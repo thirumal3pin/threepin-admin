@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3 PIN Realty — Admin</title>
+<meta name="description" content="Internal console for 3 PIN Realty. Leads, listings, and site visits across Chennai.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #121a19;
+    --ink-2: #1a2422;
+    --paper: #ece6d6;
+    --paper-dim: #a9a290;
+    --brass: #c9a227;
+    --brass-soft: #9c8035;
+    --line: rgba(236, 230, 214, 0.11);
+    --moss: #6f9c85;
+    --radius: 3px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+
+  a { color: inherit; }
+
+  ::selection { background: var(--brass); color: var(--ink); }
+
+  .grid-field {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
+  }
+
+  .page {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: clamp(20px, 4vw, 48px);
+    opacity: 0;
+    animation: rise 0.7s ease-out 0.1s forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .page { opacity: 1; animation: none; }
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: clamp(28px, 6vw, 56px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mark {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .mark b { font-weight: 500; color: var(--paper); }
+  .mark span { color: var(--paper-dim); }
+
+  .tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--brass);
+    border: 1px solid rgba(201,162,39,0.35);
+    border-radius: var(--radius);
+    padding: 4px 9px;
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: clamp(36px, 8vw, 72px) 0;
+  }
+
+  .hero {
+    max-width: 720px;
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    color: var(--moss);
+    margin: 0 0 18px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .eyebrow::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--moss);
+    box-shadow: 0 0 0 3px rgba(111,156,133,0.18);
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: clamp(2.1rem, 5.4vw, 3.7rem);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 0 0 22px;
+    max-width: 14ch;
+  }
+
+  h1 em {
+    font-style: italic;
+    font-weight: 400;
+    color: var(--brass);
+  }
+
+  .lede {
+    font-size: clamp(1rem, 1.6vw, 1.15rem);
+    line-height: 1.65;
+    color: var(--paper-dim);
+    max-width: 46ch;
+    margin: 0 0 34px;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    background: var(--brass);
+    color: var(--ink);
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-weight: 500;
+    transition: background 0.15s ease;
+  }
+  .btn:hover { background: #ddb52f; }
+  .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+
+  .btn-ghost {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    text-decoration: none;
+    color: var(--paper-dim);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 2px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-ghost:hover { color: var(--paper); border-color: var(--paper-dim); }
+  .btn-ghost:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: clamp(18px, 3vw, 26px);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  .zones {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+    color: var(--paper-dim);
+  }
+
+  .zones b { color: var(--paper); font-weight: 500; }
+
+  .stamp {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--paper-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .stamp::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: var(--moss);
+    border-radius: 50%;
+  }
+
+  @media (max-width: 640px) {
+    header { align-items: center; }
+    footer { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div class="grid-field" aria-hidden="true"></div>
+
+<div class="page">
+  <header>
+    <div class="mark"><b>3 PIN</b><span>REALTY</span></div>
+    <div class="tag">ADMIN</div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <p class="eyebrow">Internal console</p>
+      <h1>Every listing<br>and lead, kept<br><em>on record.</em></h1>
+      <p class="lede">
+        The private working console for 3 PIN Realty — properties, buyer
+        enquiries, and site visits tracked across Chennai, one parcel at a time.
+      </p>
+      <div class="actions">
+        <a class="btn" href="mailto:3pinrentals@gmail.com?subject=Admin%20access%20request">Request access</a>
+        <a class="btn-ghost" href="https://threepin.in">threepin.in →</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="zones"><b>Zones</b> — Nanganallur · Mahalingapuram · Nungambakkam · Royapettah · Adyar · Anna Nagar</div>
+    <div class="stamp">System live</div>
+  </footer>
+</div>
+
+</body>
+</html>
