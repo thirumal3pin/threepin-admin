@@ -21,6 +21,7 @@ const auth = getAuth(app);
 const leadsCol = collection(db, 'leads');
 const pipelineRef = doc(db, 'config', 'pipeline');
 const leadsSeededRef = doc(db, 'config', 'leadsSeeded');
+const whatsappBotRef = doc(db, 'config', 'whatsappBot');
 
 const DEFAULT_STAGES = [
   { id: 'new', name: 'New', color: '#1D4ED8' },
@@ -75,12 +76,18 @@ function subscribeToData(){
 window.crmFirebase = {
   saveLead: (lead) => setDoc(doc(db, 'leads', lead.id), lead).catch(e => console.error('Firestore save lead error:', e)),
   deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => console.error('Firestore delete lead error:', e)),
-  savePipeline: (stages) => setDoc(pipelineRef, { stages }).catch(e => console.error('Firestore save pipeline error:', e))
+  savePipeline: (stages) => setDoc(pipelineRef, { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
+  getBotConfig: async () => {
+    const snap = await getDoc(whatsappBotRef);
+    return snap.exists() ? snap.data() : null;
+  },
+  saveBotConfig: (config) => setDoc(whatsappBotRef, config).catch(e => console.error('Firestore save bot config error:', e))
 };
 
 window.crmAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
-  logout: () => signOut(auth)
+  logout: () => signOut(auth),
+  getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
 };
 
 onAuthStateChanged(auth, (user) => {

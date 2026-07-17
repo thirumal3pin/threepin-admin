@@ -71,6 +71,7 @@
           <button data-view="list" onclick="toggleView('list')">📃 List</button>
         </div>
         <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
+        <button class="stages-btn" onclick="openBotEditor()">🤖 AI Bot</button>
         <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
       </div>
     </div>
@@ -83,6 +84,96 @@
   </div>
 
   <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
+
+  <!-- AI BOT EDITOR PANEL -->
+  <div id="botEditorPanel">
+    <div class="dp-hdr">
+      <button class="dp-back" onclick="closeBotEditor()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Leads
+      </button>
+      <div class="dp-actions">
+        <button class="dp-act" onclick="saveBotConfig()">💾 Save Workflow</button>
+      </div>
+    </div>
+    <div class="bot-editor-body">
+      <div class="bot-editor-form">
+
+        <div class="sec">
+          <div class="sec-title">🔌 WhatsApp Connection</div>
+          <div class="connect-box">
+            <div>
+              <div style="font-weight:600;font-size:13px;" id="waConnectionLabel">Not connected</div>
+              <div style="font-size:11.5px;color:var(--ink3);">Enter your WhatsApp Business number once it's verified with Meta</div>
+            </div>
+            <span class="connect-status disconnected" id="waConnectionStatus">Not connected</span>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="waPhoneNumber">WhatsApp Business Number</label>
+              <input type="text" id="waPhoneNumber" placeholder="e.g. +91 98765 43210">
+            </div>
+            <div class="field">
+              <label for="waPhoneNumberId">Phone Number ID (from Meta)</label>
+              <input type="text" id="waPhoneNumberId" placeholder="from Meta Business settings">
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">🧑‍💼 Role & Persona</div>
+          <textarea id="botRole" class="bot-textarea" rows="3"></textarea>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">👋 Welcome Message</div>
+          <textarea id="botWelcome" class="bot-textarea" rows="2"></textarea>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">📋 Required Info to Collect</div>
+          <div id="botRequiredInfoRows"></div>
+          <div class="stage-add-row">
+            <input type="text" id="newRequiredInfo" placeholder="e.g. Preferred area" onkeydown="if(event.key==='Enter')addRequiredInfoDraft()">
+            <button onclick="addRequiredInfoDraft()">+ Add</button>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">🪜 Conversation Steps</div>
+          <div id="botStepsRows"></div>
+          <button class="stages-btn" onclick="addStepDraft()">+ Add Step</button>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">🚧 Guardrails</div>
+          <div id="botGuardrailsRows"></div>
+          <div class="stage-add-row">
+            <input type="text" id="newGuardrail" placeholder="e.g. Never invent prices" onkeydown="if(event.key==='Enter')addGuardrailDraft()">
+            <button onclick="addGuardrailDraft()">+ Add</button>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">🎨 Tone</div>
+          <textarea id="botTone" class="bot-textarea" rows="2"></textarea>
+        </div>
+
+      </div>
+
+      <div class="bot-preview">
+        <div class="sec-title">💬 Live Test Chat</div>
+        <div class="bot-chat-window" id="botChatWindow">
+          <div class="bot-chat-empty">Send a message to test the bot with your current draft workflow.</div>
+        </div>
+        <div class="note-add">
+          <input type="text" id="botTestInput" class="note-input" placeholder="Type as a test lead…" onkeydown="if(event.key==='Enter')sendBotTestMessage()">
+          <button class="note-btn" onclick="sendBotTestMessage()">Send</button>
+        </div>
+        <button class="modal-cancel" style="margin-top:8px;width:100%" onclick="clearBotTestChat()">Clear Test Chat</button>
+      </div>
+    </div>
+  </div>
 
   <!-- LEAD DETAIL PANEL -->
   <div id="dp">

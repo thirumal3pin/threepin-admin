@@ -2,8 +2,9 @@
 
 `crm.html` (repo root) is a real estate lead management CRM — a kanban
 pipeline board with manual lead entry, notes/follow-ups, customizable
-stages, and an optional live connection to Meta (Facebook/Instagram)
-Lead Ads.
+stages, an optional live connection to Meta (Facebook/Instagram) Lead
+Ads, and a customizable Claude-powered WhatsApp bot that qualifies
+leads through conversation.
 
 ## Files
 
@@ -13,7 +14,10 @@ Lead Ads.
 | `sample-leads.js` | 10 sample Chennai leads, seeded once so the board isn't empty on first login. |
 | `app.js` | All CRM logic — board rendering, list view, add/edit/delete lead, stage manager, notes, search/filter. |
 | `firebase-sync.js` | Firebase Authentication + Firestore realtime sync (leads + pipeline stages). |
-| `../api/meta-webhook.js` | Vercel serverless function that receives Meta's lead webhook and writes leads into Firestore. |
+| `../api/meta-webhook.js` | Vercel serverless function that receives Meta's Lead Ads webhook and writes leads into Firestore. |
+| `../api/whatsapp-bot-webhook.js` | Vercel serverless function that receives WhatsApp messages, runs them through Claude, replies, and writes/updates the lead. |
+| `../api/bot-test-message.js` | Authenticated endpoint the CRM's "Live Test Chat" panel calls to try the bot without a real WhatsApp message. |
+| `../api/_bot-shared.js` | Shared code between the two bot endpoints above (system prompt builder, tool definition, Firebase Admin init). |
 
 ## How it's different from the property dashboard
 
@@ -63,6 +67,9 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
     match /config/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    match /conversations/{docId} {
       allow read, write: if request.auth != null;
     }
   }
@@ -149,3 +156,101 @@ If something's misconfigured, check the function's logs in Vercel →
 your project → **Functions** tab — errors are logged there (bad
 signature, Graph API errors, Firestore write failures, etc.), nothing
 fails silently.
+
+## WhatsApp AI Bot
+
+The **🤖 AI Bot** button in the CRM opens a workflow editor: Role &
+Persona, Welcome Message, Required Info to collect, Conversation Steps,
+and Guardrails — all editable, saved to Firestore (`config/whatsappBot`),
+and used to build the system prompt for every conversation. A **Live
+Test Chat** panel lets you try the bot immediately with your current
+draft, before ever saving or connecting a real WhatsApp number.
+
+### ⚠️ Real, ongoing costs — read before enabling
+
+Unlike the rest of this project, this feature calls a **paid API per
+message**:
+- **Anthropic (Claude) API** — billed per message, using
+  `claude-opus-4-8` (Anthropic's most capable model). Check current
+  pricing at https://platform.claude.com/docs/en/pricing before going
+  live with real traffic. If you want a cheaper/faster model for a
+  high-volume bot, that's a one-line change in
+  `api/_bot-shared.js`/`api/whatsapp-bot-webhook.js`/`api/bot-test-message.js` — ask
+  and it can be swapped, but it isn't done by default.
+- **WhatsApp Business Platform** — Meta charges per conversation once
+  you're past the free tier, separate from Anthropic's pricing.
+
+### 1. Get an Anthropic API key
+- Go to https://console.anthropic.com → **API Keys** → create a key.
+- Add billing there (a card on file) — the key won't work without it.
+- This becomes `ANTHROPIC_API_KEY`.
+
+### 2. Set up WhatsApp Business Cloud API
+This is separate from Meta Lead Ads above, but can live in the **same**
+Meta App. Your real WhatsApp Business number can only be connected to
+**one** integration at a time — if it's currently used elsewhere (e.g.
+a tool like TailorTalk), either disconnect it there first, or test this
+on a different number / Meta's free test number until you're ready to
+switch over.
+
+- In your Meta App → **Add Product → WhatsApp** → follow the setup
+  flow to create/select a **WhatsApp Business Account** and a phone
+  number (Meta gives you a free test number instantly — good enough to
+  fully test this feature before using your real number).
+- **Business Settings → Users → System Users** → create a System User,
+  generate a token with `whatsapp_business_messaging` and
+  `whatsapp_business_management` permissions. This becomes
+  `WHATSAPP_ACCESS_TOKEN`.
+- From the WhatsApp product's **API Setup** page, copy the **Phone
+  Number ID** — becomes `WHATSAPP_PHONE_NUMBER_ID`. Also enter the
+  number itself and this ID into the CRM's Bot Editor "WhatsApp
+  Connection" fields, so the status shows as connected.
+- Pick any secret string yourself for verification, e.g.
+  `3pin_wa_webhook_2026` — becomes `WHATSAPP_VERIFY_TOKEN`.
+- **WhatsApp → Configuration → Webhook** → set:
+  - **Callback URL:** `https://admin.threepin.in/api/whatsapp-bot-webhook`
+  - **Verify Token:** the string you picked above
+  - Subscribe to the **messages** field.
+- The webhook signature check reuses `META_APP_SECRET` (same value as
+  the Lead Ads setup above — Meta signs all webhook types with the
+  same app secret).
+
+### 3. Add the new Vercel environment variables
+In addition to `META_APP_SECRET` and `FIREBASE_SERVICE_ACCOUNT_JSON`
+(already set up for Lead Ads), add:
+
+| Name | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | from step 1 |
+| `WHATSAPP_VERIFY_TOKEN` | the string you picked in step 2 |
+| `WHATSAPP_ACCESS_TOKEN` | the System User token from step 2 |
+| `WHATSAPP_PHONE_NUMBER_ID` | from step 2 |
+
+Redeploy after adding these — env vars only apply to new deployments.
+
+### What happens once this is live
+Someone messages your WhatsApp number → Meta calls
+`/api/whatsapp-bot-webhook` → the function verifies the request is
+genuinely from Meta → loads your saved workflow from Firestore → sends
+the conversation to Claude, which replies conversationally **and**
+calls a tool to record any new info it learned (name, area, budget,
+property type) → the reply is sent back over WhatsApp → the lead is
+created/updated on your CRM board with `source: 'whatsapp_bot'`, in
+realtime, first pipeline stage, ready to hand off to a human.
+
+### Data model additions
+- **`config/whatsappBot` doc** — the structured workflow (role,
+  welcomeMessage, requiredInfo[], steps[], guardrails[], tone,
+  waPhoneNumber, waPhoneNumberId), fully editable from the Bot Editor.
+- **`conversations/{phone}` collection** — one doc per WhatsApp number,
+  holding the full message history and extracted info for that
+  conversation. Not yet surfaced in the CRM UI beyond the lead itself.
+
+### Security note
+`/api/bot-test-message` requires a valid Firebase Auth ID token (the
+same login as the rest of the CRM) — this stops random visitors from
+running up your Anthropic bill by hitting the test endpoint directly.
+The real `/api/whatsapp-bot-webhook` is protected the same way the Lead
+Ads webhook is: HMAC signature verification against `META_APP_SECRET`,
+not authentication (Meta's webhook caller has no user session to
+authenticate).

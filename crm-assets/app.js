@@ -431,6 +431,186 @@ function saveStageManager(){
   showToast('✓ Pipeline stages updated');
 }
 
+// ═══════ AI BOT EDITOR ═══════
+const DEFAULT_BOT_CONFIG_CLIENT = {
+  role: 'You are a professional, friendly real estate assistant for 3 PIN Realty, a real estate brokerage in Chennai. You help potential buyers find properties by understanding their requirements through natural conversation.',
+  welcomeMessage: "Hi! Thanks for reaching out to 3 PIN Realty 👋 What are you looking for in Chennai — an apartment, villa, or plot?",
+  requiredInfo: [
+    { id:'ri1', label:'Preferred area in Chennai' },
+    { id:'ri2', label:'Budget' },
+    { id:'ri3', label:'Property type and configuration (e.g. 2BHK apartment, villa)' },
+    { id:'ri4', label:'Name' }
+  ],
+  steps: [
+    { id:'s1', title:'Hook & Qualify', instructions:'Acknowledge the enquiry immediately. Ask only for what is missing — do not repeat questions already answered. Gather naturally, not like a form.' },
+    { id:'s2', title:'Share Matching Options', instructions:'Once you have area, budget, and type, let them know a team member will follow up with matching properties. Do not invent specific listings, prices, or availability you were not given.' },
+    { id:'s3', title:'Close & Handoff', instructions:'Once you have the required info, thank them and let them know a team member will follow up shortly.' }
+  ],
+  guardrails: [
+    'Never invent specific property prices, availability, or details you have not been given.',
+    'If asked for legal, financial, or loan advice, say a team member will follow up on that.',
+    'If the user seems frustrated, confused, or explicitly asks for a human, stop qualifying and say a team member will take over.',
+    'Keep replies short — 1-3 sentences, WhatsApp style, not long paragraphs.'
+  ],
+  tone: 'Warm, professional, concise. Natural conversation — never sound like filling out a form.',
+  waPhoneNumber: '',
+  waPhoneNumberId: ''
+};
+let botConfigDraft = null;
+let botTestHistory = [];
+
+async function openBotEditor(){
+  document.getElementById('botEditorPanel').classList.add('open');
+  const saved = await window.crmFirebase.getBotConfig();
+  botConfigDraft = saved ? JSON.parse(JSON.stringify(saved)) : JSON.parse(JSON.stringify(DEFAULT_BOT_CONFIG_CLIENT));
+  renderBotEditorForm();
+  botTestHistory = [];
+  renderBotChat();
+}
+function closeBotEditor(){
+  document.getElementById('botEditorPanel').classList.remove('open');
+}
+
+function renderBotEditorForm(){
+  document.getElementById('botRole').value = botConfigDraft.role || '';
+  document.getElementById('botWelcome').value = botConfigDraft.welcomeMessage || '';
+  document.getElementById('botTone').value = botConfigDraft.tone || '';
+  document.getElementById('waPhoneNumber').value = botConfigDraft.waPhoneNumber || '';
+  document.getElementById('waPhoneNumberId').value = botConfigDraft.waPhoneNumberId || '';
+  updateWaConnectionStatus();
+  renderRequiredInfoRows();
+  renderStepsRows();
+  renderGuardrailsRows();
+}
+
+function updateWaConnectionStatus(){
+  const connected = !!(botConfigDraft.waPhoneNumber && botConfigDraft.waPhoneNumberId);
+  const statusEl = document.getElementById('waConnectionStatus');
+  const labelEl = document.getElementById('waConnectionLabel');
+  statusEl.textContent = connected ? 'Connected' : 'Not connected';
+  statusEl.className = 'connect-status ' + (connected ? 'connected' : 'disconnected');
+  labelEl.textContent = connected ? botConfigDraft.waPhoneNumber : 'Not connected';
+}
+
+function syncBotDraftFromForm(){
+  botConfigDraft.role = document.getElementById('botRole').value;
+  botConfigDraft.welcomeMessage = document.getElementById('botWelcome').value;
+  botConfigDraft.tone = document.getElementById('botTone').value;
+  botConfigDraft.waPhoneNumber = document.getElementById('waPhoneNumber').value.trim();
+  botConfigDraft.waPhoneNumberId = document.getElementById('waPhoneNumberId').value.trim();
+}
+
+function renderRequiredInfoRows(){
+  document.getElementById('botRequiredInfoRows').innerHTML = botConfigDraft.requiredInfo.map((r,i)=>`
+    <div class="req-info-row">
+      <input type="text" value="${r.label}" oninput="renameRequiredInfoDraft(${i}, this.value)">
+      <button class="stage-del" onclick="removeRequiredInfoDraft(${i})">🗑️</button>
+    </div>`).join('');
+}
+function renameRequiredInfoDraft(i, val){ botConfigDraft.requiredInfo[i].label = val; }
+function removeRequiredInfoDraft(i){ botConfigDraft.requiredInfo.splice(i,1); renderRequiredInfoRows(); }
+function addRequiredInfoDraft(){
+  const inp = document.getElementById('newRequiredInfo');
+  const label = inp.value.trim();
+  if(!label) return;
+  botConfigDraft.requiredInfo.push({ id:'ri_'+Date.now(), label });
+  inp.value='';
+  renderRequiredInfoRows();
+}
+
+function renderStepsRows(){
+  document.getElementById('botStepsRows').innerHTML = botConfigDraft.steps.map((s,i)=>`
+    <div class="step-row">
+      <div class="step-row-hdr">
+        <button class="stage-move" onclick="moveStepDraft(${i},-1)" ${i===0?'disabled style="opacity:.3"':''}>↑</button>
+        <button class="stage-move" onclick="moveStepDraft(${i},1)" ${i===botConfigDraft.steps.length-1?'disabled style="opacity:.3"':''}>↓</button>
+        <input type="text" value="${s.title}" oninput="renameStepTitleDraft(${i}, this.value)">
+        <button class="stage-del" onclick="removeStepDraft(${i})">🗑️</button>
+      </div>
+      <textarea rows="2" oninput="renameStepInstructionsDraft(${i}, this.value)">${s.instructions}</textarea>
+    </div>`).join('');
+}
+function renameStepTitleDraft(i, val){ botConfigDraft.steps[i].title = val; }
+function renameStepInstructionsDraft(i, val){ botConfigDraft.steps[i].instructions = val; }
+function moveStepDraft(i, dir){
+  const j = i+dir;
+  if(j<0 || j>=botConfigDraft.steps.length) return;
+  [botConfigDraft.steps[i], botConfigDraft.steps[j]] = [botConfigDraft.steps[j], botConfigDraft.steps[i]];
+  renderStepsRows();
+}
+function removeStepDraft(i){ botConfigDraft.steps.splice(i,1); renderStepsRows(); }
+function addStepDraft(){
+  botConfigDraft.steps.push({ id:'s_'+Date.now(), title:'New Step', instructions:'' });
+  renderStepsRows();
+}
+
+function renderGuardrailsRows(){
+  document.getElementById('botGuardrailsRows').innerHTML = botConfigDraft.guardrails.map((g,i)=>`
+    <div class="req-info-row">
+      <input type="text" value="${g}" oninput="renameGuardrailDraft(${i}, this.value)">
+      <button class="stage-del" onclick="removeGuardrailDraft(${i})">🗑️</button>
+    </div>`).join('');
+}
+function renameGuardrailDraft(i, val){ botConfigDraft.guardrails[i] = val; }
+function removeGuardrailDraft(i){ botConfigDraft.guardrails.splice(i,1); renderGuardrailsRows(); }
+function addGuardrailDraft(){
+  const inp = document.getElementById('newGuardrail');
+  const val = inp.value.trim();
+  if(!val) return;
+  botConfigDraft.guardrails.push(val);
+  inp.value='';
+  renderGuardrailsRows();
+}
+
+function saveBotConfig(){
+  syncBotDraftFromForm();
+  updateWaConnectionStatus();
+  window.crmFirebase.saveBotConfig(botConfigDraft);
+  showToast('✓ Workflow saved');
+}
+
+function renderBotChat(){
+  const win = document.getElementById('botChatWindow');
+  if(!botTestHistory.length){
+    win.innerHTML = '<div class="bot-chat-empty">Send a message to test the bot with your current draft workflow.</div>';
+    return;
+  }
+  win.innerHTML = botTestHistory.map(m=>`<div class="bot-msg ${m.role}">${m.content}</div>`).join('');
+  win.scrollTop = win.scrollHeight;
+}
+
+async function sendBotTestMessage(){
+  const inp = document.getElementById('botTestInput');
+  const text = inp.value.trim();
+  if(!text) return;
+  syncBotDraftFromForm();
+  botTestHistory.push({ role:'user', content:text });
+  inp.value='';
+  renderBotChat();
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/bot-test-message', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
+      body: JSON.stringify({ config: botConfigDraft, history: botTestHistory })
+    });
+    if(!res.ok){
+      const err = await res.json().catch(()=>({}));
+      throw new Error(err.error || ('HTTP '+res.status));
+    }
+    const data = await res.json();
+    botTestHistory.push({ role:'assistant', content:data.reply || '(no reply)' });
+    renderBotChat();
+  } catch(e){
+    console.error('Bot test message error:', e);
+    showToast('Test message failed — see console');
+  }
+}
+function clearBotTestChat(){
+  botTestHistory = [];
+  renderBotChat();
+}
+
 // ═══════ MOBILE HEADER / FILTER TOGGLES ═══════
 function toggleHdrMenu(e){
   if(e) e.stopPropagation();
@@ -455,7 +635,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); }
+  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════
