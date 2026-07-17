@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3 PIN Realty — Property Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F7F6F3; --bg2:#EFEDE8; --white:#FFFFFF; --card:#FFFFFF;
+  --border:#E4E0D8; --border2:#D4CFC5;
+  --ink:#1C1917; --ink2:#44403C; --ink3:#78716C; --ink4:#A8A29E;
+  --gold:#B45309; --gold-bg:#FEF3C7; --gold-lt:#FFFBEB;
+  --green:#15803D; --green-bg:#DCFCE7;
+  --amber:#B45309; --amber-bg:#FEF3C7;
+  --blue:#1D4ED8; --blue-bg:#EFF6FF;
+  --purple:#6D28D9; --purple-bg:#F3E8FF;
+  --red:#B91C1C; --red-bg:#FEF2F2;
+  --r:14px;
+  --shadow:0 1px 3px rgba(0,0,0,.05),0 4px 14px rgba(0,0,0,.05);
+  --shadow-md:0 6px 20px rgba(0,0,0,.10),0 2px 6px rgba(0,0,0,.05);
+  --shadow-lg:0 18px 50px rgba(0,0,0,.16),0 4px 12px rgba(0,0,0,.08);
+  --serif:'Cormorant Garamond',Georgia,serif;
+  --sans:'Plus Jakarta Sans',system-ui,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100vh;-webkit-font-smoothing:antialiased;}
+::selection{background:var(--gold-bg);}
+
+/* ── HEADER ── */
+#hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 14px;position:sticky;top:0;z-index:100;box-shadow:0 1px 0 var(--border),0 6px 22px rgba(0,0,0,.05);}
+.hdr-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:14px;}
+.brand{display:flex;align-items:center;gap:13px;}
+.brand-mark{width:44px;height:44px;background:linear-gradient(135deg,#1C1917,#44403C);border-radius:12px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:15px;font-weight:700;color:#fff;letter-spacing:.5px;flex-shrink:0;box-shadow:var(--shadow);}
+.brand-logo{height:48px;width:auto;max-width:150px;object-fit:contain;flex-shrink:0;}
+.brand-name{font-family:var(--serif);font-size:24px;font-weight:700;letter-spacing:.01em;line-height:1;}
+.brand-sub{font-size:10.5px;color:var(--ink4);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-top:3px;}
+.hstats{display:flex;gap:9px;}
+.hstat{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:9px 18px;text-align:center;min-width:66px;transition:transform .15s;}
+.hstat:hover{transform:translateY(-2px);}
+.hstat-n{font-family:var(--serif);font-size:24px;font-weight:700;line-height:1;}
+.hstat-l{font-size:9px;color:var(--ink4);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-top:3px;}
+.hstat.g .hstat-n{color:var(--green);} .hstat.a .hstat-n{color:var(--amber);} .hstat.t .hstat-n{color:var(--gold);}
+
+.srch-wrap{position:relative;margin-bottom:12px;}
+.srch-ico{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--ink4);pointer-events:none;}
+#searchInput{width:100%;padding:12px 40px 12px 42px;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;color:var(--ink);font-family:var(--sans);font-size:14px;outline:none;transition:border-color .18s,box-shadow .18s,background .18s;}
+#searchInput:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(28,25,23,.07);background:var(--white);}
+#searchInput::placeholder{color:var(--ink4);}
+.srch-clear{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:var(--border);border:none;width:22px;height:22px;border-radius:50%;color:var(--ink3);cursor:pointer;font-size:14px;display:none;align-items:center;justify-content:center;line-height:1;}
+.srch-clear.show{display:flex;}
+
+/* ── CONTROLS BAR ── */
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.fgroup{display:flex;gap:6px;flex-wrap:wrap;}
+.fbtn{font-size:11.5px;font-weight:600;padding:6px 15px;border-radius:20px;border:1.5px solid var(--border);background:transparent;color:var(--ink3);cursor:pointer;transition:all .15s;white-space:nowrap;}
+.fbtn:hover{border-color:var(--ink);color:var(--ink);}
+.fbtn.at{border-color:var(--ink);background:var(--ink);color:#fff;}
+.fbtn.srtm.at{border-color:var(--green);background:var(--green);color:#fff;}
+.fbtn.suc.at{border-color:var(--amber);background:var(--amber);color:#fff;}
+.fbtn.fav-toggle.at{border-color:var(--gold);background:var(--gold);color:#fff;}
+.fdiv{width:1px;height:20px;background:var(--border);margin:0 4px;flex-shrink:0;}
+.ctrl-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.sel-wrap{position:relative;}
+.sortsel{appearance:none;-webkit-appearance:none;font-family:var(--sans);font-size:11.5px;font-weight:600;padding:7px 30px 7px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2378716C' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;}
+.sortsel:focus{border-color:var(--ink);}
+
+/* ── GRID ── */
+#main{max-width:1480px;margin:0 auto;padding:22px 24px 90px;}
+.gmeta{margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}
+.gmeta-l{font-size:12.5px;color:var(--ink3);font-weight:500;}
+.gmeta-l b{color:var(--ink);font-weight:700;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px;}
+
+/* ── CARD ── */
+.card{background:var(--card);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .18s,box-shadow .18s,border-color .18s;position:relative;}
+.card:hover{transform:translateY(-4px);box-shadow:var(--shadow-md);border-color:var(--border2);}
+.card-bar{height:4px;}
+.card-bar.rtm{background:linear-gradient(90deg,#16A34A,#4ADE80);}
+.card-bar.uc{background:linear-gradient(90deg,#D97706,#FCD34D);}
+.card-body{padding:16px 17px 14px;flex:1;display:flex;flex-direction:column;cursor:pointer;}
+.card-r1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
+.card-name{font-family:var(--serif);font-size:17px;font-weight:700;line-height:1.22;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
+.card-loc{font-size:11.5px;color:var(--ink4);margin-top:4px;display:flex;align-items:center;gap:4px;}
+.card-actions{display:flex;gap:5px;flex-shrink:0;}
+.card-action-btn{width:30px;height:30px;border-radius:8px;border:1.5px solid var(--border);background:var(--white);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;color:var(--ink4);line-height:1;}
+.card-action-btn:hover{border-color:var(--ink);color:var(--ink);transform:scale(1.08);}
+.card-star.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold);}
+.badges{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;}
+.badge{font-weight:700;font-size:10px;padding:3px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;}
+.bg{background:var(--green-bg);color:var(--green);} .ba{background:var(--amber-bg);color:var(--amber);}
+.bb{background:var(--blue-bg);color:var(--blue);} .bp{background:var(--purple-bg);color:var(--purple);}
+.bs{background:var(--bg);color:var(--ink3);border:1px solid var(--border);}
+.price-row{display:flex;justify-content:space-between;align-items:flex-end;gap:8px;margin-bottom:12px;padding:11px 13px;background:var(--gold-lt);border:1px solid #FDE68A;border-radius:10px;}
+.price-main{font-family:var(--serif);font-size:20px;font-weight:700;color:var(--ink);line-height:1;}
+.price-lbl{font-size:9px;color:var(--gold);font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:3px;}
+.price-psf{font-size:10.5px;color:var(--ink3);text-align:right;font-weight:600;}
+.card-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
+.cst{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:7px 10px;}
+.cst-l{font-size:8.5px;color:var(--ink4);font-weight:700;letter-spacing:.06em;text-transform:uppercase;}
+.cst-v{font-size:12px;color:var(--ink2);font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.card-foot{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;align-items:center;margin-top:auto;}
+.card-bldr{font-size:11px;color:var(--ink3);font-weight:600;display:flex;align-items:center;gap:5px;}
+.card-bldr::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--gold);}
+.card-cmp{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ink4);font-weight:600;cursor:pointer;user-select:none;}
+.card-cmp input{cursor:pointer;width:15px;height:15px;accent-color:var(--gold);}
+.card-cta{display:flex;gap:7px;padding:0 17px 15px;}
+.cta-btn{flex:1;padding:9px;border-radius:9px;font-size:11.5px;font-weight:700;cursor:pointer;text-decoration:none;text-align:center;transition:all .15s;border:1.5px solid transparent;display:flex;align-items:center;justify-content:center;gap:5px;}
+.cta-call{background:var(--green);color:#fff;}
+.cta-call:hover{background:#166534;}
+.cta-view{background:var(--white);border-color:var(--border);color:var(--ink2);}
+.cta-view:hover{border-color:var(--ink);background:var(--ink);color:#fff;}
+
+.nores{text-align:center;padding:90px 20px;color:var(--ink4);}
+.nores-i{font-size:56px;margin-bottom:14px;}
+.nores-t{font-family:var(--serif);font-size:22px;color:var(--ink3);margin-bottom:6px;}
+.nores-s{font-size:13px;color:var(--ink4);}
+
+/* ── DETAIL PANEL ── */
+#dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
+#dp.open{display:block;animation:fadeSlide .24s ease;}
+@keyframes fadeSlide{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:translateX(0)}}
+.dp-hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 0;position:sticky;top:0;z-index:10;box-shadow:0 2px 14px rgba(0,0,0,.05);}
+.dp-hdr-nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.dp-back{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;padding:8px 15px;font-size:12.5px;font-weight:600;color:var(--ink3);cursor:pointer;transition:all .15s;}
+.dp-back:hover{background:var(--ink);color:#fff;border-color:var(--ink);}
+.dp-hdr-actions{display:flex;gap:8px;}
+.dp-hact{display:inline-flex;align-items:center;gap:6px;background:var(--white);border:1.5px solid var(--border);border-radius:9px;padding:8px 14px;font-size:12px;font-weight:600;color:var(--ink3);cursor:pointer;transition:all .15s;}
+.dp-hact:hover{border-color:var(--ink);color:var(--ink);}
+.dp-hact.fav.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold);}
+.dp-hact.danger:hover{background:var(--red-bg);border-color:var(--red);color:var(--red);}
+.addp-btn{font-size:12px;font-weight:700;padding:8px 18px;border-radius:20px;border:1.5px solid var(--ink);background:var(--ink);color:#fff;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.addp-btn:hover{background:#44403C;transform:translateY(-1px);}
+
+/* ── ADD/EDIT MODAL ── */
+#pModal{position:fixed;inset:0;background:rgba(28,25,23,.6);z-index:500;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);}
+#pModal.open{display:flex;}
+.pmodal-box{background:var(--white);border-radius:16px;max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:fadeSlide .2s ease;}
+.pmodal-hdr{display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1.5px solid var(--border);}
+.pmodal-title{font-family:var(--serif);font-size:20px;font-weight:700;}
+.pmodal-x{background:none;border:none;font-size:24px;color:var(--ink4);cursor:pointer;line-height:1;}
+.pmodal-x:hover{color:var(--ink);}
+.pmodal-body{padding:20px 24px;overflow-y:auto;flex:1;}
+.pmodal-steps{background:var(--bg);border-radius:10px;padding:13px 16px;margin-bottom:14px;}
+.pm-step{font-size:12.5px;color:var(--ink2);margin-bottom:5px;}
+.pm-step:last-child{margin-bottom:0;}
+.pmodal-dl{width:100%;padding:11px;border-radius:10px;border:1.5px solid var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:700;font-size:13px;cursor:pointer;margin-bottom:14px;transition:all .15s;}
+.pmodal-dl:hover{background:#DBEAFE;}
+.pmodal-ta{width:100%;min-height:220px;padding:13px 15px;border:1.5px solid var(--border);border-radius:10px;font-family:'SF Mono',Menlo,monospace;font-size:12px;color:var(--ink);background:var(--bg);outline:none;resize:vertical;line-height:1.6;}
+.pmodal-ta:focus{border-color:var(--ink);background:var(--white);}
+.pmodal-err{color:var(--red);background:var(--red-bg);border:1px solid #FECACA;border-radius:8px;padding:9px 12px;margin-top:10px;font-size:12.5px;font-weight:600;display:none;}
+.pmodal-err.show{display:block;}
+.pmodal-ftr{display:flex;gap:10px;justify-content:flex-end;padding:16px 24px;border-top:1.5px solid var(--border);}
+.pmodal-cancel{padding:9px 20px;border-radius:9px;border:1.5px solid var(--border);background:transparent;color:var(--ink3);font-weight:600;font-size:13px;cursor:pointer;}
+.pmodal-cancel:hover{background:var(--bg2);}
+.pmodal-save{padding:9px 22px;border-radius:9px;border:none;background:var(--green);color:#fff;font-weight:700;font-size:13px;cursor:pointer;}
+.pmodal-save:hover{background:#166534;}
+.dp-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;padding-bottom:20px;}
+.dp-builder-tag{font-size:11px;font-weight:700;color:var(--gold);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;}
+.dp-title{font-family:var(--serif);font-size:30px;font-weight:700;line-height:1.15;margin-bottom:10px;}
+.dp-loc{font-size:13px;color:var(--ink3);display:flex;align-items:center;gap:6px;margin-bottom:14px;}
+.dp-price-box{text-align:right;flex-shrink:0;}
+.dp-price{font-family:var(--serif);font-size:34px;font-weight:700;line-height:1;}
+.dp-psf{font-size:12px;color:var(--ink4);margin-top:5px;}
+.dp-call{display:inline-flex;align-items:center;gap:8px;padding:11px 24px;border-radius:11px;background:var(--green);font-size:13.5px;font-weight:700;color:#fff;text-decoration:none;margin-top:14px;box-shadow:var(--shadow);transition:all .15s;}
+.dp-call:hover{background:#166534;transform:translateY(-1px);}
+.dp-tabs{display:flex;gap:2px;border-top:1px solid var(--border);margin-top:4px;overflow-x:auto;}
+.dp-tab{font-size:13px;font-weight:500;padding:12px 22px;background:none;border:none;border-bottom:2.5px solid transparent;color:var(--ink4);cursor:pointer;transition:all .15s;margin-bottom:-1.5px;white-space:nowrap;}
+.dp-tab:hover{color:var(--ink);}
+.dp-tab.active{font-weight:700;color:var(--ink);border-bottom-color:var(--gold);}
+.dp-body{max-width:1000px;margin:0 auto;padding:30px 28px 110px;}
+.tab-panel{display:none;} .tab-panel.active{display:block;animation:fadeUp .3s ease;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.sec{margin-bottom:30px;}
+.sec-title{font-size:11px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:15px;display:flex;align-items:center;gap:7px;}
+.stats-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;}
+.stat-b{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:15px;text-align:center;box-shadow:var(--shadow);}
+.stat-b-v{font-family:var(--serif);font-size:18px;font-weight:700;line-height:1.2;}
+.stat-b-l{font-size:10px;color:var(--ink4);margin-top:5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;}
+.hi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;}
+.hi-item{background:var(--green-bg);border:1px solid #BBF7D0;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#166534;font-weight:600;display:flex;align-items:center;gap:9px;}
+.am-wrap{display:flex;flex-wrap:wrap;gap:7px;}
+.am-chip{font-size:12px;font-weight:600;padding:7px 15px;border-radius:20px;background:var(--blue-bg);border:1px solid #BFDBFE;color:var(--blue);}
+.conn-wrap{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);}
+.conn-row{display:flex;gap:16px;padding:13px 17px;border-bottom:1px solid var(--border);}
+.conn-row:last-child{border-bottom:none;}
+.conn-row:nth-child(odd){background:var(--bg);}
+.conn-k{font-size:10.5px;font-weight:800;color:var(--gold);min-width:120px;text-transform:uppercase;letter-spacing:.05em;padding-top:1px;}
+.conn-v{font-size:13px;color:var(--ink2);line-height:1.6;}
+.summary-card{background:var(--white);border:1.5px solid var(--border);border-left:4px solid var(--gold);border-radius:var(--r);padding:20px 24px;box-shadow:var(--shadow);}
+.sum-lbl{font-size:10px;font-weight:800;color:var(--gold);letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px;}
+.sum-txt{font-size:14px;line-height:1.9;color:var(--ink2);}
+.sum-txt p{margin-bottom:8px;}
+.spec-t{width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden;border:1.5px solid var(--border);box-shadow:var(--shadow);}
+.spec-t tr:nth-child(even) td{background:var(--bg);}
+.spec-t td{padding:11px 17px;border-bottom:1px solid var(--border);}
+.spec-t td:first-child{font-size:10.5px;font-weight:800;color:var(--gold);width:38%;text-transform:uppercase;letter-spacing:.05em;}
+.spec-t td:last-child{font-size:13px;color:var(--ink2);}
+.interest-buttons{display:flex;gap:8px;flex-wrap:wrap;}
+.interest-btn{font-size:12.5px;font-weight:700;padding:9px 18px;border-radius:10px;border:1.5px solid var(--border);background:var(--white);cursor:pointer;transition:all .15s;}
+.interest-btn.hot.active{background:var(--red-bg);border-color:var(--red);color:var(--red);}
+.interest-btn.warm.active{background:var(--amber-bg);border-color:var(--amber);color:var(--amber);}
+.interest-btn.cold.active{background:var(--blue-bg);border-color:var(--blue);color:var(--blue);}
+.note-item{background:var(--gold-lt);border:1px solid #FDE68A;border-radius:10px;padding:12px 15px;margin-bottom:8px;}
+.note-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+.note-time{font-size:10.5px;color:var(--ink4);font-weight:600;}
+.note-delete{background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;line-height:1;}
+.note-text{font-size:13px;color:#78350F;line-height:1.6;}
+.note-add{display:flex;gap:8px;margin-top:10px;}
+.note-input{flex:1;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-family:var(--sans);font-size:13px;outline:none;}
+.note-input:focus{border-color:var(--ink);}
+.note-btn{padding:10px 18px;border-radius:9px;border:none;background:var(--ink);color:#fff;font-weight:700;font-size:12.5px;cursor:pointer;}
+.sold-out-overlay{position:absolute;inset:0;z-index:15;pointer-events:none;display:flex;align-items:center;justify-content:center;border-radius:var(--r);}
+.sold-out-overlay-text{color:var(--red);font-weight:900;font-size:32px;letter-spacing:.12em;text-transform:uppercase;text-shadow:0 1px 3px rgba(0,0,0,0.1);transform:rotate(-45deg);opacity:0.75;}
+.card.sold-out{opacity:.9;}
+.dp-hact.sold-out{background:var(--red-bg);border-color:var(--red);color:var(--red);}
+.export-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;}
+.export-btn{background:var(--white);border:1.5px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:all .15s;text-align:center;font-size:12px;font-weight:700;color:var(--ink2);}
+.export-btn:hover{border-color:var(--ink);transform:translateY(-2px);box-shadow:var(--shadow);}
+.export-btn-icon{font-size:22px;margin-bottom:6px;}
+.empty-mini{color:var(--ink4);padding:16px;text-align:center;font-size:12.5px;background:var(--bg);border-radius:10px;}
+
+/* ── COMPARE PANEL ── */
+.cmp-t{width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden;border:1.5px solid var(--border);box-shadow:var(--shadow);}
+.cmp-t th{background:var(--bg2);padding:12px 14px;text-align:left;font-size:11px;font-weight:800;color:var(--ink2);border-bottom:2px solid var(--border);}
+.cmp-t td{padding:11px 14px;border-bottom:1px solid var(--border);font-size:12.5px;color:var(--ink2);}
+.cmp-t td:first-child{font-size:10.5px;font-weight:800;color:var(--gold);text-transform:uppercase;letter-spacing:.05em;}
+.cmp-wrap{overflow-x:auto;}
+
+/* ── MULTISELECT TOOLBAR ── */
+#msToolbar{position:fixed;bottom:0;left:0;right:0;background:var(--ink);color:#fff;padding:14px 28px;display:none;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;z-index:150;box-shadow:0 -6px 24px rgba(0,0,0,.18);animation:slideUp .25s ease;}
+#msToolbar.active{display:flex;}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.ms-info{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;}
+.ms-count{background:var(--gold);color:#fff;font-weight:800;padding:2px 11px;border-radius:99px;font-size:13px;}
+.ms-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.ms-btn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 16px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}
+.ms-btn:hover{background:rgba(255,255,255,.22);}
+.ms-clear{background:transparent;border:1px solid rgba(255,255,255,.3);}
+
+/* ── TOAST ── */
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;font-size:13px;font-weight:600;padding:12px 26px;border-radius:99px;box-shadow:var(--shadow-lg);z-index:600;opacity:0;transition:opacity .28s,transform .28s;pointer-events:none;}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+@media(max-width:680px){
+  #hdr{padding:14px 16px 12px;}
+  .brand-name{font-size:20px;} .brand-mark{width:38px;height:38px;}
+  .hstat{padding:7px 12px;min-width:56px;} .hstat-n{font-size:20px;}
+  #main{padding:18px 14px 90px;}
+  .grid{grid-template-columns:1fr;}
+  .dp-hdr{padding:14px 16px 0;} .dp-body{padding:22px 16px 90px;}
+  .dp-title{font-size:23px;} .dp-price{font-size:26px;}
+  .dp-hero{gap:14px;} .dp-price-box{text-align:left;}
+  .ctrl-right{margin-left:0;width:100%;}
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="hdr">
+  <div class="hdr-top">
+    <div class="brand">
+      <div class="brand-mark">3P</div>
+      <div>
+        <div class="brand-name">3 PIN Realty</div>
+        <div class="brand-sub">Premium Property Intelligence</div>
+      </div>
+    </div>
+    <div class="hstats">
+      <div class="hstat g"><div class="hstat-n" id="cR">0</div><div class="hstat-l">Ready</div></div>
+      <div class="hstat a"><div class="hstat-n" id="cU">0</div><div class="hstat-l">Upcoming</div></div>
+      <div class="hstat t"><div class="hstat-n" id="cT">0</div><div class="hstat-l">Total</div></div>
+    </div>
+  </div>
+  <div class="srch-wrap">
+    <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="searchInput" placeholder="Search by name, builder, location, config, amenities…">
+    <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
+  </div>
+  <div class="controls">
+    <div class="fgroup" id="statusFilters"></div>
+    <div class="fdiv"></div>
+    <div class="fgroup" id="typeFilters"></div>
+    <div class="ctrl-right">
+      <button class="fbtn fav-toggle" id="favToggle" onclick="toggleFavView()">★ Favorites</button>
+      <div class="sel-wrap">
+        <select class="sortsel" id="sortSel" onchange="applySort()">
+          <option value="default">Sort: Featured</option>
+          <option value="price-low">Price: Low → High</option>
+          <option value="price-high">Price: High → Low</option>
+          <option value="name">Name: A → Z</option>
+        </select>
+      </div>
+      <button class="addp-btn" onclick="openAddModal()">+ Add Property</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN GRID -->
+<div id="main">
+  <div class="gmeta">
+    <div class="gmeta-l" id="rCnt"></div>
+  </div>
+  <div class="grid" id="pgrid"></div>
+  <div class="nores" id="noRes" style="display:none">
+    <div class="nores-i">🏡</div>
+    <div class="nores-t">No properties match your search</div>
+    <div class="nores-s">Try adjusting your filters or search terms</div>
+  </div>
+</div>
+
+<!-- MULTISELECT TOOLBAR -->
+<div id="msToolbar">
+  <div class="ms-info">Selected <span class="ms-count" id="msCount">0</span> properties</div>
+  <div class="ms-actions">
+    <button class="ms-btn" onclick="compareSelected()">📊 Compare</button>
+    <button class="ms-btn" onclick="exportSelected('csv')">📥 Export CSV</button>
+    <button class="ms-btn ms-clear" onclick="clearSelection()">Clear</button>
+  </div>
+</div>
+
+<!-- DETAIL PANEL -->
+<div id="dp">
+  <div class="dp-hdr">
+    <div class="dp-hdr-nav">
+      <button class="dp-back" onclick="closeDetail()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Properties
+      </button>
+      <div class="dp-hdr-actions">
+        <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
+        <button class="dp-hact" id="dpSoldOut" onclick="toggleSoldOut(currentDetailId)">🏷️ Mark Sold Out</button>
+        <button class="dp-hact" onclick="printProperty(currentDetailId)">🖨️ Print</button>
+        <button class="dp-hact" onclick="openEditModal(currentDetailId)">✏️ Edit</button>
+        <button class="dp-hact danger" onclick="deleteProperty(currentDetailId)">🗑️ Delete</button>
+      </div>
+    </div>
+    <div class="dp-hero" id="dpHero"></div>
+    <div class="dp-tabs">
+      <button class="dp-tab active" onclick="showTab('overview',this)">Overview</button>
+      <button class="dp-tab" onclick="showTab('specs',this)">Specifications</button>
+      <button class="dp-tab" onclick="showTab('pitch',this)">Sales Pitch</button>
+      <button class="dp-tab" onclick="showTab('notes',this)">Notes & CRM</button>
+    </div>
+  </div>
+  <div class="dp-body" id="dpBody"></div>
+</div>
+
+<!-- ADD / EDIT PROPERTY MODAL -->
+<div id="pModal">
+  <div class="pmodal-box">
+    <div class="pmodal-hdr">
+      <div class="pmodal-title" id="pmTitle">Add New Property</div>
+      <button class="pmodal-x" onclick="closePModal()">×</button>
+    </div>
+    <div class="pmodal-body">
+      <div class="pmodal-steps">
+        <div class="pm-step"><b>1.</b> Download the JSON template below</div>
+        <div class="pm-step"><b>2.</b> Fill in the property details in any text editor</div>
+        <div class="pm-step"><b>3.</b> Paste the completed JSON here and click Save</div>
+      </div>
+      <button class="pmodal-dl" onclick="downloadTemplate()">📥 Download JSON Template</button>
+      <textarea id="pmJson" class="pmodal-ta" placeholder='Paste property JSON here, e.g.
+{
+  "name": "Green Meadows",
+  "builder": "ABC Builders",
+  "location": "Velachery, Chennai",
+  "type": "Apartments",
+  "config": "2BHK / 3BHK",
+  "status": "Under Construction",
+  "possession": "Dec 2027",
+  "startingPrice": "₹65L+",
+  ...
+}'></textarea>
+      <div class="pmodal-err" id="pmErr"></div>
+    </div>
+    <div class="pmodal-ftr">
+      <button class="pmodal-cancel" onclick="closePModal()">Cancel</button>
+      <button class="pmodal-save" onclick="savePModal()">✓ Save Property</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════ DATA ═══════
+const sampleData = [{"id": "1", "name": "SHIRDI SHELTERS Whitefield Mudra Phase C", "builder": "SHIRDI SHELTERS", "location": "Medavakkam, Chennai", "type": "Apartments", "config": "2BHK/3BHK", "status": "Under Construction", "possession": "Q1 - 2028", "startingPrice": "₹1.25 Crores", "pricePerSqft": "₹7999/Sqft", "contactName": "Shirdi Shelters", "contactNumber": "94450 38636", "totalUnits": "71", "totalLandArea": "89 Cents", "sqftRange": "1250-2000 Sq.Ft", "highlights": "Customisable Floor Plans,Open Brick Style Architecture,Prime Location", "amenities": "Indoor Kids Play Area,Badminton & Pickleball Court,EV Charging Point", "nearby": "Radial Road - 3 Kms", "nearbyLandmark": "Upcoming Medavakkam Metro Station 1 Km", "connectivity": "Upcoming Medavakkam Metro Station 1 Km", "totalFloors": "Stilt + 5", "vastu": "100% Vaastu Compliance", "parking": "1", "parkingType": "Covered", "availability": "Available"}, {"id": "2", "name": "TVS Emerald UDHYANA Phase 3", "builder": "TVS", "location": "Vengaivaasal, Chennai", "type": "Apartments", "config": "2BHK / 3BHK", "status": "Under Construction", "possession": "TBA", "startingPrice": "₹70L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "975-1665", "highlights": "2 Acres of Open Space,Herbal Garden", "amenities": "75+ Amenities,15000 Sqft Clubhouse,Gym", "nearby": "Medavakkam", "nearbyLandmark": "Tambaram Railway Station", "connectivity": "Tambaram Railway Station", "totalFloors": "", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "3", "name": "Purvankara Windemere", "builder": "Purvankara", "location": "Pallikaranai, Chennai", "type": "Apartments", "config": "2BHK / 3BHK / 4BHK", "status": "Under Construction", "possession": "Dec 2026", "startingPrice": "₹52L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "2688", "totalLandArea": "55 Acres", "sqftRange": "620-1490", "highlights": "15 mins from Airport,Near IT corridor OMR", "amenities": "Swimming Pool,Gym,Landscape Garden,Yoga Room", "nearby": "Medavakkam", "nearbyLandmark": "", "connectivity": "OMR,Velachery Main Road", "totalFloors": "12", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "4", "name": "Prestige Pallavaram Gardens", "builder": "Prestige", "location": "Pallavaram Radial Road, Chennai", "type": "Apartments", "config": "2BHK / 3BHK / 4BHK", "status": "Under Construction", "possession": "TBA", "startingPrice": "₹1.09Cr - 3.3Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "21.8 Acres", "sqftRange": "1001-2735", "highlights": "15 Mins from Tidel Park,25 Mins from Olympia Tech Park", "amenities": "Outdoor Party Lawn,Swimming Pool,Club House", "nearby": "Tambaram,Airport", "nearbyLandmark": "Vels College", "connectivity": "Kilkattalai Metro Station,GST Road", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "5", "name": "NCC Urban IVY Towers", "builder": "NCC", "location": "Pallavaram Radial Road, Chennai", "type": "Apartments", "config": "2BHK / 3BHK", "status": "Under Construction", "possession": "Dec 2026", "startingPrice": "₹1.11Cr+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "924", "totalLandArea": "8.25 Acres", "sqftRange": "1217-1810", "highlights": "No common Walls,3 side Ventilation,High Speed Lift", "amenities": "Swimming Pool,Library,Spa,Gym", "nearby": "Tambaram,Airport", "nearbyLandmark": "Vels College", "connectivity": "Kilkattalai Metro Station,GST Road", "totalFloors": "18", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "6", "name": "Brigade Altius", "builder": "Brigade", "location": "Sholinganallur, Chennai", "type": "Apartments", "config": "3BHK / 4BHK / Duplex", "status": "Under Construction", "possession": "TBA", "startingPrice": "₹2.18Cr - 3.77Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "662", "totalLandArea": "6.5 Acres", "sqftRange": "1740-2577", "highlights": "SKY Bridge,80% open spaces,Luxurious Lifestyle", "amenities": "50000 sqft Clubhouse,50+ Amenities,Swimming Pool", "nearby": "Sholinganallur Junction,ECR", "nearbyLandmark": "ELCOT SEZ IT Park", "connectivity": "Upcoming Sholinganallur Metro", "totalFloors": "43", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "7", "name": "Radiance Eternity", "builder": "Radiance", "location": "Thoraipakkam, Chennai", "type": "Apartments", "config": "3BHK / 4BHK", "status": "Under Construction", "possession": "Dec 2026", "startingPrice": "₹1.99Cr - 3.5Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "215", "totalLandArea": "2.21 Acres", "sqftRange": "1356-2711", "highlights": "Rooftop Swimming Pool with Sea View,On road Property OMR", "amenities": "Gym,Rock climbing Wall,Co-working Space", "nearby": "", "nearbyLandmark": "BSR Mall,Major IT Hubs", "connectivity": "Nearby upcoming Metro Station", "totalFloors": "22", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "8", "name": "Pacifica Aurum", "builder": "Pacifica", "location": "Padur, Chennai", "type": "Residential", "config": "Multiple", "status": "Under Construction", "possession": "TBA", "startingPrice": "Price on Request", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "", "connectivity": "", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": ""}, {"id": "9", "name": "Casa Grande Sun City", "builder": "Casa Grande", "location": "Melakottaiyur, Chennai", "type": "Apartments", "config": "2BHK / 3BHK / 4BHK", "status": "Under Construction", "possession": "TBA", "startingPrice": "₹60L - 1.3Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "40 Acres", "sqftRange": "1189-2575", "highlights": "2 Acre Club House,30 Acres Open Spaces,32000 Sqft Swimming Pool", "amenities": "130+ Amenities,Shia-salt Spa,Sky Cinema", "nearby": "Vandalur,Kilambakkam", "nearbyLandmark": "VIT University,Vandaloor Zoo", "connectivity": "Kilambakkam Bus Terminal", "totalFloors": "36", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "10", "name": "Casa Grand Casa Mia", "builder": "Casa Grande", "location": "Pallavaram, Chennai", "type": "Apartments", "config": "2BHK / 3BHK / 4BHK", "status": "Under Construction", "possession": "Jun 2026", "startingPrice": "₹60L - 1.6Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "1312", "totalLandArea": "22 Acres", "sqftRange": "1161-2960", "highlights": "Spanish Architecture,15 Acres Open Spaces,8Ft high bedroom Windows", "amenities": "Star Gazing Deck,Adult Net Swing,Herbal Garden", "nearby": "Chrompet,Kundrathur", "nearbyLandmark": "Airport,Tambaram Railway Station", "connectivity": "10 mins from Airport", "totalFloors": "5", "vastu": "Yes", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "11", "name": "Elephantine Enormous", "builder": "Elephantine", "location": "Mambakkam, Chennai", "type": "Plots", "config": "Plots", "status": "Ready to Move", "possession": "Ready to Build", "startingPrice": "₹28L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "86", "totalLandArea": "4.3 Acres", "sqftRange": "700-2000", "highlights": "EB provision ready,Surrounded by Nature,Ready to build", "amenities": "Grand Entrance Arch,Avenue Trees,Sports Academy", "nearby": "Vandalur,Kilambakkam", "nearbyLandmark": "VIT University,Vandaloor Zoo", "connectivity": "Kilambakkam Bus Terminal", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "12", "name": "Sobha Arbor", "builder": "Sobha", "location": "Poonamallee, Chennai", "type": "Apartments", "config": "3BHK / 4BHK", "status": "Under Construction", "possession": "TBA", "startingPrice": "₹1.42Cr+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "163", "totalLandArea": "3.38 Acres", "sqftRange": "1539-2445", "highlights": "Organic farming zones,Landscaped gardens,Green Design", "amenities": "Jogging Tracks,Multipurpose Hall,Rainwater Harvesting", "nearby": "Porur,Poonamallee", "nearbyLandmark": "D-Mart Porur,ACS Medical College", "connectivity": "Upcoming Kumananchavadi Metro", "totalFloors": "5", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "13", "name": "LUX 49", "builder": "LUX", "location": "Thiruvanmiyur, Chennai", "type": "Apartments", "config": "4BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹5 Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "3", "totalLandArea": "", "sqftRange": "2505 Sq.Ft", "highlights": "Lift opens directly to home,Rooftop Landscape Area", "amenities": "100% Power Backup,EV Charging Point,Servant Quarters", "nearby": "Adyar", "nearbyLandmark": "Kalakshetra Road", "connectivity": "ECR Road Connectivity", "totalFloors": "Stilt + 3", "vastu": "Yes", "parking": "2", "parkingType": "Covered", "availability": "Available"}, {"id": "14", "name": "EDEN Villas", "builder": "EDEN", "location": "Mogappair, Chennai", "type": "Villa", "config": "4BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "Price on Request", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "54", "totalLandArea": "", "sqftRange": "2430 Sq.Ft", "highlights": "Gated Community Villa,Power Backup,100% UDS", "amenities": "Clubhouse,24x7 Security", "nearby": "Nolambur,Ambattur", "nearbyLandmark": "Decathlon,Food Court", "connectivity": "Porur Toll Plaza", "totalFloors": "G+2", "vastu": "Yes", "parking": "2", "parkingType": "Covered", "availability": "Available"}, {"id": "15", "name": "Jones Cassia Phase 7", "builder": "Jones", "location": "Ottiyampakkam, Chennai", "type": "Villa", "config": "4BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹2.85 Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "40 Acres", "sqftRange": "2360 Sq.Ft", "highlights": "Corner Villa,Fully Furnished,Premium Interiors", "amenities": "Swimming Pool,Gym,Clubhouse,Kids Play Area", "nearby": "Medavakkam,Sholinganallur", "nearbyLandmark": "MS Dhoni owned School", "connectivity": "OMR Road", "totalFloors": "G+1", "vastu": "Yes", "parking": "2", "parkingType": "Covered", "availability": "Available"}, {"id": "16", "name": "GA Gardens", "builder": "GA", "location": "Poonamallee, Chennai", "type": "Plots", "config": "Plots", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹45L - 75L", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "45", "totalLandArea": "1.15 Acre", "sqftRange": "700-1100 Sq.ft", "highlights": "30ft Black Top Roads,Solar Street Lights,EB Connection", "amenities": "Black Top Roads,Solar Street Lights,EB Connection", "nearby": "Porur", "nearbyLandmark": "Panimalar Medical College", "connectivity": "Upcoming Metro", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "17", "name": "Residential Land Poes Garden", "builder": "Residential", "location": "Poes Garden, Chennai", "type": "Plot", "config": "Plots", "status": "Under Construction", "possession": "TBA", "startingPrice": "Price on Request", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "", "highlights": "Prime Poes Garden Location", "amenities": "40ft Road Access,Metro Water", "nearby": "Teynampet,Alwarpet", "nearbyLandmark": "Kasturi Ranga 1st Avenue", "connectivity": "Anna Salai,Teynampet Metro", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "18", "name": "C74 TVS Emerald Penisula", "builder": "C74", "location": "Manapakkam, Chennai", "type": "Apartment", "config": "3BHK 3T", "status": "Under Construction", "possession": "TBA", "startingPrice": "Price on Request", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "", "highlights": "Prime Location", "amenities": "40ft Road Access,Metro Water", "nearby": "", "nearbyLandmark": "", "connectivity": "", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": "Available"}, {"id": "19", "name": "Harrington Road Apartment", "builder": "Harrington", "location": "Nungambakkam, Chennai", "type": "Apartment", "config": "3BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹3.0 Cr", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "5", "totalLandArea": "", "sqftRange": "2100 Sq.Ft", "highlights": "Lift to all floors,Generator Backup", "amenities": "CCTV Surveillance,Wooden Flooring", "nearby": "Anna Nagar,Kilpauk", "nearbyLandmark": "Pachayappas College", "connectivity": "Pachayappas College Metro", "totalFloors": "5", "vastu": "", "parking": "2 Tandem", "parkingType": "Tandem", "availability": ""}, {"id": "20", "name": "Arun Excello HARIPRIYA Block 4", "builder": "Arun Excello", "location": "Guduvanchery, Chennai", "type": "Apartments", "config": "1BHK & 2BHK", "status": "Under Construction", "possession": "2027 Mid", "startingPrice": "₹20.76L+", "pricePerSqft": "GF-5275", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "65", "totalLandArea": "1.9 Acres", "sqftRange": "390-780 Sq.ft", "highlights": "", "amenities": "", "nearby": "SRM Public School", "nearbyLandmark": "Guduvanchery", "connectivity": "Guduvanchery Station", "totalFloors": "G+4", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "21", "name": "Arun Excello URMIKA Block 1", "builder": "Arun Excello", "location": "Maraimalai Nagar, Chennai", "type": "Apartments", "config": "2BHK", "status": "Under Construction", "possession": "Apr 2026", "startingPrice": "₹28.61L - 34.92L", "pricePerSqft": "GF-4700", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "94", "totalLandArea": "2.1 Acres", "sqftRange": "590-720 Sq.ft", "highlights": "", "amenities": "", "nearby": "ST Ann Matriculations School", "nearbyLandmark": "Maraimalai Nagar", "connectivity": "Maraimalai Nagar Station", "totalFloors": "G+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "22", "name": "Arun Excello SAMANTA", "builder": "Arun Excello", "location": "Singaperumal Koil, Chennai", "type": "Apartments", "config": "1BHK & 2BHK", "status": "Under Construction", "possession": "1BHK-Apr 2026", "startingPrice": "₹23.23L - 39.22L", "pricePerSqft": "5000-5300", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "240", "totalLandArea": "1.96 Acres", "sqftRange": "1BHK-460-510", "highlights": "", "amenities": "", "nearby": "Indian Public School", "nearbyLandmark": "Singaperumal Koil", "connectivity": "Singaperumal Koil Station", "totalFloors": "S+4", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "23", "name": "Arun Excello TARANGINI", "builder": "Arun Excello", "location": "Ikkadu, Chennai", "type": "Apartments", "config": "1BHK & 2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹25L - 29.54L", "pricePerSqft": "4950-5050", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "82", "totalLandArea": "5.5 Acres", "sqftRange": "1BHK-550-585 Sq.ft", "highlights": "", "amenities": "", "nearby": "Veeraraghavar Temple", "nearbyLandmark": "Ikkadu Thiruvallur", "connectivity": "2.5KM from Ikkadu Bus Stop", "totalFloors": "G+2", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "24", "name": "Arun Excello LALITHANGI", "builder": "Arun Excello", "location": "Oragadam, Chennai", "type": "Apartments", "config": "Multiple", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹18.70L - 24.22L", "pricePerSqft": "4200-4250", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "94", "totalLandArea": "1 Acre", "sqftRange": "440-570 Sq.ft", "highlights": "", "amenities": "", "nearby": "Sree Gokulam Public School", "nearbyLandmark": "Oragadam", "connectivity": "Oragadam Junction", "totalFloors": "G+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "25", "name": "Arun Excello TEMPLE GREEN ACRES 1-3", "builder": "Arun Excello", "location": "Oragadam, Chennai", "type": "Plots", "config": "Plots", "status": "Ready to Move", "possession": "RTC", "startingPrice": "₹2700/Sqft+", "pricePerSqft": "2700-2800", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "70", "totalLandArea": "140 Acres", "sqftRange": "958-2977 Sq.ft", "highlights": "", "amenities": "", "nearby": "Oragadam Junction", "nearbyLandmark": "Oragadam", "connectivity": "Oragadam Junction", "totalFloors": "", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "26", "name": "Arun Excello TEMPLE GREEN ACRES 5", "builder": "Arun Excello", "location": "Oragadam, Chennai", "type": "Plots", "config": "Plots", "status": "Ready to Move", "possession": "RTC", "startingPrice": "₹2800/Sqft+", "pricePerSqft": "2700-2800", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "60", "totalLandArea": "140 Acres", "sqftRange": "501-2516 Sq.ft", "highlights": "", "amenities": "", "nearby": "Oragadam Junction", "nearbyLandmark": "Oragadam", "connectivity": "Oragadam Junction", "totalFloors": "", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "27", "name": "Shriram 122 West", "builder": "Shriram Properties", "location": "Mangadu, Chennai", "type": "Apartments", "config": "2BHK / 3BHK", "status": "Under Construction", "possession": "Oct 2028", "startingPrice": "₹61.17L+", "pricePerSqft": "6090/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "936", "totalLandArea": "4.98 Acres", "sqftRange": "2BHK-818-874", "highlights": "Clubhouse 20000 Sqft", "amenities": "40+ Amenities", "nearby": "Close to DLF IT Park", "nearbyLandmark": "Mangadu", "connectivity": "10 Mins from Porur Junction", "totalFloors": "2B+G+19", "vastu": "Yes", "parking": "Covered", "parkingType": "Covered", "availability": ""}, {"id": "28", "name": "Shriram Park 63", "builder": "Shriram Properties", "location": "Perungalathur, Chennai", "type": "Apartments", "config": "2BHK / 3BHK / 4BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹1.7Cr - 1.95Cr", "pricePerSqft": "8550/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "1400", "totalLandArea": "17 Acres", "sqftRange": "1725-1970 Sq.ft", "highlights": "Clubhouse 20000 Sqft", "amenities": "40+ Amenities", "nearby": "Opp to Perungalathur Railway Station", "nearbyLandmark": "Perungalathur", "connectivity": "10 Mins from Kilambakkam Bus Stand", "totalFloors": "2B+G+13", "vastu": "Yes", "parking": "Covered", "parkingType": "Covered", "availability": ""}, {"id": "29", "name": "Shriram Subham Phase 2", "builder": "Shriram Properties", "location": "Valarpuram, Chennai", "type": "Plots", "config": "Plots", "status": "Ready to Move", "possession": "RTC", "startingPrice": "₹2099/Sqft", "pricePerSqft": "2099/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "151", "totalLandArea": "10+ Acres", "sqftRange": "1500-4000 Sq.ft", "highlights": "", "amenities": "25+ Amenities", "nearby": "Close to DLF Commerzone", "nearbyLandmark": "Valarpuram", "connectivity": "Sriperumbudur SIPCOT", "totalFloors": "", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "30", "name": "MP Developers MAPLE WOOD", "builder": "MP Developers", "location": "Anagakaputhur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹50L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "6", "totalLandArea": "", "sqftRange": "802 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Anagakaputhur", "connectivity": "", "totalFloors": "S+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "31", "name": "MP Developers AMBER", "builder": "MP Developers", "location": "Anagakaputhur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹50L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "8", "totalLandArea": "", "sqftRange": "671-970 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Anagakaputhur", "connectivity": "", "totalFloors": "G+2", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "32", "name": "MP Developers MP PETALS Phase 1", "builder": "MP Developers", "location": "Kundrathur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹63L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "114", "totalLandArea": "", "sqftRange": "947 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Kundrathur", "connectivity": "", "totalFloors": "S+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "33", "name": "MP Developers MP PETALS Phase 2", "builder": "MP Developers", "location": "Kundrathur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Under Construction", "possession": "May 2027", "startingPrice": "₹56L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "60", "totalLandArea": "", "sqftRange": "800-948 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Kundrathur", "connectivity": "", "totalFloors": "S+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "34", "name": "MP Developers MP GREEN BAY CMDA", "builder": "MP Developers", "location": "Kundrathur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Under Construction", "possession": "Jun 2026", "startingPrice": "₹72L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "70", "totalLandArea": "", "sqftRange": "1038-1170 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Kundrathur", "connectivity": "", "totalFloors": "S+5", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "35", "name": "MP Developers MP GREEN BAY", "builder": "MP Developers", "location": "Kundrathur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹72L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "50", "totalLandArea": "", "sqftRange": "1038-1170 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Kundrathur", "connectivity": "", "totalFloors": "S+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "36", "name": "MP Developers MP GOLDEN HEIGHTS", "builder": "MP Developers", "location": "Kovur, Chennai", "type": "Apartments", "config": "2BHK", "status": "Ready to Move", "possession": "RTM", "startingPrice": "₹75L+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "125", "totalLandArea": "", "sqftRange": "926-1057 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Kovur", "connectivity": "", "totalFloors": "S+5", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "37", "name": "MP Developers THE WHITE HOUSE", "builder": "MP Developers", "location": "Manapakkam, Chennai", "type": "Apartments", "config": "3BHK", "status": "Under Construction", "possession": "Oct 2026", "startingPrice": "₹1.7Cr+", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "36", "totalLandArea": "", "sqftRange": "1649-1750 Sq.ft", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "Manapakkam", "connectivity": "", "totalFloors": "S+3", "vastu": "Yes", "parking": "", "parkingType": "", "availability": ""}, {"id": "38", "name": "MP Developers MP MUGIL & MUGAVARI", "builder": "MP Developers", "location": "Periya Palayatamman Nagar, Chennai", "type": "Residential", "config": "Multiple", "status": "Under Construction", "possession": "TBA", "startingPrice": "Price on Request", "pricePerSqft": "", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "", "highlights": "", "amenities": "", "nearby": "", "nearbyLandmark": "", "connectivity": "", "totalFloors": "", "vastu": "", "parking": "", "parkingType": "", "availability": ""}, {"id": "39", "name": "FIRM'S Srivaruni - Anna Nagar I Block", "builder": "FIRM'S", "location": "Anna Nagar, Chennai", "type": "Apartment", "config": "3BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹3.07 Cr", "pricePerSqft": "₹20,000/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "8", "totalLandArea": "", "sqftRange": "1535 Sq.ft", "highlights": "Brand New,Road Facing", "amenities": "Access Control,Piped Gas", "nearby": "Near 6th Avenue", "nearbyLandmark": "18th Main Road", "connectivity": "Thirumangalam Metro", "totalFloors": "Stilt + 4", "vastu": "", "parking": "1", "parkingType": "Covered", "availability": "Available"}, {"id": "40", "name": "SriVaradha - Mahalingapuram", "builder": "SriVaradha", "location": "Mahalingapuram, Nungambakkam, Chennai", "type": "Apartment", "config": "3BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹3.35 Cr", "pricePerSqft": "₹18,000/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "6", "totalLandArea": "", "sqftRange": "1540 Sq.ft", "highlights": "11ft 6in High Ceilings", "amenities": "CCTV Surveillance,Automatic Security Gate", "nearby": "Kamdar Nagar", "nearbyLandmark": "IOB Bank Mahalingapuram Branch", "connectivity": "40 Ft Scheme Road", "totalFloors": "3", "vastu": "Yes", "parking": "2", "parkingType": "Covered Reserved", "availability": "Available"}, {"id": "41", "name": "Casagrand Millenia - Mogappair", "builder": "Casagrand", "location": "Mogappair, Chennai", "type": "Apartment", "config": "5BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹5.4 Crores", "pricePerSqft": "₹12,050/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "146", "totalLandArea": "3.46 Acres", "sqftRange": "4482 Sq.ft", "highlights": "Combined Units,Brand New Flat,Premium Low Density", "amenities": "Swimming Pool,Gym,Kids Play Area", "nearby": "10 Mins from Anna Nagar Roundtana", "nearbyLandmark": "Anna Nagar", "connectivity": "Anna Nagar", "totalFloors": "8", "vastu": "", "parking": "4", "parkingType": "Covered", "availability": "Available"}, {"id": "42", "name": "Lezaras Villa - Chetpet", "builder": "Lezaras", "location": "Chetpet, Chennai", "type": "Villa", "config": "6BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹8.5 Cr", "pricePerSqft": "₹22,600/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "1", "totalLandArea": "", "sqftRange": "3760 Sq.ft", "highlights": "Independent Villa,Premium Residential Location", "amenities": "Servant Room,Separate Servant Toilet", "nearby": "Chetpet Railway Station", "nearbyLandmark": "Union Christian School", "connectivity": "Approx 1.5 Km from Pachaiappa Metro Station", "totalFloors": "G+1+Terrace", "vastu": "", "parking": "3", "parkingType": "Covered", "availability": "Available"}, {"id": "43", "name": "Aynavaram Bungalow", "builder": "Independent", "location": "Ayanavaram, Chennai", "type": "Independent House", "config": "5BHK", "status": "Ready to Move", "possession": "Ready", "startingPrice": "₹6.75 Cr", "pricePerSqft": "₹11,640/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "1", "totalLandArea": "3237 Sqft Plot", "sqftRange": "5800 Sq.ft", "highlights": "Premium Independent House,Fully Furnished", "amenities": "Prayer Room,Gym Room,Balcony", "nearby": "Anna Nagar,Kilpauk Garden", "nearbyLandmark": "Ayanavaram Metro Station", "connectivity": "500m to Ayanavaram Metro", "totalFloors": "", "vastu": "", "parking": "5", "parkingType": "", "availability": "Available"}, {"id": "44", "name": "Adroit Artistica Lakshya Town House (RENT)", "builder": "Adroit", "location": "Sholinganallur, OMR, Chennai", "type": "Townhouse", "config": "4BHK", "status": "Ready to Move", "possession": "Immediate", "startingPrice": "₹1,35,000/Month", "pricePerSqft": "RENT ONLY", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "", "totalLandArea": "", "sqftRange": "4946 Sq.ft", "highlights": "Luxurious Duplex Townhouse,Immediate Occupancy", "amenities": "Clubhouse,Gym,Yoga Hall,Swimming Pool", "nearby": "SEZ IT Park", "nearbyLandmark": "Sholinganallur Junction", "connectivity": "Adjacent to Upcoming Metro Station", "totalFloors": "", "vastu": "Yes", "parking": "3", "parkingType": "2 Covered + 1 Open", "availability": "Immediate"}, {"id": "45", "name": "Suprabhatam - Nanganallur 3BHK", "builder": "Suprabhatam Builder", "location": "Nanganallur, Chennai", "type": "Apartment", "config": "3BHK", "status": "Ready to Move", "possession": "Immediate", "startingPrice": "₹2.3 Cr", "pricePerSqft": "₹20,000/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "6", "totalLandArea": "", "sqftRange": "1150 Sq.ft", "highlights": "Fully Furnished,Ready to Move", "amenities": "Modular Kitchen,Premium Furnishings", "nearby": "Chennai Airport", "nearbyLandmark": "12th Main Road,Anjaneyar Temple", "connectivity": "5 Minutes to Metro Station", "totalFloors": "3", "vastu": "Yes", "parking": "1", "parkingType": "Covered", "availability": "Available"}, {"id": "46", "name": "Ceebros Row Villa - Abhiramapuram", "builder": "Ceebros", "location": "Abhiramapuram, Alwarpet, Chennai", "type": "Villa", "config": "3BHK", "status": "Ready to Move", "possession": "Immediate", "startingPrice": "₹4.4 Cr", "pricePerSqft": "₹28,500/Sqft", "contactName": "Swaminathan", "contactNumber": "98848 83370", "totalUnits": "6", "totalLandArea": "3.5 Grounds", "sqftRange": "1540 Sq.ft", "highlights": "Premium Row Villa,Villa-Style Privacy", "amenities": "Private Terrace,Modular Kitchen", "nearby": "Akshayam Restaurant", "nearbyLandmark": "Opposite Citibank", "connectivity": "", "totalFloors": "G+1", "vastu": "", "parking": "1", "parkingType": "Open", "availability": "Available"}];
+
+// ═══════ STATE ═══════
+const savedProps = JSON.parse(localStorage.getItem('pinProperties'));
+let properties = savedProps || sampleData.map(p=>({...p}));
+function persistProperties(){ localStorage.setItem('pinProperties', JSON.stringify(properties)); }
+let filteredProperties = [...properties];
+let selectedProperties = new Set();
+let favorites = JSON.parse(localStorage.getItem('pinFavorites')) || [];
+let soldOut = JSON.parse(localStorage.getItem('pinSoldOut')) || [];
+let notes = JSON.parse(localStorage.getItem('pinNotes')) || {};
+let propertyInterests = JSON.parse(localStorage.getItem('pinInterests')) || {};
+let currentStatus = 'all';
+let currentType = 'all';
+let currentSort = 'default';
+let showFavOnly = false;
+let hideSoldOut = false;
+let currentSearch = '';
+let currentDetailId = null;
+
+// ═══════ HELPERS ═══════
+const isReady = p => p.status === 'Ready to Move';
+const splitList = s => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
+// crude numeric price extraction for sorting (₹, L, Cr, Crores)
+function priceValue(p){
+  const s = (p.startingPrice||'').replace(/,/g,'');
+  const m = s.match(/([\d.]+)\s*(Cr|Crore|Crores|L|Lakh)?/i);
+  if(!m) return Number.MAX_SAFE_INTEGER; // 'Price on Request' sinks to bottom
+  let n = parseFloat(m[1]);
+  const unit = (m[2]||'').toLowerCase();
+  if(unit.startsWith('cr')) n *= 10000000;
+  else if(unit.startsWith('l')) n *= 100000;
+  else if(s.includes('/Sqft')) n = n; // per-sqft plots — keep small
+  return n;
+}
+
+// ═══════ INIT ═══════
+function init(){
+  setupStatusFilters();
+  setupTypeFilters();
+  setupSoldOutFilter();
+  setupSearch();
+  applyFilters();
+  updateStats();
+}
+
+function updateStats(){
+  document.getElementById('cR').textContent = properties.filter(isReady).length;
+  document.getElementById('cU').textContent = properties.filter(p => p.status === 'Under Construction').length;
+  document.getElementById('cT').textContent = properties.length;
+}
+
+// ═══════ FILTERS / SORT / SEARCH ═══════
+function setupStatusFilters(){
+  document.getElementById('statusFilters').innerHTML = `
+    <button class="fbtn at" data-s="all" onclick="setStatus('all',this)">All</button>
+    <button class="fbtn srtm" data-s="ready" onclick="setStatus('ready',this)">✓ Ready</button>
+    <button class="fbtn suc" data-s="upcoming" onclick="setStatus('upcoming',this)">⏳ Upcoming</button>`;
+}
+function setupTypeFilters(){
+  const types = [...new Set(properties.map(p => p.type))].sort();
+  const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
+  const groups = [...new Set(properties.map(p => norm[p.type]||p.type))].sort();
+  let html = `<button class="fbtn at" data-t="all" onclick="setType('all',this)">All Types</button>`;
+  groups.forEach(t => html += `<button class="fbtn" data-t="${t}" onclick="setType('${t}',this)">${t}</button>`);
+  document.getElementById('typeFilters').innerHTML = html;
+}
+function setupSoldOutFilter(){
+  const html = `<button class="fbtn" id="soldOutToggle" onclick="toggleSoldOutFilter(this)">👁️ Hide Sold Out</button>`;
+  let container = document.querySelector('.controls');
+  let divider = document.querySelector('.fdiv');
+  if(divider) divider.insertAdjacentHTML('afterend', html);
+}
+function toggleSoldOutFilter(btn){
+  hideSoldOut = !hideSoldOut;
+  btn.classList.toggle('at', hideSoldOut);
+  btn.textContent = hideSoldOut ? '✓ Only Active' : '👁️ Hide Sold Out';
+  applyFilters();
+}
+function setStatus(s,btn){currentStatus=s;document.querySelectorAll('#statusFilters .fbtn').forEach(b=>b.classList.remove('at'));btn.classList.add('at');applyFilters();}
+function setType(t,btn){currentType=t;document.querySelectorAll('#typeFilters .fbtn').forEach(b=>b.classList.remove('at'));btn.classList.add('at');applyFilters();}
+function applySort(){currentSort=document.getElementById('sortSel').value;applyFilters();}
+function toggleFavView(){showFavOnly=!showFavOnly;document.getElementById('favToggle').classList.toggle('at',showFavOnly);applyFilters();}
+
+function setupSearch(){
+  const inp = document.getElementById('searchInput');
+  inp.addEventListener('input', e => {
+    currentSearch = e.target.value.toLowerCase();
+    document.getElementById('srchClear').classList.toggle('show', !!currentSearch);
+    applyFilters();
+  });
+}
+function clearSearch(){document.getElementById('searchInput').value='';currentSearch='';document.getElementById('srchClear').classList.remove('show');applyFilters();}
+
+function applyFilters(){
+  const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
+  let res = properties.filter(p => {
+    if(currentStatus==='ready' && !isReady(p)) return false;
+    if(currentStatus==='upcoming' && p.status!=='Under Construction') return false;
+    if(currentType!=='all' && (norm[p.type]||p.type)!==currentType) return false;
+    if(showFavOnly && !favorites.includes(p.id)) return false;
+    if(hideSoldOut && soldOut.includes(p.id)) return false;
+    if(currentSearch){
+      const hay = [p.name,p.location,p.builder,p.config,p.amenities,p.highlights,p.type].join(' ').toLowerCase();
+      if(!hay.includes(currentSearch)) return false;
+    }
+    return true;
+  });
+  if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
+  else if(currentSort==='price-high') res.sort((a,b)=>priceValue(b)-priceValue(a));
+  else if(currentSort==='name') res.sort((a,b)=>a.name.localeCompare(b.name));
+  filteredProperties = res;
+  renderGrid();
+}
+
+// ═══════ GRID ═══════
+function renderGrid(){
+  const grid = document.getElementById('pgrid');
+  const noRes = document.getElementById('noRes');
+  const rCnt = document.getElementById('rCnt');
+  if(filteredProperties.length===0){
+    grid.innerHTML=''; noRes.style.display='block';
+    rCnt.innerHTML='<b>0</b> properties'; return;
+  }
+  noRes.style.display='none';
+  rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`;
+  grid.innerHTML = filteredProperties.map(p => {
+    const fav = favorites.includes(p.id);
+    const sel = selectedProperties.has(p.id);
+    const isSoldOut = soldOut.includes(p.id);
+    const typeBadge = p.type.includes('Plot')?'bs':p.type.includes('Villa')||p.type.includes('House')?'bp':'bb';
+    return `
+    <div class="card ${isSoldOut?'sold-out':''}">
+      <div class="card-bar ${isReady(p)?'rtm':'uc'}"></div>
+      ${isSoldOut?'<div class="sold-out-overlay"><div class="sold-out-overlay-text">SOLD OUT</div></div>':''}
+      <div class="card-body" onclick="openDetail('${p.id}')">
+        <div class="card-r1">
+          <div>
+            <div class="card-name">${p.name}</div>
+            <div class="card-loc">📍 ${p.location}</div>
+          </div>
+          <div class="card-actions" onclick="event.stopPropagation()">
+            <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${p.id}',event)" title="Save">★</button>
+          </div>
+        </div>
+        <div class="badges">
+          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+p.possession}</span>
+          <span class="badge ${typeBadge}">${p.config}</span>
+        </div>
+        <div class="price-row">
+          <div>
+            <div class="price-lbl">Starting Price</div>
+            <div class="price-main">${p.startingPrice}</div>
+          </div>
+          ${p.pricePerSqft?`<div class="price-psf">${p.pricePerSqft}</div>`:''}
+        </div>
+        <div class="card-stats">
+          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${p.sqftRange||'—'}</div></div>
+          <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${p.type}</div></div>
+        </div>
+        <div class="card-foot">
+          <div class="card-bldr">${p.builder}</div>
+          <label class="card-cmp" onclick="event.stopPropagation()">
+            <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${p.id}',this)"> Compare
+          </label>
+        </div>
+      </div>
+      <div class="card-cta">
+        <a href="tel:${p.contactNumber}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
+        <div class="cta-btn cta-view" onclick="openDetail('${p.id}')">View Details →</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════ FAVORITES ═══════
+function toggleFavorite(id,event){
+  event.stopPropagation();
+  const i = favorites.indexOf(id);
+  if(i===-1){favorites.push(id);showToast('★ Added to favorites');}
+  else{favorites.splice(i,1);showToast('Removed from favorites');}
+  localStorage.setItem('pinFavorites',JSON.stringify(favorites));
+  applyFilters();
+}
+function toggleFavFromDetail(){
+  const id = currentDetailId;
+  const i = favorites.indexOf(id);
+  if(i===-1){favorites.push(id);showToast('★ Added to favorites');}
+  else{favorites.splice(i,1);showToast('Removed from favorites');}
+  localStorage.setItem('pinFavorites',JSON.stringify(favorites));
+  document.getElementById('dpFav').classList.toggle('active',favorites.includes(id));
+  document.getElementById('dpFav').textContent = favorites.includes(id)?'★ Saved':'★ Save';
+}
+
+// ═══════ SOLD OUT ═══════
+function toggleSoldOut(id){
+  const i = soldOut.indexOf(id);
+  if(i===-1){
+    soldOut.push(id);
+    showToast('✓ Property marked as Sold Out');
+    document.getElementById('dpSoldOut').classList.add('sold-out');
+    document.getElementById('dpSoldOut').textContent = '✓ Marked Sold Out';
+  } else {
+    soldOut.splice(i,1);
+    showToast('Property unmarked — Back to Active');
+    document.getElementById('dpSoldOut').classList.remove('sold-out');
+    document.getElementById('dpSoldOut').textContent = '🏷️ Mark Sold Out';
+  }
+  localStorage.setItem('pinSoldOut',JSON.stringify(soldOut));
+  applyFilters();
+}
+
+// ═══════ SELECTION / COMPARE ═══════
+function toggleSelection(id,cb){
+  if(cb.checked) selectedProperties.add(id); else selectedProperties.delete(id);
+  const t=document.getElementById('msToolbar');
+  document.getElementById('msCount').textContent=selectedProperties.size;
+  t.classList.toggle('active',selectedProperties.size>0);
+}
+function clearSelection(){
+  selectedProperties.clear();
+  document.querySelectorAll('.card-cmp input').forEach(c=>c.checked=false);
+  document.getElementById('msToolbar').classList.remove('active');
+}
+function compareSelected(){
+  if(selectedProperties.size<2){showToast('Select at least 2 properties to compare');return;}
+  const comp = Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
+  const rows = [
+    ['Starting Price','startingPrice'],['Price/SqFt','pricePerSqft'],['Configuration','config'],
+    ['Area Range','sqftRange'],['Status','status'],['Possession','possession'],
+    ['Builder','builder'],['Location','location'],['Total Units','totalUnits'],['Vastu','vastu']
+  ];
+  const html = `
+    <div class="sec">
+      <div class="sec-title">📊 Property Comparison</div>
+      <div class="cmp-wrap"><table class="cmp-t">
+        <thead><tr><th>Feature</th>${comp.map(p=>`<th>${p.name}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(([lbl,key])=>`<tr><td>${lbl}</td>${comp.map(p=>`<td>${p[key]||'—'}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
+  currentDetailId=null;
+  document.getElementById('dpHero').innerHTML='<div><div class="dp-builder-tag">Comparison Mode</div><h1 class="dp-title">Comparing '+comp.length+' Properties</h1></div>';
+  document.querySelector('.dp-tabs').style.display='none';
+  document.querySelector('.dp-hdr-actions').style.display='none';
+  document.getElementById('dpBody').innerHTML=html;
+  document.getElementById('dp').classList.add('open');
+}
+
+// ═══════ DETAIL PANEL ═══════
+function openDetail(id){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  currentDetailId = id;
+  document.querySelector('.dp-tabs').style.display='flex';
+  document.querySelector('.dp-hdr-actions').style.display='flex';
+  const fav = favorites.includes(id);
+  const isSoldOut = soldOut.includes(id);
+  document.getElementById('dpFav').classList.toggle('active',fav);
+  document.getElementById('dpFav').textContent = fav?'★ Saved':'★ Save';
+  document.getElementById('dpSoldOut').classList.toggle('sold-out',isSoldOut);
+  document.getElementById('dpSoldOut').textContent = isSoldOut?'✓ Marked Sold Out':'🏷️ Mark Sold Out';
+
+  document.getElementById('dpHero').innerHTML = `
+    <div style="flex:1;min-width:240px;">
+      <div class="dp-builder-tag">${p.builder} · ${p.type}</div>
+      <h1 class="dp-title">${p.name}</h1>
+      <div class="dp-loc">📍 ${p.location}</div>
+      <a href="tel:${p.contactNumber}" class="dp-call">📞 Call ${p.contactName} — ${p.contactNumber}</a>
+    </div>
+    <div class="dp-price-box">
+      <div class="dp-price">${p.startingPrice}</div>
+      ${p.pricePerSqft?`<div class="dp-psf">${p.pricePerSqft}</div>`:''}
+      <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ Under Construction'}</span></div>
+    </div>`;
+
+  const highlights = splitList(p.highlights);
+  const amenities = splitList(p.amenities);
+
+  const overview = `
+    <div class="tab-panel active">
+      <div class="sec">
+        <div class="sec-title">📊 Key Facts</div>
+        <div class="stats-g">
+          <div class="stat-b"><div class="stat-b-v">${p.config}</div><div class="stat-b-l">Configuration</div></div>
+          <div class="stat-b"><div class="stat-b-v">${p.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
+          <div class="stat-b"><div class="stat-b-v">${p.possession}</div><div class="stat-b-l">Possession</div></div>
+          <div class="stat-b"><div class="stat-b-v">${p.totalUnits||'—'}</div><div class="stat-b-l">Total Units</div></div>
+          <div class="stat-b"><div class="stat-b-v">${p.totalFloors||'—'}</div><div class="stat-b-l">Floors</div></div>
+          <div class="stat-b"><div class="stat-b-v">${p.vastu||'—'}</div><div class="stat-b-l">Vastu</div></div>
+        </div>
+      </div>
+      ${highlights.length?`<div class="sec"><div class="sec-title">✨ Highlights</div><div class="hi-grid">${highlights.map(h=>`<div class="hi-item">✓ ${h}</div>`).join('')}</div></div>`:''}
+      ${amenities.length?`<div class="sec"><div class="sec-title">🏢 Amenities</div><div class="am-wrap">${amenities.map(a=>`<span class="am-chip">${a}</span>`).join('')}</div></div>`:''}
+      <div class="sec">
+        <div class="sec-title">📍 Location & Connectivity</div>
+        <div class="conn-wrap">
+          ${p.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${p.nearby}</div></div>`:''}
+          ${p.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${p.nearbyLandmark}</div></div>`:''}
+          ${p.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${p.connectivity}</div></div>`:''}
+          ${!p.nearby&&!p.nearbyLandmark&&!p.connectivity?`<div class="conn-row"><div class="conn-v">Information not available</div></div>`:''}
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-title">📤 Share & Export</div>
+        <div class="export-g">
+          <div class="export-btn" onclick="printProperty('${p.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
+          <div class="export-btn" onclick="exportProperty('${p.id}')"><div class="export-btn-icon">📄</div>JSON</div>
+          <div class="export-btn" onclick="downloadBrochure('${p.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
+          <div class="export-btn" onclick="shareProperty('${p.id}')"><div class="export-btn-icon">🔗</div>Share</div>
+        </div>
+      </div>
+    </div>`;
+
+  const specs = `
+    <div class="tab-panel">
+      <div class="sec"><table class="spec-t">
+        <tr><td>Property Name</td><td>${p.name}</td></tr>
+        <tr><td>Builder</td><td>${p.builder}</td></tr>
+        <tr><td>Type</td><td>${p.type}</td></tr>
+        <tr><td>Location</td><td>${p.location}</td></tr>
+        <tr><td>Configuration</td><td>${p.config}</td></tr>
+        <tr><td>Area Range</td><td>${p.sqftRange||'—'}</td></tr>
+        <tr><td>Total Units</td><td>${p.totalUnits||'—'}</td></tr>
+        <tr><td>Land Area</td><td>${p.totalLandArea||'—'}</td></tr>
+        <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
+        <tr><td>Price / SqFt</td><td>${p.pricePerSqft||'—'}</td></tr>
+        <tr><td>Status</td><td>${p.status}</td></tr>
+        <tr><td>Possession</td><td>${p.possession}</td></tr>
+        <tr><td>Total Floors</td><td>${p.totalFloors||'—'}</td></tr>
+        <tr><td>Parking</td><td>${p.parking?p.parking+' '+(p.parkingType||''):'—'}</td></tr>
+        <tr><td>Vastu</td><td>${p.vastu||'—'}</td></tr>
+        <tr><td>Availability</td><td>${p.availability||'—'}</td></tr>
+        <tr><td>Contact</td><td>${p.contactName} — ${p.contactNumber}</td></tr>
+      </table></div>
+    </div>`;
+
+  const pitch = `
+    <div class="tab-panel">
+      <div class="sec">
+        <div class="summary-card">
+          <div class="sum-lbl">💬 Sales Talking Points</div>
+          <div class="sum-txt">
+            <p><strong>${p.name}</strong> by ${p.builder} is a premium ${p.type.toLowerCase()} project in <strong>${p.location}</strong>.</p>
+            <p>Offering ${p.config} configurations${p.sqftRange?` spanning ${p.sqftRange}`:''}, priced from <strong>${p.startingPrice}</strong>.</p>
+            <p><strong>Possession:</strong> ${p.possession} · <strong>Status:</strong> ${p.status}</p>
+            ${highlights.length?`<p><strong>Why buy:</strong> ${highlights.join(' · ')}</p>`:''}
+            ${p.connectivity?`<p><strong>Connectivity:</strong> ${p.connectivity}</p>`:''}
+            <p style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);"><strong>📞 Close with:</strong> "Shall I block a site visit for you this weekend? Call ${p.contactName} at ${p.contactNumber}."</p>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const crm = `
+    <div class="tab-panel">
+      <div class="sec">
+        <div class="sec-title">👤 Client Interest Level</div>
+        <div class="interest-buttons">
+          <button class="interest-btn hot ${propertyInterests[id]==='hot'?'active':''}" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
+          <button class="interest-btn warm ${propertyInterests[id]==='warm'?'active':''}" onclick="setInterest('${id}','warm')">🌡️ Warm</button>
+          <button class="interest-btn cold ${propertyInterests[id]==='cold'?'active':''}" onclick="setInterest('${id}','cold')">❄️ Cold</button>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-title">📝 Notes & Follow-up</div>
+        <div id="notesPanel">${renderNotes(id)}</div>
+        <div class="note-add">
+          <input class="note-input" id="noteInput" placeholder="Add a note (e.g. client budget, follow-up date)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
+          <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('dpBody').innerHTML = overview + specs + pitch + crm;
+  document.getElementById('dp').classList.add('open');
+  // reset tabs
+  document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+}
+
+function showTab(name,btn){
+  document.querySelectorAll('.dp-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  const idx=['overview','specs','pitch','notes'].indexOf(name);
+  document.querySelectorAll('.tab-panel')[idx].classList.add('active');
+}
+function closeDetail(){document.getElementById('dp').classList.remove('open');}
+
+// ═══════ NOTES ═══════
+function renderNotes(id){
+  const list = notes[id]||[];
+  if(!list.length) return `<div class="empty-mini">No notes yet. Add your first observation below.</div>`;
+  return list.map(n=>`
+    <div class="note-item">
+      <div class="note-meta"><span class="note-time">${n.date}</span><button class="note-delete" onclick="deleteNote('${id}',${n.id})">×</button></div>
+      <div class="note-text">${n.text}</div>
+    </div>`).join('');
+}
+function addNoteInline(id){
+  const inp=document.getElementById('noteInput');
+  const txt=inp.value.trim();
+  if(!txt) return;
+  if(!notes[id]) notes[id]=[];
+  notes[id].push({text:txt,date:new Date().toLocaleString(),id:Date.now()});
+  localStorage.setItem('pinNotes',JSON.stringify(notes));
+  document.getElementById('notesPanel').innerHTML=renderNotes(id);
+  inp.value=''; showToast('Note added');
+}
+function deleteNote(id,noteId){
+  if(notes[id]){notes[id]=notes[id].filter(n=>n.id!==noteId);localStorage.setItem('pinNotes',JSON.stringify(notes));document.getElementById('notesPanel').innerHTML=renderNotes(id);}
+}
+function setInterest(id,lvl){
+  propertyInterests[id]= propertyInterests[id]===lvl?null:lvl;
+  localStorage.setItem('pinInterests',JSON.stringify(propertyInterests));
+  document.querySelectorAll('.interest-btn').forEach(b=>b.classList.remove('active'));
+  if(propertyInterests[id]){event.target.classList.add('active');showToast(`Marked as ${lvl} lead`);}
+}
+
+// ═══════ ADD / EDIT / DELETE PROPERTY ═══════
+const PROPERTY_TEMPLATE = {
+  name: "Property Name Here",
+  builder: "Builder Name",
+  location: "Locality, Chennai",
+  type: "Apartments",
+  config: "2BHK / 3BHK",
+  status: "Under Construction",
+  possession: "Dec 2027",
+  startingPrice: "₹60L+",
+  pricePerSqft: "₹5500/Sqft",
+  contactName: "Swaminathan",
+  contactNumber: "98848 83370",
+  totalUnits: "100",
+  totalLandArea: "5 Acres",
+  sqftRange: "900-1800 Sq.Ft",
+  highlights: "Highlight One,Highlight Two,Highlight Three",
+  amenities: "Swimming Pool,Gym,Clubhouse",
+  nearby: "Nearby area",
+  nearbyLandmark: "Landmark name",
+  connectivity: "Metro / Road connectivity details",
+  totalFloors: "G+5",
+  vastu: "Yes",
+  parking: "1",
+  parkingType: "Covered",
+  availability: "Available"
+};
+
+let pModalMode = 'add'; // 'add' | 'edit'
+let pModalEditId = null;
+
+function downloadTemplate(){
+  downloadFile(JSON.stringify(PROPERTY_TEMPLATE, null, 2), '3pin_property_template.json', 'application/json');
+  showToast('Template downloaded — fill it in and paste back here');
+}
+
+function openAddModal(){
+  pModalMode = 'add'; pModalEditId = null;
+  document.getElementById('pmTitle').textContent = 'Add New Property';
+  document.getElementById('pmJson').value = '';
+  document.getElementById('pmErr').classList.remove('show');
+  document.getElementById('pModal').classList.add('open');
+}
+
+function openEditModal(id){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  pModalMode = 'edit'; pModalEditId = id;
+  document.getElementById('pmTitle').textContent = 'Edit Property';
+  document.getElementById('pmJson').value = JSON.stringify(p, null, 2);
+  document.getElementById('pmErr').classList.remove('show');
+  document.getElementById('pModal').classList.add('open');
+}
+
+function closePModal(){
+  document.getElementById('pModal').classList.remove('open');
+}
+
+function savePModal(){
+  const raw = document.getElementById('pmJson').value.trim();
+  const errBox = document.getElementById('pmErr');
+  if(!raw){ errBox.textContent='Please paste the property JSON.'; errBox.classList.add('show'); return; }
+  let data;
+  try{ data = JSON.parse(raw); }
+  catch(e){ errBox.textContent='Invalid JSON — check for missing commas or quotes. ('+e.message+')'; errBox.classList.add('show'); return; }
+  if(!data.name || !data.location){ errBox.textContent='Property must have at least a "name" and "location".'; errBox.classList.add('show'); return; }
+  errBox.classList.remove('show');
+
+  if(pModalMode==='add'){
+    data.id = 'p'+Date.now();
+    properties.unshift(data);
+    showToast('✓ Property added successfully');
+  } else {
+    data.id = pModalEditId;
+    const idx = properties.findIndex(p=>p.id===pModalEditId);
+    if(idx>-1) properties[idx] = data;
+    showToast('✓ Property updated successfully');
+  }
+  persistProperties();
+  closePModal();
+  refreshAfterDataChange();
+  if(pModalMode==='edit') openDetail(data.id);
+}
+
+function deleteProperty(id){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+  properties = properties.filter(x=>x.id!==id);
+  persistProperties();
+  closeDetail();
+  refreshAfterDataChange();
+  showToast('Property deleted');
+}
+
+function refreshAfterDataChange(){
+  setupTypeFilters();
+  updateStats();
+  applyFilters();
+}
+
+// ═══════ EXPORT / SHARE ═══════
+function exportProperty(id){const p=properties.find(x=>x.id===id);downloadFile(JSON.stringify(p,null,2),`${p.name.replace(/\s+/g,'_')}.json`,'application/json');showToast('JSON downloaded');}
+function exportSelected(format){
+  const sel=Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
+  if(!sel.length){showToast('No properties selected');return;}
+  if(format==='csv'){
+    const headers=['Name','Builder','Location','Type','Config','Starting Price','Price/SqFt','Area','Status','Possession'];
+    const rows=sel.map(p=>[p.name,p.builder,p.location,p.type,p.config,p.startingPrice,p.pricePerSqft,p.sqftRange,p.status,p.possession]);
+    const csv=[headers,...rows].map(r=>r.map(c=>`"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+    downloadFile(csv,`3pin_properties_${Date.now()}.csv`,'text/csv');
+  }
+  showToast('Export downloaded');
+}
+function downloadFile(content,filename,type){
+  const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
+}
+function shareProperty(id){
+  const p=properties.find(x=>x.id===id);
+  const text=`${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
+  if(navigator.share) navigator.share({title:p.name,text});
+  else{navigator.clipboard.writeText(text);showToast('Details copied to clipboard');}
+}
+function printProperty(id){
+  const p=properties.find(x=>x.id===id);const w=window.open('','_blank');
+  w.document.write(`<html><head><title>${p.name}</title><style>body{font-family:Arial;padding:30px;color:#1c1917}h1{color:#B45309}table{width:100%;border-collapse:collapse;margin-top:16px}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{font-weight:bold;width:32%;color:#78716C}</style></head><body>
+    <h1>${p.name}</h1><p><strong>${p.builder}</strong> · ${p.location}</p>
+    <table>
+      <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
+      <tr><td>Configuration</td><td>${p.config}</td></tr>
+      <tr><td>Area</td><td>${p.sqftRange||'—'}</td></tr>
+      <tr><td>Status</td><td>${p.status}</td></tr>
+      <tr><td>Possession</td><td>${p.possession}</td></tr>
+      <tr><td>Amenities</td><td>${p.amenities||'—'}</td></tr>
+      <tr><td>Contact</td><td>${p.contactName} — ${p.contactNumber}</td></tr>
+    </table></body></html>`);
+  w.document.close();w.print();
+}
+function downloadBrochure(id){
+  const p=properties.find(x=>x.id===id);
+  const html=`<html><head><title>${p.name}</title></head><body style="font-family:Arial;padding:40px">
+    <h1 style="color:#B45309">${p.name}</h1><h3>${p.builder} · ${p.location}</h3>
+    <p><strong>Price:</strong> ${p.startingPrice} | <strong>Config:</strong> ${p.config} | <strong>Area:</strong> ${p.sqftRange||'—'}</p>
+    <p><strong>Status:</strong> ${p.status} | <strong>Possession:</strong> ${p.possession}</p>
+    <p><strong>Highlights:</strong> ${p.highlights||'—'}</p>
+    <p><strong>Amenities:</strong> ${p.amenities||'—'}</p>
+    <p><strong>Contact:</strong> ${p.contactName} — ${p.contactNumber}</p></body></html>`;
+  downloadFile(html,`${p.name.replace(/\s+/g,'_')}_Brochure.html`,'text/html');showToast('Brochure downloaded');
+}
+
+// ═══════ TOAST ═══════
+let toastTimer;
+function showToast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2400);
+}
+
+// keyboard: ESC closes detail
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();}});
+window.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>
