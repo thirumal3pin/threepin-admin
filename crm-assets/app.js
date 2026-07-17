@@ -123,11 +123,38 @@ function renderBoard(){
         <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${stage.name}</div>
         <div class="kcol-count">${colLeads.length}</div>
       </div>
-      <div class="kcol-body">
+      <div class="kcol-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
         ${colLeads.length ? colLeads.map(l=>leadCardHtml(l)).join('') : '<div class="kcol-empty">No leads</div>'}
       </div>
     </div>`;
   }).join('')}</div>`;
+}
+
+let draggedLeadId = null;
+function onCardDragStart(e, id){
+  draggedLeadId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', id);
+  e.currentTarget.classList.add('dragging');
+}
+function onCardDragEnd(e){
+  e.currentTarget.classList.remove('dragging');
+  draggedLeadId = null;
+  document.querySelectorAll('.kcol-body.drag-over').forEach(el=>el.classList.remove('drag-over'));
+}
+function onColDragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+function onColDragLeave(e){
+  e.currentTarget.classList.remove('drag-over');
+}
+function onColDrop(e, stageId){
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const id = draggedLeadId || e.dataTransfer.getData('text/plain');
+  if(id) changeStage(id, stageId);
 }
 
 function leadCardHtml(l){
@@ -135,7 +162,7 @@ function leadCardHtml(l){
   const next = nextStageId(l.stageId);
   const nextStage = next ? stageById(next) : null;
   return `
-  <div class="lcard" onclick="openDetail('${l.id}')">
+  <div class="lcard" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
     <div class="lcard-top">
       <div class="lcard-name">${l.name}</div>
       <div class="lcard-src ${l.source}">${l.source==='meta'?'Meta':'Manual'}</div>
