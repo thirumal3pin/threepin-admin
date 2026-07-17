@@ -2,7 +2,12 @@
 // Client-side only: hides the dashboard behind a login screen. Does not
 // protect the Firestore data itself (see dashboard-assets/firebase-sync.js).
 const PIN_ADMIN_USER = 'admin';
-const PIN_ADMIN_PASS = 'thirumal@threepin.in';
+const PIN_ADMIN_PASSWORDS = [
+  'thirumal@threepin.in',
+  'swami@threepin',
+  'rajesh@threepin',
+  'pradeep@threepin'
+];
 const PIN_AUTH_KEY = 'pinAdminAuthed';
 
 function pinIsLoggedIn(){
@@ -24,7 +29,7 @@ function pinAttemptLogin(e){
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value;
   const errBox = document.getElementById('loginErr');
-  if(u === PIN_ADMIN_USER && p === PIN_ADMIN_PASS){
+  if(u === PIN_ADMIN_USER && PIN_ADMIN_PASSWORDS.includes(p)){
     localStorage.setItem(PIN_AUTH_KEY, 'true');
     errBox.classList.remove('show');
     pinShowApp();
