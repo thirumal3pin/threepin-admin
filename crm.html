@@ -14,7 +14,7 @@
 
 <!-- LOGIN SCREEN -->
 <div id="loginScreen" class="login-screen">
-  <form class="login-box" onsubmit="pinAuth.attemptLogin(event)">
+  <form class="login-box" onsubmit="attemptCrmLogin(event)">
     <div class="login-brand">
       <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
       <div>
@@ -24,8 +24,8 @@
     </div>
     <h2 class="login-title">Admin Login</h2>
     <div class="login-field">
-      <label for="loginUser">Username</label>
-      <input type="text" id="loginUser" autocomplete="username" required>
+      <label for="loginUser">Email</label>
+      <input type="email" id="loginUser" autocomplete="username" required>
     </div>
     <div class="login-field">
       <label for="loginPass">Password</label>
@@ -39,31 +39,154 @@
 
 <div id="appRoot" style="display:none">
 
+  <!-- HEADER -->
   <div id="hdr">
-    <div class="brand">
-      <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
-      <div>
-        <div class="brand-name">3 PIN Realty</div>
-        <div class="brand-sub">CRM</div>
+    <div class="hdr-top">
+      <div class="brand">
+        <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
+        <div>
+          <div class="brand-name">3 PIN Realty</div>
+          <div class="brand-sub">Lead CRM</div>
+        </div>
+      </div>
+      <div class="hstats" id="hstats">
+        <div class="hstat b"><div class="hstat-n" id="statMeta">0</div><div class="hstat-l">Via Meta</div></div>
+        <div class="hstat p"><div class="hstat-n" id="statManual">0</div><div class="hstat-l">Manual</div></div>
+        <div class="hstat g"><div class="hstat-n" id="statTotal">0</div><div class="hstat-l">Total</div></div>
+        <button class="logout-btn" onclick="crmLogout()">Logout</button>
+      </div>
+      <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
+    </div>
+    <div class="srch-wrap">
+      <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
+      <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
+    </div>
+    <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & View</button>
+    <div class="controls" id="controlsPanel">
+      <div class="fgroup" id="sourceFilters"></div>
+      <div class="ctrl-right">
+        <div class="view-toggle">
+          <button data-view="kanban" class="at" onclick="toggleView('kanban')">📋 Board</button>
+          <button data-view="list" onclick="toggleView('list')">📃 List</button>
+        </div>
+        <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
+        <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
       </div>
     </div>
-    <button class="logout-btn" onclick="pinAuth.logout()">Logout</button>
   </div>
 
+  <!-- MAIN -->
   <div id="main">
-    <div class="stub-icon">🚧</div>
-    <div class="stub-title">CRM is under construction</div>
-    <p class="stub-sub">
-      Leads, follow-ups, and buyer pipeline tracking will live here.
-      This page is a placeholder — the login and layout are wired up,
-      the actual CRM features come next.
-    </p>
-    <div class="stub-tag">Coming soon</div>
+    <div id="kanbanView"></div>
+    <div id="listView" style="display:none"></div>
+  </div>
+
+  <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
+
+  <!-- LEAD DETAIL PANEL -->
+  <div id="dp">
+    <div class="dp-hdr">
+      <button class="dp-back" onclick="closeDetail()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Leads
+      </button>
+      <div class="dp-actions">
+        <button class="dp-act" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
+        <button class="dp-act danger" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
+      </div>
+    </div>
+    <div class="dp-body">
+      <div class="dp-title" id="dpName"></div>
+      <div class="dp-sub" id="dpSub"></div>
+      <div class="dp-stage-row">
+        <select class="dp-stage-sel" id="dpStageSel" onchange="onDetailStageChange()"></select>
+      </div>
+
+      <div class="sec">
+        <div class="sec-title">📇 Lead Info</div>
+        <div class="info-grid" id="dpInfo"></div>
+      </div>
+
+      <div class="sec" id="dpRawSec">
+        <div class="sec-title">📦 Raw Meta Form Data</div>
+        <span class="raw-toggle" onclick="toggleRaw()">show / hide raw fields</span>
+        <div class="raw-data" id="dpRaw"></div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-title">📝 Notes & Follow-ups</div>
+        <div id="notesPanel"></div>
+        <div class="note-add">
+          <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
+          <button class="note-btn" onclick="addNote()">Add</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD / EDIT LEAD MODAL -->
+  <div class="modal-overlay" id="lModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title" id="lmTitle">Add New Lead</div>
+        <button class="modal-x" onclick="closeLeadModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="lmName">Name *</label>
+          <input type="text" id="lmName">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="lmPhone">Phone</label>
+            <input type="text" id="lmPhone">
+          </div>
+          <div class="field">
+            <label for="lmEmail">Email</label>
+            <input type="text" id="lmEmail">
+          </div>
+        </div>
+        <div class="field">
+          <label for="lmInterest">Property Interest</label>
+          <input type="text" id="lmInterest" placeholder="e.g. 3BHK in Nanganallur, budget 1.5Cr">
+        </div>
+        <div class="modal-err" id="lmErr"></div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeLeadModal()">Cancel</button>
+        <button class="modal-save" onclick="saveLeadModal()">✓ Save Lead</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MANAGE STAGES MODAL -->
+  <div class="modal-overlay" id="stageModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">Manage Pipeline Stages</div>
+        <button class="modal-x" onclick="closeStageManager()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="stageRows"></div>
+        <div class="stage-add-row">
+          <input type="text" id="newStageName" placeholder="New stage name…" onkeydown="if(event.key==='Enter')addStageDraft()">
+          <button onclick="addStageDraft()">+ Add</button>
+        </div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeStageManager()">Cancel</button>
+        <button class="modal-save" onclick="saveStageManager()">✓ Save Stages</button>
+      </div>
+    </div>
   </div>
 
 </div>
 
-<script src="dashboard-assets/auth.js"></script>
+<div id="toast"></div>
+
+<script src="crm-assets/sample-leads.js"></script>
 <script src="crm-assets/app.js"></script>
+<script type="module" src="crm-assets/firebase-sync.js"></script>
 </body>
 </html>
