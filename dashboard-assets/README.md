@@ -19,19 +19,31 @@ Load order in `dashboard.html` matters: `sample-data.js` → `auth.js` →
 
 ## Logging in
 
-- **Username:** `admin`
-- **Password:** `thirumal@threepin.in`
+- **Username:** `admin` (same for everyone)
+- **Password:** any one of:
+  - `thirumal@threepin.in`
+  - `swami@threepin`
+  - `rajesh@threepin`
+  - `pradeep@threepin`
 
-The whole dashboard is hidden behind a login screen until these are
-entered correctly. Once logged in, the session is remembered in the
-browser's `localStorage` (key `pinAdminAuthed`) — closing the tab or
-reloading the page does **not** ask for the password again. Click
-**Logout** in the header to clear it and return to the login screen.
+Each person uses the same username with their own password — any
+password in the list works. The whole dashboard is hidden behind a
+login screen until a valid pair is entered. Once logged in, the session
+is remembered in the browser's `localStorage` (key `pinAdminAuthed`) —
+closing the tab or reloading the page does **not** ask for the password
+again. Click **Logout** in the header to clear it and return to the
+login screen.
 
-To change the password, edit the two constants at the top of `auth.js`:
+To add, remove, or change passwords, edit the constants at the top of
+`auth.js`:
 ```js
 const PIN_ADMIN_USER = 'admin';
-const PIN_ADMIN_PASS = 'thirumal@threepin.in';
+const PIN_ADMIN_PASSWORDS = [
+  'thirumal@threepin.in',
+  'swami@threepin',
+  'rajesh@threepin',
+  'pradeep@threepin'
+];
 ```
 
 ### ⚠️ Security note
