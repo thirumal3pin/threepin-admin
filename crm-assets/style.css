@@ -30,6 +30,8 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .login-err.show{display:block;}
 .login-submit{width:100%;padding:12px;background:var(--ink);color:#fff;border:none;border-radius:10px;font-family:var(--sans);font-size:14px;font-weight:600;cursor:pointer;transition:background .15s;}
 .login-submit:hover{background:var(--ink2);}
+.login-home{display:block;text-align:center;margin-top:16px;font-size:12.5px;font-weight:600;color:var(--ink3);text-decoration:none;}
+.login-home:hover{color:var(--ink);}
 .brand-logo{height:44px;width:44px;object-fit:cover;border-radius:12px;flex-shrink:0;box-shadow:var(--shadow);}
 .brand-name{font-family:var(--serif);font-size:24px;font-weight:700;letter-spacing:.01em;line-height:1;}
 .brand-sub{font-size:10.5px;color:var(--ink4);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-top:3px;}
