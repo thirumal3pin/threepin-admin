@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
 <style>
   :root {
     --ink: #121a19;
@@ -88,6 +89,7 @@
 
   .mark b { font-weight: 500; color: var(--paper); }
   .mark span { color: var(--paper-dim); }
+  .mark-logo { height: 30px; width: 30px; object-fit: cover; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
 
   .tag {
     font-family: 'IBM Plex Mono', monospace;
@@ -328,7 +330,7 @@
 
 <div class="page">
   <header>
-    <div class="mark"><b>3 PIN</b><span>REALTY</span></div>
+    <div class="mark"><img src="logo.jpg" alt="3 PIN Realty" class="mark-logo"><b>3 PIN</b><span>REALTY</span></div>
     <button type="button" class="tag tag-btn" id="admin-open">ADMIN</button>
   </header>
 
