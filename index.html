@@ -229,6 +229,97 @@
     header { align-items: center; }
     footer { flex-direction: column; align-items: flex-start; }
   }
+
+  .tag-btn {
+    font: inherit;
+    cursor: pointer;
+  }
+  .tag-btn:hover { background: rgba(201,162,39,0.1); }
+  .tag-btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: rgba(9, 13, 12, 0.72);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    width: 100%;
+    max-width: 340px;
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  .modal h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 1.3rem;
+    margin: 0 0 6px;
+    color: var(--paper);
+  }
+
+  .modal p.sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--paper-dim);
+    margin: 0 0 22px;
+  }
+
+  .field {
+    margin-bottom: 16px;
+  }
+
+  .field label {
+    display: block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--paper-dim);
+    margin-bottom: 6px;
+  }
+
+  .field input {
+    width: 100%;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--paper);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+  .field input:focus-visible {
+    outline: 2px solid var(--brass);
+    outline-offset: 1px;
+  }
+
+  .modal-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 22px;
+  }
+
+  .modal-actions .btn {
+    border: none;
+  }
+
+  .modal-note {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--paper-dim);
+    margin-top: 16px;
+    line-height: 1.5;
+  }
 </style>
 </head>
 <body>
@@ -238,7 +329,7 @@
 <div class="page">
   <header>
     <div class="mark"><b>3 PIN</b><span>REALTY</span></div>
-    <div class="tag">ADMIN</div>
+    <button type="button" class="tag tag-btn" id="admin-open">ADMIN</button>
   </header>
 
   <main>
@@ -261,6 +352,65 @@
     <div class="stamp">System live</div>
   </footer>
 </div>
+
+<div class="modal-overlay" id="admin-overlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+    <h2 id="admin-modal-title">Admin login</h2>
+    <p class="sub">3 PIN Realty — internal console</p>
+    <form id="admin-form">
+      <div class="field">
+        <label for="admin-username">Username</label>
+        <input type="text" id="admin-username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="admin-password">Password</label>
+        <input type="password" id="admin-password" autocomplete="current-password" required>
+      </div>
+      <div class="modal-actions">
+        <a class="btn-ghost" href="#" id="admin-cancel">Cancel</a>
+        <button type="submit" class="btn">Login</button>
+      </div>
+    </form>
+    <p class="modal-note">check credentials.</p>
+  </div>
+</div>
+
+<script>
+  var overlay = document.getElementById('admin-overlay');
+  var openBtn = document.getElementById('admin-open');
+  var cancelBtn = document.getElementById('admin-cancel');
+  var form = document.getElementById('admin-form');
+
+  function openModal() {
+    overlay.classList.add('open');
+    document.getElementById('admin-username').focus();
+  }
+
+  function closeModal() {
+    overlay.classList.remove('open');
+    form.reset();
+  }
+
+  openBtn.addEventListener('click', openModal);
+
+  cancelBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    closeModal();
+  });
+
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) closeModal();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) closeModal();
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    closeModal();
+  });
+</script>
 
 </body>
 </html>
