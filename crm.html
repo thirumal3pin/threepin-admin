@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3 PIN Realty — CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="stylesheet" href="crm-assets/style.css">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="loginScreen" class="login-screen">
+  <form class="login-box" onsubmit="pinAuth.attemptLogin(event)">
+    <div class="login-brand">
+      <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
+      <div>
+        <div class="brand-name">3 PIN Realty</div>
+        <div class="brand-sub">CRM</div>
+      </div>
+    </div>
+    <h2 class="login-title">Admin Login</h2>
+    <div class="login-field">
+      <label for="loginUser">Username</label>
+      <input type="text" id="loginUser" autocomplete="username" required>
+    </div>
+    <div class="login-field">
+      <label for="loginPass">Password</label>
+      <input type="password" id="loginPass" autocomplete="current-password" required>
+    </div>
+    <div class="login-err" id="loginErr"></div>
+    <button type="submit" class="login-submit">Login</button>
+  </form>
+</div>
+
+<div id="appRoot" style="display:none">
+
+  <div id="hdr">
+    <div class="brand">
+      <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
+      <div>
+        <div class="brand-name">3 PIN Realty</div>
+        <div class="brand-sub">CRM</div>
+      </div>
+    </div>
+    <button class="logout-btn" onclick="pinAuth.logout()">Logout</button>
+  </div>
+
+  <div id="main">
+    <div class="stub-icon">🚧</div>
+    <div class="stub-title">CRM is under construction</div>
+    <p class="stub-sub">
+      Leads, follow-ups, and buyer pipeline tracking will live here.
+      This page is a placeholder — the login and layout are wired up,
+      the actual CRM features come next.
+    </p>
+    <div class="stub-tag">Coming soon</div>
+  </div>
+
+</div>
+
+<script src="dashboard-assets/auth.js"></script>
+<script src="crm-assets/app.js"></script>
+</body>
+</html>
