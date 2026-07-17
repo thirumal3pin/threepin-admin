@@ -48,19 +48,21 @@
         <div class="brand-sub">Premium Property Intelligence</div>
       </div>
     </div>
-    <div class="hstats">
+    <div class="hstats" id="hstats">
       <div class="hstat g"><div class="hstat-n" id="cR">0</div><div class="hstat-l">Ready</div></div>
       <div class="hstat a"><div class="hstat-n" id="cU">0</div><div class="hstat-l">Upcoming</div></div>
       <div class="hstat t"><div class="hstat-n" id="cT">0</div><div class="hstat-l">Total</div></div>
       <button class="logout-btn" onclick="pinAuth.logout()">Logout</button>
     </div>
+    <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
   </div>
   <div class="srch-wrap">
     <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
     <input id="searchInput" placeholder="Search by name, builder, location, config, amenities…">
     <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
   </div>
-  <div class="controls">
+  <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
+  <div class="controls" id="controlsPanel">
     <div class="fgroup" id="statusFilters"></div>
     <div class="fdiv"></div>
     <div class="fgroup" id="typeFilters"></div>
@@ -101,6 +103,8 @@
     <button class="ms-btn ms-clear" onclick="clearSelection()">Clear</button>
   </div>
 </div>
+
+<button class="mobile-fab" onclick="openAddModal()" aria-label="Add Property">+</button>
 
 <!-- DETAIL PANEL -->
 <div id="dp">

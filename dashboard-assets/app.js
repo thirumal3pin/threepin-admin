@@ -77,6 +77,22 @@ function setType(t,btn){currentType=t;document.querySelectorAll('#typeFilters .f
 function applySort(){currentSort=document.getElementById('sortSel').value;applyFilters();}
 function toggleFavView(){showFavOnly=!showFavOnly;document.getElementById('favToggle').classList.toggle('at',showFavOnly);applyFilters();}
 
+// ═══════ MOBILE HEADER / FILTER TOGGLES ═══════
+function toggleHdrMenu(e){
+  if(e) e.stopPropagation();
+  document.getElementById('hstats').classList.toggle('mobile-open');
+}
+function toggleMobileFilters(){
+  document.getElementById('controlsPanel').classList.toggle('mobile-open');
+}
+document.addEventListener('click', e=>{
+  const hstats = document.getElementById('hstats');
+  const menuBtn = document.getElementById('hdrMenuBtn');
+  if(hstats && hstats.classList.contains('mobile-open') && !hstats.contains(e.target) && e.target!==menuBtn){
+    hstats.classList.remove('mobile-open');
+  }
+});
+
 function setupSearch(){
   const inp = document.getElementById('searchInput');
   inp.addEventListener('input', e => {
