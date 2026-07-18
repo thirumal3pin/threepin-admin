@@ -471,20 +471,24 @@ let pModalEditId = null;
 // (propertyType/price/priceInCr/readyToMove/builtupArea/...) used by some
 // listing sources, and fills in the fields the grid/detail view rely on.
 function normalizeProperty(data){
-  const type = data.type || data.propertyType || 'Property';
+  // Raw source fields always win over a previously-derived value, so
+  // re-editing price/type/status/etc. on an already-saved alt-schema
+  // property actually changes what's displayed instead of being masked
+  // by whatever got baked in on the first save.
+  const type = data.propertyType || data.type || 'Property';
   const builder = data.builder || 'Individual Owner';
-  let startingPrice = data.startingPrice;
-  if(!startingPrice){
-    if(data.price) startingPrice = data.price;
-    else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-    else startingPrice = 'Price on Request';
-  }
-  let status = data.status;
-  if(!status){
+  let startingPrice;
+  if(data.price) startingPrice = data.price;
+  else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
+  else startingPrice = data.startingPrice || 'Price on Request';
+  let status;
+  if(data.readyToMove !== undefined || data.newOrResale !== undefined){
     status = (data.readyToMove==='Yes' || data.newOrResale==='Resale') ? 'Ready to Move' : 'Under Construction';
+  } else {
+    status = data.status || 'Under Construction';
   }
-  const possession = data.possession || data.possessionDate || 'Contact for details';
-  const sqftRange = data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea || '';
+  const possession = data.possessionDate || data.possession || 'Contact for details';
+  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
   return { ...data, type, builder, startingPrice, status, possession, sqftRange };
 }
 
