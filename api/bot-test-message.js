@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL } from './_bot-shared.js';
+import { getDb, verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, getKnowledgeSources } from './_bot-shared.js';
 
 const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
 
@@ -25,11 +25,12 @@ export async function POST(request) {
   }
 
   try {
+    const knowledge = await getKnowledgeSources(getDb());
     const response = await anthropic.messages.create({
       model: 'claude-opus-4-8',
       max_tokens: 1024,
       thinking: { type: 'adaptive' },
-      system: buildSystemPrompt(config),
+      system: buildSystemPrompt(config, knowledge),
       tools: [UPDATE_LEAD_INFO_TOOL],
       messages: history.map(m => ({ role: m.role, content: m.content }))
     });

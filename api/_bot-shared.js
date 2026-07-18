@@ -45,7 +45,11 @@ export const DEFAULT_BOT_CONFIG = {
   tone: 'Warm, professional, concise. Natural conversation — never sound like filling out a form.'
 };
 
-export function buildSystemPrompt(config) {
+// How much knowledge-base text we allow into a single system prompt.
+// Keeps context (and cost) bounded even if someone connects a huge sheet.
+const KNOWLEDGE_CHAR_BUDGET = 40000;
+
+export function buildSystemPrompt(config, knowledgeSources) {
   const parts = [config.role || '', '', `Tone: ${config.tone || ''}`, ''];
   parts.push('Information you need to collect from the lead:');
   (config.requiredInfo || []).forEach(r => parts.push(`- ${r.label}`));
@@ -55,9 +59,62 @@ export function buildSystemPrompt(config) {
   parts.push('');
   parts.push('Guardrails:');
   (config.guardrails || []).forEach(g => parts.push(`- ${g}`));
+
+  const knowledgeBlock = renderKnowledgeBlock(knowledgeSources);
+  if (knowledgeBlock) {
+    parts.push('');
+    parts.push(knowledgeBlock);
+  }
+
   parts.push('');
   parts.push('Whenever you learn new information about the lead from their message, call the update_lead_info tool with only the fields you newly learned, in addition to your normal conversational reply. Keep replies short and natural for WhatsApp.');
   return parts.join('\n');
+}
+
+function renderKnowledgeBlock(knowledgeSources) {
+  const sources = (knowledgeSources || []).filter(s => s && s.content && s.content.trim());
+  if (!sources.length) return '';
+
+  const lines = [
+    'KNOWLEDGE BASE',
+    'The following is verified information provided by 3 PIN Realty (property listings, pricing, projects, FAQs). You MAY share specific details found here — prices, areas, availability — because they are real. You must still never invent anything that is not present below; if the answer is not here, say a team member will follow up.',
+    ''
+  ];
+  let budget = KNOWLEDGE_CHAR_BUDGET;
+  for (const s of sources) {
+    if (budget <= 0) break;
+    const header = `--- ${s.name || s.type || 'Source'} ---`;
+    let body = s.content.trim();
+    if (body.length > budget) body = body.slice(0, budget) + '\n…(truncated)';
+    budget -= body.length;
+    lines.push(header, body, '');
+  }
+  return lines.join('\n');
+}
+
+// WhatsApp credentials: the phone number id lives in Firestore (set from the
+// CRM connect flow), but the access token stays a server-only secret in env.
+export async function getWhatsAppCreds(db) {
+  let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+  try {
+    const snap = await db.collection('config').doc('whatsappBot').get();
+    if (snap.exists && snap.data().waPhoneNumberId) {
+      phoneNumberId = snap.data().waPhoneNumberId;
+    }
+  } catch (e) {
+    console.error('getWhatsAppCreds error:', e);
+  }
+  return { phoneNumberId, token: process.env.WHATSAPP_ACCESS_TOKEN || '' };
+}
+
+export async function getKnowledgeSources(db) {
+  try {
+    const snap = await db.collection('config').doc('knowledge').get();
+    return snap.exists ? (snap.data().sources || []) : [];
+  } catch (e) {
+    console.error('getKnowledgeSources error:', e);
+    return [];
+  }
 }
 
 export const UPDATE_LEAD_INFO_TOOL = {

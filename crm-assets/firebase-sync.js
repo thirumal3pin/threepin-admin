@@ -81,7 +81,7 @@ window.crmFirebase = {
     const snap = await getDoc(whatsappBotRef);
     return snap.exists() ? snap.data() : null;
   },
-  saveBotConfig: (config) => setDoc(whatsappBotRef, config).catch(e => console.error('Firestore save bot config error:', e))
+  saveBotConfig: (config) => setDoc(whatsappBotRef, config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e))
 };
 
 window.crmAuth = {

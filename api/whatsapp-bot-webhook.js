@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
-import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG } from './_bot-shared.js';
+import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG, getWhatsAppCreds, getKnowledgeSources } from './_bot-shared.js';
 
 const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
 
@@ -34,9 +34,8 @@ async function getConversation(db, phone) {
   };
 }
 
-async function sendWhatsAppMessage(to, text) {
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+async function sendWhatsAppMessage(db, to, text) {
+  const { phoneNumberId, token } = await getWhatsAppCreds(db);
   const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -70,7 +69,7 @@ async function upsertLead(db, phone, extractedInfo, contactName) {
 }
 
 async function processIncomingMessage(db, phone, text, contactName) {
-  const config = await getBotConfig(db);
+  const [config, knowledge] = await Promise.all([getBotConfig(db), getKnowledgeSources(db)]);
   const { ref, data: convo } = await getConversation(db, phone);
 
   convo.messages = convo.messages || [];
@@ -80,7 +79,7 @@ async function processIncomingMessage(db, phone, text, contactName) {
     model: 'claude-opus-4-8',
     max_tokens: 1024,
     thinking: { type: 'adaptive' },
-    system: buildSystemPrompt(config),
+    system: buildSystemPrompt(config, knowledge),
     tools: [UPDATE_LEAD_INFO_TOOL],
     messages: convo.messages.map(m => ({ role: m.role, content: m.content }))
   });
@@ -101,7 +100,7 @@ async function processIncomingMessage(db, phone, text, contactName) {
 
   await ref.set(convo, { merge: true });
   await upsertLead(db, phone, extractedInfo, contactName);
-  await sendWhatsAppMessage(phone, replyText);
+  await sendWhatsAppMessage(db, phone, replyText);
 }
 
 export async function GET(request) {

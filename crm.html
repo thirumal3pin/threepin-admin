@@ -100,24 +100,68 @@
       <div class="bot-editor-form">
 
         <div class="sec">
-          <div class="sec-title">🔌 WhatsApp Connection</div>
-          <div class="connect-box">
-            <div>
-              <div style="font-weight:600;font-size:13px;" id="waConnectionLabel">Not connected</div>
-              <div style="font-size:11.5px;color:var(--ink3);">Enter your WhatsApp Business number once it's verified with Meta</div>
+          <div class="sec-title">🔌 Channels</div>
+
+          <!-- WhatsApp connect card -->
+          <div class="chan-card" id="waCard">
+            <div class="chan-head">
+              <div class="chan-id">
+                <span class="chan-ico wa">🟢</span>
+                <div>
+                  <div class="chan-name">WhatsApp</div>
+                  <div class="chan-sub" id="waCardSub">Not connected</div>
+                </div>
+              </div>
+              <span class="connect-status disconnected" id="waConnectionStatus">Not connected</span>
             </div>
-            <span class="connect-status disconnected" id="waConnectionStatus">Not connected</span>
+
+            <!-- Disconnected state: enter number id + click connect -->
+            <div id="waDisconnectedBody">
+              <div class="field">
+                <label for="waPhoneNumberId">Phone Number ID <span class="lbl-hint">(WhatsApp → API Setup in Meta)</span></label>
+                <input type="text" id="waPhoneNumberId" placeholder="e.g. 123456789012345">
+              </div>
+              <button class="chan-connect-btn" id="waConnectBtn" onclick="connectWhatsApp()">
+                <span class="wa-glyph">✆</span> Connect WhatsApp
+              </button>
+              <div class="chan-note" id="waConnectNote">The access token is stored securely in Vercel (server-side) — you only enter the Phone Number ID here.</div>
+            </div>
+
+            <!-- Connected state: verified badge like the Meta dashboard -->
+            <div id="waConnectedBody" style="display:none">
+              <div class="wa-verified" id="waVerifiedNumber">
+                <span class="wa-check">✓</span> <span id="waVerifiedText">—</span>
+              </div>
+              <div class="chan-meta-row" id="waVerifiedMeta"></div>
+              <button class="chan-disconnect-btn" onclick="disconnectWhatsApp()">Disconnect</button>
+            </div>
           </div>
-          <div class="field-row">
-            <div class="field">
-              <label for="waPhoneNumber">WhatsApp Business Number</label>
-              <input type="text" id="waPhoneNumber" placeholder="e.g. +91 98765 43210">
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">📚 Knowledge Base</div>
+          <div class="kb-intro">Connect listings, price lists, or brochures. The bot answers buyers using only what you add here.</div>
+
+          <div class="kb-connectors">
+            <div class="kb-conn-row">
+              <input type="text" id="kbLinkUrl" class="kb-input" placeholder="Paste a Google Sheet or Google Doc link…">
+              <input type="text" id="kbLinkName" class="kb-input kb-name" placeholder="Label (optional)">
+              <button class="kb-add-btn" onclick="addKnowledgeLink()">🔗 Connect</button>
             </div>
-            <div class="field">
-              <label for="waPhoneNumberId">Phone Number ID (from Meta)</label>
-              <input type="text" id="waPhoneNumberId" placeholder="from Meta Business settings">
+            <div class="kb-conn-row">
+              <button class="kb-upload-btn" onclick="document.getElementById('kbFileInput').click()">📄 Upload PDF / TXT</button>
+              <input type="file" id="kbFileInput" accept=".pdf,.txt,.md,.csv" style="display:none" onchange="uploadKnowledgeFile(event)">
+              <button class="kb-paste-toggle" onclick="toggleKbPaste()">✍️ Paste text</button>
+              <button class="kb-drive-btn" onclick="connectGoogleDrive()" title="Full Google Drive picker — needs one-time OAuth setup">▶ Google Drive</button>
+            </div>
+            <div class="kb-paste-box" id="kbPasteBox" style="display:none">
+              <input type="text" id="kbPasteName" class="kb-input" placeholder="Label (e.g. FAQ)">
+              <textarea id="kbPasteContent" class="bot-textarea" rows="4" placeholder="Paste any text the bot should know…"></textarea>
+              <button class="kb-add-btn" onclick="addKnowledgePaste()">+ Add to knowledge</button>
             </div>
           </div>
+
+          <div id="kbSourceList" class="kb-list"></div>
         </div>
 
         <div class="sec">
@@ -276,6 +320,13 @@
 
 <div id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 <script src="crm-assets/sample-leads.js"></script>
 <script src="crm-assets/app.js"></script>
 <script type="module" src="crm-assets/firebase-sync.js"></script>

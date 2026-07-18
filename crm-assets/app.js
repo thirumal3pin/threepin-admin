@@ -466,6 +466,7 @@ async function openBotEditor(){
   renderBotEditorForm();
   botTestHistory = [];
   renderBotChat();
+  loadKnowledge();
 }
 function closeBotEditor(){
   document.getElementById('botEditorPanel').classList.remove('open');
@@ -475,7 +476,6 @@ function renderBotEditorForm(){
   document.getElementById('botRole').value = botConfigDraft.role || '';
   document.getElementById('botWelcome').value = botConfigDraft.welcomeMessage || '';
   document.getElementById('botTone').value = botConfigDraft.tone || '';
-  document.getElementById('waPhoneNumber').value = botConfigDraft.waPhoneNumber || '';
   document.getElementById('waPhoneNumberId').value = botConfigDraft.waPhoneNumberId || '';
   updateWaConnectionStatus();
   renderRequiredInfoRows();
@@ -484,20 +484,96 @@ function renderBotEditorForm(){
 }
 
 function updateWaConnectionStatus(){
-  const connected = !!(botConfigDraft.waPhoneNumber && botConfigDraft.waPhoneNumberId);
+  const connected = !!(botConfigDraft.waPhoneNumberId && botConfigDraft.waConnectedAt);
   const statusEl = document.getElementById('waConnectionStatus');
-  const labelEl = document.getElementById('waConnectionLabel');
-  statusEl.textContent = connected ? 'Connected' : 'Not connected';
+  const disconnectedBody = document.getElementById('waDisconnectedBody');
+  const connectedBody = document.getElementById('waConnectedBody');
+  const subEl = document.getElementById('waCardSub');
+
+  statusEl.textContent = connected ? 'Verified' : 'Not connected';
   statusEl.className = 'connect-status ' + (connected ? 'connected' : 'disconnected');
-  labelEl.textContent = connected ? botConfigDraft.waPhoneNumber : 'Not connected';
+  disconnectedBody.style.display = connected ? 'none' : 'block';
+  connectedBody.style.display = connected ? 'block' : 'none';
+
+  if(connected){
+    const num = botConfigDraft.waPhoneNumber || botConfigDraft.waPhoneNumberId;
+    subEl.textContent = botConfigDraft.waVerifiedName || 'Connected';
+    document.getElementById('waVerifiedText').textContent = num;
+    const meta = [];
+    if(botConfigDraft.waVerifiedName) meta.push('Name: ' + botConfigDraft.waVerifiedName);
+    if(botConfigDraft.waQualityRating) meta.push('Quality: ' + botConfigDraft.waQualityRating);
+    meta.push('ID: ' + botConfigDraft.waPhoneNumberId);
+    document.getElementById('waVerifiedMeta').innerHTML = meta.map(m=>`<span>${m}</span>`).join('');
+  } else {
+    subEl.textContent = 'Not connected';
+  }
+}
+
+async function connectWhatsApp(){
+  const phoneNumberId = document.getElementById('waPhoneNumberId').value.trim();
+  if(!phoneNumberId){ showToast('Enter your Phone Number ID first'); return; }
+  const btn = document.getElementById('waConnectBtn');
+  const note = document.getElementById('waConnectNote');
+  btn.disabled = true; btn.textContent = 'Connecting…';
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/whatsapp-connect', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
+      body: JSON.stringify({ phoneNumberId })
+    });
+    const data = await res.json().catch(()=>({}));
+    if(data.needsSetup){
+      note.innerHTML = '⚠️ ' + data.message;
+      note.style.color = 'var(--red)';
+      return;
+    }
+    if(!data.connected){
+      note.textContent = data.error || 'Could not connect. Check the Phone Number ID.';
+      note.style.color = 'var(--red)';
+      return;
+    }
+    // Persist verified fields into the draft so a later "Save Workflow" won't wipe them.
+    botConfigDraft.waPhoneNumberId = data.phoneNumberId;
+    botConfigDraft.waPhoneNumber = data.displayPhoneNumber || '';
+    botConfigDraft.waVerifiedName = data.verifiedName || '';
+    botConfigDraft.waQualityRating = data.qualityRating || '';
+    botConfigDraft.waConnectedAt = Date.now();
+    updateWaConnectionStatus();
+    showToast('✓ WhatsApp connected');
+  } catch(e){
+    console.error('connectWhatsApp error:', e);
+    note.textContent = 'Connection failed — see console.';
+    note.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false; btn.innerHTML = '<span class="wa-glyph">✆</span> Connect WhatsApp';
+  }
+}
+
+async function disconnectWhatsApp(){
+  if(!confirm('Disconnect this WhatsApp number from the bot?')) return;
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    await fetch('/api/whatsapp-connect', {
+      method:'DELETE',
+      headers:{ 'Authorization':'Bearer '+idToken }
+    });
+  } catch(e){ console.error('disconnectWhatsApp error:', e); }
+  botConfigDraft.waPhoneNumberId = '';
+  botConfigDraft.waPhoneNumber = '';
+  botConfigDraft.waVerifiedName = '';
+  botConfigDraft.waQualityRating = '';
+  botConfigDraft.waConnectedAt = null;
+  document.getElementById('waPhoneNumberId').value = '';
+  updateWaConnectionStatus();
+  showToast('WhatsApp disconnected');
 }
 
 function syncBotDraftFromForm(){
   botConfigDraft.role = document.getElementById('botRole').value;
   botConfigDraft.welcomeMessage = document.getElementById('botWelcome').value;
   botConfigDraft.tone = document.getElementById('botTone').value;
-  botConfigDraft.waPhoneNumber = document.getElementById('waPhoneNumber').value.trim();
-  botConfigDraft.waPhoneNumberId = document.getElementById('waPhoneNumberId').value.trim();
+  // WhatsApp fields are managed by the connect/disconnect flow, not this form.
 }
 
 function renderRequiredInfoRows(){
@@ -609,6 +685,153 @@ async function sendBotTestMessage(){
 function clearBotTestChat(){
   botTestHistory = [];
   renderBotChat();
+}
+
+// ═══════ KNOWLEDGE BASE ═══════
+let knowledgeSources = [];
+
+async function kbFetch(method, body){
+  const idToken = await window.crmAuth.getIdToken();
+  const opts = { method, headers:{ 'Authorization':'Bearer '+idToken } };
+  if(body){ opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(body); }
+  const res = await fetch('/api/knowledge-sync', opts);
+  const data = await res.json().catch(()=>({}));
+  if(data.error) throw new Error(data.error);
+  return data;
+}
+
+async function loadKnowledge(){
+  try{
+    const data = await kbFetch('GET');
+    knowledgeSources = data.sources || [];
+  } catch(e){
+    console.error('loadKnowledge error:', e);
+    knowledgeSources = [];
+  }
+  renderKnowledgeList();
+}
+
+function renderKnowledgeList(){
+  const el = document.getElementById('kbSourceList');
+  if(!knowledgeSources.length){
+    el.innerHTML = '<div class="kb-empty">No knowledge connected yet. Add a sheet, doc, or file above.</div>';
+    return;
+  }
+  el.innerHTML = knowledgeSources.map(s=>{
+    const when = s.syncedAt ? new Date(s.syncedAt).toLocaleDateString() : '';
+    const chars = s.chars ? (s.chars>999 ? (s.chars/1000).toFixed(1)+'k' : s.chars) + ' chars' : '';
+    const resync = s.url ? `<button class="kb-src-act" onclick="resyncKnowledge('${s.id}')">↻ Sync</button>` : '';
+    return `<div class="kb-src">
+      <div class="kb-src-icon">${s.url ? '🔗' : '📄'}</div>
+      <div class="kb-src-body">
+        <div class="kb-src-name">${escapeHtml(s.name||'Source')}</div>
+        <div class="kb-src-meta">${escapeHtml(s.type||'')} · ${chars} · synced ${when}</div>
+      </div>
+      <div class="kb-src-acts">${resync}<button class="kb-src-act del" onclick="removeKnowledge('${s.id}')">🗑️</button></div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function addKnowledgeLink(){
+  const url = document.getElementById('kbLinkUrl').value.trim();
+  const name = document.getElementById('kbLinkName').value.trim();
+  if(!url){ showToast('Paste a Google Sheet or Doc link'); return; }
+  showToast('Connecting link…');
+  try{
+    const data = await kbFetch('POST', { action:'addLink', url, name });
+    knowledgeSources.push(data.source);
+    document.getElementById('kbLinkUrl').value='';
+    document.getElementById('kbLinkName').value='';
+    renderKnowledgeList();
+    showToast('✓ Knowledge added');
+  } catch(e){
+    console.error(e); showToast(e.message || 'Could not add link');
+  }
+}
+
+function toggleKbPaste(){
+  const box = document.getElementById('kbPasteBox');
+  box.style.display = box.style.display==='none' ? 'block' : 'none';
+}
+
+async function addKnowledgePaste(){
+  const name = document.getElementById('kbPasteName').value.trim();
+  const content = document.getElementById('kbPasteContent').value.trim();
+  if(!content){ showToast('Paste some text first'); return; }
+  try{
+    const data = await kbFetch('POST', { action:'addText', name: name||'Pasted text', sourceType:'Text', content });
+    knowledgeSources.push(data.source);
+    document.getElementById('kbPasteName').value='';
+    document.getElementById('kbPasteContent').value='';
+    document.getElementById('kbPasteBox').style.display='none';
+    renderKnowledgeList();
+    showToast('✓ Knowledge added');
+  } catch(e){ console.error(e); showToast(e.message || 'Could not add text'); }
+}
+
+async function uploadKnowledgeFile(event){
+  const file = event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  showToast('Reading ' + file.name + '…');
+  try{
+    let text = '';
+    if(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')){
+      text = await extractPdfText(file);
+    } else {
+      text = await file.text();
+    }
+    if(!text.trim()){ showToast('No readable text found in that file'); return; }
+    const data = await kbFetch('POST', { action:'addText', name:file.name, sourceType: file.name.split('.').pop().toUpperCase(), content:text });
+    knowledgeSources.push(data.source);
+    renderKnowledgeList();
+    showToast('✓ ' + file.name + ' added');
+  } catch(e){ console.error(e); showToast(e.message || 'Could not read file'); }
+}
+
+async function extractPdfText(file){
+  if(!window.pdfjsLib) throw new Error('PDF reader not loaded — try again');
+  const buf = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  const pages = Math.min(pdf.numPages, 50);
+  for(let i=1;i<=pages;i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    out += content.items.map(it=>it.str).join(' ') + '\n';
+  }
+  return out;
+}
+
+async function resyncKnowledge(id){
+  showToast('Re-syncing…');
+  try{
+    const data = await kbFetch('POST', { action:'resync', id });
+    const idx = knowledgeSources.findIndex(s=>s.id===id);
+    if(idx>=0) knowledgeSources[idx] = data.source;
+    renderKnowledgeList();
+    showToast('✓ Synced');
+  } catch(e){ console.error(e); showToast(e.message || 'Sync failed'); }
+}
+
+async function removeKnowledge(id){
+  try{
+    await kbFetch('POST', { action:'remove', id });
+    knowledgeSources = knowledgeSources.filter(s=>s.id!==id);
+    renderKnowledgeList();
+    showToast('Removed');
+  } catch(e){ console.error(e); showToast('Could not remove'); }
+}
+
+function connectGoogleDrive(){
+  // Placeholder for the full OAuth Drive Picker (needs a one-time Google Cloud
+  // OAuth client + Picker API key). Until that's configured, the paste-a-link
+  // flow above already covers Sheets & Docs with no setup.
+  showToast('Google Drive picker needs one-time OAuth setup — use "Connect" with a shared link for now');
 }
 
 // ═══════ MOBILE HEADER / FILTER TOGGLES ═══════
