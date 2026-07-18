@@ -139,7 +139,8 @@ function renderGrid(){
     const fav = favorites.includes(p.id);
     const sel = selectedProperties.has(p.id);
     const isSoldOut = !!p.soldOut;
-    const typeBadge = p.type.includes('Plot')?'bs':p.type.includes('Villa')||p.type.includes('House')?'bp':'bb';
+    const pType = p.type||'';
+    const typeBadge = pType.includes('Plot')?'bs':pType.includes('Villa')||pType.includes('House')?'bp':'bb';
     return `
     <div class="card ${isSoldOut?'sold-out':''}">
       <div class="card-bar ${isReady(p)?'rtm':'uc'}"></div>
@@ -204,21 +205,29 @@ function toggleFavFromDetail(){
 }
 
 // ═══════ SOLD OUT ═══════
-function toggleSoldOut(id){
+async function toggleSoldOut(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
+  const prev = p.soldOut;
   p.soldOut = !p.soldOut;
   if(p.soldOut){
-    showToast('✓ Property marked as Sold Out');
     document.getElementById('dpSoldOut').classList.add('sold-out');
     document.getElementById('dpSoldOut').textContent = '✓ Marked Sold Out';
   } else {
-    showToast('Property unmarked — Back to Active');
     document.getElementById('dpSoldOut').classList.remove('sold-out');
     document.getElementById('dpSoldOut').textContent = '🏷️ Mark Sold Out';
   }
   applyFilters();
-  window.dashboardFirebase.saveProperty(p);
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(p.soldOut ? '✓ Property marked as Sold Out' : 'Property unmarked — Back to Active');
+  }catch(e){
+    p.soldOut = prev;
+    document.getElementById('dpSoldOut').classList.toggle('sold-out', p.soldOut);
+    document.getElementById('dpSoldOut').textContent = p.soldOut ? '✓ Marked Sold Out' : '🏷️ Mark Sold Out';
+    applyFilters();
+    showToast('✗ Update failed — check your connection and try again');
+  }
 }
 
 // ═══════ SELECTION / COMPARE ═══════
@@ -458,6 +467,27 @@ const PROPERTY_TEMPLATE = {
 let pModalMode = 'add'; // 'add' | 'edit'
 let pModalEditId = null;
 
+// Accepts either the dashboard's own schema or the alternate flat schema
+// (propertyType/price/priceInCr/readyToMove/builtupArea/...) used by some
+// listing sources, and fills in the fields the grid/detail view rely on.
+function normalizeProperty(data){
+  const type = data.type || data.propertyType || 'Property';
+  const builder = data.builder || 'Individual Owner';
+  let startingPrice = data.startingPrice;
+  if(!startingPrice){
+    if(data.price) startingPrice = data.price;
+    else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
+    else startingPrice = 'Price on Request';
+  }
+  let status = data.status;
+  if(!status){
+    status = (data.readyToMove==='Yes' || data.newOrResale==='Resale') ? 'Ready to Move' : 'Under Construction';
+  }
+  const possession = data.possession || data.possessionDate || 'Contact for details';
+  const sqftRange = data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea || '';
+  return { ...data, type, builder, startingPrice, status, possession, sqftRange };
+}
+
 function downloadTemplate(){
   downloadFile(JSON.stringify(PROPERTY_TEMPLATE, null, 2), '3pin_property_template.json', 'application/json');
   showToast('Template downloaded — fill it in and paste back here');
@@ -485,7 +515,7 @@ function closePModal(){
   document.getElementById('pModal').classList.remove('open');
 }
 
-function savePModal(){
+async function savePModal(){
   const raw = document.getElementById('pmJson').value.trim();
   const errBox = document.getElementById('pmErr');
   if(!raw){ errBox.textContent='Please paste the property JSON.'; errBox.classList.add('show'); return; }
@@ -495,31 +525,53 @@ function savePModal(){
   if(!data.name || !data.location){ errBox.textContent='Property must have at least a "name" and "location".'; errBox.classList.add('show'); return; }
   errBox.classList.remove('show');
 
-  if(pModalMode==='add'){
+  data = normalizeProperty(data);
+
+  const mode = pModalMode;
+  let previousEntry = null;
+  if(mode==='add'){
     data.id = 'p'+Date.now();
     properties.unshift(data);
-    showToast('✓ Property added successfully');
   } else {
     data.id = pModalEditId;
     const idx = properties.findIndex(p=>p.id===pModalEditId);
+    previousEntry = idx>-1 ? properties[idx] : null;
     if(idx>-1) properties[idx] = data;
-    showToast('✓ Property updated successfully');
   }
   closePModal();
   refreshAfterDataChange();
-  if(pModalMode==='edit') openDetail(data.id);
-  window.dashboardFirebase.saveProperty(data);
+  if(mode==='edit') openDetail(data.id);
+
+  try{
+    await window.dashboardFirebase.saveProperty(data);
+    showToast(mode==='add' ? '✓ Property added successfully' : '✓ Property updated successfully');
+  }catch(e){
+    if(mode==='add'){
+      properties = properties.filter(p=>p.id!==data.id);
+    } else if(previousEntry){
+      const idx = properties.findIndex(p=>p.id===data.id);
+      if(idx>-1) properties[idx] = previousEntry;
+    }
+    refreshAfterDataChange();
+    showToast('✗ Save failed — check your connection and try again');
+  }
 }
 
-function deleteProperty(id){
+async function deleteProperty(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   if(!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
   properties = properties.filter(x=>x.id!==id);
   closeDetail();
   refreshAfterDataChange();
-  showToast('Property deleted');
-  window.dashboardFirebase.deleteProperty(id);
+  try{
+    await window.dashboardFirebase.deleteProperty(id);
+    showToast('Property deleted');
+  }catch(e){
+    properties.unshift(p);
+    refreshAfterDataChange();
+    showToast('✗ Delete failed — check your connection and try again');
+  }
 }
 
 function refreshAfterDataChange(){

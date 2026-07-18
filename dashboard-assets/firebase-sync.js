@@ -27,8 +27,10 @@ async function seedIfEmpty(){
 }
 
 window.dashboardFirebase = {
-  saveProperty: (data) => setDoc(doc(db, 'properties', data.id), data).catch(e => console.error('Firestore save error:', e)),
-  deleteProperty: (id) => deleteDoc(doc(db, 'properties', id)).catch(e => console.error('Firestore delete error:', e))
+  saveProperty: (data) => setDoc(doc(db, 'properties', data.id), data)
+    .catch(e => { console.error('Firestore save error:', e); throw e; }),
+  deleteProperty: (id) => deleteDoc(doc(db, 'properties', id))
+    .catch(e => { console.error('Firestore delete error:', e); throw e; })
 };
 
 seedIfEmpty()
