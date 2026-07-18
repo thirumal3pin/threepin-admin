@@ -507,6 +507,71 @@ function updateWaConnectionStatus(){
   } else {
     subEl.textContent = 'Not connected';
   }
+  renderWorkflowCanvas();
+}
+
+// ═══════ WORKFLOW CANVAS ═══════
+function renderWorkflowCanvas(){
+  const el = document.getElementById('wfCanvas');
+  if(!el || !botConfigDraft) return;
+
+  const sheets = knowledgeSources.filter(s => /sheet/i.test(s.type||''));
+  const docs = knowledgeSources.filter(s => !/sheet/i.test(s.type||''));
+  const waOn = !!(botConfigDraft.waPhoneNumberId && botConfigDraft.waConnectedAt);
+  const agentOn = waOn && knowledgeSources.length > 0;
+
+  const node = (opts) => {
+    const cls = 'wf-node' + (opts.cls ? ' '+opts.cls : '');
+    const click = opts.onclick ? ` onclick="${opts.onclick}"` : '';
+    const pill = opts.pill ? `<span class="wf-pill ${opts.pill.k}">${opts.pill.t}</span>` : '';
+    return `<div class="${cls}"${click}>
+      <div class="wf-node-top"><span class="wf-ico">${opts.ico}</span>${pill}</div>
+      <div class="wf-node-name">${opts.name}</div>
+      <div class="wf-node-desc">${opts.desc}</div>
+    </div>`;
+  };
+
+  const knowledgeNode = node({
+    ico:'📚', name:'Knowledge',
+    desc: docs.length ? `${docs.length} doc${docs.length>1?'s':''}/file${docs.length>1?'s':''}` : 'Add docs & PDFs',
+    pill: docs.length ? {k:'on',t:'Connected'} : {k:'off',t:'Empty'},
+    onclick:"openWfSection('secKnowledge')"
+  });
+  const sheetNode = node({
+    ico:'📊', name:'Google Sheet',
+    desc: sheets.length ? `${sheets.length} sheet${sheets.length>1?'s':''} linked` : 'Link a sheet',
+    pill: sheets.length ? {k:'on',t:'Linked'} : {k:'off',t:'Empty'},
+    onclick:"openWfSection('secKnowledge')"
+  });
+  const agentNode = node({
+    cls:'agent', ico:'🤖', name:"3 PIN Agent",
+    desc: agentOn ? 'Live & answering' : 'Connect a channel to go live',
+    pill: agentOn ? {k:'on',t:'Active'} : {k:'warn',t:'Inactive'},
+    onclick:"openWfSection('secPersona')"
+  });
+  const waNode = node({
+    ico:'🟢', name:'WhatsApp',
+    desc: waOn ? (botConfigDraft.waPhoneNumber||'Connected') : 'Click to connect',
+    pill: waOn ? {k:'on',t:'Verified'} : {k:'off',t:'Connect'},
+    onclick:"openWfSection('secChannels')"
+  });
+  const igNode = node({ cls:'soon', ico:'📸', name:'Instagram', desc:'Coming soon', pill:{k:'off',t:'Soon'} });
+  const webNode = node({ cls:'soon', ico:'🌐', name:'Website', desc:'Coming soon', pill:{k:'off',t:'Soon'} });
+
+  el.innerHTML =
+    `<div class="wf-col">${knowledgeNode}${sheetNode}</div>` +
+    `<div class="wf-rail"></div>` +
+    `<div class="wf-col center">${agentNode}</div>` +
+    `<div class="wf-rail"></div>` +
+    `<div class="wf-col">${waNode}${igNode}${webNode}</div>`;
+}
+
+function openWfSection(id){
+  const sec = document.getElementById(id);
+  if(!sec) return;
+  sec.scrollIntoView({ behavior:'smooth', block:'center' });
+  sec.classList.add('wf-flash');
+  setTimeout(()=>sec.classList.remove('wf-flash'), 1200);
 }
 
 async function connectWhatsApp(){
@@ -712,6 +777,7 @@ async function loadKnowledge(){
 }
 
 function renderKnowledgeList(){
+  renderWorkflowCanvas();
   const el = document.getElementById('kbSourceList');
   if(!knowledgeSources.length){
     el.innerHTML = '<div class="kb-empty">No knowledge connected yet. Add a sheet, doc, or file above.</div>';

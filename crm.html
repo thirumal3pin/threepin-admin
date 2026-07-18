@@ -96,10 +96,18 @@
         <button class="dp-act" onclick="saveBotConfig()">💾 Save Workflow</button>
       </div>
     </div>
+
+    <!-- VISUAL WORKFLOW CANVAS -->
+    <div class="wf-wrap">
+      <div class="wf-title">Agent Workflow</div>
+      <div class="wf-canvas" id="wfCanvas"></div>
+      <div class="wf-hint">Click any block to set it up below.</div>
+    </div>
+
     <div class="bot-editor-body">
       <div class="bot-editor-form">
 
-        <div class="sec">
+        <div class="sec" id="secChannels">
           <div class="sec-title">🔌 Channels</div>
 
           <!-- WhatsApp connect card -->
@@ -138,7 +146,7 @@
           </div>
         </div>
 
-        <div class="sec">
+        <div class="sec" id="secKnowledge">
           <div class="sec-title">📚 Knowledge Base</div>
           <div class="kb-intro">Connect listings, price lists, or brochures. The bot answers buyers using only what you add here.</div>
 
@@ -164,7 +172,7 @@
           <div id="kbSourceList" class="kb-list"></div>
         </div>
 
-        <div class="sec">
+        <div class="sec" id="secPersona">
           <div class="sec-title">🧑‍💼 Role & Persona</div>
           <textarea id="botRole" class="bot-textarea" rows="3"></textarea>
         </div>
