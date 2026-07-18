@@ -2,7 +2,13 @@ import crypto from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG, getWhatsAppCreds, getKnowledgeSources } from './_bot-shared.js';
 
-const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
+// Lazily created so a missing ANTHROPIC_API_KEY can't crash the module at
+// load time — webhook verification (GET) must never depend on Claude.
+let _anthropic;
+function getAnthropic() {
+  if (!_anthropic) _anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
+  return _anthropic;
+}
 
 function verifySignature(rawBody, signatureHeader, secret) {
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false;
@@ -75,7 +81,7 @@ async function processIncomingMessage(db, phone, text, contactName) {
   convo.messages = convo.messages || [];
   convo.messages.push({ role: 'user', content: text, ts: Date.now() });
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropic().messages.create({
     model: 'claude-opus-4-8',
     max_tokens: 1024,
     thinking: { type: 'adaptive' },
