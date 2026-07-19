@@ -578,9 +578,17 @@ function openWfSection(id){
 // env var — not hardcoded here, so it's set in exactly one place.
 let waSignupSessionInfo = null;
 let waSessionInfoResolvers = [];
+let publicConfig = null;
+(window.__publicConfigPromise || Promise.resolve({})).then(cfg => { publicConfig = cfg; });
+
+// Exact allowlist, not endsWith — "evilfacebook.com" ends with "facebook.com"
+// too, so a substring/suffix check here would let an attacker-controlled
+// page inject a fake WA_EMBEDDED_SIGNUP message with a spoofed phone number.
+const META_MESSAGE_ORIGINS = ['https://www.facebook.com', 'https://web.facebook.com', 'https://m.facebook.com'];
+let waSignupAttemptId = 0;
 
 window.addEventListener('message', (event) => {
-  if (typeof event.origin !== 'string' || !event.origin.endsWith('facebook.com')) return;
+  if (!META_MESSAGE_ORIGINS.includes(event.origin)) return;
   let data;
   try { data = JSON.parse(event.data); } catch { return; }
   if (data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH') {
@@ -590,39 +598,49 @@ window.addEventListener('message', (event) => {
   }
 });
 
-function waitForWaSessionInfo(timeoutMs){
-  if (waSignupSessionInfo) return Promise.resolve(waSignupSessionInfo);
+// Tagged with the attempt id at call time so a message that arrives late
+// from a cancelled/timed-out earlier attempt can't be mistaken for the
+// current one's session info.
+function waitForWaSessionInfo(timeoutMs, attemptId){
+  if (waSignupSessionInfo && attemptId === waSignupAttemptId) return Promise.resolve(waSignupSessionInfo);
   return new Promise(resolve => {
-    waSessionInfoResolvers.push(resolve);
-    setTimeout(() => resolve(waSignupSessionInfo), timeoutMs);
+    const wrapped = (info) => { if (attemptId === waSignupAttemptId) resolve(info); };
+    waSessionInfoResolvers.push(wrapped);
+    setTimeout(() => { if (attemptId === waSignupAttemptId) resolve(waSignupSessionInfo); }, timeoutMs);
   });
 }
 
-async function connectWhatsApp(){
+function connectWhatsApp(){
+  // Must call FB.login() synchronously, in direct response to the click —
+  // any `await` (even a resolved promise's microtask) before it makes
+  // browsers treat the resulting window.open() as NOT user-initiated, and
+  // they silently block the popup instead of opening it. That's why the
+  // public config is pre-fetched into `publicConfig` at load time rather
+  // than awaited here.
   const note = document.getElementById('waConnectNote');
   if (typeof FB === 'undefined'){
     note.textContent = 'Meta SDK failed to load — check your connection and try again.';
     note.style.color = 'var(--red)';
     return;
   }
-  const cfg = await (window.__publicConfigPromise || Promise.resolve({}));
-  if (!cfg.metaEmbeddedSignupConfigId){
-    note.textContent = 'Meta Embedded Signup isn\'t configured yet — set META_EMBEDDED_SIGNUP_CONFIG_ID in Vercel.';
+  if (!publicConfig || !publicConfig.metaEmbeddedSignupConfigId){
+    note.textContent = 'Meta config is still loading — wait a second and try again.';
     note.style.color = 'var(--red)';
     return;
   }
   const btn = document.getElementById('waConnectBtn');
   btn.disabled = true; btn.textContent = 'Connecting…';
   waSignupSessionInfo = null;
-  FB.login(handleFbLoginResponse, {
-    config_id: cfg.metaEmbeddedSignupConfigId,
+  const attemptId = ++waSignupAttemptId;
+  FB.login((response) => handleFbLoginResponse(response, attemptId), {
+    config_id: publicConfig.metaEmbeddedSignupConfigId,
     response_type: 'code',
     override_default_response_type: true,
     extras: { setup: {}, featureType: '', sessionInfoVersion: '2' }
   });
 }
 
-async function handleFbLoginResponse(response){
+async function handleFbLoginResponse(response, attemptId){
   const btn = document.getElementById('waConnectBtn');
   const note = document.getElementById('waConnectNote');
   const resetBtn = () => { btn.disabled = false; btn.innerHTML = '<span class="wa-glyph">✆</span> Connect WhatsApp via Meta'; };
@@ -635,7 +653,7 @@ async function handleFbLoginResponse(response){
   }
 
   try{
-    const sessionInfo = await waitForWaSessionInfo(4000);
+    const sessionInfo = await waitForWaSessionInfo(4000, attemptId);
     if (!sessionInfo || !sessionInfo.phone_number_id){
       note.textContent = 'Could not read the connected number from Meta — please try again.';
       note.style.color = 'var(--red)';

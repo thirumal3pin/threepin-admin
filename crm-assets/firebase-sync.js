@@ -100,9 +100,11 @@ window.crmAuth = {
 
 onAuthStateChanged(auth, async (user) => {
   if(user){
-    // Force-refresh once so a just-provisioned tenantId claim is picked up
-    // even if this is the very first sign-in after account creation.
-    const tokenResult = await user.getIdTokenResult();
+    // Force-refresh (the `true` argument) so a tenantId claim set AFTER this
+    // browser's last sign-in — e.g. right after scripts/create-tenant.js or
+    // scripts/migrate-existing-tenant.js ran — is picked up immediately,
+    // instead of silently reusing a cached token that predates the claim.
+    const tokenResult = await user.getIdTokenResult(true);
     currentTenantId = tokenResult.claims.tenantId || null;
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');

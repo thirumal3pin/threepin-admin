@@ -55,9 +55,13 @@ service cloud.firestore {
       allow read, write: if ownsTenantDoc(tid);
     }
 
-    // Flat collections scoped by a tenantId field on each document.
+    // Flat collections scoped by a tenantId field on each document. Update
+    // requires BOTH the existing doc and the new data to belong to the same
+    // tenant — otherwise a tenant could reassign their own lead's tenantId
+    // to hand (or accidentally move) it to a different tenant.
     match /leads/{leadId} {
-      allow read, update, delete: if ownsTenantField();
+      allow read, delete: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
       allow create: if writingOwnTenantField();
     }
     match /conversations/{convoId} {

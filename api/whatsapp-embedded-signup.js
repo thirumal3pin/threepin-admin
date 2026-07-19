@@ -35,18 +35,34 @@ async function exchangeCodeForToken(code) {
   return data.access_token;
 }
 
+// Meta's Embedded Signup code-for-token exchange (exchangeCodeForToken,
+// above) is documented to already hand back a token suitable for the
+// WhatsApp Business Management API — unlike a plain Facebook Login user
+// token, it isn't confirmed to need (or even accept) the generic
+// fb_exchange_token grant, which is documented for short-lived USER tokens.
+// Attempted here as a best-effort upgrade only: if it fails or behaves
+// unexpectedly, we fall back to the token from the first exchange rather
+// than blocking the whole connection on an unverified assumption. Verify
+// against a real completed signup and simplify this to a single exchange if
+// it turns out the second call is a no-op or errors.
 async function exchangeForLongLivedToken(shortLivedToken) {
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token` +
     `?grant_type=fb_exchange_token` +
     `&client_id=${encodeURIComponent(process.env.META_APP_ID)}` +
     `&client_secret=${encodeURIComponent(process.env.META_APP_SECRET)}` +
     `&fb_exchange_token=${encodeURIComponent(shortLivedToken)}`;
-  const res = await fetch(url);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error ? data.error.message : `Long-lived token exchange failed (${res.status})`);
+  try {
+    const res = await fetch(url);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) {
+      console.error('Long-lived token exchange failed, using original token:', data.error || res.status);
+      return shortLivedToken;
+    }
+    return data.access_token;
+  } catch (e) {
+    console.error('Long-lived token exchange threw, using original token:', e);
+    return shortLivedToken;
   }
-  return data.access_token;
 }
 
 async function fetchNumberInfo(phoneNumberId, token) {
@@ -78,12 +94,29 @@ export async function POST(request) {
   }
 
   try {
+    const db = getDb();
+    const tenantId = user.tenantId;
+
+    // Guard against two tenants ending up pointed at the same WhatsApp
+    // number — a real risk while testing, since Meta only gives a handful
+    // of test numbers and multiple test tenants can easily collide on one.
+    const existingRoute = await db.collection('waNumbers').doc(phoneNumberId).get();
+    if (existingRoute.exists && existingRoute.data().tenantId !== tenantId) {
+      return json({ connected: false, error: 'This WhatsApp number is already connected to a different account. Disconnect it there first.' }, 200);
+    }
+
     const shortLivedToken = await exchangeCodeForToken(code);
     const longLivedToken = await exchangeForLongLivedToken(shortLivedToken);
     const info = await fetchNumberInfo(phoneNumberId, longLivedToken);
 
-    const db = getDb();
-    const tenantId = user.tenantId;
+    // If this tenant was previously connected to a DIFFERENT number and is
+    // now reconnecting without an explicit disconnect first, clean up the
+    // stale routing entry so old messages/webhooks never route here.
+    const currentBotCfg = await db.collection('botConfigs').doc(tenantId).get();
+    const previousPhoneNumberId = currentBotCfg.exists ? currentBotCfg.data().waPhoneNumberId : null;
+    if (previousPhoneNumberId && previousPhoneNumberId !== phoneNumberId) {
+      await db.collection('waNumbers').doc(previousPhoneNumberId).delete();
+    }
 
     await Promise.all([
       db.collection('botConfigs').doc(tenantId).set({
