@@ -1,0 +1,115 @@
+rules_version = '2';
+
+// Tenant-isolation rules for the multi-tenant CRM/WhatsApp bot.
+//
+// These only govern CLIENT-SIDE Firestore access (crm.html / dashboard.html
+// using the public firebaseConfig). Server-side writes from api/*.js use the
+// Admin SDK, which bypasses these rules entirely by design — that's how the
+// WhatsApp/Meta webhooks resolve and write data for a tenant without the
+// caller being a logged-in Firebase user.
+//
+// NOT reviewed/deployed automatically — read this before running
+// `firebase deploy --only firestore:rules` (or pasting into the Firebase
+// Console Rules editor), since it replaces whatever rules exist there today.
+//
+// properties (used by dashboard.html) is intentionally left OUT of tenant
+// scoping below — dashboard.html has no Firebase Auth wiring yet (a
+// separate, not-yet-done piece of work), so a tenantId check here would
+// break it outright. Today properties has no rules-based protection at all;
+// closing that gap requires giving dashboard.html real Firebase Auth first.
+
+function tenantId() {
+  return request.auth.token.tenantId;
+}
+
+function isSignedInWithTenant() {
+  return request.auth != null && tenantId() != null;
+}
+
+function ownsTenantDoc(id) {
+  return isSignedInWithTenant() && id == tenantId();
+}
+
+function ownsTenantField() {
+  return isSignedInWithTenant() && resource.data.tenantId == tenantId();
+}
+
+function writingOwnTenantField() {
+  return isSignedInWithTenant() && request.resource.data.tenantId == tenantId();
+}
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Per-tenant singleton config docs — doc ID IS the tenant.
+    match /botConfigs/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+    match /knowledgeConfigs/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+    match /pipelines/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+    match /leadsSeededFlags/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+
+    // Flat collections scoped by a tenantId field on each document.
+    match /leads/{leadId} {
+      allow read, update, delete: if ownsTenantField();
+      allow create: if writingOwnTenantField();
+    }
+    match /conversations/{convoId} {
+      allow read: if ownsTenantField();
+      // Only the webhook (Admin SDK, bypasses rules) writes conversations —
+      // no client-side write path exists today.
+    }
+
+    // A user can only read their own users/{uid} record (their tenantId,
+    // business name, role) — never anyone else's.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Routing tables and secrets — server-only (Admin SDK), no client access
+    // at all, in either direction.
+    match /waNumbers/{phoneNumberId} {
+      allow read, write: if false;
+    }
+    match /waPages/{pageId} {
+      allow read, write: if false;
+    }
+    match /waSecrets/{tid} {
+      allow read, write: if false;
+    }
+
+    // Legacy global singletons from the pre-multi-tenant app. Left readable
+    // by any signed-in CRM user only so existing tooling doesn't 403 outright
+    // during the transition; nothing new should read/write these — they're
+    // superseded by the per-tenant collections above.
+    match /config/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // dashboard.html (property listings) has no Firebase Auth wiring at all
+    // yet — it's gated only by a client-side hardcoded password check, not a
+    // real login. Since I don't know what rule (if any) governs this
+    // collection today, this line intentionally preserves fully-open access
+    // rather than guessing and breaking the live dashboard on deploy. This is
+    // a real gap (see the security review earlier this session) — closing it
+    // properly requires giving dashboard.html real Firebase Auth + tenantId
+    // first, which is out of scope for this pass.
+    match /properties/{propId} {
+      allow read, write: if true;
+    }
+
+    // meta/{docId} (e.g. meta/seeded) is used by dashboard-assets/firebase-sync.js's
+    // one-time seed check, which also runs with no auth — preserved exactly
+    // as it exists in the live rules today.
+    match /meta/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

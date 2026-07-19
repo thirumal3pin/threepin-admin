@@ -476,7 +476,6 @@ function renderBotEditorForm(){
   document.getElementById('botRole').value = botConfigDraft.role || '';
   document.getElementById('botWelcome').value = botConfigDraft.welcomeMessage || '';
   document.getElementById('botTone').value = botConfigDraft.tone || '';
-  document.getElementById('waPhoneNumberId').value = botConfigDraft.waPhoneNumberId || '';
   updateWaConnectionStatus();
   renderRequiredInfoRows();
   renderStepsRows();
@@ -574,27 +573,87 @@ function openWfSection(id){
   setTimeout(()=>sec.classList.remove('wf-flash'), 1200);
 }
 
+// Meta Embedded Signup Configuration ID comes from /api/public-config (see
+// crm.html), which serves it from the META_EMBEDDED_SIGNUP_CONFIG_ID Vercel
+// env var — not hardcoded here, so it's set in exactly one place.
+let waSignupSessionInfo = null;
+let waSessionInfoResolvers = [];
+
+window.addEventListener('message', (event) => {
+  if (typeof event.origin !== 'string' || !event.origin.endsWith('facebook.com')) return;
+  let data;
+  try { data = JSON.parse(event.data); } catch { return; }
+  if (data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH') {
+    waSignupSessionInfo = data.data; // { phone_number_id, waba_id }
+    waSessionInfoResolvers.forEach(r => r(data.data));
+    waSessionInfoResolvers = [];
+  }
+});
+
+function waitForWaSessionInfo(timeoutMs){
+  if (waSignupSessionInfo) return Promise.resolve(waSignupSessionInfo);
+  return new Promise(resolve => {
+    waSessionInfoResolvers.push(resolve);
+    setTimeout(() => resolve(waSignupSessionInfo), timeoutMs);
+  });
+}
+
 async function connectWhatsApp(){
-  const phoneNumberId = document.getElementById('waPhoneNumberId').value.trim();
-  if(!phoneNumberId){ showToast('Enter your Phone Number ID first'); return; }
+  const note = document.getElementById('waConnectNote');
+  if (typeof FB === 'undefined'){
+    note.textContent = 'Meta SDK failed to load — check your connection and try again.';
+    note.style.color = 'var(--red)';
+    return;
+  }
+  const cfg = await (window.__publicConfigPromise || Promise.resolve({}));
+  if (!cfg.metaEmbeddedSignupConfigId){
+    note.textContent = 'Meta Embedded Signup isn\'t configured yet — set META_EMBEDDED_SIGNUP_CONFIG_ID in Vercel.';
+    note.style.color = 'var(--red)';
+    return;
+  }
+  const btn = document.getElementById('waConnectBtn');
+  btn.disabled = true; btn.textContent = 'Connecting…';
+  waSignupSessionInfo = null;
+  FB.login(handleFbLoginResponse, {
+    config_id: cfg.metaEmbeddedSignupConfigId,
+    response_type: 'code',
+    override_default_response_type: true,
+    extras: { setup: {}, featureType: '', sessionInfoVersion: '2' }
+  });
+}
+
+async function handleFbLoginResponse(response){
   const btn = document.getElementById('waConnectBtn');
   const note = document.getElementById('waConnectNote');
-  btn.disabled = true; btn.textContent = 'Connecting…';
+  const resetBtn = () => { btn.disabled = false; btn.innerHTML = '<span class="wa-glyph">✆</span> Connect WhatsApp via Meta'; };
+
+  if (!response.authResponse || !response.authResponse.code){
+    note.textContent = 'Connection cancelled.';
+    note.style.color = 'var(--red)';
+    resetBtn();
+    return;
+  }
+
   try{
-    const idToken = await window.crmAuth.getIdToken();
-    const res = await fetch('/api/whatsapp-connect', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
-      body: JSON.stringify({ phoneNumberId })
-    });
-    const data = await res.json().catch(()=>({}));
-    if(data.needsSetup){
-      note.innerHTML = '⚠️ ' + data.message;
+    const sessionInfo = await waitForWaSessionInfo(4000);
+    if (!sessionInfo || !sessionInfo.phone_number_id){
+      note.textContent = 'Could not read the connected number from Meta — please try again.';
       note.style.color = 'var(--red)';
       return;
     }
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/whatsapp-embedded-signup', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
+      body: JSON.stringify({
+        code: response.authResponse.code,
+        phoneNumberId: sessionInfo.phone_number_id,
+        wabaId: sessionInfo.waba_id
+      })
+    });
+    const data = await res.json().catch(()=>({}));
     if(!data.connected){
-      note.textContent = data.error || 'Could not connect. Check the Phone Number ID.';
+      note.textContent = data.error || 'Could not connect. Please try again.';
       note.style.color = 'var(--red)';
       return;
     }
@@ -611,7 +670,7 @@ async function connectWhatsApp(){
     note.textContent = 'Connection failed — see console.';
     note.style.color = 'var(--red)';
   } finally {
-    btn.disabled = false; btn.innerHTML = '<span class="wa-glyph">✆</span> Connect WhatsApp';
+    resetBtn();
   }
 }
 
@@ -619,7 +678,7 @@ async function disconnectWhatsApp(){
   if(!confirm('Disconnect this WhatsApp number from the bot?')) return;
   try{
     const idToken = await window.crmAuth.getIdToken();
-    await fetch('/api/whatsapp-connect', {
+    await fetch('/api/whatsapp-embedded-signup', {
       method:'DELETE',
       headers:{ 'Authorization':'Bearer '+idToken }
     });
@@ -629,7 +688,6 @@ async function disconnectWhatsApp(){
   botConfigDraft.waVerifiedName = '';
   botConfigDraft.waQualityRating = '';
   botConfigDraft.waConnectedAt = null;
-  document.getElementById('waPhoneNumberId').value = '';
   updateWaConnectionStatus();
   showToast('WhatsApp disconnected');
 }

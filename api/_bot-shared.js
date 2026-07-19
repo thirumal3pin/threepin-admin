@@ -10,23 +10,30 @@ export function getDb() {
   return getFirestore();
 }
 
+// Returns the decoded Firebase ID token plus the caller's tenantId (from the
+// `tenantId` custom claim set at provisioning time — see scripts/create-tenant.js).
+// Callers that need tenant scoping should treat a missing tenantId as
+// "not fully onboarded" rather than assuming a default.
 export async function verifyCrmUser(request) {
   const authHeader = request.headers.get('authorization') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (!token) return null;
   try {
     getDb(); // ensures the default app is initialized before getAuth()
-    return await getAuth().verifyIdToken(token);
+    const decoded = await getAuth().verifyIdToken(token);
+    return { ...decoded, tenantId: decoded.tenantId || null };
   } catch {
     return null;
   }
 }
 
+// Starter template used to seed a new tenant's bot config at signup time
+// (see scripts/create-tenant.js) — generic, not specific to any one business.
 export const DEFAULT_BOT_CONFIG = {
-  role: 'You are a professional, friendly real estate assistant for 3 PIN Realty, a real estate brokerage in Chennai. You help potential buyers find properties by understanding their requirements through natural conversation.',
-  welcomeMessage: "Hi! Thanks for reaching out to 3 PIN Realty 👋 What are you looking for in Chennai — an apartment, villa, or plot?",
+  role: 'You are a professional, friendly real estate assistant. You help potential buyers find properties by understanding their requirements through natural conversation.',
+  welcomeMessage: "Hi! Thanks for reaching out 👋 What are you looking for — an apartment, villa, or plot?",
   requiredInfo: [
-    { id: 'ri1', label: 'Preferred area in Chennai' },
+    { id: 'ri1', label: 'Preferred area/location' },
     { id: 'ri2', label: 'Budget' },
     { id: 'ri3', label: 'Property type and configuration (e.g. 2BHK apartment, villa)' },
     { id: 'ri4', label: 'Name' }
@@ -77,7 +84,7 @@ function renderKnowledgeBlock(knowledgeSources) {
 
   const lines = [
     'KNOWLEDGE BASE',
-    'The following is verified information provided by 3 PIN Realty (property listings, pricing, projects, FAQs). You MAY share specific details found here — prices, areas, availability — because they are real. You must still never invent anything that is not present below; if the answer is not here, say a team member will follow up.',
+    'The following is verified information provided by the business (property listings, pricing, projects, FAQs). You MAY share specific details found here — prices, areas, availability — because they are real. You must still never invent anything that is not present below; if the answer is not here, say a team member will follow up.',
     ''
   ];
   let budget = KNOWLEDGE_CHAR_BUDGET;
@@ -92,24 +99,48 @@ function renderKnowledgeBlock(knowledgeSources) {
   return lines.join('\n');
 }
 
-// WhatsApp credentials: the phone number id lives in Firestore (set from the
-// CRM connect flow), but the access token stays a server-only secret in env.
-export async function getWhatsAppCreds(db) {
+// WhatsApp credentials are per-tenant: the phone number id + display metadata
+// live in botConfigs/{tenantId}, the access token in the server-only
+// waSecrets/{tenantId} doc (never exposed to any client-side Firestore call).
+// Falls back to the legacy single-tenant env vars only when a tenant has no
+// waSecrets doc yet, so the original pre-migration deployment keeps working
+// until it's reconnected through the new Embedded Signup flow.
+export async function getWhatsAppCreds(db, tenantId) {
   let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+  let token = process.env.WHATSAPP_ACCESS_TOKEN || '';
   try {
-    const snap = await db.collection('config').doc('whatsappBot').get();
-    if (snap.exists && snap.data().waPhoneNumberId) {
-      phoneNumberId = snap.data().waPhoneNumberId;
+    const [botSnap, secretSnap] = await Promise.all([
+      db.collection('botConfigs').doc(tenantId).get(),
+      db.collection('waSecrets').doc(tenantId).get()
+    ]);
+    if (botSnap.exists && botSnap.data().waPhoneNumberId) {
+      phoneNumberId = botSnap.data().waPhoneNumberId;
+    }
+    if (secretSnap.exists && secretSnap.data().token) {
+      token = secretSnap.data().token;
     }
   } catch (e) {
     console.error('getWhatsAppCreds error:', e);
   }
-  return { phoneNumberId, token: process.env.WHATSAPP_ACCESS_TOKEN || '' };
+  return { phoneNumberId, token };
 }
 
-export async function getKnowledgeSources(db) {
+// Given the phone_number_id Meta includes on every inbound WhatsApp webhook
+// payload (value.metadata.phone_number_id), find which tenant owns it.
+export async function resolveTenantByPhoneNumberId(db, phoneNumberId) {
+  if (!phoneNumberId) return null;
   try {
-    const snap = await db.collection('config').doc('knowledge').get();
+    const snap = await db.collection('waNumbers').doc(phoneNumberId).get();
+    return snap.exists ? snap.data().tenantId : null;
+  } catch (e) {
+    console.error('resolveTenantByPhoneNumberId error:', e);
+    return null;
+  }
+}
+
+export async function getKnowledgeSources(db, tenantId) {
+  try {
+    const snap = await db.collection('knowledgeConfigs').doc(tenantId).get();
     return snap.exists ? (snap.data().sources || []) : [];
   } catch (e) {
     console.error('getKnowledgeSources error:', e);

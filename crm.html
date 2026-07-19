@@ -12,6 +12,25 @@
 </head>
 <body>
 
+<!-- Meta JS SDK — powers the "Connect WhatsApp via Meta" Embedded Signup popup.
+     App ID / Config ID come from /api/public-config (backed by the META_APP_ID
+     and META_EMBEDDED_SIGNUP_CONFIG_ID Vercel env vars) rather than being
+     hardcoded here — set them once in Vercel, nothing to edit in this file. -->
+<div id="fb-root"></div>
+<script>
+  window.__publicConfigPromise = fetch('/api/public-config').then(r => r.json()).catch(() => ({}));
+  window.fbAsyncInit = async function() {
+    const cfg = await window.__publicConfigPromise;
+    FB.init({
+      appId: cfg.metaAppId || '',
+      autoLogAppEvents: true,
+      xfbml: true,
+      version: 'v21.0'
+    });
+  };
+</script>
+<script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
+
 <!-- LOGIN SCREEN -->
 <div id="loginScreen" class="login-screen">
   <form class="login-box" onsubmit="attemptCrmLogin(event)">
@@ -123,16 +142,12 @@
               <span class="connect-status disconnected" id="waConnectionStatus">Not connected</span>
             </div>
 
-            <!-- Disconnected state: enter number id + click connect -->
+            <!-- Disconnected state: one click opens Meta's Embedded Signup popup -->
             <div id="waDisconnectedBody">
-              <div class="field">
-                <label for="waPhoneNumberId">Phone Number ID <span class="lbl-hint">(WhatsApp → API Setup in Meta)</span></label>
-                <input type="text" id="waPhoneNumberId" placeholder="e.g. 123456789012345">
-              </div>
               <button class="chan-connect-btn" id="waConnectBtn" onclick="connectWhatsApp()">
-                <span class="wa-glyph">✆</span> Connect WhatsApp
+                <span class="wa-glyph">✆</span> Connect WhatsApp via Meta
               </button>
-              <div class="chan-note" id="waConnectNote">The access token is stored securely in Vercel (server-side) — you only enter the Phone Number ID here.</div>
+              <div class="chan-note" id="waConnectNote">Opens a secure Meta popup — log into your own WhatsApp Business account there. Nothing is typed in here, and your credentials never touch this site.</div>
             </div>
 
             <!-- Connected state: verified badge like the Meta dashboard -->

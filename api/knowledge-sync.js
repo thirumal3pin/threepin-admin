@@ -6,11 +6,10 @@ import { getDb, verifyCrmUser } from './_bot-shared.js';
 // we pull its contents server-side (CSV / plain-text export) — no OAuth needed
 // as long as the file is shared with "Anyone with the link". Uploaded PDFs /
 // text files arrive already extracted to text from the browser and are stored
-// the same way. Everything lands in config/knowledge.sources[] and is fed into
-// the bot's system prompt by buildSystemPrompt().
+// the same way. Everything lands in knowledgeConfigs/{tenantId}.sources[] and
+// is fed into the bot's system prompt by buildSystemPrompt().
 
 const MAX_SOURCE_CHARS = 20000;      // per-source cap kept in Firestore
-const KNOWLEDGE_DOC = ['config', 'knowledge'];
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -19,17 +18,17 @@ function json(body, status = 200) {
   });
 }
 
-function knowledgeRef(db) {
-  return db.collection(KNOWLEDGE_DOC[0]).doc(KNOWLEDGE_DOC[1]);
+function knowledgeRef(db, tenantId) {
+  return db.collection('knowledgeConfigs').doc(tenantId);
 }
 
-async function readSources(db) {
-  const snap = await knowledgeRef(db).get();
+async function readSources(db, tenantId) {
+  const snap = await knowledgeRef(db, tenantId).get();
   return snap.exists ? (snap.data().sources || []) : [];
 }
 
-async function writeSources(db, sources) {
-  await knowledgeRef(db).set({ sources, updatedAt: Date.now() }, { merge: true });
+async function writeSources(db, tenantId, sources) {
+  await knowledgeRef(db, tenantId).set({ sources, updatedAt: Date.now() }, { merge: true });
 }
 
 // --- Google link parsing / fetching ------------------------------------------
@@ -76,9 +75,9 @@ function clamp(text) {
 
 export async function GET(request) {
   const user = await verifyCrmUser(request);
-  if (!user) return json({ error: 'Unauthorized' }, 401);
+  if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   const db = getDb();
-  const sources = await readSources(db);
+  const sources = await readSources(db, user.tenantId);
   // Don't ship full content back to the list view — just metadata.
   const meta = sources.map(({ content, ...rest }) => ({ ...rest, chars: (content || '').length }));
   return json({ sources: meta });
@@ -86,7 +85,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   const user = await verifyCrmUser(request);
-  if (!user) return json({ error: 'Unauthorized' }, 401);
+  if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
 
   let body;
   try {
@@ -96,6 +95,7 @@ export async function POST(request) {
   }
 
   const db = getDb();
+  const tenantId = user.tenantId;
   const action = body.action;
 
   try {
@@ -115,9 +115,9 @@ export async function POST(request) {
         syncedAt: Date.now(),
         status: 'synced'
       };
-      const sources = await readSources(db);
+      const sources = await readSources(db, tenantId);
       sources.push(source);
-      await writeSources(db, sources);
+      await writeSources(db, tenantId, sources);
       return json({ ok: true, source: { ...source, content: undefined, chars: content.length } });
     }
 
@@ -134,14 +134,14 @@ export async function POST(request) {
         syncedAt: Date.now(),
         status: 'synced'
       };
-      const sources = await readSources(db);
+      const sources = await readSources(db, tenantId);
       sources.push(source);
-      await writeSources(db, sources);
+      await writeSources(db, tenantId, sources);
       return json({ ok: true, source: { ...source, content: undefined, chars: content.length } });
     }
 
     if (action === 'resync') {
-      const sources = await readSources(db);
+      const sources = await readSources(db, tenantId);
       const src = sources.find(s => s.id === body.id);
       if (!src) return json({ error: 'Source not found.' }, 404);
       if (!src.url) return json({ error: 'This source has no link to re-sync (re-upload the file).' }, 400);
@@ -150,13 +150,13 @@ export async function POST(request) {
       src.content = clamp(await fetchGoogleContent(parsed));
       src.syncedAt = Date.now();
       src.status = 'synced';
-      await writeSources(db, sources);
+      await writeSources(db, tenantId, sources);
       return json({ ok: true, source: { ...src, content: undefined, chars: src.content.length } });
     }
 
     if (action === 'remove') {
-      const sources = (await readSources(db)).filter(s => s.id !== body.id);
-      await writeSources(db, sources);
+      const sources = (await readSources(db, tenantId)).filter(s => s.id !== body.id);
+      await writeSources(db, tenantId, sources);
       return json({ ok: true });
     }
 

@@ -1,11 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, getKnowledgeSources } from './_bot-shared.js';
 
-const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
+// Lazy so a missing ANTHROPIC_API_KEY doesn't crash every request to this
+// endpoint at module load — only the actual Claude call should fail.
+let _anthropic;
+function getAnthropic() {
+  if (!_anthropic) _anthropic = new Anthropic();
+  return _anthropic;
+}
 
 export async function POST(request) {
   const user = await verifyCrmUser(request);
-  if (!user) {
+  if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
@@ -25,8 +31,8 @@ export async function POST(request) {
   }
 
   try {
-    const knowledge = await getKnowledgeSources(getDb());
-    const response = await anthropic.messages.create({
+    const knowledge = await getKnowledgeSources(getDb(), user.tenantId);
+    const response = await getAnthropic().messages.create({
       model: 'claude-opus-4-8',
       max_tokens: 1024,
       thinking: { type: 'adaptive' },

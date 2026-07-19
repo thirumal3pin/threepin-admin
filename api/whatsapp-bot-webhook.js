@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
-import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG, getWhatsAppCreds, getKnowledgeSources } from './_bot-shared.js';
+import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG, getWhatsAppCreds, getKnowledgeSources, resolveTenantByPhoneNumberId } from './_bot-shared.js';
 
 // Lazily created so a missing ANTHROPIC_API_KEY can't crash the module at
 // load time — webhook verification (GET) must never depend on Claude.
@@ -19,29 +19,29 @@ function verifySignature(rawBody, signatureHeader, secret) {
   return crypto.timingSafeEqual(a, b);
 }
 
-async function getBotConfig(db) {
-  const snap = await db.collection('config').doc('whatsappBot').get();
+async function getBotConfig(db, tenantId) {
+  const snap = await db.collection('botConfigs').doc(tenantId).get();
   return snap.exists ? snap.data() : DEFAULT_BOT_CONFIG;
 }
 
-async function getFirstStageId(db) {
-  const snap = await db.collection('config').doc('pipeline').get();
+async function getFirstStageId(db, tenantId) {
+  const snap = await db.collection('pipelines').doc(tenantId).get();
   const stages = snap.exists ? (snap.data().stages || []) : [];
   return stages.length ? stages[0].id : 'new';
 }
 
-async function getConversation(db, phone) {
-  const ref = db.collection('conversations').doc(phone);
+async function getConversation(db, tenantId, phone) {
+  const ref = db.collection('conversations').doc(`${tenantId}_${phone}`);
   const snap = await ref.get();
   if (snap.exists) return { ref, data: snap.data() };
   return {
     ref,
-    data: { phone, messages: [], extractedInfo: {}, status: 'active', createdAt: Date.now(), updatedAt: Date.now() }
+    data: { tenantId, phone, messages: [], extractedInfo: {}, status: 'active', createdAt: Date.now(), updatedAt: Date.now() }
   };
 }
 
-async function sendWhatsAppMessage(db, to, text) {
-  const { phoneNumberId, token } = await getWhatsAppCreds(db);
+async function sendWhatsAppMessage(db, tenantId, to, text) {
+  const { phoneNumberId, token } = await getWhatsAppCreds(db, tenantId);
   const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -52,14 +52,15 @@ async function sendWhatsAppMessage(db, to, text) {
   }
 }
 
-async function upsertLead(db, phone, extractedInfo, contactName) {
-  const leadId = 'lead_wa_' + phone.replace(/[^0-9]/g, '');
+async function upsertLead(db, tenantId, phone, extractedInfo, contactName) {
+  const leadId = 'lead_wa_' + tenantId + '_' + phone.replace(/[^0-9]/g, '');
   const ref = db.collection('leads').doc(leadId);
   const snap = await ref.get();
   const existing = snap.exists ? snap.data() : null;
-  const stageId = existing ? existing.stageId : await getFirstStageId(db);
+  const stageId = existing ? existing.stageId : await getFirstStageId(db, tenantId);
   const lead = {
     id: leadId,
+    tenantId,
     name: extractedInfo.name || (existing && existing.name) || contactName || 'WhatsApp Lead',
     phone,
     email: (existing && existing.email) || '',
@@ -74,9 +75,9 @@ async function upsertLead(db, phone, extractedInfo, contactName) {
   await ref.set(lead, { merge: true });
 }
 
-async function processIncomingMessage(db, phone, text, contactName) {
-  const [config, knowledge] = await Promise.all([getBotConfig(db), getKnowledgeSources(db)]);
-  const { ref, data: convo } = await getConversation(db, phone);
+async function processIncomingMessage(db, tenantId, phone, text, contactName) {
+  const [config, knowledge] = await Promise.all([getBotConfig(db, tenantId), getKnowledgeSources(db, tenantId)]);
+  const { ref, data: convo } = await getConversation(db, tenantId, phone);
 
   convo.messages = convo.messages || [];
   convo.messages.push({ role: 'user', content: text, ts: Date.now() });
@@ -105,8 +106,8 @@ async function processIncomingMessage(db, phone, text, contactName) {
   convo.updatedAt = Date.now();
 
   await ref.set(convo, { merge: true });
-  await upsertLead(db, phone, extractedInfo, contactName);
-  await sendWhatsAppMessage(db, phone, replyText);
+  await upsertLead(db, tenantId, phone, extractedInfo, contactName);
+  await sendWhatsAppMessage(db, tenantId, phone, replyText);
 }
 
 export async function GET(request) {
@@ -144,12 +145,20 @@ export async function POST(request) {
       const value = change.value || {};
       const contact = (value.contacts && value.contacts[0]) || {};
       const contactName = contact.profile ? contact.profile.name : '';
+      const phoneNumberId = (value.metadata || {}).phone_number_id;
       for (const msg of value.messages || []) {
         if (msg.type !== 'text') continue; // v1: text messages only
         const phone = msg.from;
         const text = msg.text.body;
         jobs.push(
-          processIncomingMessage(db, phone, text, contactName)
+          resolveTenantByPhoneNumberId(db, phoneNumberId)
+            .then(tenantId => {
+              if (!tenantId) {
+                console.error('WhatsApp webhook: no tenant registered for phone_number_id', phoneNumberId);
+                return;
+              }
+              return processIncomingMessage(db, tenantId, phone, text, contactName);
+            })
             .catch(e => console.error('WhatsApp bot processing error:', e))
         );
       }
