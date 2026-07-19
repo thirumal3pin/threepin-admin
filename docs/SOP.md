@@ -19,8 +19,15 @@ Your own business (3 PIN Realty) was migrated in as the first tenant:
 
 **Stack**: static site (`crm.html`, `dashboard.html`) + Vercel serverless
 functions (`api/*.js`) + Firebase (Firestore + Auth), project `pin-realty`.
-Deploys automatically on every push to `main` (Vercel ↔ GitHub integration),
-live at `https://threepin-admin.vercel.app`.
+Deploys automatically on every push to `main` (Vercel ↔ GitHub integration).
+
+**Two live domains, both serving the same deployment:**
+- `https://admin.threepin.in` (custom domain — canonical, used below)
+- `https://threepin-admin.vercel.app` (default Vercel domain)
+
+Anywhere someone might load `crm.html` from and trigger the WhatsApp popup,
+that domain needs to be registered with Meta (see App Domains below) — so
+register **both** there even though only one is used for webhook URLs.
 
 ---
 
@@ -33,13 +40,17 @@ Go to [developers.facebook.com](https://developers.facebook.com) → your app.
 | Where | What to set | Why |
 |---|---|---|
 | Settings → Basic | **App ID**, **App Secret** | App ID is public (client-side popup); App Secret verifies webhook signatures — never exposed client-side |
-| Settings → Basic | **Privacy Policy URL** = `https://threepin-admin.vercel.app/privacy-policy.html` | Required before App Review will approve anything |
-| Settings → Basic | **Terms of Service URL** = `https://threepin-admin.vercel.app/terms.html` | Recommended, some review paths require it |
+| Settings → Basic | **App Domains** = `admin.threepin.in` **and** `threepin-admin.vercel.app` | Both domains serve the CRM — Meta blocks `FB.login()`/the JS SDK from any origin not listed here |
+| Settings → Basic → Add Platform → Website | **Site URL** = `https://admin.threepin.in` | Required alongside App Domains for the JS SDK to be allowed |
+| Settings → Basic | **Privacy Policy URL** = `https://admin.threepin.in/privacy-policy.html` | Required before App Review will approve anything |
+| Settings → Basic | **Terms of Service URL** = `https://admin.threepin.in/terms.html` | Recommended, some review paths require it |
+| Facebook Login → Settings | **Login with the JavaScript SDK** = **Yes** | Required for the Embedded Signup popup (`FB.login`) to work at all |
+| Facebook Login → Settings | **Valid OAuth Redirect URIs** = `https://admin.threepin.in/` | Belt-and-suspenders for the popup flow |
 | App Review → Permissions and Features | Request `whatsapp_business_management` (currently: **Ready for testing**) | Governs whether real, unaffiliated customers can use the Embedded Signup popup |
 | WhatsApp → Configuration | Create an **Embedded Signup Configuration** | Produces the Configuration ID the popup uses |
-| WhatsApp → Configuration (webhook) | Callback URL = `https://threepin-admin.vercel.app/api/whatsapp-bot-webhook`, Verify token = your `WHATSAPP_VERIFY_TOKEN`, subscribe to field `messages` | So Meta forwards inbound WhatsApp messages to your bot |
-| Facebook Login → Settings | Data Deletion Request URL = `https://threepin-admin.vercel.app/api/data-deletion-callback` | Required for App Review — Meta calls this when a user asks Meta to delete their app data |
-| Webhooks (Page/Lead Ads, if used) | Callback URL = `https://threepin-admin.vercel.app/api/meta-webhook`, Verify token = your `META_VERIFY_TOKEN`, subscribe to field `leadgen` | Facebook/Instagram Lead Ads → CRM |
+| WhatsApp → Configuration (webhook) | Callback URL = `https://admin.threepin.in/api/whatsapp-bot-webhook`, Verify token = your `WHATSAPP_VERIFY_TOKEN`, subscribe to field `messages` | So Meta forwards inbound WhatsApp messages to your bot |
+| Facebook Login → Settings | Data Deletion Request URL = `https://admin.threepin.in/api/data-deletion-callback` | Required for App Review — Meta calls this when a user asks Meta to delete their app data |
+| Webhooks (Page/Lead Ads, if used) | Callback URL = `https://admin.threepin.in/api/meta-webhook`, Verify token = your `META_VERIFY_TOKEN`, subscribe to field `leadgen` | Facebook/Instagram Lead Ads → CRM |
 
 ### 2.2 Vercel environment variables
 
@@ -88,7 +99,7 @@ default bot config, and prints a temporary password (share it with them
 securely — it's not stored anywhere, so save it now if you need it later).
 
 Then tell the customer:
-1. Go to `https://threepin-admin.vercel.app/crm.html`
+1. Go to `https://admin.threepin.in/crm.html`
 2. Log in with the email/password you gave them
 3. Click **AI Bot** → **Connect WhatsApp via Meta**
 4. Complete the popup using their own WhatsApp Business Account login
