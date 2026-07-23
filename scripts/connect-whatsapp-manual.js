@@ -7,7 +7,14 @@
 // Dashboard, or a real long-lived token once you have one).
 //
 // Usage:
-//   node scripts/connect-whatsapp-manual.js --tenantId t_3pinrealty --phoneNumberId 123456789012345 --token EAAxxxx...
+//   node scripts/connect-whatsapp-manual.js --tenantId t_3pinrealty --phoneNumberId 123456789012345 --wabaId 987654321 --token EAAxxxx...
+//
+// Note on --wabaId: Embedded Signup automatically subscribes your app to
+// receive that WABA's webhook events; a manual connect does not, so this
+// script does it explicitly via POST /{waba-id}/subscribed_apps. Without
+// --wabaId this step is skipped and Meta will silently never call your
+// webhook for this number (it may still be subscribed to some OTHER app,
+// e.g. Meta's own default test-number app, instead of yours).
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { readFileSync } from 'node:fs';
@@ -36,6 +43,15 @@ async function fetchNumberInfo(phoneNumberId, token) {
     throw new Error(data.error ? data.error.message : `Could not fetch phone number info (${res.status})`);
   }
   return data;
+}
+
+async function subscribeAppToWaba(wabaId, token) {
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${wabaId}/subscribed_apps?access_token=${encodeURIComponent(token)}`;
+  const res = await fetch(url, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) {
+    throw new Error(data.error ? data.error.message : `Could not subscribe app to WABA webhooks (${res.status})`);
+  }
 }
 
 async function main() {
@@ -75,6 +91,16 @@ async function main() {
       connectedAt: Date.now()
     })
   ]);
+
+  if (wabaId) {
+    console.log('Subscribing your app to this WABA\'s webhook events...');
+    await subscribeAppToWaba(wabaId, token);
+    console.log('Subscribed — Meta will now deliver webhook events for this number to your app.');
+  } else {
+    console.log('\nWARNING: no --wabaId given, so I could NOT subscribe your app to this WABA\'s webhooks.');
+    console.log('Meta will not call your webhook for this number until this is done — pass --wabaId and re-run,');
+    console.log('or run: curl -X POST "https://graph.facebook.com/v21.0/{waba-id}/subscribed_apps?access_token={token}"');
+  }
 
   console.log(`\nConnected ${phoneNumberId} to tenant ${tenantId}.`);
   console.log('Note: if this is the 24h temporary token from API Setup, re-run this script with a fresh token before it expires (or get a long-lived System User token for a permanent connection).');

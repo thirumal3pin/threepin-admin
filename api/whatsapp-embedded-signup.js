@@ -77,6 +77,26 @@ async function fetchNumberInfo(phoneNumberId, token) {
   return data;
 }
 
+// Embedded Signup is documented to auto-subscribe the app to the WABA's
+// webhook events, but this call is cheap, idempotent, and confirmed
+// necessary for manual connects (see scripts/connect-whatsapp-manual.js) —
+// calling it explicitly here too means we never depend on that automatic
+// behavior actually happening, which would otherwise fail completely
+// silently (Meta just never calls the webhook, no error anywhere).
+async function subscribeAppToWaba(wabaId, token) {
+  if (!wabaId) return;
+  try {
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${wabaId}/subscribed_apps?access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      console.error('subscribeAppToWaba failed:', data.error || res.status);
+    }
+  } catch (e) {
+    console.error('subscribeAppToWaba threw:', e);
+  }
+}
+
 export async function POST(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
@@ -108,6 +128,7 @@ export async function POST(request) {
     const shortLivedToken = await exchangeCodeForToken(code);
     const longLivedToken = await exchangeForLongLivedToken(shortLivedToken);
     const info = await fetchNumberInfo(phoneNumberId, longLivedToken);
+    await subscribeAppToWaba(wabaId, longLivedToken);
 
     // If this tenant was previously connected to a DIFFERENT number and is
     // now reconnecting without an explicit disconnect first, clean up the
