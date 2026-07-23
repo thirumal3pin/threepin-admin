@@ -14,5 +14,8 @@
   },
   "devDependencies": {
     "live-server": "^1.2.2"
+  },
+  "overrides": {
+    "jose": "^5.10.0"
   }
 }
