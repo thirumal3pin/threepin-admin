@@ -107,6 +107,21 @@ Then tell the customer:
 That's it — their bot, knowledge base, and leads are fully isolated from
 every other tenant from that point on.
 
+### 3.1 Adding a teammate to YOUR existing business (not a new tenant)
+
+`create-tenant.js` always mints a brand-new tenantId — use it only when
+onboarding a genuinely separate business. To give another person on your
+own team their own login that shares the same leads/bot config/WhatsApp
+connection, use `scripts/add-team-member.js` instead:
+
+```bash
+node scripts/add-team-member.js --email teammate@3pin.in --tenantId t_3pinrealty
+```
+
+This attaches their new login to the *existing* `t_3pinrealty` tenant
+rather than creating a new one — log in as them, see exactly what everyone
+else on the team sees.
+
 ---
 
 ## 4. Testing before going fully live
