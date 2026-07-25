@@ -579,19 +579,6 @@ function exportAllLeads(){
     };
   });
 
-  const noteRows = [];
-  leads.forEach(l=>{
-    (l.notes||[]).slice().sort((a,b)=>a.createdAt-b.createdAt).forEach(n=>{
-      noteRows.push({
-        'Lead Name': l.name || '',
-        'Phone': l.phone || '',
-        'Note Date/Time': new Date(n.createdAt).toLocaleString(),
-        'Logged By': n.by || '',
-        'Note': n.text || ''
-      });
-    });
-  });
-
   const wb = XLSX.utils.book_new();
   const leadsSheet = XLSX.utils.json_to_sheet(leadRows);
   leadsSheet['!cols'] = [
@@ -599,12 +586,6 @@ function exportAllLeads(){
     {wch:16},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
   ];
   XLSX.utils.book_append_sheet(wb, leadsSheet, 'Leads');
-
-  if(noteRows.length){
-    const notesSheet = XLSX.utils.json_to_sheet(noteRows);
-    notesSheet['!cols'] = [{wch:20},{wch:14},{wch:19},{wch:22},{wch:60}];
-    XLSX.utils.book_append_sheet(wb, notesSheet, 'Notes');
-  }
 
   const stamp = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `3pin-leads-export-${stamp}.xlsx`);
