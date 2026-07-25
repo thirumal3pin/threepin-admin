@@ -51,6 +51,9 @@ service cloud.firestore {
     match /pipelines/{tid} {
       allow read, write: if ownsTenantDoc(tid);
     }
+    match /settings/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
     match /leadsSeededFlags/{tid} {
       allow read, write: if ownsTenantDoc(tid);
     }

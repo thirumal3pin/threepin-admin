@@ -72,6 +72,7 @@
         <div class="hstat b"><div class="hstat-n" id="statMeta">0</div><div class="hstat-l">Via Meta</div></div>
         <div class="hstat p"><div class="hstat-n" id="statManual">0</div><div class="hstat-l">Manual</div></div>
         <div class="hstat g"><div class="hstat-n" id="statTotal">0</div><div class="hstat-l">Total</div></div>
+        <div class="hstat-user" id="hdrUserEmail"></div>
         <button class="logout-btn" onclick="crmLogout()">Logout</button>
       </div>
       <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
@@ -302,8 +303,8 @@
             </select>
           </div>
           <div class="field">
-            <label>Time of Contact</label>
-            <div class="lm-static" id="lmContactTimeDisplay">—</div>
+            <label for="lmStage">Stage</label>
+            <select id="lmStage"></select>
           </div>
         </div>
         <div class="field">
@@ -332,9 +333,15 @@
           <label for="lmInterest">Property / Locality *</label>
           <input type="text" id="lmInterest" placeholder="e.g. 3BHK in Nanganallur">
         </div>
-        <div class="field">
-          <label for="lmBudget">Budget (optional)</label>
-          <input type="text" id="lmBudget" placeholder="e.g. 1.5 Cr">
+        <div class="field-row">
+          <div class="field">
+            <label for="lmBudget">Budget (optional)</label>
+            <input type="text" id="lmBudget" placeholder="e.g. 1.5 Cr">
+          </div>
+          <div class="field">
+            <label>Time of Contact</label>
+            <div class="lm-static" id="lmContactTimeDisplay">—</div>
+          </div>
         </div>
         <div class="field-row">
           <div class="field">

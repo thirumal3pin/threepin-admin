@@ -12,6 +12,7 @@ let lModalEditId = null;
 let lmModalContactAt = null;
 let stageManagerDraft = [];
 let toastTimer;
+let currentUserEmail = null;
 
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
@@ -203,7 +204,7 @@ function leadCardHtml(l){
     </div>
     ${followUpBadge(l)}
     <div class="lcard-foot">
-      <div class="lcard-time">${timeAgo(l.updatedAt||l.createdAt)}</div>
+      <div class="lcard-time">${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}</div>
       ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${nextStage.name}</button>`:''}
     </div>
   </div>`;
@@ -217,7 +218,7 @@ function renderList(){
     return;
   }
   wrap.innerHTML = `<div class="list-view"><table>
-    <thead><tr><th>Name</th><th>Contact</th><th>Channel</th><th>Type</th><th>Interest</th><th>Stage</th><th>Source</th><th>Follow-up</th><th>Updated</th></tr></thead>
+    <thead><tr><th>Name</th><th>Contact</th><th>Channel</th><th>Type</th><th>Interest</th><th>Stage</th><th>Source</th><th>Follow-up</th><th>Updated</th><th>Updated By</th></tr></thead>
     <tbody>${filteredLeads.map(l=>{
       const stage = stageById(l.stageId);
       return `<tr onclick="openDetail('${l.id}')">
@@ -230,6 +231,7 @@ function renderList(){
         <td>${l.source==='meta'?'📱 Meta':'✍️ Manual'}</td>
         <td>${l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—'}</td>
         <td>${timeAgo(l.updatedAt||l.createdAt)}</td>
+        <td>${l.updatedBy?escapeHtml(l.updatedBy):'—'}</td>
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
@@ -240,6 +242,7 @@ function changeStage(id, stageId){
   if(!l) return;
   l.stageId = stageId;
   l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
   applyFilters();
   window.crmFirebase.saveLead(l);
   if(currentDetailId===id) renderDetailStageRow(l);
@@ -251,6 +254,12 @@ function renderEnquiryTypeOptions(selected){
   const opts = enquiryTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   sel.innerHTML = `<option value="">Select type…</option>${opts}<option value="__add_new__">+ Add new type…</option>`;
   sel.value = selected && enquiryTypes.includes(selected) ? selected : '';
+}
+function renderStageOptions(selected){
+  const sel = document.getElementById('lmStage');
+  if(!stages.length){ sel.innerHTML = '<option value="">No stages yet</option>'; return; }
+  sel.innerHTML = stages.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  sel.value = (selected && stages.some(s=>s.id===selected)) ? selected : stages[0].id;
 }
 function hideNewTypeRow(){
   document.getElementById('lmNewTypeRow').style.display='none';
@@ -282,6 +291,7 @@ function openAddLeadModal(){
   lModalMode='add'; lModalEditId=null;
   document.getElementById('lmTitle').textContent='Add New Lead';
   document.getElementById('lmChannel').value='';
+  renderStageOptions('');
   document.getElementById('lmName').value='';
   document.getElementById('lmPhone').value='';
   document.getElementById('lmEmail').value='';
@@ -303,6 +313,7 @@ function openEditLeadModal(id){
   lModalMode='edit'; lModalEditId=id;
   document.getElementById('lmTitle').textContent='Edit Lead';
   document.getElementById('lmChannel').value=l.channel||'';
+  renderStageOptions(l.stageId||'');
   document.getElementById('lmName').value=l.name||'';
   document.getElementById('lmPhone').value=l.phone||'';
   document.getElementById('lmEmail').value=l.email||'';
@@ -345,6 +356,7 @@ function saveLeadModal(){
   errBox.classList.remove('show');
 
   const channel = document.getElementById('lmChannel').value;
+  const stageId = document.getElementById('lmStage').value || (stages.length ? stages[0].id : null);
   const name = document.getElementById('lmName').value.trim();
   const phone = document.getElementById('lmPhone').value.trim();
   const email = document.getElementById('lmEmail').value.trim();
@@ -376,27 +388,30 @@ function saveLeadModal(){
       id: 'lead_'+now,
       channel, name, phone, email, enquiryType, propertyInterest, budget,
       source: 'manual',
-      stageId: stages.length ? stages[0].id : null,
+      stageId,
       notes: [],
       contactAt,
       followUpAt,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      createdBy: currentUserEmail || null,
+      updatedBy: currentUserEmail || null
     };
-    if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now });
+    if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
     leads.unshift(l);
     showToast('✓ Enquiry saved');
     window.crmFirebase.saveLead(l);
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
-      l.channel=channel; l.name=name; l.phone=phone; l.email=email;
+      l.channel=channel; l.stageId=stageId; l.name=name; l.phone=phone; l.email=email;
       l.enquiryType=enquiryType; l.propertyInterest=propertyInterest; l.budget=budget;
       l.contactAt = l.contactAt || contactAt;
       l.followUpAt = followUpAt;
       l.updatedAt = now;
+      l.updatedBy = currentUserEmail || null;
       l.notes = l.notes || [];
-      if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now });
+      if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
       window.crmFirebase.saveLead(l);
     }
@@ -437,6 +452,8 @@ function openDetail(id){
     <div class="info-b"><div class="info-b-l">Time of Contact</div><div class="info-b-v">${new Date(l.contactAt||l.createdAt).toLocaleString()}</div></div>
     ${l.followUpAt?`<div class="info-b"><div class="info-b-l">Follow-up</div><div class="info-b-v">${new Date(l.followUpAt).toLocaleString()}</div></div>`:''}
     <div class="info-b"><div class="info-b-l">Added</div><div class="info-b-v">${new Date(l.createdAt).toLocaleString()}</div></div>
+    ${l.createdBy?`<div class="info-b"><div class="info-b-l">Added By</div><div class="info-b-v">${escapeHtml(l.createdBy)}</div></div>`:''}
+    ${l.updatedBy?`<div class="info-b"><div class="info-b-l">Last Updated By</div><div class="info-b-v">${escapeHtml(l.updatedBy)}</div></div>`:''}
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${l.formId}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${l.adId}</div></div>`:''}
   `;
@@ -479,7 +496,7 @@ function renderNotes(l){
   const html = notes.length ? notes.slice().reverse().map(n=>`
     <div class="note-item">
       <div class="note-meta">
-        <span class="note-time">${new Date(n.createdAt).toLocaleString()}</span>
+        <span class="note-time">${new Date(n.createdAt).toLocaleString()}${n.by?' · '+escapeHtml(n.by):''}</span>
         <button class="note-delete" onclick="deleteNote('${l.id}','${n.id}')">×</button>
       </div>
       <div class="note-text">${n.text}</div>
@@ -492,9 +509,11 @@ function addNote(){
   if(!text) return;
   const l = leads.find(x=>x.id===currentDetailId);
   if(!l) return;
+  const now = Date.now();
   l.notes = l.notes || [];
-  l.notes.push({ id:'n'+Date.now(), text, createdAt: Date.now() });
-  l.updatedAt = Date.now();
+  l.notes.push({ id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
+  l.updatedAt = now;
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
   inp.value='';
   renderNotes(l);
   applyFilters();
@@ -504,6 +523,8 @@ function deleteNote(leadId, noteId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
   l.notes = (l.notes||[]).filter(n=>n.id!==noteId);
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
   renderNotes(l);
   window.crmFirebase.saveLead(l);
 }
@@ -1158,12 +1179,19 @@ function attemptCrmLogin(e){
 function crmLogout(){
   window.crmAuth.logout();
 }
+function renderUserProfileBadge(){
+  const el = document.getElementById('hdrUserEmail');
+  if(el) el.textContent = currentUserEmail ? '👤 ' + currentUserEmail : '';
+}
 window.onCrmAuthChange = function(user){
   if(user){
+    currentUserEmail = user.email || null;
+    renderUserProfileBadge();
     document.getElementById('loginScreen').classList.remove('open');
     document.getElementById('appRoot').style.display = '';
     if(!crmInited){ crmInited = true; init(); }
   } else {
+    currentUserEmail = null;
     document.getElementById('loginScreen').classList.add('open');
     document.getElementById('appRoot').style.display = 'none';
   }
