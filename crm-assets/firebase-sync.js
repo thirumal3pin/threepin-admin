@@ -88,8 +88,14 @@ function subscribeToData(tenantId){
       }, (err) => console.error('Firestore pipeline sync error:', err));
 
       onSnapshot(settingsRef(tenantId), (snap) => {
-        if (snap.exists() && window.applyEnquiryTypesSnapshot) {
-          window.applyEnquiryTypesSnapshot(snap.data().enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        if (window.applyEnquiryTypesSnapshot) window.applyEnquiryTypesSnapshot(data.enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+        if (window.applyDigestSettingsSnapshot) {
+          window.applyDigestSettingsSnapshot({
+            enabled: !!data.followupDigestEnabled,
+            recipients: data.followupDigestRecipients || []
+          });
         }
       }, (err) => console.error('Firestore settings sync error:', err));
     });
@@ -105,7 +111,8 @@ window.crmFirebase = {
     return snap.exists() ? snap.data() : null;
   },
   saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e)),
-  saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e))
+  saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
+  saveFollowupDigestSettings: (enabled, recipients) => setDoc(settingsRef(currentTenantId), { followupDigestEnabled: enabled, followupDigestRecipients: recipients }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e))
 };
 
 window.crmAuth = {

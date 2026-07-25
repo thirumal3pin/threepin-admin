@@ -89,9 +89,10 @@
         <div class="view-toggle">
           <button data-view="kanban" class="at" onclick="toggleView('kanban')">📋 Board</button>
           <button data-view="list" onclick="toggleView('list')">📃 List</button>
-          <button data-view="followups" onclick="toggleView('followups')">📅 Follow-ups</button>
+          <button data-view="followups" onclick="toggleView('followups')">📅 Follow-ups<span class="fu-badge" id="fuBadge" style="display:none">0</span></button>
         </div>
         <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
+        <button class="stages-btn" onclick="openDigestManager()">🔔 Digest</button>
         <button class="stages-btn" onclick="openBotEditor()">🤖 AI Bot</button>
         <button class="stages-btn" onclick="exportAllLeads()">⬇️ Export All Leads</button>
         <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
@@ -398,6 +399,35 @@
       <div class="modal-ftr">
         <button class="modal-cancel" onclick="closeStageManager()">Cancel</button>
         <button class="modal-save" onclick="saveStageManager()">✓ Save Stages</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOLLOW-UP WHATSAPP DIGEST MODAL -->
+  <div class="modal-overlay" id="digestModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">Follow-up WhatsApp Digest</div>
+        <button class="modal-x" onclick="closeDigestManager()">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="digest-toggle-label">
+          <input type="checkbox" id="digestEnabled">
+          Send a daily WhatsApp digest of overdue + due-today follow-ups, every morning at 9:00 AM IST
+        </label>
+        <div class="field" style="margin-top:16px">
+          <label>Send to (WhatsApp numbers)</label>
+          <div id="digestRecipientRows"></div>
+          <div class="stage-add-row">
+            <input type="text" id="newDigestRecipient" placeholder="e.g. 9941880088" onkeydown="if(event.key==='Enter')addDigestRecipientDraft()">
+            <button onclick="addDigestRecipientDraft()">+ Add</button>
+          </div>
+        </div>
+        <div class="note-fu-hint">Sent from your connected WhatsApp Business number. Bare 10-digit numbers are assumed +91.</div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeDigestManager()">Cancel</button>
+        <button class="modal-save" onclick="saveDigestManager()">✓ Save</button>
       </div>
     </div>
   </div>

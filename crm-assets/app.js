@@ -13,6 +13,8 @@ let lmModalContactAt = null;
 let stageManagerDraft = [];
 let toastTimer;
 let currentUserEmail = null;
+let digestSettings = { enabled:false, recipients:[] };
+let digestSettingsDraft = { enabled:false, recipients:[] };
 
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
@@ -51,9 +53,13 @@ window.applyEnquiryTypesSnapshot = function(list){
     renderEnquiryTypeOptions(document.getElementById('lmEnquiryType').value);
   }
 };
+window.applyDigestSettingsSnapshot = function(settings){
+  digestSettings = settings;
+};
 
 function refreshAll(){
   updateStats();
+  updateFollowupBadge();
   applyFilters();
 }
 
@@ -394,6 +400,21 @@ function followupBuckets(list){
   });
   Object.values(buckets).forEach(arr=>arr.sort((a,b)=>a.followUpAt-b.followUpAt));
   return buckets;
+}
+function updateFollowupBadge(){
+  const badge = document.getElementById('fuBadge');
+  if(!badge) return;
+  const withFollowup = leads.filter(l=>l.followUpAt);
+  if(!withFollowup.length){ badge.style.display='none'; return; }
+  const buckets = followupBuckets(withFollowup);
+  const count = buckets.overdue.length + buckets.today.length;
+  if(count>0){
+    badge.textContent = count;
+    badge.style.display='';
+    badge.classList.toggle('urgent', buckets.overdue.length>0);
+  } else {
+    badge.style.display='none';
+  }
 }
 function followupRowHtml(l, bucketKey){
   const stage = stageById(l.stageId);
@@ -871,6 +892,41 @@ function saveStageManager(){
   closeStageManager();
   refreshAll();
   showToast('✓ Pipeline stages updated');
+}
+
+// ═══════ FOLLOW-UP WHATSAPP DIGEST MANAGER ═══════
+function openDigestManager(){
+  digestSettingsDraft = { enabled: digestSettings.enabled, recipients: digestSettings.recipients.slice() };
+  document.getElementById('digestEnabled').checked = digestSettingsDraft.enabled;
+  renderDigestRecipientRows();
+  document.getElementById('digestModal').classList.add('open');
+}
+function closeDigestManager(){
+  document.getElementById('digestModal').classList.remove('open');
+}
+function renderDigestRecipientRows(){
+  document.getElementById('digestRecipientRows').innerHTML = digestSettingsDraft.recipients.map((r,i)=>`
+    <div class="req-info-row">
+      <input type="text" value="${escapeHtml(r)}" oninput="renameDigestRecipientDraft(${i}, this.value)">
+      <button class="stage-del" onclick="removeDigestRecipientDraft(${i})">🗑️</button>
+    </div>`).join('');
+}
+function renameDigestRecipientDraft(i, val){ digestSettingsDraft.recipients[i] = val; }
+function removeDigestRecipientDraft(i){ digestSettingsDraft.recipients.splice(i,1); renderDigestRecipientRows(); }
+function addDigestRecipientDraft(){
+  const inp = document.getElementById('newDigestRecipient');
+  const val = inp.value.trim();
+  if(!val) return;
+  digestSettingsDraft.recipients.push(val);
+  inp.value='';
+  renderDigestRecipientRows();
+}
+function saveDigestManager(){
+  digestSettingsDraft.enabled = document.getElementById('digestEnabled').checked;
+  window.crmFirebase.saveFollowupDigestSettings(digestSettingsDraft.enabled, digestSettingsDraft.recipients);
+  digestSettings = { enabled: digestSettingsDraft.enabled, recipients: digestSettingsDraft.recipients.slice() };
+  closeDigestManager();
+  showToast('✓ Digest settings saved');
 }
 
 // ═══════ AI BOT EDITOR ═══════
@@ -1442,7 +1498,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); }
+  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════
