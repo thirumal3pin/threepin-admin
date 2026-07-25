@@ -230,7 +230,7 @@ function addHistory(l, type, text){
   });
 }
 function historyIcon(type){
-  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓' }[type] || '•';
+  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨' }[type] || '•';
 }
 function renderHistory(l){
   const el = document.getElementById('historyPanel');
@@ -769,6 +769,7 @@ function saveLeadModal(){
       stageId,
       notes: [],
       history: [],
+      detailsSent: false,
       contactAt,
       followUpAt,
       createdAt: now,
@@ -924,6 +925,7 @@ function openDetail(id){
 
   renderNotes(l);
   renderNoteFollowUpFields(l);
+  renderDetailsSentToggle(l);
   renderHistory(l);
   document.getElementById('dp').classList.add('open');
   window.scrollTo(0,0);
@@ -934,6 +936,32 @@ function renderDetailStageRow(l){
   const stage = stageById(l.stageId);
   sel.style.borderColor = stage ? stage.color : '';
   sel.style.color = stage ? stage.color : '';
+}
+// Leads with no `detailsSent` field yet (everything created before this
+// feature) read as "No" by default — same as an explicit false — so there's
+// no migration needed and nothing forces an agent to set it.
+function renderDetailsSentToggle(l){
+  const wrap = document.getElementById('dpDetailsSentToggle');
+  if(!wrap) return;
+  const effective = l.detailsSent === true;
+  wrap.querySelector('.yes').classList.toggle('active', effective);
+  wrap.querySelector('.no').classList.toggle('active', !effective);
+  wrap.classList.toggle('sent', effective);
+  wrap.classList.toggle('not-sent', !effective);
+}
+function setDetailsSent(value){
+  const l = leads.find(x=>x.id===currentDetailId);
+  if(!l) return;
+  const prevEffective = l.detailsSent === true;
+  if(prevEffective === value) return;
+  const label = v => v ? 'Yes' : 'No';
+  addHistory(l, 'details-sent', `Sent details changed from <b>${label(prevEffective)}</b> to <b>${label(value)}</b>`);
+  l.detailsSent = value;
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  renderDetailsSentToggle(l);
+  renderHistory(l);
+  window.crmFirebase.saveLead(l);
 }
 function onDetailStageChange(){
   const sel = document.getElementById('dpStageSel');

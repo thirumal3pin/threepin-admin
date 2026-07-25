@@ -219,6 +219,14 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .dp-sub{font-size:13px;color:var(--ink3);margin-bottom:18px;}
 .dp-stage-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:22px;}
 .dp-stage-sel{appearance:none;-webkit-appearance:none;font-family:var(--sans);font-size:13px;font-weight:700;padding:9px 34px 9px 16px;border-radius:20px;border:1.5px solid var(--border);cursor:pointer;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2378716C' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center;}
+.dp-flag-toggle{display:inline-flex;align-items:center;gap:8px;padding:4px 6px 4px 14px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);transition:background .15s,border-color .15s;}
+.dp-flag-toggle.not-sent{background:var(--red-bg);border-color:#FECACA;}
+.dp-flag-toggle.sent{background:var(--green-bg);border-color:#BBF7D0;}
+.dp-flag-label{font-size:10px;font-weight:800;color:var(--ink4);text-transform:uppercase;letter-spacing:.05em;}
+.dp-flag-btn{padding:6px 14px;border-radius:16px;border:none;background:transparent;font-family:var(--sans);font-size:12px;font-weight:700;color:var(--ink3);cursor:pointer;transition:all .15s;}
+.dp-flag-btn:hover{color:var(--ink);}
+.dp-flag-btn.yes.active{background:var(--green);color:#fff;}
+.dp-flag-btn.no.active{background:var(--red);color:#fff;}
 .sec{margin-bottom:26px;}
 .sec-title{font-size:11px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:13px;}
 .info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;}
@@ -268,6 +276,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .history-dot.followup-removed{background:var(--red-bg);}
 .history-dot.followed-up{background:var(--green-bg);}
 .history-dot.created{background:var(--gold-bg);}
+.history-dot.details-sent{background:var(--blue-bg);}
 .history-content{flex:1;min-width:0;padding-top:3px;}
 .history-text{font-size:13px;color:var(--ink2);line-height:1.5;}
 .history-text b{color:var(--ink);font-weight:700;}

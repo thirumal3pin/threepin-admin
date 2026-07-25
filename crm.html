@@ -275,6 +275,11 @@
       <div class="dp-sub" id="dpSub"></div>
       <div class="dp-stage-row">
         <select class="dp-stage-sel" id="dpStageSel" onchange="onDetailStageChange()"></select>
+        <div class="dp-flag-toggle" id="dpDetailsSentToggle">
+          <span class="dp-flag-label">Sent Details</span>
+          <button type="button" class="dp-flag-btn yes" onclick="setDetailsSent(true)">Yes</button>
+          <button type="button" class="dp-flag-btn no" onclick="setDetailsSent(false)">No</button>
+        </div>
       </div>
 
       <div id="dpFuSpotlight"></div>
