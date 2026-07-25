@@ -210,16 +210,133 @@ function leadCardHtml(l){
   </div>`;
 }
 
-// ═══════ LIST VIEW ═══════
+// ═══════ LIST VIEW (sortable + per-column filter, Excel-style) ═══════
+function sourceLabel(s){ return s==='meta'?'📱 Meta':(s==='whatsapp_bot'?'🤖 WhatsApp Bot':'✍️ Manual'); }
+const LIST_COLUMNS = [
+  { key:'name', label:'Name', filterable:true, get:l=>l.name||'', sortVal:l=>(l.name||'').toLowerCase() },
+  { key:'contact', label:'Contact', filterable:false, get:l=>l.phone||l.email||'—', sortVal:l=>(l.phone||l.email||'').toLowerCase() },
+  { key:'channel', label:'Channel', filterable:true, get:l=>l.channel?channelLabel(l.channel):'—', sortVal:l=>l.channel?channelLabel(l.channel):'' },
+  { key:'enquiryType', label:'Type', filterable:true, get:l=>l.enquiryType||'—', sortVal:l=>(l.enquiryType||'').toLowerCase() },
+  { key:'propertyInterest', label:'Interest', filterable:true, get:l=>l.propertyInterest||'—', sortVal:l=>(l.propertyInterest||'').toLowerCase() },
+  { key:'stage', label:'Stage', filterable:true, get:l=>{ const s=stageById(l.stageId); return s?s.name:'—'; }, sortVal:l=>{ const s=stageById(l.stageId); return s?s.name.toLowerCase():''; } },
+  { key:'source', label:'Source', filterable:true, get:l=>sourceLabel(l.source), sortVal:l=>sourceLabel(l.source).toLowerCase() },
+  { key:'followUpAt', label:'Follow-up', filterable:false, get:l=>l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—', sortVal:l=>l.followUpAt||0 },
+  { key:'updatedAt', label:'Updated', filterable:false, get:l=>timeAgo(l.updatedAt||l.createdAt), sortVal:l=>l.updatedAt||l.createdAt||0 },
+  { key:'updatedBy', label:'Updated By', filterable:true, get:l=>l.updatedBy||'—', sortVal:l=>(l.updatedBy||'').toLowerCase() }
+];
+let listSortCol = null;
+let listSortDir = 'asc';
+let listColumnFilters = {}; // key -> Set of allowed display values; absent = no filter
+let openFilterCol = null;
+
+// Filter dropdowns list values from filteredLeads (the global search/source
+// filter), not from other columns' filters — a lightweight approximation of
+// Excel's cascading filters, good enough for this dataset's size.
+function listFilterOptions(col){
+  const counts = new Map();
+  filteredLeads.forEach(l=>{
+    const v = col.get(l);
+    counts.set(v, (counts.get(v)||0)+1);
+  });
+  return Array.from(counts.entries()).sort((a,b)=>a[0].localeCompare(b[0]));
+}
+function passesColumnFilters(l){
+  return LIST_COLUMNS.every(col=>{
+    if(!col.filterable) return true;
+    const set = listColumnFilters[col.key];
+    if(!set) return true;
+    return set.has(col.get(l));
+  });
+}
+function toggleListSort(key){
+  if(listSortCol===key){ listSortDir = listSortDir==='asc' ? 'desc' : 'asc'; }
+  else { listSortCol = key; listSortDir = 'asc'; }
+  renderList();
+}
+function toggleListFilter(key, ev){
+  if(ev) ev.stopPropagation();
+  openFilterCol = openFilterCol===key ? null : key;
+  renderList();
+}
+function toggleListFilterValue(key, value){
+  let set = listColumnFilters[key];
+  if(!set){
+    const col = LIST_COLUMNS.find(c=>c.key===key);
+    set = new Set(listFilterOptions(col).map(([v])=>v));
+    listColumnFilters[key] = set;
+  }
+  if(set.has(value)) set.delete(value); else set.add(value);
+  renderList();
+}
+function selectAllListFilter(key){ delete listColumnFilters[key]; renderList(); }
+function clearListFilterToNone(key){ listColumnFilters[key] = new Set(); renderList(); }
+document.addEventListener('click', ()=>{
+  if(openFilterCol){ openFilterCol = null; renderList(); }
+});
+
+function renderFilterDropdown(col){
+  const options = listFilterOptions(col);
+  const optsHtml = options.length ? options.map(([value,count])=>{
+    const checked = isFilterValueChecked(col.key, value) ? 'checked' : '';
+    return `<label class="lv-filter-opt">
+      <input type="checkbox" ${checked} data-val="${escapeHtml(value)}" onclick="toggleListFilterValue('${col.key}', this.dataset.val)">
+      <span>${escapeHtml(value)||'(blank)'}</span>
+      <span class="lv-filter-count">${count}</span>
+    </label>`;
+  }).join('') : '<div class="lv-filter-empty">No values</div>';
+  return `<div class="lv-filter-pop" onclick="event.stopPropagation()">
+    <div class="lv-filter-actions">
+      <button onclick="selectAllListFilter('${col.key}')">Select all</button>
+      <button onclick="clearListFilterToNone('${col.key}')">Clear</button>
+    </div>
+    <div class="lv-filter-opts">${optsHtml}</div>
+  </div>`;
+}
+function isFilterValueChecked(key, value){
+  const set = listColumnFilters[key];
+  return !set || set.has(value);
+}
+
 function renderList(){
   const wrap = document.getElementById('listView');
   if(!filteredLeads.length){
     wrap.innerHTML = '<div class="nores"><div class="nores-i">🗂️</div><div class="nores-t">No leads match your filters</div></div>';
     return;
   }
+
+  let rows = filteredLeads.filter(passesColumnFilters);
+  if(listSortCol){
+    const col = LIST_COLUMNS.find(c=>c.key===listSortCol);
+    rows = rows.slice().sort((a,b)=>{
+      const av = col.sortVal(a), bv = col.sortVal(b);
+      const cmp = (typeof av==='number' && typeof bv==='number') ? av-bv : String(av).localeCompare(String(bv));
+      return listSortDir==='asc' ? cmp : -cmp;
+    });
+  }
+
+  const theadHtml = `<tr>${LIST_COLUMNS.map(col=>{
+    const sortIcon = listSortCol===col.key ? (listSortDir==='asc'?'▲':'▼') : '↕';
+    const filterActive = listColumnFilters[col.key] ? ' active' : '';
+    const filterBtn = col.filterable ? `<button class="lv-filter-btn${filterActive}" onclick="toggleListFilter('${col.key}',event)">▾</button>` : '';
+    const dropdown = (col.filterable && openFilterCol===col.key) ? renderFilterDropdown(col) : '';
+    return `<th>
+      <div class="lv-th">
+        <span class="lv-th-label" onclick="toggleListSort('${col.key}')">${col.label} <span class="lv-sort-ico">${sortIcon}</span></span>
+        ${filterBtn}
+      </div>
+      ${dropdown}
+    </th>`;
+  }).join('')}</tr>`;
+
+  if(!rows.length){
+    wrap.innerHTML = `<div class="list-view"><table><thead>${theadHtml}</thead></table></div>
+      <div class="nores"><div class="nores-i">🔍</div><div class="nores-t">No leads match the current column filters</div></div>`;
+    return;
+  }
+
   wrap.innerHTML = `<div class="list-view"><table>
-    <thead><tr><th>Name</th><th>Contact</th><th>Channel</th><th>Type</th><th>Interest</th><th>Stage</th><th>Source</th><th>Follow-up</th><th>Updated</th><th>Updated By</th></tr></thead>
-    <tbody>${filteredLeads.map(l=>{
+    <thead>${theadHtml}</thead>
+    <tbody>${rows.map(l=>{
       const stage = stageById(l.stageId);
       return `<tr onclick="openDetail('${l.id}')">
         <td><b>${l.name}</b></td>
@@ -228,7 +345,7 @@ function renderList(){
         <td>${l.enquiryType||'—'}</td>
         <td>${l.propertyInterest||'—'}</td>
         <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${stage.name}</span>`:'—'}</td>
-        <td>${l.source==='meta'?'📱 Meta':'✍️ Manual'}</td>
+        <td>${sourceLabel(l.source)}</td>
         <td>${l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—'}</td>
         <td>${timeAgo(l.updatedAt||l.createdAt)}</td>
         <td>${l.updatedBy?escapeHtml(l.updatedBy):'—'}</td>
@@ -430,6 +547,68 @@ function deleteLead(id){
   refreshAll();
   showToast('Lead deleted');
   window.crmFirebase.deleteLead(id);
+}
+
+// ═══════ EXPORT ═══════
+function exportAllLeads(){
+  if(typeof XLSX === 'undefined'){ showToast('Export library failed to load — check your connection and retry'); return; }
+  if(!leads.length){ showToast('No leads to export'); return; }
+
+  const leadRows = leads.map(l=>{
+    const stage = stageById(l.stageId);
+    const notes = (l.notes||[]).slice().sort((a,b)=>a.createdAt-b.createdAt);
+    const notesSummary = notes.map(n=>`[${new Date(n.createdAt).toLocaleString()}${n.by?' · '+n.by:''}] ${n.text}`).join('\n');
+    return {
+      'Name': l.name || '',
+      'Phone': l.phone || '',
+      'Email': l.email || '',
+      'Channel': l.channel ? channelLabel(l.channel) : '',
+      'Enquiry Type': l.enquiryType || '',
+      'Property / Locality': l.propertyInterest || '',
+      'Budget': l.budget || '',
+      'Stage': stage ? stage.name : '',
+      'Source': sourceLabel(l.source),
+      'Time of Contact': l.contactAt ? new Date(l.contactAt).toLocaleString() : '',
+      'Follow-up': l.followUpAt ? new Date(l.followUpAt).toLocaleString() : '',
+      'Added': l.createdAt ? new Date(l.createdAt).toLocaleString() : '',
+      'Added By': l.createdBy || '',
+      'Last Updated': l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '',
+      'Last Updated By': l.updatedBy || '',
+      'Notes Count': notes.length,
+      'Notes': notesSummary
+    };
+  });
+
+  const noteRows = [];
+  leads.forEach(l=>{
+    (l.notes||[]).slice().sort((a,b)=>a.createdAt-b.createdAt).forEach(n=>{
+      noteRows.push({
+        'Lead Name': l.name || '',
+        'Phone': l.phone || '',
+        'Note Date/Time': new Date(n.createdAt).toLocaleString(),
+        'Logged By': n.by || '',
+        'Note': n.text || ''
+      });
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  const leadsSheet = XLSX.utils.json_to_sheet(leadRows);
+  leadsSheet['!cols'] = [
+    {wch:20},{wch:14},{wch:22},{wch:14},{wch:16},{wch:24},{wch:12},{wch:14},
+    {wch:16},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
+  ];
+  XLSX.utils.book_append_sheet(wb, leadsSheet, 'Leads');
+
+  if(noteRows.length){
+    const notesSheet = XLSX.utils.json_to_sheet(noteRows);
+    notesSheet['!cols'] = [{wch:20},{wch:14},{wch:19},{wch:22},{wch:60}];
+    XLSX.utils.book_append_sheet(wb, notesSheet, 'Notes');
+  }
+
+  const stamp = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `3pin-leads-export-${stamp}.xlsx`);
+  showToast('✓ Export downloaded');
 }
 
 // ═══════ DETAIL PANEL ═══════

@@ -92,6 +92,7 @@
         </div>
         <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
         <button class="stages-btn" onclick="openBotEditor()">🤖 AI Bot</button>
+        <button class="stages-btn" onclick="exportAllLeads()">⬇️ Export All Leads</button>
         <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
       </div>
     </div>
@@ -391,6 +392,7 @@
 
 <div id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
   if (window.pdfjsLib) {
