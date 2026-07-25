@@ -47,6 +47,13 @@ async function sendDigestEmail(to, subject, text, html) {
   }
 }
 
+// Vercel functions run in UTC regardless of who's reading the output, but
+// every recipient here is in India — so all display formatting AND the
+// "today"/"tomorrow" day-bucket boundaries must be pinned to IST, not the
+// server's local (UTC) clock. IST has no DST, so a fixed offset is safe.
+const TZ = 'Asia/Kolkata';
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
 // Buckets: overdue (past due, not yet acted on) + one bucket per calendar
 // day for the next 3 days (today, tomorrow, day after) — shown day by day
 // rather than lumped into a single "upcoming" pile.
@@ -54,7 +61,9 @@ const DAY_MS = 86400000;
 const LOOKAHEAD_DAYS = 3;
 function bucketLeads(leadsSnap) {
   const now = Date.now();
-  const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+  // Midnight IST for "today," expressed as a true UTC epoch ms timestamp —
+  // works no matter what timezone the server process itself is running in.
+  const startOfToday = Math.floor((now + IST_OFFSET_MS) / DAY_MS) * DAY_MS - IST_OFFSET_MS;
   const overdue = [];
   const days = Array.from({ length: LOOKAHEAD_DAYS }, () => []);
   leadsSnap.forEach(d => {
@@ -69,7 +78,7 @@ function bucketLeads(leadsSnap) {
   return { overdue, days, startOfToday };
 }
 function dayLabel(i, startOfToday) {
-  const dateStr = new Date(startOfToday + i * DAY_MS).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  const dateStr = new Date(startOfToday + i * DAY_MS).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: TZ });
   if (i === 0) return `Today — ${dateStr}`;
   if (i === 1) return `Tomorrow — ${dateStr}`;
   return dateStr;
@@ -91,7 +100,7 @@ function formatDigestText(overdue, days, startOfToday) {
     if (!arr.length) return;
     lines.push(`${dayLabel(i, startOfToday).toUpperCase()} (${arr.length}):`);
     arr.forEach(l => {
-      const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ });
       lines.push(`- ${leadLine(l)} @ ${time}`);
     });
     lines.push('');
@@ -110,7 +119,7 @@ function formatWhatsAppDigest(overdue, days, startOfToday) {
     if (!arr.length) return;
     lines.push(`📅 ${dayLabel(i, startOfToday)} (${arr.length}):`);
     arr.forEach(l => {
-      const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ });
       lines.push(`• ${leadLine(l)} @ ${time}`);
     });
     lines.push('');
@@ -131,7 +140,7 @@ const COLS = [
   { label: 'Time', width: '20%' }
 ];
 function leadRowHtml(l, showTime) {
-  const time = showTime ? new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+  const time = showTime ? new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ }) : '—';
   return `<tr>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${escapeHtml(l.name || 'Lead')}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(l.phone || '—')}</td>
@@ -182,8 +191,8 @@ async function digestForTenant(db, tenantId) {
   }
   if (emailRecipients.length) {
     const triggeredAt = new Date();
-    const dateStr = triggeredAt.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
-    const timeStr = triggeredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = triggeredAt.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ });
+    const timeStr = triggeredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ });
     const subject = `3 PIN Realty Follow up (${dateStr}) ${timeStr}`;
     const text = formatDigestText(overdue, days, startOfToday);
     const html = formatDigestHtml(overdue, days, startOfToday);
