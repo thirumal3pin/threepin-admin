@@ -837,11 +837,69 @@ function deleteLead(id){
 }
 
 // ═══════ EXPORT ═══════
-function exportAllLeads(){
+function isToday(ts){
+  if(!ts) return false;
+  const d = new Date(ts), now = new Date();
+  return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+}
+const EXPORT_SCOPE_LABELS = {
+  all: 'all', created_today: 'created-today', movement_today: 'movement-today', date_range: 'date-range'
+};
+function openExportModal(){
+  document.querySelector('input[name="exportScope"][value="all"]').checked = true;
+  document.getElementById('exportDateFrom').value = '';
+  document.getElementById('exportDateTo').value = '';
+  document.getElementById('exportDateRangeRow').style.display = 'none';
+  document.getElementById('exportErr').classList.remove('show');
+  updateExportCount();
+  document.getElementById('exportModal').classList.add('open');
+}
+function closeExportModal(){
+  document.getElementById('exportModal').classList.remove('open');
+}
+function onExportScopeChange(){
+  const scope = document.querySelector('input[name="exportScope"]:checked').value;
+  document.getElementById('exportDateRangeRow').style.display = scope==='date_range' ? 'flex' : 'none';
+  updateExportCount();
+}
+// Returns the matching leads, or null when a date-range scope is missing a
+// bound — the caller distinguishes "0 matches" from "filter incomplete."
+function getExportLeads(){
+  const scope = document.querySelector('input[name="exportScope"]:checked').value;
+  if(scope==='created_today') return leads.filter(l=>isToday(l.createdAt));
+  if(scope==='movement_today') return leads.filter(l=>isToday(l.updatedAt));
+  if(scope==='date_range'){
+    const fromStr = document.getElementById('exportDateFrom').value;
+    const toStr = document.getElementById('exportDateTo').value;
+    if(!fromStr || !toStr) return null;
+    const from = new Date(`${fromStr}T00:00:00`).getTime();
+    const to = new Date(`${toStr}T23:59:59.999`).getTime();
+    return leads.filter(l=>l.createdAt>=from && l.createdAt<=to);
+  }
+  return leads;
+}
+function updateExportCount(){
+  const countEl = document.getElementById('exportCount');
+  const result = getExportLeads();
+  countEl.textContent = result===null ? 'Pick both a from and to date.' : `${result.length} lead${result.length===1?'':'s'} will be exported.`;
+}
+function runExport(){
   if(typeof XLSX === 'undefined'){ showToast('Export library failed to load — check your connection and retry'); return; }
-  if(!leads.length){ showToast('No leads to export'); return; }
+  const errBox = document.getElementById('exportErr');
+  errBox.classList.remove('show');
 
-  const leadRows = leads.map(l=>{
+  const scope = document.querySelector('input[name="exportScope"]:checked').value;
+  if(scope==='date_range'){
+    const fromStr = document.getElementById('exportDateFrom').value;
+    const toStr = document.getElementById('exportDateTo').value;
+    if(!fromStr || !toStr){ errBox.textContent='Pick both a from and to date.'; errBox.classList.add('show'); return; }
+    if(fromStr > toStr){ errBox.textContent='"From" date must be before "To" date.'; errBox.classList.add('show'); return; }
+  }
+
+  const rows = getExportLeads();
+  if(!rows || !rows.length){ errBox.textContent='No leads match this filter.'; errBox.classList.add('show'); return; }
+
+  const leadRows = rows.map(l=>{
     const stage = stageById(l.stageId);
     const notes = (l.notes||[]).slice().sort((a,b)=>a.createdAt-b.createdAt);
     const notesSummary = notes.map(n=>`[${new Date(n.createdAt).toLocaleString()}${n.by?' · '+n.by:''}] ${n.text}`).join('\n');
@@ -855,6 +913,7 @@ function exportAllLeads(){
       'Budget': l.budget || '',
       'Stage': stage ? stage.name : '',
       'Source': sourceLabel(l.source),
+      'Sent Details': l.detailsSent === true ? 'Yes' : 'No',
       'Time of Contact': l.contactAt ? new Date(l.contactAt).toLocaleString() : '',
       'Follow-up': l.followUpAt ? new Date(l.followUpAt).toLocaleString() : '',
       'Added': l.createdAt ? new Date(l.createdAt).toLocaleString() : '',
@@ -870,12 +929,14 @@ function exportAllLeads(){
   const leadsSheet = XLSX.utils.json_to_sheet(leadRows);
   leadsSheet['!cols'] = [
     {wch:20},{wch:14},{wch:22},{wch:14},{wch:16},{wch:24},{wch:12},{wch:14},
-    {wch:16},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
+    {wch:16},{wch:12},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
   ];
   XLSX.utils.book_append_sheet(wb, leadsSheet, 'Leads');
 
   const stamp = new Date().toISOString().slice(0,10);
-  XLSX.writeFile(wb, `3pin-leads-export-${stamp}.xlsx`);
+  const label = EXPORT_SCOPE_LABELS[scope] || 'all';
+  XLSX.writeFile(wb, `3pin-leads-export-${label}-${stamp}.xlsx`);
+  closeExportModal();
   showToast('✓ Export downloaded');
 }
 

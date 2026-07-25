@@ -96,7 +96,7 @@
             <button class="more-dd-item" onclick="openStageManager()">⚙️ Manage Stages</button>
             <button class="more-dd-item" onclick="openDigestManager()">🔔 Follow-up Digest</button>
             <button class="more-dd-item" onclick="openBotEditor()">🤖 AI Bot</button>
-            <button class="more-dd-item" onclick="exportAllLeads()">⬇️ Export All Leads</button>
+            <button class="more-dd-item" onclick="openExportModal()">⬇️ Export Leads</button>
             <div class="dd-sep"></div>
             <button class="more-dd-item danger" onclick="crmLogout()">Logout</button>
           </div>
@@ -512,6 +512,64 @@
         <button class="modal-cancel" onclick="closeDigestManager()">Cancel</button>
         <button class="modal-cancel" onclick="sendDigestNow()">📤 Send Digest Now</button>
         <button class="modal-save" onclick="saveDigestManager()">✓ Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT LEADS MODAL -->
+  <div class="modal-overlay" id="exportModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">Export Leads</div>
+        <button class="modal-x" onclick="closeExportModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-opt-list">
+          <label class="export-opt">
+            <input type="radio" name="exportScope" value="all" checked onchange="onExportScopeChange()">
+            <div class="export-opt-txt">
+              <div class="export-opt-title">All Leads</div>
+              <div class="export-opt-sub">Every lead in the CRM</div>
+            </div>
+          </label>
+          <label class="export-opt">
+            <input type="radio" name="exportScope" value="created_today" onchange="onExportScopeChange()">
+            <div class="export-opt-txt">
+              <div class="export-opt-title">Created Today</div>
+              <div class="export-opt-sub">Leads added today</div>
+            </div>
+          </label>
+          <label class="export-opt">
+            <input type="radio" name="exportScope" value="movement_today" onchange="onExportScopeChange()">
+            <div class="export-opt-txt">
+              <div class="export-opt-title">Has Movement Today</div>
+              <div class="export-opt-sub">Any change today — stage, notes, follow-up, edits…</div>
+            </div>
+          </label>
+          <label class="export-opt">
+            <input type="radio" name="exportScope" value="date_range" onchange="onExportScopeChange()">
+            <div class="export-opt-txt">
+              <div class="export-opt-title">Date Range</div>
+              <div class="export-opt-sub">Leads created within a specific range</div>
+            </div>
+          </label>
+        </div>
+        <div class="field-row" id="exportDateRangeRow" style="display:none">
+          <div class="field">
+            <label for="exportDateFrom">From</label>
+            <input type="date" id="exportDateFrom" onchange="updateExportCount()">
+          </div>
+          <div class="field">
+            <label for="exportDateTo">To</label>
+            <input type="date" id="exportDateTo" onchange="updateExportCount()">
+          </div>
+        </div>
+        <div class="export-count" id="exportCount"></div>
+        <div class="modal-err" id="exportErr"></div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeExportModal()">Cancel</button>
+        <button class="modal-save" onclick="runExport()">⬇️ Export</button>
       </div>
     </div>
   </div>
