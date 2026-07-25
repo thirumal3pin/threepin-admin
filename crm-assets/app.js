@@ -42,6 +42,14 @@ function waHref(phone){
 window.applyLeadsSnapshot = function(list){
   leads = list;
   refreshAll();
+  // The AI summary regenerates server-side (see generate-lead-summary.js)
+  // and arrives back through this same snapshot — refresh just that block
+  // if its lead's detail page happens to be open, without touching any
+  // in-progress form state elsewhere in the panel.
+  if(currentDetailId && document.getElementById('dp').classList.contains('open')){
+    const l = leads.find(x=>x.id===currentDetailId);
+    if(l) renderAiSummary(l);
+  }
 };
 window.applyPipelineSnapshot = function(list){
   stages = list.slice().sort((a,b)=> (a.order||0) - (b.order||0));
@@ -215,6 +223,89 @@ function followUpBadge(l){
   const cls = diff < 0 ? 'overdue' : (diff < 24*60*60*1000 ? 'soon' : '');
   const when = new Date(l.followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
   return `<div class="lcard-followup ${cls}">📅 ${diff<0?'Overdue: ':''}${when}</div>`;
+}
+
+// ═══════ PERSIST + AI SUMMARY ═══════
+// Single choke point for every lead write — every call site that used to
+// call window.crmFirebase.saveLead(l) directly now goes through here, so a
+// summary regeneration can never be forgotten on some new call site later.
+function persistLead(l){
+  window.crmFirebase.saveLead(l);
+  scheduleSummaryRegeneration(l.id);
+}
+
+// Debounced ~5s per lead: a burst of edits to the same lead (e.g. change
+// stage, then immediately log a note) collapses into a single Claude call
+// instead of one per save. The regenerated summary comes back through the
+// normal Firestore onSnapshot listener (applyLeadsSnapshot) — no need to
+// patch local state here.
+const summaryRegenTimers = {};
+function scheduleSummaryRegeneration(leadId){
+  clearTimeout(summaryRegenTimers[leadId]);
+  summaryRegenTimers[leadId] = setTimeout(() => {
+    delete summaryRegenTimers[leadId];
+    regenerateLeadSummary(leadId);
+  }, 5000);
+}
+function renderAiSummary(l){
+  const el = document.getElementById('dpAiSummary');
+  if(!el) return;
+  if(!l.aiSummary && !l.aiSummaryError){
+    el.innerHTML = `<div class="dp-ai-summary-box empty"><span>✨</span><span>No AI summary yet — one will generate shortly after the next change.</span></div>`;
+    return;
+  }
+  const metaHtml = `<div class="dp-ai-summary-meta">✨ AI summary${l.aiSummaryAt?' · updated '+timeAgo(l.aiSummaryAt):''}</div>`;
+  const summaryHtml = l.aiSummary
+    ? `<div class="dp-ai-summary-text">${escapeHtml(l.aiSummary)}</div>`
+    : `<div class="dp-ai-summary-text empty">No summary yet.</div>`;
+  const errorHtml = l.aiSummaryError
+    ? `<div class="dp-ai-summary-err">⚠ Couldn't refresh the summary — showing the last one. (${escapeHtml(l.aiSummaryError)})</div>`
+    : '';
+  el.innerHTML = `<div class="dp-ai-summary-box${l.aiSummaryError?' has-error':''}">${metaHtml}${summaryHtml}${errorHtml}</div>`;
+}
+async function regenerateLeadSummary(leadId){
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    if(!idToken) return;
+    await fetch('/api/generate-lead-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
+      body: JSON.stringify({ leadId })
+    });
+  } catch(e){
+    // Summary generation is best-effort and must never surface as a user-
+    // facing error for an otherwise-successful save — the failure is still
+    // visible via aiSummaryError once/if the request reaches the server.
+    console.error('regenerateLeadSummary failed:', e);
+  }
+}
+
+// One-time (re-runnable) bulk fill for existing leads that predate this
+// feature — skips any lead that already has a summary. Runs server-side via
+// api/backfill-lead-summaries.js so it uses the real ANTHROPIC_API_KEY at
+// Vercel runtime; results land back through the usual Firestore listener.
+async function runBackfillSummaries(){
+  if(!confirm('Generate AI summaries for every existing lead that doesn\'t have one yet? This calls the Claude API once per lead.')) return;
+  closeMoreMenu();
+  showToast('Generating summaries…');
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/backfill-lead-summaries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
+      body: JSON.stringify({})
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok){ showToast(data.error || 'Backfill failed'); return; }
+    const skippedNote = data.skipped ? `, ${data.skipped} already had one` : '';
+    showToast(data.failed
+      ? `✓ Generated ${data.generated}, ${data.failed} failed${skippedNote} — check console`
+      : `✓ Generated summaries for ${data.generated} lead${data.generated===1?'':'s'}${skippedNote}`);
+    if(data.errors && data.errors.length) console.error('Backfill errors:', data.errors);
+  } catch(e){
+    console.error('runBackfillSummaries failed:', e);
+    showToast('Backfill failed — check console');
+  }
 }
 
 // ═══════ LEAD HISTORY LOG ═══════
@@ -622,7 +713,7 @@ function changeStage(id, stageId){
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   applyFilters();
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
   if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); }
 }
 
@@ -781,7 +872,7 @@ function saveLeadModal(){
     if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
     leads.unshift(l);
     showToast('✓ Enquiry saved');
-    window.crmFirebase.saveLead(l);
+    persistLead(l);
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
@@ -817,7 +908,7 @@ function saveLeadModal(){
       diffs.forEach(d=>addHistory(l, d.type, d.text));
       if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
-      window.crmFirebase.saveLead(l);
+      persistLead(l);
     }
   }
   closeLeadModal();
@@ -947,6 +1038,7 @@ function openDetail(id){
   currentDetailId = id;
   document.getElementById('dpName').textContent = l.name;
   document.getElementById('dpSub').textContent = l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads' : 'Manually added lead';
+  renderAiSummary(l);
 
   const waBtn = document.getElementById('dpWaBtn');
   const waUrl = waHref(l.phone);
@@ -1022,7 +1114,7 @@ function setDetailsSent(value){
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   renderDetailsSentToggle(l);
   renderHistory(l);
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
 }
 function onDetailStageChange(){
   const sel = document.getElementById('dpStageSel');
@@ -1130,7 +1222,7 @@ function saveFollowUpLog(){
   l.followUpAt = followUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
   closeFollowUpLogModal();
   refreshAll();
   showToast(followUpAt ? '✓ Logged — next follow-up set' : '✓ Logged — no further follow-up');
@@ -1144,7 +1236,7 @@ function removeFollowUp(leadId){
   l.followUpAt = null;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
   refreshAll();
   showToast('Follow-up removed');
   if(currentDetailId===leadId){ renderNoteFollowUpFields(l); renderFollowUpSpotlight(l); renderHistory(l); }
@@ -1194,7 +1286,7 @@ function addNote(){
   renderFollowUpSpotlight(l);
   renderHistory(l);
   applyFilters();
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
 }
 function deleteNote(leadId, noteId){
   const l = leads.find(x=>x.id===leadId);
@@ -1203,7 +1295,7 @@ function deleteNote(leadId, noteId){
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   renderNotes(l);
-  window.crmFirebase.saveLead(l);
+  persistLead(l);
 }
 
 // ═══════ STAGE MANAGER ═══════
@@ -1258,7 +1350,7 @@ function saveStageManager(){
   leads.forEach(l=>{
     if(!validIds.has(l.stageId)){
       l.stageId = fallbackId;
-      window.crmFirebase.saveLead(l);
+      persistLead(l);
     }
   });
   stages = stageManagerDraft;

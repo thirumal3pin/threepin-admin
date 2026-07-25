@@ -97,6 +97,7 @@
             <button class="more-dd-item" onclick="openDigestManager()">🔔 Follow-up Digest</button>
             <button class="more-dd-item" onclick="openBotEditor()">🤖 AI Bot</button>
             <button class="more-dd-item" onclick="openExportModal()">⬇️ Export Leads</button>
+            <button class="more-dd-item" onclick="runBackfillSummaries()">✨ Backfill AI Summaries</button>
             <div class="dd-sep"></div>
             <button class="more-dd-item danger" onclick="crmLogout()">Logout</button>
           </div>
@@ -273,6 +274,7 @@
     <div class="dp-body">
       <div class="dp-title" id="dpName"></div>
       <div class="dp-sub" id="dpSub"></div>
+      <div class="dp-ai-summary" id="dpAiSummary"></div>
       <div class="dp-stage-row">
         <select class="dp-stage-sel" id="dpStageSel" onchange="onDetailStageChange()"></select>
         <div class="dp-flag-toggle" id="dpDetailsSentToggle">
