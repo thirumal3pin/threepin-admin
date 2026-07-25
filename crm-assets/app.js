@@ -24,6 +24,18 @@ function channelLabel(c){
   return m ? `${m.icon} ${m.label}` : '—';
 }
 
+// wa.me needs digits only, no leading zeros, with country code. Most leads
+// here are 10-digit Indian mobile numbers with no country code typed in, so
+// default to +91 — the only assumption we can make without asking the user.
+function waHref(phone){
+  if(!phone) return null;
+  let digits = String(phone).replace(/\D/g,'');
+  if(!digits) return null;
+  if(digits.length===10) digits = '91'+digits;
+  else if(digits.length===11 && digits.startsWith('0')) digits = '91'+digits.slice(1);
+  return `https://wa.me/${digits}`;
+}
+
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
 window.applyLeadsSnapshot = function(list){
   leads = list;
@@ -599,6 +611,11 @@ function openDetail(id){
   currentDetailId = id;
   document.getElementById('dpName').textContent = l.name;
   document.getElementById('dpSub').textContent = l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads' : 'Manually added lead';
+
+  const waBtn = document.getElementById('dpWaBtn');
+  const waUrl = waHref(l.phone);
+  waBtn.style.display = waUrl ? '' : 'none';
+  if(waUrl) waBtn.href = waUrl;
 
   renderDetailStageRow(l);
 
