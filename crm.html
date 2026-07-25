@@ -73,6 +73,7 @@
         <div class="hstat p"><div class="hstat-n" id="statManual">0</div><div class="hstat-l">Manual</div></div>
         <div class="hstat g"><div class="hstat-n" id="statTotal">0</div><div class="hstat-l">Total</div></div>
         <div class="hstat-user" id="hdrUserEmail"></div>
+        <button class="logout-btn" id="fuNotifyBtn" onclick="toggleBrowserNotify()">🔕 Alerts: Off</button>
         <button class="logout-btn" onclick="crmLogout()">Logout</button>
       </div>
       <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
@@ -403,11 +404,11 @@
     </div>
   </div>
 
-  <!-- FOLLOW-UP WHATSAPP DIGEST MODAL -->
+  <!-- FOLLOW-UP DIGEST MODAL -->
   <div class="modal-overlay" id="digestModal">
     <div class="modal-box">
       <div class="modal-hdr">
-        <div class="modal-title">Follow-up WhatsApp Digest</div>
+        <div class="modal-title">Follow-up Digest</div>
         <button class="modal-x" onclick="closeDigestManager()">×</button>
       </div>
       <div class="modal-body">
@@ -415,7 +416,7 @@
           <input type="checkbox" id="digestEnabled">
           Send a daily WhatsApp digest of overdue + due-today follow-ups, every morning at 9:00 AM IST
         </label>
-        <div class="field" style="margin-top:16px">
+        <div class="field" style="margin-top:12px">
           <label>Send to (WhatsApp numbers)</label>
           <div id="digestRecipientRows"></div>
           <div class="stage-add-row">
@@ -424,9 +425,23 @@
           </div>
         </div>
         <div class="note-fu-hint">Sent from your connected WhatsApp Business number. Bare 10-digit numbers are assumed +91.</div>
+
+        <label class="digest-toggle-label" style="margin-top:20px">
+          <input type="checkbox" id="digestEmailEnabled">
+          Also send a daily email digest, every morning at 9:00 AM IST
+        </label>
+        <div class="field" style="margin-top:12px">
+          <label>Send to (email addresses)</label>
+          <div id="digestEmailRows"></div>
+          <div class="stage-add-row">
+            <input type="text" id="newDigestEmail" placeholder="e.g. name@threepin.in" onkeydown="if(event.key==='Enter')addDigestEmailDraft()">
+            <button onclick="addDigestEmailDraft()">+ Add</button>
+          </div>
+        </div>
       </div>
       <div class="modal-ftr">
         <button class="modal-cancel" onclick="closeDigestManager()">Cancel</button>
+        <button class="modal-cancel" onclick="sendDigestNow()">📤 Send Digest Now</button>
         <button class="modal-save" onclick="saveDigestManager()">✓ Save</button>
       </div>
     </div>

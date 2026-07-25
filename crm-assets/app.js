@@ -13,8 +13,8 @@ let lmModalContactAt = null;
 let stageManagerDraft = [];
 let toastTimer;
 let currentUserEmail = null;
-let digestSettings = { enabled:false, recipients:[] };
-let digestSettingsDraft = { enabled:false, recipients:[] };
+let digestSettings = { enabled:false, recipients:[], emailEnabled:false, emails:[] };
+let digestSettingsDraft = { enabled:false, recipients:[], emailEnabled:false, emails:[] };
 
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
@@ -60,6 +60,7 @@ window.applyDigestSettingsSnapshot = function(settings){
 function refreshAll(){
   updateStats();
   updateFollowupBadge();
+  checkFollowupNotify(false);
   applyFilters();
 }
 
@@ -68,6 +69,54 @@ function init(){
   setupSearch();
   applyFilters();
   updateStats();
+  updateNotifyBtnLabel();
+  setInterval(()=>checkFollowupNotify(false), 15*60*1000);
+}
+
+// ═══════ BROWSER FOLLOW-UP ALERTS ═══════
+// Per-device preference (localStorage, not synced) — a native OS
+// notification while this tab is open, independent of the WhatsApp digest.
+const FU_NOTIFY_KEY = 'fuNotifyEnabled';
+const FU_NOTIFY_INTERVAL_MS = 60*60*1000; // don't re-notify more than once/hour
+let fuNotifyEnabled = localStorage.getItem(FU_NOTIFY_KEY) === '1';
+let fuLastNotifiedAt = 0;
+function updateNotifyBtnLabel(){
+  const btn = document.getElementById('fuNotifyBtn');
+  if(!btn) return;
+  btn.textContent = fuNotifyEnabled ? '🔔 Alerts: On' : '🔕 Alerts: Off';
+}
+async function toggleBrowserNotify(){
+  if(!('Notification' in window)){ showToast('Notifications not supported in this browser'); return; }
+  if(!fuNotifyEnabled){
+    const perm = await Notification.requestPermission();
+    if(perm!=='granted'){ showToast('Notification permission denied'); return; }
+    fuNotifyEnabled = true;
+    localStorage.setItem(FU_NOTIFY_KEY,'1');
+    showToast('✓ Browser alerts enabled');
+    checkFollowupNotify(true);
+  } else {
+    fuNotifyEnabled = false;
+    localStorage.setItem(FU_NOTIFY_KEY,'0');
+    showToast('Browser alerts turned off');
+  }
+  updateNotifyBtnLabel();
+}
+function checkFollowupNotify(force){
+  if(!fuNotifyEnabled) return;
+  if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const withFollowup = leads.filter(l=>l.followUpAt);
+  if(!withFollowup.length) return;
+  const buckets = followupBuckets(withFollowup);
+  const count = buckets.overdue.length + buckets.today.length;
+  if(count<=0) return;
+  const now = Date.now();
+  if(!force && now-fuLastNotifiedAt < FU_NOTIFY_INTERVAL_MS) return;
+  fuLastNotifiedAt = now;
+  const n = new Notification('📅 Follow-ups need attention', {
+    body: `${buckets.overdue.length} overdue, ${buckets.today.length} due today`,
+    tag: 'crm-followups'
+  });
+  n.onclick = () => { window.focus(); toggleView('followups'); n.close(); };
 }
 
 function updateStats(){
@@ -896,9 +945,14 @@ function saveStageManager(){
 
 // ═══════ FOLLOW-UP WHATSAPP DIGEST MANAGER ═══════
 function openDigestManager(){
-  digestSettingsDraft = { enabled: digestSettings.enabled, recipients: digestSettings.recipients.slice() };
+  digestSettingsDraft = {
+    enabled: digestSettings.enabled, recipients: digestSettings.recipients.slice(),
+    emailEnabled: digestSettings.emailEnabled, emails: digestSettings.emails.slice()
+  };
   document.getElementById('digestEnabled').checked = digestSettingsDraft.enabled;
+  document.getElementById('digestEmailEnabled').checked = digestSettingsDraft.emailEnabled;
   renderDigestRecipientRows();
+  renderDigestEmailRows();
   document.getElementById('digestModal').classList.add('open');
 }
 function closeDigestManager(){
@@ -921,12 +975,64 @@ function addDigestRecipientDraft(){
   inp.value='';
   renderDigestRecipientRows();
 }
-function saveDigestManager(){
+function renderDigestEmailRows(){
+  document.getElementById('digestEmailRows').innerHTML = digestSettingsDraft.emails.map((r,i)=>`
+    <div class="req-info-row">
+      <input type="text" value="${escapeHtml(r)}" oninput="renameDigestEmailDraft(${i}, this.value)">
+      <button class="stage-del" onclick="removeDigestEmailDraft(${i})">🗑️</button>
+    </div>`).join('');
+}
+function renameDigestEmailDraft(i, val){ digestSettingsDraft.emails[i] = val; }
+function removeDigestEmailDraft(i){ digestSettingsDraft.emails.splice(i,1); renderDigestEmailRows(); }
+function addDigestEmailDraft(){
+  const inp = document.getElementById('newDigestEmail');
+  const val = inp.value.trim();
+  if(!val) return;
+  digestSettingsDraft.emails.push(val);
+  inp.value='';
+  renderDigestEmailRows();
+}
+function syncDigestDraftFromForm(){
   digestSettingsDraft.enabled = document.getElementById('digestEnabled').checked;
-  window.crmFirebase.saveFollowupDigestSettings(digestSettingsDraft.enabled, digestSettingsDraft.recipients);
-  digestSettings = { enabled: digestSettingsDraft.enabled, recipients: digestSettingsDraft.recipients.slice() };
+  digestSettingsDraft.emailEnabled = document.getElementById('digestEmailEnabled').checked;
+}
+function saveDigestManager(){
+  syncDigestDraftFromForm();
+  window.crmFirebase.saveFollowupDigestSettings(digestSettingsDraft.enabled, digestSettingsDraft.recipients, digestSettingsDraft.emailEnabled, digestSettingsDraft.emails);
+  digestSettings = {
+    enabled: digestSettingsDraft.enabled, recipients: digestSettingsDraft.recipients.slice(),
+    emailEnabled: digestSettingsDraft.emailEnabled, emails: digestSettingsDraft.emails.slice()
+  };
   closeDigestManager();
   showToast('✓ Digest settings saved');
+}
+async function sendDigestNow(){
+  syncDigestDraftFromForm();
+  if(!digestSettingsDraft.recipients.length && !digestSettingsDraft.emails.length){
+    showToast('Add at least one WhatsApp number or email first');
+    return;
+  }
+  saveDigestManager();
+  showToast('Sending digest…');
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/followup-digest', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+idToken }
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok){ showToast(data.error || 'Send failed'); return; }
+    const results = data.results || [];
+    const okCount = results.filter(r=>r.ok).length;
+    const failCount = results.length - okCount;
+    if(!results.length) showToast('Nothing to send — no recipients configured');
+    else if(!failCount) showToast(`✓ Digest sent to ${okCount} recipient${okCount===1?'':'s'}`);
+    else showToast(`Sent to ${okCount}, ${failCount} failed — check console`);
+    if(failCount) console.error('Digest send failures:', results.filter(r=>!r.ok));
+  } catch(e){
+    console.error('sendDigestNow error:', e);
+    showToast('Send failed — see console');
+  }
 }
 
 // ═══════ AI BOT EDITOR ═══════

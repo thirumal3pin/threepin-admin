@@ -94,7 +94,9 @@ function subscribeToData(tenantId){
         if (window.applyDigestSettingsSnapshot) {
           window.applyDigestSettingsSnapshot({
             enabled: !!data.followupDigestEnabled,
-            recipients: data.followupDigestRecipients || []
+            recipients: data.followupDigestRecipients || [],
+            emailEnabled: !!data.followupDigestEmailEnabled,
+            emails: data.followupDigestEmails || []
           });
         }
       }, (err) => console.error('Firestore settings sync error:', err));
@@ -112,7 +114,12 @@ window.crmFirebase = {
   },
   saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e)),
   saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
-  saveFollowupDigestSettings: (enabled, recipients) => setDoc(settingsRef(currentTenantId), { followupDigestEnabled: enabled, followupDigestRecipients: recipients }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e))
+  saveFollowupDigestSettings: (enabled, recipients, emailEnabled, emails) => setDoc(settingsRef(currentTenantId), {
+    followupDigestEnabled: enabled,
+    followupDigestRecipients: recipients,
+    followupDigestEmailEnabled: emailEnabled,
+    followupDigestEmails: emails
+  }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e))
 };
 
 window.crmAuth = {

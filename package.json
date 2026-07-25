@@ -9,8 +9,9 @@
     "dev": "live-server --port=5173"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.2",
     "firebase-admin": "^14.2.0",
-    "@anthropic-ai/sdk": "^0.112.2"
+    "nodemailer": "^9.0.3"
   },
   "devDependencies": {
     "live-server": "^1.2.2"
