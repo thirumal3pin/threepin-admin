@@ -1,14 +1,12 @@
 import crypto from 'node:crypto';
-import Anthropic from '@anthropic-ai/sdk';
-import { getDb, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, DEFAULT_BOT_CONFIG, getWhatsAppCreds, getKnowledgeSources, resolveTenantByPhoneNumberId } from './_bot-shared.js';
+import { getDb, getWhatsAppCreds, resolveTenantByPhoneNumberId } from './_bot-shared.js';
 
-// Lazily created so a missing ANTHROPIC_API_KEY can't crash the module at
-// load time — webhook verification (GET) must never depend on Claude.
-let _anthropic;
-function getAnthropic() {
-  if (!_anthropic) _anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
-  return _anthropic;
-}
+// AI replies are intentionally disabled here — ANTHROPIC_API_KEY stays set
+// in Vercel but is reserved for a different upcoming feature on this site,
+// not spent on bot replies. Incoming messages still create/update a lead
+// and get a static acknowledgment; nothing calls Claude. Re-add the
+// Anthropic call (see git history) to restore AI replies.
+const STATIC_REPLY = "Thanks for reaching out! A team member will follow up with you shortly.";
 
 function verifySignature(rawBody, signatureHeader, secret) {
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false;
@@ -17,11 +15,6 @@ function verifySignature(rawBody, signatureHeader, secret) {
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
-}
-
-async function getBotConfig(db, tenantId) {
-  const snap = await db.collection('botConfigs').doc(tenantId).get();
-  return snap.exists ? snap.data() : DEFAULT_BOT_CONFIG;
 }
 
 async function getFirstStageId(db, tenantId) {
@@ -76,38 +69,18 @@ async function upsertLead(db, tenantId, phone, extractedInfo, contactName) {
 }
 
 async function processIncomingMessage(db, tenantId, phone, text, contactName) {
-  const [config, knowledge] = await Promise.all([getBotConfig(db, tenantId), getKnowledgeSources(db, tenantId)]);
   const { ref, data: convo } = await getConversation(db, tenantId, phone);
 
   convo.messages = convo.messages || [];
   convo.messages.push({ role: 'user', content: text, ts: Date.now() });
-
-  const response = await getAnthropic().messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 1024,
-    thinking: { type: 'adaptive' },
-    system: buildSystemPrompt(config, knowledge),
-    tools: [UPDATE_LEAD_INFO_TOOL],
-    messages: convo.messages.map(m => ({ role: m.role, content: m.content }))
-  });
-
-  let replyText = '';
-  let extractedInfo = { ...(convo.extractedInfo || {}) };
-  for (const block of response.content) {
-    if (block.type === 'text') replyText += block.text;
-    if (block.type === 'tool_use' && block.name === 'update_lead_info') {
-      extractedInfo = { ...extractedInfo, ...block.input };
-    }
-  }
-  if (!replyText.trim()) replyText = 'Thanks for the message! A team member will follow up shortly.';
-
-  convo.messages.push({ role: 'assistant', content: replyText, ts: Date.now() });
-  convo.extractedInfo = extractedInfo;
+  convo.messages.push({ role: 'assistant', content: STATIC_REPLY, ts: Date.now() });
   convo.updatedAt = Date.now();
+
+  const extractedInfo = convo.extractedInfo || {};
 
   await ref.set(convo, { merge: true });
   await upsertLead(db, tenantId, phone, extractedInfo, contactName);
-  await sendWhatsAppMessage(db, tenantId, phone, replyText);
+  await sendWhatsAppMessage(db, tenantId, phone, STATIC_REPLY);
 }
 
 export async function GET(request) {

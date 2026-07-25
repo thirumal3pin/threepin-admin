@@ -1,14 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { getDb, verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, getKnowledgeSources } from './_bot-shared.js';
+import { verifyCrmUser } from './_bot-shared.js';
 
-// Lazy so a missing ANTHROPIC_API_KEY doesn't crash every request to this
-// endpoint at module load — only the actual Claude call should fail.
-let _anthropic;
-function getAnthropic() {
-  if (!_anthropic) _anthropic = new Anthropic();
-  return _anthropic;
-}
-
+// AI Bot test chat is intentionally disabled — ANTHROPIC_API_KEY stays set
+// in Vercel but is reserved for a different upcoming feature on this site,
+// not spent on bot replies. Re-wire this to call Claude again to restore it.
 export async function POST(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) {
@@ -30,35 +24,11 @@ export async function POST(request) {
     return new Response(JSON.stringify({ error: 'Missing config or history' }), { status: 400 });
   }
 
-  try {
-    const knowledge = await getKnowledgeSources(getDb(), user.tenantId);
-    const response = await getAnthropic().messages.create({
-      model: 'claude-opus-4-8',
-      max_tokens: 1024,
-      thinking: { type: 'adaptive' },
-      system: buildSystemPrompt(config, knowledge),
-      tools: [UPDATE_LEAD_INFO_TOOL],
-      messages: history.map(m => ({ role: m.role, content: m.content }))
-    });
-
-    let reply = '';
-    let extractedInfo = {};
-    for (const block of response.content) {
-      if (block.type === 'text') reply += block.text;
-      if (block.type === 'tool_use' && block.name === 'update_lead_info') {
-        extractedInfo = { ...extractedInfo, ...block.input };
-      }
-    }
-
-    return new Response(JSON.stringify({ reply, extractedInfo }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (e) {
-    console.error('bot-test-message error:', e);
-    return new Response(JSON.stringify({ error: 'Claude API error', message: String(e) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+  return new Response(JSON.stringify({
+    reply: "AI Bot replies are turned off right now — this token's being freed up for something else we're building. Turn it back on in api/bot-test-message.js when that's ready.",
+    extractedInfo: {}
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
