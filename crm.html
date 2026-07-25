@@ -89,6 +89,7 @@
         <div class="view-toggle">
           <button data-view="kanban" class="at" onclick="toggleView('kanban')">📋 Board</button>
           <button data-view="list" onclick="toggleView('list')">📃 List</button>
+          <button data-view="followups" onclick="toggleView('followups')">📅 Follow-ups</button>
         </div>
         <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
         <button class="stages-btn" onclick="openBotEditor()">🤖 AI Bot</button>
@@ -102,6 +103,7 @@
   <div id="main">
     <div id="kanbanView"></div>
     <div id="listView" style="display:none"></div>
+    <div id="followupsView" style="display:none"></div>
   </div>
 
   <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
@@ -278,6 +280,17 @@
       <div class="sec">
         <div class="sec-title">📝 Notes & Follow-ups</div>
         <div id="notesPanel"></div>
+        <div class="note-fu-row">
+          <div class="field">
+            <label for="noteFollowUpDate">Next Follow-up Date</label>
+            <input type="date" id="noteFollowUpDate">
+          </div>
+          <div class="field">
+            <label for="noteFollowUpTime">Time</label>
+            <input type="time" id="noteFollowUpTime">
+          </div>
+          <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
+        </div>
         <div class="note-add">
           <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
           <button class="note-btn" onclick="addNote()">Add</button>

@@ -141,6 +141,36 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .nores{text-align:center;padding:70px 20px;color:var(--ink4);}
 .nores-i{font-size:48px;margin-bottom:12px;}
 .nores-t{font-family:var(--serif);font-size:20px;color:var(--ink3);margin-bottom:4px;}
+.nores-sub{font-size:12.5px;color:var(--ink4);}
+
+/* ── FOLLOW-UPS VIEW ── */
+.fu-wrap{display:flex;flex-direction:column;gap:22px;}
+.fu-group-hdr{display:flex;align-items:center;gap:8px;font-family:var(--serif);font-size:17px;font-weight:600;color:var(--ink2);margin-bottom:10px;}
+.fu-group-hdr.overdue{color:var(--red);}
+.fu-group-hdr.today{color:var(--amber);}
+.fu-count{background:var(--bg2);color:var(--ink3);font-family:var(--sans);font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px;}
+.fu-rows{display:flex;flex-direction:column;gap:8px;}
+.fu-row{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--white);border:1.5px solid var(--border);border-radius:12px;padding:13px 16px;cursor:pointer;box-shadow:var(--shadow);transition:transform .15s,box-shadow .15s;}
+.fu-row:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);}
+.fu-row-main{min-width:0;flex:1;}
+.fu-name-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+.fu-name{font-weight:700;font-size:14px;}
+.stage-pill.sm{font-size:9.5px;padding:2px 8px;}
+.fu-meta{display:flex;gap:14px;font-size:12px;color:var(--ink3);margin-bottom:5px;flex-wrap:wrap;}
+.fu-note{font-size:12.5px;color:var(--ink3);font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fu-note.empty{color:var(--ink4);font-style:normal;}
+.fu-note-time{font-style:normal;color:var(--ink4);}
+.fu-row-side{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+.fu-time{font-size:12px;font-weight:700;color:var(--ink2);white-space:nowrap;}
+.fu-time.overdue{color:var(--red);}
+.fu-time.today{color:var(--amber);}
+.fu-wa-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;background:var(--green-bg);color:var(--green);text-decoration:none;font-size:15px;flex-shrink:0;}
+.fu-wa-btn:hover{background:var(--green);color:#fff;}
+
+/* ── NOTE FOLLOW-UP EDIT ROW ── */
+.note-fu-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:14px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;}
+.note-fu-row .field{margin-bottom:0;flex:0 0 auto;min-width:150px;}
+.note-fu-hint{font-size:11px;color:var(--ink4);flex-basis:100%;}
 
 /* ── LEAD DETAIL PANEL ── */
 #dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}

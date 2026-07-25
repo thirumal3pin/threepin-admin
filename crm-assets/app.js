@@ -109,7 +109,9 @@ function applyFilters(){
     }
     return true;
   });
-  if(currentView==='kanban') renderBoard(); else renderList();
+  if(currentView==='kanban') renderBoard();
+  else if(currentView==='list') renderList();
+  else renderFollowups();
 }
 
 function toggleView(view){
@@ -117,6 +119,7 @@ function toggleView(view){
   document.querySelectorAll('.view-toggle button').forEach(b=>b.classList.toggle('at', b.dataset.view===view));
   document.getElementById('kanbanView').style.display = view==='kanban' ? '' : 'none';
   document.getElementById('listView').style.display = view==='list' ? '' : 'none';
+  document.getElementById('followupsView').style.display = view==='followups' ? '' : 'none';
   applyFilters();
 }
 
@@ -364,6 +367,77 @@ function renderList(){
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
+}
+
+// ═══════ FOLLOW-UPS VIEW (date-grouped, calendar-style) ═══════
+const FU_GROUP_DEFS = [
+  { key:'overdue', label:'⚠️ Overdue' },
+  { key:'today', label:'📅 Today' },
+  { key:'tomorrow', label:'🌤️ Tomorrow' },
+  { key:'week', label:'🗓️ This Week' },
+  { key:'later', label:'📆 Later' }
+];
+function followupBuckets(list){
+  const now = Date.now();
+  const startOfToday = new Date(new Date().setHours(0,0,0,0)).getTime();
+  const startOfTomorrow = startOfToday + 86400000;
+  const startOfDayAfter = startOfTomorrow + 86400000;
+  const startOfNextWeek = startOfToday + 7*86400000;
+  const buckets = { overdue:[], today:[], tomorrow:[], week:[], later:[] };
+  list.forEach(l=>{
+    const t = l.followUpAt;
+    if(t < now) buckets.overdue.push(l);
+    else if(t < startOfTomorrow) buckets.today.push(l);
+    else if(t < startOfDayAfter) buckets.tomorrow.push(l);
+    else if(t < startOfNextWeek) buckets.week.push(l);
+    else buckets.later.push(l);
+  });
+  Object.values(buckets).forEach(arr=>arr.sort((a,b)=>a.followUpAt-b.followUpAt));
+  return buckets;
+}
+function followupRowHtml(l, bucketKey){
+  const stage = stageById(l.stageId);
+  const latest = (l.notes||[]).slice().sort((a,b)=>b.createdAt-a.createdAt)[0];
+  const waUrl = waHref(l.phone);
+  const fuDate = new Date(l.followUpAt);
+  const timeLabel = (bucketKey==='today' || bucketKey==='overdue')
+    ? fuDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+    : fuDate.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  return `<div class="fu-row" onclick="openDetail('${l.id}')">
+    <div class="fu-row-main">
+      <div class="fu-name-row">
+        <span class="fu-name">${escapeHtml(l.name)}</span>
+        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${stage.name}</span>`:''}
+      </div>
+      <div class="fu-meta">
+        ${l.phone?`<span>📞 ${escapeHtml(l.phone)}</span>`:''}
+        ${l.propertyInterest?`<span>🏠 ${escapeHtml(l.propertyInterest)}</span>`:''}
+      </div>
+      <div class="fu-note ${latest?'':'empty'}">${latest ? `“${escapeHtml(latest.text)}” <span class="fu-note-time">— ${timeAgo(latest.createdAt)}</span>` : 'No notes yet'}</div>
+    </div>
+    <div class="fu-row-side">
+      <div class="fu-time ${bucketKey}">${timeLabel}</div>
+      ${waUrl?`<a class="fu-wa-btn" href="${waUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">💬</a>`:''}
+    </div>
+  </div>`;
+}
+function renderFollowups(){
+  const wrap = document.getElementById('followupsView');
+  const withFollowup = filteredLeads.filter(l=>l.followUpAt);
+  if(!withFollowup.length){
+    wrap.innerHTML = '<div class="nores"><div class="nores-i">📅</div><div class="nores-t">No follow-ups scheduled</div><div class="nores-sub">Set one from a lead\'s Notes &amp; Follow-ups section.</div></div>';
+    return;
+  }
+  const buckets = followupBuckets(withFollowup);
+  const groupsHtml = FU_GROUP_DEFS.map(g=>{
+    const arr = buckets[g.key];
+    if(!arr.length) return '';
+    return `<div class="fu-group">
+      <div class="fu-group-hdr ${g.key}">${g.label} <span class="fu-count">${arr.length}</span></div>
+      <div class="fu-rows">${arr.map(l=>followupRowHtml(l, g.key)).join('')}</div>
+    </div>`;
+  }).join('');
+  wrap.innerHTML = `<div class="fu-wrap">${groupsHtml}</div>`;
 }
 
 function changeStage(id, stageId){
@@ -645,6 +719,7 @@ function openDetail(id){
   }
 
   renderNotes(l);
+  renderNoteFollowUpFields(l);
   document.getElementById('dp').classList.add('open');
   window.scrollTo(0,0);
 }
@@ -680,19 +755,49 @@ function renderNotes(l){
     </div>`).join('') : '<div class="empty-mini">No notes yet — log a call or follow-up below.</div>';
   document.getElementById('notesPanel').innerHTML = html;
 }
+function renderNoteFollowUpFields(l){
+  const fu = l.followUpAt ? new Date(l.followUpAt) : null;
+  document.getElementById('noteFollowUpDate').value = fu ? toDateInputValue(fu) : '';
+  document.getElementById('noteFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
+}
+function parseFollowUpRaw(dateStr, timeStr){
+  if(!dateStr) return null;
+  return timeStr ? new Date(`${dateStr}T${timeStr}:00`).getTime() : new Date(`${dateStr}T00:00:00`).getTime();
+}
 function addNote(){
   const inp = document.getElementById('noteInput');
   const text = inp.value.trim();
   if(!text) return;
   const l = leads.find(x=>x.id===currentDetailId);
   if(!l) return;
+
+  const fuDateStr = document.getElementById('noteFollowUpDate').value;
+  const fuTimeStr = document.getElementById('noteFollowUpTime').value;
+  const currentAt = l.followUpAt || null;
+  const candidateAt = parseFollowUpRaw(fuDateStr, fuTimeStr);
+  let nextFollowUpAt = currentAt;
+  // Only re-validate "must be future" when the agent actually changed the
+  // date/time — leaving it as-is must never block saving a note, even if
+  // that existing follow-up has since gone overdue.
+  if(candidateAt !== currentAt){
+    if(candidateAt === null){
+      nextFollowUpAt = null;
+    } else {
+      const r = computeFollowUpAt(fuDateStr, fuTimeStr);
+      if(r.error){ showToast(r.error); return; }
+      nextFollowUpAt = r.value;
+    }
+  }
+
   const now = Date.now();
   l.notes = l.notes || [];
   l.notes.push({ id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
+  l.followUpAt = nextFollowUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   inp.value='';
   renderNotes(l);
+  renderNoteFollowUpFields(l);
   applyFilters();
   window.crmFirebase.saveLead(l);
 }
