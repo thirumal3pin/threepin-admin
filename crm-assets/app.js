@@ -1,6 +1,7 @@
 // ═══════ STATE ═══════
 let leads = [];
 let stages = [];
+let enquiryTypes = ['Property Enquiry', 'Seller Listing', 'General'];
 let filteredLeads = [];
 let currentView = 'kanban';
 let currentSource = 'all';
@@ -8,8 +9,19 @@ let currentSearch = '';
 let currentDetailId = null;
 let lModalMode = 'add';
 let lModalEditId = null;
+let lmModalContactAt = null;
 let stageManagerDraft = [];
 let toastTimer;
+
+const CHANNEL_META = {
+  call: { label: 'Direct Call', icon: '📞' },
+  whatsapp: { label: 'WhatsApp', icon: '🟢' },
+  instagram: { label: 'Instagram', icon: '📸' }
+};
+function channelLabel(c){
+  const m = CHANNEL_META[c];
+  return m ? `${m.icon} ${m.label}` : '—';
+}
 
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
 window.applyLeadsSnapshot = function(list){
@@ -19,6 +31,12 @@ window.applyLeadsSnapshot = function(list){
 window.applyPipelineSnapshot = function(list){
   stages = list.slice().sort((a,b)=> (a.order||0) - (b.order||0));
   refreshAll();
+};
+window.applyEnquiryTypesSnapshot = function(list){
+  enquiryTypes = (list && list.length) ? list : enquiryTypes;
+  if(document.getElementById('lModal').classList.contains('open')){
+    renderEnquiryTypeOptions(document.getElementById('lmEnquiryType').value);
+  }
 };
 
 function refreshAll(){
@@ -73,7 +91,7 @@ function applyFilters(){
   filteredLeads = leads.filter(l=>{
     if(currentSource!=='all' && l.source!==currentSource) return false;
     if(currentSearch){
-      const hay = [l.name,l.phone,l.email,l.propertyInterest].join(' ').toLowerCase();
+      const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel)].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
@@ -106,6 +124,16 @@ function timeAgo(ts){
   if(hrs<24) return hrs+'h ago';
   const days = Math.floor(hrs/24);
   return days+'d ago';
+}
+function pad2(n){ return String(n).padStart(2,'0'); }
+function toDateInputValue(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function toTimeInputValue(d){ return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function followUpBadge(l){
+  if(!l.followUpAt) return '';
+  const diff = l.followUpAt - Date.now();
+  const cls = diff < 0 ? 'overdue' : (diff < 24*60*60*1000 ? 'soon' : '');
+  const when = new Date(l.followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  return `<div class="lcard-followup ${cls}">📅 ${diff<0?'Overdue: ':''}${when}</div>`;
 }
 
 // ═══════ KANBAN BOARD ═══════
@@ -169,8 +197,11 @@ function leadCardHtml(l){
     </div>
     <div class="lcard-meta">
       ${l.phone?`<div>📞 ${l.phone}</div>`:''}
+      ${l.channel?`<div>${channelLabel(l.channel)}</div>`:''}
+      ${l.enquiryType?`<div>🏷️ ${l.enquiryType}</div>`:''}
       ${l.propertyInterest?`<div>🏠 ${l.propertyInterest}</div>`:''}
     </div>
+    ${followUpBadge(l)}
     <div class="lcard-foot">
       <div class="lcard-time">${timeAgo(l.updatedAt||l.createdAt)}</div>
       ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${nextStage.name}</button>`:''}
@@ -186,15 +217,18 @@ function renderList(){
     return;
   }
   wrap.innerHTML = `<div class="list-view"><table>
-    <thead><tr><th>Name</th><th>Contact</th><th>Interest</th><th>Stage</th><th>Source</th><th>Updated</th></tr></thead>
+    <thead><tr><th>Name</th><th>Contact</th><th>Channel</th><th>Type</th><th>Interest</th><th>Stage</th><th>Source</th><th>Follow-up</th><th>Updated</th></tr></thead>
     <tbody>${filteredLeads.map(l=>{
       const stage = stageById(l.stageId);
       return `<tr onclick="openDetail('${l.id}')">
         <td><b>${l.name}</b></td>
         <td>${l.phone||l.email||'—'}</td>
+        <td>${l.channel?channelLabel(l.channel):'—'}</td>
+        <td>${l.enquiryType||'—'}</td>
         <td>${l.propertyInterest||'—'}</td>
         <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${stage.name}</span>`:'—'}</td>
         <td>${l.source==='meta'?'📱 Meta':'✍️ Manual'}</td>
+        <td>${l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—'}</td>
         <td>${timeAgo(l.updatedAt||l.createdAt)}</td>
       </tr>`;
     }).join('')}</tbody>
@@ -212,13 +246,54 @@ function changeStage(id, stageId){
 }
 
 // ═══════ ADD / EDIT LEAD MODAL ═══════
+function renderEnquiryTypeOptions(selected){
+  const sel = document.getElementById('lmEnquiryType');
+  const opts = enquiryTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  sel.innerHTML = `<option value="">Select type…</option>${opts}<option value="__add_new__">+ Add new type…</option>`;
+  sel.value = selected && enquiryTypes.includes(selected) ? selected : '';
+}
+function hideNewTypeRow(){
+  document.getElementById('lmNewTypeRow').style.display='none';
+  document.getElementById('lmNewEnquiryType').value='';
+}
+function onEnquiryTypeSelectChange(){
+  const sel = document.getElementById('lmEnquiryType');
+  if(sel.value === '__add_new__'){
+    document.getElementById('lmNewTypeRow').style.display='flex';
+    document.getElementById('lmNewEnquiryType').focus();
+  } else {
+    hideNewTypeRow();
+  }
+}
+function confirmAddEnquiryType(){
+  const inp = document.getElementById('lmNewEnquiryType');
+  const val = inp.value.trim();
+  if(!val) return;
+  const existing = enquiryTypes.find(t=>t.toLowerCase()===val.toLowerCase());
+  if(!existing){
+    enquiryTypes.push(val);
+    window.crmFirebase.saveEnquiryTypes(enquiryTypes);
+  }
+  renderEnquiryTypeOptions(existing || val);
+  hideNewTypeRow();
+}
+
 function openAddLeadModal(){
   lModalMode='add'; lModalEditId=null;
   document.getElementById('lmTitle').textContent='Add New Lead';
+  document.getElementById('lmChannel').value='';
   document.getElementById('lmName').value='';
   document.getElementById('lmPhone').value='';
   document.getElementById('lmEmail').value='';
+  renderEnquiryTypeOptions('');
+  hideNewTypeRow();
   document.getElementById('lmInterest').value='';
+  document.getElementById('lmBudget').value='';
+  document.getElementById('lmFollowUpDate').value='';
+  document.getElementById('lmFollowUpTime').value='';
+  document.getElementById('lmNotes').value='';
+  lmModalContactAt = Date.now();
+  document.getElementById('lmContactTimeDisplay').textContent = new Date(lmModalContactAt).toLocaleString();
   document.getElementById('lmErr').classList.remove('show');
   document.getElementById('lModal').classList.add('open');
 }
@@ -227,43 +302,102 @@ function openEditLeadModal(id){
   if(!l) return;
   lModalMode='edit'; lModalEditId=id;
   document.getElementById('lmTitle').textContent='Edit Lead';
+  document.getElementById('lmChannel').value=l.channel||'';
   document.getElementById('lmName').value=l.name||'';
   document.getElementById('lmPhone').value=l.phone||'';
   document.getElementById('lmEmail').value=l.email||'';
+  renderEnquiryTypeOptions(l.enquiryType||'');
+  hideNewTypeRow();
   document.getElementById('lmInterest').value=l.propertyInterest||'';
+  document.getElementById('lmBudget').value=l.budget||'';
+  const fu = l.followUpAt ? new Date(l.followUpAt) : null;
+  document.getElementById('lmFollowUpDate').value = fu ? toDateInputValue(fu) : '';
+  document.getElementById('lmFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
+  document.getElementById('lmNotes').value='';
+  lmModalContactAt = l.contactAt || l.createdAt || Date.now();
+  document.getElementById('lmContactTimeDisplay').textContent = new Date(lmModalContactAt).toLocaleString();
   document.getElementById('lmErr').classList.remove('show');
   document.getElementById('lModal').classList.add('open');
 }
 function closeLeadModal(){
   document.getElementById('lModal').classList.remove('open');
+  hideNewTypeRow();
+}
+// Future-date rule: with a time given, the exact moment must be after now;
+// with only a date given, it must be strictly after today (a bare "today"
+// reads as already past since we can't know which part of today they meant).
+function computeFollowUpAt(dateStr, timeStr){
+  if(timeStr){
+    const dt = new Date(`${dateStr}T${timeStr}:00`);
+    if(isNaN(dt.getTime()) || dt.getTime() <= Date.now()){
+      return { error: 'Follow-up date & time must be in the future.' };
+    }
+    return { value: dt.getTime() };
+  }
+  if(dateStr <= toDateInputValue(new Date())){
+    return { error: 'Follow-up date must be a future date (add a time if you mean later today).' };
+  }
+  return { value: new Date(`${dateStr}T00:00:00`).getTime() };
 }
 function saveLeadModal(){
-  const name = document.getElementById('lmName').value.trim();
   const errBox = document.getElementById('lmErr');
-  if(!name){ errBox.textContent='Name is required.'; errBox.classList.add('show'); return; }
+  const showErr = (msg) => { errBox.textContent = msg; errBox.classList.add('show'); };
   errBox.classList.remove('show');
+
+  const channel = document.getElementById('lmChannel').value;
+  const name = document.getElementById('lmName').value.trim();
   const phone = document.getElementById('lmPhone').value.trim();
   const email = document.getElementById('lmEmail').value.trim();
+  const enquiryType = document.getElementById('lmEnquiryType').value;
   const propertyInterest = document.getElementById('lmInterest').value.trim();
+  const budget = document.getElementById('lmBudget').value.trim();
+  const followUpDate = document.getElementById('lmFollowUpDate').value;
+  const followUpTime = document.getElementById('lmFollowUpTime').value;
+  const noteText = document.getElementById('lmNotes').value.trim();
+
+  if(!channel){ showErr('Please select a channel.'); return; }
+  if(!name){ showErr('Name is required.'); return; }
+  if(!phone){ showErr('Phone number is required.'); return; }
+  if(!enquiryType || enquiryType==='__add_new__'){ showErr('Please select an enquiry type.'); return; }
+  if(!propertyInterest){ showErr('Property / Locality is required.'); return; }
+
+  let followUpAt = null;
+  if(followUpDate){
+    const r = computeFollowUpAt(followUpDate, followUpTime);
+    if(r.error){ showErr(r.error); return; }
+    followUpAt = r.value;
+  }
+
+  const now = Date.now();
+  const contactAt = lmModalContactAt || now;
 
   if(lModalMode==='add'){
     const l = {
-      id: 'lead_'+Date.now(),
-      name, phone, email, propertyInterest,
+      id: 'lead_'+now,
+      channel, name, phone, email, enquiryType, propertyInterest, budget,
       source: 'manual',
       stageId: stages.length ? stages[0].id : null,
       notes: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
+      contactAt,
+      followUpAt,
+      createdAt: now,
+      updatedAt: now
     };
+    if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now });
     leads.unshift(l);
-    showToast('✓ Lead added');
+    showToast('✓ Enquiry saved');
     window.crmFirebase.saveLead(l);
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
-      l.name=name; l.phone=phone; l.email=email; l.propertyInterest=propertyInterest; l.updatedAt=Date.now();
-      showToast('✓ Lead updated');
+      l.channel=channel; l.name=name; l.phone=phone; l.email=email;
+      l.enquiryType=enquiryType; l.propertyInterest=propertyInterest; l.budget=budget;
+      l.contactAt = l.contactAt || contactAt;
+      l.followUpAt = followUpAt;
+      l.updatedAt = now;
+      l.notes = l.notes || [];
+      if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now });
+      showToast('✓ Enquiry updated');
       window.crmFirebase.saveLead(l);
     }
   }
@@ -294,9 +428,14 @@ function openDetail(id){
   renderDetailStageRow(l);
 
   const infoHtml = `
+    ${l.channel?`<div class="info-b"><div class="info-b-l">Channel</div><div class="info-b-v">${channelLabel(l.channel)}</div></div>`:''}
     ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${l.phone}">${l.phone}</a></div></div>`:''}
     ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${l.email}">${l.email}</a></div></div>`:''}
-    ${l.propertyInterest?`<div class="info-b"><div class="info-b-l">Property Interest</div><div class="info-b-v">${l.propertyInterest}</div></div>`:''}
+    ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${l.enquiryType}</div></div>`:''}
+    ${l.propertyInterest?`<div class="info-b"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${l.propertyInterest}</div></div>`:''}
+    ${l.budget?`<div class="info-b"><div class="info-b-l">Budget</div><div class="info-b-v">${l.budget}</div></div>`:''}
+    <div class="info-b"><div class="info-b-l">Time of Contact</div><div class="info-b-v">${new Date(l.contactAt||l.createdAt).toLocaleString()}</div></div>
+    ${l.followUpAt?`<div class="info-b"><div class="info-b-l">Follow-up</div><div class="info-b-v">${new Date(l.followUpAt).toLocaleString()}</div></div>`:''}
     <div class="info-b"><div class="info-b-l">Added</div><div class="info-b-v">${new Date(l.createdAt).toLocaleString()}</div></div>
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${l.formId}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${l.adId}</div></div>`:''}

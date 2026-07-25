@@ -291,13 +291,28 @@
         <button class="modal-x" onclick="closeLeadModal()">×</button>
       </div>
       <div class="modal-body">
+        <div class="field-row">
+          <div class="field">
+            <label for="lmChannel">Channel *</label>
+            <select id="lmChannel">
+              <option value="">Select channel…</option>
+              <option value="call">📞 Direct Call</option>
+              <option value="whatsapp">🟢 WhatsApp</option>
+              <option value="instagram">📸 Instagram</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Time of Contact</label>
+            <div class="lm-static" id="lmContactTimeDisplay">—</div>
+          </div>
+        </div>
         <div class="field">
           <label for="lmName">Name *</label>
           <input type="text" id="lmName">
         </div>
         <div class="field-row">
           <div class="field">
-            <label for="lmPhone">Phone</label>
+            <label for="lmPhone">Phone *</label>
             <input type="text" id="lmPhone">
           </div>
           <div class="field">
@@ -306,14 +321,40 @@
           </div>
         </div>
         <div class="field">
-          <label for="lmInterest">Property Interest</label>
-          <input type="text" id="lmInterest" placeholder="e.g. 3BHK in Nanganallur, budget 1.5Cr">
+          <label for="lmEnquiryType">Enquiry Type *</label>
+          <select id="lmEnquiryType" onchange="onEnquiryTypeSelectChange()"></select>
+          <div class="stage-add-row" id="lmNewTypeRow" style="display:none">
+            <input type="text" id="lmNewEnquiryType" placeholder="New enquiry type…" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmAddEnquiryType();}">
+            <button type="button" onclick="confirmAddEnquiryType()">+ Add</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="lmInterest">Property / Locality *</label>
+          <input type="text" id="lmInterest" placeholder="e.g. 3BHK in Nanganallur">
+        </div>
+        <div class="field">
+          <label for="lmBudget">Budget (optional)</label>
+          <input type="text" id="lmBudget" placeholder="e.g. 1.5 Cr">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="lmFollowUpDate">Follow-up Date (optional)</label>
+            <input type="date" id="lmFollowUpDate">
+          </div>
+          <div class="field">
+            <label for="lmFollowUpTime">Follow-up Time (optional)</label>
+            <input type="time" id="lmFollowUpTime">
+          </div>
+        </div>
+        <div class="field">
+          <label for="lmNotes">Notes</label>
+          <textarea id="lmNotes" class="bot-textarea" rows="3" placeholder="Log details about this enquiry — saved with today's date &amp; time"></textarea>
         </div>
         <div class="modal-err" id="lmErr"></div>
       </div>
       <div class="modal-ftr">
         <button class="modal-cancel" onclick="closeLeadModal()">Cancel</button>
-        <button class="modal-save" onclick="saveLeadModal()">✓ Save Lead</button>
+        <button class="modal-save" onclick="saveLeadModal()">✓ Save Enquiry</button>
       </div>
     </div>
   </div>

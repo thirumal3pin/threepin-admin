@@ -29,6 +29,8 @@ const DEFAULT_STAGES = [
   { id: 'closed_lost', name: 'Closed Lost', color: '#B91C1C' }
 ];
 
+const DEFAULT_ENQUIRY_TYPES = ['Property Enquiry', 'Seller Listing', 'General'];
+
 // Every tenant's data lives under this id — resolved once per session from
 // the `tenantId` custom claim set at provisioning time (scripts/create-tenant.js).
 // A user with no claim yet (not fully onboarded) gets no data access at all.
@@ -38,11 +40,18 @@ let subscribed = false;
 function pipelineRef(tenantId){ return doc(db, 'pipelines', tenantId); }
 function whatsappBotRef(tenantId){ return doc(db, 'botConfigs', tenantId); }
 function leadsSeededRef(tenantId){ return doc(db, 'leadsSeededFlags', tenantId); }
+function settingsRef(tenantId){ return doc(db, 'settings', tenantId); }
 
 async function seedPipelineIfEmpty(tenantId){
   const snap = await getDoc(pipelineRef(tenantId));
   if(snap.exists()) return;
   await setDoc(pipelineRef(tenantId), { stages: DEFAULT_STAGES });
+}
+
+async function seedSettingsIfEmpty(tenantId){
+  const snap = await getDoc(settingsRef(tenantId));
+  if(snap.exists()) return;
+  await setDoc(settingsRef(tenantId), { enquiryTypes: DEFAULT_ENQUIRY_TYPES });
 }
 
 async function seedSampleLeadsIfEmpty(tenantId){
@@ -62,7 +71,8 @@ function subscribeToData(tenantId){
   subscribed = true;
   Promise.all([
     seedPipelineIfEmpty(tenantId).catch(e => console.error('Pipeline seed error:', e)),
-    seedSampleLeadsIfEmpty(tenantId).catch(e => console.error('Sample leads seed error:', e))
+    seedSampleLeadsIfEmpty(tenantId).catch(e => console.error('Sample leads seed error:', e)),
+    seedSettingsIfEmpty(tenantId).catch(e => console.error('Settings seed error:', e))
   ])
     .finally(() => {
       const leadsQuery = query(leadsCol, where('tenantId', '==', tenantId));
@@ -76,6 +86,12 @@ function subscribeToData(tenantId){
           window.applyPipelineSnapshot(snap.data().stages || []);
         }
       }, (err) => console.error('Firestore pipeline sync error:', err));
+
+      onSnapshot(settingsRef(tenantId), (snap) => {
+        if (snap.exists() && window.applyEnquiryTypesSnapshot) {
+          window.applyEnquiryTypesSnapshot(snap.data().enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+        }
+      }, (err) => console.error('Firestore settings sync error:', err));
     });
 }
 
@@ -88,7 +104,8 @@ window.crmFirebase = {
     const snap = await getDoc(whatsappBotRef(currentTenantId));
     return snap.exists() ? snap.data() : null;
   },
-  saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e))
+  saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e)),
+  saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e))
 };
 
 window.crmAuth = {
