@@ -217,6 +217,92 @@ function followUpBadge(l){
   return `<div class="lcard-followup ${cls}">📅 ${diff<0?'Overdue: ':''}${when}</div>`;
 }
 
+// ═══════ LEAD HISTORY LOG ═══════
+// text may contain <b> tags around already-escaped values for emphasis —
+// never pass raw user input directly, always escapeHtml() it first.
+function addHistory(l, type, text){
+  l.history = l.history || [];
+  l.history.push({
+    id: 'h'+Date.now()+Math.random().toString(36).slice(2,7),
+    type, text,
+    at: Date.now(),
+    by: currentUserEmail || l.updatedBy || null
+  });
+}
+function historyIcon(type){
+  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓' }[type] || '•';
+}
+function renderHistory(l){
+  const el = document.getElementById('historyPanel');
+  if(!el) return;
+  const items = (l.history||[]).slice().sort((a,b)=>b.at-a.at);
+  if(!items.length){ el.innerHTML = '<div class="empty-mini">No changes logged yet.</div>'; return; }
+  el.innerHTML = items.map(h=>`
+    <div class="history-item">
+      <div class="history-dot ${h.type}">${historyIcon(h.type)}</div>
+      <div class="history-content">
+        <div class="history-text">${h.text}</div>
+        <div class="history-time">${new Date(h.at).toLocaleString([], { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' })}${h.by?' · '+escapeHtml(h.by.split('@')[0]):''}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ═══════ FOLLOW-UP SPOTLIGHT ═══════
+function followUpUrgencyClass(ts){
+  if(ts==null) return 'none';
+  const diff = ts - Date.now();
+  if(diff < 0) return 'overdue';
+  if(diff < 24*60*60*1000) return 'today';
+  return 'upcoming';
+}
+function relativeFollowUpText(ts){
+  const diff = ts - Date.now();
+  const abs = Math.abs(diff);
+  const mins = Math.round(abs/60000);
+  const hrs = Math.round(abs/3600000);
+  const days = Math.round(abs/86400000);
+  let phrase;
+  if(mins<60) phrase = mins<=1 ? '1 minute' : mins+' minutes';
+  else if(hrs<24) phrase = hrs===1 ? '1 hour' : hrs+' hours';
+  else phrase = days===1 ? '1 day' : days+' days';
+  return diff<0 ? `Overdue by ${phrase}` : `In ${phrase}`;
+}
+function renderFollowUpSpotlight(l){
+  const el = document.getElementById('dpFuSpotlight');
+  if(!el) return;
+  if(l.followUpAt){
+    const cls = followUpUrgencyClass(l.followUpAt);
+    const when = new Date(l.followUpAt).toLocaleString([], { weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+    const icoMap = { overdue:'⏰', today:'⏰', upcoming:'📅' };
+    const labelMap = { overdue:'OVERDUE FOLLOW-UP', today:'FOLLOW-UP DUE TODAY', upcoming:'NEXT FOLLOW-UP' };
+    el.innerHTML = `
+      <div class="fu-spotlight ${cls}">
+        <div class="fu-spotlight-ico">${icoMap[cls]}</div>
+        <div class="fu-spotlight-main">
+          <div class="fu-spotlight-label">${labelMap[cls]}</div>
+          <div class="fu-spotlight-when">${when}</div>
+          <div class="fu-spotlight-rel">${relativeFollowUpText(l.followUpAt)}</div>
+        </div>
+        <div class="fu-spotlight-actions">
+          <button type="button" class="fu-spotlight-btn done" onclick="openFollowUpLogModal('${l.id}')">✓ Followed Up</button>
+          <button type="button" class="fu-spotlight-btn remove" onclick="removeFollowUp('${l.id}')">✕ Remove</button>
+        </div>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div class="fu-spotlight none">
+        <div class="fu-spotlight-ico">🗓️</div>
+        <div class="fu-spotlight-main">
+          <div class="fu-spotlight-label">No follow-up scheduled</div>
+          <div class="fu-spotlight-when">Set a date to stay on top of this lead</div>
+        </div>
+        <div class="fu-spotlight-actions">
+          <button type="button" class="fu-spotlight-btn done" onclick="openFollowUpLogModal('${l.id}')">+ Schedule</button>
+        </div>
+      </div>`;
+  }
+}
+
 // ═══════ KANBAN BOARD ═══════
 function renderBoard(){
   const board = document.getElementById('kanbanView');
@@ -525,12 +611,19 @@ function renderFollowups(){
 function changeStage(id, stageId){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
+  if(l.stageId !== stageId){
+    const oldStage = stageById(l.stageId);
+    const newStage = stageById(stageId);
+    if(oldStage && newStage){
+      addHistory(l, 'stage', `Stage changed from <b>${escapeHtml(oldStage.name)}</b> to <b>${escapeHtml(newStage.name)}</b>`);
+    }
+  }
   l.stageId = stageId;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   applyFilters();
   window.crmFirebase.saveLead(l);
-  if(currentDetailId===id) renderDetailStageRow(l);
+  if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); }
 }
 
 // ═══════ ADD / EDIT LEAD MODAL ═══════
@@ -675,6 +768,7 @@ function saveLeadModal(){
       source: 'manual',
       stageId,
       notes: [],
+      history: [],
       contactAt,
       followUpAt,
       createdAt: now,
@@ -682,6 +776,7 @@ function saveLeadModal(){
       createdBy: currentUserEmail || null,
       updatedBy: currentUserEmail || null
     };
+    addHistory(l, 'created', `Lead added via <b>${escapeHtml(channelLabel(channel))}</b>`);
     if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
     leads.unshift(l);
     showToast('✓ Enquiry saved');
@@ -689,6 +784,28 @@ function saveLeadModal(){
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
+      const diffs = [];
+      const diffField = (label, oldVal, newVal) => {
+        if((oldVal||'') !== (newVal||'')){
+          diffs.push({ type:'field', text:`${label} changed from <b>${escapeHtml(oldVal||'—')}</b> to <b>${escapeHtml(newVal||'—')}</b>` });
+        }
+      };
+      diffField('Channel', channelLabel(l.channel), channelLabel(channel));
+      diffField('Name', l.name, name);
+      diffField('Phone', l.phone, phone);
+      diffField('Email', l.email, email);
+      diffField('Enquiry type', l.enquiryType, enquiryType);
+      diffField('Property / Locality', l.propertyInterest, propertyInterest);
+      diffField('Budget', l.budget, budget);
+      if((l.followUpAt||null) !== (followUpAt||null)){
+        if(followUpAt){
+          const when = new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+          diffs.push({ type:'followup', text:`Next follow-up ${l.followUpAt?'changed to':'set for'} <b>${when}</b>` });
+        } else {
+          diffs.push({ type:'followup-removed', text:'Follow-up removed' });
+        }
+      }
+
       l.channel=channel; l.stageId=stageId; l.name=name; l.phone=phone; l.email=email;
       l.enquiryType=enquiryType; l.propertyInterest=propertyInterest; l.budget=budget;
       l.contactAt = l.contactAt || contactAt;
@@ -696,6 +813,7 @@ function saveLeadModal(){
       l.updatedAt = now;
       l.updatedBy = currentUserEmail || null;
       l.notes = l.notes || [];
+      diffs.forEach(d=>addHistory(l, d.type, d.text));
       if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
       window.crmFirebase.saveLead(l);
@@ -774,23 +892,27 @@ function openDetail(id){
   if(waUrl) waBtn.href = waUrl;
 
   renderDetailStageRow(l);
+  renderFollowUpSpotlight(l);
 
   const infoHtml = `
     ${l.channel?`<div class="info-b"><div class="info-b-l">Channel</div><div class="info-b-v">${channelLabel(l.channel)}</div></div>`:''}
     ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${l.phone}">${l.phone}</a></div></div>`:''}
     ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${l.email}">${l.email}</a></div></div>`:''}
     ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${l.enquiryType}</div></div>`:''}
-    ${l.propertyInterest?`<div class="info-b"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${l.propertyInterest}</div></div>`:''}
-    ${l.budget?`<div class="info-b"><div class="info-b-l">Budget</div><div class="info-b-v">${l.budget}</div></div>`:''}
-    <div class="info-b"><div class="info-b-l">Time of Contact</div><div class="info-b-v">${new Date(l.contactAt||l.createdAt).toLocaleString()}</div></div>
-    ${l.followUpAt?`<div class="info-b"><div class="info-b-l">Follow-up</div><div class="info-b-v">${new Date(l.followUpAt).toLocaleString()}</div></div>`:''}
-    <div class="info-b"><div class="info-b-l">Added</div><div class="info-b-v">${new Date(l.createdAt).toLocaleString()}</div></div>
-    ${l.createdBy?`<div class="info-b"><div class="info-b-l">Added By</div><div class="info-b-v">${escapeHtml(l.createdBy)}</div></div>`:''}
-    ${l.updatedBy?`<div class="info-b"><div class="info-b-l">Last Updated By</div><div class="info-b-v">${escapeHtml(l.updatedBy)}</div></div>`:''}
+    ${l.propertyInterest?`<div class="info-b highlight"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${l.propertyInterest}</div></div>`:''}
+    ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${l.budget}</div></div>`:''}
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${l.formId}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${l.adId}</div></div>`:''}
   `;
   document.getElementById('dpInfo').innerHTML = infoHtml;
+
+  const metaHtml = `
+    <div class="dp-meta-item"><span class="dp-meta-l">Contacted</span><span class="dp-meta-v">${new Date(l.contactAt||l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
+    <div class="dp-meta-item"><span class="dp-meta-l">Added</span><span class="dp-meta-v">${new Date(l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
+    ${l.createdBy?`<div class="dp-meta-item"><span class="dp-meta-l">By</span><span class="dp-meta-v">${escapeHtml(l.createdBy.split('@')[0])}</span></div>`:''}
+    ${l.updatedBy?`<div class="dp-meta-item"><span class="dp-meta-l">Updated by</span><span class="dp-meta-v">${escapeHtml(l.updatedBy.split('@')[0])}</span></div>`:''}
+  `;
+  document.getElementById('dpMeta').innerHTML = metaHtml;
 
   const rawSec = document.getElementById('dpRawSec');
   if(l.source==='meta' && l.rawFieldData){
@@ -802,6 +924,7 @@ function openDetail(id){
 
   renderNotes(l);
   renderNoteFollowUpFields(l);
+  renderHistory(l);
   document.getElementById('dp').classList.add('open');
   window.scrollTo(0,0);
 }
@@ -902,6 +1025,18 @@ function saveFollowUpLog(){
   if(noteText){
     l.notes = l.notes || [];
     l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+    addHistory(l, 'followed-up', `Followed up — “${escapeHtml(noteText)}”`);
+  } else {
+    addHistory(l, 'followed-up', 'Marked as followed up');
+  }
+  const prevFollowUpAt = l.followUpAt;
+  if((prevFollowUpAt||null) !== (followUpAt||null)){
+    if(followUpAt){
+      const when = new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      addHistory(l, 'followup', `Next follow-up ${prevFollowUpAt?'changed to':'set for'} <b>${when}</b>`);
+    } else {
+      addHistory(l, 'followup-removed', 'Follow-up removed');
+    }
   }
   l.followUpAt = followUpAt;
   l.updatedAt = now;
@@ -910,19 +1045,20 @@ function saveFollowUpLog(){
   closeFollowUpLogModal();
   refreshAll();
   showToast(followUpAt ? '✓ Logged — next follow-up set' : '✓ Logged — no further follow-up');
-  if(currentDetailId===l.id){ renderNotes(l); renderNoteFollowUpFields(l); }
+  if(currentDetailId===l.id){ renderNotes(l); renderNoteFollowUpFields(l); renderFollowUpSpotlight(l); renderHistory(l); }
 }
 function removeFollowUp(leadId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
   if(!confirm(`Remove the follow-up for "${l.name}"?`)) return;
+  if(l.followUpAt) addHistory(l, 'followup-removed', 'Follow-up removed');
   l.followUpAt = null;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   window.crmFirebase.saveLead(l);
   refreshAll();
   showToast('Follow-up removed');
-  if(currentDetailId===leadId) renderNoteFollowUpFields(l);
+  if(currentDetailId===leadId){ renderNoteFollowUpFields(l); renderFollowUpSpotlight(l); renderHistory(l); }
 }
 function addNote(){
   const inp = document.getElementById('noteInput');
@@ -952,12 +1088,22 @@ function addNote(){
   const now = Date.now();
   l.notes = l.notes || [];
   l.notes.push({ id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
+  if(nextFollowUpAt !== currentAt){
+    if(nextFollowUpAt){
+      const when = new Date(nextFollowUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      addHistory(l, 'followup', `Next follow-up ${currentAt?'changed to':'set for'} <b>${when}</b>`);
+    } else {
+      addHistory(l, 'followup-removed', 'Follow-up removed');
+    }
+  }
   l.followUpAt = nextFollowUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   inp.value='';
   renderNotes(l);
   renderNoteFollowUpFields(l);
+  renderFollowUpSpotlight(l);
+  renderHistory(l);
   applyFilters();
   window.crmFirebase.saveLead(l);
 }

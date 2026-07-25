@@ -277,9 +277,12 @@
         <select class="dp-stage-sel" id="dpStageSel" onchange="onDetailStageChange()"></select>
       </div>
 
+      <div id="dpFuSpotlight"></div>
+
       <div class="sec">
         <div class="sec-title">📇 Lead Info</div>
         <div class="info-grid" id="dpInfo"></div>
+        <div class="dp-meta-row" id="dpMeta"></div>
       </div>
 
       <div class="sec" id="dpRawSec">
@@ -289,7 +292,7 @@
       </div>
 
       <div class="sec">
-        <div class="sec-title">📝 Notes & Follow-ups</div>
+        <div class="sec-title">📝 Notes</div>
         <div id="notesPanel"></div>
         <div class="note-fu-row">
           <div class="field">
@@ -310,6 +313,11 @@
           <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
           <button class="note-btn" onclick="addNote()">Add</button>
         </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-title">🕓 Lead History</div>
+        <div class="history-list" id="historyPanel"></div>
       </div>
     </div>
   </div>
