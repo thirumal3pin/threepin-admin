@@ -169,7 +169,6 @@ async function digestForTenant(db, tenantId) {
 
   const leadsSnap = await db.collection('leads').where('tenantId', '==', tenantId).get();
   const { overdue, days, startOfToday } = bucketLeads(leadsSnap);
-  const dueSoonCount = days.reduce((n, arr) => n + arr.length, 0);
 
   const results = [];
   if (waRecipients.length) {
@@ -182,7 +181,10 @@ async function digestForTenant(db, tenantId) {
     }
   }
   if (emailRecipients.length) {
-    const subject = `Follow-up digest — ${overdue.length} overdue, ${dueSoonCount} in the next ${LOOKAHEAD_DAYS} days`;
+    const triggeredAt = new Date();
+    const dateStr = triggeredAt.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = triggeredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const subject = `3 PIN Realty Follow up (${dateStr}) ${timeStr}`;
     const text = formatDigestText(overdue, days, startOfToday);
     const html = formatDigestHtml(overdue, days, startOfToday);
     for (const to of emailRecipients) {
