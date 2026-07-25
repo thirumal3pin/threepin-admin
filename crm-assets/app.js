@@ -497,6 +497,8 @@ function followupRowHtml(l, bucketKey){
     </div>
     <div class="fu-row-side">
       <div class="fu-time ${bucketKey}">${timeLabel}</div>
+      <button class="fu-action-btn done" onclick="event.stopPropagation();markFollowedUp('${l.id}')" title="Mark followed up">✓</button>
+      <button class="fu-action-btn remove" onclick="event.stopPropagation();removeFollowUp('${l.id}')" title="Remove follow-up">✕</button>
       ${waUrl?`<a class="fu-wa-btn" href="${waUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">💬</a>`:''}
     </div>
   </div>`;
@@ -839,10 +841,45 @@ function renderNoteFollowUpFields(l){
   const fu = l.followUpAt ? new Date(l.followUpAt) : null;
   document.getElementById('noteFollowUpDate').value = fu ? toDateInputValue(fu) : '';
   document.getElementById('noteFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
+  const actions = document.getElementById('noteFuActions');
+  if(actions) actions.style.display = l.followUpAt ? 'flex' : 'none';
 }
 function parseFollowUpRaw(dateStr, timeStr){
   if(!dateStr) return null;
   return timeStr ? new Date(`${dateStr}T${timeStr}:00`).getTime() : new Date(`${dateStr}T00:00:00`).getTime();
+}
+// Closes out a lead's follow-up — optionally logging a note about what
+// happened — vs. removeFollowUp() which just clears it with no note.
+// Both are reachable from the Follow-ups view rows and the lead detail panel.
+function markFollowedUp(leadId){
+  const l = leads.find(x=>x.id===leadId);
+  if(!l) return;
+  const note = prompt(`Mark "${l.name}" as followed up. Add a closing note (optional):`, '');
+  if(note===null) return;
+  const now = Date.now();
+  if(note.trim()){
+    l.notes = l.notes || [];
+    l.notes.push({ id:'n'+now, text: note.trim(), createdAt: now, by: currentUserEmail || null });
+  }
+  l.followUpAt = null;
+  l.updatedAt = now;
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  window.crmFirebase.saveLead(l);
+  refreshAll();
+  showToast('✓ Marked as followed up');
+  if(currentDetailId===leadId){ renderNotes(l); renderNoteFollowUpFields(l); }
+}
+function removeFollowUp(leadId){
+  const l = leads.find(x=>x.id===leadId);
+  if(!l) return;
+  if(!confirm(`Remove the follow-up for "${l.name}"?`)) return;
+  l.followUpAt = null;
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  window.crmFirebase.saveLead(l);
+  refreshAll();
+  showToast('Follow-up removed');
+  if(currentDetailId===leadId) renderNoteFollowUpFields(l);
 }
 function addNote(){
   const inp = document.getElementById('noteInput');

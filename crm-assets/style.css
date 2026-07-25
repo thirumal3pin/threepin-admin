@@ -180,10 +180,19 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .fu-time.today{color:var(--amber);}
 .fu-wa-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;background:var(--green-bg);color:var(--green);text-decoration:none;font-size:15px;flex-shrink:0;}
 .fu-wa-btn:hover{background:var(--green);color:#fff;}
+.fu-action-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;border:1.5px solid var(--border);background:var(--white);color:var(--ink3);font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all .15s;}
+.fu-action-btn.done:hover{background:var(--green);border-color:var(--green);color:#fff;}
+.fu-action-btn.remove:hover{background:var(--red);border-color:var(--red);color:#fff;}
 
 /* ── NOTE FOLLOW-UP EDIT ROW ── */
 .note-fu-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:14px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;}
 .note-fu-row .field{margin-bottom:0;flex:0 0 auto;min-width:150px;}
+.note-fu-actions{display:none;gap:8px;flex-basis:100%;}
+.note-fu-btn{padding:8px 14px;border-radius:9px;border:1.5px solid var(--border);background:var(--white);font-size:12.5px;font-weight:700;cursor:pointer;color:var(--ink2);}
+.note-fu-btn.done{color:var(--green);border-color:transparent;background:var(--green-bg);}
+.note-fu-btn.done:hover{background:var(--green);color:#fff;}
+.note-fu-btn.remove{color:var(--red);border-color:transparent;background:var(--red-bg);}
+.note-fu-btn.remove:hover{background:var(--red);color:#fff;}
 .note-fu-hint{font-size:11px;color:var(--ink4);flex-basis:100%;}
 
 /* ── LEAD DETAIL PANEL ── */

@@ -300,6 +300,10 @@
             <label for="noteFollowUpTime">Time</label>
             <input type="time" id="noteFollowUpTime">
           </div>
+          <div class="note-fu-actions" id="noteFuActions">
+            <button type="button" class="note-fu-btn done" onclick="markFollowedUp(currentDetailId)">✓ Followed Up</button>
+            <button type="button" class="note-fu-btn remove" onclick="removeFollowUp(currentDetailId)">✕ Remove</button>
+          </div>
           <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
         </div>
         <div class="note-add">
