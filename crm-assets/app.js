@@ -4,7 +4,7 @@ let stages = [];
 let enquiryTypes = ['Property Enquiry', 'Seller Listing', 'General'];
 let filteredLeads = [];
 let currentView = 'kanban';
-let currentSource = 'all';
+let lastBrowseView = 'kanban';
 let currentSearch = '';
 let currentDetailId = null;
 let lModalMode = 'add';
@@ -67,6 +67,7 @@ function refreshAll(){
 // ═══════ INIT ═══════
 function init(){
   setupSearch();
+  updateNavState();
   applyFilters();
   updateStats();
   updateNotifyBtnLabel();
@@ -83,7 +84,7 @@ let fuLastNotifiedAt = 0;
 function updateNotifyBtnLabel(){
   const btn = document.getElementById('fuNotifyBtn');
   if(!btn) return;
-  btn.textContent = fuNotifyEnabled ? '🔔 Alerts: On' : '🔕 Alerts: Off';
+  btn.textContent = fuNotifyEnabled ? '🔔 Browser Alerts: On' : '🔕 Browser Alerts: Off';
 }
 async function toggleBrowserNotify(){
   if(!('Notification' in window)){ showToast('Notifications not supported in this browser'); return; }
@@ -120,10 +121,6 @@ function checkFollowupNotify(force){
 }
 
 function updateStats(){
-  const metaCount = leads.filter(l=>l.source==='meta').length;
-  const manualCount = leads.filter(l=>l.source==='manual').length;
-  document.getElementById('statMeta').textContent = metaCount;
-  document.getElementById('statManual').textContent = manualCount;
   document.getElementById('statTotal').textContent = leads.length;
 }
 
@@ -142,22 +139,9 @@ function clearSearch(){
   document.getElementById('srchClear').classList.remove('show');
   applyFilters();
 }
-function setSource(s, btn){
-  currentSource = s;
-  document.querySelectorAll('#sourceFilters .fbtn').forEach(b=>b.classList.remove('at'));
-  btn.classList.add('at');
-  applyFilters();
-}
-function setupSourceFilters(){
-  document.getElementById('sourceFilters').innerHTML = `
-    <button class="fbtn at" data-s="all" onclick="setSource('all',this)">All Sources</button>
-    <button class="fbtn" data-s="meta" onclick="setSource('meta',this)">📱 Meta Ads</button>
-    <button class="fbtn" data-s="manual" onclick="setSource('manual',this)">✍️ Manual</button>`;
-}
 
 function applyFilters(){
   filteredLeads = leads.filter(l=>{
-    if(currentSource!=='all' && l.source!==currentSource) return false;
     if(currentSearch){
       const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel)].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
@@ -169,14 +153,40 @@ function applyFilters(){
   else renderFollowups();
 }
 
+// ═══════ NAV: view switching, view dropdown, more menu ═══════
 function toggleView(view){
   currentView = view;
-  document.querySelectorAll('.view-toggle button').forEach(b=>b.classList.toggle('at', b.dataset.view===view));
+  if(view!=='followups') lastBrowseView = view;
+  updateNavState();
   document.getElementById('kanbanView').style.display = view==='kanban' ? '' : 'none';
   document.getElementById('listView').style.display = view==='list' ? '' : 'none';
   document.getElementById('followupsView').style.display = view==='followups' ? '' : 'none';
+  closeViewDropdown();
   applyFilters();
 }
+function updateNavState(){
+  document.getElementById('fuNavBtn').classList.toggle('at', currentView==='followups');
+  document.querySelector('#viewDd .view-dd-btn').classList.toggle('at', currentView!=='followups');
+  document.getElementById('viewDdLabel').textContent = lastBrowseView==='list' ? '📃 List' : '📋 Board';
+  document.querySelectorAll('#viewDdMenu button').forEach(b=>b.classList.toggle('at', b.dataset.view===lastBrowseView && currentView!=='followups'));
+}
+function toggleViewDropdown(e){
+  if(e) e.stopPropagation();
+  document.getElementById('viewDd').classList.toggle('open');
+  document.getElementById('moreDd').classList.remove('open');
+}
+function closeViewDropdown(){
+  document.getElementById('viewDd').classList.remove('open');
+}
+function toggleMoreMenu(e){
+  if(e) e.stopPropagation();
+  document.getElementById('moreDd').classList.toggle('open');
+  document.getElementById('viewDd').classList.remove('open');
+}
+function closeMoreMenu(){
+  document.getElementById('moreDd').classList.remove('open');
+}
+document.addEventListener('click', ()=>{ closeViewDropdown(); closeMoreMenu(); });
 
 // ═══════ HELPERS ═══════
 function stageById(id){ return stages.find(s=>s.id===id); }
@@ -1580,21 +1590,6 @@ function connectGoogleDrive(){
   showToast('Google Drive picker needs one-time OAuth setup — use "Connect" with a shared link for now');
 }
 
-// ═══════ MOBILE HEADER / FILTER TOGGLES ═══════
-function toggleHdrMenu(e){
-  if(e) e.stopPropagation();
-  document.getElementById('hstats').classList.toggle('mobile-open');
-}
-function toggleMobileFilters(){
-  document.getElementById('controlsPanel').classList.toggle('mobile-open');
-}
-document.addEventListener('click', e=>{
-  const hstats = document.getElementById('hstats');
-  const menuBtn = document.getElementById('hdrMenuBtn');
-  if(hstats && hstats.classList.contains('mobile-open') && !hstats.contains(e.target) && e.target!==menuBtn){
-    hstats.classList.remove('mobile-open');
-  }
-});
 
 // ═══════ TOAST ═══════
 function showToast(msg){
@@ -1604,7 +1599,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); }
+  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeViewDropdown(); closeMoreMenu(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════
@@ -1640,7 +1635,3 @@ window.onCrmAuthChange = function(user){
     document.getElementById('appRoot').style.display = 'none';
   }
 };
-
-window.addEventListener('DOMContentLoaded', ()=>{
-  setupSourceFilters();
-});

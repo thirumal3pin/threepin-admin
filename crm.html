@@ -6,7 +6,7 @@
 <title>3 PIN Realty — CRM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/jpeg" href="logo.jpg">
 <link rel="stylesheet" href="crm-assets/style.css">
 </head>
@@ -60,7 +60,7 @@
 
   <!-- HEADER -->
   <div id="hdr">
-    <div class="hdr-top">
+    <div class="hdr-row">
       <div class="brand">
         <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
         <div>
@@ -68,36 +68,45 @@
           <div class="brand-sub">Lead CRM</div>
         </div>
       </div>
-      <div class="hstats" id="hstats">
-        <div class="hstat b"><div class="hstat-n" id="statMeta">0</div><div class="hstat-l">Via Meta</div></div>
-        <div class="hstat p"><div class="hstat-n" id="statManual">0</div><div class="hstat-l">Manual</div></div>
-        <div class="hstat g"><div class="hstat-n" id="statTotal">0</div><div class="hstat-l">Total</div></div>
-        <div class="hstat-user" id="hdrUserEmail"></div>
-        <button class="logout-btn" id="fuNotifyBtn" onclick="toggleBrowserNotify()">🔕 Alerts: Off</button>
-        <button class="logout-btn" onclick="crmLogout()">Logout</button>
+
+      <div class="hdr-nav">
+        <button class="fu-nav-btn" id="fuNavBtn" onclick="toggleView('followups')">
+          <span class="fu-nav-ico">📅</span><span class="fu-nav-label">Follow-ups</span><span class="fu-badge" id="fuBadge" style="display:none">0</span>
+        </button>
+
+        <div class="view-dd" id="viewDd">
+          <button class="view-dd-btn at" onclick="toggleViewDropdown(event)">
+            <span id="viewDdLabel">📋 Board</span><span class="dd-chevron">⌄</span>
+          </button>
+          <div class="dd-menu" id="viewDdMenu">
+            <button data-view="kanban" class="at" onclick="toggleView('kanban')">📋 Board</button>
+            <button data-view="list" onclick="toggleView('list')">📃 List</button>
+          </div>
+        </div>
+
+        <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
+
+        <div class="more-dd" id="moreDd">
+          <button class="menu-btn" onclick="toggleMoreMenu(event)" aria-label="More">☰</button>
+          <div class="dd-menu more-dd-menu" id="moreDdMenu">
+            <div class="more-dd-user" id="hdrUserEmail"></div>
+            <button class="more-dd-item" id="fuNotifyBtn" onclick="toggleBrowserNotify()">🔕 Browser Alerts: Off</button>
+            <div class="more-dd-stat"><span id="statTotal">0</span> total leads</div>
+            <div class="dd-sep"></div>
+            <button class="more-dd-item" onclick="openStageManager()">⚙️ Manage Stages</button>
+            <button class="more-dd-item" onclick="openDigestManager()">🔔 Follow-up Digest</button>
+            <button class="more-dd-item" onclick="openBotEditor()">🤖 AI Bot</button>
+            <button class="more-dd-item" onclick="exportAllLeads()">⬇️ Export All Leads</button>
+            <div class="dd-sep"></div>
+            <button class="more-dd-item danger" onclick="crmLogout()">Logout</button>
+          </div>
+        </div>
       </div>
-      <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
     </div>
     <div class="srch-wrap">
       <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
       <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
-    </div>
-    <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & View</button>
-    <div class="controls" id="controlsPanel">
-      <div class="fgroup" id="sourceFilters"></div>
-      <div class="ctrl-right">
-        <div class="view-toggle">
-          <button data-view="kanban" class="at" onclick="toggleView('kanban')">📋 Board</button>
-          <button data-view="list" onclick="toggleView('list')">📃 List</button>
-          <button data-view="followups" onclick="toggleView('followups')">📅 Follow-ups<span class="fu-badge" id="fuBadge" style="display:none">0</span></button>
-        </div>
-        <button class="stages-btn" onclick="openStageManager()">⚙️ Manage Stages</button>
-        <button class="stages-btn" onclick="openDigestManager()">🔔 Digest</button>
-        <button class="stages-btn" onclick="openBotEditor()">🤖 AI Bot</button>
-        <button class="stages-btn" onclick="exportAllLeads()">⬇️ Export All Leads</button>
-        <button class="addl-btn" onclick="openAddLeadModal()">+ Add Lead</button>
-      </div>
     </div>
   </div>
 
