@@ -497,7 +497,7 @@ function followupRowHtml(l, bucketKey){
     </div>
     <div class="fu-row-side">
       <div class="fu-time ${bucketKey}">${timeLabel}</div>
-      <button class="fu-action-btn done" onclick="event.stopPropagation();markFollowedUp('${l.id}')" title="Mark followed up">✓</button>
+      <button class="fu-action-btn done" onclick="event.stopPropagation();openFollowUpLogModal('${l.id}')" title="Log follow-up">✓</button>
       <button class="fu-action-btn remove" onclick="event.stopPropagation();removeFollowUp('${l.id}')" title="Remove follow-up">✕</button>
       ${waUrl?`<a class="fu-wa-btn" href="${waUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">💬</a>`:''}
     </div>
@@ -848,26 +848,69 @@ function parseFollowUpRaw(dateStr, timeStr){
   if(!dateStr) return null;
   return timeStr ? new Date(`${dateStr}T${timeStr}:00`).getTime() : new Date(`${dateStr}T00:00:00`).getTime();
 }
-// Closes out a lead's follow-up — optionally logging a note about what
-// happened — vs. removeFollowUp() which just clears it with no note.
-// Both are reachable from the Follow-ups view rows and the lead detail panel.
-function markFollowedUp(leadId){
+// Closes out a follow-up: log what happened AND set the next one in one
+// step — a real estate agent almost always needs both ("called, still
+// deciding on budget — check back in a week"), so this never silently
+// wipes the date the way a bare "mark done" would. removeFollowUp() below
+// stays fully separate for when a lead genuinely needs no more follow-up.
+let fuLogLeadId = null;
+function openFollowUpLogModal(leadId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
-  const note = prompt(`Mark "${l.name}" as followed up. Add a closing note (optional):`, '');
-  if(note===null) return;
-  const now = Date.now();
-  if(note.trim()){
-    l.notes = l.notes || [];
-    l.notes.push({ id:'n'+now, text: note.trim(), createdAt: now, by: currentUserEmail || null });
+  fuLogLeadId = leadId;
+  document.getElementById('fuLogLeadName').textContent = l.name;
+  document.getElementById('fuLogNote').value = '';
+  document.getElementById('fuLogDate').value = '';
+  document.getElementById('fuLogTime').value = '';
+  document.getElementById('fuLogErr').classList.remove('show');
+  document.getElementById('fuLogModal').classList.add('open');
+  document.getElementById('fuLogNote').focus();
+}
+function closeFollowUpLogModal(){
+  document.getElementById('fuLogModal').classList.remove('open');
+  fuLogLeadId = null;
+}
+// Real-estate follow-up cadence — tomorrow/3-day/week/fortnight covers the
+// common "still deciding," "post-site-visit," and "nurture" cases without
+// making the agent operate a date picker for every single lead.
+function setFuLogPreset(days){
+  const dateInp = document.getElementById('fuLogDate');
+  const timeInp = document.getElementById('fuLogTime');
+  if(days===null){ dateInp.value=''; timeInp.value=''; return; }
+  const d = new Date();
+  d.setDate(d.getDate()+days);
+  dateInp.value = toDateInputValue(d);
+}
+function saveFollowUpLog(){
+  const l = leads.find(x=>x.id===fuLogLeadId);
+  if(!l) return;
+  const errBox = document.getElementById('fuLogErr');
+  errBox.classList.remove('show');
+
+  const noteText = document.getElementById('fuLogNote').value.trim();
+  const dateStr = document.getElementById('fuLogDate').value;
+  const timeStr = document.getElementById('fuLogTime').value;
+
+  let followUpAt = null;
+  if(dateStr){
+    const r = computeFollowUpAt(dateStr, timeStr);
+    if(r.error){ errBox.textContent = r.error; errBox.classList.add('show'); return; }
+    followUpAt = r.value;
   }
-  l.followUpAt = null;
+
+  const now = Date.now();
+  if(noteText){
+    l.notes = l.notes || [];
+    l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+  }
+  l.followUpAt = followUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   window.crmFirebase.saveLead(l);
+  closeFollowUpLogModal();
   refreshAll();
-  showToast('✓ Marked as followed up');
-  if(currentDetailId===leadId){ renderNotes(l); renderNoteFollowUpFields(l); }
+  showToast(followUpAt ? '✓ Logged — next follow-up set' : '✓ Logged — no further follow-up');
+  if(currentDetailId===l.id){ renderNotes(l); renderNoteFollowUpFields(l); }
 }
 function removeFollowUp(leadId){
   const l = leads.find(x=>x.id===leadId);
@@ -1636,7 +1679,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeViewDropdown(); closeMoreMenu(); }
+  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════

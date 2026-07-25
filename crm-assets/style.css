@@ -195,6 +195,11 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .note-fu-btn.remove:hover{background:var(--red);color:#fff;}
 .note-fu-hint{font-size:11px;color:var(--ink4);flex-basis:100%;}
 
+.fu-log-name{font-family:var(--serif);font-size:18px;font-weight:600;margin-bottom:16px;}
+.fu-log-presets{display:flex;gap:7px;flex-wrap:wrap;}
+.fu-log-presets button{padding:7px 13px;border-radius:9px;border:1.5px solid var(--border);background:var(--bg);color:var(--ink2);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s;}
+.fu-log-presets button:hover{border-color:var(--ink);background:var(--white);}
+
 /* ── LEAD DETAIL PANEL ── */
 #dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
 #dp.open{display:block;animation:fadeSlide .24s ease;}

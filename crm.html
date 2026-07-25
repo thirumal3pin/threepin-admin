@@ -301,7 +301,7 @@
             <input type="time" id="noteFollowUpTime">
           </div>
           <div class="note-fu-actions" id="noteFuActions">
-            <button type="button" class="note-fu-btn done" onclick="markFollowedUp(currentDetailId)">✓ Followed Up</button>
+            <button type="button" class="note-fu-btn done" onclick="openFollowUpLogModal(currentDetailId)">✓ Followed Up</button>
             <button type="button" class="note-fu-btn remove" onclick="removeFollowUp(currentDetailId)">✕ Remove</button>
           </div>
           <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
@@ -413,6 +413,49 @@
       <div class="modal-ftr">
         <button class="modal-cancel" onclick="closeStageManager()">Cancel</button>
         <button class="modal-save" onclick="saveStageManager()">✓ Save Stages</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOG FOLLOW-UP MODAL -->
+  <div class="modal-overlay" id="fuLogModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">Log Follow-up</div>
+        <button class="modal-x" onclick="closeFollowUpLogModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="fu-log-name" id="fuLogLeadName"></div>
+        <div class="field">
+          <label for="fuLogNote">What happened? (optional)</label>
+          <textarea id="fuLogNote" class="bot-textarea" rows="3" placeholder="e.g. Called — still deciding on budget, check back next week"></textarea>
+        </div>
+        <div class="field">
+          <label>Next Follow-up</label>
+          <div class="fu-log-presets">
+            <button type="button" onclick="setFuLogPreset(1)">Tomorrow</button>
+            <button type="button" onclick="setFuLogPreset(3)">+3 days</button>
+            <button type="button" onclick="setFuLogPreset(7)">+1 week</button>
+            <button type="button" onclick="setFuLogPreset(14)">+2 weeks</button>
+            <button type="button" onclick="setFuLogPreset(null)">No follow-up</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="fuLogDate">Date (optional)</label>
+            <input type="date" id="fuLogDate">
+          </div>
+          <div class="field">
+            <label for="fuLogTime">Time (optional)</label>
+            <input type="time" id="fuLogTime">
+          </div>
+        </div>
+        <div class="note-fu-hint">Leave the date blank if this lead needs no further follow-up right now.</div>
+        <div class="modal-err" id="fuLogErr"></div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeFollowUpLogModal()">Cancel</button>
+        <button class="modal-save" onclick="saveFollowUpLog()">✓ Save</button>
       </div>
     </div>
   </div>
