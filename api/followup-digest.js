@@ -47,70 +47,116 @@ async function sendDigestEmail(to, subject, text, html) {
   }
 }
 
-function leadLine(l) {
-  return `${l.name || 'Lead'}${l.phone ? ' — ' + l.phone : ''}${l.propertyInterest ? ' (' + l.propertyInterest + ')' : ''}`;
+// Buckets: overdue (past due, not yet acted on) + one bucket per calendar
+// day for the next 3 days (today, tomorrow, day after) — shown day by day
+// rather than lumped into a single "upcoming" pile.
+const DAY_MS = 86400000;
+const LOOKAHEAD_DAYS = 3;
+function bucketLeads(leadsSnap) {
+  const now = Date.now();
+  const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+  const overdue = [];
+  const days = Array.from({ length: LOOKAHEAD_DAYS }, () => []);
+  leadsSnap.forEach(d => {
+    const l = d.data();
+    if (!l.followUpAt) return;
+    if (l.followUpAt < now) { overdue.push(l); return; }
+    const dayIndex = Math.floor((l.followUpAt - startOfToday) / DAY_MS);
+    if (dayIndex >= 0 && dayIndex < LOOKAHEAD_DAYS) days[dayIndex].push(l);
+  });
+  overdue.sort((a, b) => a.followUpAt - b.followUpAt);
+  days.forEach(arr => arr.sort((a, b) => a.followUpAt - b.followUpAt));
+  return { overdue, days, startOfToday };
 }
-function formatDigestText(overdue, today) {
+function dayLabel(i, startOfToday) {
+  const dateStr = new Date(startOfToday + i * DAY_MS).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  if (i === 0) return `Today — ${dateStr}`;
+  if (i === 1) return `Tomorrow — ${dateStr}`;
+  return dateStr;
+}
+
+// Property is always shown so an agent can act without opening the CRM;
+// kept in the same position/format across every line so entries line up.
+function leadLine(l) {
+  return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'}`;
+}
+function formatDigestText(overdue, days, startOfToday) {
   const lines = ['Follow-up digest', ''];
   if (overdue.length) {
     lines.push(`OVERDUE (${overdue.length}):`);
     overdue.forEach(l => lines.push(`- ${leadLine(l)}`));
     lines.push('');
   }
-  if (today.length) {
-    lines.push(`DUE TODAY (${today.length}):`);
-    today.forEach(l => {
+  days.forEach((arr, i) => {
+    if (!arr.length) return;
+    lines.push(`${dayLabel(i, startOfToday).toUpperCase()} (${arr.length}):`);
+    arr.forEach(l => {
       const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       lines.push(`- ${leadLine(l)} @ ${time}`);
     });
     lines.push('');
-  }
-  if (!overdue.length && !today.length) lines.push('Nothing due today.');
+  });
+  if (!overdue.length && !days.some(a => a.length)) lines.push(`Nothing due in the next ${LOOKAHEAD_DAYS} days.`);
   return lines.join('\n').trim();
 }
-function formatWhatsAppDigest(overdue, today) {
+function formatWhatsAppDigest(overdue, days, startOfToday) {
   const lines = ['📅 *Follow-up digest*', ''];
   if (overdue.length) {
     lines.push(`⚠️ Overdue (${overdue.length}):`);
     overdue.forEach(l => lines.push(`• ${leadLine(l)}`));
     lines.push('');
   }
-  if (today.length) {
-    lines.push(`📅 Due today (${today.length}):`);
-    today.forEach(l => {
+  days.forEach((arr, i) => {
+    if (!arr.length) return;
+    lines.push(`📅 ${dayLabel(i, startOfToday)} (${arr.length}):`);
+    arr.forEach(l => {
       const time = new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       lines.push(`• ${leadLine(l)} @ ${time}`);
     });
     lines.push('');
-  }
-  if (!overdue.length && !today.length) lines.push('Nothing due today. 🎉');
+  });
+  if (!overdue.length && !days.some(a => a.length)) lines.push(`Nothing due in the next ${LOOKAHEAD_DAYS} days. 🎉`);
   return lines.join('\n').trim();
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+// Every section's table uses the same column set/order/widths so Name,
+// Phone, and Property line up visually whether you're looking at Overdue
+// or any of the day sections.
+const COLS = [
+  { label: 'Name', width: '26%' },
+  { label: 'Phone', width: '20%' },
+  { label: 'Property', width: '34%' },
+  { label: 'Time', width: '20%' }
+];
 function leadRowHtml(l, showTime) {
-  const time = showTime ? new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const time = showTime ? new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   return `<tr>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${escapeHtml(l.name || 'Lead')}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(l.phone || '—')}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(l.propertyInterest || '—')}</td>
-    ${showTime ? `<td style="padding:6px 10px;border-bottom:1px solid #eee;">${time}</td>` : ''}
+    <td style="padding:6px 10px;border-bottom:1px solid #eee;">${time}</td>
   </tr>`;
 }
-function formatDigestHtml(overdue, today) {
-  const section = (title, color, rows, showTime) => !rows.length ? '' : `
+function sectionHtml(title, color, rows, showTime) {
+  if (!rows.length) return '';
+  return `
     <h3 style="color:${color};margin:18px 0 8px;font-family:sans-serif;">${title} (${rows.length})</h3>
-    <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">
+    <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;table-layout:fixed;">
+      <colgroup>${COLS.map(c => `<col style="width:${c.width}">`).join('')}</colgroup>
       <tr style="text-align:left;color:#888;font-size:11px;text-transform:uppercase;">
-        <th style="padding:4px 10px;">Name</th><th style="padding:4px 10px;">Phone</th><th style="padding:4px 10px;">Property</th>${showTime ? '<th style="padding:4px 10px;">Time</th>' : ''}
+        ${COLS.map(c => `<th style="padding:4px 10px;">${c.label}</th>`).join('')}
       </tr>
       ${rows.map(l => leadRowHtml(l, showTime)).join('')}
     </table>`;
-  const body = section('⚠️ Overdue', '#B91C1C', overdue, false) + section('📅 Due Today', '#B45309', today, true);
+}
+function formatDigestHtml(overdue, days, startOfToday) {
+  let body = sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
+  days.forEach((arr, i) => { body += sectionHtml(`📅 ${dayLabel(i, startOfToday)}`, i === 0 ? '#B45309' : '#1D4ED8', arr, true); });
   return `<div style="font-family:sans-serif;">
     <h2 style="font-family:sans-serif;">Follow-up digest</h2>
-    ${body || '<p style="font-family:sans-serif;color:#888;">Nothing due today.</p>'}
+    ${body || `<p style="font-family:sans-serif;color:#888;">Nothing due in the next ${LOOKAHEAD_DAYS} days.</p>`}
   </div>`;
 }
 
@@ -122,23 +168,12 @@ async function digestForTenant(db, tenantId) {
   if (!waRecipients.length && !emailRecipients.length) return { tenantId, skipped: true, results: [] };
 
   const leadsSnap = await db.collection('leads').where('tenantId', '==', tenantId).get();
-  const now = Date.now();
-  const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
-  const startOfTomorrow = startOfToday + 86400000;
-  const overdue = [];
-  const today = [];
-  leadsSnap.forEach(d => {
-    const l = d.data();
-    if (!l.followUpAt) return;
-    if (l.followUpAt < now) overdue.push(l);
-    else if (l.followUpAt < startOfTomorrow) today.push(l);
-  });
-  overdue.sort((a, b) => a.followUpAt - b.followUpAt);
-  today.sort((a, b) => a.followUpAt - b.followUpAt);
+  const { overdue, days, startOfToday } = bucketLeads(leadsSnap);
+  const dueSoonCount = days.reduce((n, arr) => n + arr.length, 0);
 
   const results = [];
   if (waRecipients.length) {
-    const message = formatWhatsAppDigest(overdue, today);
+    const message = formatWhatsAppDigest(overdue, days, startOfToday);
     for (const raw of waRecipients) {
       const to = normalizePhone(raw);
       if (!to) continue;
@@ -147,9 +182,9 @@ async function digestForTenant(db, tenantId) {
     }
   }
   if (emailRecipients.length) {
-    const subject = `Follow-up digest — ${overdue.length} overdue, ${today.length} due today`;
-    const text = formatDigestText(overdue, today);
-    const html = formatDigestHtml(overdue, today);
+    const subject = `Follow-up digest — ${overdue.length} overdue, ${dueSoonCount} in the next ${LOOKAHEAD_DAYS} days`;
+    const text = formatDigestText(overdue, days, startOfToday);
+    const html = formatDigestHtml(overdue, days, startOfToday);
     for (const to of emailRecipients) {
       const r = await sendDigestEmail(to, subject, text, html);
       results.push({ channel: 'email', to, ...r });
