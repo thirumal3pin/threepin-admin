@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { FieldPath } from 'firebase-admin/firestore';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { LEAD_SUMMARY_MODEL, LEAD_SUMMARY_MAX_TOKENS, buildLeadSummarySystemPrompt, buildLeadSummaryUserPrompt } from './_lead-summary-shared.js';
 
@@ -8,15 +9,17 @@ function getAnthropic() {
   return _anthropic;
 }
 
-// One-time (but safe to re-run) bulk generation for a tenant's existing
-// leads that don't have an AI summary yet — triggered from the CRM's
-// "⚙️ Backfill AI Summaries" menu item, the same verifyCrmUser + per-tenant
-// scoping as every other admin action in this file's sibling endpoints.
-// Skips leads that already have `aiSummary` unless `force` is passed, and
-// runs leads strictly one Claude call at a time (never batched) so nothing
-// from one lead's prompt can bleed into another's.
-const MAX_LEADS_PER_RUN = 300;
+// Give the function the full serverless budget — even so we only ever do a
+// SMALL number of Claude calls per HTTP request (see CHUNK), because a few
+// hundred sequential ~1-2s calls in one request would blow past any function
+// time limit and time out mid-run. Instead the client calls this repeatedly,
+// walking a document-id cursor until `done` (see runBackfillSummaries in
+// crm-assets/app.js).
+export const maxDuration = 60;
+const CHUNK = 5;
 
+// Still one Claude call at a time (never a single batched prompt) so nothing
+// from one lead's prompt can bleed into another's.
 export async function POST(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) {
@@ -29,18 +32,25 @@ export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch { /* empty body is fine */ }
   const force = !!body.force;
+  const afterId = typeof body.cursor === 'string' && body.cursor ? body.cursor : null;
 
   const db = getDb();
   const pipelineSnap = await db.collection('pipelines').doc(user.tenantId).get();
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
   const stageName = stageId => (stages.find(s => s.id === stageId) || {}).name || '';
 
-  const leadsSnap = await db.collection('leads').where('tenantId', '==', user.tenantId).get();
-  const docs = leadsSnap.docs.filter(d => force || !d.data().aiSummary).slice(0, MAX_LEADS_PER_RUN);
+  // Walk leads in document-id order so the client can resume exactly where it
+  // left off via `cursor`, regardless of how many chunks it takes.
+  let query = db.collection('leads').where('tenantId', '==', user.tenantId).orderBy(FieldPath.documentId());
+  if (afterId) query = query.startAfter(afterId);
+  const snap = await query.get();
+
+  const pending = snap.docs.filter(d => force || !d.data().aiSummary);
+  const batch = pending.slice(0, CHUNK);
 
   let generated = 0, failed = 0;
   const errors = [];
-  for (const doc of docs) {
+  for (const doc of batch) {
     const lead = doc.data();
     try {
       const response = await getAnthropic().messages.create({
@@ -59,13 +69,18 @@ export async function POST(request) {
     }
   }
 
+  // Cursor = last lead we advanced past this chunk. When nothing was left to
+  // process after the cursor, we're done.
+  const lastProcessed = batch.length ? batch[batch.length - 1].id : (snap.docs.length ? snap.docs[snap.docs.length - 1].id : afterId);
+  const remaining = pending.length - batch.length;
+
   return new Response(JSON.stringify({
     ok: true,
-    totalLeads: leadsSnap.size,
-    attempted: docs.length,
-    skipped: leadsSnap.size - docs.length,
     generated,
     failed,
+    remaining,
+    done: remaining <= 0,
+    cursor: lastProcessed,
     errors
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

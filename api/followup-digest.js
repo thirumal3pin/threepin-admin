@@ -54,6 +54,14 @@ async function sendDigestEmail(to, subject, text, html) {
 const TZ = 'Asia/Kolkata';
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
+// YYYY-MM-DD in IST — used as a per-tenant "already sent today" key so the
+// scheduled digest is idempotent: it's safe to trigger the cron endpoint from
+// more than one scheduler (Vercel Cron + a GitHub Actions backup) without
+// double-emailing, and a run that failed to send can be retried the same day.
+function istDateString(ts = Date.now()) {
+  return new Date(ts).toLocaleDateString('en-CA', { timeZone: TZ });
+}
+
 // Buckets: overdue (past due, not yet acted on) + one bucket per calendar
 // day for the next 3 days (today, tomorrow, day after) — shown day by day
 // rather than lumped into a single "upcoming" pile.
@@ -217,14 +225,53 @@ export async function GET(request) {
   }
 
   const db = getDb();
-  const pipelinesSnap = await db.collection('pipelines').get();
-  const results = [];
-  for (const doc of pipelinesSnap.docs) {
-    const r = await digestForTenant(db, doc.id);
-    if (!r.skipped) results.push(...r.results.map(x => ({ tenantId: doc.id, ...x })));
+  const today = istDateString();
+  const summary = [];
+  let pipelinesSnap;
+  try {
+    pipelinesSnap = await db.collection('pipelines').get();
+  } catch (e) {
+    // Total failure to even list tenants — surface it loudly (500) so an
+    // uptime check / the Vercel dashboard shows the cron erroring instead of
+    // silently returning 200 with nothing sent.
+    console.error('followup-digest: failed to list pipelines:', e);
+    return new Response(JSON.stringify({ error: String((e && e.message) || e) }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
   }
 
-  return new Response(JSON.stringify({ sent: results }), {
+  // Each tenant is isolated in its own try/catch + written run-record, so one
+  // tenant's failure never aborts the others and every outcome is observable
+  // afterwards in settings/{tenantId}.lastDigestRun (also surfaced in the CRM's
+  // Follow-up Digest modal).
+  for (const doc of pipelinesSnap.docs) {
+    const tenantId = doc.id;
+    const settingsRef = db.collection('settings').doc(tenantId);
+    try {
+      const sSnap = await settingsRef.get();
+      const s = sSnap.exists ? sSnap.data() : {};
+      if (s.lastDigestSentDate === today) { summary.push({ tenantId, skipped: 'already-sent-today' }); continue; }
+
+      const r = await digestForTenant(db, tenantId);
+      if (r.skipped) { summary.push({ tenantId, skipped: 'no-recipients' }); continue; }
+
+      // Mark the day AFTER a successful run so a failed send can be retried by
+      // a later trigger the same day, while a success blocks a redundant one.
+      await settingsRef.set({
+        lastDigestSentDate: today,
+        lastDigestRun: { at: Date.now(), source: 'cron', date: today, results: r.results }
+      }, { merge: true });
+      summary.push({ tenantId, sent: r.results });
+    } catch (e) {
+      console.error('followup-digest: tenant', tenantId, 'failed:', e);
+      await settingsRef.set({
+        lastDigestRun: { at: Date.now(), source: 'cron', date: today, error: String((e && e.message) || e) }
+      }, { merge: true }).catch(() => {});
+      summary.push({ tenantId, error: String((e && e.message) || e) });
+    }
+  }
+
+  return new Response(JSON.stringify({ ranAt: Date.now(), date: today, tenants: summary }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' }
   });
@@ -240,5 +287,11 @@ export async function POST(request) {
   }
   const db = getDb();
   const r = await digestForTenant(db, user.tenantId);
+  // Record manual sends too (for the "last sent" indicator), but deliberately
+  // do NOT set lastDigestSentDate — a manual "Send now" and the scheduled
+  // daily digest are independent, so neither suppresses the other.
+  await db.collection('settings').doc(user.tenantId).set({
+    lastDigestRun: { at: Date.now(), source: 'manual', results: r.results }
+  }, { merge: true }).catch(() => {});
   return new Response(JSON.stringify(r), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

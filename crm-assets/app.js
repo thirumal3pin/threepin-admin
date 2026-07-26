@@ -231,80 +231,103 @@ function followUpBadge(l){
 // summary regeneration can never be forgotten on some new call site later.
 function persistLead(l){
   window.crmFirebase.saveLead(l);
-  scheduleSummaryRegeneration(l.id);
 }
 
-// Debounced ~5s per lead: a burst of edits to the same lead (e.g. change
-// stage, then immediately log a note) collapses into a single Claude call
-// instead of one per save. The regenerated summary comes back through the
-// normal Firestore onSnapshot listener (applyLeadsSnapshot) — no need to
-// patch local state here.
-const summaryRegenTimers = {};
-function scheduleSummaryRegeneration(leadId){
-  clearTimeout(summaryRegenTimers[leadId]);
-  summaryRegenTimers[leadId] = setTimeout(() => {
-    delete summaryRegenTimers[leadId];
-    regenerateLeadSummary(leadId);
-  }, 5000);
-}
+// AI summaries are generated ON DEMAND only — the agent clicks "🔄 Regenerate"
+// in the lead's summary box. Previously EVERY lead save auto-fired a debounced
+// Claude call, so a single workflow (drag stage → add note → edit a field)
+// silently cost 3 generations with no explicit intent. On-demand generation
+// removes that cost leak entirely and also drops the extra summary write.
+const summaryGeneratingIds = new Set();
 function renderAiSummary(l){
   const el = document.getElementById('dpAiSummary');
   if(!el) return;
+  const generating = summaryGeneratingIds.has(l.id);
+  const btn = `<button class="dp-ai-regen" ${generating?'disabled':''} onclick="regenerateSummaryNow('${l.id}')">${generating?'⏳ Generating…':'🔄 Regenerate'}</button>`;
   if(!l.aiSummary && !l.aiSummaryError){
-    el.innerHTML = `<div class="dp-ai-summary-box empty"><span>✨</span><span>No AI summary yet — one will generate shortly after the next change.</span></div>`;
+    el.innerHTML = `<div class="dp-ai-summary-box empty"><div class="dp-ai-summary-meta">✨ AI summary ${btn}</div><div class="dp-ai-summary-text empty">${generating?'Generating summary…':'No AI summary yet — tap Regenerate to create one.'}</div></div>`;
     return;
   }
-  const metaHtml = `<div class="dp-ai-summary-meta">✨ AI summary${l.aiSummaryAt?' · updated '+timeAgo(l.aiSummaryAt):''}</div>`;
+  const metaHtml = `<div class="dp-ai-summary-meta">✨ AI summary${l.aiSummaryAt?' · updated '+timeAgo(l.aiSummaryAt):''} ${btn}</div>`;
   const summaryHtml = l.aiSummary
     ? `<div class="dp-ai-summary-text">${escapeHtml(l.aiSummary)}</div>`
-    : `<div class="dp-ai-summary-text empty">No summary yet.</div>`;
+    : `<div class="dp-ai-summary-text empty">${generating?'Generating summary…':'No summary yet.'}</div>`;
   const errorHtml = l.aiSummaryError
     ? `<div class="dp-ai-summary-err">⚠ Couldn't refresh the summary — showing the last one. (${escapeHtml(l.aiSummaryError)})</div>`
     : '';
   el.innerHTML = `<div class="dp-ai-summary-box${l.aiSummaryError?' has-error':''}">${metaHtml}${summaryHtml}${errorHtml}</div>`;
 }
-async function regenerateLeadSummary(leadId){
+// The new summary lands back through the normal Firestore onSnapshot listener
+// (applyLeadsSnapshot), which re-renders this block — we only manage the
+// transient "generating" spinner state here.
+async function regenerateSummaryNow(leadId){
+  if(summaryGeneratingIds.has(leadId)) return;
+  summaryGeneratingIds.add(leadId);
+  const l = leads.find(x=>x.id===leadId);
+  if(l && currentDetailId===leadId) renderAiSummary(l);
   try{
     const idToken = await window.crmAuth.getIdToken();
-    if(!idToken) return;
-    await fetch('/api/generate-lead-summary', {
+    if(!idToken){ showToast('Please log in again'); return; }
+    const res = await fetch('/api/generate-lead-summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
       body: JSON.stringify({ leadId })
     });
+    if(!res.ok){
+      const e = await res.json().catch(()=>({}));
+      showToast(e.error ? 'Summary failed: '+e.error : 'Summary failed');
+    }
   } catch(e){
-    // Summary generation is best-effort and must never surface as a user-
-    // facing error for an otherwise-successful save — the failure is still
-    // visible via aiSummaryError once/if the request reaches the server.
-    console.error('regenerateLeadSummary failed:', e);
+    console.error('regenerateSummaryNow failed:', e);
+    showToast('Summary failed — check your connection');
+  } finally {
+    summaryGeneratingIds.delete(leadId);
+    const cur = leads.find(x=>x.id===leadId);
+    if(cur && currentDetailId===leadId) renderAiSummary(cur);
   }
 }
 
-// One-time (re-runnable) bulk fill for existing leads that predate this
-// feature — skips any lead that already has a summary. Runs server-side via
-// api/backfill-lead-summaries.js so it uses the real ANTHROPIC_API_KEY at
-// Vercel runtime; results land back through the usual Firestore listener.
+// One-time (re-runnable) bulk fill for existing leads that don't have an AI
+// summary yet. The server processes only a few leads per request (to stay
+// well under the function time limit), returning a cursor + `done`; we loop
+// here, walking the cursor until every lead is covered, so this scales to any
+// number of leads without a timeout. Results land back through the usual
+// Firestore listener.
+let backfillRunning = false;
 async function runBackfillSummaries(){
+  if(backfillRunning) return;
   if(!confirm('Generate AI summaries for every existing lead that doesn\'t have one yet? This calls the Claude API once per lead.')) return;
   closeMoreMenu();
-  showToast('Generating summaries…');
+  backfillRunning = true;
+  let cursor = null, generated = 0, failed = 0, safety = 0;
+  const allErrors = [];
   try{
-    const idToken = await window.crmAuth.getIdToken();
-    const res = await fetch('/api/backfill-lead-summaries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
-      body: JSON.stringify({})
-    });
-    const data = await res.json().catch(()=>({}));
-    if(!res.ok){ showToast(data.error || 'Backfill failed'); return; }
-    const skippedNote = data.skipped ? `, ${data.skipped} already had one` : '';
-    showToast(data.failed
-      ? `✓ Generated ${data.generated}, ${data.failed} failed${skippedNote} — check console`
-      : `✓ Generated summaries for ${data.generated} lead${data.generated===1?'':'s'}${skippedNote}`);
-    if(data.errors && data.errors.length) console.error('Backfill errors:', data.errors);
+    while(safety++ < 1000){
+      const idToken = await window.crmAuth.getIdToken();
+      if(!idToken){ showToast('Please log in again'); break; }
+      const res = await fetch('/api/backfill-lead-summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
+        body: JSON.stringify(cursor ? { cursor } : {})
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ showToast(data.error || 'Backfill failed'); break; }
+      generated += data.generated || 0;
+      failed += data.failed || 0;
+      if(data.errors && data.errors.length) allErrors.push(...data.errors);
+      cursor = data.cursor;
+      showToast(`Generating summaries… ${generated} done${data.remaining>0?`, ${data.remaining}+ to go`:''}`);
+      if(data.done) break;
+    }
+    showToast(failed
+      ? `✓ Generated ${generated}, ${failed} failed — check console`
+      : (generated ? `✓ Generated summaries for ${generated} lead${generated===1?'':'s'}` : 'All leads already have a summary'));
+    if(allErrors.length) console.error('Backfill errors:', allErrors);
   } catch(e){
     console.error('runBackfillSummaries failed:', e);
     showToast('Backfill failed — check console');
+  } finally {
+    backfillRunning = false;
   }
 }
 
