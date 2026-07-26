@@ -15,6 +15,11 @@ let toastTimer;
 let currentUserEmail = null;
 let digestSettings = { enabled:false, recipients:[], emailEnabled:false, emails:[] };
 let digestSettingsDraft = { enabled:false, recipients:[], emailEnabled:false, emails:[] };
+// null recipients = "never saved yet" so openDashboardEmailManager() knows to
+// pre-fill from the Follow-up Digest's email list exactly once; after the
+// first save it's an independent array and never re-defaults again.
+let dashboardEmailSettings = { enabled:false, recipients:null };
+let dashboardEmailSettingsDraft = { enabled:false, recipients:[] };
 
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
@@ -79,12 +84,16 @@ window.applyEnquiryTypesSnapshot = function(list){
 window.applyDigestSettingsSnapshot = function(settings){
   digestSettings = settings;
 };
+window.applyDashboardEmailSettingsSnapshot = function(settings){
+  dashboardEmailSettings = settings;
+};
 
 function refreshAll(){
   updateStats();
   updateFollowupBadge();
   checkFollowupNotify(false);
-  applyFilters();
+  if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
+  else applyFilters();
 }
 
 // ═══════ INIT ═══════
@@ -173,25 +182,30 @@ function applyFilters(){
   });
   if(currentView==='kanban') renderBoard();
   else if(currentView==='list') renderList();
-  else renderFollowups();
+  else if(currentView==='followups') renderFollowups();
+  // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
+  // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
 }
 
 // ═══════ NAV: view switching, view dropdown, more menu ═══════
 function toggleView(view){
   currentView = view;
-  if(view!=='followups') lastBrowseView = view;
+  if(view!=='followups' && view!=='dashboard') lastBrowseView = view;
   updateNavState();
   document.getElementById('kanbanView').style.display = view==='kanban' ? '' : 'none';
   document.getElementById('listView').style.display = view==='list' ? '' : 'none';
   document.getElementById('followupsView').style.display = view==='followups' ? '' : 'none';
+  document.getElementById('dashboardView').style.display = view==='dashboard' ? '' : 'none';
   closeViewDropdown();
-  applyFilters();
+  if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
+  else applyFilters();
 }
 function updateNavState(){
   document.getElementById('fuNavBtn').classList.toggle('at', currentView==='followups');
-  document.querySelector('#viewDd .view-dd-btn').classList.toggle('at', currentView!=='followups');
+  document.getElementById('dashNavBtn').classList.toggle('at', currentView==='dashboard');
+  document.querySelector('#viewDd .view-dd-btn').classList.toggle('at', currentView!=='followups' && currentView!=='dashboard');
   document.getElementById('viewDdLabel').textContent = lastBrowseView==='list' ? '📃 List' : '📋 Board';
-  document.querySelectorAll('#viewDdMenu button').forEach(b=>b.classList.toggle('at', b.dataset.view===lastBrowseView && currentView!=='followups'));
+  document.querySelectorAll('#viewDdMenu button').forEach(b=>b.classList.toggle('at', b.dataset.view===lastBrowseView && currentView!=='followups' && currentView!=='dashboard'));
 }
 function toggleViewDropdown(e){
   if(e) e.stopPropagation();
@@ -770,16 +784,23 @@ function renderFollowups(){
 function changeStage(id, stageId){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
-  if(l.stageId !== stageId){
+  const stageChanged = l.stageId !== stageId;
+  if(stageChanged){
     const oldStage = stageById(l.stageId);
     const newStage = stageById(stageId);
     if(oldStage && newStage){
       addHistory(l, 'stage', `Stage changed from <b>${escapeHtml(oldStage.name)}</b> to <b>${escapeHtml(newStage.name)}</b>`);
     }
+    // Denormalized onto the parent doc (same write, no extra read/write) so
+    // the Dashboard's computeDashboardMetrics can tell "moved to stage X
+    // today" apart from a note/follow-up update without reading history.
+    l.prevStageId = l.stageId;
+    l.stageChangedAt = Date.now();
   }
   l.stageId = stageId;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
+  if(stageChanged) l.lastActionType = 'stage';
   applyFilters();
   persistLead(l);
   if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); }
@@ -934,7 +955,11 @@ function saveLeadModal(){
       createdAt: now,
       updatedAt: now,
       createdBy: currentUserEmail || null,
-      updatedBy: currentUserEmail || null
+      updatedBy: currentUserEmail || null,
+      // Denormalized for the Dashboard's "today" metrics (computeDashboardMetrics
+      // in dashboardMetrics.js) — lets it tell an untouched brand-new lead apart
+      // from one that already got a first note, with zero extra reads/writes.
+      lastActionType: noteText ? 'note' : 'created'
     };
     // Brand-new lead: the subcollection security rule checks the PARENT lead's
     // tenantId, so the parent doc must exist before we write its notes/history.
@@ -976,6 +1001,8 @@ function saveLeadModal(){
         }
       }
 
+      const oldStageId = l.stageId;
+      const stageChanged = oldStageId !== stageId;
       l.channel=channel; l.stageId=stageId; l.name=name; l.phone=phone; l.email=email;
       l.enquiryType=enquiryType; l.propertyInterest=propertyInterest; l.budget=budget;
       l.contactAt = l.contactAt || contactAt;
@@ -983,6 +1010,9 @@ function saveLeadModal(){
       l.updatedAt = now;
       l.updatedBy = currentUserEmail || null;
       l.notes = l.notes || [];
+      // See changeStage() for why these are stamped — same "today" bucketing need.
+      if(stageChanged){ l.prevStageId = oldStageId; l.stageChangedAt = now; }
+      l.lastActionType = stageChanged ? 'stage' : (noteText ? 'note' : 'field');
       diffs.forEach(d=>addHistory(l, d.type, d.text));
       if(noteText) logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
@@ -1228,6 +1258,7 @@ function setDetailsSent(value){
   l.detailsSent = value;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'details-sent';
   renderDetailsSentToggle(l);
   renderHistory(l);
   persistLead(l);
@@ -1337,6 +1368,7 @@ function saveFollowUpLog(){
   l.followUpAt = followUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'followed-up';
   persistLead(l);
   closeFollowUpLogModal();
   refreshAll();
@@ -1351,6 +1383,7 @@ function removeFollowUp(leadId){
   l.followUpAt = null;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'followup-removed';
   persistLead(l);
   refreshAll();
   showToast('Follow-up removed');
@@ -1394,6 +1427,7 @@ function addNote(){
   l.followUpAt = nextFollowUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'note';
   inp.value='';
   renderNotes(l);
   renderNoteFollowUpFields(l);
@@ -1564,6 +1598,79 @@ async function sendDigestNow(){
     if(failCount) console.error('Digest send failures:', results.filter(r=>!r.ok));
   } catch(e){
     console.error('sendDigestNow error:', e);
+    showToast('Send failed — see console');
+  }
+}
+
+// ═══════ DASHBOARD SUMMARY EMAIL MANAGER ═══════
+// Mirrors the Follow-up Digest manager above exactly (same modal pattern,
+// same save/send plumbing) — see openDigestManager() for the reference.
+function openDashboardEmailManager(){
+  // First time this tenant ever opens it: default to whatever Follow-up
+  // Digest's email list currently is. From then on it's fully independent.
+  const startingRecipients = dashboardEmailSettings.recipients === null
+    ? digestSettings.emails.slice()
+    : dashboardEmailSettings.recipients.slice();
+  dashboardEmailSettingsDraft = { enabled: dashboardEmailSettings.enabled, recipients: startingRecipients };
+  document.getElementById('dashboardEmailEnabled').checked = dashboardEmailSettingsDraft.enabled;
+  renderDashboardEmailRows();
+  document.getElementById('dashboardEmailModal').classList.add('open');
+}
+function closeDashboardEmailManager(){
+  document.getElementById('dashboardEmailModal').classList.remove('open');
+}
+function renderDashboardEmailRows(){
+  document.getElementById('dashboardEmailRows').innerHTML = dashboardEmailSettingsDraft.recipients.map((r,i)=>`
+    <div class="req-info-row">
+      <input type="text" value="${escapeHtml(r)}" oninput="renameDashboardEmailDraft(${i}, this.value)">
+      <button class="stage-del" onclick="removeDashboardEmailDraft(${i})">🗑️</button>
+    </div>`).join('');
+}
+function renameDashboardEmailDraft(i, val){ dashboardEmailSettingsDraft.recipients[i] = val; }
+function removeDashboardEmailDraft(i){ dashboardEmailSettingsDraft.recipients.splice(i,1); renderDashboardEmailRows(); }
+function addDashboardEmailDraft(){
+  const inp = document.getElementById('newDashboardEmail');
+  const val = inp.value.trim();
+  if(!val) return;
+  dashboardEmailSettingsDraft.recipients.push(val);
+  inp.value='';
+  renderDashboardEmailRows();
+}
+function syncDashboardEmailDraftFromForm(){
+  dashboardEmailSettingsDraft.enabled = document.getElementById('dashboardEmailEnabled').checked;
+}
+function saveDashboardEmailManager(){
+  syncDashboardEmailDraftFromForm();
+  window.crmFirebase.saveDashboardEmailSettings(dashboardEmailSettingsDraft.enabled, dashboardEmailSettingsDraft.recipients);
+  dashboardEmailSettings = { enabled: dashboardEmailSettingsDraft.enabled, recipients: dashboardEmailSettingsDraft.recipients.slice() };
+  closeDashboardEmailManager();
+  showToast('✓ Dashboard email settings saved');
+}
+async function sendDashboardEmailNow(){
+  syncDashboardEmailDraftFromForm();
+  if(!dashboardEmailSettingsDraft.recipients.length){
+    showToast('Add at least one email address first');
+    return;
+  }
+  saveDashboardEmailManager();
+  showToast('Sending dashboard summary…');
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/dashboard-summary', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+idToken }
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok){ showToast(data.error || 'Send failed'); return; }
+    const results = data.results || [];
+    const okCount = results.filter(r=>r.ok).length;
+    const failCount = results.length - okCount;
+    if(!results.length) showToast('Nothing to send — no recipients configured');
+    else if(!failCount) showToast(`✓ Dashboard summary sent to ${okCount} recipient${okCount===1?'':'s'}`);
+    else showToast(`Sent to ${okCount}, ${failCount} failed — check console`);
+    if(failCount) console.error('Dashboard summary send failures:', results.filter(r=>!r.ok));
+  } catch(e){
+    console.error('sendDashboardEmailNow error:', e);
     showToast('Send failed — see console');
   }
 }
@@ -2125,7 +2232,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
+  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeDashboardEmailManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════

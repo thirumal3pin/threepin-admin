@@ -73,6 +73,9 @@
         <button class="fu-nav-btn" id="fuNavBtn" onclick="toggleView('followups')">
           <span class="fu-nav-ico">📅</span><span class="fu-nav-label">Follow-ups</span><span class="fu-badge" id="fuBadge" style="display:none">0</span>
         </button>
+        <button class="fu-nav-btn" id="dashNavBtn" onclick="toggleView('dashboard')">
+          <span class="fu-nav-ico">📊</span><span class="fu-nav-label">Dashboard</span>
+        </button>
 
         <div class="view-dd" id="viewDd">
           <button class="view-dd-btn at" onclick="toggleViewDropdown(event)">
@@ -95,6 +98,7 @@
             <div class="dd-sep"></div>
             <button class="more-dd-item" onclick="openStageManager()">⚙️ Manage Stages</button>
             <button class="more-dd-item" onclick="openDigestManager()">🔔 Follow-up Digest</button>
+            <button class="more-dd-item" onclick="openDashboardEmailManager()">📊 Dashboard Summary Email</button>
             <button class="more-dd-item" onclick="openBotEditor()">🤖 AI Bot</button>
             <button class="more-dd-item" onclick="openExportModal()">⬇️ Export Leads</button>
             <button class="more-dd-item" onclick="runBackfillSummaries()">✨ Backfill AI Summaries</button>
@@ -116,6 +120,7 @@
     <div id="kanbanView"></div>
     <div id="listView" style="display:none"></div>
     <div id="followupsView" style="display:none"></div>
+    <div id="dashboardView" style="display:none"></div>
   </div>
 
   <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
@@ -518,6 +523,36 @@
     </div>
   </div>
 
+  <!-- DASHBOARD SUMMARY EMAIL MODAL -->
+  <div class="modal-overlay" id="dashboardEmailModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">Dashboard Summary Email</div>
+        <button class="modal-x" onclick="closeDashboardEmailManager()">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="digest-toggle-label">
+          <input type="checkbox" id="dashboardEmailEnabled">
+          Send a daily end-of-day dashboard summary email, every evening at 9:30 PM IST
+        </label>
+        <div class="field" style="margin-top:12px">
+          <label>Send to (email addresses)</label>
+          <div id="dashboardEmailRows"></div>
+          <div class="stage-add-row">
+            <input type="text" id="newDashboardEmail" placeholder="e.g. name@threepin.in" onkeydown="if(event.key==='Enter')addDashboardEmailDraft()">
+            <button onclick="addDashboardEmailDraft()">+ Add</button>
+          </div>
+        </div>
+        <div class="note-fu-hint">Same numbers as the Dashboard tab — today's activity, overdue follow-ups, pipeline, and more.</div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeDashboardEmailManager()">Cancel</button>
+        <button class="modal-cancel" onclick="sendDashboardEmailNow()">📤 Send Now</button>
+        <button class="modal-save" onclick="saveDashboardEmailManager()">✓ Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- EXPORT LEADS MODAL -->
   <div class="modal-overlay" id="exportModal">
     <div class="modal-box">
@@ -596,6 +631,17 @@
 </script>
 <script src="crm-assets/sample-leads.js"></script>
 <script src="crm-assets/app.js"></script>
+<!-- dashboardMetrics.js is an ES module (also imported directly, unmodified,
+     by api/dashboard-summary.js) so the Dashboard tab and the Dashboard
+     Summary Email always compute from the exact same code — never two
+     implementations of the same numbers. This bridges it into the classic-
+     script global scope that app.js/dashboardView.js share. -->
+<script type="module">
+  import { computeDashboardMetrics, formatINR } from './crm-assets/dashboardMetrics.js';
+  window.computeDashboardMetrics = computeDashboardMetrics;
+  window.formatINR = formatINR;
+</script>
+<script src="crm-assets/dashboardView.js"></script>
 <script type="module" src="crm-assets/firebase-sync.js"></script>
 </body>
 </html>

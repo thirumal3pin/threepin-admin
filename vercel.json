@@ -1,6 +1,7 @@
 {
   "crons": [
-    { "path": "/api/followup-digest", "schedule": "30 3 * * *" }
+    { "path": "/api/followup-digest", "schedule": "30 3 * * *" },
+    { "path": "/api/dashboard-summary", "schedule": "0 16 * * *" }
   ],
   "headers": [
     {

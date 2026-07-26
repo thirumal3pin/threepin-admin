@@ -1,6 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import nodemailer from 'nodemailer';
 
 export function getDb() {
   if (!getApps().length) {
@@ -24,6 +25,33 @@ export async function verifyCrmUser(request) {
     return { ...decoded, tenantId: decoded.tenantId || null };
   } catch {
     return null;
+  }
+}
+
+// Shared Gmail sender — used by both api/followup-digest.js and
+// api/dashboard-summary.js so there's exactly one place that knows how
+// outbound CRM email is sent (same sender, same credentials, same provider).
+// Lazy so a missing GMAIL_USER/GMAIL_APP_PASSWORD doesn't crash module load —
+// only an actual send should fail if Gmail isn't configured.
+let _mailer;
+export function getMailer() {
+  if (!_mailer) {
+    _mailer = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+    });
+  }
+  return _mailer;
+}
+export async function sendEmail(to, subject, text, html) {
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    return { ok: false, error: 'Gmail not configured (GMAIL_USER/GMAIL_APP_PASSWORD missing)' };
+  }
+  try {
+    await getMailer().sendMail({ from: `"3 PIN Realty CRM" <${process.env.GMAIL_USER}>`, to, subject, text, html });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 }
 

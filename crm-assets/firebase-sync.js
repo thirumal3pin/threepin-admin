@@ -99,6 +99,15 @@ function subscribeToData(tenantId){
             emails: data.followupDigestEmails || []
           });
         }
+        if (window.applyDashboardEmailSettingsSnapshot) {
+          window.applyDashboardEmailSettingsSnapshot({
+            enabled: !!data.dashboardEmailEnabled,
+            // null (key never set) vs [] (saved once, deliberately emptied) are
+            // distinct — the client uses null to decide whether to default this
+            // list from the Follow-up Digest's recipients on first-ever open.
+            recipients: Array.isArray(data.dashboardEmailRecipients) ? data.dashboardEmailRecipients : null
+          });
+        }
       }, (err) => console.error('Firestore settings sync error:', err));
     });
 }
@@ -138,7 +147,11 @@ window.crmFirebase = {
     followupDigestRecipients: recipients,
     followupDigestEmailEnabled: emailEnabled,
     followupDigestEmails: emails
-  }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e))
+  }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e)),
+  saveDashboardEmailSettings: (enabled, recipients) => setDoc(settingsRef(currentTenantId), {
+    dashboardEmailEnabled: enabled,
+    dashboardEmailRecipients: recipients
+  }, { merge: true }).catch(e => console.error('Firestore save dashboard email settings error:', e))
 };
 
 window.crmAuth = {

@@ -1,5 +1,4 @@
-import nodemailer from 'nodemailer';
-import { getDb, getWhatsAppCreds, verifyCrmUser } from './_bot-shared.js';
+import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared.js';
 
 // wa.me / Cloud API sends need digits only, country code, no leading zeros.
 // Recipients here are typed by hand in the CRM, so normalize the same way
@@ -21,30 +20,6 @@ async function sendWhatsAppText(db, tenantId, to, text) {
   });
   if (!res.ok) return { ok: false, error: `${res.status}: ${await res.text()}` };
   return { ok: true };
-}
-
-// Lazy so a missing GMAIL_USER/GMAIL_APP_PASSWORD doesn't crash module load —
-// only an actual send should fail if Gmail isn't configured.
-let _mailer;
-function getMailer() {
-  if (!_mailer) {
-    _mailer = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-    });
-  }
-  return _mailer;
-}
-async function sendDigestEmail(to, subject, text, html) {
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    return { ok: false, error: 'Gmail not configured (GMAIL_USER/GMAIL_APP_PASSWORD missing)' };
-  }
-  try {
-    await getMailer().sendMail({ from: `"3 PIN Realty CRM" <${process.env.GMAIL_USER}>`, to, subject, text, html });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
 }
 
 // Vercel functions run in UTC regardless of who's reading the output, but
@@ -205,7 +180,7 @@ async function digestForTenant(db, tenantId) {
     const text = formatDigestText(overdue, days, startOfToday);
     const html = formatDigestHtml(overdue, days, startOfToday);
     for (const to of emailRecipients) {
-      const r = await sendDigestEmail(to, subject, text, html);
+      const r = await sendEmail(to, subject, text, html);
       results.push({ channel: 'email', to, ...r });
     }
   }
