@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, writeBatch, query, where
+  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -104,8 +104,27 @@ function subscribeToData(tenantId){
 }
 
 window.crmFirebase = {
-  saveLead: (lead) => setDoc(doc(db, 'leads', lead.id), { ...lead, tenantId: currentTenantId }).catch(e => console.error('Firestore save lead error:', e)),
+  // Notes + history live in per-lead subcollections now (see saveNote /
+  // saveHistory below), so they are stripped from the parent write: the lead
+  // doc stays small and constant-size, so a note-add never rewrites a growing
+  // document and the board listener never streams note/history bodies.
+  saveLead: (lead) => {
+    const { notes, history, ...rest } = lead;
+    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }).catch(e => console.error('Firestore save lead error:', e));
+  },
   deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => console.error('Firestore delete lead error:', e)),
+
+  // ── Notes / history subcollections ──
+  getLeadNotes: (leadId) => getDocs(collection(db, 'leads', leadId, 'notes'))
+    .then(s => s.docs.map(d => d.data()))
+    .catch(e => { console.error('Firestore get notes error:', e); return []; }),
+  getLeadHistory: (leadId) => getDocs(collection(db, 'leads', leadId, 'history'))
+    .then(s => s.docs.map(d => d.data()))
+    .catch(e => { console.error('Firestore get history error:', e); return []; }),
+  saveNote: (leadId, note) => setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => console.error('Firestore save note error:', e)),
+  deleteNoteDoc: (leadId, noteId) => deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => console.error('Firestore delete note error:', e)),
+  saveHistory: (leadId, event) => setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => console.error('Firestore save history error:', e)),
+
   savePipeline: (stages) => setDoc(pipelineRef(currentTenantId), { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
   getBotConfig: async () => {
     if (!currentTenantId) return null;

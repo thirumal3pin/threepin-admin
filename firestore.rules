@@ -71,6 +71,21 @@ service cloud.firestore {
       allow update: if ownsTenantField() && writingOwnTenantField();
       allow create: if writingOwnTenantField();
     }
+
+    // Notes + history live in subcollections under each lead (so adding a note
+    // no longer rewrites the whole lead doc, and the board listener doesn't
+    // stream every note/history entry). Firestore rules do NOT cascade to
+    // subcollections, so these are scoped explicitly: you may read/write a
+    // lead's notes/history only if you own the PARENT lead's tenant. The
+    // get() reads the parent doc to check its tenantId.
+    match /leads/{leadId}/notes/{noteId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+    }
+    match /leads/{leadId}/history/{eventId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+    }
     match /conversations/{convoId} {
       allow read: if ownsTenantField();
       // Only the webhook (Admin SDK, bypasses rules) writes conversations —

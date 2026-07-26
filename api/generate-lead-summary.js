@@ -46,6 +46,19 @@ export async function POST(request) {
   }
   const lead = snap.data();
 
+  // Notes + history live in subcollections now — load them so the summary
+  // prompt still sees the full context.
+  try {
+    const [notesSnap, historySnap] = await Promise.all([
+      leadRef.collection('notes').get(),
+      leadRef.collection('history').get()
+    ]);
+    lead.notes = notesSnap.docs.map(d => d.data());
+    lead.history = historySnap.docs.map(d => d.data());
+  } catch (e) {
+    console.error('generate-lead-summary: subcollection load failed:', e);
+  }
+
   let stageName = '';
   try {
     const pipelineSnap = await db.collection('pipelines').doc(user.tenantId).get();

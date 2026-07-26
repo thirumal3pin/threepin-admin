@@ -40,7 +40,22 @@ function waHref(phone){
 
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
 window.applyLeadsSnapshot = function(list){
+  // Notes + history now live in per-lead subcollections, so they don't arrive
+  // in this snapshot. Preserve the threads we already loaded for the open lead
+  // across the array swap so an incoming snapshot (e.g. right after saving a
+  // note) doesn't blank out the notes/history panels.
+  const openId = currentDetailId;
+  const prev = openId ? leads.find(x => x.id === openId) : null;
+  const keepNotes = prev ? prev.notes : undefined;
+  const keepHistory = prev ? prev.history : undefined;
   leads = list;
+  if(openId){
+    const cur = leads.find(x => x.id === openId);
+    if(cur){
+      if(keepNotes !== undefined) cur.notes = keepNotes;
+      if(keepHistory !== undefined) cur.history = keepHistory;
+    }
+  }
   refreshAll();
   // The AI summary regenerates server-side (see generate-lead-summary.js)
   // and arrives back through this same snapshot — refresh just that block
@@ -233,6 +248,27 @@ function persistLead(l){
   window.crmFirebase.saveLead(l);
 }
 
+// Add a note to a lead: update the in-memory arrays + denormalized lastNote/
+// noteCount (what the board & follow-ups render), and persist the note as its
+// own doc in the lead's notes subcollection. Callers still call persistLead(l)
+// afterwards to save the small parent (lastNote/noteCount/updatedAt/…).
+// Assumes the parent lead doc already exists (true everywhere except the very
+// first write of a brand-new lead, which creates the parent first — see the
+// add-lead path in saveLeadModal).
+function logNote(l, note){
+  l.notes = l.notes || [];
+  l.notes.push(note);
+  l.noteCount = l.notes.length;
+  l.lastNote = { text: note.text, createdAt: note.createdAt, by: note.by || null };
+  if(window.crmFirebase && window.crmFirebase.saveNote) window.crmFirebase.saveNote(l.id, note);
+}
+function recomputeNoteMeta(l){
+  const notes = (l.notes || []).slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const last = notes[notes.length - 1] || null;
+  l.noteCount = notes.length;
+  l.lastNote = last ? { text: last.text, createdAt: last.createdAt, by: last.by || null } : null;
+}
+
 // AI summaries are generated ON DEMAND only — the agent clicks "🔄 Regenerate"
 // in the lead's summary box. Previously EVERY lead save auto-fired a debounced
 // Claude call, so a single workflow (drag stage → add note → edit a field)
@@ -336,12 +372,19 @@ async function runBackfillSummaries(){
 // never pass raw user input directly, always escapeHtml() it first.
 function addHistory(l, type, text){
   l.history = l.history || [];
-  l.history.push({
+  const event = {
     id: 'h'+Date.now()+Math.random().toString(36).slice(2,7),
     type, text,
     at: Date.now(),
     by: currentUserEmail || l.updatedBy || null
-  });
+  };
+  l.history.push(event);
+  // Persist to the lead's history subcollection (instead of rewriting a
+  // growing array on the parent). Assumes the parent lead doc exists — true
+  // for every flow except the brand-new-lead path, which creates the parent
+  // first and only then logs its 'created' event.
+  if(window.crmFirebase && window.crmFirebase.saveHistory) window.crmFirebase.saveHistory(l.id, event);
+  return event;
 }
 function historyIcon(type){
   return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨' }[type] || '•';
@@ -677,7 +720,9 @@ function updateFollowupBadge(){
 }
 function followupRowHtml(l, bucketKey){
   const stage = stageById(l.stageId);
-  const latest = (l.notes||[]).slice().sort((a,b)=>b.createdAt-a.createdAt)[0];
+  // Prefer the denormalized lastNote (on the parent) — the follow-ups view
+  // renders leads whose full notes[] subcollection hasn't been loaded.
+  const latest = l.lastNote || (l.notes||[]).slice().sort((a,b)=>b.createdAt-a.createdAt)[0] || null;
   const waUrl = waHref(l.phone);
   const fuDate = new Date(l.followUpAt);
   const timeLabel = (bucketKey==='today' || bucketKey==='overdue')
@@ -891,11 +936,21 @@ function saveLeadModal(){
       createdBy: currentUserEmail || null,
       updatedBy: currentUserEmail || null
     };
-    addHistory(l, 'created', `Lead added via <b>${escapeHtml(channelLabel(channel))}</b>`);
-    if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+    // Brand-new lead: the subcollection security rule checks the PARENT lead's
+    // tenantId, so the parent doc must exist before we write its notes/history.
+    // Create the parent first, then log the 'created' event + optional first
+    // note, then re-save the parent so its lastNote/noteCount persist.
+    const createdEvent = { id:'h'+now+Math.random().toString(36).slice(2,7), type:'created', text:`Lead added via <b>${escapeHtml(channelLabel(channel))}</b>`, at: now, by: currentUserEmail || null };
+    l.history = [createdEvent];
+    const firstNote = noteText ? { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null } : null;
+    if(firstNote){ l.notes = [firstNote]; recomputeNoteMeta(l); }
     leads.unshift(l);
     showToast('✓ Enquiry saved');
-    persistLead(l);
+    Promise.resolve(window.crmFirebase.saveLead(l)).then(() => {
+      window.crmFirebase.saveHistory(l.id, createdEvent);
+      if(firstNote) window.crmFirebase.saveNote(l.id, firstNote);
+      if(firstNote) window.crmFirebase.saveLead(l); // persist lastNote/noteCount
+    });
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
@@ -929,7 +984,7 @@ function saveLeadModal(){
       l.updatedBy = currentUserEmail || null;
       l.notes = l.notes || [];
       diffs.forEach(d=>addHistory(l, d.type, d.text));
-      if(noteText) l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+      if(noteText) logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
       persistLead(l);
     }
@@ -997,7 +1052,7 @@ function updateExportCount(){
   const result = getExportLeads();
   countEl.textContent = result===null ? 'Pick both a from and to date.' : `${result.length} lead${result.length===1?'':'s'} will be exported.`;
 }
-function runExport(){
+async function runExport(){
   if(typeof XLSX === 'undefined'){ showToast('Export library failed to load — check your connection and retry'); return; }
   const errBox = document.getElementById('exportErr');
   errBox.classList.remove('show');
@@ -1013,9 +1068,18 @@ function runExport(){
   const rows = getExportLeads();
   if(!rows || !rows.length){ errBox.textContent='No leads match this filter.'; errBox.classList.add('show'); return; }
 
+  // Notes live in subcollections now — fetch each exported lead's notes (in
+  // parallel) so the export still includes the full note history.
+  showToast('Preparing export…');
+  const notesByLead = new Map();
+  await Promise.all(rows.map(async l => {
+    const n = (l.notes && l.notes.length) ? l.notes : await window.crmFirebase.getLeadNotes(l.id);
+    notesByLead.set(l.id, (n || []).slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)));
+  }));
+
   const leadRows = rows.map(l=>{
     const stage = stageById(l.stageId);
-    const notes = (l.notes||[]).slice().sort((a,b)=>a.createdAt-b.createdAt);
+    const notes = notesByLead.get(l.id) || [];
     const notesSummary = notes.map(n=>`[${new Date(n.createdAt).toLocaleString()}${n.by?' · '+n.by:''}] ${n.text}`).join('\n');
     return {
       'Name': l.name || '',
@@ -1105,6 +1169,35 @@ function openDetail(id){
   renderHistory(l);
   document.getElementById('dp').classList.add('open');
   window.scrollTo(0,0);
+  // Notes + history live in subcollections — load them on open (the board
+  // never needs them). Renders again once they arrive.
+  loadLeadThreads(l);
+}
+
+// Fetch a lead's notes + history subcollections into the in-memory object and
+// re-render the panels. Merges with anything already on the object (e.g. a
+// parent still carrying pre-migration arrays) and de-dupes by id, so nothing
+// is ever dropped during the cutover window.
+async function loadLeadThreads(l){
+  try{
+    const [notes, history] = await Promise.all([
+      window.crmFirebase.getLeadNotes(l.id),
+      window.crmFirebase.getLeadHistory(l.id)
+    ]);
+    const byId = (arr) => { const m = new Map(); (arr||[]).forEach(x => { if(x && x.id) m.set(x.id, x); }); return m; };
+    const notesMap = byId(l.notes); byId(notes).forEach((v,k)=>notesMap.set(k,v));
+    const histMap = byId(l.history); byId(history).forEach((v,k)=>histMap.set(k,v));
+    l.notes = Array.from(notesMap.values()).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    l.history = Array.from(histMap.values()).sort((a,b)=>(a.at||0)-(b.at||0));
+    recomputeNoteMeta(l);
+    if(currentDetailId === l.id && document.getElementById('dp').classList.contains('open')){
+      renderNotes(l);
+      renderHistory(l);
+      renderFollowUpSpotlight(l);
+    }
+  } catch(e){
+    console.error('loadLeadThreads failed:', e);
+  }
 }
 function renderDetailStageRow(l){
   const sel = document.getElementById('dpStageSel');
@@ -1227,8 +1320,7 @@ function saveFollowUpLog(){
 
   const now = Date.now();
   if(noteText){
-    l.notes = l.notes || [];
-    l.notes.push({ id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+    logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
     addHistory(l, 'followed-up', `Followed up — “${escapeHtml(noteText)}”`);
   } else {
     addHistory(l, 'followed-up', 'Marked as followed up');
@@ -1290,8 +1382,7 @@ function addNote(){
   }
 
   const now = Date.now();
-  l.notes = l.notes || [];
-  l.notes.push({ id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
+  logNote(l, { id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
   if(nextFollowUpAt !== currentAt){
     if(nextFollowUpAt){
       const when = new Date(nextFollowUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -1315,9 +1406,11 @@ function deleteNote(leadId, noteId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
   l.notes = (l.notes||[]).filter(n=>n.id!==noteId);
+  recomputeNoteMeta(l);
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   renderNotes(l);
+  if(window.crmFirebase.deleteNoteDoc) window.crmFirebase.deleteNoteDoc(leadId, noteId);
   persistLead(l);
 }
 

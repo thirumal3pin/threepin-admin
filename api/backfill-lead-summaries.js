@@ -53,6 +53,13 @@ export async function POST(request) {
   for (const doc of batch) {
     const lead = doc.data();
     try {
+      // Notes + history are in subcollections now — load them for the prompt.
+      const [notesSnap, historySnap] = await Promise.all([
+        doc.ref.collection('notes').get(),
+        doc.ref.collection('history').get()
+      ]);
+      lead.notes = notesSnap.docs.map(d => d.data());
+      lead.history = historySnap.docs.map(d => d.data());
       const response = await getAnthropic().messages.create({
         model: LEAD_SUMMARY_MODEL,
         max_tokens: LEAD_SUMMARY_MAX_TOKENS,
