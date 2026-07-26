@@ -406,7 +406,7 @@ function renderBoard(){
     return `
     <div class="kcol">
       <div class="kcol-hdr">
-        <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${stage.name}</div>
+        <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${escapeHtml(stage.name)}</div>
         <div class="kcol-count">${colLeads.length}</div>
       </div>
       <div class="kcol-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
@@ -450,14 +450,14 @@ function leadCardHtml(l){
   return `
   <div class="lcard" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
     <div class="lcard-top">
-      <div class="lcard-name">${l.name}</div>
+      <div class="lcard-name">${escapeHtml(l.name)}</div>
       <div class="lcard-src ${l.source}">${l.source==='meta'?'Meta':'Manual'}</div>
     </div>
     <div class="lcard-meta">
-      ${l.phone?`<div>📞 ${l.phone}</div>`:''}
+      ${l.phone?`<div>📞 ${escapeHtml(l.phone)}</div>`:''}
       ${l.channel?`<div>${channelLabel(l.channel)}</div>`:''}
-      ${l.enquiryType?`<div>🏷️ ${l.enquiryType}</div>`:''}
-      ${l.propertyInterest?`<div>🏠 ${l.propertyInterest}</div>`:''}
+      ${l.enquiryType?`<div>🏷️ ${escapeHtml(l.enquiryType)}</div>`:''}
+      ${l.propertyInterest?`<div>🏠 ${escapeHtml(l.propertyInterest)}</div>`:''}
     </div>
     ${followUpBadge(l)}
     <div class="lcard-foot">
@@ -596,12 +596,12 @@ function renderList(){
     <tbody>${rows.map(l=>{
       const stage = stageById(l.stageId);
       return `<tr onclick="openDetail('${l.id}')">
-        <td><b>${l.name}</b></td>
-        <td>${l.phone||l.email||'—'}</td>
+        <td><b>${escapeHtml(l.name)}</b></td>
+        <td>${escapeHtml(l.phone||l.email||'—')}</td>
         <td>${l.channel?channelLabel(l.channel):'—'}</td>
-        <td>${l.enquiryType||'—'}</td>
-        <td>${l.propertyInterest||'—'}</td>
-        <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${stage.name}</span>`:'—'}</td>
+        <td>${escapeHtml(l.enquiryType||'—')}</td>
+        <td>${escapeHtml(l.propertyInterest||'—')}</td>
+        <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:'—'}</td>
         <td>${sourceLabel(l.source)}</td>
         <td>${l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—'}</td>
         <td>${timeAgo(l.updatedAt||l.createdAt)}</td>
@@ -664,7 +664,7 @@ function followupRowHtml(l, bucketKey){
     <div class="fu-row-main">
       <div class="fu-name-row">
         <span class="fu-name">${escapeHtml(l.name)}</span>
-        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${stage.name}</span>`:''}
+        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
       </div>
       <div class="fu-meta">
         ${l.phone?`<span>📞 ${escapeHtml(l.phone)}</span>`:''}
@@ -1050,13 +1050,13 @@ function openDetail(id){
 
   const infoHtml = `
     ${l.channel?`<div class="info-b"><div class="info-b-l">Channel</div><div class="info-b-v">${channelLabel(l.channel)}</div></div>`:''}
-    ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${l.phone}">${l.phone}</a></div></div>`:''}
-    ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${l.email}">${l.email}</a></div></div>`:''}
-    ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${l.enquiryType}</div></div>`:''}
-    ${l.propertyInterest?`<div class="info-b highlight"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${l.propertyInterest}</div></div>`:''}
-    ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${l.budget}</div></div>`:''}
-    ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${l.formId}</div></div>`:''}
-    ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${l.adId}</div></div>`:''}
+    ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${encodeURIComponent(l.phone)}">${escapeHtml(l.phone)}</a></div></div>`:''}
+    ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${encodeURIComponent(l.email)}">${escapeHtml(l.email)}</a></div></div>`:''}
+    ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${escapeHtml(l.enquiryType)}</div></div>`:''}
+    ${l.propertyInterest?`<div class="info-b highlight"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${escapeHtml(l.propertyInterest)}</div></div>`:''}
+    ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${escapeHtml(l.budget)}</div></div>`:''}
+    ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
+    ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
   `;
   document.getElementById('dpInfo').innerHTML = infoHtml;
 
@@ -1085,7 +1085,7 @@ function openDetail(id){
 }
 function renderDetailStageRow(l){
   const sel = document.getElementById('dpStageSel');
-  sel.innerHTML = stages.map(s=>`<option value="${s.id}" ${s.id===l.stageId?'selected':''}>${s.name}</option>`).join('');
+  sel.innerHTML = stages.map(s=>`<option value="${s.id}" ${s.id===l.stageId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
   const stage = stageById(l.stageId);
   sel.style.borderColor = stage ? stage.color : '';
   sel.style.color = stage ? stage.color : '';
@@ -1137,7 +1137,7 @@ function renderNotes(l){
         <span class="note-time">${new Date(n.createdAt).toLocaleString()}${n.by?' · '+escapeHtml(n.by):''}</span>
         <button class="note-delete" onclick="deleteNote('${l.id}','${n.id}')">×</button>
       </div>
-      <div class="note-text">${n.text}</div>
+      <div class="note-text">${escapeHtml(n.text)}</div>
     </div>`).join('') : '<div class="empty-mini">No notes yet — log a call or follow-up below.</div>';
   document.getElementById('notesPanel').innerHTML = html;
 }
@@ -1959,7 +1959,10 @@ async function uploadKnowledgeFile(event){
 async function extractPdfText(file){
   if(!window.pdfjsLib) throw new Error('PDF reader not loaded — try again');
   const buf = await file.arrayBuffer();
-  const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  // isEvalSupported:false disarms CVE-2024-4367 — a crafted PDF can otherwise
+  // run arbitrary JS in this (logged-in) origin via pdf.js's font eval path.
+  // Kept even after the version bump below, as defence-in-depth.
+  const pdf = await window.pdfjsLib.getDocument({ data: buf, isEvalSupported: false }).promise;
   let out = '';
   const pages = Math.min(pdf.numPages, 50);
   for(let i=1;i<=pages;i++){

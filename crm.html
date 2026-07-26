@@ -580,8 +580,14 @@
 
 <div id="toast"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- SRI integrity hashes pin the exact bytes: if cdnjs is ever compromised
+     and serves altered JS, the hash mismatch makes the browser refuse to run
+     it (supply-chain protection). XLSX here is export-only (no XLSX.read), so
+     its parse-time CVEs are not reachable; pdf.js is hardened separately with
+     isEvalSupported:false in extractPdfText(). Hashes are cdnjs's own published
+     SRI — re-generate if the pinned versions ever change. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
   if (window.pdfjsLib) {
     window.pdfjsLib.GlobalWorkerOptions.workerSrc =
