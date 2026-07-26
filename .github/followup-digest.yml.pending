@@ -1,0 +1,32 @@
+name: Follow-up digest (backup trigger)
+
+# Vercel Cron on the Hobby plan is best-effort and can silently skip a run —
+# which is exactly what happened (a 9am digest never went out). This workflow
+# is a second, independent scheduler that hits the same endpoint. The endpoint
+# is idempotent per day (settings/{tenant}.lastDigestSentDate), so whichever
+# scheduler fires first sends and the other is a safe no-op — no double emails.
+#
+# One-time setup: add a repository secret named CRON_SECRET whose value matches
+# the CRON_SECRET env var in Vercel (Repo → Settings → Secrets and variables →
+# Actions → New repository secret).
+
+on:
+  schedule:
+    - cron: '30 3 * * *'   # 03:30 UTC = 09:00 IST
+  workflow_dispatch: {}      # lets you trigger it by hand from the Actions tab
+
+jobs:
+  trigger-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call follow-up digest endpoint
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set — add it in Settings → Secrets → Actions"; exit 1
+          fi
+          code=$(curl -sS -o /tmp/digest.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://admin.threepin.in/api/followup-digest)
+          echo "HTTP $code"
+          cat /tmp/digest.json; echo
+          test "$code" = "200"
