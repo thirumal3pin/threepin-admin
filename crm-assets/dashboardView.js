@@ -172,7 +172,7 @@ async function loadDashDeadReasons(){
   if(btn){ btn.textContent = '⏳ Summarizing…'; btn.disabled = true; }
   try{
     const idToken = await window.crmAuth.getIdToken();
-    const res = await fetch('/api/dashboard-dead-reasons', {
+    const res = await fetch('/api/dashboard-summary?action=dead-reasons', {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
       body: JSON.stringify({ items: leadsArr.map(l => ({ id: l.id, note: (l.lastNote && l.lastNote.text) || '' })) })

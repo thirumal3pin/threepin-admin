@@ -316,6 +316,21 @@ export async function POST(request) {
       headers: { 'Content-Type': 'application/json' }
     });
   }
+
+  // Folded in here (rather than its own api/dashboard-dead-reasons.js file)
+  // to stay under the Hobby plan's 12-serverless-function-per-deployment cap
+  // — same auth, same underlying summarizeDeadReasons() helper, just routed
+  // by a query param instead of a separate path. Called on-demand by the
+  // Dashboard tab's "Moved to Dead" drill-down; does no Firestore read.
+  const url = new URL(request.url);
+  if (url.searchParams.get('action') === 'dead-reasons') {
+    let body;
+    try { body = await request.json(); } catch { body = {}; }
+    const items = Array.isArray(body && body.items) ? body.items.map(i => ({ id: i && i.id, note: i && i.note })) : [];
+    const map = await summarizeDeadReasons(items);
+    return new Response(JSON.stringify({ reasons: Object.fromEntries(map) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+
   const db = getDb();
   // Manual "Send Now" is independent of the scheduled run — it never sets
   // lastDashboardSentDate, so it can't suppress (or be suppressed by) the
