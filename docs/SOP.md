@@ -175,7 +175,9 @@ same popup works for any real customer — no code changes needed.
 | `users/{uid}` | Per-user | Maps a Firebase Auth user → their tenant + role |
 | `leads`, `conversations` | Flat, `tenantId`-filtered | CRM leads and WhatsApp conversation history |
 | `dataDeletionRequests/{code}` | Audit log | Records from the Meta data-deletion callback |
-| `properties`, `config/*`, `meta/*` | Legacy / dashboard.html | Unrelated to the multi-tenant bot — property listings still single-tenant (see §7) |
+| `properties` | Flat, `tenantId`-filtered | dashboard.html property listings — same tenant model as `leads` |
+| `propertiesSeededFlags/{tenantId}` | Per-tenant | Marks that a tenant's `properties` sample-data seed already ran |
+| `config/*`, `meta/*` | Legacy | Superseded pre-multi-tenant docs, no longer written |
 
 ### Scripts
 
@@ -183,15 +185,17 @@ same popup works for any real customer — no code changes needed.
 |---|---|
 | `scripts/create-tenant.js` | Onboarding a new customer |
 | `scripts/migrate-existing-tenant.js` | Already run once — do not re-run unless onboarding a *second* pre-existing business the same way |
+| `scripts/migrate-properties-tenant.js` | Already run once, when dashboard.html moved to Firebase Auth + tenant-scoped `properties` — safe to re-run, but shouldn't need to |
 
 ---
 
 ## 7. Known gaps / not yet done
 
-- **`dashboard.html` (property listings)** is still single-tenant and has no
-  real Firebase Auth (only a hardcoded password gate) — it was explicitly
-  out of scope for this conversion. Its `properties` collection remains
-  fully open in Firestore rules.
+- **`dashboard.html` (property listings)** now shares the same Firebase Auth
+  + tenantId model as `crm.html` — log in with the same CRM account, no
+  separate dashboard password anymore. Give someone dashboard access the
+  same way as CRM access: `scripts/add-team-member.js --tenantId
+  t_3pinrealty`.
 - **Lead Ads (`api/meta-webhook.js`) multi-tenancy** was deferred — it still
   reads the legacy `config/pipeline` doc rather than being tenant-routed.
 - **Privacy Policy / Terms of Service** (`privacy-policy.html`, `terms.html`)

@@ -648,11 +648,3 @@ function showToast(msg){
 
 // keyboard: ESC closes detail
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();}});
-window.addEventListener('DOMContentLoaded',()=>{
-  if(window.pinAuth && window.pinAuth.isLoggedIn()){
-    window.pinAuth.showApp();
-    init();
-  } else {
-    window.pinAuth.showLogin();
-  }
-});

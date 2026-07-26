@@ -1,18 +1,9 @@
-// ═══════ ADMIN LOGIN GATE ═══════
-// Client-side only: hides the dashboard behind a login screen. Does not
-// protect the Firestore data itself (see dashboard-assets/firebase-sync.js).
-const PIN_ADMIN_USER = 'admin';
-const PIN_ADMIN_PASSWORDS = [
-  'thirumal@threepin.in',
-  'swami@threepin',
-  'rajesh@threepin',
-  'pradeep@threepin'
-];
-const PIN_AUTH_KEY = 'pinAdminAuthed';
-
-function pinIsLoggedIn(){
-  return localStorage.getItem(PIN_AUTH_KEY) === 'true';
-}
+// ═══════ ADMIN LOGIN GATE (Firebase Authentication) ═══════
+// Same Firebase project, tenant (t_3pinrealty), and login accounts as
+// crm.html — log in here with the same email/password. The actual
+// signInWithEmailAndPassword / onAuthStateChanged wiring lives in
+// dashboard-assets/firebase-sync.js, which exposes window.dashboardAuth
+// and calls window.onDashboardAuthChange below on every auth state change.
 
 function pinShowLogin(){
   document.getElementById('loginScreen').classList.add('open');
@@ -26,29 +17,32 @@ function pinShowApp(){
 
 function pinAttemptLogin(e){
   e.preventDefault();
-  const u = document.getElementById('loginUser').value.trim();
-  const p = document.getElementById('loginPass').value;
+  const email = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
   const errBox = document.getElementById('loginErr');
-  if(u === PIN_ADMIN_USER && PIN_ADMIN_PASSWORDS.includes(p)){
-    localStorage.setItem(PIN_AUTH_KEY, 'true');
-    errBox.classList.remove('show');
-    pinShowApp();
-    if(typeof init === 'function') init();
-  } else {
-    errBox.textContent = 'Invalid username or password.';
+  errBox.classList.remove('show');
+  window.dashboardAuth.login(email, password).catch(()=>{
+    errBox.textContent = 'Invalid email or password.';
     errBox.classList.add('show');
-  }
+  });
 }
 
 function pinLogout(){
-  localStorage.removeItem(PIN_AUTH_KEY);
-  location.reload();
+  window.dashboardAuth.logout();
 }
 
 window.pinAuth = {
-  isLoggedIn: pinIsLoggedIn,
-  showLogin: pinShowLogin,
-  showApp: pinShowApp,
   attemptLogin: pinAttemptLogin,
   logout: pinLogout
+};
+
+let dashboardInited = false;
+window.onDashboardAuthChange = function(user){
+  if(user){
+    pinShowApp();
+    if(!dashboardInited){ dashboardInited = true; if(typeof init === 'function') init(); }
+  } else {
+    dashboardInited = false;
+    pinShowLogin();
+  }
 };

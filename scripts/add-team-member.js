@@ -1,7 +1,14 @@
 // Adds a new login for an EXISTING business — unlike create-tenant.js (which
 // mints a brand-new tenantId for a separate business), this attaches the new
 // user to a tenantId that already exists, so they see the exact same leads,
-// bot config, and connected WhatsApp number as everyone else on that tenant.
+// properties, bot config, and connected WhatsApp number as everyone else on
+// that tenant, in BOTH crm.html and dashboard.html (same accounts, same
+// pathway — dashboard.html has no separate login system anymore).
+//
+// If the email already has a Firebase Auth account (e.g. someone created it
+// by hand in the Firebase Console before running this), this does NOT create
+// a duplicate or touch their password — it just attaches the tenantId claim
+// to the existing account.
 //
 // Usage:
 //   node scripts/add-team-member.js --email teammate@3pin.in --tenantId t_3pinrealty [--password somepass] [--role member]
@@ -48,8 +55,17 @@ async function main() {
     process.exit(1);
   }
 
-  const password = args.password || randomBytes(9).toString('base64url');
-  const userRecord = await auth.createUser({ email: args.email, password });
+  let userRecord;
+  let createdPassword = null;
+  try {
+    userRecord = await auth.getUserByEmail(args.email);
+    console.log(`Found an existing Firebase Auth account for ${args.email} — attaching the tenantId claim to it (not creating a new account, not touching their password).`);
+  } catch (e) {
+    if (e.code !== 'auth/user-not-found') throw e;
+    createdPassword = args.password || randomBytes(9).toString('base64url');
+    userRecord = await auth.createUser({ email: args.email, password: createdPassword });
+  }
+
   await auth.setCustomUserClaims(userRecord.uid, { tenantId: args.tenantId });
 
   await db.collection('users').doc(userRecord.uid).set({
@@ -57,14 +73,14 @@ async function main() {
     email: args.email,
     role: args.role || 'member',
     createdAt: Date.now()
-  });
+  }, { merge: true });
 
-  console.log('Team member added:');
+  console.log('Team member ready:');
   console.log('  tenantId:', args.tenantId);
   console.log('  uid:     ', userRecord.uid);
   console.log('  email:   ', args.email);
-  if (!args.password) console.log('  password:', password, '(share this securely — it is not stored anywhere)');
-  console.log('\nThey can log in at crm.html right away and will see the same leads/bot config/WhatsApp connection as everyone else on this tenant.');
+  if (createdPassword) console.log('  password:', createdPassword, '(share this securely — it is not stored anywhere)');
+  console.log('\nThey can log in at crm.html AND dashboard.html right away (same account, same tenant) and will see the same leads/properties/bot config/WhatsApp connection as everyone else on this tenant.');
 }
 
 main().catch(e => {

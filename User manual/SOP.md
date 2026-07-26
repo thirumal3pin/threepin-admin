@@ -5,7 +5,7 @@ unless a step clearly says "developer only."
 
 **The two apps**
 - **CRM** (leads): `https://admin.threepin.in/crm.html` — real login, one account each.
-- **Dashboard** (property listings): `https://admin.threepin.in/dashboard.html` — shared login.
+- **Dashboard** (property listings): `https://admin.threepin.in/dashboard.html` — same login as the CRM, one account each.
 
 **When you see "developer only":** that task needs someone who can run commands
 on a computer. Call your developer. The manual/console fallback is written out so
@@ -115,16 +115,14 @@ board. The "Added by / Updated by" name on old leads stays as-is.
 2. Find the email → **⋮** → **Reset password** (sends a reset email) **or**
    **Edit** to set a new password directly.
 3. Tell the person the new password (if you set one).
-**Verify:** They can log in at `/crm.html`.
-**Common mistake:** The **Dashboard** login is different — it does **not** use
-Firebase. Its passwords are fixed in the code (see [#29](#29-nobody-can-log-in)).
+**Verify:** They can log in at `/crm.html` — the same account also logs into
+`/dashboard.html`.
 
 ### 5. See who has access
 **Who:** Anyone with Firebase Console access.
 1. Console → **pin-realty** → **Authentication → Users**.
-2. The list shows every CRM login, last sign-in, and whether it's disabled.
-**Note:** The **Dashboard** has no per-person accounts — it's one shared login
-with a few passwords.
+2. The list shows every login (both CRM and Dashboard use the same accounts),
+   last sign-in, and whether it's disabled.
 
 ---
 
@@ -213,8 +211,8 @@ lead**. To hand a lead over, just tell your teammate, or add a note:
 ## Everyday data — properties (Dashboard)
 
 ### 14. Add a property
-**Who:** Anyone with the Dashboard password.
-1. Open `/dashboard.html`, log in (username `admin` + a team password).
+**Who:** Any CRM user (same login as `/crm.html`).
+1. Open `/dashboard.html`, log in with your CRM email/password.
 2. Tap **+ Add Property** (or the **+** button on phone).
 3. Tap **📥 Download JSON Template**, fill it in a notes app, then paste it back
    into the box. (Minimum: **name** and **location**.)
@@ -225,21 +223,21 @@ lead**. To hand a lead over, just tell your teammate, or add a note:
 fix and paste again.
 
 ### 15. Edit a property
-**Who:** Anyone with the Dashboard password.
+**Who:** Any CRM user (same login as `/crm.html`).
 1. Tap the property card → **✏️ Edit**.
 2. The box is pre-filled with its details — change what you need → **✓ Save
    Property**.
 **Worked?** "✓ Property updated".
 
 ### 16. Mark a property Sold Out
-**Who:** Anyone with the Dashboard password.
+**Who:** Any CRM user (same login as `/crm.html`).
 1. Open the property → **🏷️ Mark Sold Out** (tap again to unmark).
 **Worked?** A "SOLD OUT" overlay shows; toast confirms. Use **Hide Sold Out**
 filter to hide them.
 **Undo:** Same button → **✓ Marked Sold Out** toggles back to active.
 
 ### 17. Delete a property
-**Who:** Anyone with the Dashboard password.
+**Who:** Any CRM user (same login as `/crm.html`).
 1. Open it → **🗑️ Delete** → confirm.
 **Worked?** "Property deleted".
 **Undo:** No undo — you'd re-add it. See [#31](#31-someone-deleted-something-important).
@@ -383,17 +381,16 @@ Check these **in order**:
   3. Reset the password ([#4](#4-reset-a-password--locked-out)).
   4. "No access / board empty after login" → the account is missing its tenant
      link; developer runs `add-team-member.js` ([#1](#1-add-a-new-team-member-crm)).
-- **Dashboard (`/dashboard.html`):** username is `admin` and the password is one
-  of the fixed team passwords in the code (`dashboard-assets/auth.js`). If those
-  don't work, a developer must check that file. There is no password reset here.
+- **Dashboard (`/dashboard.html`):** same login as the CRM — if it fails here
+  too, follow the CRM steps above (same Firebase account).
 
 ### 30. Data isn't saving
 1. **Refresh** the page and try once more.
 2. **Check connection** — a "Save failed / check your connection" toast means the
    change didn't sync. Get back online and redo it.
-3. **CRM only:** if the console shows "permission denied", the login may have lost
-   its tenant link — log out and back in; if it persists, developer checks the
-   `tenantId` claim.
+3. **CRM or Dashboard:** if the console shows "permission denied", the login may
+   have lost its tenant link — log out and back in; if it persists, developer
+   checks the `tenantId` claim.
 4. **Two people editing the same record** can overwrite each other — last save
    wins. Coordinate on hot records.
 

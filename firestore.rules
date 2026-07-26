@@ -12,11 +12,12 @@ rules_version = '2';
 // `firebase deploy --only firestore:rules` (or pasting into the Firebase
 // Console Rules editor), since it replaces whatever rules exist there today.
 //
-// properties (used by dashboard.html) is intentionally left OUT of tenant
-// scoping below — dashboard.html has no Firebase Auth wiring yet (a
-// separate, not-yet-done piece of work), so a tenantId check here would
-// break it outright. Today properties has no rules-based protection at all;
-// closing that gap requires giving dashboard.html real Firebase Auth first.
+// dashboard.html now shares the same Firebase Auth + tenantId model as
+// crm.html (see dashboard-assets/firebase-sync.js), so `properties` is
+// scoped by tenantId below exactly like `leads`. Run
+// scripts/migrate-properties-tenant.js once before deploying these rules —
+// it backfills tenantId onto every pre-existing properties doc so they
+// don't get locked out.
 
 function tenantId() {
   return request.auth.token.tenantId;
@@ -55,6 +56,9 @@ service cloud.firestore {
       allow read, write: if ownsTenantDoc(tid);
     }
     match /leadsSeededFlags/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+    match /propertiesSeededFlags/{tid} {
       allow read, write: if ownsTenantDoc(tid);
     }
 
@@ -100,23 +104,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // dashboard.html (property listings) has no Firebase Auth wiring at all
-    // yet — it's gated only by a client-side hardcoded password check, not a
-    // real login. Since I don't know what rule (if any) governs this
-    // collection today, this line intentionally preserves fully-open access
-    // rather than guessing and breaking the live dashboard on deploy. This is
-    // a real gap (see the security review earlier this session) — closing it
-    // properly requires giving dashboard.html real Firebase Auth + tenantId
-    // first, which is out of scope for this pass.
+    // dashboard.html (property listings), same ownership model as leads.
     match /properties/{propId} {
-      allow read, write: if true;
+      allow read, delete: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
+      allow create: if writingOwnTenantField();
     }
 
-    // meta/{docId} (e.g. meta/seeded) is used by dashboard-assets/firebase-sync.js's
-    // one-time seed check, which also runs with no auth — preserved exactly
-    // as it exists in the live rules today.
+    // Legacy global seed marker from before properties was tenant-scoped.
+    // No longer written by the app (superseded by propertiesSeededFlags
+    // above) — left readable/writable by no one since nothing should touch
+    // it going forward.
     match /meta/{docId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

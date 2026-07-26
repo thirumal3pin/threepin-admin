@@ -56,9 +56,9 @@ It bundles two independent single-page apps plus a small serverless backend:
   business = one `tenantId`; data is isolated).
 - **Property Intelligence Dashboard** (`dashboard.html`) — a catalogue of ~46
   property listings with search/filter/compare/export, sales talking points, and
-  per-browser notes/favorites. Protected only by a **client-side hardcoded
-  password gate** (not real auth) and is **single-tenant with open Firestore
-  rules** (see [Known issues](#14-known-issues--technical-debt)).
+  per-browser notes/favorites. Protected by the same **real Firebase
+  Authentication** and `tenantId`-scoped Firestore rules as the CRM — log in
+  with the same account.
 - **Public landing page** (`index.html`) — brochure page with a cosmetic "Admin
   login" modal that does nothing but link to the two apps.
 
@@ -200,9 +200,9 @@ the WhatsApp Cloud API.
 │
 ├── dashboard-assets/              Everything dashboard.html loads
 │   ├── app.js                     Filters, cards, add/edit/delete, compare, export, notes
-│   ├── auth.js                    ⚠️ CLIENT-SIDE password gate with hardcoded passwords
-│   ├── firebase-sync.js           Firebase init + realtime sync (NO auth) for `properties`
-│   ├── sample-data.js             46 starter properties (seeded once via meta/seeded)
+│   ├── auth.js                    Login gate glue — delegates to firebase-sync.js's dashboardAuth
+│   ├── firebase-sync.js           Firebase init, Email/Password auth, tenant-scoped realtime sync
+│   ├── sample-data.js             46 starter properties (seeded once per tenant via propertiesSeededFlags)
 │   ├── style.css                  All dashboard styling
 │   └── README.md                  Dashboard-specific notes
 │
@@ -377,8 +377,8 @@ flowchart LR
   `setDoc properties/{id}` → realtime `onSnapshot` re-render (rolls back on error).
 - **Files:** `dashboard.html`, `dashboard-assets/app.js`,
   `dashboard-assets/firebase-sync.js`, `dashboard-assets/auth.js`.
-- **Data:** `properties` collection, `meta/seeded` marker. Favorites/notes/
-  interest are `localStorage` only (per-browser, not synced).
+- **Data:** `properties` collection (`tenantId`-scoped), `propertiesSeededFlags/{tid}`
+  marker. Favorites/notes/interest are `localStorage` only (per-browser, not synced).
 
 ### 5.8 Meta Lead Ads intake (legacy, single-tenant)
 
@@ -475,13 +475,15 @@ Readable only by that same uid.
 ### `dataDeletionRequests/{code}` — Meta compliance audit log
 `{ metaUserId, requestedAt, status }`.
 
-### `properties` — dashboard listings (single-tenant, OPEN rules)
-Free-form; common fields: `id, name, builder, location, type, config, status,
+### `properties` — dashboard listings (`tenantId`-scoped, same model as `leads`)
+Free-form; common fields: `id, tenantId, name, builder, location, type, config, status,
 possession, startingPrice, pricePerSqft, contactName, contactNumber, totalUnits,
 sqftRange, highlights, amenities, nearby, connectivity, vastu, soldOut, …`.
 Accepts an alternate flat schema normalized by `normalizeProperty()`.
 
-### `meta/{docId}` — dashboard seed marker (`meta/seeded`), OPEN rules
+### `propertiesSeededFlags/{tenantId}` — dashboard per-tenant seed marker
+
+### `meta/{docId}` — legacy pre-tenant-scoping seed marker, no longer written (rules deny all access)
 
 ### `config/*` — **legacy** pre-multi-tenant singletons
 `config/pipeline`, `config/whatsappBot`, `config/knowledge`. Superseded by the
@@ -519,13 +521,19 @@ per-tenant collections; still read by `api/meta-webhook.js`. Client read-only.
   browser). Server-side functions using `firebase-admin` **bypass rules by
   design** (that's how webhooks write without a user session).
 
-### Dashboard (`dashboard.html`) — NOT real auth
-- A **client-side hardcoded** username (`admin`) + one of four plaintext passwords
-  in `dashboard-assets/auth.js`; a successful check sets
-  `localStorage.pinAdminAuthed = true`. This hides the UI only — the
-  `properties`/`meta` collections are **fully open** in Firestore rules, so anyone
-  with the (public) Firebase config can read/write them directly. See
-  [Known issues](#14-known-issues--technical-debt) — this is Critical/High.
+### Dashboard (`dashboard.html`) — same real auth as the CRM
+- Uses the **same Firebase Authentication** (Email/Password) and the same
+  `t_3pinrealty` tenant as the CRM — log in with the same account. No
+  separate password store.
+- `properties` docs carry a `tenantId` field and `firestore.rules` scopes
+  read/write to the signed-in user's own `tenantId`, exactly like `leads`.
+  `scripts/migrate-properties-tenant.js` backfilled `tenantId` onto every
+  pre-existing property doc before these rules went live.
+  ⚠️ **Rollout order matters:** run the migration script, then deploy the
+  updated `firestore.rules` (Firebase Console → Firestore → Rules, or
+  `firebase deploy --only firestore:rules` — see the "not deployed
+  automatically" note in [§14](#14-known-issues--technical-debt)). Deploying
+  the rules before the migration locks everyone out of existing properties.
 
 ### Webhooks — HMAC, not user auth
 `meta-webhook.js`, `whatsapp-bot-webhook.js`, and `data-deletion-callback.js`
@@ -726,11 +734,11 @@ vercel dev          # runs static pages + api/*.js together at http://localhost:
    set `FIREBASE_SERVICE_ACCOUNT_PATH` to wherever you put it.
 
 **Verify it works:**
-- `dashboard.html`: log in as `admin` / one of the passwords in
-  `dashboard-assets/auth.js`; you should see ~46 property cards.
 - `crm.html`: log in with a Firebase Email/Password user that has a `tenantId`
   claim (create one with `node scripts/create-tenant.js …`); you should see the
   Kanban board seed with 10 sample leads.
+- `dashboard.html`: log in with that same account; you should see ~46 property
+  cards seeded for that tenant.
 - Functions: `curl http://localhost:3000/api/public-config` → JSON with
   `metaAppId`.
 
@@ -816,14 +824,6 @@ Dashboards/docs: [Firebase Console](https://console.firebase.google.com/project/
 ## 14. Known issues & technical debt
 
 ### 🔴 Critical
-- **Dashboard passwords are hardcoded in client JS.** `dashboard-assets/auth.js`
-  ships four plaintext passwords readable via "View Source". Anyone can read them
-  and log into the dashboard UI. **Rotate to real auth** (Firebase) or at minimum
-  stop treating this as a security control.
-- **`properties` and `meta` Firestore collections are world-writable.**
-  `firestore.rules` has `allow read, write: if true` for both. Anyone with the
-  (public) Firebase config can read/modify/delete all listings directly, bypassing
-  the login entirely. Closing this needs real auth on the dashboard first.
 - **Secrets can be committed by accident.** Scripts expect a service-account JSON
   at `api/pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json`. It is git-ignored
   (`*firebase-adminsdk*.json`), but verify it was never force-added. `.env.local`
@@ -998,8 +998,8 @@ Dashboards/docs: [Firebase Console](https://console.firebase.google.com/project/
 | `users/{uid}` | (client, own uid) | `create-tenant.js`, `add-team-member.js`, `migrate-existing-tenant.js` | — |
 | `leadsSeededFlags/{tid}` | `firebase-sync.js` | `firebase-sync.js` | — |
 | `dataDeletionRequests/{code}` | `data-deletion-status.js` | `data-deletion-callback.js` | — |
-| `properties` | `dashboard-assets/firebase-sync.js` | `dashboard-assets/app.js`→`firebase-sync.js` | `dashboard-assets/firebase-sync.js` |
-| `meta/seeded` | `dashboard-assets/firebase-sync.js` | `dashboard-assets/firebase-sync.js` | — |
+| `properties` | `dashboard-assets/firebase-sync.js` (tenant-scoped) | `dashboard-assets/app.js`→`firebase-sync.js`, `migrate-properties-tenant.js` | `dashboard-assets/firebase-sync.js` |
+| `propertiesSeededFlags/{tid}` | `dashboard-assets/firebase-sync.js` | `dashboard-assets/firebase-sync.js`, `migrate-properties-tenant.js` | — |
 | `config/*` (legacy) | `meta-webhook.js`, `migrate-existing-tenant.js` | (rules: client write denied) | — |
 
 ### c) Env var → consumers
@@ -1035,8 +1035,8 @@ Dashboards/docs: [Firebase Console](https://console.firebase.google.com/project/
 | `api/_bot-shared.js` | `generate-lead-summary`, `backfill-lead-summaries`, `bot-test-message`, `whatsapp-bot-webhook`, `whatsapp-embedded-signup`, `knowledge-sync`, `followup-digest`, `data-deletion-*`, `create-tenant.js` (`DEFAULT_BOT_CONFIG`) | `getDb()`, `verifyCrmUser(req)→{…,tenantId}`, `buildSystemPrompt`, `getWhatsAppCreds`, `resolveTenantByPhoneNumberId`, `getKnowledgeSources`, `DEFAULT_BOT_CONFIG`, `UPDATE_LEAD_INFO_TOOL` |
 | `api/_lead-summary-shared.js` | `generate-lead-summary.js`, `backfill-lead-summaries.js` | `LEAD_SUMMARY_MODEL`, `LEAD_SUMMARY_MAX_TOKENS`, `buildLeadSummarySystemPrompt()`, `buildLeadSummaryUserPrompt(lead, stageName)` |
 | `crm-assets/firebase-sync.js` | `crm.html` (window globals `crmFirebase`, `crmAuth`; callbacks `applyLeadsSnapshot`, `applyPipelineSnapshot`, `applyEnquiryTypesSnapshot`, `applyDigestSettingsSnapshot`, `onCrmAuthChange`) | `crm-assets/app.js` calls these globals |
-| `dashboard-assets/firebase-sync.js` | `dashboard.html` (`dashboardFirebase`, `applyPropertiesSnapshot`) | `dashboard-assets/app.js` calls these globals |
-| `dashboard-assets/auth.js` | `dashboard.html`, `app.js` (`window.pinAuth`) | `isLoggedIn/showLogin/showApp/attemptLogin/logout` |
+| `dashboard-assets/firebase-sync.js` | `dashboard.html` (`dashboardFirebase`, `dashboardAuth`; callback `applyPropertiesSnapshot`, `onDashboardAuthChange`) | `dashboard-assets/app.js`/`auth.js` call these globals |
+| `dashboard-assets/auth.js` | `dashboard.html`, `app.js` (`window.pinAuth`) | `attemptLogin/logout` |
 
 ### f) Orphans (defined but unused — do not delete without confirming)
 - **`dash-copy.html`** — older dashboard copy, referenced nowhere.
@@ -1072,6 +1072,9 @@ Dashboards/docs: [Firebase Console](https://console.firebase.google.com/project/
 - [ ] ⚠️ **Should `dash-copy.html` be deleted?** Confirm it's a dead copy.
 - [ ] ⚠️ **Node version for local scripts?** No `engines` field. Confirm you run
       Node 18+/20 locally (matching Vercel).
-- [ ] ⚠️ **Dashboard security:** confirm the open `properties`/`meta` rules and
-      client-side passwords are an accepted risk or scheduled for real auth.
+- [ ] ⚠️ **Dashboard security migration:** confirm
+      `scripts/migrate-properties-tenant.js` has been run and the updated
+      `firestore.rules` deployed to the live Firebase project — until both are
+      done, the dashboard's `properties` collection is still governed by
+      whatever rules are live in the console, not this repo file.
 ```

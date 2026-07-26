@@ -12,63 +12,45 @@ a thin shell so edits touch one small file instead of a 1000+ line page.
 | `sample-data.js` | The 46 starter properties, used to seed Firestore once and to paint the page instantly on first load. |
 | `auth.js` | The login gate (see below). |
 | `app.js` | All dashboard logic — filters, search, cards, add/edit/delete, sold-out, notes, favorites, compare, export. |
-| `firebase-sync.js` | Connects to Firebase, seeds the database on first run, and keeps every open browser in sync in realtime. |
+| `firebase-sync.js` | Connects to Firebase, handles login, seeds the database on first run, and keeps every open browser in sync in realtime. |
 
 Load order in `dashboard.html` matters: `sample-data.js` → `auth.js` →
 `app.js` → `firebase-sync.js` (the last one is a `type="module"` script).
 
 ## Logging in
 
-- **Username:** `admin` (same for everyone)
-- **Password:** any one of:
-  - `thirumal@threepin.in`
-  - `swami@threepin`
-  - `rajesh@threepin`
-  - `pradeep@threepin`
+Real **Firebase Authentication** — the same Firebase project, tenant
+(`t_3pinrealty`), and accounts as `crm.html`. Log in with the same
+email/password used there (e.g. `3pinrentals@gmail.com` or
+`thirumal@threepin.in`). There's no separate dashboard-only password list
+anymore; to give someone dashboard access, give them a CRM login via
+`scripts/add-team-member.js --tenantId t_3pinrealty` (see `docs/SOP.md`) —
+they'll then be able to log into both `crm.html` and `dashboard.html` with
+the same credentials.
 
-Each person uses the same username with their own password — any
-password in the list works. The whole dashboard is hidden behind a
-login screen until a valid pair is entered. Once logged in, the session
-is remembered in the browser's `localStorage` (key `pinAdminAuthed`) —
-closing the tab or reloading the page does **not** ask for the password
-again. Click **Logout** in the header to clear it and return to the
-login screen.
+Session persistence is handled by the Firebase SDK itself (it stays signed
+in across reloads until you click **Logout**), not `localStorage`.
 
-To add, remove, or change passwords, edit the constants at the top of
-`auth.js`:
-```js
-const PIN_ADMIN_USER = 'admin';
-const PIN_ADMIN_PASSWORDS = [
-  'thirumal@threepin.in',
-  'swami@threepin',
-  'rajesh@threepin',
-  'pradeep@threepin'
-];
-```
+### Security
 
-### ⚠️ Security note
-
-This login is a **client-side check only**. It hides the dashboard UI from
-casual visitors, but:
-- The password is readable in `auth.js` by anyone who views page source.
-- It does **not** protect the Firestore database itself — the security
-  rules are currently open (`allow read, write: if true`), so anyone with
-  the Firebase project config could read/write data directly via the API,
-  bypassing this login entirely.
-
-This is an accepted tradeoff for now (simplicity over security). If this
-ever needs to be properly locked down, replace this with real Firebase
-Authentication and matching Firestore security rules.
+- Firestore security rules (`firestore.rules`) enforce that only signed-in
+  users with a `tenantId` claim can read/write `properties`, and only for
+  their own tenant — scoped exactly like the CRM's `leads` collection.
+- Before deploying the updated rules, run
+  `node scripts/migrate-properties-tenant.js` once — it backfills
+  `tenantId` onto every property doc that predates this change, so
+  existing listings aren't locked out.
 
 ## How data flows (and fallback behavior)
 
 - Properties and each property's "sold out" flag live in **Firebase
-  Firestore** (project `pin-realty`), not in browser storage. Favorites
-  and CRM notes stay local per-browser (`localStorage`) since those are
-  personal, not shared.
-- On the very first load ever, `firebase-sync.js` seeds Firestore with
-  the 46 properties from `sample-data.js` (checked via a `meta/seeded`
-  marker doc, so it only runs once).
+  Firestore** (project `pin-realty`), scoped by `tenantId`, not in browser
+  storage. Favorites and CRM notes stay local per-browser (`localStorage`)
+  since those are personal, not shared.
+- On first login for a tenant with no properties yet, `firebase-sync.js`
+  seeds Firestore with the 46 properties from `sample-data.js` (checked via
+  a `propertiesSeededFlags/{tenantId}` marker doc, so it only runs once per
+  tenant).
 - After that, a realtime listener (`onSnapshot`) means every add / edit /
   delete / sold-out toggle appears on **every other open browser within
   seconds**, no refresh needed.
@@ -85,6 +67,7 @@ Authentication and matching Firestore security rules.
 
 - Console: https://console.firebase.google.com → project `pin-realty`
 - Database: Firestore, collection `properties` (one document per
-  listing, document ID = property `id`), plus a `meta/seeded` marker doc.
+  listing, document ID = property `id`, each with a `tenantId` field),
+  plus a `propertiesSeededFlags/{tenantId}` marker doc per tenant.
 - SDK: loaded from `https://www.gstatic.com/firebasejs/12.16.0/` via
   CDN — no `npm install` or build step needed.
