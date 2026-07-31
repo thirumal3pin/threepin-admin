@@ -131,6 +131,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .lcard-followup.overdue{color:var(--red);background:var(--red-bg);border-color:transparent;}
 .lcard-next{font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;}
 .lcard-next:hover{border-color:var(--ink);background:var(--ink);color:#fff;}
+.lcard-flag{font-size:10.5px;font-weight:700;border-radius:7px;padding:4px 8px;margin-bottom:8px;display:inline-block;}
+.lcard-flag.sent{color:var(--green);background:var(--green-bg);}
+.lcard-flag.not-sent{color:var(--ink3);background:var(--bg2);}
 
 /* ── LIST VIEW ── */
 .list-view table{width:100%;border-collapse:collapse;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);}
@@ -247,6 +250,30 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .dp-flag-btn:hover{color:var(--ink);}
 .dp-flag-btn.yes.active{background:var(--green);color:#fff;}
 .dp-flag-btn.no.active{background:var(--red);color:#fff;}
+/* Same pill inside the Add/Edit Lead modal, where it sits under its own
+   field label rather than beside the stage selector. */
+.lm-flag-toggle{width:100%;justify-content:space-between;padding:5px 6px 5px 14px;}
+
+/* ── DUPLICATE LEAD MODAL ── */
+.dup-warn{background:var(--red-bg);color:var(--red);border-radius:10px;padding:11px 13px;font-size:12.5px;font-weight:600;line-height:1.5;margin-bottom:14px;}
+/* Wider than the standard modal, and the existing lead is laid out two
+   columns wide: this is a comparison screen, and the "what will change" list
+   below has to be visible without scrolling for the choice to be an informed
+   one. */
+#dupModal .modal-box{max-width:640px;}
+.dup-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:6px 13px;margin-bottom:18px;display:grid;grid-template-columns:1fr 1fr;column-gap:22px;}
+.dup-kv{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px;}
+.dup-kv:nth-last-child(-n+2){border-bottom:none;}
+.dup-k{color:var(--ink4);font-weight:700;white-space:nowrap;}
+.dup-v{color:var(--ink);font-weight:600;text-align:right;word-break:break-word;}
+.dup-sec-title{font-size:11px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;}
+.dup-changes{display:flex;flex-direction:column;gap:6px;}
+.dup-change{display:grid;grid-template-columns:minmax(90px,auto) 1fr auto 1fr;align-items:center;gap:8px;background:var(--gold-lt);border:1px solid #FDE68A;border-radius:9px;padding:8px 11px;font-size:12px;}
+.dup-change-label{font-weight:800;color:var(--ink3);}
+.dup-change-old{color:var(--ink4);text-decoration:line-through;word-break:break-word;}
+.dup-change-arrow{color:var(--ink4);font-weight:700;}
+.dup-change-new{color:var(--ink);font-weight:700;word-break:break-word;}
+.dup-change-note,.dup-change-none{font-size:12px;color:var(--ink3);background:var(--bg);border-radius:9px;padding:9px 11px;line-height:1.5;}
 .sec{margin-bottom:26px;}
 .sec-title{font-size:11px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:13px;}
 .info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;}
@@ -516,9 +543,60 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .dash-hygiene-row{display:flex;justify-content:space-between;align-items:center;padding:8px 4px;font-size:13px;border-bottom:1px solid var(--border);}
 .dash-hygiene-row:last-of-type{border-bottom:none;}
 
+/* ── DASHBOARD CARDS / CHARTS / KPIs ── */
+.dash-card{background:var(--white);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px 12px;margin-bottom:12px;box-shadow:var(--shadow);}
+.dash-card-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px;}
+.dash-card-title{font-size:13.5px;font-weight:700;color:var(--ink);}
+.dash-card-sub{font-size:11.5px;color:var(--ink3);margin-top:2px;}
+.dash-card-btn{flex-shrink:0;font-size:11.5px;font-weight:700;padding:6px 11px;border-radius:9px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;font-family:var(--sans);}
+.dash-card-btn:hover{border-color:var(--ink);}
+.dash-sec-note{font-size:11.5px;color:var(--ink3);padding:2px 4px 8px;line-height:1.5;}
+
+.dash-chart-wrap{position:relative;}
+.dash-chart-svg{width:100%;height:auto;display:block;overflow:visible;}
+.dash-chart-tick{font-family:var(--sans);font-size:11px;fill:var(--ink4);}
+.dash-chart-endlabel{font-family:var(--sans);font-size:12px;font-weight:800;fill:var(--ink2);}
+.dash-chart-tip{position:absolute;z-index:5;pointer-events:none;background:var(--ink);color:#fff;font-size:11.5px;line-height:1.5;padding:7px 10px;border-radius:8px;white-space:nowrap;box-shadow:var(--shadow-md);}
+
+/* min-width:0 is load-bearing: .dash-sec-body is a flex column, and a flex
+   item won't shrink below its content width without it — the table would
+   then push the whole page sideways on a phone instead of scrolling itself. */
+.dash-chart-table{overflow-x:auto;margin-top:4px;min-width:0;max-width:100%;}
+.dash-chart-table table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.dash-chart-table th{text-align:left;font-size:10px;font-weight:800;color:var(--ink4);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1.5px solid var(--border);white-space:nowrap;}
+.dash-chart-table td{padding:7px 8px;border-bottom:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.dash-chart-table td.dash-td-name{font-weight:600;color:var(--ink);white-space:normal;min-width:150px;}
+.dash-chart-table tr:last-child td{border-bottom:none;}
+
+.dash-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.dash-kpi{background:var(--bg);border-radius:11px;padding:11px 13px;}
+.dash-kpi-val{font-family:var(--serif);font-size:21px;font-weight:700;line-height:1.1;}
+.dash-kpi-label{font-size:10.5px;color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:3px;}
+.dash-kpi-sub{font-size:11px;color:var(--ink4);margin-top:2px;}
+
+.dash-bar-list{display:flex;flex-direction:column;gap:9px;padding:4px 4px 8px;}
+.dash-bar-row{display:grid;grid-template-columns:minmax(0,150px) 1fr auto;align-items:center;gap:10px;}
+.dash-bar-label{font-size:12.5px;font-weight:600;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dash-bar-track{height:14px;background:var(--bg2);border-radius:0 4px 4px 0;overflow:hidden;}
+.dash-bar-fill{height:100%;border-radius:0 4px 4px 0;}
+.dash-bar-val{font-size:12.5px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;min-width:28px;text-align:right;}
+.dash-bar-sub{grid-column:2/4;font-size:11px;color:var(--ink4);}
+
 @media(max-width:680px){
   .dash-stats{grid-template-columns:repeat(2,1fr);}
   .dash-stat-val{font-size:22px;}
+  .dash-kpi-grid{grid-template-columns:repeat(2,1fr);}
+  /* Label above its own full-width bar — a 150px label column leaves no room
+     for the mark on a phone. */
+  .dash-bar-row{grid-template-columns:1fr auto;grid-template-areas:"label val" "track track";row-gap:5px;}
+  .dash-bar-label{grid-area:label;}
+  .dash-bar-val{grid-area:val;}
+  .dash-bar-track{grid-area:track;}
+  .dash-bar-sub{grid-column:1/3;}
+  /* The chart's viewBox scales to ~0.47 on a phone, so these are sized in
+     viewBox units to land back at ~11px on screen. */
+  .dash-chart-tick{font-size:23px;}
+  .dash-chart-endlabel{font-size:25px;}
 }
 
 /* ── TOAST ── */
@@ -542,13 +620,26 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
   .login-box{padding:24px 22px;}
 
   .hdr-nav{gap:6px;}
-  .fu-nav-btn,.view-dd-btn{padding:9px 11px;}
+  /* 9px, not 11px: the nav grows by the follow-up badge's width the moment
+     anything is overdue, and at 11px that tipped the header past a 390px
+     viewport and made the whole page scroll sideways. */
+  .fu-nav-btn,.view-dd-btn{padding:9px;}
   .fu-nav-label{display:none;}
   .hdr-nav .addl-btn{display:none;}
 
   .mobile-fab{display:flex;position:fixed;bottom:22px;right:18px;width:56px;height:56px;border-radius:50%;background:var(--ink);color:#fff;align-items:center;justify-content:center;font-size:28px;line-height:1;box-shadow:var(--shadow-lg);z-index:140;border:none;cursor:pointer;padding:0;}
 
   .list-view{overflow-x:auto;}
+
+  /* Three buttons side by side wrap to three lines of text at 390px — stack
+     them full-width instead. */
+  #dupModal .modal-ftr{flex-direction:column;}
+  .dup-card{grid-template-columns:1fr;}
+  .dup-kv:nth-last-child(-n+2){border-bottom:1px solid var(--border);}
+  .dup-kv:last-child{border-bottom:none;}
+  .dup-change{grid-template-columns:1fr;gap:2px;}
+  .dup-change-arrow{display:none;}
+  .dup-change-old::after{content:' →';color:var(--ink4);}
 
   .bot-editor-body{padding:16px 16px 80px;flex-direction:column;}
   .bot-preview{width:100%;position:static;}

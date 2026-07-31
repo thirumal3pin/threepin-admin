@@ -43,6 +43,23 @@ function waHref(phone){
   return `https://wa.me/${digits}`;
 }
 
+// Canonical form of a phone number, used ONLY for duplicate detection and
+// never for display. Deliberately identical to normPhone() in
+// dashboardMetrics.js so the CRM's "already exists" check and the Dashboard's
+// "duplicate phone numbers" hygiene count can never disagree.
+function phoneKey(raw){
+  const digits = String(raw || '').replace(/\D/g, '');
+  if(!digits) return '';
+  if(digits.length===10) return '91'+digits;
+  if(digits.length===11 && digits.startsWith('0')) return '91'+digits.slice(1);
+  return digits;
+}
+function findLeadByPhone(phone, excludeId){
+  const key = phoneKey(phone);
+  if(!key) return null;
+  return leads.find(l => l.id !== excludeId && phoneKey(l.phone) === key) || null;
+}
+
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
 window.applyLeadsSnapshot = function(list){
   // Notes + history now live in per-lead subcollections, so they don't arrive
@@ -88,12 +105,16 @@ window.applyDashboardEmailSettingsSnapshot = function(settings){
   dashboardEmailSettings = settings;
 };
 
+// Rendering runs FIRST and the auxiliary passes are individually isolated:
+// a throw in any of them (browser notification quirks, a bad metric) must
+// never be able to leave the board/list showing stale-empty data. This was a
+// real mobile bug — see checkFollowupNotify() for the specific case.
 function refreshAll(){
-  updateStats();
-  updateFollowupBadge();
-  checkFollowupNotify(false);
   if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else applyFilters();
+  try{ updateStats(); } catch(e){ console.error('updateStats failed:', e); }
+  try{ updateFollowupBadge(); } catch(e){ console.error('updateFollowupBadge failed:', e); }
+  try{ checkFollowupNotify(false); } catch(e){ console.error('checkFollowupNotify failed:', e); }
 }
 
 // ═══════ INIT ═══════
@@ -123,6 +144,16 @@ async function toggleBrowserNotify(){
   if(!fuNotifyEnabled){
     const perm = await Notification.requestPermission();
     if(perm!=='granted'){ showToast('Notification permission denied'); return; }
+    // Probe with a real (confirming) notification: permission can be 'granted'
+    // on mobile Chrome while the constructor still throws, so granting alone
+    // is not proof the device can show one.
+    try{
+      new Notification('🔔 Browser alerts on', { body:'You\'ll be reminded about overdue follow-ups.', tag:'crm-followups' });
+    } catch(e){
+      console.warn('Browser notifications unsupported on this device:', e);
+      showToast('This device can\'t show browser alerts — use the Follow-ups tab or the daily digest');
+      return;
+    }
     fuNotifyEnabled = true;
     localStorage.setItem(FU_NOTIFY_KEY,'1');
     showToast('✓ Browser alerts enabled');
@@ -145,11 +176,24 @@ function checkFollowupNotify(force){
   const now = Date.now();
   if(!force && now-fuLastNotifiedAt < FU_NOTIFY_INTERVAL_MS) return;
   fuLastNotifiedAt = now;
-  const n = new Notification('📅 Follow-ups need attention', {
-    body: `${buckets.overdue.length} overdue, ${buckets.today.length} due today`,
-    tag: 'crm-followups'
-  });
-  n.onclick = () => { window.focus(); toggleView('followups'); n.close(); };
+  // Mobile Chrome/Android throws "Illegal constructor" here — the Notification
+  // constructor is desktop-only there, and permission can still be 'granted',
+  // so there's no feature test that predicts it. An unhandled throw used to
+  // abort refreshAll() mid-flight and leave the board rendered empty on phones;
+  // now it degrades to an in-app toast and turns the preference back off.
+  try{
+    const n = new Notification('📅 Follow-ups need attention', {
+      body: `${buckets.overdue.length} overdue, ${buckets.today.length} due today`,
+      tag: 'crm-followups'
+    });
+    n.onclick = () => { window.focus(); toggleView('followups'); n.close(); };
+  } catch(e){
+    console.warn('Browser notifications unsupported on this device:', e);
+    fuNotifyEnabled = false;
+    localStorage.setItem(FU_NOTIFY_KEY,'0');
+    updateNotifyBtnLabel();
+    showToast(`📅 ${buckets.overdue.length} overdue, ${buckets.today.length} due today`);
+  }
 }
 
 function updateStats(){
@@ -523,6 +567,14 @@ function onColDrop(e, stageId){
   if(id) changeStage(id, stageId);
 }
 
+// Leads created before the detailsSent field existed have it undefined, which
+// reads as "No" everywhere (detail toggle, export, dashboard) — keep this the
+// same strict === true test so the board never disagrees with them.
+function detailsSentChip(l){
+  const sent = l.detailsSent === true;
+  return `<div class="lcard-flag ${sent?'sent':'not-sent'}">${sent?'📨 Details sent':'📭 Details not sent'}</div>`;
+}
+
 function leadCardHtml(l){
   const stage = stageById(l.stageId);
   const next = nextStageId(l.stageId);
@@ -539,6 +591,7 @@ function leadCardHtml(l){
       ${l.enquiryType?`<div>🏷️ ${escapeHtml(l.enquiryType)}</div>`:''}
       ${l.propertyInterest?`<div>🏠 ${escapeHtml(l.propertyInterest)}</div>`:''}
     </div>
+    ${detailsSentChip(l)}
     ${followUpBadge(l)}
     <div class="lcard-foot">
       <div class="lcard-time">${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}</div>
@@ -845,6 +898,23 @@ function confirmAddEnquiryType(){
   hideNewTypeRow();
 }
 
+// Sent Details in the add/edit modal is a tri-state-free Yes/No pill mirroring
+// the detail panel's toggle — held in this draft variable while the modal is
+// open, and only written onto the lead on save.
+let lmDetailsSent = false;
+function renderLeadModalDetailsSent(){
+  const wrap = document.getElementById('lmDetailsSentToggle');
+  if(!wrap) return;
+  wrap.querySelector('.yes').classList.toggle('active', lmDetailsSent);
+  wrap.querySelector('.no').classList.toggle('active', !lmDetailsSent);
+  wrap.classList.toggle('sent', lmDetailsSent);
+  wrap.classList.toggle('not-sent', !lmDetailsSent);
+}
+function setLeadModalDetailsSent(value){
+  lmDetailsSent = value === true;
+  renderLeadModalDetailsSent();
+}
+
 function openAddLeadModal(){
   lModalMode='add'; lModalEditId=null;
   document.getElementById('lmTitle').textContent='Add New Lead';
@@ -860,6 +930,7 @@ function openAddLeadModal(){
   document.getElementById('lmFollowUpDate').value='';
   document.getElementById('lmFollowUpTime').value='';
   document.getElementById('lmNotes').value='';
+  setLeadModalDetailsSent(false);
   lmModalContactAt = Date.now();
   document.getElementById('lmContactTimeDisplay').textContent = new Date(lmModalContactAt).toLocaleString();
   document.getElementById('lmErr').classList.remove('show');
@@ -883,6 +954,7 @@ function openEditLeadModal(id){
   document.getElementById('lmFollowUpDate').value = fu ? toDateInputValue(fu) : '';
   document.getElementById('lmFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
   document.getElementById('lmNotes').value='';
+  setLeadModalDetailsSent(l.detailsSent === true);
   lmModalContactAt = l.contactAt || l.createdAt || Date.now();
   document.getElementById('lmContactTimeDisplay').textContent = new Date(lmModalContactAt).toLocaleString();
   document.getElementById('lmErr').classList.remove('show');
@@ -908,113 +980,121 @@ function computeFollowUpAt(dateStr, timeStr){
   }
   return { value: new Date(`${dateStr}T00:00:00`).getTime() };
 }
-function saveLeadModal(){
+// Reads + validates the add/edit modal into one plain object. Returns null
+// (after showing the inline error) when anything is missing, so every caller —
+// save, and the duplicate-merge path — validates identically.
+function readLeadForm(){
   const errBox = document.getElementById('lmErr');
   const showErr = (msg) => { errBox.textContent = msg; errBox.classList.add('show'); };
   errBox.classList.remove('show');
 
-  const channel = document.getElementById('lmChannel').value;
-  const stageId = document.getElementById('lmStage').value || (stages.length ? stages[0].id : null);
-  const name = document.getElementById('lmName').value.trim();
-  const phone = document.getElementById('lmPhone').value.trim();
-  const email = document.getElementById('lmEmail').value.trim();
-  const enquiryType = document.getElementById('lmEnquiryType').value;
-  const propertyInterest = document.getElementById('lmInterest').value.trim();
-  const budget = document.getElementById('lmBudget').value.trim();
+  const form = {
+    channel: document.getElementById('lmChannel').value,
+    stageId: document.getElementById('lmStage').value || (stages.length ? stages[0].id : null),
+    name: document.getElementById('lmName').value.trim(),
+    phone: document.getElementById('lmPhone').value.trim(),
+    email: document.getElementById('lmEmail').value.trim(),
+    enquiryType: document.getElementById('lmEnquiryType').value,
+    propertyInterest: document.getElementById('lmInterest').value.trim(),
+    budget: document.getElementById('lmBudget').value.trim(),
+    detailsSent: lmDetailsSent === true,
+    noteText: document.getElementById('lmNotes').value.trim(),
+    followUpAt: null
+  };
+
+  if(!form.channel){ showErr('Please select a channel.'); return null; }
+  if(!form.name){ showErr('Name is required.'); return null; }
+  if(!form.phone){ showErr('Phone number is required.'); return null; }
+  if(!form.enquiryType || form.enquiryType==='__add_new__'){ showErr('Please select an enquiry type.'); return null; }
+  if(!form.propertyInterest){ showErr('Property / Locality is required.'); return null; }
+
   const followUpDate = document.getElementById('lmFollowUpDate').value;
   const followUpTime = document.getElementById('lmFollowUpTime').value;
-  const noteText = document.getElementById('lmNotes').value.trim();
-
-  if(!channel){ showErr('Please select a channel.'); return; }
-  if(!name){ showErr('Name is required.'); return; }
-  if(!phone){ showErr('Phone number is required.'); return; }
-  if(!enquiryType || enquiryType==='__add_new__'){ showErr('Please select an enquiry type.'); return; }
-  if(!propertyInterest){ showErr('Property / Locality is required.'); return; }
-
-  let followUpAt = null;
   if(followUpDate){
     const r = computeFollowUpAt(followUpDate, followUpTime);
-    if(r.error){ showErr(r.error); return; }
-    followUpAt = r.value;
+    if(r.error){ showErr(r.error); return null; }
+    form.followUpAt = r.value;
   }
+  return form;
+}
 
-  const now = Date.now();
-  const contactAt = lmModalContactAt || now;
+// Field-by-field difference between a lead and a submitted form. Each entry
+// carries BOTH the escaped history sentence and the raw label/old/new, so the
+// same diff drives the history log, the duplicate modal's preview, and the
+// "what changed" note — they can never describe different things.
+function leadFormDiffs(l, form){
+  const diffs = [];
+  const push = (type, label, oldVal, newVal) => {
+    if((oldVal||'') === (newVal||'')) return;
+    diffs.push({
+      type, label, oldVal: oldVal||'', newVal: newVal||'',
+      text: `${label} changed from <b>${escapeHtml(oldVal||'—')}</b> to <b>${escapeHtml(newVal||'—')}</b>`
+    });
+  };
+  push('field', 'Channel', channelLabel(l.channel), channelLabel(form.channel));
+  push('field', 'Name', l.name, form.name);
+  push('field', 'Phone', l.phone, form.phone);
+  push('field', 'Email', l.email, form.email);
+  push('field', 'Enquiry type', l.enquiryType, form.enquiryType);
+  push('field', 'Property / Locality', l.propertyInterest, form.propertyInterest);
+  push('field', 'Budget', l.budget, form.budget);
+
+  const oldStage = stageById(l.stageId), newStage = stageById(form.stageId);
+  push('stage', 'Stage', oldStage ? oldStage.name : '', newStage ? newStage.name : '');
+
+  const flag = v => v === true ? 'Yes' : 'No';
+  push('details-sent', 'Sent details', flag(l.detailsSent), flag(form.detailsSent));
+
+  const fmtFu = ts => ts ? new Date(ts).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+  if((l.followUpAt||null) !== (form.followUpAt||null)){
+    diffs.push(form.followUpAt
+      ? { type:'followup', label:'Next follow-up', oldVal: fmtFu(l.followUpAt), newVal: fmtFu(form.followUpAt),
+          text:`Next follow-up ${l.followUpAt?'changed to':'set for'} <b>${fmtFu(form.followUpAt)}</b>` }
+      : { type:'followup-removed', label:'Next follow-up', oldVal: fmtFu(l.followUpAt), newVal: '',
+          text:'Follow-up removed' });
+  }
+  return diffs;
+}
+
+// Writes a validated form onto an existing lead and logs every change to its
+// history. Shared by the Edit modal and the duplicate-merge path.
+function applyLeadForm(l, form, now){
+  const diffs = leadFormDiffs(l, form);
+  const oldStageId = l.stageId;
+  const stageChanged = oldStageId !== form.stageId;
+
+  l.channel=form.channel; l.stageId=form.stageId; l.name=form.name; l.phone=form.phone;
+  l.email=form.email; l.enquiryType=form.enquiryType; l.propertyInterest=form.propertyInterest;
+  l.budget=form.budget; l.detailsSent=form.detailsSent;
+  l.contactAt = l.contactAt || lmModalContactAt || now;
+  l.followUpAt = form.followUpAt;
+  l.updatedAt = now;
+  l.updatedBy = currentUserEmail || null;
+  l.notes = l.notes || [];
+  // See changeStage() for why these are stamped — same "today" bucketing need.
+  if(stageChanged){ l.prevStageId = oldStageId; l.stageChangedAt = now; }
+  l.lastActionType = stageChanged ? 'stage' : (form.noteText ? 'note' : 'field');
+  diffs.forEach(d => addHistory(l, d.type, d.text));
+  return diffs;
+}
+
+function saveLeadModal(){
+  const form = readLeadForm();
+  if(!form) return;
 
   if(lModalMode==='add'){
-    const l = {
-      id: 'lead_'+now,
-      channel, name, phone, email, enquiryType, propertyInterest, budget,
-      source: 'manual',
-      stageId,
-      notes: [],
-      history: [],
-      detailsSent: false,
-      contactAt,
-      followUpAt,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: currentUserEmail || null,
-      updatedBy: currentUserEmail || null,
-      // Denormalized for the Dashboard's "today" metrics (computeDashboardMetrics
-      // in dashboardMetrics.js) — lets it tell an untouched brand-new lead apart
-      // from one that already got a first note, with zero extra reads/writes.
-      lastActionType: noteText ? 'note' : 'created'
-    };
-    // Brand-new lead: the subcollection security rule checks the PARENT lead's
-    // tenantId, so the parent doc must exist before we write its notes/history.
-    // Create the parent first, then log the 'created' event + optional first
-    // note, then re-save the parent so its lastNote/noteCount persist.
-    const createdEvent = { id:'h'+now+Math.random().toString(36).slice(2,7), type:'created', text:`Lead added via <b>${escapeHtml(channelLabel(channel))}</b>`, at: now, by: currentUserEmail || null };
-    l.history = [createdEvent];
-    const firstNote = noteText ? { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null } : null;
-    if(firstNote){ l.notes = [firstNote]; recomputeNoteMeta(l); }
-    leads.unshift(l);
-    showToast('✓ Enquiry saved');
-    Promise.resolve(window.crmFirebase.saveLead(l)).then(() => {
-      window.crmFirebase.saveHistory(l.id, createdEvent);
-      if(firstNote) window.crmFirebase.saveNote(l.id, firstNote);
-      if(firstNote) window.crmFirebase.saveLead(l); // persist lastNote/noteCount
-    });
+    // A second lead on the same phone number is never created silently — the
+    // agent decides between abandoning the entry and folding it into the one
+    // that already exists (see openDuplicateModal / confirmDuplicateUpdate).
+    const existing = findLeadByPhone(form.phone, null);
+    if(existing){ openDuplicateModal(existing, form); return; }
+    createLeadFromForm(form);
   } else {
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
-      const diffs = [];
-      const diffField = (label, oldVal, newVal) => {
-        if((oldVal||'') !== (newVal||'')){
-          diffs.push({ type:'field', text:`${label} changed from <b>${escapeHtml(oldVal||'—')}</b> to <b>${escapeHtml(newVal||'—')}</b>` });
-        }
-      };
-      diffField('Channel', channelLabel(l.channel), channelLabel(channel));
-      diffField('Name', l.name, name);
-      diffField('Phone', l.phone, phone);
-      diffField('Email', l.email, email);
-      diffField('Enquiry type', l.enquiryType, enquiryType);
-      diffField('Property / Locality', l.propertyInterest, propertyInterest);
-      diffField('Budget', l.budget, budget);
-      if((l.followUpAt||null) !== (followUpAt||null)){
-        if(followUpAt){
-          const when = new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
-          diffs.push({ type:'followup', text:`Next follow-up ${l.followUpAt?'changed to':'set for'} <b>${when}</b>` });
-        } else {
-          diffs.push({ type:'followup-removed', text:'Follow-up removed' });
-        }
-      }
-
-      const oldStageId = l.stageId;
-      const stageChanged = oldStageId !== stageId;
-      l.channel=channel; l.stageId=stageId; l.name=name; l.phone=phone; l.email=email;
-      l.enquiryType=enquiryType; l.propertyInterest=propertyInterest; l.budget=budget;
-      l.contactAt = l.contactAt || contactAt;
-      l.followUpAt = followUpAt;
-      l.updatedAt = now;
-      l.updatedBy = currentUserEmail || null;
-      l.notes = l.notes || [];
-      // See changeStage() for why these are stamped — same "today" bucketing need.
-      if(stageChanged){ l.prevStageId = oldStageId; l.stageChangedAt = now; }
-      l.lastActionType = stageChanged ? 'stage' : (noteText ? 'note' : 'field');
-      diffs.forEach(d=>addHistory(l, d.type, d.text));
-      if(noteText) logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+      const now = Date.now();
+      applyLeadForm(l, form, now);
+      if(form.noteText) logNote(l, { id:'n'+now, text: form.noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
       persistLead(l);
     }
@@ -1022,6 +1102,147 @@ function saveLeadModal(){
   closeLeadModal();
   refreshAll();
   if(lModalMode==='edit') openDetail(lModalEditId);
+}
+
+function createLeadFromForm(form){
+  const now = Date.now();
+  const l = {
+    id: 'lead_'+now,
+    channel: form.channel, name: form.name, phone: form.phone, email: form.email,
+    enquiryType: form.enquiryType, propertyInterest: form.propertyInterest, budget: form.budget,
+    source: 'manual',
+    stageId: form.stageId,
+    notes: [],
+    history: [],
+    detailsSent: form.detailsSent,
+    contactAt: lmModalContactAt || now,
+    followUpAt: form.followUpAt,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: currentUserEmail || null,
+    updatedBy: currentUserEmail || null,
+    // Denormalized for the Dashboard's "today" metrics (computeDashboardMetrics
+    // in dashboardMetrics.js) — lets it tell an untouched brand-new lead apart
+    // from one that already got a first note, with zero extra reads/writes.
+    lastActionType: form.noteText ? 'note' : 'created'
+  };
+  // Brand-new lead: the subcollection security rule checks the PARENT lead's
+  // tenantId, so the parent doc must exist before we write its notes/history.
+  // Create the parent first, then log the 'created' event + optional first
+  // note, then re-save the parent so its lastNote/noteCount persist.
+  const createdEvent = { id:'h'+now+Math.random().toString(36).slice(2,7), type:'created', text:`Lead added via <b>${escapeHtml(channelLabel(form.channel))}</b>`, at: now, by: currentUserEmail || null };
+  l.history = [createdEvent];
+  const firstNote = form.noteText ? { id:'n'+now, text: form.noteText, createdAt: now, by: currentUserEmail || null } : null;
+  if(firstNote){ l.notes = [firstNote]; recomputeNoteMeta(l); }
+  leads.unshift(l);
+  showToast('✓ Enquiry saved');
+  Promise.resolve(window.crmFirebase.saveLead(l)).then(() => {
+    window.crmFirebase.saveHistory(l.id, createdEvent);
+    if(firstNote) window.crmFirebase.saveNote(l.id, firstNote);
+    if(firstNote) window.crmFirebase.saveLead(l); // persist lastNote/noteCount
+  });
+}
+
+// ═══════ DUPLICATE LEAD (same phone number) ═══════
+let dupExistingId = null;
+let dupPendingForm = null;
+
+// Merging into an existing lead is a PATCH, not a replace. The Add form opens
+// on defaults — first stage, Sent Details = No, no follow-up, blank optional
+// fields — and leaving one of those alone means "I have no opinion", not
+// "clear it". Applying them literally would drag a Site-Visit lead back to
+// New and delete a scheduled follow-up, so untouched defaults defer to
+// whatever the existing lead already has. A value the agent actually changed
+// always wins.
+function mergeFormOntoLead(l, form){
+  const patched = { ...form };
+  if(!patched.email) patched.email = l.email || '';
+  if(!patched.budget) patched.budget = l.budget || '';
+  const defaultStageId = stages.length ? stages[0].id : null;
+  if(patched.stageId === defaultStageId && l.stageId) patched.stageId = l.stageId;
+  if(patched.detailsSent === false && l.detailsSent === true) patched.detailsSent = true;
+  if(patched.followUpAt === null && l.followUpAt) patched.followUpAt = l.followUpAt;
+  return patched;
+}
+
+function openDuplicateModal(existing, form){
+  dupExistingId = existing.id;
+  dupPendingForm = mergeFormOntoLead(existing, form);
+  form = dupPendingForm;
+
+  const stage = stageById(existing.stageId);
+  const rows = [
+    ['Name', existing.name],
+    ['Phone', existing.phone],
+    ['Email', existing.email],
+    ['Channel', existing.channel ? channelLabel(existing.channel) : ''],
+    ['Enquiry type', existing.enquiryType],
+    ['Property / Locality', existing.propertyInterest],
+    ['Budget', existing.budget],
+    ['Stage', stage ? stage.name : ''],
+    ['Sent details', existing.detailsSent === true ? 'Yes' : 'No'],
+    ['Added', existing.createdAt ? new Date(existing.createdAt).toLocaleString() : ''],
+    ['Added by', existing.createdBy || ''],
+    ['Last updated', existing.updatedAt ? new Date(existing.updatedAt).toLocaleString() : ''],
+    ['Last updated by', existing.updatedBy || '']
+  ];
+  document.getElementById('dupExistingCard').innerHTML = rows
+    .map(([k,v]) => `<div class="dup-kv"><span class="dup-k">${escapeHtml(k)}</span><span class="dup-v">${escapeHtml(v || '—')}</span></div>`)
+    .join('');
+
+  const diffs = leadFormDiffs(existing, form);
+  document.getElementById('dupChangeList').innerHTML = diffs.length
+    ? diffs.map(d => `<div class="dup-change">
+        <span class="dup-change-label">${escapeHtml(d.label)}</span>
+        <span class="dup-change-old">${escapeHtml(d.oldVal || '—')}</span>
+        <span class="dup-change-arrow">→</span>
+        <span class="dup-change-new">${escapeHtml(d.newVal || '—')}</span>
+      </div>`).join('') + (form.noteText ? `<div class="dup-change-note">Plus a new note: “${escapeHtml(form.noteText)}”</div>` : '')
+    : `<div class="dup-change-none">No field changes — the details you typed match the existing lead.${form.noteText ? ' Your note will still be added.' : ''}</div>`;
+
+  document.getElementById('dupModal').classList.add('open');
+}
+function closeDupModal(){
+  document.getElementById('dupModal').classList.remove('open');
+  dupExistingId = null;
+  dupPendingForm = null;
+}
+function openExistingDuplicate(){
+  const id = dupExistingId;
+  closeDupModal();
+  closeLeadModal();
+  if(id) openDetail(id);
+}
+// Merge: every changed field lands in the lead's history AND is summarised in
+// one extra note appended alongside the existing ones, so the change is
+// readable from the notes thread without opening the history log.
+function confirmDuplicateUpdate(){
+  const l = leads.find(x=>x.id===dupExistingId);
+  const form = dupPendingForm;
+  if(!l || !form){ closeDupModal(); return; }
+
+  const now = Date.now();
+  const diffs = applyLeadForm(l, form, now);
+  const changeSummary = diffs.map(d => `${d.label}: ${d.oldVal || '—'} → ${d.newVal || '—'}`).join(', ');
+  logNote(l, {
+    id: 'n'+now,
+    text: changeSummary
+      ? `Lead details updated — Changes: ${changeSummary}`
+      : 'Lead details updated — no field changes',
+    createdAt: now,
+    by: currentUserEmail || null
+  });
+  if(form.noteText){
+    logNote(l, { id:'n'+(now+1), text: form.noteText, createdAt: now+1, by: currentUserEmail || null });
+  }
+  persistLead(l);
+
+  const id = l.id;
+  closeDupModal();
+  closeLeadModal();
+  refreshAll();
+  showToast('✓ Existing lead updated');
+  openDetail(id);
 }
 
 function deleteLead(id){
@@ -2232,7 +2453,7 @@ function showToast(msg){
 
 // keyboard: ESC closes panels
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeDashboardEmailManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
+  if(e.key==='Escape'){ closeDupModal(); closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeDashboardEmailManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════

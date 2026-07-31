@@ -22,9 +22,16 @@ const ACTION_LINE_MAX = 90;
 // "active pipeline" concept is computed by design (kept intentionally lean).
 const WON_STAGE_NAMES = ['closed'];
 const DEAD_STAGE_NAMES = ['not interested', 'spam'];
+// Spam is a strict subset of "dead": the property-wise totals below exclude
+// ONLY spam (junk that was never a real enquiry), while genuinely lost leads
+// still count towards a property's demand.
+const SPAM_STAGE_NAMES = ['spam'];
 const SITE_VISIT_DONE_NAME = 'site visit done';
 const SITE_VISIT_PENDING_NAME = 'site visit';
 const MISSED_CALLS_NAME = 'missed calls';
+// Days of daily new-lead history returned for the trend chart. The existing
+// 7-day average is derived from the same buckets, so the two can never drift.
+const TREND_DAYS = 14;
 
 function normName(s) { return String(s || '').trim().toLowerCase(); }
 
@@ -143,7 +150,9 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const enquiryTypeCountsAll = new Map();
   const sourceCountsNewToday = new Map();
   const phoneGroups = new Map(); // normalized phone -> leads[]
-  const trailing7Buckets = [0, 0, 0, 0, 0, 0, 0]; // 7 days strictly before today
+  const propertyMap = new Map(); // normalized property -> stats
+  // Daily new-lead counts, oldest first; the last slot is the reference day.
+  const dailyNewBuckets = new Array(TREND_DAYS).fill(0);
 
   const followedUpToday = [];
   const overdueFollowUps = [];
@@ -175,9 +184,37 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     return ownerMap.get(owner);
   }
 
+  // Properties are free text ("3BHK in Adyar"), so they're grouped
+  // case-insensitively on the trimmed string and displayed using the first
+  // spelling seen. Nothing is normalized away beyond case/whitespace — two
+  // genuinely different descriptions stay two rows.
+  function ensureProperty(l) {
+    const raw = String(l.propertyInterest || '').trim();
+    const key = normName(raw) || '__unspecified__';
+    if (!propertyMap.has(key)) {
+      propertyMap.set(key, {
+        key, property: raw || 'Unspecified',
+        total: 0, newToday: 0, open: 0, won: 0, lost: 0, spam: 0,
+        siteVisitDone: 0, siteVisitDoneToday: 0, siteVisitPending: 0,
+        detailsSent: 0, overdue: 0, pipelineValueINR: 0, wonValueINR: 0,
+        lastActivityAt: 0
+      });
+    }
+    return propertyMap.get(key);
+  }
+
+  let spamCount = 0;
+  let openLeadCount = 0;
+  let wonLeadCount = 0;
+  let deadLeadCount = 0;
+  let detailsSentOpenCount = 0;
+  let openPipelineValueINR = 0;
+  let wonValueINR = 0;
+
   for (const l of leads) {
     const kind = kindOf(l.stageId);
     const isOpen = kind === 'open';
+    const isSpam = SPAM_STAGE_NAMES.includes(normName(stageNameOf(l.stageId)));
 
     stageCounts.set(l.stageId, (stageCounts.get(l.stageId) || 0) + 1);
     enquiryTypeCountsAll.set(l.enquiryType || 'Unspecified', (enquiryTypeCountsAll.get(l.enquiryType || 'Unspecified') || 0) + 1);
@@ -242,6 +279,43 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     }
     if (sName === MISSED_CALLS_NAME) missedCallsLeads.push(l);
 
+    // ── Portfolio KPIs + per-property rollup ──
+    const budgetINR = parseBudgetToINR(l.budget);
+    const countsForValue = budgetINR !== null && l.enquiryType !== 'Rental Enquiry';
+    if (isSpam) spamCount++;
+    if (isOpen) {
+      openLeadCount++;
+      if (l.detailsSent === true) detailsSentOpenCount++;
+      if (countsForValue) openPipelineValueINR += budgetINR;
+    }
+    if (kind === 'won') { wonLeadCount++; if (countsForValue) wonValueINR += budgetINR; }
+    if (kind === 'dead') deadLeadCount++;
+
+    const p = ensureProperty(l);
+    if (isSpam) {
+      p.spam++;
+    } else {
+      // "Total leads for that property" deliberately excludes spam — every
+      // other per-property number below is a subset of this same total.
+      p.total++;
+      if (isOpen) {
+        p.open++;
+        if (countsForValue) p.pipelineValueINR += budgetINR;
+        if (l.followUpAt && l.followUpAt <= now) p.overdue++;
+      }
+      if (kind === 'won') { p.won++; if (countsForValue) p.wonValueINR += budgetINR; }
+      if (kind === 'dead') p.lost++;
+      if (sName === SITE_VISIT_DONE_NAME) {
+        p.siteVisitDone++;
+        if (isToday(l.stageChangedAt)) p.siteVisitDoneToday++;
+      }
+      if (sName === SITE_VISIT_PENDING_NAME) p.siteVisitPending++;
+      if (l.detailsSent === true) p.detailsSent++;
+      if (isToday(l.createdAt)) p.newToday++;
+      const touched = l.updatedAt || l.createdAt || 0;
+      if (touched > p.lastActivityAt) p.lastActivityAt = touched;
+    }
+
     if (isToday(l.createdAt)) {
       newLeadsToday.push(l);
       const chan = CHANNEL_LABELS[l.channel] ? l.channel : '__other__';
@@ -252,21 +326,35 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       creatorOwner.newAssigned++;
       const untouched = l.lastActionType ? l.lastActionType === 'created' : ((l.updatedAt || 0) <= (l.createdAt || 0));
       if (untouched) newLeadsNoActionToday.push(l);
-    } else if (typeof l.createdAt === 'number') {
-      for (let d = 1; d <= 7; d++) {
-        const bStart = dayStart - d * DAY_MS;
-        const bEnd = bStart + DAY_MS - 1;
-        if (l.createdAt >= bStart && l.createdAt <= bEnd) { trailing7Buckets[d - 1]++; break; }
-      }
+    }
+    // Daily buckets for the trend chart. dayStart is an IST midnight, so a
+    // whole-day offset from it lands cleanly on IST calendar days; slot
+    // TREND_DAYS-1 is the reference day, and anything after it (possible when
+    // viewing a past date) falls outside the window and is dropped.
+    if (typeof l.createdAt === 'number') {
+      const idx = TREND_DAYS - 1 + Math.floor((l.createdAt - dayStart) / DAY_MS);
+      if (idx >= 0 && idx < TREND_DAYS) dailyNewBuckets[idx]++;
     }
     if (typeof l.createdAt === 'number' && istDateLabel(l.createdAt).slice(0, 7) === monthStartLabel && l.createdAt <= dayEnd) {
       monthToDateTotal++;
     }
   }
 
+  // The 7 days strictly BEFORE the reference day — the last slot is today.
+  const trailing7Buckets = dailyNewBuckets.slice(TREND_DAYS - 8, TREND_DAYS - 1);
   const trailing7DayAvg = trailing7Buckets.reduce((a, b) => a + b, 0) / 7;
   let newLeadsDeltaPct = null;
   if (trailing7DayAvg > 0) newLeadsDeltaPct = ((newLeadsToday.length - trailing7DayAvg) / trailing7DayAvg) * 100;
+
+  const dailyTrend = dailyNewBuckets.map((count, i) => {
+    const ts = dayStart - (TREND_DAYS - 1 - i) * DAY_MS;
+    return {
+      date: istDateLabel(ts),
+      label: new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }),
+      weekday: new Date(ts).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Asia/Kolkata' }),
+      count
+    };
+  });
 
   const byChannel = CHANNEL_ORDER.map(key => ({ key, label: CHANNEL_LABELS[key], count: channelCounts.get(key) || 0 }));
   const otherChannelCount = channelCounts.get('__other__') || 0;
@@ -299,6 +387,26 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const duplicatePhoneGroups = Array.from(phoneGroups.entries())
     .filter(([, arr]) => arr.length > 1)
     .map(([phone, arr]) => ({ phone, leads: arr }));
+
+  const propertyRows = Array.from(propertyMap.values())
+    .map(p => ({
+      ...p,
+      // Of the leads this property ever attracted (spam excluded), how many
+      // reached Closed. Zero-total rows (spam-only) report null, never 0%,
+      // so "no data" is never mistaken for "0% conversion".
+      conversionPct: p.total ? Math.round((p.won / p.total) * 1000) / 10 : null,
+      siteVisitPct: p.total ? Math.round((p.siteVisitDone / p.total) * 1000) / 10 : null
+    }))
+    .filter(p => p.total > 0)
+    .sort((a, b) => b.total - a.total || a.property.localeCompare(b.property));
+
+  const propertyNewTodayRows = propertyRows
+    .filter(p => p.newToday > 0)
+    .slice()
+    .sort((a, b) => b.newToday - a.newToday || a.property.localeCompare(b.property));
+
+  const nonSpamTotal = totalLeads - spamCount;
+  const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
   return {
     meta: {
@@ -346,7 +454,36 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       bySource: topNPlusOther(sourceCountsNewToday, 5),
       trailing7DayAvg: Math.round(trailing7DayAvg * 10) / 10,
       deltaPct: newLeadsDeltaPct === null ? null : Math.round(newLeadsDeltaPct),
-      monthToDateTotal
+      monthToDateTotal,
+      // Oldest → newest, last entry = the reference day. Drives the trend chart.
+      dailyTrend
+    },
+
+    // Property-wise view of the book: what came in today, and the standing
+    // demand + conversion each property has accumulated (spam excluded).
+    propertyPerformance: {
+      totalProperties: propertyRows.length,
+      newTodayTotal: propertyNewTodayRows.reduce((s, p) => s + p.newToday, 0),
+      newTodayRows: propertyNewTodayRows,
+      rows: propertyRows
+    },
+
+    kpis: {
+      totalLeads,
+      spamCount,
+      nonSpamTotal,
+      openLeads: openLeadCount,
+      wonLeads: wonLeadCount,
+      deadLeads: deadLeadCount,
+      conversionPct: pct(wonLeadCount, nonSpamTotal),
+      siteVisitConversionPct: pct(siteVisitDoneLeads.length, nonSpamTotal),
+      detailsSentPct: pct(detailsSentOpenCount, openLeadCount),
+      overduePct: pct(overdueFollowUps.length, openLeadCount),
+      coldPct: pct(coldLeads.length, openLeadCount),
+      openPipelineValueINR,
+      wonValueINR,
+      avgNewLeadsPerDay: Math.round((dailyNewBuckets.reduce((a, b) => a + b, 0) / TREND_DAYS) * 10) / 10,
+      newLeadsMTD: monthToDateTotal
     },
 
     // Trimmed per product decision: simple counts by enquiry type, no detail

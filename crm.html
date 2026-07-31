@@ -393,6 +393,14 @@
             <div class="lm-static" id="lmContactTimeDisplay">—</div>
           </div>
         </div>
+        <div class="field">
+          <label>Sent Details</label>
+          <div class="dp-flag-toggle lm-flag-toggle" id="lmDetailsSentToggle">
+            <span class="dp-flag-label">Property details shared?</span>
+            <button type="button" class="dp-flag-btn yes" onclick="setLeadModalDetailsSent(true)">Yes</button>
+            <button type="button" class="dp-flag-btn no" onclick="setLeadModalDetailsSent(false)">No</button>
+          </div>
+        </div>
         <div class="field-row">
           <div class="field">
             <label for="lmFollowUpDate">Follow-up Date (optional)</label>
@@ -412,6 +420,35 @@
       <div class="modal-ftr">
         <button class="modal-cancel" onclick="closeLeadModal()">Cancel</button>
         <button class="modal-save" onclick="saveLeadModal()">✓ Save Enquiry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DUPLICATE LEAD MODAL -->
+  <!-- Shown instead of creating a second lead when the typed phone number
+       already exists. Either abandon the entry, or fold the newly typed
+       details into the existing lead (fully logged in its history + notes). -->
+  <div class="modal-overlay" id="dupModal">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div class="modal-title">⚠️ Lead Already Exists</div>
+        <button class="modal-x" onclick="closeDupModal()">×</button>
+      </div>
+      <!-- Changes come BEFORE the existing lead's details: they're what the
+           choice actually turns on, and on a phone anything below the first
+           card is off-screen. -->
+      <div class="modal-body">
+        <div class="dup-warn">This phone number already belongs to a lead in the CRM. Duplicate leads aren't allowed.</div>
+        <div class="dup-sec-title">Changes if you update</div>
+        <div class="dup-changes" id="dupChangeList"></div>
+        <div class="note-fu-hint" style="margin:10px 0 20px">Fields you left blank or at their default (stage, sent details, follow-up) are kept as-is. Every change above is written to the lead's history and summarised in a new note.</div>
+        <div class="dup-sec-title">The existing lead</div>
+        <div class="dup-card" id="dupExistingCard"></div>
+      </div>
+      <div class="modal-ftr">
+        <button class="modal-cancel" onclick="closeDupModal()">Cancel</button>
+        <button class="modal-cancel" onclick="openExistingDuplicate()">👁 Open Lead</button>
+        <button class="modal-save" onclick="confirmDuplicateUpdate()">↻ Update with new details</button>
       </div>
     </div>
   </div>

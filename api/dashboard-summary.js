@@ -36,7 +36,9 @@ function statCardsHtml(m) {
     ['Overdue', m.overdueFollowUps.count],
     ['Cold Leads', m.coldLeads.count],
     ['Pending Site Visit', m.siteVisitPending.total],
-    ['Site Visit Done', m.siteVisitDone.total],
+    // Today's completed visits, NOT the all-time size of the stage — this is a
+    // report on one day's activity, so a standing total belongs nowhere in it.
+    ['Site Visits Today', m.siteVisitDone.movedTodayCount],
     ['Missed Calls', m.missedCalls.total],
     ['Closed Today', m.movedToWonToday.count]
   ];
@@ -119,6 +121,67 @@ function newLeadsTodaySection(m) {
     <p style="font-family:sans-serif;font-size:12px;color:#888;margin-top:8px;">Month-to-date: ${n.monthToDateTotal}</p>`);
 }
 
+function siteVisitsTodaySection(m) {
+  const leadsArr = m.siteVisitDone.movedTodayLeads;
+  if (!leadsArr.length) return sectionWrap('🏠 Site Visits Done Today', null, emptyLine());
+  const { shown, extraLine } = rowsWithCap(leadsArr, 25);
+  const body = shown.map(l => `<tr>
+    <td style="${TD}font-weight:600;">${escapeHtml(l.name || 'Lead')}</td>
+    <td style="${TD}">${escapeHtml(l.phone || '—')}</td>
+    <td style="${TD}">${escapeHtml(l.propertyInterest || '—')}</td>
+    <td style="${TD}">${escapeHtml(l.updatedBy ? l.updatedBy.split('@')[0] : '—')}</td>
+  </tr>`).join('');
+  return sectionWrap('🏠 Site Visits Done Today', String(leadsArr.length),
+    tableWrap(['Name', 'Phone', 'Property', 'By'], body) + extraLine);
+}
+
+function propertyTodaySection(m) {
+  const rows = m.propertyPerformance.newTodayRows;
+  if (!rows.length) return sectionWrap('📍 Property-wise Leads Today', null, emptyLine());
+  const body = rows.map(r => `<tr>
+    <td style="${TD}font-weight:600;">${escapeHtml(r.property)}</td>
+    <td style="${TD}">${r.newToday}</td>
+    <td style="${TD}">${r.total}</td>
+  </tr>`).join('');
+  return sectionWrap('📍 Property-wise Leads Today', String(m.propertyPerformance.newTodayTotal),
+    tableWrap(['Property / Locality', 'New today', 'Total (excl. spam)'], body));
+}
+
+function propertyPerformanceSection(m) {
+  const rows = m.propertyPerformance.rows;
+  if (!rows.length) return sectionWrap('🏘️ Property Performance', null, emptyLine());
+  const { shown, extraLine } = rowsWithCap(rows, 15);
+  const body = shown.map(r => `<tr>
+    <td style="${TD}font-weight:600;">${escapeHtml(r.property)}</td>
+    <td style="${TD}">${r.total}</td>
+    <td style="${TD}">${r.open}</td>
+    <td style="${TD}">${r.siteVisitDone}</td>
+    <td style="${TD}">${r.won}</td>
+    <td style="${TD}">${r.conversionPct === null ? '—' : r.conversionPct + '%'}</td>
+    <td style="${TD}">${r.pipelineValueINR ? formatINR(r.pipelineValueINR) : '—'}</td>
+  </tr>`).join('');
+  return sectionWrap('🏘️ Property Performance', `${rows.length} properties`,
+    `<p style="font-family:sans-serif;font-size:12px;color:#888;margin:0 0 6px;">All-time, spam excluded. Sorted by total leads.</p>`
+    + tableWrap(['Property', 'Total', 'Open', 'Visits', 'Closed', 'Conv.', 'Pipeline'], body) + extraLine);
+}
+
+function kpiSection(m) {
+  const k = m.kpis;
+  const rows = [
+    ['Total leads (excl. spam)', String(k.nonSpamTotal)],
+    ['Open pipeline value', formatINR(k.openPipelineValueINR)],
+    ['Open leads', String(k.openLeads)],
+    ['Conversion rate', k.conversionPct === null ? '—' : k.conversionPct + '%'],
+    ['Site-visit rate', k.siteVisitConversionPct === null ? '—' : k.siteVisitConversionPct + '%'],
+    ['Details shared (open leads)', k.detailsSentPct === null ? '—' : k.detailsSentPct + '%'],
+    ['Overdue (open leads)', k.overduePct === null ? '—' : k.overduePct + '%'],
+    ['New leads / day (14-day avg)', String(k.avgNewLeadsPerDay)],
+    ['New leads month-to-date', String(k.newLeadsMTD)]
+  ];
+  const body = rows.map(([label, value]) => `<tr><td style="${TD}">${escapeHtml(label)}</td><td style="${TD}font-weight:600;">${escapeHtml(value)}</td></tr>`).join('');
+  return sectionWrap('📌 Portfolio KPIs', null, tableWrap(['Metric', 'Value'], body));
+}
+
 function pipelineSection(m) {
   const rows = m.pipelineByStage.stages;
   if (!rows.length) return sectionWrap('📊 Pipeline by Stage', null, emptyLine());
@@ -184,11 +247,15 @@ async function renderDashboardEmailHtml(m, dateStr) {
     statCardsHtml(m),
     actionLogSection(m),
     newLeadsTodaySection(m),
+    propertyTodaySection(m),
+    siteVisitsTodaySection(m),
     leadTableSection('Overdue Follow-ups', '⚠️', m.overdueFollowUps, 15, [{ label: 'Was due', value: l => fmtDateTime(l.followUpAt) }]),
     leadTableSection("Tomorrow's Follow-up Plan", '🌤️', m.followUpsDueTomorrow, 25, [{ label: 'Time', value: l => fmtTime(l.followUpAt) }]),
     sectionWrap('🎉 Moved to Closed Today', wonHeadline, m.movedToWonToday.count ? tableWrap(['Name', 'Phone', 'Budget'], m.movedToWonToday.leads.map(l => `<tr><td style="${TD}font-weight:600;">${escapeHtml(l.name || 'Lead')}</td><td style="${TD}">${escapeHtml(l.phone || '—')}</td><td style="${TD}">${escapeHtml(l.budget || '—')}</td></tr>`).join('')) : emptyLine()),
     await movedToDeadSection(m),
     leadTableSection('Cold Leads (7+ days silent)', '🧊', m.coldLeads, 10, []),
+    kpiSection(m),
+    propertyPerformanceSection(m),
     pipelineSection(m),
     ownerSection(m),
     hygieneSection(m)
@@ -207,8 +274,21 @@ async function renderDashboardEmailHtml(m, dateStr) {
 function renderDashboardEmailText(m, dateStr) {
   const lines = [`3 PIN Realty — EOD Dashboard Summary — ${dateStr}`, ''];
   lines.push(`New today: ${m.newLeadsToday.total} | Followed up: ${m.followedUpToday.count} | Overdue: ${m.overdueFollowUps.count} | Cold: ${m.coldLeads.count}`);
-  lines.push(`Pending site visit: ${m.siteVisitPending.total} | Site visit done: ${m.siteVisitDone.total} | Missed calls: ${m.missedCalls.total} | Closed today: ${m.movedToWonToday.count}`);
+  lines.push(`Pending site visit: ${m.siteVisitPending.total} | Site visits done today: ${m.siteVisitDone.movedTodayCount} | Missed calls: ${m.missedCalls.total} | Closed today: ${m.movedToWonToday.count}`);
   lines.push('');
+  const k = m.kpis;
+  lines.push(`Total leads (excl. spam): ${k.nonSpamTotal} | Open pipeline: ${formatINR(k.openPipelineValueINR)} | Conversion: ${k.conversionPct === null ? '—' : k.conversionPct + '%'}`);
+  lines.push('');
+  if (m.propertyPerformance.newTodayRows.length) {
+    lines.push(`PROPERTY-WISE LEADS TODAY (${m.propertyPerformance.newTodayTotal}):`);
+    m.propertyPerformance.newTodayRows.forEach(r => lines.push(`- ${r.property}: ${r.newToday} new (${r.total} total)`));
+    lines.push('');
+  }
+  if (m.siteVisitDone.movedTodayCount) {
+    lines.push(`SITE VISITS DONE TODAY (${m.siteVisitDone.movedTodayCount}):`);
+    m.siteVisitDone.movedTodayLeads.slice(0, 25).forEach(l => lines.push(`- ${l.name || 'Lead'} — ${l.phone || '—'} — ${l.propertyInterest || '—'}`));
+    lines.push('');
+  }
   if (m.overdueFollowUps.count) {
     lines.push(`OVERDUE (${m.overdueFollowUps.count}):`);
     m.overdueFollowUps.leads.slice(0, 15).forEach(l => lines.push(`- ${l.name || 'Lead'} — ${l.phone || '—'} — ${l.propertyInterest || '—'} — was due ${fmtDateTime(l.followUpAt)}`));

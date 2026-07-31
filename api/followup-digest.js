@@ -67,10 +67,20 @@ function dayLabel(i, startOfToday) {
   return dateStr;
 }
 
+// Who last touched the lead, as the local part of their login email — the
+// same short form the CRM shows on cards and in the action log, so a name in
+// the digest matches what the agent sees in the app.
+function updatedByLabel(l) {
+  const email = l.updatedBy || l.createdBy;
+  if (!email) return '—';
+  const at = String(email).indexOf('@');
+  return at > 0 ? String(email).slice(0, at) : String(email);
+}
+
 // Property is always shown so an agent can act without opening the CRM;
 // kept in the same position/format across every line so entries line up.
 function leadLine(l) {
-  return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'}`;
+  return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — last updated by ${updatedByLabel(l)}`;
 }
 function formatDigestText(overdue, days, startOfToday) {
   const lines = ['Follow-up digest', ''];
@@ -117,10 +127,11 @@ function escapeHtml(s) {
 // Phone, and Property line up visually whether you're looking at Overdue
 // or any of the day sections.
 const COLS = [
-  { label: 'Name', width: '26%' },
-  { label: 'Phone', width: '20%' },
-  { label: 'Property', width: '34%' },
-  { label: 'Time', width: '20%' }
+  { label: 'Name', width: '20%' },
+  { label: 'Phone', width: '16%' },
+  { label: 'Property', width: '26%' },
+  { label: 'Last Updated By', width: '23%' },
+  { label: 'Time', width: '15%' }
 ];
 function leadRowHtml(l, showTime) {
   const time = showTime ? new Date(l.followUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ }) : '—';
@@ -128,6 +139,7 @@ function leadRowHtml(l, showTime) {
     <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${escapeHtml(l.name || 'Lead')}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(l.phone || '—')}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(l.propertyInterest || '—')}</td>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(updatedByLabel(l))}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;">${time}</td>
   </tr>`;
 }

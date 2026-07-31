@@ -272,6 +272,186 @@ function leadsHeadlineThenList(movedToday, leadsArr){
   const headline = movedToday > 0 ? `<div class="dash-sec-headline">${movedToday} moved in today</div>` : '';
   return headline + buildLeadListBody(leadsArr);
 }
+// Site visits DONE is read two different ways and the difference matters:
+// "today" is the day's actual activity (what the daily report reports), the
+// standing total is the all-time size of that stage. Both are shown, today's
+// first, so neither can be mistaken for the other.
+function buildSiteVisitDoneBody(){
+  const b = dashMetrics.siteVisitDone;
+  const today = b.movedTodayLeads;
+  const todayBlock = `<div class="dash-sec-headline">${today.length} site visit${today.length===1?'':'s'} done today</div>`
+    + (today.length ? buildLeadListBody(today) : dashEmpty('no site visits completed today'));
+  // Nothing to add when today IS the whole stage — repeating the identical
+  // list under an "all-time" heading just reads as a duplicate.
+  if(b.total <= today.length) return todayBlock;
+  return todayBlock
+    + `<div class="dash-sec-note" style="margin-top:12px">All-time in this stage — ${b.total} lead${b.total===1?'':'s'}</div>`
+    + buildLeadListBody(b.leads);
+}
+
+// ── Charts ────────────────────────────────────────────────────────────
+// All charts here are single-series magnitude plots, so they use ONE hue
+// (the CRM's blue) rather than a categorical palette — identity never rides
+// on colour, and there is nothing for a colour-blind reader to tell apart.
+// Text always wears the ink tokens; only marks carry the hue.
+const CHART_HUE = '#1D4ED8';
+
+// Axis ticks land on 1/2/5×10ⁿ so the labels read as round numbers.
+function dashNiceStep(max, targetTicks){
+  const raw = Math.max(1, max) / Math.max(1, targetTicks);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const mult = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return mult * mag;
+}
+
+let dashTrendData = [];
+let dashTrendShowTable = false;
+
+function dashTrendChartHtml(trend){
+  dashTrendData = trend || [];
+  if(!dashTrendData.length) return dashEmpty('no lead history yet');
+  if(dashTrendShowTable) return dashTrendTableHtml();
+
+  const W = 720, H = 190, PL = 34, PR = 14, PT = 14, PB = 30;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const n = dashTrendData.length;
+  const max = Math.max(1, ...dashTrendData.map(d => d.count));
+  const step = dashNiceStep(max, 4);
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  const ticks = [];
+  for(let v = 0; v <= top + 1e-9; v += step) ticks.push(Math.round(v));
+
+  const px = i => PL + (n === 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const py = v => PT + ih - (v / top) * ih;
+  const pts = dashTrendData.map((d, i) => [px(i), py(d.count)]);
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${line} L${pts[pts.length-1][0].toFixed(1)},${PT+ih} L${pts[0][0].toFixed(1)},${PT+ih} Z`;
+
+  const grid = ticks.map(v => `
+    <line x1="${PL}" y1="${py(v).toFixed(1)}" x2="${W-PR}" y2="${py(v).toFixed(1)}" stroke="#E4E0D8" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <text x="${PL-8}" y="${(py(v)+4).toFixed(1)}" text-anchor="end" class="dash-chart-tick">${v}</text>`).join('');
+
+  // Only first / middle / last get an x label — 14 dates would collide.
+  const xLabelIdx = new Set([0, Math.floor((n-1)/2), n-1]);
+  const xLabels = dashTrendData.map((d, i) => xLabelIdx.has(i)
+    ? `<text x="${px(i).toFixed(1)}" y="${H-9}" text-anchor="${i===0?'start':(i===n-1?'end':'middle')}" class="dash-chart-tick">${escapeHtml(d.label)}</text>`
+    : '').join('');
+
+  // Full-height hit bands, wider than the marks, so hovering anywhere in a
+  // day's column reveals it (see interaction guidance on hit targets). The
+  // first and last bands are clamped to the plot area — a half-band hanging
+  // off each end would widen the SVG's scrollable box and push the whole page
+  // sideways on a phone.
+  const band = iw / Math.max(1, n - 1);
+  const hits = dashTrendData.map((d, i) => {
+    const x0 = Math.max(PL, px(i) - band/2);
+    const x1 = Math.min(W - PR, px(i) + band/2);
+    return `<rect x="${x0.toFixed(1)}" y="${PT}" width="${(x1-x0).toFixed(1)}" height="${ih}" fill="transparent"
+      onmousemove="dashTrendHover(event,${i})" onmouseleave="dashTrendHoverOut()"></rect>`;
+  }).join('');
+
+  const last = pts[pts.length - 1];
+  const lastVal = dashTrendData[n-1].count;
+
+  return `<div class="dash-chart-wrap" id="dashTrendWrap">
+    <svg viewBox="0 0 ${W} ${H}" class="dash-chart-svg" role="img" aria-label="New leads per day for the last ${n} days">
+      ${grid}
+      <path d="${area}" fill="${CHART_HUE}" fill-opacity="0.10"/>
+      <path d="${line}" fill="none" stroke="${CHART_HUE}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4.5" fill="${CHART_HUE}" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      <text x="${(last[0]-8).toFixed(1)}" y="${(last[1]-10).toFixed(1)}" text-anchor="end" class="dash-chart-endlabel">${lastVal}</text>
+      ${xLabels}
+      ${hits}
+    </svg>
+    <div class="dash-chart-tip" id="dashTrendTip" style="display:none"></div>
+  </div>`;
+}
+
+function dashTrendTableHtml(){
+  return `<div class="dash-chart-table"><table>
+    <thead><tr><th>Date</th><th>Day</th><th>New leads</th></tr></thead>
+    <tbody>${dashTrendData.map(d => `<tr><td>${escapeHtml(d.label)}</td><td>${escapeHtml(d.weekday)}</td><td>${d.count}</td></tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function toggleDashTrendTable(){
+  dashTrendShowTable = !dashTrendShowTable;
+  const host = document.getElementById('dashTrendBody');
+  const btn = document.getElementById('dashTrendTableBtn');
+  if(host) host.innerHTML = dashTrendChartHtml(dashTrendData);
+  if(btn) btn.textContent = dashTrendShowTable ? '📈 Chart' : '⊞ Table';
+}
+function dashTrendHover(ev, i){
+  const tip = document.getElementById('dashTrendTip');
+  const wrap = document.getElementById('dashTrendWrap');
+  const d = dashTrendData[i];
+  if(!tip || !wrap || !d) return;
+  tip.innerHTML = `<b>${escapeHtml(d.weekday)} ${escapeHtml(d.label)}</b><br>${d.count} new lead${d.count===1?'':'s'}`;
+  tip.style.display = '';
+  const r = wrap.getBoundingClientRect();
+  const x = ev.clientX - r.left, y = ev.clientY - r.top;
+  tip.style.left = Math.max(4, Math.min(x + 12, r.width - tip.offsetWidth - 4)) + 'px';
+  tip.style.top = Math.max(4, y - tip.offsetHeight - 10) + 'px';
+}
+function dashTrendHoverOut(){
+  const tip = document.getElementById('dashTrendTip');
+  if(tip) tip.style.display = 'none';
+}
+
+// Horizontal magnitude bars: one hue, 4px rounded data-end, square at the
+// baseline, value at the tip. Never used for identity.
+function dashBarRows(rows, valueOf, labelOf, subOf){
+  const max = Math.max(1, ...rows.map(valueOf));
+  return `<div class="dash-bar-list">${rows.map(r => `
+    <div class="dash-bar-row">
+      <div class="dash-bar-label" title="${escapeHtml(labelOf(r))}">${escapeHtml(labelOf(r))}</div>
+      <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${Math.max(2, (valueOf(r)/max)*100)}%;background:${CHART_HUE}"></div></div>
+      <div class="dash-bar-val">${valueOf(r)}</div>
+      ${subOf ? `<div class="dash-bar-sub">${subOf(r)}</div>` : ''}
+    </div>`).join('')}</div>`;
+}
+
+function dashKpiTile(label, value, sub){
+  return `<div class="dash-kpi">
+    <div class="dash-kpi-val">${value}</div>
+    <div class="dash-kpi-label">${escapeHtml(label)}</div>
+    ${sub ? `<div class="dash-kpi-sub">${escapeHtml(sub)}</div>` : ''}
+  </div>`;
+}
+function dashPct(v){ return v === null || v === undefined ? '—' : `${v}%`; }
+
+// ── Property sections ─────────────────────────────────────────────────
+
+function buildPropertyTodayBody(){
+  const rows = dashMetrics.propertyPerformance.newTodayRows;
+  if(!rows.length) return dashEmpty('no new leads today');
+  return dashBarRows(rows, r => r.newToday, r => r.property)
+    + `<div class="dash-mini-row" style="margin-top:10px"><span>Total new today</span><span>${dashMetrics.propertyPerformance.newTodayTotal}</span></div>`;
+}
+
+function buildPropertyPerformanceBody(){
+  const rows = dashMetrics.propertyPerformance.rows;
+  if(!rows.length) return dashEmpty('no properties yet');
+  const top = rows.slice(0, 12);
+  const chart = dashBarRows(top, r => r.total, r => r.property);
+  const table = `<div class="dash-chart-table"><table>
+    <thead><tr><th>Property / Locality</th><th>Total</th><th>Today</th><th>Open</th><th>Site visits</th><th>Closed</th><th>Conv.</th><th>Pipeline</th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td class="dash-td-name">${escapeHtml(r.property)}</td>
+      <td>${r.total}</td>
+      <td>${r.newToday || '—'}</td>
+      <td>${r.open}</td>
+      <td>${r.siteVisitDone}</td>
+      <td>${r.won}</td>
+      <td>${dashPct(r.conversionPct)}</td>
+      <td>${r.pipelineValueINR ? window.formatINR(r.pipelineValueINR) : '—'}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+  return `<div class="dash-sec-note">Totals exclude leads parked in Spam. “Conv.” is Closed ÷ total for that property.</div>`
+    + chart
+    + (rows.length > top.length ? `<div class="dash-sec-note">Chart shows the top ${top.length}; all ${rows.length} are in the table below.</div>` : '')
+    + table;
+}
 
 // ── Main render ───────────────────────────────────────────────────────
 
@@ -296,9 +476,21 @@ window.renderDashboardView = function(){
     dashStatCard('Overdue', m.overdueFollowUps.count, 'overdueFollowUps'),
     dashStatCard('Cold Leads', m.coldLeads.count, 'coldLeads'),
     dashStatCard('Pending Site Visit', m.siteVisitPending.total, 'siteVisitPending'),
-    dashStatCard('Site Visit Done', m.siteVisitDone.total, 'siteVisitDone'),
+    dashStatCard('Site Visits Today', m.siteVisitDone.movedTodayCount, 'siteVisitDone'),
     dashStatCard('Missed Calls', m.missedCalls.total, 'missedCalls'),
     dashStatCard('Closed Today', m.movedToWonToday.count, 'movedToWonToday')
+  ].join('');
+
+  const k = m.kpis;
+  const kpis = [
+    dashKpiTile('Total leads', k.nonSpamTotal, `excl. ${k.spamCount} spam`),
+    dashKpiTile('Open pipeline', window.formatINR(k.openPipelineValueINR), `${k.openLeads} open leads`),
+    dashKpiTile('Conversion', dashPct(k.conversionPct), `${k.wonLeads} closed`),
+    dashKpiTile('Site-visit rate', dashPct(k.siteVisitConversionPct), `${m.siteVisitDone.total} visited`),
+    dashKpiTile('Details shared', dashPct(k.detailsSentPct), 'of open leads'),
+    dashKpiTile('Overdue', dashPct(k.overduePct), 'of open leads'),
+    dashKpiTile('New / day', k.avgNewLeadsPerDay, 'avg last 14 days'),
+    dashKpiTile('New this month', k.newLeadsMTD, 'month to date')
   ].join('');
 
   el.innerHTML = `
@@ -309,12 +501,34 @@ window.renderDashboardView = function(){
       </div>
       <div class="dash-stats">${stats}</div>
 
+      <div class="dash-card">
+        <div class="dash-card-hdr">
+          <div>
+            <div class="dash-card-title">New Leads — Last 14 Days</div>
+            <div class="dash-card-sub">Leads created per day, IST · avg ${k.avgNewLeadsPerDay}/day</div>
+          </div>
+          <button class="dash-card-btn" id="dashTrendTableBtn" onclick="toggleDashTrendTable()">${dashTrendShowTable ? '📈 Chart' : '⊞ Table'}</button>
+        </div>
+        <div id="dashTrendBody">${dashTrendChartHtml(m.newLeadsToday.dailyTrend)}</div>
+      </div>
+
+      <div class="dash-card">
+        <div class="dash-card-hdr"><div>
+          <div class="dash-card-title">Portfolio KPIs</div>
+          <div class="dash-card-sub">All-time, spam excluded</div>
+        </div></div>
+        <div class="dash-kpi-grid">${kpis}</div>
+      </div>
+
+      ${dashSection('propertyToday', '📍', 'Property-wise Leads Today', m.propertyPerformance.newTodayTotal, buildPropertyTodayBody)}
+      ${dashSection('propertyPerformance', '🏘️', 'Property Performance (all-time)', m.propertyPerformance.totalProperties, buildPropertyPerformanceBody)}
+
       ${dashSection('followedUpToday', '✅', "Followed Up Today", m.followedUpToday.count, () => buildLeadListBody(m.followedUpToday.leads))}
       ${dashSection('overdueFollowUps', '⚠️', 'Overdue Follow-ups', m.overdueFollowUps.count, buildOverdueBody)}
       ${dashSection('actionLog', '📝', "Today's Action Log", m.actionLog.count, buildActionLogBody)}
       ${dashSection('stageChangesToday', '🔀', 'Stage Changes Today', `${m.stageChangesToday.count} (${m.stageChangesToday.forwardCount} forward)`, () => buildLeadListBody(m.stageChangesToday.leads))}
       ${dashSection('siteVisitPending', '🕓', 'Pending Site Visit', m.siteVisitPending.total, () => buildSiteVisitBody('siteVisitPending'))}
-      ${dashSection('siteVisitDone', '🏠', 'Site Visit Done', m.siteVisitDone.total, () => buildSiteVisitBody('siteVisitDone'))}
+      ${dashSection('siteVisitDone', '🏠', 'Site Visits Done', `${m.siteVisitDone.movedTodayCount} today · ${m.siteVisitDone.total} all-time`, buildSiteVisitDoneBody)}
       ${dashSection('missedCalls', '📵', 'Missed Calls', m.missedCalls.total, () => buildLeadListBody(m.missedCalls.leads))}
       ${dashSection('movedToWonToday', '🎉', 'Moved to Closed Today', m.movedToWonToday.count, buildWonBody)}
       ${dashSection('movedToDeadToday', '🚫', 'Moved to Not Interested / Spam Today', m.movedToDeadToday.count, buildDeadBody)}
