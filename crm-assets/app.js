@@ -267,7 +267,7 @@ function toggleMoreMenu(e){
 function closeMoreMenu(){
   document.getElementById('moreDd').classList.remove('open');
 }
-document.addEventListener('click', ()=>{ closeViewDropdown(); closeMoreMenu(); });
+document.addEventListener('click', ()=>{ closeViewDropdown(); closeMoreMenu(); closePropertyPop(); });
 
 // ═══════ HELPERS ═══════
 function stageById(id){ return stages.find(s=>s.id===id); }
@@ -865,6 +865,7 @@ function renderEnquiryTypeOptions(selected){
   const opts = enquiryTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   sel.innerHTML = `<option value="">Select type…</option>${opts}<option value="__add_new__">+ Add new type…</option>`;
   sel.value = selected && enquiryTypes.includes(selected) ? selected : '';
+  updatePropertyFieldMode();
 }
 function renderStageOptions(selected){
   const sel = document.getElementById('lmStage');
@@ -884,6 +885,7 @@ function onEnquiryTypeSelectChange(){
   } else {
     hideNewTypeRow();
   }
+  updatePropertyFieldMode();
 }
 function confirmAddEnquiryType(){
   const inp = document.getElementById('lmNewEnquiryType');
@@ -913,6 +915,130 @@ function renderLeadModalDetailsSent(){
 function setLeadModalDetailsSent(value){
   lmDetailsSent = value === true;
   renderLeadModalDetailsSent();
+}
+
+// ═══════ PROPERTY COMBOBOX (Property Enquiry only) ═══════
+// The property list is the union of two sources, so it's always complete
+// without anyone having to curate it: every property already used by a
+// Property Enquiry lead, plus the ones explicitly added here (persisted in
+// settings/{tenant}.properties, which is what keeps a brand-new property
+// selectable before its first lead has even been saved).
+let savedProperties = [];
+window.applyPropertiesSnapshot = function(list){
+  savedProperties = Array.isArray(list) ? list : [];
+};
+function isPropertyEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'property enquiry'; }
+function knownProperties(){
+  const byKey = new Map();
+  const add = (v) => {
+    const val = String(v || '').trim();
+    const key = val.toLowerCase();
+    if(key && !byKey.has(key)) byKey.set(key, val);
+  };
+  savedProperties.forEach(add);
+  leads.forEach(l => { if(isPropertyEnquiryType(l.enquiryType)) add(l.propertyInterest); });
+  return Array.from(byKey.values()).sort((a,b)=>a.localeCompare(b));
+}
+// Called on save so a property typed in via "add on the fly" is selectable
+// from the dropdown next time, even before its lead syncs back.
+function rememberProperty(enquiryType, value){
+  if(!isPropertyEnquiryType(enquiryType)) return;
+  const val = String(value || '').trim();
+  if(!val) return;
+  if(savedProperties.some(p => String(p).trim().toLowerCase() === val.toLowerCase())) return;
+  savedProperties = savedProperties.concat([val]);
+  if(window.crmFirebase && window.crmFirebase.saveProperties) window.crmFirebase.saveProperties(savedProperties);
+}
+
+let propertyPopOpen = false;
+let propertyPopItems = [];
+let propertyPopIndex = -1;
+
+function updatePropertyFieldMode(){
+  const isProp = isPropertyEnquiryType(document.getElementById('lmEnquiryType').value);
+  const combo = document.getElementById('lmInterestCombo');
+  const input = document.getElementById('lmInterest');
+  const hint = document.getElementById('lmInterestHint');
+  const label = document.getElementById('lmInterestLabel');
+  if(!combo) return;
+  combo.classList.toggle('is-combo', isProp);
+  input.placeholder = isProp ? 'Search properties, or type a new one…' : 'e.g. 3BHK in Nanganallur';
+  label.textContent = isProp ? 'Property *' : 'Property / Locality *';
+  hint.textContent = isProp ? `${knownProperties().length} propert${knownProperties().length===1?'y':'ies'} on file — pick one or type a new name to add it.` : '';
+  if(!isProp) closePropertyPop();
+}
+function propertyMatches(query){
+  const q = String(query || '').trim().toLowerCase();
+  const all = knownProperties();
+  if(!q) return all;
+  return all.filter(p => p.toLowerCase().includes(q));
+}
+function renderPropertyPop(){
+  const pop = document.getElementById('lmInterestPop');
+  const input = document.getElementById('lmInterest');
+  const typed = input.value.trim();
+  const matches = propertyMatches(typed).slice(0, 60);
+  const exact = matches.some(p => p.toLowerCase() === typed.toLowerCase());
+
+  propertyPopItems = matches.map(p => ({ kind:'pick', value:p }));
+  if(typed && !exact) propertyPopItems.unshift({ kind:'add', value:typed });
+
+  if(!propertyPopItems.length){
+    pop.innerHTML = '<div class="combo-empty">No properties yet — type a name to add the first one.</div>';
+    return;
+  }
+  pop.innerHTML = propertyPopItems.map((it,i)=>{
+    const active = i===propertyPopIndex ? ' at' : '';
+    return it.kind === 'add'
+      ? `<button type="button" class="combo-opt add${active}" role="option" onclick="pickProperty(${i})">＋ Add “${escapeHtml(it.value)}” as a new property</button>`
+      : `<button type="button" class="combo-opt${active}" role="option" onclick="pickProperty(${i})">${escapeHtml(it.value)}</button>`;
+  }).join('');
+  const activeEl = pop.querySelector('.combo-opt.at');
+  if(activeEl) activeEl.scrollIntoView({ block:'nearest' });
+}
+function openPropertyPop(){
+  if(!isPropertyEnquiryType(document.getElementById('lmEnquiryType').value)) return;
+  propertyPopOpen = true;
+  document.getElementById('lmInterestCombo').classList.add('open');
+  document.getElementById('lmInterest').setAttribute('aria-expanded','true');
+  renderPropertyPop();
+}
+function closePropertyPop(){
+  propertyPopOpen = false;
+  propertyPopIndex = -1;
+  const combo = document.getElementById('lmInterestCombo');
+  if(combo) combo.classList.remove('open');
+  const input = document.getElementById('lmInterest');
+  if(input) input.setAttribute('aria-expanded','false');
+}
+function togglePropertyPop(){
+  if(propertyPopOpen) closePropertyPop();
+  else { document.getElementById('lmInterest').focus(); openPropertyPop(); }
+}
+function onPropertyFocus(){ openPropertyPop(); }
+function onPropertyInput(){ propertyPopIndex = -1; openPropertyPop(); }
+function pickProperty(i){
+  const it = propertyPopItems[i];
+  if(!it) return;
+  document.getElementById('lmInterest').value = it.value;
+  closePropertyPop();
+  document.getElementById('lmInterest').focus();
+}
+function onPropertyKeydown(e){
+  if(!isPropertyEnquiryType(document.getElementById('lmEnquiryType').value)) return;
+  if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+    e.preventDefault();
+    if(!propertyPopOpen){ openPropertyPop(); return; }
+    if(!propertyPopItems.length) return;
+    propertyPopIndex = e.key === 'ArrowDown'
+      ? (propertyPopIndex + 1) % propertyPopItems.length
+      : (propertyPopIndex - 1 + propertyPopItems.length) % propertyPopItems.length;
+    renderPropertyPop();
+  } else if(e.key === 'Enter'){
+    if(propertyPopOpen && propertyPopIndex >= 0){ e.preventDefault(); pickProperty(propertyPopIndex); }
+  } else if(e.key === 'Escape'){
+    if(propertyPopOpen){ e.stopPropagation(); closePropertyPop(); }
+  }
 }
 
 function openAddLeadModal(){
@@ -963,6 +1089,7 @@ function openEditLeadModal(id){
 function closeLeadModal(){
   document.getElementById('lModal').classList.remove('open');
   hideNewTypeRow();
+  closePropertyPop();
 }
 // Future-date rule: with a time given, the exact moment must be after now;
 // with only a date given, it must be strictly after today (a bare "today"
@@ -1059,6 +1186,7 @@ function leadFormDiffs(l, form){
 // Writes a validated form onto an existing lead and logs every change to its
 // history. Shared by the Edit modal and the duplicate-merge path.
 function applyLeadForm(l, form, now){
+  rememberProperty(form.enquiryType, form.propertyInterest);
   const diffs = leadFormDiffs(l, form);
   const oldStageId = l.stageId;
   const stageChanged = oldStageId !== form.stageId;
@@ -1134,6 +1262,7 @@ function createLeadFromForm(form){
   l.history = [createdEvent];
   const firstNote = form.noteText ? { id:'n'+now, text: form.noteText, createdAt: now, by: currentUserEmail || null } : null;
   if(firstNote){ l.notes = [firstNote]; recomputeNoteMeta(l); }
+  rememberProperty(form.enquiryType, form.propertyInterest);
   leads.unshift(l);
   showToast('✓ Enquiry saved');
   Promise.resolve(window.crmFirebase.saveLead(l)).then(() => {

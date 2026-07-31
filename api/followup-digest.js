@@ -158,8 +158,11 @@ function sectionHtml(title, color, rows, showTime) {
 function formatDigestHtml(overdue, days, startOfToday) {
   let body = sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
   days.forEach((arr, i) => { body += sectionHtml(`📅 ${dayLabel(i, startOfToday)}`, i === 0 ? '#B45309' : '#1D4ED8', arr, true); });
-  return `<div style="font-family:sans-serif;">
-    <h2 style="font-family:sans-serif;">Follow-up digest</h2>
+  return `<div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#0A0A0A;">
+    <div style="padding:0 0 14px;border-bottom:3px solid #FE8D00;margin-bottom:6px;">
+      <div style="font-size:20px;font-weight:700;letter-spacing:-.03em;">3 PIN Realty</div>
+      <div style="font-size:11px;color:#A85C00;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-top:3px;">Follow-up digest</div>
+    </div>
     ${body || `<p style="font-family:sans-serif;color:#888;">Nothing due in the next ${LOOKAHEAD_DAYS} days.</p>`}
   </div>`;
 }

@@ -48,7 +48,7 @@ function statCardsHtml(m) {
         ${stats.slice(row * 2, row * 2 + 2).map(([label, val]) => `
           <div style="display:table-cell;width:50%;padding:6px;">
             <div style="${CARD}">
-              <div style="font-size:22px;font-weight:700;font-family:Georgia,serif;">${val}</div>
+              <div style="font-size:24px;font-weight:700;letter-spacing:-.02em;">${val}</div>
               <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;">${escapeHtml(label)}</div>
             </div>
           </div>`).join('')}
@@ -58,8 +58,8 @@ function statCardsHtml(m) {
 function sectionWrap(title, headline, bodyHtml) {
   return `
     <div style="margin:22px 0 8px;">
-      <h3 style="margin:0 0 4px;font-family:sans-serif;color:#1C1917;">${title}</h3>
-      ${headline ? `<div style="font-size:20px;font-weight:700;font-family:Georgia,serif;margin-bottom:8px;">${headline}</div>` : ''}
+      <h3 style="margin:0 0 4px;font-family:sans-serif;color:#0A0A0A;font-size:16px;">${title}</h3>
+      ${headline ? `<div style="font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:8px;">${headline}</div>` : ''}
       ${bodyHtml}
     </div>`;
 }
@@ -135,24 +135,27 @@ function siteVisitsTodaySection(m) {
     tableWrap(['Name', 'Phone', 'Property', 'By'], body) + extraLine);
 }
 
-function propertyTodaySection(m) {
-  const rows = m.propertyPerformance.newTodayRows;
-  if (!rows.length) return sectionWrap('📍 Property-wise Leads Today', null, emptyLine());
+// Property Enquiry leads are grouped by property; everything else by enquiry
+// type. Both sides share the metrics engine's group shape, so one pair of
+// renderers covers them — see finishGroups() in dashboardMetrics.js.
+function groupTodaySection(section, icon, title, colLabel) {
+  const rows = section.newTodayRows;
+  if (!rows.length) return sectionWrap(`${icon} ${title}`, null, emptyLine());
   const body = rows.map(r => `<tr>
-    <td style="${TD}font-weight:600;">${escapeHtml(r.property)}</td>
+    <td style="${TD}font-weight:600;">${escapeHtml(r.label)}</td>
     <td style="${TD}">${r.newToday}</td>
     <td style="${TD}">${r.total}</td>
   </tr>`).join('');
-  return sectionWrap('📍 Property-wise Leads Today', String(m.propertyPerformance.newTodayTotal),
-    tableWrap(['Property / Locality', 'New today', 'Total (excl. spam)'], body));
+  return sectionWrap(`${icon} ${title}`, String(section.newTodayTotal),
+    tableWrap([colLabel, 'New today', 'Total (excl. spam)'], body));
 }
 
-function propertyPerformanceSection(m) {
-  const rows = m.propertyPerformance.rows;
-  if (!rows.length) return sectionWrap('🏘️ Property Performance', null, emptyLine());
+function groupPerformanceSection(section, icon, title, colLabel, note) {
+  const rows = section.rows;
+  if (!rows.length) return sectionWrap(`${icon} ${title}`, null, emptyLine());
   const { shown, extraLine } = rowsWithCap(rows, 15);
   const body = shown.map(r => `<tr>
-    <td style="${TD}font-weight:600;">${escapeHtml(r.property)}</td>
+    <td style="${TD}font-weight:600;">${escapeHtml(r.label)}</td>
     <td style="${TD}">${r.total}</td>
     <td style="${TD}">${r.open}</td>
     <td style="${TD}">${r.siteVisitDone}</td>
@@ -160,9 +163,33 @@ function propertyPerformanceSection(m) {
     <td style="${TD}">${r.conversionPct === null ? '—' : r.conversionPct + '%'}</td>
     <td style="${TD}">${r.pipelineValueINR ? formatINR(r.pipelineValueINR) : '—'}</td>
   </tr>`).join('');
-  return sectionWrap('🏘️ Property Performance', `${rows.length} properties`,
-    `<p style="font-family:sans-serif;font-size:12px;color:#888;margin:0 0 6px;">All-time, spam excluded. Sorted by total leads.</p>`
-    + tableWrap(['Property', 'Total', 'Open', 'Visits', 'Closed', 'Conv.', 'Pipeline'], body) + extraLine);
+  return sectionWrap(`${icon} ${title}`, `${rows.length}`,
+    `<p style="font-family:sans-serif;font-size:12px;color:#888;margin:0 0 6px;">${escapeHtml(note)}</p>`
+    + tableWrap([colLabel, 'Total', 'Open', 'Visits', 'Closed', 'Conv.', 'Pipeline'], body) + extraLine);
+}
+
+function journeySection(m) {
+  const body = m.journey.map(s => `<tr>
+    <td style="${TD}font-weight:600;">${escapeHtml(s.label)}</td>
+    <td style="${TD}">${s.count}</td>
+    <td style="${TD}">${s.pct === null ? '—' : s.pct + '%'}</td>
+  </tr>`).join('');
+  return sectionWrap('🚀 Lead Journey', null, tableWrap(['Checkpoint', 'Leads', '% of all'], body));
+}
+
+function mixSection(m) {
+  const list = (title, rows) => rows.length
+    ? `<div style="display:table-cell;width:33%;vertical-align:top;padding-right:8px;">
+         <div style="font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px;">${title}</div>
+         ${rows.map(r => `<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>${escapeHtml(r.label)}</span><span>${r.count}</span></div>`).join('')}
+       </div>`
+    : '';
+  return sectionWrap('🧭 Lead Mix (all-time)', null,
+    `<div style="display:table;width:100%;"><div style="display:table-row;">
+       ${list('By Channel', m.mix.byChannel)}
+       ${list('By Source', m.mix.bySource)}
+       ${list('By Budget', m.mix.byBudgetBand)}
+     </div></div>`);
 }
 
 function kpiSection(m) {
@@ -247,7 +274,8 @@ async function renderDashboardEmailHtml(m, dateStr) {
     statCardsHtml(m),
     actionLogSection(m),
     newLeadsTodaySection(m),
-    propertyTodaySection(m),
+    groupTodaySection(m.propertyPerformance, '📍', 'Property-wise Leads Today', 'Property'),
+    groupTodaySection(m.enquiryPerformance, '🏷️', 'Other Enquiries Today (by type)', 'Enquiry type'),
     siteVisitsTodaySection(m),
     leadTableSection('Overdue Follow-ups', '⚠️', m.overdueFollowUps, 15, [{ label: 'Was due', value: l => fmtDateTime(l.followUpAt) }]),
     leadTableSection("Tomorrow's Follow-up Plan", '🌤️', m.followUpsDueTomorrow, 25, [{ label: 'Time', value: l => fmtTime(l.followUpAt) }]),
@@ -255,16 +283,19 @@ async function renderDashboardEmailHtml(m, dateStr) {
     await movedToDeadSection(m),
     leadTableSection('Cold Leads (7+ days silent)', '🧊', m.coldLeads, 10, []),
     kpiSection(m),
-    propertyPerformanceSection(m),
+    journeySection(m),
+    mixSection(m),
+    groupPerformanceSection(m.propertyPerformance, '🏘️', 'Property Performance', 'Property', 'Property Enquiry leads only, grouped by property. All-time, spam excluded.'),
+    groupPerformanceSection(m.enquiryPerformance, '📁', 'Enquiry Type Performance', 'Enquiry type', 'Everything that is not a Property Enquiry, grouped by type. All-time, spam excluded.'),
     pipelineSection(m),
     ownerSection(m),
     hygieneSection(m)
   ].join('');
 
   return `<div style="max-width:600px;margin:0 auto;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;color:#1C1917;">
-    <div style="text-align:center;padding:10px 0 18px;">
-      <div style="font-family:Georgia,serif;font-size:20px;font-weight:700;">3 PIN Realty</div>
-      <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:.06em;">EOD Dashboard Summary — ${dateStr}</div>
+    <div style="text-align:center;padding:10px 0 20px;border-bottom:3px solid #FE8D00;margin-bottom:18px;">
+      <div style="font-size:22px;font-weight:700;letter-spacing:-.03em;color:#0A0A0A;">3 PIN Realty</div>
+      <div style="font-size:11px;color:#A85C00;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-top:4px;">EOD Dashboard Summary — ${dateStr}</div>
     </div>
     ${body}
     <p style="text-align:center;color:#aaa;font-size:11px;margin-top:24px;">Generated 21:30 IST, ${dateStr} • Data window 00:00–23:59 IST • 3 PIN Realty CRM</p>
@@ -281,7 +312,7 @@ function renderDashboardEmailText(m, dateStr) {
   lines.push('');
   if (m.propertyPerformance.newTodayRows.length) {
     lines.push(`PROPERTY-WISE LEADS TODAY (${m.propertyPerformance.newTodayTotal}):`);
-    m.propertyPerformance.newTodayRows.forEach(r => lines.push(`- ${r.property}: ${r.newToday} new (${r.total} total)`));
+    m.propertyPerformance.newTodayRows.forEach(r => lines.push(`- ${r.label}: ${r.newToday} new (${r.total} total)`));
     lines.push('');
   }
   if (m.siteVisitDone.movedTodayCount) {

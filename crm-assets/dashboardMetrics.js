@@ -26,6 +26,8 @@ const DEAD_STAGE_NAMES = ['not interested', 'spam'];
 // ONLY spam (junk that was never a real enquiry), while genuinely lost leads
 // still count towards a property's demand.
 const SPAM_STAGE_NAMES = ['spam'];
+// The one enquiry type whose leads are analysed property-by-property.
+const PROPERTY_ENQUIRY_NAME = 'property enquiry';
 const SITE_VISIT_DONE_NAME = 'site visit done';
 const SITE_VISIT_PENDING_NAME = 'site visit';
 const MISSED_CALLS_NAME = 'missed calls';
@@ -150,7 +152,8 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const enquiryTypeCountsAll = new Map();
   const sourceCountsNewToday = new Map();
   const phoneGroups = new Map(); // normalized phone -> leads[]
-  const propertyMap = new Map(); // normalized property -> stats
+  const propertyMap = new Map();      // normalized property -> stats (Property Enquiry only)
+  const enquiryGroupMap = new Map();  // normalized enquiry type -> stats (everything else)
   // Daily new-lead counts, oldest first; the last slot is the reference day.
   const dailyNewBuckets = new Array(TREND_DAYS).fill(0);
 
@@ -184,24 +187,64 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     return ownerMap.get(owner);
   }
 
-  // Properties are free text ("3BHK in Adyar"), so they're grouped
-  // case-insensitively on the trimmed string and displayed using the first
-  // spelling seen. Nothing is normalized away beyond case/whitespace — two
-  // genuinely different descriptions stay two rows.
-  function ensureProperty(l) {
-    const raw = String(l.propertyInterest || '').trim();
-    const key = normName(raw) || '__unspecified__';
-    if (!propertyMap.has(key)) {
-      propertyMap.set(key, {
-        key, property: raw || 'Unspecified',
+  // Only PROPERTY ENQUIRIES are grouped by property — for those, the property
+  // is the thing being sold and the unit the business thinks in. Every other
+  // enquiry type (rentals, seller listings, general) has free-text or empty
+  // property fields that would shatter into meaningless one-row groups, so
+  // those are grouped by enquiry type instead. Both sides use the identical
+  // stat shape so one renderer serves both.
+  function ensureGroup(map, key, label) {
+    if (!map.has(key)) {
+      map.set(key, {
+        key, label,
         total: 0, newToday: 0, open: 0, won: 0, lost: 0, spam: 0,
         siteVisitDone: 0, siteVisitDoneToday: 0, siteVisitPending: 0,
         detailsSent: 0, overdue: 0, pipelineValueINR: 0, wonValueINR: 0,
         lastActivityAt: 0
       });
     }
-    return propertyMap.get(key);
+    return map.get(key);
   }
+  // Grouped case-insensitively on the trimmed string, displayed using the
+  // first spelling seen. Nothing is normalized away beyond case/whitespace —
+  // two genuinely different descriptions stay two rows.
+  function groupFor(l) {
+    if (normName(l.enquiryType) === PROPERTY_ENQUIRY_NAME) {
+      const raw = String(l.propertyInterest || '').trim();
+      return ensureGroup(propertyMap, normName(raw) || '__unspecified__', raw || 'Unspecified');
+    }
+    const raw = String(l.enquiryType || '').trim();
+    return ensureGroup(enquiryGroupMap, normName(raw) || '__unspecified__', raw || 'Unspecified');
+  }
+
+  // Six calendar months ending on the reference day's month, oldest first.
+  const monthKeys = [];
+  {
+    const d = new Date(dayStart);
+    let y = Number(istDateLabel(dayStart).slice(0, 4));
+    let mo = Number(istDateLabel(dayStart).slice(5, 7));
+    for (let i = 5; i >= 0; i--) {
+      let yy = y, mm = mo - i;
+      while (mm <= 0) { mm += 12; yy -= 1; }
+      monthKeys.push(`${yy}-${String(mm).padStart(2, '0')}`);
+    }
+    void d;
+  }
+  const monthCounts = new Map(monthKeys.map(k => [k, 0]));
+
+  // Sale-price bands in the units Chennai brokers actually quote.
+  const BUDGET_BANDS = [
+    { label: 'Under ₹50 L', max: 50e5 },
+    { label: '₹50 L – 1 Cr', max: 1e7 },
+    { label: '₹1 – 2 Cr', max: 2e7 },
+    { label: '₹2 – 5 Cr', max: 5e7 },
+    { label: '₹5 Cr+', max: Infinity }
+  ];
+  const budgetBandCounts = BUDGET_BANDS.map(b => ({ label: b.label, count: 0 }));
+  let budgetUnknownCount = 0;
+
+  const channelCountsAll = new Map();
+  const sourceCountsAll = new Map();
 
   let spamCount = 0;
   let openLeadCount = 0;
@@ -282,6 +325,19 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     // ── Portfolio KPIs + per-property rollup ──
     const budgetINR = parseBudgetToINR(l.budget);
     const countsForValue = budgetINR !== null && l.enquiryType !== 'Rental Enquiry';
+    if (!isSpam) {
+      // All-time mix charts deliberately exclude spam, so a junk spike can't
+      // make a channel look productive.
+      const chanKey = CHANNEL_LABELS[l.channel] ? CHANNEL_LABELS[l.channel] : 'Other';
+      channelCountsAll.set(chanKey, (channelCountsAll.get(chanKey) || 0) + 1);
+      sourceCountsAll.set(l.source || 'Unspecified', (sourceCountsAll.get(l.source || 'Unspecified') || 0) + 1);
+      if (budgetINR === null) budgetUnknownCount++;
+      else budgetBandCounts[BUDGET_BANDS.findIndex(b => budgetINR < b.max)].count++;
+      if (typeof l.createdAt === 'number') {
+        const mk = istDateLabel(l.createdAt).slice(0, 7);
+        if (monthCounts.has(mk)) monthCounts.set(mk, monthCounts.get(mk) + 1);
+      }
+    }
     if (isSpam) spamCount++;
     if (isOpen) {
       openLeadCount++;
@@ -291,7 +347,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     if (kind === 'won') { wonLeadCount++; if (countsForValue) wonValueINR += budgetINR; }
     if (kind === 'dead') deadLeadCount++;
 
-    const p = ensureProperty(l);
+    const p = groupFor(l);
     if (isSpam) {
       p.spam++;
     } else {
@@ -388,22 +444,33 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     .filter(([, arr]) => arr.length > 1)
     .map(([phone, arr]) => ({ phone, leads: arr }));
 
-  const propertyRows = Array.from(propertyMap.values())
-    .map(p => ({
-      ...p,
-      // Of the leads this property ever attracted (spam excluded), how many
-      // reached Closed. Zero-total rows (spam-only) report null, never 0%,
-      // so "no data" is never mistaken for "0% conversion".
-      conversionPct: p.total ? Math.round((p.won / p.total) * 1000) / 10 : null,
-      siteVisitPct: p.total ? Math.round((p.siteVisitDone / p.total) * 1000) / 10 : null
-    }))
-    .filter(p => p.total > 0)
-    .sort((a, b) => b.total - a.total || a.property.localeCompare(b.property));
-
-  const propertyNewTodayRows = propertyRows
-    .filter(p => p.newToday > 0)
-    .slice()
-    .sort((a, b) => b.newToday - a.newToday || a.property.localeCompare(b.property));
+  // Property groups and enquiry-type groups carry the same stat shape, so one
+  // finisher serves both — and the Dashboard can render them with one renderer.
+  function finishGroups(map) {
+    const rows = Array.from(map.values())
+      .map(g => ({
+        ...g,
+        // Of the leads this group ever attracted (spam excluded), how many
+        // reached Closed. Zero-total rows (spam-only) report null, never 0%,
+        // so "no data" is never mistaken for "0% conversion".
+        conversionPct: g.total ? Math.round((g.won / g.total) * 1000) / 10 : null,
+        siteVisitPct: g.total ? Math.round((g.siteVisitDone / g.total) * 1000) / 10 : null
+      }))
+      .filter(g => g.total > 0)
+      .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+    const newTodayRows = rows
+      .filter(g => g.newToday > 0)
+      .slice()
+      .sort((a, b) => b.newToday - a.newToday || a.label.localeCompare(b.label));
+    return {
+      totalGroups: rows.length,
+      newTodayTotal: newTodayRows.reduce((s, g) => s + g.newToday, 0),
+      newTodayRows,
+      rows
+    };
+  }
+  const propertyGroups = finishGroups(propertyMap);
+  const enquiryGroups = finishGroups(enquiryGroupMap);
 
   const nonSpamTotal = totalLeads - spamCount;
   const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
@@ -459,14 +526,41 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       dailyTrend
     },
 
-    // Property-wise view of the book: what came in today, and the standing
-    // demand + conversion each property has accumulated (spam excluded).
-    propertyPerformance: {
-      totalProperties: propertyRows.length,
-      newTodayTotal: propertyNewTodayRows.reduce((s, p) => s + p.newToday, 0),
-      newTodayRows: propertyNewTodayRows,
-      rows: propertyRows
+    // Property-wise view of the book — PROPERTY ENQUIRIES ONLY: what came in
+    // today, and the standing demand + conversion each property has
+    // accumulated (spam excluded).
+    propertyPerformance: { ...propertyGroups, totalProperties: propertyGroups.totalGroups },
+    // Everything that isn't a property enquiry, grouped by enquiry type
+    // instead — same columns, so the two tables read identically.
+    enquiryPerformance: enquiryGroups,
+
+    // ── All-time mixes and distributions (spam excluded throughout) ──
+    mix: {
+      byChannel: Array.from(channelCountsAll.entries())
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count),
+      bySource: Array.from(sourceCountsAll.entries())
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count),
+      byBudgetBand: budgetBandCounts.concat([{ label: 'Not specified', count: budgetUnknownCount }])
+        .filter(b => b.count > 0),
+      byMonth: monthKeys.map(k => ({
+        key: k,
+        label: new Date(`${k}-15T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' }),
+        count: monthCounts.get(k) || 0
+      }))
     },
+
+    // Four checkpoints every lead can be measured against RIGHT NOW. This is
+    // deliberately not a cumulative stage funnel: stages are user-editable and
+    // leads can skip or move backwards, so "reached at least stage N" would be
+    // a guess. Each count below is a fact about the current data.
+    journey: [
+      { label: 'Total leads', count: nonSpamTotal },
+      { label: 'Details shared', count: leads.filter(l => l.detailsSent === true && !SPAM_STAGE_NAMES.includes(normName(stageNameOf(l.stageId)))).length },
+      { label: 'Site visit done', count: siteVisitDoneLeads.length },
+      { label: 'Closed', count: wonLeadCount }
+    ].map(s => ({ ...s, pct: pct(s.count, nonSpamTotal) })),
 
     kpis: {
       totalLeads,

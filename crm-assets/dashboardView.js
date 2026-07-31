@@ -290,11 +290,16 @@ function buildSiteVisitDoneBody(){
 }
 
 // ── Charts ────────────────────────────────────────────────────────────
-// All charts here are single-series magnitude plots, so they use ONE hue
-// (the CRM's blue) rather than a categorical palette — identity never rides
-// on colour, and there is nothing for a colour-blind reader to tell apart.
-// Text always wears the ink tokens; only marks carry the hue.
-const CHART_HUE = '#1D4ED8';
+// Almost every chart here is a single-series magnitude plot, so it uses ONE
+// hue rather than a categorical palette — identity never rides on colour, and
+// there is nothing for a colour-blind reader to tell apart. Text always wears
+// the ink tokens; only marks carry the hue.
+//
+// This is the brand orange stepped down to #D47300, which clears the 3:1
+// floor for non-text marks on white — the logo's own #FE8D00 is 2.3:1 and
+// would leave bars washed out against the card.
+const CHART_HUE = '#D47300';
+const CHART_HUE_SOFT = '#FBE4C8';
 
 // Axis ticks land on 1/2/5×10ⁿ so the labels read as round numbers.
 function dashNiceStep(max, targetTicks){
@@ -411,6 +416,54 @@ function dashBarRows(rows, valueOf, labelOf, subOf){
     </div>`).join('')}</div>`;
 }
 
+// Ordinal ramp for ORDERED categories only (the journey funnel), light→dark.
+// Validated against white: lightest step is 2.14:1, clearing the 2:1 floor an
+// ordinal ramp's near-surface step has to hold. Never used for nominal
+// categories — those get one flat hue, so length is the only encoding.
+const CHART_RAMP = ['#F0A03C', '#E88A1B', '#D47300', '#B35F00'];
+
+// Vertical columns for a short ordered series (months, budget bands).
+// ≤24px thick, 4px rounded cap, square at the baseline, value on the cap.
+function dashColumnsHtml(rows, opts){
+  opts = opts || {};
+  if(!rows || !rows.length) return dashEmpty(opts.emptyLabel);
+  const max = Math.max(1, ...rows.map(r => r.count));
+  return `<div class="dash-cols" style="--cols:${rows.length}">
+    ${rows.map(r => {
+      const h = Math.max(2, Math.round((r.count / max) * 100));
+      return `<div class="dash-col" title="${escapeHtml(r.label)}: ${r.count}">
+        <div class="dash-col-val">${r.count}</div>
+        <div class="dash-col-track"><div class="dash-col-fill" style="height:${h}%;background:${CHART_HUE}"></div></div>
+        <div class="dash-col-label">${escapeHtml(r.label)}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// The journey checkpoints. Bar length is the count; the ordinal ramp reinforces
+// the sequence. Each row carries its own count AND share, so nothing depends on
+// reading a colour.
+function dashFunnelHtml(steps){
+  if(!steps || !steps.length) return dashEmpty();
+  const max = Math.max(1, ...steps.map(s => s.count));
+  return `<div class="dash-funnel">
+    ${steps.map((s, i) => {
+      const w = Math.max(3, (s.count / max) * 100);
+      const colour = CHART_RAMP[Math.min(i, CHART_RAMP.length - 1)];
+      const dropFrom = i > 0 ? steps[i-1].count : null;
+      const drop = dropFrom && dropFrom > 0 ? Math.round((s.count / dropFrom) * 100) : null;
+      return `<div class="dash-funnel-row">
+        <div class="dash-funnel-head">
+          <span class="dash-funnel-label">${escapeHtml(s.label)}</span>
+          <span class="dash-funnel-val">${s.count}<span class="dash-funnel-pct">${s.pct === null ? '' : ` · ${s.pct}% of all`}</span></span>
+        </div>
+        <div class="dash-funnel-track"><div class="dash-funnel-fill" style="width:${w}%;background:${colour}"></div></div>
+        ${drop !== null ? `<div class="dash-funnel-step">${drop}% carried through from “${escapeHtml(steps[i-1].label)}”</div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function dashKpiTile(label, value, sub){
   return `<div class="dash-kpi">
     <div class="dash-kpi-val">${value}</div>
@@ -422,22 +475,24 @@ function dashPct(v){ return v === null || v === undefined ? '—' : `${v}%`; }
 
 // ── Property sections ─────────────────────────────────────────────────
 
-function buildPropertyTodayBody(){
-  const rows = dashMetrics.propertyPerformance.newTodayRows;
-  if(!rows.length) return dashEmpty('no new leads today');
-  return dashBarRows(rows, r => r.newToday, r => r.property)
-    + `<div class="dash-mini-row" style="margin-top:10px"><span>Total new today</span><span>${dashMetrics.propertyPerformance.newTodayTotal}</span></div>`;
+// Property groups and enquiry-type groups have an identical shape by design
+// (see finishGroups in dashboardMetrics.js), so one renderer serves both.
+function buildGroupTodayBody(section, emptyLabel){
+  const rows = section.newTodayRows;
+  if(!rows.length) return dashEmpty(emptyLabel);
+  return dashBarRows(rows, r => r.newToday, r => r.label)
+    + `<div class="dash-mini-row" style="margin-top:10px"><span>Total new today</span><span>${section.newTodayTotal}</span></div>`;
 }
 
-function buildPropertyPerformanceBody(){
-  const rows = dashMetrics.propertyPerformance.rows;
-  if(!rows.length) return dashEmpty('no properties yet');
+function buildGroupPerformanceBody(section, colLabel, note){
+  const rows = section.rows;
+  if(!rows.length) return dashEmpty('nothing here yet');
   const top = rows.slice(0, 12);
-  const chart = dashBarRows(top, r => r.total, r => r.property);
+  const chart = dashBarRows(top, r => r.total, r => r.label);
   const table = `<div class="dash-chart-table"><table>
-    <thead><tr><th>Property / Locality</th><th>Total</th><th>Today</th><th>Open</th><th>Site visits</th><th>Closed</th><th>Conv.</th><th>Pipeline</th></tr></thead>
+    <thead><tr><th>${escapeHtml(colLabel)}</th><th>Total</th><th>Today</th><th>Open</th><th>Site visits</th><th>Closed</th><th>Conv.</th><th>Pipeline</th></tr></thead>
     <tbody>${rows.map(r => `<tr>
-      <td class="dash-td-name">${escapeHtml(r.property)}</td>
+      <td class="dash-td-name">${escapeHtml(r.label)}</td>
       <td>${r.total}</td>
       <td>${r.newToday || '—'}</td>
       <td>${r.open}</td>
@@ -447,10 +502,21 @@ function buildPropertyPerformanceBody(){
       <td>${r.pipelineValueINR ? window.formatINR(r.pipelineValueINR) : '—'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`;
-  return `<div class="dash-sec-note">Totals exclude leads parked in Spam. “Conv.” is Closed ÷ total for that property.</div>`
+  return `<div class="dash-sec-note">${escapeHtml(note)}</div>`
     + chart
     + (rows.length > top.length ? `<div class="dash-sec-note">Chart shows the top ${top.length}; all ${rows.length} are in the table below.</div>` : '')
     + table;
+}
+
+function buildPropertyTodayBody(){ return buildGroupTodayBody(dashMetrics.propertyPerformance, 'no property enquiries today'); }
+function buildPropertyPerformanceBody(){
+  return buildGroupPerformanceBody(dashMetrics.propertyPerformance, 'Property',
+    'Property Enquiry leads only, grouped by property. Spam excluded. “Conv.” is Closed ÷ total.');
+}
+function buildEnquiryTodayBody(){ return buildGroupTodayBody(dashMetrics.enquiryPerformance, 'no other enquiries today'); }
+function buildEnquiryPerformanceBody(){
+  return buildGroupPerformanceBody(dashMetrics.enquiryPerformance, 'Enquiry type',
+    'Everything that is not a Property Enquiry, grouped by enquiry type rather than by property. Spam excluded.');
 }
 
 // ── Main render ───────────────────────────────────────────────────────
@@ -520,8 +586,71 @@ window.renderDashboardView = function(){
         <div class="dash-kpi-grid">${kpis}</div>
       </div>
 
+      <div class="dash-card-grid">
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">Lead Journey</div>
+            <div class="dash-card-sub">Where the book stands right now</div>
+          </div></div>
+          ${dashFunnelHtml(m.journey)}
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">New Leads by Month</div>
+            <div class="dash-card-sub">Last 6 months</div>
+          </div></div>
+          ${dashColumnsHtml(m.mix.byMonth, { emptyLabel:'no history yet' })}
+        </div>
+      </div>
+
+      <div class="dash-card-grid">
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">Leads by Channel</div>
+            <div class="dash-card-sub">All-time, spam excluded</div>
+          </div></div>
+          ${m.mix.byChannel.length ? dashBarRows(m.mix.byChannel, r => r.count, r => r.label) : dashEmpty('no leads yet')}
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">Leads by Source</div>
+            <div class="dash-card-sub">Where the enquiry originated</div>
+          </div></div>
+          ${m.mix.bySource.length ? dashBarRows(m.mix.bySource, r => r.count, r => r.label) : dashEmpty('no leads yet')}
+        </div>
+      </div>
+
+      <div class="dash-card">
+        <div class="dash-card-hdr"><div>
+          <div class="dash-card-title">Budget Distribution</div>
+          <div class="dash-card-sub">All-time, spam excluded · unparseable budgets counted as “Not specified”</div>
+        </div></div>
+        ${dashColumnsHtml(m.mix.byBudgetBand, { emptyLabel:'no budgets recorded' })}
+      </div>
+
+      <div class="dash-card-grid">
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">Pipeline by Stage</div>
+            <div class="dash-card-sub">${m.pipelineByStage.totalLeads} leads across ${m.pipelineByStage.stages.length} stages</div>
+          </div></div>
+          ${buildPipelineBody()}
+        </div>
+        <div class="dash-card">
+          <div class="dash-card-hdr"><div>
+            <div class="dash-card-title">Open Leads by Owner</div>
+            <div class="dash-card-sub">Who is carrying the book</div>
+          </div></div>
+          ${m.ownerActivity.owners.length
+            ? dashBarRows(m.ownerActivity.owners.slice().sort((a,b)=>b.openLeads-a.openLeads), o => o.openLeads, o => o.owner)
+            : dashEmpty('no owners yet')}
+        </div>
+      </div>
+
       ${dashSection('propertyToday', '📍', 'Property-wise Leads Today', m.propertyPerformance.newTodayTotal, buildPropertyTodayBody)}
       ${dashSection('propertyPerformance', '🏘️', 'Property Performance (all-time)', m.propertyPerformance.totalProperties, buildPropertyPerformanceBody)}
+      ${dashSection('enquiryToday', '🏷️', 'Other Enquiries Today (by type)', m.enquiryPerformance.newTodayTotal, buildEnquiryTodayBody)}
+      ${dashSection('enquiryPerformance', '📁', 'Enquiry Type Performance (all-time)', m.enquiryPerformance.totalGroups, buildEnquiryPerformanceBody)}
 
       ${dashSection('followedUpToday', '✅', "Followed Up Today", m.followedUpToday.count, () => buildLeadListBody(m.followedUpToday.leads))}
       ${dashSection('overdueFollowUps', '⚠️', 'Overdue Follow-ups', m.overdueFollowUps.count, buildOverdueBody)}
@@ -536,8 +665,7 @@ window.renderDashboardView = function(){
       ${dashSection('newLeadsToday', '📈', 'New Leads Today', m.newLeadsToday.total, buildNewTodayBody)}
       ${dashSection('followUpsDueTomorrow', '🌤️', "Tomorrow's Follow-up Plan", m.followUpsDueTomorrow.count, buildTomorrowBody)}
       ${dashSection('coldLeads', '🧊', 'Cold Leads (7+ days silent)', m.coldLeads.count, buildColdBody)}
-      ${dashSection('pipelineByStage', '📊', 'Pipeline by Stage', m.pipelineByStage.totalLeads, buildPipelineBody)}
-      ${dashSection('ownerActivity', '👤', 'Owner Activity', m.ownerActivity.owners.length, buildOwnerBody)}
+      ${dashSection('ownerActivity', '👤', 'Owner Activity Detail', m.ownerActivity.owners.length, buildOwnerBody)}
       ${dashSection('dataHygiene', '🧹', 'Data Hygiene', m.dataHygiene.missingPhone.count + m.dataHygiene.missingBudget.count + m.dataHygiene.noFollowUpDate.count + m.dataHygiene.noAiSummary.count + m.dataHygiene.duplicatePhones.count, buildHygieneBody)}
     </div>`;
   dashDeadReasonsState = 'idle';

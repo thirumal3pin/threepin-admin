@@ -6,7 +6,7 @@
 <title>3 PIN Realty — CRM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/jpeg" href="logo.jpg">
 <link rel="stylesheet" href="crm-assets/style.css">
 </head>
@@ -379,9 +379,23 @@
             <button type="button" onclick="confirmAddEnquiryType()">+ Add</button>
           </div>
         </div>
+        <!-- For a Property Enquiry this behaves as a searchable combobox over
+             every property already in the CRM, with "add on the fly" for
+             anything new. For any other enquiry type it stays a plain free-text
+             field — see updatePropertyFieldMode(). -->
         <div class="field">
-          <label for="lmInterest">Property / Locality *</label>
-          <input type="text" id="lmInterest" placeholder="e.g. 3BHK in Nanganallur">
+          <label for="lmInterest" id="lmInterestLabel">Property / Locality *</label>
+          <div class="combo" id="lmInterestCombo">
+            <input type="text" id="lmInterest" autocomplete="off" role="combobox"
+                   aria-expanded="false" aria-autocomplete="list" aria-controls="lmInterestPop"
+                   placeholder="e.g. 3BHK in Nanganallur"
+                   oninput="onPropertyInput()" onfocus="onPropertyFocus()"
+                   onkeydown="onPropertyKeydown(event)" onclick="event.stopPropagation()">
+            <button type="button" class="combo-caret" id="lmInterestCaret" tabindex="-1"
+                    onclick="event.stopPropagation();togglePropertyPop()">⌄</button>
+            <div class="combo-pop" id="lmInterestPop" role="listbox" onclick="event.stopPropagation()"></div>
+          </div>
+          <div class="combo-hint" id="lmInterestHint"></div>
         </div>
         <div class="field-row">
           <div class="field">

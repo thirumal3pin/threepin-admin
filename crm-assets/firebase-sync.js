@@ -91,6 +91,7 @@ function subscribeToData(tenantId){
         if (!snap.exists()) return;
         const data = snap.data();
         if (window.applyEnquiryTypesSnapshot) window.applyEnquiryTypesSnapshot(data.enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+        if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(data.properties || []);
         if (window.applyDigestSettingsSnapshot) {
           window.applyDigestSettingsSnapshot({
             enabled: !!data.followupDigestEnabled,
@@ -142,6 +143,10 @@ window.crmFirebase = {
   },
   saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e)),
   saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
+  // The curated property list behind the Add Lead combobox. Leads already in
+  // the CRM contribute their properties client-side; this doc is what makes a
+  // brand-new property selectable before its first lead exists.
+  saveProperties: (properties) => setDoc(settingsRef(currentTenantId), { properties }, { merge: true }).catch(e => console.error('Firestore save properties error:', e)),
   saveFollowupDigestSettings: (enabled, recipients, emailEnabled, emails) => setDoc(settingsRef(currentTenantId), {
     followupDigestEnabled: enabled,
     followupDigestRecipients: recipients,
