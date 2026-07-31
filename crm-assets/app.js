@@ -248,7 +248,7 @@ function updateNavState(){
   document.getElementById('fuNavBtn').classList.toggle('at', currentView==='followups');
   document.getElementById('dashNavBtn').classList.toggle('at', currentView==='dashboard');
   document.querySelector('#viewDd .view-dd-btn').classList.toggle('at', currentView!=='followups' && currentView!=='dashboard');
-  document.getElementById('viewDdLabel').textContent = lastBrowseView==='list' ? '📃 List' : '📋 Board';
+  document.getElementById('viewDdLabel').textContent = lastBrowseView==='list' ? 'List' : 'Board';
   document.querySelectorAll('#viewDdMenu button').forEach(b=>b.classList.toggle('at', b.dataset.view===lastBrowseView && currentView!=='followups' && currentView!=='dashboard'));
 }
 function toggleViewDropdown(e){
