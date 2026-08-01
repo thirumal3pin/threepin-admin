@@ -142,27 +142,15 @@
       <button class="pmodal-x" onclick="closePModal()">×</button>
     </div>
     <div class="pmodal-body">
-      <div class="pmodal-steps">
-        <div class="pm-step"><b>1.</b> Download the JSON template below</div>
-        <div class="pm-step"><b>2.</b> Fill in the property details in any text editor</div>
-        <div class="pm-step"><b>3.</b> Paste the completed JSON here and click Save</div>
-      </div>
-      <button class="pmodal-dl" onclick="downloadTemplate()">📥 Download JSON Template</button>
-      <textarea id="pmJson" class="pmodal-ta" placeholder='Paste property JSON here, e.g.
-{
-  "name": "Green Meadows",
-  "builder": "ABC Builders",
-  "location": "Velachery, Chennai",
-  "type": "Apartments",
-  "config": "2BHK / 3BHK",
-  "status": "Under Construction",
-  "possession": "Dec 2027",
-  "startingPrice": "₹65L+",
-  ...
-}'></textarea>
+      <div id="pmForm" class="pmodal-form"></div>
       <div class="pmodal-err" id="pmErr"></div>
+      <details class="pmodal-json-wrap">
+        <summary>View JSON (live preview, read-only)</summary>
+        <textarea id="pmJson" class="pmodal-ta" readonly></textarea>
+      </details>
     </div>
     <div class="pmodal-ftr">
+      <button class="pmodal-discard" id="pmDiscard" onclick="discardPModalChanges()">↺ Discard changes</button>
       <button class="pmodal-cancel" onclick="closePModal()">Cancel</button>
       <button class="pmodal-save" onclick="savePModal()">✓ Save Property</button>
     </div>

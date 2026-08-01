@@ -437,35 +437,139 @@ function setInterest(id,lvl){
 }
 
 // ═══════ ADD / EDIT / DELETE PROPERTY ═══════
-const PROPERTY_TEMPLATE = {
-  name: "Property Name Here",
-  builder: "Builder Name",
-  location: "Locality, Chennai",
-  type: "Apartments",
-  config: "2BHK / 3BHK",
-  status: "Under Construction",
-  possession: "Dec 2027",
-  startingPrice: "₹60L+",
-  pricePerSqft: "₹5500/Sqft",
-  contactName: "Swaminathan",
-  contactNumber: "98848 83370",
-  totalUnits: "100",
-  totalLandArea: "5 Acres",
-  sqftRange: "900-1800 Sq.Ft",
-  highlights: "Highlight One,Highlight Two,Highlight Three",
-  amenities: "Swimming Pool,Gym,Clubhouse",
-  nearby: "Nearby area",
-  nearbyLandmark: "Landmark name",
-  connectivity: "Metro / Road connectivity details",
-  totalFloors: "G+5",
-  vastu: "Yes",
-  parking: "1",
-  parkingType: "Covered",
-  availability: "Available"
-};
-
 let pModalMode = 'add'; // 'add' | 'edit'
 let pModalEditId = null;
+let pModalOriginalFull = null; // full original property object, when editing
+let pModalOriginalStr = {};    // key -> snapshot string value, for diffing
+
+// Drives the on-screen edit form: which fields exist, how they're grouped,
+// and how each renders.
+const PROPERTY_FIELDS = [
+  { key:'name', label:'Property Name', group:'Basic Info', required:true },
+  { key:'builder', label:'Builder', group:'Basic Info' },
+  { key:'location', label:'Location', group:'Basic Info', required:true },
+  { key:'type', label:'Type', group:'Basic Info', datalist:true },
+  { key:'config', label:'Configuration', group:'Basic Info', placeholder:'2BHK / 3BHK' },
+  { key:'status', label:'Status', group:'Pricing & Status', options:['Under Construction','Ready to Move'] },
+  { key:'possession', label:'Possession', group:'Pricing & Status' },
+  { key:'startingPrice', label:'Starting Price', group:'Pricing & Status' },
+  { key:'pricePerSqft', label:'Price / Sqft', group:'Pricing & Status' },
+  { key:'availability', label:'Availability', group:'Pricing & Status' },
+  { key:'totalUnits', label:'Total Units', group:'Specifications' },
+  { key:'sqftRange', label:'Sqft Range', group:'Specifications' },
+  { key:'totalLandArea', label:'Total Land Area', group:'Specifications' },
+  { key:'totalFloors', label:'Total Floors', group:'Specifications' },
+  { key:'parking', label:'Parking', group:'Specifications' },
+  { key:'parkingType', label:'Parking Type', group:'Specifications' },
+  { key:'vastu', label:'Vastu', group:'Specifications' },
+  { key:'highlights', label:'Highlights', group:'Description', textarea:true, wide:true, hint:'Comma-separated' },
+  { key:'amenities', label:'Amenities', group:'Description', textarea:true, wide:true, hint:'Comma-separated' },
+  { key:'nearby', label:'Nearby', group:'Description' },
+  { key:'nearbyLandmark', label:'Nearby Landmark', group:'Description' },
+  { key:'connectivity', label:'Connectivity', group:'Description', wide:true },
+  { key:'contactName', label:'Contact Name', group:'Contact' },
+  { key:'contactNumber', label:'Contact Number', group:'Contact' },
+];
+
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function ensurePModalFormBuilt(){
+  const container = document.getElementById('pmForm');
+  if(container.dataset.built) return;
+  container.dataset.built = '1';
+  const groups = [];
+  const byGroup = {};
+  PROPERTY_FIELDS.forEach(f=>{
+    if(!byGroup[f.group]){ byGroup[f.group]=[]; groups.push(f.group); }
+    byGroup[f.group].push(f);
+  });
+  let html = '';
+  groups.forEach(g=>{
+    html += `<div class="pf-group"><div class="pf-group-title">${escapeHtml(g)}</div><div class="pf-grid">`;
+    byGroup[g].forEach(f=>{
+      html += `<div class="pf-field${f.wide?' pf-wide':''}" id="pfw_${f.key}">
+        <label for="pf_${f.key}">${escapeHtml(f.label)}${f.required?' *':''}</label>`;
+      if(f.options){
+        html += `<select id="pf_${f.key}" oninput="onPModalFieldInput('${f.key}')">` +
+          f.options.map(o=>`<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('') + `</select>`;
+      } else if(f.textarea){
+        html += `<textarea id="pf_${f.key}" rows="2" placeholder="${escapeHtml(f.hint||'')}" oninput="onPModalFieldInput('${f.key}')"></textarea>`;
+      } else {
+        const listAttr = f.datalist ? ` list="pf_${f.key}_list"` : '';
+        html += `<input type="text" id="pf_${f.key}"${listAttr} placeholder="${escapeHtml(f.placeholder||'')}" oninput="onPModalFieldInput('${f.key}')">`;
+        if(f.datalist) html += `<datalist id="pf_${f.key}_list"></datalist>`;
+      }
+      html += `<div class="pf-diff" id="pfd_${f.key}"></div></div>`;
+    });
+    html += `</div></div>`;
+  });
+  container.innerHTML = html;
+}
+
+function refreshPModalTypeDatalist(){
+  const list = document.getElementById('pf_type_list');
+  if(!list) return;
+  const types = [...new Set(properties.map(p=>p.type).filter(Boolean))].sort();
+  list.innerHTML = types.map(t=>`<option value="${escapeHtml(t)}"></option>`).join('');
+}
+
+function populatePModalForm(data){
+  data = data || {};
+  PROPERTY_FIELDS.forEach(f=>{
+    const val = data[f.key]!=null ? String(data[f.key]) : '';
+    pModalOriginalStr[f.key] = val;
+    const el = document.getElementById('pf_'+f.key);
+    el.value = val;
+    updateFieldDiff(f.key);
+  });
+  updateJsonPreview();
+}
+
+function onPModalFieldInput(key){
+  updateFieldDiff(key);
+  updateJsonPreview();
+}
+
+function updateFieldDiff(key){
+  const el = document.getElementById('pf_'+key);
+  const diffEl = document.getElementById('pfd_'+key);
+  const wrap = document.getElementById('pfw_'+key);
+  if(!el || !diffEl || !wrap) return;
+  const cur = el.value;
+  const orig = pModalOriginalStr[key] || '';
+  if(pModalMode==='edit' && cur !== orig){
+    wrap.classList.add('pf-changed');
+    const oldTxt = orig ? `<s class="pf-old">${escapeHtml(orig)}</s>` : `<s class="pf-old pf-empty">empty</s>`;
+    const newTxt = cur ? `<span class="pf-new">${escapeHtml(cur)}</span>` : `<span class="pf-new pf-empty">empty</span>`;
+    diffEl.innerHTML = `${oldTxt} → ${newTxt}`;
+    diffEl.classList.add('show');
+  } else {
+    wrap.classList.remove('pf-changed');
+    diffEl.classList.remove('show');
+    diffEl.innerHTML = '';
+  }
+}
+
+function buildDataFromForm(){
+  const base = pModalMode==='edit' && pModalOriginalFull ? {...pModalOriginalFull} : {};
+  PROPERTY_FIELDS.forEach(f=>{
+    base[f.key] = document.getElementById('pf_'+f.key).value.trim();
+  });
+  return base;
+}
+
+function updateJsonPreview(){
+  const jsonEl = document.getElementById('pmJson');
+  if(jsonEl) jsonEl.value = JSON.stringify(buildDataFromForm(), null, 2);
+}
+
+function discardPModalChanges(){
+  populatePModalForm(pModalOriginalFull || {});
+  document.getElementById('pmErr').classList.remove('show');
+  showToast('Changes discarded');
+}
 
 // Accepts either the dashboard's own schema or the alternate flat schema
 // (propertyType/price/priceInCr/readyToMove/builtupArea/...) used by some
@@ -492,26 +596,25 @@ function normalizeProperty(data){
   return { ...data, type, builder, startingPrice, status, possession, sqftRange };
 }
 
-function downloadTemplate(){
-  downloadFile(JSON.stringify(PROPERTY_TEMPLATE, null, 2), '3pin_property_template.json', 'application/json');
-  showToast('Template downloaded — fill it in and paste back here');
-}
-
 function openAddModal(){
-  pModalMode = 'add'; pModalEditId = null;
+  pModalMode = 'add'; pModalEditId = null; pModalOriginalFull = null;
   document.getElementById('pmTitle').textContent = 'Add New Property';
-  document.getElementById('pmJson').value = '';
   document.getElementById('pmErr').classList.remove('show');
+  ensurePModalFormBuilt();
+  refreshPModalTypeDatalist();
+  populatePModalForm({ status:'Under Construction' });
   document.getElementById('pModal').classList.add('open');
 }
 
 function openEditModal(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
-  pModalMode = 'edit'; pModalEditId = id;
+  pModalMode = 'edit'; pModalEditId = id; pModalOriginalFull = {...p};
   document.getElementById('pmTitle').textContent = 'Edit Property';
-  document.getElementById('pmJson').value = JSON.stringify(p, null, 2);
   document.getElementById('pmErr').classList.remove('show');
+  ensurePModalFormBuilt();
+  refreshPModalTypeDatalist();
+  populatePModalForm(p);
   document.getElementById('pModal').classList.add('open');
 }
 
@@ -520,12 +623,8 @@ function closePModal(){
 }
 
 async function savePModal(){
-  const raw = document.getElementById('pmJson').value.trim();
   const errBox = document.getElementById('pmErr');
-  if(!raw){ errBox.textContent='Please paste the property JSON.'; errBox.classList.add('show'); return; }
-  let data;
-  try{ data = JSON.parse(raw); }
-  catch(e){ errBox.textContent='Invalid JSON — check for missing commas or quotes. ('+e.message+')'; errBox.classList.add('show'); return; }
+  let data = buildDataFromForm();
   if(!data.name || !data.location){ errBox.textContent='Property must have at least a "name" and "location".'; errBox.classList.add('show'); return; }
   errBox.classList.remove('show');
 
