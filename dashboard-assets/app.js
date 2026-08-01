@@ -28,6 +28,16 @@ function priceValue(p){
   else if(s.includes('/Sqft')) n = n; // per-sqft plots — keep small
   return n;
 }
+// When a property was added, for the "time of insert" sort. New properties
+// get an explicit createdAt (see savePModal); older ones fall back to the
+// timestamp baked into their id ('p'+Date.now(), see savePModal's add path),
+// and anything with neither (the original seeded sample data) sorts as
+// oldest, which is the correct place for it.
+function insertValue(p){
+  if(p.createdAt) return Number(p.createdAt);
+  const m = /^p(\d+)$/.exec(p.id || '');
+  return m ? Number(m[1]) : 0;
+}
 
 // ═══════ INIT ═══════
 function init(){
@@ -120,6 +130,8 @@ function applyFilters(){
   if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
   else if(currentSort==='price-high') res.sort((a,b)=>priceValue(b)-priceValue(a));
   else if(currentSort==='name') res.sort((a,b)=>a.name.localeCompare(b.name));
+  else if(currentSort==='newest') res.sort((a,b)=>insertValue(b)-insertValue(a));
+  else if(currentSort==='oldest') res.sort((a,b)=>insertValue(a)-insertValue(b));
   filteredProperties = res;
   renderGrid();
 }
@@ -675,6 +687,7 @@ async function savePModal(){
   let previousEntry = null;
   if(mode==='add'){
     data.id = 'p'+Date.now();
+    data.createdAt = Date.now();
     properties.unshift(data);
   } else {
     data.id = pModalEditId;
