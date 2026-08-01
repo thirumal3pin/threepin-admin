@@ -195,6 +195,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .pmodal-json-wrap summary{font-size:12px;font-weight:600;color:var(--ink3);cursor:pointer;padding:6px 0;}
 .pmodal-json-wrap summary:hover{color:var(--ink);}
 .pmodal-json-wrap .pmodal-ta{min-height:160px;margin-top:8px;background:var(--bg2);}
+.pmodal-json-wrap .pmodal-ta[readonly]{cursor:default;}
+.pmodal-json-actions{display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;}
+.pmodal-json-actions.show{display:flex;}
+.pmodal-json-load{padding:7px 13px;border-radius:8px;border:1.5px solid var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap;}
+.pmodal-json-load:hover{background:#DBEAFE;}
+.pmodal-json-hint{font-size:11.5px;color:var(--ink4);}
 @media (max-width:560px){
   .pf-grid{grid-template-columns:1fr;}
 }

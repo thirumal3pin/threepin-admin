@@ -603,6 +603,11 @@ function openAddModal(){
   ensurePModalFormBuilt();
   refreshPModalTypeDatalist();
   populatePModalForm({ status:'Under Construction' });
+  const jsonEl = document.getElementById('pmJson');
+  jsonEl.readOnly = false;
+  jsonEl.value = '';
+  document.getElementById('pmJsonSummary').textContent = 'Paste JSON to fill in the form (optional)';
+  document.getElementById('pmJsonActions').classList.add('show');
   document.getElementById('pModal').classList.add('open');
 }
 
@@ -615,7 +620,28 @@ function openEditModal(id){
   ensurePModalFormBuilt();
   refreshPModalTypeDatalist();
   populatePModalForm(p);
+  document.getElementById('pmJson').readOnly = true;
+  document.getElementById('pmJsonSummary').textContent = 'View JSON (live preview, read-only)';
+  document.getElementById('pmJsonActions').classList.remove('show');
   document.getElementById('pModal').classList.add('open');
+}
+
+// Add-mode only: lets someone paste a full property JSON (e.g. from
+// exportProperty on another listing, or hand-written) and have it fill
+// in the form fields in one shot, instead of retyping every field.
+function loadPModalJson(){
+  const errBox = document.getElementById('pmErr');
+  const raw = document.getElementById('pmJson').value.trim();
+  if(!raw){ errBox.textContent = 'Paste a property JSON above first.'; errBox.classList.add('show'); return; }
+  let data;
+  try{ data = JSON.parse(raw); }
+  catch(e){ errBox.textContent = 'Invalid JSON — check for missing commas or quotes. ('+e.message+')'; errBox.classList.add('show'); return; }
+  errBox.classList.remove('show');
+  // Runs the same alt-schema mapping used at save time (propertyType/price/
+  // priceInCr/readyToMove/builtupArea/...) so JSON from other listing
+  // sources still lands in the right form fields, not just this app's own shape.
+  populatePModalForm(normalizeProperty(data));
+  showToast('JSON loaded — review the form below and Save');
 }
 
 function closePModal(){

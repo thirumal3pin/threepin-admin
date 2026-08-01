@@ -144,9 +144,23 @@
     <div class="pmodal-body">
       <div id="pmForm" class="pmodal-form"></div>
       <div class="pmodal-err" id="pmErr"></div>
-      <details class="pmodal-json-wrap">
-        <summary>View JSON (live preview, read-only)</summary>
-        <textarea id="pmJson" class="pmodal-ta" readonly></textarea>
+      <details class="pmodal-json-wrap" id="pmJsonWrap">
+        <summary id="pmJsonSummary">View JSON (live preview, read-only)</summary>
+        <div class="pmodal-json-actions" id="pmJsonActions">
+          <button type="button" class="pmodal-json-load" onclick="loadPModalJson()">⇩ Load JSON into form</button>
+          <span class="pmodal-json-hint">Paste a property JSON above, then click to fill in the form fields.</span>
+        </div>
+        <textarea id="pmJson" class="pmodal-ta" placeholder='{
+  "name": "Green Meadows",
+  "builder": "ABC Builders",
+  "location": "Velachery, Chennai",
+  "type": "Apartments",
+  "config": "2BHK / 3BHK",
+  "status": "Under Construction",
+  "possession": "Dec 2027",
+  "startingPrice": "₹65L+",
+  ...
+}'></textarea>
       </details>
     </div>
     <div class="pmodal-ftr">
