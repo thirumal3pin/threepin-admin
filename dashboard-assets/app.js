@@ -650,6 +650,21 @@ function closePModal(){
 
 async function savePModal(){
   const errBox = document.getElementById('pmErr');
+
+  // Add mode: if the form's still empty but JSON was pasted (and never
+  // explicitly "Load"ed), apply it now — otherwise Save silently fails
+  // the name/location check even though the pasted JSON has both.
+  if(pModalMode === 'add'){
+    const formSoFar = buildDataFromForm();
+    const rawJson = document.getElementById('pmJson').value.trim();
+    if((!formSoFar.name || !formSoFar.location) && rawJson){
+      let parsed;
+      try{ parsed = JSON.parse(rawJson); }
+      catch(e){ errBox.textContent='Invalid JSON — check for missing commas or quotes. ('+e.message+')'; errBox.classList.add('show'); return; }
+      populatePModalForm(normalizeProperty(parsed));
+    }
+  }
+
   let data = buildDataFromForm();
   if(!data.name || !data.location){ errBox.textContent='Property must have at least a "name" and "location".'; errBox.classList.add('show'); return; }
   errBox.classList.remove('show');
