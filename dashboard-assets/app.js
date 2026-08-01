@@ -458,31 +458,31 @@ let pModalOriginalStr = {};    // key -> snapshot string value, for diffing
 // Drives the on-screen edit form: which fields exist, how they're grouped,
 // and how each renders.
 const PROPERTY_FIELDS = [
-  { key:'name', label:'Property Name', group:'Basic Info', required:true },
-  { key:'builder', label:'Builder', group:'Basic Info' },
-  { key:'location', label:'Location', group:'Basic Info', required:true },
-  { key:'type', label:'Type', group:'Basic Info', datalist:true },
-  { key:'config', label:'Configuration', group:'Basic Info', placeholder:'2BHK / 3BHK' },
-  { key:'status', label:'Status', group:'Pricing & Status', options:['Under Construction','Ready to Move'] },
-  { key:'possession', label:'Possession', group:'Pricing & Status' },
-  { key:'startingPrice', label:'Starting Price', group:'Pricing & Status' },
-  { key:'pricePerSqft', label:'Price / Sqft', group:'Pricing & Status' },
-  { key:'availability', label:'Availability', group:'Pricing & Status' },
-  { key:'totalUnits', label:'Total Units', group:'Specifications' },
-  { key:'sqftRange', label:'Sqft Range', group:'Specifications' },
-  { key:'totalLandArea', label:'Total Land Area', group:'Specifications' },
-  { key:'uds', label:'UDS (Undivided Share)', group:'Specifications' },
-  { key:'totalFloors', label:'Total Floors', group:'Specifications' },
-  { key:'parking', label:'Parking', group:'Specifications' },
-  { key:'parkingType', label:'Parking Type', group:'Specifications' },
-  { key:'vastu', label:'Vastu', group:'Specifications' },
-  { key:'highlights', label:'Highlights', group:'Description', textarea:true, wide:true, hint:'Comma-separated' },
-  { key:'amenities', label:'Amenities', group:'Description', textarea:true, wide:true, hint:'Comma-separated' },
-  { key:'nearby', label:'Nearby', group:'Description' },
-  { key:'nearbyLandmark', label:'Nearby Landmark', group:'Description' },
-  { key:'connectivity', label:'Connectivity', group:'Description', wide:true },
-  { key:'contactName', label:'Contact Name', group:'Contact' },
-  { key:'contactNumber', label:'Contact Number', group:'Contact' },
+  { key:'name', label:'Property Name', group:'Basic Info', required:true, example:'Green Meadows' },
+  { key:'builder', label:'Builder', group:'Basic Info', example:'ABC Builders' },
+  { key:'location', label:'Location', group:'Basic Info', required:true, example:'Velachery, Chennai' },
+  { key:'type', label:'Type', group:'Basic Info', datalist:true, example:'Apartments' },
+  { key:'config', label:'Configuration', group:'Basic Info', placeholder:'2BHK / 3BHK', example:'2BHK / 3BHK' },
+  { key:'status', label:'Status', group:'Pricing & Status', options:['Under Construction','Ready to Move'], example:'Under Construction' },
+  { key:'possession', label:'Possession', group:'Pricing & Status', example:'Dec 2027' },
+  { key:'startingPrice', label:'Starting Price', group:'Pricing & Status', example:'₹65L+' },
+  { key:'pricePerSqft', label:'Price / Sqft', group:'Pricing & Status', example:'₹5500/Sqft' },
+  { key:'availability', label:'Availability', group:'Pricing & Status', example:'Available' },
+  { key:'totalUnits', label:'Total Units', group:'Specifications', example:'100' },
+  { key:'sqftRange', label:'Sqft Range', group:'Specifications', example:'900-1800 Sq.Ft' },
+  { key:'totalLandArea', label:'Total Land Area', group:'Specifications', example:'5 Acres' },
+  { key:'uds', label:'UDS (Undivided Share)', group:'Specifications', example:'600 Sqft UDS' },
+  { key:'totalFloors', label:'Total Floors', group:'Specifications', example:'G+5' },
+  { key:'parking', label:'Parking', group:'Specifications', example:'1' },
+  { key:'parkingType', label:'Parking Type', group:'Specifications', example:'Covered' },
+  { key:'vastu', label:'Vastu', group:'Specifications', example:'Yes' },
+  { key:'highlights', label:'Highlights', group:'Description', textarea:true, wide:true, hint:'Comma-separated', example:'Highlight One,Highlight Two,Highlight Three' },
+  { key:'amenities', label:'Amenities', group:'Description', textarea:true, wide:true, hint:'Comma-separated', example:'Swimming Pool,Gym,Clubhouse' },
+  { key:'nearby', label:'Nearby', group:'Description', example:'Nearby area' },
+  { key:'nearbyLandmark', label:'Nearby Landmark', group:'Description', example:'Landmark name' },
+  { key:'connectivity', label:'Connectivity', group:'Description', wide:true, example:'Metro / Road connectivity details' },
+  { key:'contactName', label:'Contact Name', group:'Contact', example:'Swaminathan' },
+  { key:'contactNumber', label:'Contact Number', group:'Contact', example:'98848 83370' },
 ];
 
 function escapeHtml(s){
@@ -656,6 +656,20 @@ function loadPModalJson(){
   // sources still lands in the right form fields, not just this app's own shape.
   populatePModalForm(normalizeProperty(data));
   showToast('JSON loaded — review the form below and Save');
+}
+
+// Add-mode only: fills the JSON box with a blank template (every field
+// PROPERTY_FIELDS knows about, with an example value) so it can be copied
+// out, filled in elsewhere, and pasted back — or edited right there and
+// loaded with loadPModalJson().
+function insertPModalJsonTemplate(){
+  const tmpl = {};
+  PROPERTY_FIELDS.forEach(f => { tmpl[f.key] = f.example || ''; });
+  const jsonEl = document.getElementById('pmJson');
+  jsonEl.value = JSON.stringify(tmpl, null, 2);
+  document.getElementById('pmJsonWrap').open = true;
+  jsonEl.focus();
+  showToast('Template inserted — edit the values, then Load into form or paste elsewhere');
 }
 
 function closePModal(){

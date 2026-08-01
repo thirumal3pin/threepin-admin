@@ -149,8 +149,9 @@
       <details class="pmodal-json-wrap" id="pmJsonWrap">
         <summary id="pmJsonSummary">View JSON (live preview, read-only)</summary>
         <div class="pmodal-json-actions" id="pmJsonActions">
+          <button type="button" class="pmodal-json-tmpl" onclick="insertPModalJsonTemplate()">📄 Insert Template</button>
           <button type="button" class="pmodal-json-load" onclick="loadPModalJson()">⇩ Load JSON into form</button>
-          <span class="pmodal-json-hint">Paste a property JSON above, then click to fill in the form fields.</span>
+          <span class="pmodal-json-hint">Get a blank template, fill it in (here or elsewhere) and paste it back, then Load into the form.</span>
         </div>
         <textarea id="pmJson" class="pmodal-ta" placeholder='{
   "name": "Green Meadows",
