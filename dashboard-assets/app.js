@@ -354,6 +354,7 @@ function openDetail(id){
         <tr><td>Area Range</td><td>${p.sqftRange||'—'}</td></tr>
         <tr><td>Total Units</td><td>${p.totalUnits||'—'}</td></tr>
         <tr><td>Land Area</td><td>${p.totalLandArea||'—'}</td></tr>
+        <tr><td>UDS</td><td>${p.uds||'—'}</td></tr>
         <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
         <tr><td>Price / SqFt</td><td>${p.pricePerSqft||'—'}</td></tr>
         <tr><td>Status</td><td>${p.status}</td></tr>
@@ -470,6 +471,7 @@ const PROPERTY_FIELDS = [
   { key:'totalUnits', label:'Total Units', group:'Specifications' },
   { key:'sqftRange', label:'Sqft Range', group:'Specifications' },
   { key:'totalLandArea', label:'Total Land Area', group:'Specifications' },
+  { key:'uds', label:'UDS (Undivided Share)', group:'Specifications' },
   { key:'totalFloors', label:'Total Floors', group:'Specifications' },
   { key:'parking', label:'Parking', group:'Specifications' },
   { key:'parkingType', label:'Parking Type', group:'Specifications' },
