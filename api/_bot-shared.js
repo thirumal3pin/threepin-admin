@@ -43,12 +43,12 @@ export function getMailer() {
   }
   return _mailer;
 }
-export async function sendEmail(to, subject, text, html) {
+export async function sendEmail(to, subject, text, html, attachments) {
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
     return { ok: false, error: 'Gmail not configured (GMAIL_USER/GMAIL_APP_PASSWORD missing)' };
   }
   try {
-    await getMailer().sendMail({ from: `"3 PIN Realty CRM" <${process.env.GMAIL_USER}>`, to, subject, text, html });
+    await getMailer().sendMail({ from: `"3 PIN Realty CRM" <${process.env.GMAIL_USER}>`, to, subject, text, html, attachments });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
