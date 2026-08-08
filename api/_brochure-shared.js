@@ -46,13 +46,20 @@ export async function getDriveAccessToken() {
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON not configured');
   const sa = JSON.parse(raw);
   const now = Math.floor(Date.now() / 1000);
-  const signInput = `${base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${base64url(JSON.stringify({
+  // Service accounts have no Drive storage quota of their own (uploads
+  // 403 with storageQuotaExceeded) — domain-wide delegation lets it act as
+  // a real Workspace user instead, via the `sub` claim, so uploads use
+  // that user's quota and the target folders just need to already be
+  // accessible to them.
+  const claims = {
     iss: sa.client_email,
     scope: DRIVE_SCOPE,
     aud: 'https://oauth2.googleapis.com/token',
     iat: now,
     exp: now + 3600
-  }))}`;
+  };
+  if (process.env.GOOGLE_IMPERSONATE_EMAIL) claims.sub = process.env.GOOGLE_IMPERSONATE_EMAIL;
+  const signInput = `${base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${base64url(JSON.stringify(claims))}`;
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(signInput);
   signer.end();
