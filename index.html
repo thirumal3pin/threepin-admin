@@ -7,46 +7,82 @@
 <meta name="description" content="Internal console for 3 PIN Realty. Leads, listings, and site visits across Chennai.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/jpeg" href="logo.jpg">
 <style>
+  /* Same token system as crm-assets/style.css — one orange split by job
+     (fill / text / mark), declared once via light-dark() so there is no
+     separate dark palette to keep in sync. */
   :root {
-    --ink: #121a19;
-    --ink-2: #1a2422;
-    --paper: #ece6d6;
-    --paper-dim: #a9a290;
-    --brass: #c9a227;
-    --brass-soft: #9c8035;
-    --line: rgba(236, 230, 214, 0.11);
-    --moss: #6f9c85;
-    --radius: 3px;
+    color-scheme: light dark;
+
+    --brand: #FE8D00;
+    --brand-600: light-dark(#E87F00, #FF9B1A);
+    --brand-ink: light-dark(#A85C00, #FFA22E);
+    --brand-soft: light-dark(#FFF4E3, rgba(254,141,0,.12));
+    --brand-line: light-dark(#FFDCAE, rgba(254,141,0,.34));
+
+    --bg: light-dark(#F7F6F2, #0F1216);
+    --bg2: light-dark(#EFEDE7, #1F252E);
+    --white: light-dark(#FFFFFF, #151920);
+    --border: light-dark(#E5E1D9, #252B34);
+
+    --ink: light-dark(#14120F, #ECEAE5);
+    --ink2: light-dark(#3B3833, #B9B5AE);
+    --ink3: light-dark(#6B6660, #8A867F);
+    --ink4: light-dark(#8C877F, #6C6862);
+
+    --green: light-dark(#137A3B, #4ADE80);
+
+    --r2: 11px;
+    --r3: 15px;
+    --r4: 22px;
+
+    --shadow-c: light-dark(rgba(20,18,15,.07), rgba(0,0,0,.44));
+    --shadow-c2: light-dark(rgba(20,18,15,.13), rgba(0,0,0,.60));
+    --shadow-md: 0 4px 14px var(--shadow-c), 0 1px 3px var(--shadow-c);
+    --shadow-lg: 0 18px 46px var(--shadow-c2), 0 3px 10px var(--shadow-c);
+    --ring: 0 0 0 3px light-dark(rgba(254,141,0,.28), rgba(254,141,0,.36));
+
+    --grid-c: light-dark(rgba(20,18,15,.05), rgba(255,255,255,.045));
+
+    --sans: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
+    --ease: cubic-bezier(.22,.61,.36,1);
   }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
 
   * { box-sizing: border-box; }
 
   html, body {
     margin: 0;
     padding: 0;
-    background: var(--ink);
-    color: var(--paper);
-    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
 
   a { color: inherit; }
+  ::selection { background: var(--brand); color: #14120F; }
 
-  ::selection { background: var(--brass); color: var(--ink); }
-
+  /* Pointer-reactive: the field drifts a few px toward the cursor via
+     --gx/--gy custom properties set on mousemove — a small "alive" touch
+     that costs nothing when reduced-motion callers skip the listener. */
   .grid-field {
     position: fixed;
-    inset: 0;
+    inset: -40px;
     z-index: 0;
     background-image:
-      linear-gradient(var(--line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--line) 1px, transparent 1px);
-    background-size: 64px 64px;
-    mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
-    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
+      linear-gradient(var(--grid-c) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-c) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-position: var(--gx, 0px) var(--gy, 0px);
+    mask-image: radial-gradient(ellipse 78% 58% at 50% 38%, black 30%, transparent 76%);
+    -webkit-mask-image: radial-gradient(ellipse 78% 58% at 50% 38%, black 30%, transparent 76%);
+    transition: background-position 1.1s var(--ease);
   }
 
   .page {
@@ -56,50 +92,107 @@
     display: flex;
     flex-direction: column;
     padding: clamp(20px, 4vw, 48px);
-    opacity: 0;
-    animation: rise 0.7s ease-out 0.1s forwards;
   }
 
+  header, main .hero > *, footer {
+    opacity: 0;
+    animation: rise .6s var(--ease) forwards;
+  }
+  header { animation-delay: .02s; }
+  .hero .eyebrow { animation-delay: .1s; }
+  .hero h1 { animation-delay: .16s; }
+  .hero .lede { animation-delay: .24s; }
+  .hero .actions { animation-delay: .32s; }
+  footer { animation-delay: .4s; }
+
   @media (prefers-reduced-motion: reduce) {
-    .page { opacity: 1; animation: none; }
+    header, main .hero > *, footer { opacity: 1; animation: none; }
+    .grid-field { transition: none; }
   }
 
   @keyframes rise {
-    from { opacity: 0; transform: translateY(6px); }
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
   header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
     padding-bottom: clamp(28px, 6vw, 56px);
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--border);
   }
 
-  .mark {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    letter-spacing: 0.14em;
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-logo {
+    height: 38px;
+    width: 38px;
+    object-fit: contain;
+    background: light-dark(#fff, #fff);
+    border: 1px solid var(--border);
+    border-radius: var(--r2);
+    padding: 3px;
+    flex-shrink: 0;
+    transition: transform .35s var(--ease), box-shadow .35s var(--ease);
+  }
+  .brand:hover .brand-logo { transform: rotate(-4deg) scale(1.04); box-shadow: var(--shadow-md); }
+
+  .brand-text { line-height: 1.05; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .brand-sub {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--brand-ink);
+    margin-top: 3px;
   }
 
-  .mark b { font-weight: 500; color: var(--paper); }
-  .mark span { color: var(--paper-dim); }
-  .mark-logo { height: 30px; width: 30px; object-fit: cover; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+  .header-actions { display: flex; align-items: center; gap: 10px; }
 
-  .tag {
-    font-family: 'IBM Plex Mono', monospace;
+  .theme-tog {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 99px;
+    border: 1.5px solid var(--border);
+    background: var(--white);
+    color: var(--ink2);
+    cursor: pointer;
+    transition: border-color .15s, color .15s, transform .15s;
+  }
+  .theme-tog:hover { border-color: var(--ink4); color: var(--ink); transform: translateY(-1px); }
+  .theme-tog svg { width: 15px; height: 15px; }
+  .theme-tog .ico-moon { display: none; }
+  :root[data-theme="dark"] .theme-tog .ico-sun { display: block; }
+  :root[data-theme="dark"] .theme-tog .ico-moon { display: none; }
+  :root[data-theme="light"] .theme-tog .ico-sun { display: none; }
+  :root[data-theme="light"] .theme-tog .ico-moon { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .theme-tog .ico-sun { display: block; }
+    :root:not([data-theme="light"]) .theme-tog .ico-moon { display: none; }
+  }
+
+  .tag-btn {
+    font: inherit;
+    font-family: var(--mono);
     font-size: 11px;
-    letter-spacing: 0.12em;
-    color: var(--brass);
-    border: 1px solid rgba(201,162,39,0.35);
-    border-radius: var(--radius);
-    padding: 4px 9px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    color: var(--brand-ink);
+    background: var(--brand-soft);
+    border: 1px solid var(--brand-line);
+    border-radius: var(--r2);
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background .15s, transform .15s, box-shadow .15s;
   }
+  .tag-btn:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .tag-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
   main {
     flex: 1;
@@ -108,90 +201,99 @@
     padding: clamp(36px, 8vw, 72px) 0;
   }
 
-  .hero {
-    max-width: 720px;
-  }
+  .hero { max-width: 720px; }
 
   .eyebrow {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    letter-spacing: 0.16em;
-    color: var(--moss);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--green);
     margin: 0 0 18px;
     display: flex;
     align-items: center;
     gap: 9px;
   }
-
   .eyebrow::before {
     content: '';
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--moss);
-    box-shadow: 0 0 0 3px rgba(111,156,133,0.18);
+    background: var(--green);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
   }
 
   h1 {
-    font-family: 'Fraunces', serif;
-    font-weight: 500;
+    font-family: var(--sans);
+    font-weight: 700;
     font-size: clamp(2.1rem, 5.4vw, 3.7rem);
-    line-height: 1.08;
-    letter-spacing: -0.01em;
-    margin: 0 0 22px;
+    line-height: 1.06;
+    letter-spacing: -.025em;
+    margin: 0 0 20px;
     max-width: 14ch;
   }
-
   h1 em {
-    font-style: italic;
-    font-weight: 400;
-    color: var(--brass);
+    font-style: normal;
+    color: var(--brand-ink);
   }
 
   .lede {
-    font-size: clamp(1rem, 1.6vw, 1.15rem);
+    font-size: clamp(1rem, 1.6vw, 1.13rem);
     line-height: 1.65;
-    color: var(--paper-dim);
+    color: var(--ink2);
     max-width: 46ch;
     margin: 0 0 34px;
   }
 
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 22px;
-    flex-wrap: wrap;
-  }
+  .actions { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 
   .btn {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    letter-spacing: 0.04em;
+    position: relative;
+    overflow: hidden;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 700;
     text-decoration: none;
-    background: var(--brass);
-    color: var(--ink);
-    padding: 12px 20px;
-    border-radius: var(--radius);
-    font-weight: 500;
-    transition: background 0.15s ease;
+    background: var(--brand);
+    color: #14120F;
+    padding: 13px 22px;
+    border-radius: var(--r2);
+    transition: background .15s, transform .15s var(--ease), box-shadow .15s var(--ease);
   }
-  .btn:hover { background: #ddb52f; }
-  .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+  .btn:hover { background: var(--brand-600); transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .btn:active { transform: translateY(0); }
+  .btn:focus-visible { outline: 2px solid var(--brand-ink); outline-offset: 3px; }
+  /* A quiet diagonal sheen sweeps through on hover — reads as polish, not gimmick. */
+  .btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,.5) 50%, transparent 70%);
+    transform: translateX(-120%);
+  }
+  .btn:hover::after { transform: translateX(120%); transition: transform .65s var(--ease); }
 
   .btn-ghost {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
     text-decoration: none;
-    color: var(--paper-dim);
-    border-bottom: 1px solid var(--line);
+    color: var(--ink2);
+    border-bottom: 1.5px solid var(--border);
     padding-bottom: 2px;
-    transition: color 0.15s ease, border-color 0.15s ease;
+    transition: color .15s, border-color .15s;
   }
-  .btn-ghost:hover { color: var(--paper); border-color: var(--paper-dim); }
-  .btn-ghost:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--ink3); }
+  .btn-ghost:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn, .btn-ghost, .tag-btn, .theme-tog, .brand-logo { transition: none; }
+    .btn::after { display: none; }
+  }
 
   footer {
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--border);
     padding-top: clamp(18px, 3vw, 26px);
     display: flex;
     justify-content: space-between;
@@ -201,30 +303,28 @@
   }
 
   .zones {
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: var(--mono);
     font-size: 11.5px;
-    letter-spacing: 0.03em;
-    color: var(--paper-dim);
+    color: var(--ink3);
   }
-
-  .zones b { color: var(--paper); font-weight: 500; }
+  .zones b { color: var(--ink); font-weight: 600; }
 
   .stamp {
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
-    letter-spacing: 0.1em;
-    color: var(--paper-dim);
+    letter-spacing: .06em;
+    color: var(--ink3);
     display: flex;
     align-items: center;
     gap: 8px;
   }
-
   .stamp::before {
     content: '';
     width: 6px;
     height: 6px;
-    background: var(--moss);
+    background: var(--green);
     border-radius: 50%;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 16%, transparent);
   }
 
   @media (max-width: 640px) {
@@ -232,96 +332,66 @@
     footer { flex-direction: column; align-items: flex-start; }
   }
 
-  .tag-btn {
-    font: inherit;
-    cursor: pointer;
-  }
-  .tag-btn:hover { background: rgba(201,162,39,0.1); }
-  .tag-btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 3px; }
-
+  /* ── Modal — same overlay/scale-in language as the CRM's real login modal ── */
   .modal-overlay {
     position: fixed;
     inset: 0;
     z-index: 10;
-    background: rgba(9, 13, 12, 0.72);
+    background: light-dark(rgba(20,18,15,.42), rgba(6,8,10,.72));
+    backdrop-filter: blur(3px);
     display: none;
     align-items: center;
     justify-content: center;
     padding: 20px;
   }
-  .modal-overlay.open { display: flex; }
+  .modal-overlay.open { display: flex; animation: ovIn .18s var(--ease); }
+  @keyframes ovIn { from { opacity: 0; } to { opacity: 1; } }
 
   .modal {
     width: 100%;
-    max-width: 340px;
-    background: var(--ink-2);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 28px;
+    max-width: 350px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--r4);
+    padding: 30px;
+    box-shadow: var(--shadow-lg);
+    animation: modalIn .22s var(--ease);
+  }
+  @keyframes modalIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .modal-overlay.open, .modal { animation: none; }
   }
 
-  .modal h2 {
-    font-family: 'Fraunces', serif;
-    font-weight: 500;
-    font-size: 1.3rem;
-    margin: 0 0 6px;
-    color: var(--paper);
-  }
+  .modal h2 { font-family: var(--sans); font-weight: 700; font-size: 1.25rem; margin: 0 0 4px; letter-spacing: -.01em; }
+  .modal p.sub { font-family: var(--mono); font-size: 11.5px; color: var(--ink3); margin: 0 0 22px; }
 
-  .modal p.sub {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11.5px;
-    color: var(--paper-dim);
-    margin: 0 0 22px;
-  }
-
-  .field {
-    margin-bottom: 16px;
-  }
-
+  .field { margin-bottom: 15px; }
   .field label {
     display: block;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: var(--paper-dim);
-    margin-bottom: 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--ink3);
+    margin-bottom: 7px;
   }
-
   .field input {
     width: 100%;
-    background: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    color: var(--paper);
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    padding: 10px 12px;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: var(--r2);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 11px 13px;
+    outline: none;
+    transition: border-color .18s, box-shadow .18s, background .18s;
   }
-  .field input:focus-visible {
-    outline: 2px solid var(--brass);
-    outline-offset: 1px;
-  }
+  .field input:focus { border-color: var(--brand); box-shadow: var(--ring); background: var(--white); }
 
-  .modal-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 22px;
-  }
-
-  .modal-actions .btn {
-    border: none;
-  }
-
-  .modal-note {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10.5px;
-    color: var(--paper-dim);
-    margin-top: 16px;
-    line-height: 1.5;
-  }
+  .modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 22px; }
+  .modal-actions .btn { border: none; }
+  .modal-note { font-family: var(--mono); font-size: 10.5px; color: var(--ink4); margin-top: 16px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -330,13 +400,25 @@
 
 <div class="page">
   <header>
-    <div class="mark"><img src="logo.jpg" alt="3 PIN Realty" class="mark-logo"><b>3 PIN</b><span>REALTY</span></div>
-    <button type="button" class="tag tag-btn" id="admin-open">ADMIN</button>
+    <div class="brand">
+      <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
+      <div class="brand-text">
+        <div class="brand-name">3 PIN Realty</div>
+        <div class="brand-sub">Internal console</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button type="button" class="theme-tog" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+      <button type="button" class="tag-btn" id="admin-open">ADMIN</button>
+    </div>
   </header>
 
   <main>
     <div class="hero">
-      <p class="eyebrow">Internal console</p>
+      <p class="eyebrow">Chennai · Real estate</p>
       <h1>Every listing<br>and lead, kept<br><em>on record.</em></h1>
       <p class="lede">
         The private working console for 3 PIN Realty — properties, buyer
@@ -384,36 +466,51 @@
   var openBtn = document.getElementById('admin-open');
   var cancelBtn = document.getElementById('admin-cancel');
   var form = document.getElementById('admin-form');
+  var themeBtn = document.getElementById('theme-toggle');
+  var root = document.documentElement;
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Theme toggle — same data-theme override convention as the CRM, persisted
+  // so the choice survives a reload instead of silently reverting to system.
+  var savedTheme = localStorage.getItem('3pin-theme');
+  if (savedTheme) root.setAttribute('data-theme', savedTheme);
+  themeBtn.addEventListener('click', function () {
+    var current = root.getAttribute('data-theme');
+    var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var isDark = current ? current === 'dark' : systemDark;
+    var next = isDark ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem('3pin-theme', next);
+  });
 
   function openModal() {
     overlay.classList.add('open');
     document.getElementById('admin-username').focus();
   }
-
   function closeModal() {
     overlay.classList.remove('open');
     form.reset();
   }
 
   openBtn.addEventListener('click', openModal);
-
-  cancelBtn.addEventListener('click', function (e) {
-    e.preventDefault();
-    closeModal();
-  });
-
-  overlay.addEventListener('click', function (e) {
-    if (e.target === overlay) closeModal();
-  });
-
+  cancelBtn.addEventListener('click', function (e) { e.preventDefault(); closeModal(); });
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && overlay.classList.contains('open')) closeModal();
   });
+  form.addEventListener('submit', function (e) { e.preventDefault(); closeModal(); });
 
-  form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    closeModal();
-  });
+  // Subtle pointer-reactive grid drift — a few px only, eased over ~1s so it
+  // reads as a slow ambient tilt rather than something tracking the cursor.
+  if (!reduceMotion) {
+    var gridField = document.querySelector('.grid-field');
+    window.addEventListener('mousemove', function (e) {
+      var x = (e.clientX / window.innerWidth - 0.5) * 14;
+      var y = (e.clientY / window.innerHeight - 0.5) * 14;
+      gridField.style.setProperty('--gx', x.toFixed(1) + 'px');
+      gridField.style.setProperty('--gy', y.toFixed(1) + 'px');
+    }, { passive: true });
+  }
 </script>
 
 </body>
