@@ -94,6 +94,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 .card-bar.uc{background:linear-gradient(90deg,#D97706,#FCD34D);}
 .card-body{padding:16px 17px 14px;flex:1;display:flex;flex-direction:column;cursor:pointer;}
 .card-r1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
+.card-code{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink4);text-transform:uppercase;margin-bottom:2px;}
 .card-name{font-family:var(--serif);font-size:17px;font-weight:700;line-height:1.22;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .card-loc{font-size:11.5px;color:var(--ink4);margin-top:4px;display:flex;align-items:center;gap:4px;}
 .card-actions{display:flex;gap:5px;flex-shrink:0;}

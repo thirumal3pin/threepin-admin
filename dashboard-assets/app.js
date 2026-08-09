@@ -122,7 +122,7 @@ function applyFilters(){
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
     if(currentSearch){
-      const hay = [p.name,p.location,p.builder,p.config,p.amenities,p.highlights,p.type].join(' ').toLowerCase();
+      const hay = [p.propertyCode,p.name,p.location,p.builder,p.config,p.amenities,p.highlights,p.type].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
@@ -160,6 +160,7 @@ function renderGrid(){
       <div class="card-body" onclick="openDetail('${p.id}')">
         <div class="card-r1">
           <div>
+            ${p.propertyCode?`<div class="card-code">${escapeHtml(p.propertyCode)}</div>`:''}
             <div class="card-name">${p.name}</div>
             <div class="card-loc">📍 ${p.location}</div>
           </div>
@@ -294,7 +295,7 @@ function openDetail(id){
 
   document.getElementById('dpHero').innerHTML = `
     <div style="flex:1;min-width:240px;">
-      <div class="dp-builder-tag">${p.builder} · ${p.type}</div>
+      <div class="dp-builder-tag">${p.propertyCode?escapeHtml(p.propertyCode)+' · ':''}${p.builder} · ${p.type}</div>
       <h1 class="dp-title">${p.name}</h1>
       <div class="dp-loc">📍 ${p.location}</div>
       <a href="tel:${p.contactNumber}" class="dp-call">📞 Call ${p.contactName} — ${p.contactNumber}</a>
@@ -346,6 +347,7 @@ function openDetail(id){
   const specs = `
     <div class="tab-panel">
       <div class="sec"><table class="spec-t">
+        ${p.propertyCode?`<tr><td>Property Code</td><td>${escapeHtml(p.propertyCode)}</td></tr>`:''}
         <tr><td>Property Name</td><td>${p.name}</td></tr>
         <tr><td>Builder</td><td>${p.builder}</td></tr>
         <tr><td>Type</td><td>${p.type}</td></tr>
@@ -458,6 +460,7 @@ let pModalOriginalStr = {};    // key -> snapshot string value, for diffing
 // Drives the on-screen edit form: which fields exist, how they're grouped,
 // and how each renders.
 const PROPERTY_FIELDS = [
+  { key:'propertyCode', label:'Property Code', group:'Basic Info', placeholder:'MYLA002', example:'MYLA002' },
   { key:'name', label:'Property Name', group:'Basic Info', required:true, example:'Green Meadows' },
   { key:'builder', label:'Builder', group:'Basic Info', example:'ABC Builders' },
   { key:'location', label:'Location', group:'Basic Info', required:true, example:'Velachery, Chennai' },
@@ -593,6 +596,7 @@ function normalizeProperty(data){
   // re-editing price/type/status/etc. on an already-saved alt-schema
   // property actually changes what's displayed instead of being masked
   // by whatever got baked in on the first save.
+  const propertyCode = data.propertyCode || data.propertyId || '';
   const type = data.propertyType || data.type || 'Property';
   const builder = data.builder || 'Individual Owner';
   let startingPrice;
@@ -607,7 +611,7 @@ function normalizeProperty(data){
   }
   const possession = data.possessionDate || data.possession || 'Contact for details';
   const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
-  return { ...data, type, builder, startingPrice, status, possession, sqftRange };
+  return { ...data, propertyCode, type, builder, startingPrice, status, possession, sqftRange };
 }
 
 function openAddModal(){
