@@ -7,7 +7,7 @@ let notes = JSON.parse(localStorage.getItem('pinNotes')) || {};
 let propertyInterests = JSON.parse(localStorage.getItem('pinInterests')) || {};
 let currentStatus = 'all';
 let currentType = 'all';
-let currentSort = 'default';
+let currentSort = 'newest';
 let showFavOnly = false;
 let hideSoldOut = false;
 let currentSearch = '';
@@ -215,6 +215,13 @@ function toggleFavFromDetail(){
   localStorage.setItem('pinFavorites',JSON.stringify(favorites));
   document.getElementById('dpFav').classList.toggle('active',favorites.includes(id));
   document.getElementById('dpFav').textContent = favorites.includes(id)?'★ Saved':'★ Save';
+}
+
+// ═══════ LEAD CRM ═══════
+function openLeadCrm(id){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  window.location.href = 'crm.html?propertyId=' + id;
 }
 
 // ═══════ SOLD OUT ═══════

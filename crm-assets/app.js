@@ -267,7 +267,21 @@ function toggleMoreMenu(e){
 function closeMoreMenu(){
   document.getElementById('moreDd').classList.remove('open');
 }
-document.addEventListener('click', ()=>{ closeViewDropdown(); closeMoreMenu(); closePropertyPop(); });
+function toggleHdrNav(e){
+  if(e) e.stopPropagation();
+  const hdrNav = document.querySelector('.hdr-nav');
+  if(hdrNav) hdrNav.classList.toggle('mobile-open');
+  document.getElementById('viewDd').classList.remove('open');
+  document.getElementById('moreDd').classList.remove('open');
+}
+document.addEventListener('click', (e)=>{
+  const hdrNav = document.querySelector('.hdr-nav');
+  const menuBtn = document.querySelector('.menu-btn');
+  if(hdrNav && hdrNav.classList.contains('mobile-open') && !hdrNav.contains(e.target) && e.target !== menuBtn){
+    hdrNav.classList.remove('mobile-open');
+  }
+  closeViewDropdown(); closeMoreMenu(); closePropertyPop();
+});
 
 // ═══════ HELPERS ═══════
 function stageById(id){ return stages.find(s=>s.id===id); }

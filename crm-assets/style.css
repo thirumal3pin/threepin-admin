@@ -183,6 +183,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .fu-nav-ico{font-size:14px;line-height:1;opacity:.9;}
 .fu-nav-ico svg{display:block;width:15px;height:15px;}
 
+.nav-back-btn{display:inline-flex;align-items:center;padding:7px 13px;border-radius:var(--r2);border:1.5px solid transparent;background-image:linear-gradient(var(--white),var(--white)),linear-gradient(135deg,var(--purple),var(--blue));background-origin:border-box;background-clip:padding-box,border-box;color:var(--ink3);font-family:var(--sans);font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.nav-back-btn:hover{color:var(--ink);background-image:linear-gradient(var(--white),var(--white)),linear-gradient(135deg,#6D28D9,#1D4ED8);}
+
 /* Dropdowns share one visual language: anchored trigger + floating menu */
 .view-dd,.more-dd{position:relative;}
 .view-dd-btn,.menu-btn,.theme-tog{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:var(--r2);border:1.5px solid var(--border);background:var(--white);color:var(--ink2);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:border-color .15s,color .15s;white-space:nowrap;}
@@ -822,21 +825,27 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
 @media(max-width:680px){
-  #hdr{padding:12px 16px 14px;}
-  .hdr-row{position:relative;flex-wrap:nowrap;}
-  .brand-name{font-size:19px;} .brand-logo{width:38px;height:38px;}
+  #hdr{padding:10px 12px;gap:0;}
+  .hdr-row{position:relative;flex-wrap:nowrap;gap:0;justify-content:flex-start;align-items:center;}
+  .brand{gap:9px;flex-shrink:0;}
+  .brand-name{font-size:17px;letter-spacing:-.02em;} .brand-logo{width:34px;height:34px;}
   .brand-sub{display:none;}
-  #main{padding:14px 14px 90px;}
-  #kanbanView::before{inset:-14px;}
-  .kcol{flex:0 0 80vw;}
-  .dp-hdr{padding:14px 16px;}
-  .dp-body{padding:20px 16px 80px;}
-  .dp-title{font-size:23px;}
+  .nav-back-btn{display:none;}
+  .nav-mobile-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,var(--purple),var(--blue));color:#fff;font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s;flex-shrink:0;box-shadow:0 2px 6px rgba(109,40,217,.12);margin-left:auto;margin-right:6px;}
+  .nav-mobile-icon:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(109,40,217,.2);}
+  .hdr-nav{position:absolute;top:50px;right:12px;display:none;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r3);padding:10px;flex-direction:column;gap:6px;min-width:180px;box-shadow:var(--shadow-md);z-index:150;}
+  .hdr-nav.mobile-open{display:flex;}
+  #main{padding:12px 12px 90px;}
+  #kanbanView::before{inset:-12px;}
+  .kcol{flex:0 0 85vw;}
+  .dp-hdr{padding:12px 14px;}
+  .dp-body{padding:16px 14px 80px;}
+  .dp-title{font-size:20px;}
   .modal-box{max-width:100%;max-height:92vh;border-radius:var(--r3);}
-  .modal-hdr,.modal-body,.modal-ftr{padding-left:16px;padding-right:16px;}
+  .modal-hdr,.modal-body,.modal-ftr{padding-left:14px;padding-right:14px;}
   .modal-ftr{flex-wrap:wrap;}
-  .modal-ftr button{flex:1;}
-  .login-box{padding:26px 22px;}
+  .modal-ftr button{flex:1;font-size:12px;padding:8px 12px;}
+  .login-box{padding:24px 20px;}
 
   .dash-stats{grid-template-columns:repeat(2,1fr);}
   .dash-stat-val{font-size:24px;}
@@ -857,18 +866,57 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .dash-chart-tick{font-size:23px;}
   .dash-chart-endlabel{font-size:25px;}
 
-  .hdr-nav{gap:6px;}
-  /* 9px, not 11px: the nav grows by the follow-up badge's width the moment
-     anything is overdue, and at 11px that tipped the header past a 390px
-     viewport and made the whole page scroll sideways. */
-  .fu-nav-btn,.view-dd-btn{padding:9px;}
-  .fu-nav-label{display:none;}
-  .hdr-nav .addl-btn{display:none;}
-  .theme-tog{width:34px;height:34px;}
+  .hdr-nav{gap:0;width:auto;position:static;background:transparent;border:none;padding:0;box-shadow:none;}
+  .hdr-nav.mobile-open{position:absolute;display:flex;top:50px;right:12px;}
+  .fu-nav-btn,.view-dd-btn{padding:10px 12px;font-size:12px;width:100%;justify-content:flex-start;border-radius:var(--r1);border:1.5px solid var(--border);}
+  .fu-nav-btn:hover,.view-dd-btn:hover{border-color:var(--brand);background:var(--bg);}
+  .fu-nav-btn.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
+  .fu-nav-ico{width:16px;height:16px;flex-shrink:0;}
+  .fu-nav-label{display:inline;}
+  .fu-badge{display:inline;font-size:10px;margin-left:auto;}
+  .hdr-nav .addl-btn{width:100%;padding:10px 12px;border-radius:var(--r1);display:flex;align-items:center;justify-content:center;}
+  .view-dd{width:100%;}
+  .view-dd-btn{width:100%;}
+  .view-dd.open .dd-menu,.more-dd.open .dd-menu{position:static;border:none;padding:6px 0;margin-top:6px;box-shadow:none;background:transparent;}
+  .theme-tog{width:100%;padding:10px 12px;justify-content:flex-start;border-radius:var(--r1);}
+  .more-dd{width:100%;position:relative;}
+  .more-dd .menu-btn{width:100%;height:auto;padding:10px 12px;justify-content:flex-start;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);font-size:14px;font-weight:600;color:var(--ink2);}
+  .hdr-menu-btn{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;border:1.5px solid var(--border);background:var(--white);font-size:16px;color:var(--ink2);cursor:pointer;flex-shrink:0;margin-left:6px;}
+  .dd-menu{min-width:100%;font-size:12px;}
+  .dd-sep{margin:6px 0;border-top:1px solid var(--border);}
+  .more-dd-item{padding:10px 12px;font-size:12px;width:100%;text-align:left;}
 
   .mobile-fab{display:flex;position:fixed;bottom:22px;right:18px;width:56px;height:56px;border-radius:50%;background:var(--brand);color:#14120F;align-items:center;justify-content:center;font-size:30px;font-weight:600;line-height:1;box-shadow:var(--shadow-lg);z-index:140;border:none;cursor:pointer;padding:0;}
 
   .list-view{overflow-x:auto;}
+  
+  /* Kanban & Card optimizations for mobile */
+  .kcol{flex:0 0 85vw;padding:0 8px 8px;}
+  .kcol-hdr{padding:9px 3px 8px;margin-bottom:8px;}
+  .kcol-title{font-size:12px;}
+  .lcard{padding:10px 11px;margin-bottom:8px;}
+  .lcard-name{font-size:12.5px;}
+  .lcard-meta{font-size:11px;margin-bottom:7px;}
+  .lcard-foot{font-size:9.5px;gap:4px;}
+  .lcard-time{font-size:9px;}
+  .lcard-followup,.lcard-flag,.lcard-next{font-size:9.5px;padding:3px 7px;}
+  
+  /* List view optimizations */
+  #listView{padding:8px;}
+  .list-row{padding:10px 12px;margin-bottom:8px;}
+  .fu-row{padding:10px 12px;margin-bottom:8px;}
+  .fu-row-main{font-size:12.5px;}
+  .fu-row-sub{font-size:11px;}
+  
+  /* Touch-friendly buttons */
+  .lcard-next{min-height:28px;display:flex;align-items:center;justify-content:center;}
+  .stage-pill{padding:6px 10px;font-size:11px;}
+  
+  /* Property detail panel on mobile */
+  .dp-content{padding:12px 0;}
+  .dp-meta{margin-bottom:14px;}
+  .dp-lbl{font-size:10px;}
+  .dp-val{font-size:12.5px;}
 
   /* Three buttons side by side wrap to three lines of text at 390px — stack
      them full-width instead. */
@@ -884,6 +932,15 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .bot-preview{width:100%;position:static;}
   .bot-chat-window{height:260px;}
 }
+/* ── SMALL PHONES (≤360px) ── */
+@media(max-width:360px){
+  .brand-name{font-size:15px;}
+  .nav-back-btn{display:none;}
+  .fu-nav-btn{padding:8px;font-size:11px;}
+  .more-dd-item{padding:8px 10px;font-size:11px;}
+}
+
+/* ── EXTRA SMALL (original) ── */
 @media(max-width:360px){
   .hdr-nav{gap:4px;}
   .view-dd-btn{padding:9px 8px;font-size:12px;}
