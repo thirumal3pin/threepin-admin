@@ -54,6 +54,7 @@
       <div class="hstat g"><div class="hstat-n" id="cR">0</div><div class="hstat-l">Ready</div></div>
       <div class="hstat a"><div class="hstat-n" id="cU">0</div><div class="hstat-l">Upcoming</div></div>
       <div class="hstat t"><div class="hstat-n" id="cT">0</div><div class="hstat-l">Total</div></div>
+      <button type="button" class="brochure-nav-btn" onclick="openBrochureModal()" title="New Listing Intake — Create Brochure">📋 Create Brochure</button>
       <a href="crm.html" class="crm-nav-btn" title="Open Lead CRM">💬 Lead CRM</a>
       <button class="logout-btn" onclick="pinAuth.logout()">Logout</button>
     </div>
@@ -178,6 +179,36 @@
   </div>
 </div>
 
+<!-- CREATE BROCHURE (NEW LISTING INTAKE) MODAL -->
+<div id="brochureModal">
+  <div class="pmodal-box brochure-box">
+    <div class="pmodal-hdr">
+      <div class="pmodal-title">📋 Create Brochure — New Listing Intake</div>
+      <button class="pmodal-x" onclick="closeBrochureModal()">×</button>
+    </div>
+    <div class="pmodal-body">
+      <p class="brochure-hint">Fill this in for a new property. Claude will build the brochure and update the inventory automatically within ~30 min.</p>
+      <form id="brochureForm" class="pmodal-form">
+        <div class="pf-field pf-wide">
+          <label for="bfTitle">Property ID &amp; Title</label>
+          <input type="text" id="bfTitle" placeholder="e.g. NOL002 - 3BHK in Velachery">
+        </div>
+        <div class="pf-field pf-wide">
+          <label for="bfDrive">Google Drive Photo Folder Link</label>
+          <input type="url" id="bfDrive" placeholder="https://drive.google.com/drive/folders/...">
+        </div>
+        <div class="pf-field pf-wide">
+          <label for="bfDetails">Property Details <span class="req-star">*</span></label>
+          <textarea id="bfDetails" rows="7" placeholder="Paste full description — title, specs, highlights, price, nearby landmarks" required></textarea>
+        </div>
+      </form>
+      <div class="pmodal-err" id="bfErr"></div>
+    </div>
+    <div class="pmodal-ftr">
+      <button class="pmodal-cancel" onclick="closeBrochureModal()">Cancel</button>
+      <button class="pmodal-save" id="bfSubmitBtn" onclick="submitBrochureForm()">✓ Submit</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast"></div>
@@ -185,6 +216,7 @@
 <script src="dashboard-assets/sample-data.js"></script>
 <script src="dashboard-assets/auth.js"></script>
 <script src="dashboard-assets/app.js"></script>
+<script src="dashboard-assets/brochure-form.js"></script>
 <script type="module" src="dashboard-assets/firebase-sync.js"></script>
 </body>
 </html>
