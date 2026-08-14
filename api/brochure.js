@@ -22,6 +22,27 @@ import { json, fail, checkAuth, checkRateLimit, getDriveAccessToken, makeDriveFi
 // Response: { success: true, ... } or { success: false, error, step }
 // where step is one of drive_init|drive_fetch|email|whatsapp.
 
+async function openDriveSession(accessToken, filename, drive_folder_id) {
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': 'application/pdf'
+    },
+    body: JSON.stringify({ name: String(filename), parents: [String(drive_folder_id)] })
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error ? data.error.message : `Drive session init failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  const uploadUrl = res.headers.get('location');
+  if (!uploadUrl) throw new Error('Drive did not return a resumable upload URL');
+  return uploadUrl;
+}
+
 async function handleInit(db, body) {
   const { property_id, drive_folder_id, filename } = body;
   if (!property_id || !drive_folder_id || !filename) {
@@ -32,27 +53,34 @@ async function handleInit(db, body) {
   }
 
   try {
-    const accessToken = await getDriveAccessToken();
-    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Upload-Content-Type': 'application/pdf'
-      },
-      body: JSON.stringify({ name: String(filename), parents: [String(drive_folder_id)] })
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error ? data.error.message : `Drive session init failed (${res.status})`);
+    let uploadUrl;
+    try {
+      uploadUrl = await openDriveSession(await getDriveAccessToken(true), filename, drive_folder_id);
+    } catch (e) {
+      // Not visible to the impersonated Workspace user — retry as the bare
+      // service account, which can access anything explicitly shared with
+      // its own address regardless of which Google account owns it.
+      if (e.status !== 404 && e.status !== 403) throw e;
+      uploadUrl = await openDriveSession(await getDriveAccessToken(false), filename, drive_folder_id);
     }
-    const uploadUrl = res.headers.get('location');
-    if (!uploadUrl) throw new Error('Drive did not return a resumable upload URL');
     return json({ success: true, upload_url: uploadUrl });
   } catch (e) {
     console.error('brochure init: failed:', e);
     return fail('drive_init', String(e.message || e), 502);
   }
+}
+
+async function fetchDriveFile(accessToken, drive_file_id) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(drive_file_id)}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error ? data.error.message : `Fetching uploaded file from Drive failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return Buffer.from(await res.arrayBuffer());
 }
 
 async function handleFinish(db, body) {
@@ -64,15 +92,18 @@ async function handleFinish(db, body) {
   let accessToken;
   let fileBuffer;
   try {
-    accessToken = await getDriveAccessToken();
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(drive_file_id)}?alt=media`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error ? data.error.message : `Fetching uploaded file from Drive failed (${res.status})`);
+    // If init fell back to the bare service account (folder not visible to
+    // the impersonated user), the uploaded file lives under that same
+    // identity — the impersonated fetch below would 403/404 on it too, so
+    // this mirrors init's fallback rather than assuming impersonation works.
+    try {
+      accessToken = await getDriveAccessToken(true);
+      fileBuffer = await fetchDriveFile(accessToken, drive_file_id);
+    } catch (e) {
+      if (e.status !== 404 && e.status !== 403) throw e;
+      accessToken = await getDriveAccessToken(false);
+      fileBuffer = await fetchDriveFile(accessToken, drive_file_id);
     }
-    fileBuffer = Buffer.from(await res.arrayBuffer());
     if (fileBuffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
       throw new Error('Uploaded file is not a valid PDF');
     }
