@@ -160,8 +160,7 @@ function renderGrid(){
       <div class="card-body" onclick="openDetail('${p.id}')">
         <div class="card-r1">
           <div>
-            ${p.propertyCode?`<div class="card-code">${escapeHtml(p.propertyCode)}</div>`:''}
-            <div class="card-name">${p.name}</div>
+            <div class="card-name">${p.propertyCode?`<span class="card-code-inline">${escapeHtml(p.propertyCode)}</span> — `:''}${p.name}</div>
             <div class="card-loc">📍 ${p.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
