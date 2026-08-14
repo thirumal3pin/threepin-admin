@@ -80,7 +80,12 @@ function mapToDashboardProperty(data) {
     propertyCode: data.propertyCode || data.propertyId || '',
     type, builder, startingPrice, status, possession, sqftRange,
     tenantId: DASHBOARD_TENANT_ID,
-    soldOut: false
+    soldOut: false,
+    // Matches the dashboard's own add-property convention (savePModal in
+    // app.js) so "Recently Added" sort actually surfaces these — without
+    // this, insertValue() falls back to 0 and they sort as if seeded
+    // on day one, buried under everything actually added since.
+    createdAt: data.createdAt || Date.now()
   };
 }
 
