@@ -345,6 +345,7 @@ function openDetail(id){
           <div class="export-btn" onclick="printProperty('${p.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
           <div class="export-btn" onclick="exportProperty('${p.id}')"><div class="export-btn-icon">📄</div>JSON</div>
           <div class="export-btn" onclick="downloadBrochure('${p.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
+          <div class="export-btn" onclick="openPhotos('${p.id}')"><div class="export-btn-icon">🖼️</div>Photos</div>
           <div class="export-btn" onclick="shareProperty('${p.id}')"><div class="export-btn-icon">🔗</div>Share</div>
         </div>
       </div>
@@ -785,12 +786,32 @@ function downloadFile(content,filename,type){
   const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
 }
+function openPhotos(id){
+  const p=properties.find(x=>x.id===id);
+  if(!p.photosLink){showToast('No photos link saved for this property yet');return;}
+  window.open(p.photosLink,'_blank','noopener');
+}
 function shareProperty(id){
   const p=properties.find(x=>x.id===id);
-  const text=`${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
-  if(navigator.share) navigator.share({title:p.name,text});
-  else{navigator.clipboard.writeText(text);showToast('Details copied to clipboard');}
+  const text=(p.detailsText&&p.detailsText.trim())
+    ? p.detailsText.trim()
+    : `${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
+  document.getElementById('shareDetailsTa').value=text;
+  document.getElementById('shareDetailsModal').classList.add('open');
 }
+function closeShareDetailsModal(){
+  document.getElementById('shareDetailsModal').classList.remove('open');
+}
+function copyShareDetails(){
+  const ta=document.getElementById('shareDetailsTa');
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(()=>showToast('Copied to clipboard')).catch(()=>{
+    document.execCommand('copy');showToast('Copied to clipboard');
+  });
+}
+document.getElementById('shareDetailsModal')?.addEventListener('click',e=>{
+  if(e.target.id==='shareDetailsModal') closeShareDetailsModal();
+});
 function printProperty(id){
   const p=properties.find(x=>x.id===id);const w=window.open('','_blank');
   w.document.write(`<html><head><title>${p.name}</title><style>body{font-family:Arial;padding:30px;color:#1c1917}h1{color:#B45309}table{width:100%;border-collapse:collapse;margin-top:16px}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{font-weight:bold;width:32%;color:#78716C}</style></head><body>
@@ -808,14 +829,16 @@ function printProperty(id){
 }
 function downloadBrochure(id){
   const p=properties.find(x=>x.id===id);
-  const html=`<html><head><title>${p.name}</title></head><body style="font-family:Arial;padding:40px">
-    <h1 style="color:#B45309">${p.name}</h1><h3>${p.builder} · ${p.location}</h3>
-    <p><strong>Price:</strong> ${p.startingPrice} | <strong>Config:</strong> ${p.config} | <strong>Area:</strong> ${p.sqftRange||'—'}</p>
-    <p><strong>Status:</strong> ${p.status} | <strong>Possession:</strong> ${p.possession}</p>
-    <p><strong>Highlights:</strong> ${p.highlights||'—'}</p>
-    <p><strong>Amenities:</strong> ${p.amenities||'—'}</p>
-    <p><strong>Contact:</strong> ${p.contactName} — ${p.contactNumber}</p></body></html>`;
-  downloadFile(html,`${p.name.replace(/\s+/g,'_')}_Brochure.html`,'text/html');showToast('Brochure downloaded');
+  const m=p.brochureLink&&p.brochureLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if(m){
+    const a=document.createElement('a');
+    a.href=`https://drive.google.com/uc?export=download&id=${m[1]}`;
+    a.target='_blank';a.rel='noopener';
+    document.body.appendChild(a);a.click();a.remove();
+    showToast('Brochure downloading…');
+    return;
+  }
+  showToast('No PDF brochure uploaded yet for this property');
 }
 
 // ═══════ TOAST ═══════
@@ -826,4 +849,4 @@ function showToast(msg){
 }
 
 // keyboard: ESC closes detail
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();closeShareDetailsModal();}});

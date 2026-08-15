@@ -89,9 +89,17 @@ function mapToDashboardProperty(data) {
   };
 }
 
-async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl) {
+async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, photosLink, detailsText) {
   const db = getFirestoreDb();
-  const mapped = mapToDashboardProperty({ ...propertyJson, brochureLink: driveFileUrl });
+  const mapped = mapToDashboardProperty({
+    ...propertyJson,
+    brochureLink: driveFileUrl,
+    // Queue row's own col C (photo folder) / col D (pasted details) —
+    // saved onto the property doc so the dashboard's Photos/Share-Details
+    // buttons have something to show without a second sheet read.
+    photosLink: photosLink || '',
+    detailsText: detailsText || ''
+  });
   // The dashboard's own client code (savePModal in app.js) always bakes an
   // explicit `id` field into the document data, matching the doc path —
   // firebase-sync.js's onSnapshot listener reads that field, not Firestore's
@@ -286,7 +294,7 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   let dashboardAdded = false;
   let dashboardError = null;
   try {
-    await upsertDashboardProperty(propertyId, data, finish.drive_file_url);
+    await upsertDashboardProperty(propertyId, data, finish.drive_file_url, row[2], row[3]);
     dashboardAdded = true;
   } catch (e) {
     dashboardError = String(e.message || e);

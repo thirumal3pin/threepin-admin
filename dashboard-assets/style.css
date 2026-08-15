@@ -191,6 +191,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14p
 #brochureModal{position:fixed;inset:0;background:rgba(28,25,23,.6);z-index:500;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);}
 #brochureModal.open{display:flex;}
 .brochure-box{max-width:600px;}
+
+/* ── SHARE DETAILS MODAL ── */
+#shareDetailsModal{position:fixed;inset:0;background:rgba(28,25,23,.6);z-index:500;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);}
+#shareDetailsModal.open{display:flex;}
+.share-box{max-width:600px;}
+#shareDetailsTa{min-height:280px;font-family:var(--sans);font-size:13px;}
 .brochure-hint{font-size:12.5px;color:var(--ink3);background:var(--gold-lt);border:1px solid #FDE68A;border-radius:8px;padding:10px 13px;margin-bottom:16px;line-height:1.5;}
 .pmodal-form{display:flex;flex-direction:column;gap:14px;}
 .req-star{color:var(--red);}
