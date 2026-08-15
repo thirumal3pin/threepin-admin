@@ -50,7 +50,15 @@ function subscribeToProperties(tenantId){
     .finally(() => {
       const propertiesQuery = query(propertiesCol, where('tenantId', '==', tenantId));
       onSnapshot(propertiesQuery, (snapshot) => {
-        const list = snapshot.docs.map(d => d.data());
+        // d.id (the actual Firestore doc path) is the real identity — trust
+        // it over whatever's in the data blob. Writers that never baked an
+        // `id` field into the document itself (any server-side upsert that
+        // doesn't go through savePModal's convention) left it undefined,
+        // which silently broke every click-to-open on those cards: the
+        // onclick handler stringifies undefined into the literal text
+        // "undefined", which never matches the real `undefined` id when
+        // openDetail does its lookup, so it fails with no visible error.
+        const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
         if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(list);
       }, (err) => console.error('Firestore sync error:', err));
     });

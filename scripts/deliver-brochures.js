@@ -92,6 +92,12 @@ function mapToDashboardProperty(data) {
 async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl) {
   const db = getFirestoreDb();
   const mapped = mapToDashboardProperty({ ...propertyJson, brochureLink: driveFileUrl });
+  // The dashboard's own client code (savePModal in app.js) always bakes an
+  // explicit `id` field into the document data, matching the doc path —
+  // firebase-sync.js's onSnapshot listener reads that field, not Firestore's
+  // real doc.id, so leaving it out here made every card silently unclickable
+  // (openDetail's lookup against the real `id` never matched).
+  mapped.id = propertyId;
   await db.collection('properties').doc(propertyId).set(mapped, { merge: true });
 }
 const SECRET = process.env.WEBHOOK_SHARED_SECRET;
