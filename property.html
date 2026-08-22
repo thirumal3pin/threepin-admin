@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Property — 3 PIN Realty</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- Warm up the two hosts the first paint waits on, in parallel with the
+     HTML parse — this is most of the cold-open speed on a shared link. -->
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js" crossorigin>
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js" crossorigin>
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="stylesheet" href="dashboard-assets/style.css">
+<style>
+  /* This page IS the detail view, so the panel is always open and static
+     rather than a fixed slide-over layered on top of the grid. */
+  #dp.standalone{position:static;display:block;min-height:100vh;animation:none;}
+  /* Loading skeleton — shown only until the first document read lands. */
+  .sk{background:linear-gradient(90deg,var(--border) 25%,var(--bg) 50%,var(--border) 75%);
+      background-size:200% 100%;animation:skwave 1.3s ease-in-out infinite;border-radius:7px;}
+  .sk-xs{height:10px;width:52px;margin:6px auto 0;}
+  .sk-sm{height:13px;width:120px;margin-bottom:10px;}
+  .sk-md{height:20px;width:230px;margin-bottom:14px;}
+  .sk-lg{height:34px;width:min(420px,72vw);margin-bottom:12px;}
+  .sk-row{height:44px;width:100%;margin-bottom:10px;}
+  @keyframes skwave{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  @media (prefers-reduced-motion:reduce){.sk{animation:none;}}
+</style>
+<script>
+  // Must run BEFORE the deferred firebase-sync module: tells it to skip the
+  // whole-collection listener and let this page read its one doc instead.
+  window.__pinPageMode = 'single';
+</script>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="loginScreen" class="login-screen">
+  <form class="login-box" onsubmit="pinAuth.attemptLogin(event)">
+    <div class="login-brand">
+      <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
+      <div>
+        <div class="brand-name">3 PIN Realty</div>
+        <div class="brand-sub">Premium Property Intelligence</div>
+      </div>
+    </div>
+    <h2 class="login-title">Admin Login</h2>
+    <p class="login-note">Log in to view this property.</p>
+    <div class="login-field">
+      <label for="loginUser">Email</label>
+      <input type="email" id="loginUser" autocomplete="username" required>
+    </div>
+    <div class="login-field">
+      <label for="loginPass">Password</label>
+      <input type="password" id="loginPass" autocomplete="current-password" required>
+    </div>
+    <div class="login-err" id="loginErr"></div>
+    <button type="submit" class="login-submit">Login</button>
+    <a href="dashboard.html" class="login-home">← All properties</a>
+  </form>
+</div>
+
+<div id="appRoot" style="display:none">
+  <div id="dp" class="standalone open">
+    <div class="dp-hdr">
+      <div class="dp-hdr-nav">
+        <a class="dp-back" href="dashboard.html">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+          All Properties
+        </a>
+        <div class="dp-hdr-actions" id="dpHdrActions" style="display:none">
+          <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
+          <button class="dp-hact" onclick="copyPropertyLink(currentProperty && currentProperty.id)">🔗 Copy Link</button>
+          <button class="dp-hact crm-btn" onclick="openLeadCrm()">📋 Lead CRM</button>
+          <button class="dp-hact" onclick="printProperty(currentProperty && currentProperty.id)">🖨️ Print</button>
+        </div>
+      </div>
+      <div class="dp-hero" id="dpHero"></div>
+      <div class="dp-tabs" style="display:none">
+        <button class="dp-tab active" onclick="showTab('overview',this)">Overview</button>
+        <button class="dp-tab" onclick="showTab('specs',this)">Specifications</button>
+        <button class="dp-tab" onclick="showTab('pitch',this)">Sales Pitch</button>
+      </div>
+    </div>
+    <div class="dp-body" id="dpBody"></div>
+  </div>
+</div>
+
+<!-- SHARE DETAILS MODAL -->
+<div id="shareDetailsModal">
+  <div class="pmodal-box share-box">
+    <div class="pmodal-hdr">
+      <div class="pmodal-title">🔗 Share Details</div>
+      <button class="pmodal-x" onclick="closeShareDetailsModal()">×</button>
+    </div>
+    <div class="pmodal-body">
+      <textarea id="shareDetailsTa" class="pmodal-ta" rows="14" readonly></textarea>
+    </div>
+    <div class="pmodal-ftr">
+      <button class="pmodal-cancel" onclick="closeShareDetailsModal()">Close</button>
+      <button class="pmodal-save" onclick="copyShareDetails()">📋 Copy</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="dashboard-assets/property-view.js"></script>
+<script src="dashboard-assets/property-page.js"></script>
+<script type="module" src="dashboard-assets/firebase-sync.js"></script>
+</body>
+</html>

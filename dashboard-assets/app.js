@@ -15,7 +15,6 @@ let currentDetailId = null;
 
 // ═══════ HELPERS ═══════
 const isReady = p => p.status === 'Ready to Move';
-const splitList = s => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
 // crude numeric price extraction for sorting (₹, L, Cr, Crores)
 function priceValue(p){
   const s = (p.startingPrice||'').replace(/,/g,'');
@@ -286,10 +285,20 @@ function compareSelected(){
 }
 
 // ═══════ DETAIL PANEL ═══════
+// openDetail = render + put the property's own URL in the address bar, so
+// whatever you're looking at is always the link you can paste into chat.
+// renderDetail is the plain render, used on its own when the Back button
+// (popstate) restores a panel that's already in the history stack.
 function openDetail(id){
+  if(!renderDetail(id)) return;
+  pushDetailUrl(id);
+}
+
+function renderDetail(id){
   const p = properties.find(x=>x.id===id);
-  if(!p) return;
+  if(!p) return false;
   currentDetailId = id;
+  PinPropertyView.cacheProperty(p);
   document.querySelector('.dp-tabs').style.display='flex';
   document.querySelector('.dp-hdr-actions').style.display='flex';
   const fav = favorites.includes(id);
@@ -299,99 +308,11 @@ function openDetail(id){
   document.getElementById('dpSoldOut').classList.toggle('sold-out',isSoldOut);
   document.getElementById('dpSoldOut').textContent = isSoldOut?'✓ Marked Sold Out':'🏷️ Mark Sold Out';
 
-  document.getElementById('dpHero').innerHTML = `
-    <div style="flex:1;min-width:240px;">
-      <div class="dp-builder-tag">${p.propertyCode?escapeHtml(p.propertyCode)+' · ':''}${p.builder} · ${p.type}</div>
-      <h1 class="dp-title">${p.name}</h1>
-      <div class="dp-loc">📍 ${p.location}</div>
-      <a href="tel:${p.contactNumber}" class="dp-call">📞 Call ${p.contactName} — ${p.contactNumber}</a>
-    </div>
-    <div class="dp-price-box">
-      <div class="dp-price">${p.startingPrice}</div>
-      ${p.pricePerSqft?`<div class="dp-psf">${p.pricePerSqft}</div>`:''}
-      <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ Under Construction'}</span></div>
-    </div>`;
+  document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
 
-  const highlights = splitList(p.highlights);
-  const amenities = splitList(p.amenities);
-
-  const overview = `
-    <div class="tab-panel active">
-      <div class="sec">
-        <div class="sec-title">📊 Key Facts</div>
-        <div class="stats-g">
-          <div class="stat-b"><div class="stat-b-v">${p.config}</div><div class="stat-b-l">Configuration</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.possession}</div><div class="stat-b-l">Possession</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.totalUnits||'—'}</div><div class="stat-b-l">Total Units</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.totalFloors||'—'}</div><div class="stat-b-l">Floors</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.vastu||'—'}</div><div class="stat-b-l">Vastu</div></div>
-        </div>
-      </div>
-      ${highlights.length?`<div class="sec"><div class="sec-title">✨ Highlights</div><div class="hi-grid">${highlights.map(h=>`<div class="hi-item">✓ ${h}</div>`).join('')}</div></div>`:''}
-      ${amenities.length?`<div class="sec"><div class="sec-title">🏢 Amenities</div><div class="am-wrap">${amenities.map(a=>`<span class="am-chip">${a}</span>`).join('')}</div></div>`:''}
-      <div class="sec">
-        <div class="sec-title">📍 Location & Connectivity</div>
-        <div class="conn-wrap">
-          ${p.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${p.nearby}</div></div>`:''}
-          ${p.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${p.nearbyLandmark}</div></div>`:''}
-          ${p.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${p.connectivity}</div></div>`:''}
-          ${!p.nearby&&!p.nearbyLandmark&&!p.connectivity?`<div class="conn-row"><div class="conn-v">Information not available</div></div>`:''}
-        </div>
-      </div>
-      <div class="sec">
-        <div class="sec-title">📤 Share & Export</div>
-        <div class="export-g">
-          <div class="export-btn" onclick="printProperty('${p.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
-          <div class="export-btn" onclick="exportProperty('${p.id}')"><div class="export-btn-icon">📄</div>JSON</div>
-          <div class="export-btn" onclick="downloadBrochure('${p.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
-          <div class="export-btn" onclick="openPhotos('${p.id}')"><div class="export-btn-icon">🖼️</div>Photos</div>
-          <div class="export-btn" onclick="shareProperty('${p.id}')"><div class="export-btn-icon">🔗</div>Share</div>
-        </div>
-      </div>
-    </div>`;
-
-  const specs = `
-    <div class="tab-panel">
-      <div class="sec"><table class="spec-t">
-        ${p.propertyCode?`<tr><td>Property Code</td><td>${escapeHtml(p.propertyCode)}</td></tr>`:''}
-        <tr><td>Property Name</td><td>${p.name}</td></tr>
-        <tr><td>Builder</td><td>${p.builder}</td></tr>
-        <tr><td>Type</td><td>${p.type}</td></tr>
-        <tr><td>Location</td><td>${p.location}</td></tr>
-        <tr><td>Configuration</td><td>${p.config}</td></tr>
-        <tr><td>Area Range</td><td>${p.sqftRange||'—'}</td></tr>
-        <tr><td>Total Units</td><td>${p.totalUnits||'—'}</td></tr>
-        <tr><td>Land Area</td><td>${p.totalLandArea||'—'}</td></tr>
-        <tr><td>UDS</td><td>${p.uds||'—'}</td></tr>
-        <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
-        <tr><td>Price / SqFt</td><td>${p.pricePerSqft||'—'}</td></tr>
-        <tr><td>Status</td><td>${p.status}</td></tr>
-        <tr><td>Possession</td><td>${p.possession}</td></tr>
-        <tr><td>Total Floors</td><td>${p.totalFloors||'—'}</td></tr>
-        <tr><td>Parking</td><td>${p.parking?p.parking+' '+(p.parkingType||''):'—'}</td></tr>
-        <tr><td>Vastu</td><td>${p.vastu||'—'}</td></tr>
-        <tr><td>Availability</td><td>${p.availability||'—'}</td></tr>
-        <tr><td>Contact</td><td>${p.contactName} — ${p.contactNumber}</td></tr>
-      </table></div>
-    </div>`;
-
-  const pitch = `
-    <div class="tab-panel">
-      <div class="sec">
-        <div class="summary-card">
-          <div class="sum-lbl">💬 Sales Talking Points</div>
-          <div class="sum-txt">
-            <p><strong>${p.name}</strong> by ${p.builder} is a premium ${p.type.toLowerCase()} project in <strong>${p.location}</strong>.</p>
-            <p>Offering ${p.config} configurations${p.sqftRange?` spanning ${p.sqftRange}`:''}, priced from <strong>${p.startingPrice}</strong>.</p>
-            <p><strong>Possession:</strong> ${p.possession} · <strong>Status:</strong> ${p.status}</p>
-            ${highlights.length?`<p><strong>Why buy:</strong> ${highlights.join(' · ')}</p>`:''}
-            ${p.connectivity?`<p><strong>Connectivity:</strong> ${p.connectivity}</p>`:''}
-            <p style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);"><strong>📞 Close with:</strong> "Shall I block a site visit for you this weekend? Call ${p.contactName} at ${p.contactNumber}."</p>
-          </div>
-        </div>
-      </div>
-    </div>`;
+  const overview = PinPropertyView.overviewTab(p);
+  const specs = PinPropertyView.specsTab(p);
+  const pitch = PinPropertyView.pitchTab(p);
 
   const crm = `
     <div class="tab-panel">
@@ -417,6 +338,7 @@ function openDetail(id){
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  return true;
 }
 
 function showTab(name,btn){
@@ -426,7 +348,38 @@ function showTab(name,btn){
   const idx=['overview','specs','pitch','notes'].indexOf(name);
   document.querySelectorAll('.tab-panel')[idx].classList.add('active');
 }
-function closeDetail(){document.getElementById('dp').classList.remove('open');}
+
+// ═══════ DETAIL URL / HISTORY ═══════
+// The panel owns exactly ONE history entry while it's open: opening pushes
+// it, re-rendering a different property replaces it, and closing pops it.
+// Without that single-entry rule, browsing five properties would bury the
+// list under five Back presses.
+let detailUrlPushed = false;
+function pushDetailUrl(id){
+  const url = PinPropertyView.propertyUrl(id);
+  if(detailUrlPushed){ history.replaceState({pinDetail:id},'',url); }
+  else { history.pushState({pinDetail:id},'',url); detailUrlPushed = true; }
+}
+function hideDetailPanel(){
+  document.getElementById('dp').classList.remove('open');
+  currentDetailId = null;
+}
+// Close routes through the history stack so the Back button and the
+// "All Properties" button land in exactly the same state.
+function closeDetail(){
+  if(detailUrlPushed){ history.back(); return; }
+  hideDetailPanel();
+}
+window.addEventListener('popstate', e => {
+  const id = e.state && e.state.pinDetail;
+  if(id && properties.some(p=>p.id===id)){
+    detailUrlPushed = true;
+    renderDetail(id);
+  } else {
+    detailUrlPushed = false;
+    hideDetailPanel();
+  }
+});
 
 // ═══════ NOTES ═══════
 function renderNotes(id){
@@ -770,7 +723,9 @@ window.applyPropertiesSnapshot = function(list){
 };
 
 // ═══════ EXPORT / SHARE ═══════
-function exportProperty(id){const p=properties.find(x=>x.id===id);downloadFile(JSON.stringify(p,null,2),`${p.name.replace(/\s+/g,'_')}.json`,'application/json');showToast('JSON downloaded');}
+// Single-property export/share/print actions (and showToast/downloadFile)
+// live in property-view.js, shared with property.html. Only the
+// multi-select export below is dashboard-only.
 function exportSelected(format){
   const sel=Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
   if(!sel.length){showToast('No properties selected');return;}
@@ -782,71 +737,9 @@ function exportSelected(format){
   }
   showToast('Export downloaded');
 }
-function downloadFile(content,filename,type){
-  const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
-}
-function openPhotos(id){
-  const p=properties.find(x=>x.id===id);
-  if(!p.photosLink){showToast('No photos link saved for this property yet');return;}
-  window.open(p.photosLink,'_blank','noopener');
-}
-function shareProperty(id){
-  const p=properties.find(x=>x.id===id);
-  const text=(p.detailsText&&p.detailsText.trim())
-    ? p.detailsText.trim()
-    : `${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
-  document.getElementById('shareDetailsTa').value=text;
-  document.getElementById('shareDetailsModal').classList.add('open');
-}
-function closeShareDetailsModal(){
-  document.getElementById('shareDetailsModal').classList.remove('open');
-}
-function copyShareDetails(){
-  const ta=document.getElementById('shareDetailsTa');
-  ta.select();
-  navigator.clipboard.writeText(ta.value).then(()=>showToast('Copied to clipboard')).catch(()=>{
-    document.execCommand('copy');showToast('Copied to clipboard');
-  });
-}
-document.getElementById('shareDetailsModal')?.addEventListener('click',e=>{
-  if(e.target.id==='shareDetailsModal') closeShareDetailsModal();
-});
-function printProperty(id){
-  const p=properties.find(x=>x.id===id);const w=window.open('','_blank');
-  w.document.write(`<html><head><title>${p.name}</title><style>body{font-family:Arial;padding:30px;color:#1c1917}h1{color:#B45309}table{width:100%;border-collapse:collapse;margin-top:16px}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{font-weight:bold;width:32%;color:#78716C}</style></head><body>
-    <h1>${p.name}</h1><p><strong>${p.builder}</strong> · ${p.location}</p>
-    <table>
-      <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
-      <tr><td>Configuration</td><td>${p.config}</td></tr>
-      <tr><td>Area</td><td>${p.sqftRange||'—'}</td></tr>
-      <tr><td>Status</td><td>${p.status}</td></tr>
-      <tr><td>Possession</td><td>${p.possession}</td></tr>
-      <tr><td>Amenities</td><td>${p.amenities||'—'}</td></tr>
-      <tr><td>Contact</td><td>${p.contactName} — ${p.contactNumber}</td></tr>
-    </table></body></html>`);
-  w.document.close();w.print();
-}
-function downloadBrochure(id){
-  const p=properties.find(x=>x.id===id);
-  const m=p.brochureLink&&p.brochureLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  if(m){
-    const a=document.createElement('a');
-    a.href=`https://drive.google.com/uc?export=download&id=${m[1]}`;
-    a.target='_blank';a.rel='noopener';
-    document.body.appendChild(a);a.click();a.remove();
-    showToast('Brochure downloading…');
-    return;
-  }
-  showToast('No PDF brochure uploaded yet for this property');
-}
-
-// ═══════ TOAST ═══════
-let toastTimer;
-function showToast(msg){
-  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
-  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2400);
-}
+// Look properties up out of this page's in-memory list for the shared
+// export/share/print actions in property-view.js.
+PinPropertyView.setResolver(id => properties.find(x => x.id === id));
 
 // keyboard: ESC closes detail
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();closeShareDetailsModal();}});
