@@ -74,7 +74,7 @@
       <div class="sec">
         <div class="sec-title">📤 Share & Export</div>
         <div class="export-g">
-          <div class="export-btn" onclick="copyPropertyLink('${p.id}')"><div class="export-btn-icon">🔗</div>Copy Link</div>
+          <div class="export-btn" onclick="sharePropertyLink('${p.id}')"><div class="export-btn-icon">🔗</div>Share Link</div>
           <div class="export-btn" onclick="printProperty('${p.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
           <div class="export-btn" onclick="exportProperty('${p.id}')"><div class="export-btn-icon">📄</div>JSON</div>
           <div class="export-btn" onclick="downloadBrochure('${p.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
@@ -158,8 +158,35 @@
     ta.remove();
   }
 
-  function copyPropertyLink(id){
-    copyToClipboard(propertyUrl(id),'🔗 Property link copied');
+  // Phones get the OS share sheet (one tap straight into WhatsApp, which is
+  // how these actually get sent); desktop gets a clipboard copy, because a
+  // share sheet there is a detour when you're pasting into a chat window
+  // that's already open. Pointer type is the honest signal for that, not
+  // screen width — a small desktop window still wants copy.
+  function prefersNativeShare(){
+    return !!navigator.share && window.matchMedia('(pointer: coarse)').matches;
+  }
+
+  const COPIED_MSG = '🔗 Link copied — only logged-in team members can open it';
+
+  function sharePropertyLink(id, ev){
+    if(ev) ev.stopPropagation();
+    if(!id) return;
+    const p = resolveProperty(id);
+    const url = propertyUrl(id);
+    if(prefersNativeShare()){
+      navigator.share({
+        title: p ? p.name : 'Property',
+        text: p ? `${p.name} — ${p.location} · ${p.startingPrice}` : '',
+        url
+      }).catch(err => {
+        // Dismissing the sheet is a normal outcome, not a failure.
+        if(err && err.name === 'AbortError') return;
+        copyToClipboard(url, COPIED_MSG);
+      });
+      return;
+    }
+    copyToClipboard(url, COPIED_MSG);
   }
 
   function exportProperty(id){
@@ -254,18 +281,23 @@
     if(e.target && e.target.id === 'shareDetailsModal') closeShareDetailsModal();
   });
 
+  // Share glyph, inline so it inherits currentColor and stays crisp beside
+  // the monochrome ★ on each card.
+  const SHARE_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4"/><path d="m15.4 6.5-6.8 4"/></svg>';
+
   window.PinPropertyView = {
     setResolver: fn => { resolveProperty = fn; },
     hero, overviewTab, specsTab, pitchTab,
     propertyUrl, cacheProperty, cachedProperty,
-    escapeHtml, isReady, splitList
+    escapeHtml, isReady, splitList,
+    SHARE_ICON, prefersNativeShare
   };
 
   // Shared globals the inline onclick handlers (and app.js) call by name.
   window.showToast = showToast;
   window.downloadFile = downloadFile;
   window.copyToClipboard = copyToClipboard;
-  window.copyPropertyLink = copyPropertyLink;
+  window.sharePropertyLink = sharePropertyLink;
   window.exportProperty = exportProperty;
   window.openPhotos = openPhotos;
   window.downloadBrochure = downloadBrochure;

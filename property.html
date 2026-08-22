@@ -75,8 +75,8 @@
           All Properties
         </a>
         <div class="dp-hdr-actions" id="dpHdrActions" style="display:none">
+          <button class="dp-hact share" onclick="sharePropertyLink(currentProperty && currentProperty.id)">🔗 Share Link</button>
           <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
-          <button class="dp-hact" onclick="copyPropertyLink(currentProperty && currentProperty.id)">🔗 Copy Link</button>
           <button class="dp-hact crm-btn" onclick="openLeadCrm()">📋 Lead CRM</button>
           <button class="dp-hact" onclick="printProperty(currentProperty && currentProperty.id)">🖨️ Print</button>
         </div>
@@ -89,6 +89,15 @@
       </div>
     </div>
     <div class="dp-body" id="dpBody"></div>
+  </div>
+
+  <!-- Thumb-reachable primary actions, mobile only. This page exists to be
+       looked at on a phone and then acted on — call or forward. -->
+  <div class="mobile-actionbar" id="mobileActionBar" style="display:none">
+    <a class="mab-btn mab-call" id="mabCall" href="#">📞 Call</a>
+    <button class="mab-btn mab-share" onclick="sharePropertyLink(currentProperty && currentProperty.id)">
+      🔗 Share Link
+    </button>
   </div>
 </div>
 

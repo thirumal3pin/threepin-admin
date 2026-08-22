@@ -110,6 +110,10 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .card-action-btn{width:30px;height:30px;border-radius:8px;border:1.5px solid var(--border);background:var(--white);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;color:var(--ink3);line-height:1;}
 .card-action-btn:hover{border-color:var(--ink);color:var(--ink);transform:scale(1.08);}
 .card-star.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold);}
+.card-action-btn svg{display:block;pointer-events:none;}
+.card-share:hover{border-color:var(--blue);color:var(--blue);}
+.dp-hact.share{border-color:var(--blue);color:var(--blue);}
+.dp-hact.share:hover{background:var(--blue);border-color:var(--blue);color:#fff;}
 .badges{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;}
 .badge{font-weight:700;font-size:11px;padding:3px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;}
 .bg{background:var(--green-bg);color:var(--green);} .ba{background:var(--amber-bg);color:var(--amber);}
@@ -355,7 +359,14 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .login-box{padding:24px 20px;}
   #msToolbar{padding:10px 14px;}
   .card-cta{flex-wrap:wrap;gap:6px;}
-  .cta-btn{padding:8px;font-size:12px;}
+  .cta-btn{padding:10px;font-size:12px;min-height:42px;}
+  /* Fingers, not cursors: the card's ★/share targets get real touch size. */
+  .card-actions{gap:7px;}
+  .card-action-btn{width:40px;height:40px;font-size:16px;}
+  .card-action-btn:hover{transform:none;}
+  .card-action-btn svg{width:17px;height:17px;}
+  /* Room for the sticky action bar so it never covers the last section. */
+  .dp-body{padding-bottom:104px;}
 
   /* header stats collapse into a menu popup */
   .hdr-menu-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;border:1.5px solid var(--border);background:var(--white);font-size:18px;color:var(--ink2);cursor:pointer;flex-shrink:0;transition:all .15s;}
@@ -381,4 +392,33 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 
 @media(max-width:420px){
   .dp-hact{padding:6px 9px;font-size:11.5px;}
+}
+
+/* ═══════ MOBILE ACTION BAR (property.html) ═══════
+   Hidden by default; the mobile breakpoint above switches it on. Sits above
+   the home indicator via safe-area inset so the buttons stay tappable on
+   notched phones. */
+.mobile-actionbar{
+  display:none;position:fixed;left:0;right:0;bottom:0;z-index:150;
+  gap:9px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+  background:var(--white);border-top:1.5px solid var(--border);
+  box-shadow:0 -4px 18px rgba(0,0,0,.07);
+}
+.mab-btn{
+  flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:48px;padding:12px;border-radius:12px;border:1.5px solid transparent;
+  font-family:var(--sans);font-size:14.5px;font-weight:700;
+  text-decoration:none;cursor:pointer;transition:filter .15s;
+}
+.mab-btn:active{filter:brightness(.93);}
+.mab-call{background:var(--green);color:#fff;}
+.mab-share{background:var(--blue);color:#fff;}
+/* Kept next to the base rule rather than up in the shared 680px block: same
+   specificity, so it only wins by coming after it in source order. */
+@media(max-width:680px){
+  .mobile-actionbar{display:flex;}
+  /* The sticky bar already carries Call, so the hero's copy is dead weight
+     pushing price and status below the fold. Scoped to .standalone because
+     the dashboard's panel has no action bar to fall back on. */
+  #dp.standalone .dp-call{display:none;}
 }

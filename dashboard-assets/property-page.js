@@ -34,6 +34,9 @@ function renderProperty(p){
   document.querySelector('.dp-tabs').style.display = 'flex';
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
   document.getElementById('dpHdrActions').style.display = 'flex';
+  const bar = document.getElementById('mobileActionBar');
+  document.getElementById('mabCall').href = 'tel:' + (p.contactNumber || '');
+  bar.style.display = '';   // CSS decides whether it actually shows (mobile only)
   syncFavButton();
 }
 
@@ -46,8 +49,10 @@ function syncFavButton(){
 }
 
 function showMessage(title, detail){
+  currentProperty = null;
   document.querySelector('.dp-tabs').style.display = 'none';
   document.getElementById('dpHdrActions').style.display = 'none';
+  document.getElementById('mobileActionBar').style.display = 'none';
   document.getElementById('dpHero').innerHTML =
     `<div><div class="dp-builder-tag">Property</div><h1 class="dp-title">${PinPropertyView.escapeHtml(title)}</h1></div>`;
   document.getElementById('dpBody').innerHTML = `
@@ -132,10 +137,7 @@ window.onPinTenantReady = function(){
       // A permission error here means the signed-in account belongs to a
       // different tenant — the rules did their job. Don't leave a stale
       // cached copy on screen pretending it's live.
-      if(!renderedOnce || currentProperty){
-        showMessage('No access to this property', 'This property belongs to a different account. Ask whoever shared the link to add you, or log in with the right account.');
-        currentProperty = null;
-      }
+      showMessage('No access to this property', 'This property belongs to a different account. Ask whoever shared the link to add you, or log in with the right account.');
     }
   );
 };

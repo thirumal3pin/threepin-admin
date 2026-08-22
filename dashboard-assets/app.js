@@ -163,6 +163,7 @@ function renderGrid(){
             <div class="card-loc">📍 ${p.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
+            <button class="card-action-btn card-share" onclick="sharePropertyLink('${p.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
             <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${p.id}',event)" title="Save">★</button>
           </div>
         </div>
