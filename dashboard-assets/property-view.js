@@ -215,14 +215,16 @@
     showToast('No PDF brochure uploaded yet for this property');
   }
 
-  // The pasteable blurb for WhatsApp — now led by the property link, which
-  // is the whole point of the standalone page.
+  // The CLIENT-facing WhatsApp blurb. Deliberately plain text with NO
+  // property link in it: customers have no login, so an admin.threepin.in
+  // URL would be dead weight to them and leaks an internal address. The
+  // internal link is a separate action — sharePropertyLink above.
   function shareProperty(id){
     const p=resolveProperty(id); if(!p) return;
     const body=(p.detailsText&&p.detailsText.trim())
       ? p.detailsText.trim()
       : `${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
-    document.getElementById('shareDetailsTa').value=`${body}\n\n${propertyUrl(id)}`;
+    document.getElementById('shareDetailsTa').value=body;
     document.getElementById('shareDetailsModal').classList.add('open');
   }
   function closeShareDetailsModal(){
