@@ -37,7 +37,8 @@ const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
 const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
-const INVENTORY_BROCHURE_LINK_COL = 'AR'; // 44th of 46 columns, see the Cowork task spec
+const INVENTORY_BROCHURE_LINK_COL = 'AH'; // Brochure_Link — Inventory sheet was revised down to 36 cols (A-AJ); this used to be AR under the old 46-col layout
+const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
 const DASHBOARD_TENANT_ID = 't_3pinrealty'; // dashboard.html / crm.html tenant, confirmed against live Firestore data
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
@@ -205,6 +206,22 @@ async function logDelivery(token, propertyId, result, detail) {
   }
 }
 
+// Checked once per run (not once per row) — the header can't change between
+// rows of the same run, so there's no reason to re-fetch it for every one.
+let brochureColumnChecked = false;
+async function assertInventoryBrochureColumn(token) {
+  if (brochureColumnChecked) return;
+  const [headerRow] = await sheetsGet(token, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}1`);
+  const actual = headerRow && headerRow[0];
+  if (actual !== INVENTORY_BROCHURE_LINK_HEADER) {
+    throw new Error(
+      `Inventory sheet column ${INVENTORY_BROCHURE_LINK_COL} is now "${actual}", not "${INVENTORY_BROCHURE_LINK_HEADER}" — ` +
+      `the sheet has been reorganized again. Update INVENTORY_BROCHURE_LINK_COL in this file before this script writes anything else.`
+    );
+  }
+  brochureColumnChecked = true;
+}
+
 function extractFolderId(driveUrl) {
   const m = String(driveUrl || '').match(/\/folders\/([a-zA-Z0-9_-]+)/);
   return m ? m[1] : null;
@@ -288,6 +305,12 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A:A');
   const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
   if (invRowIndex !== -1) {
+    // The Sheets API writes to whatever column you name — it won't complain
+    // if the sheet's been reorganized and that column now holds something
+    // else. Confirm the header matches before writing, so a future column
+    // shuffle fails loudly here instead of silently clobbering the wrong
+    // field with a Drive URL.
+    await assertInventoryBrochureColumn(sheetsToken);
     await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}${invRowIndex + 1}`, finish.drive_file_url);
   }
 

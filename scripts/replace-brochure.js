@@ -38,7 +38,8 @@ const BROCHURE_FOLDER = '/Users/swaminathannagarajan/Downloads/Product brochure 
 const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
-const INVENTORY_BROCHURE_LINK_COL = 'AR';
+const INVENTORY_BROCHURE_LINK_COL = 'AH'; // Brochure_Link — Inventory sheet was revised down to 36 cols (A-AJ); this used to be AR under the old 46-col layout
+const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
   || path.join(import.meta.dirname, '..', 'api', 'pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json');
@@ -262,6 +263,18 @@ async function main() {
   const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A:A');
   const invIdx = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
   if (invIdx !== -1) {
+    // The Sheets API writes to whatever column you name — it won't complain
+    // if the sheet's been reorganized and that column now holds something
+    // else. Confirm the header before writing, so a future column shuffle
+    // fails loudly here instead of silently clobbering the wrong field.
+    const [headerRow] = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}1`);
+    const actualHeader = headerRow && headerRow[0];
+    if (actualHeader !== INVENTORY_BROCHURE_LINK_HEADER) {
+      throw new Error(
+        `Inventory sheet column ${INVENTORY_BROCHURE_LINK_COL} is now "${actualHeader}", not "${INVENTORY_BROCHURE_LINK_HEADER}" — ` +
+        `the sheet has been reorganized again. Update INVENTORY_BROCHURE_LINK_COL in this file before retrying.`
+      );
+    }
     await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}${invIdx + 1}`, newUrl);
     console.log(`Inventory sheet col ${INVENTORY_BROCHURE_LINK_COL} row ${invIdx + 1} updated.`);
   } else {
