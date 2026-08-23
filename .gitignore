@@ -4,3 +4,4 @@ node_modules/
 *firebase-adminsdk*.json
 .DS_Store
 backups/
+.vscode/

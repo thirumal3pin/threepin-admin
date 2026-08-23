@@ -124,6 +124,7 @@
         All Properties
       </button>
       <div class="dp-hdr-actions">
+        <button class="dp-hact share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
         <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
         <button class="dp-hact crm-btn" id="dpCrm" onclick="openLeadCrm(currentDetailId)">📋 Lead CRM</button>
         <button class="dp-hact" id="dpSoldOut" onclick="toggleSoldOut(currentDetailId)">🏷️ Mark Sold Out</button>
@@ -264,10 +265,11 @@
 <div id="shareDetailsModal">
   <div class="pmodal-box share-box">
     <div class="pmodal-hdr">
-      <div class="pmodal-title">🔗 Share Details</div>
+      <div class="pmodal-title">💬 Client Details — WhatsApp</div>
       <button class="pmodal-x" onclick="closeShareDetailsModal()">×</button>
     </div>
     <div class="pmodal-body">
+      <p class="share-hint">Safe to send to customers — plain details only, no internal link. To send a colleague the property page, use <b>🔗 Share Link</b> instead.</p>
       <textarea id="shareDetailsTa" class="pmodal-ta" rows="14" readonly></textarea>
     </div>
     <div class="pmodal-ftr">
@@ -281,6 +283,7 @@
 
 <script src="dashboard-assets/sample-data.js"></script>
 <script src="dashboard-assets/auth.js"></script>
+<script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>
 <script src="dashboard-assets/brochure-form.js"></script>
 <script type="module" src="dashboard-assets/firebase-sync.js"></script>

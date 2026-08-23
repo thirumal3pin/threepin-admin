@@ -37,7 +37,13 @@ const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
 const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
-const INVENTORY_BROCHURE_LINK_COL = 'AR'; // 44th of 46 columns, see the Cowork task spec
+// No hardcoded column letters here on purpose — the Inventory sheet has
+// already been reorganized once (46 cols -> 36, which silently moved
+// Brochure_Link from AR to AH and had this script writing links into empty
+// space for weeks with no error). Column position is resolved by header
+// text at the start of every run instead — see resolveInventoryColumns().
+const INVENTORY_PROPERTY_ID_HEADER = 'Property_ID';
+const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
 const DASHBOARD_TENANT_ID = 't_3pinrealty'; // dashboard.html / crm.html tenant, confirmed against live Firestore data
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
@@ -56,41 +62,179 @@ function getFirestoreDb() {
   return getFirestore();
 }
 
-// Maps the brochure pipeline's property JSON (propertyId/propertyType/price/
-// priceInCr/readyToMove/builtupArea/...) onto dashboard.html's own schema —
-// the same mapping dashboard-assets/app.js's normalizeProperty() does
-// client-side for pasted JSON, mirrored here since this runs server-side.
-function mapToDashboardProperty(data) {
-  const type = data.propertyType || data.type || 'Property';
-  const builder = data.builder || 'Individual Owner';
-  let startingPrice;
-  if (data.price) startingPrice = data.price;
-  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = data.startingPrice || 'Price on Request';
-  let status;
-  if (data.readyToMove !== undefined || data.newOrResale !== undefined) {
-    status = (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') ? 'Ready to Move' : 'Under Construction';
-  } else {
-    status = data.status || 'Under Construction';
+// The dashboard's status filter recognizes exactly these two strings — any
+// other value drops a property out of BOTH filter buttons, making it
+// invisible on the grid without any visible error. A stage description the
+// source uses ("Pre-Launch", "Demolition stage", ...) is kept verbatim in
+// constructionStage instead of being discarded.
+const STATUS_READY = 'Ready to Move';
+const STATUS_UNDER_CONSTRUCTION = 'Under Construction';
+
+function normalizeStatus(data) {
+  if (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') {
+    return { status: STATUS_READY };
   }
-  const possession = data.possessionDate || data.possession || 'Contact for details';
-  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
-  return {
-    ...data,
-    propertyCode: data.propertyCode || data.propertyId || '',
-    type, builder, startingPrice, status, possession, sqftRange,
-    tenantId: DASHBOARD_TENANT_ID,
-    soldOut: false,
-    // Matches the dashboard's own add-property convention (savePModal in
-    // app.js) so "Recently Added" sort actually surfaces these — without
-    // this, insertValue() falls back to 0 and they sort as if seeded
-    // on day one, buried under everything actually added since.
-    createdAt: data.createdAt || Date.now()
-  };
+  const raw = String(data.status || '').trim();
+  if (raw === STATUS_READY) return { status: STATUS_READY };
+  if (!raw || raw === STATUS_UNDER_CONSTRUCTION) return { status: STATUS_UNDER_CONSTRUCTION };
+  return { status: STATUS_UNDER_CONSTRUCTION, constructionStage: raw };
+}
+
+// Only assigns the key when the value is present — Firestore merge writes an
+// empty string or null right over whatever real value was already there, so
+// "not stated in this delivery" must mean "leave it alone", not "blank it".
+function setIfPresent(target, key, value) {
+  if (value !== undefined && value !== null && value !== '') target[key] = value;
+}
+
+// Maps the brochure pipeline's property JSON onto dashboard.html's actual
+// schema (see the PMODAL_FIELDS list in dashboard-assets/app.js for what the
+// dashboard's own Add/Edit form edits — that list is the ground truth for
+// "canonical", not this pipeline's convenience). Built key by key rather
+// than spreading `data`: a spread let every dead source field name
+// (propertyId, propertyType, price, priceInCr, readyToMove, newOrResale,
+// possessionDate, builtupArea) ride along forever, and dashboard-assets/
+// app.js's normalizeProperty() re-derives `status` from the leftover
+// readyToMove/newOrResale on every manual save — so a user switching a
+// property to "Ready to Move" in the UI got silently reverted back to
+// "Under Construction" on the next edit. That dashboard-side bug is fixed
+// separately; this stops the pipeline from planting the stale fields that
+// trigger it.
+//
+function isBlank(v) {
+  return v === undefined || v === null || v === '';
+}
+
+// `existing` is the property's current Firestore doc (or null if this is a
+// brand-new property).
+//
+// Two writers touch this collection: this script (Queue sheet + local
+// brochure JSON, every 30 min) and scripts/sync-inventory.js (the Inventory
+// sheet, run separately). They overlap on every property that's in both
+// places, and on every descriptive field — name, type, status, possession,
+// startingPrice, sqftRange, and more. Whichever ran last used to win, so a
+// brochure re-delivery could silently revert a correction made in the
+// Inventory sheet (the same class of bug as the readyToMove/status one
+// below, one level up — see docs/mac-scheduler-handoff.md, Problem 3).
+//
+// The fix: the Inventory sheet owns descriptive fields once a property
+// exists. This script only ever WRITES a descriptive field for a brand-new
+// property (so a card is never blank while waiting for the next Inventory
+// sync) or to fill one still blank on an existing doc. It never overwrites
+// a descriptive field that's already set — that's the sync's job, and it
+// doesn't matter which of the two ran most recently. Delivery artifacts
+// (brochureLink/photosLink/detailsText) and audit fields are this script's
+// own, always written regardless.
+function mapToDashboardProperty(data, existing) {
+  const out = {};
+  const setDescriptive = existing
+    ? (key, value) => { if (isBlank(existing[key])) setIfPresent(out, key, value); }
+    : (key, value) => setIfPresent(out, key, value);
+
+  // Identity — system-owned, always written
+  const propertyId = data.propertyId || data.propertyCode || (existing && existing.propertyCode) || '';
+  out.propertyCode = propertyId;
+  out.tenantId = DASHBOARD_TENANT_ID;
+
+  // Basic info
+  setDescriptive('name', data.name);
+  setDescriptive('builder', data.builder || 'Individual Owner');
+  setDescriptive('location', data.location);
+  setDescriptive('type', data.propertyType || data.type);
+  setDescriptive('config', data.config);
+
+  // Status / sale info
+  const { status, constructionStage } = normalizeStatus(data);
+  setDescriptive('status', status);
+  if (constructionStage !== undefined) setDescriptive('constructionStage', constructionStage);
+  setDescriptive('saleType', data.newOrResale);
+  setDescriptive('propertyAge', data.ageOfProperty);
+  setDescriptive('possession', data.possessionDate || data.possession || 'Contact for details');
+
+  // Pricing
+  let startingPrice;
+  if (data.startingPrice) startingPrice = data.startingPrice;
+  else if (data.price) startingPrice = data.price;
+  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
+  else startingPrice = 'Price on Request';
+  setDescriptive('startingPrice', startingPrice);
+  setDescriptive('pricePerSqft', data.pricePerSqft);
+
+  // Specs — sqftRange falls back through built-up -> super built-up -> carpet,
+  // same priority order the old code used, just without keeping the raw
+  // builtupArea name around afterwards.
+  setDescriptive('sqftRange', data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea);
+  setDescriptive('superBuiltupArea', data.superBuiltupArea);
+  setDescriptive('carpetArea', data.carpetArea);
+  setDescriptive('uds', data.uds);
+  setDescriptive('totalUnits', data.totalUnits);
+  setDescriptive('totalLandArea', data.totalLandArea);
+  setDescriptive('totalTowers', data.totalTowers);
+  setDescriptive('totalFloors', data.totalFloors);
+  setDescriptive('floorNo', data.floorNo);
+  setDescriptive('facing', data.facing);
+  setDescriptive('bathrooms', data.bathrooms);
+  setDescriptive('parking', data.parking);
+  setDescriptive('parkingType', data.parkingType);
+  setDescriptive('furnishing', data.furnishing);
+  setDescriptive('cornerUnit', data.cornerUnit);
+  setDescriptive('vastu', data.vastu);
+  setDescriptive('powerBackup', data.ebGenerator);
+  setDescriptive('approval', data.approval);
+
+  // Description
+  setDescriptive('highlights', data.highlights);
+  setDescriptive('amenities', data.amenities);
+  setDescriptive('nearbyLandmark', data.nearbyLandmark);
+  setDescriptive('connectivity', data.connectivity);
+  setDescriptive('contactName', data.contactName);
+  setDescriptive('contactNumber', data.contactNumber);
+  setDescriptive('sheetNotes', data.notes);
+
+  // Everything else the source JSON carries with no canonical field above —
+  // same descriptive-tier ownership, so fill in only when the existing doc
+  // has none at all rather than merging key by key (a partial overwrite of
+  // a bag-of-extras is more confusing than helpful).
+  const extras = {};
+  setIfPresent(extras, 'Nearby', data.nearby);
+  setIfPresent(extras, 'Main Door Facing', data.mainDoorFacing);
+  setIfPresent(extras, 'Plot Size', data.plotSize);
+  setIfPresent(extras, 'Maintenance', data.maintenance);
+  setIfPresent(extras, 'Negotiable', data.negotiable);
+  setIfPresent(extras, 'GST Applicable', data.gstApplicable);
+  setIfPresent(extras, 'Registration Extra', data.registrationExtra);
+  setIfPresent(extras, 'Loan Eligible', data.loanEligible);
+  setIfPresent(extras, 'Site Visit Status', data.siteVisitStatus);
+  if (Object.keys(extras).length && (!existing || isBlank(existing.sheetExtras))) out.sheetExtras = extras;
+
+  // Delivery artifacts — this pipeline owns these outright, always written
+  // regardless of what else exists on the doc.
+  setIfPresent(out, 'brochureLink', data.brochureLink);
+  setIfPresent(out, 'photosLink', data.photosLink);
+  setIfPresent(out, 'detailsText', data.detailsText);
+
+  // Deliberately NOT written, even though the source JSON may carry them:
+  //   - soldOut, interestLevel — dashboard-owned; writing either would
+  //     un-sell a property or wipe a lead rating on the next scheduler run.
+  //   - availability — Inventory sheet's own column.
+
+  // Audit
+  out.createdAt = (existing && existing.createdAt) || Date.now();
+  out.updatedAt = Date.now();
+  out.source = 'pipeline';
+
+  return out;
 }
 
 async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, photosLink, detailsText) {
   const db = getFirestoreDb();
+  const ref = db.collection('properties').doc(propertyId);
+  // Read first so createdAt survives a re-delivery (e.g. a brochure
+  // correction re-running this script) instead of jumping back to "just
+  // added" on the dashboard's Recently Added sort every single time.
+  const existingSnap = await ref.get();
+  const existing = existingSnap.exists ? existingSnap.data() : null;
+
   const mapped = mapToDashboardProperty({
     ...propertyJson,
     brochureLink: driveFileUrl,
@@ -99,14 +243,14 @@ async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, p
     // buttons have something to show without a second sheet read.
     photosLink: photosLink || '',
     detailsText: detailsText || ''
-  });
+  }, existing);
   // The dashboard's own client code (savePModal in app.js) always bakes an
   // explicit `id` field into the document data, matching the doc path —
   // firebase-sync.js's onSnapshot listener reads that field, not Firestore's
   // real doc.id, so leaving it out here made every card silently unclickable
   // (openDetail's lookup against the real `id` never matched).
   mapped.id = propertyId;
-  await db.collection('properties').doc(propertyId).set(mapped, { merge: true });
+  await ref.set(mapped, { merge: true });
 }
 const SECRET = process.env.WEBHOOK_SHARED_SECRET;
 
@@ -205,6 +349,31 @@ async function logDelivery(token, propertyId, result, detail) {
   }
 }
 
+function columnLetter(zeroBasedIndex) {
+  return zeroBasedIndex < 26
+    ? String.fromCharCode(65 + zeroBasedIndex)
+    : String.fromCharCode(64 + Math.floor(zeroBasedIndex / 26)) + String.fromCharCode(65 + (zeroBasedIndex % 26));
+}
+
+// Reads the Inventory header row once per run and resolves both columns by
+// their header text rather than a hardcoded letter — a future reorg then
+// either keeps working automatically or fails loudly (skip + warn below),
+// instead of silently writing into whatever that letter now points at.
+let resolvedInventoryColumns = null;
+async function resolveInventoryColumns(token) {
+  if (resolvedInventoryColumns) return resolvedInventoryColumns;
+  const [headerRow] = await sheetsGet(token, INVENTORY_SHEET_ID, 'Inventory!A1:BZ1');
+  const findColumn = header => {
+    const idx = (headerRow || []).findIndex(h => String(h || '').trim() === header);
+    return idx === -1 ? null : columnLetter(idx);
+  };
+  resolvedInventoryColumns = {
+    propertyId: findColumn(INVENTORY_PROPERTY_ID_HEADER),
+    brochureLink: findColumn(INVENTORY_BROCHURE_LINK_HEADER),
+  };
+  return resolvedInventoryColumns;
+}
+
 function extractFolderId(driveUrl) {
   const m = String(driveUrl || '').match(/\/folders\/([a-zA-Z0-9_-]+)/);
   return m ? m[1] : null;
@@ -285,10 +454,28 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   data.brochureLink = finish.drive_file_url;
   fs.writeFileSync(local.jsonPath, JSON.stringify(data, null, 2));
 
-  const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A:A');
-  const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
-  if (invRowIndex !== -1) {
-    await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}${invRowIndex + 1}`, finish.drive_file_url);
+  let inventoryRowUpdated = false;
+  let inventoryWarning = null;
+  const cols = await resolveInventoryColumns(sheetsToken);
+  const missingHeaders = [
+    !cols.propertyId && INVENTORY_PROPERTY_ID_HEADER,
+    !cols.brochureLink && INVENTORY_BROCHURE_LINK_HEADER,
+  ].filter(Boolean);
+  if (missingHeaders.length) {
+    // Never fall back to a hardcoded letter here — writing the link into the
+    // wrong column (silently, since the Sheets API doesn't complain) is
+    // worse than not writing it at all. The Drive upload and email above
+    // already succeeded, so the property isn't lost, just not cross-linked
+    // in the Inventory sheet until someone fixes the header.
+    inventoryWarning = `Inventory sheet header(s) not found: ${missingHeaders.join(', ')} — skipped Inventory update`;
+    console.warn(`[WARN] ${propertyId}: ${inventoryWarning}`);
+  } else {
+    const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.propertyId}:${cols.propertyId}`);
+    const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
+    if (invRowIndex !== -1) {
+      await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.brochureLink}${invRowIndex + 1}`, finish.drive_file_url);
+      inventoryRowUpdated = true;
+    }
   }
 
   let dashboardAdded = false;
@@ -302,7 +489,7 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   return {
     propertyId, ok: true, drive_file_url: finish.drive_file_url,
-    inventoryRowUpdated: invRowIndex !== -1, dashboardAdded, dashboardError
+    inventoryRowUpdated, inventoryWarning, dashboardAdded, dashboardError
   };
 }
 
@@ -336,9 +523,10 @@ async function main() {
       const result = await deliverRow(sheetsToken, rowIndex, row);
       if (result.ok) {
         const dashboardNote = result.dashboardAdded ? 'dashboard: added' : `dashboard: FAILED (${result.dashboardError})`;
-        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (inventory row updated: ${result.inventoryRowUpdated}, ${dashboardNote})`);
+        const inventoryNote = result.inventoryWarning || `inventory row updated: ${result.inventoryRowUpdated}`;
+        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (${inventoryNote}, ${dashboardNote})`);
         await logDelivery(sheetsToken, result.propertyId, 'Delivered',
-          `${result.drive_file_url} | ${dashboardNote}`);
+          `${result.drive_file_url} | ${inventoryNote} | ${dashboardNote}`);
       } else {
         console.log(`[SKIP] ${result.propertyId}: ${result.error}`);
         await logDelivery(sheetsToken, result.propertyId, 'Skipped', result.error);
