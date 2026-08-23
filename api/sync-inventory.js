@@ -1,7 +1,7 @@
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import {
   getSheetsToken, readInventoryRows, readQueueFill, planSync, unmappedHeaders,
-  commitWrites, loadExistingProperties, TENANT_ID
+  commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID
 } from './_inventory-shared.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
@@ -46,7 +46,8 @@ export async function POST(request){
     const headers = rows[0] || [];
     const db = getDb();
     const existing = await loadExistingProperties(db);
-    const plan = planSync(rows, existing, null, queueFill);
+    const protections = await loadPendingProtections(db);
+    const plan = planSync(rows, existing, null, queueFill, protections);
 
     const summary = {
       dryRun,
@@ -57,6 +58,11 @@ export async function POST(request){
       updated: plan.updates.length,
       unchanged: plan.unchanged,
       untouched: plan.orphans.length,
+      // Dashboard edits kept because they're still pending in the Changes
+      // worklist — shown in the preview so "why didn't my sheet value come
+      // through" is answered on screen instead of looking like a sync bug.
+      protectedFields: plan.protectedFields.slice(0, 40),
+      skippedDeleted: plan.skippedDeleted,
       // Enough detail for the dashboard to show what actually moved, capped
       // so a first-run diff of hundreds of fields can't bloat the response.
       changes: [...plan.creates.map(c => ({ id:c.id, name:c.name, kind:'create', fields:[] })),

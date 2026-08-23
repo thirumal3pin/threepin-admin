@@ -1045,6 +1045,14 @@ function renderSyncPreview(d){
     </div>`;
   }).join('');
 
+  const prot = d.protectedFields || [];
+  const protBlock = (prot.length || (d.skippedDeleted||[]).length) ? `
+    <div class="sync-protected">
+      <div class="sync-prot-title">🛡 Your dashboard edits are kept</div>
+      ${prot.map(p=>`<div class="sync-prot-row"><span class="chg-code">${escapeHtml(p.id)}</span> ${p.fields.map(escapeHtml).join(', ')}</div>`).join('')}
+      ${(d.skippedDeleted||[]).map(id=>`<div class="sync-prot-row"><span class="chg-code">${escapeHtml(id)}</span> not recreated (deleted here)</div>`).join('')}
+      <div class="sync-prot-hint">These stay as edited in the dashboard because they're still Pending in 🕒 Changes. Tick an edit off there once the sheet has it — from then on the sheet governs that field again.</div>
+    </div>` : '';
   return `
     <div class="sync-stats">
       <div class="sync-stat"><b>${d.created}</b><span>to add</span></div>
@@ -1052,6 +1060,7 @@ function renderSyncPreview(d){
       <div class="sync-stat"><b>${d.unchanged}</b><span>already current</span></div>
       <div class="sync-stat quiet"><b>${d.untouched}</b><span>not in sheet — untouched</span></div>
     </div>
+    ${protBlock}
     ${(d.created + d.updated) === 0
       ? `<div class="empty-mini">Everything already matches the sheet. Nothing to do.</div>`
       : `<div class="sync-list">${rows}</div>`}`;

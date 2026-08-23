@@ -30,7 +30,7 @@ import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
   getSheetsToken, readInventoryRows, readQueueFill, planSync, unmappedHeaders,
-  commitWrites, loadExistingProperties, TENANT_ID
+  commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID
 } from '../api/_inventory-shared.js';
 
 const SA_PATH = process.env.FIREBASE_SERVICE_ACCOUNT_PATH
@@ -90,9 +90,22 @@ async function main(){
 
   const db = getDb();
   const existing = await loadExistingProperties(db);
-  console.log(`firestore: ${existing.size} properties for ${TENANT_ID}\n`);
+  const protections = await loadPendingProtections(db);
+  console.log(`firestore: ${existing.size} properties for ${TENANT_ID}`);
+  if(protections.fieldsByProp.size || protections.deletedProps.size){
+    console.log(`pending dashboard edits protected: ${protections.fieldsByProp.size} propert${protections.fieldsByProp.size===1?'y':'ies'}, ${protections.deletedProps.size} pending delete(s)`);
+  }
+  console.log();
 
-  const plan = planSync(rows, existing, ONLY_ID, queueFill);
+  const plan = planSync(rows, existing, ONLY_ID, queueFill, protections);
+
+  if(plan.protectedFields.length){
+    console.log('  🛡 kept (pending in the dashboard Changes list — tick them off to let the sheet govern again):');
+    plan.protectedFields.forEach(p => console.log(`      ${p.id.padEnd(10)} ${p.fields.join(', ')}`));
+  }
+  if(plan.skippedDeleted.length){
+    console.log(`  🛡 not recreated (deleted in dashboard, delete still pending): ${plan.skippedDeleted.join(', ')}`);
+  }
 
   plan.creates.forEach(c => console.log(`  + CREATE ${c.id.padEnd(10)} ${trunc(c.name, 46)}`));
   plan.updates.forEach(u => {
