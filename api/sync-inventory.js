@@ -1,6 +1,6 @@
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import {
-  getSheetsToken, readInventoryRows, planSync, unmappedHeaders,
+  getSheetsToken, readInventoryRows, readQueueFill, planSync, unmappedHeaders,
   commitWrites, loadExistingProperties, TENANT_ID
 } from './_inventory-shared.js';
 
@@ -40,11 +40,13 @@ export async function POST(request){
   catch { return json({ error: 'Server credential is malformed.' }, 500); }
 
   try {
-    const rows = await readInventoryRows(await getSheetsToken(sa));
+    const sheetsToken = await getSheetsToken(sa);
+    const rows = await readInventoryRows(sheetsToken);
+    const queueFill = await readQueueFill(sheetsToken);
     const headers = rows[0] || [];
     const db = getDb();
     const existing = await loadExistingProperties(db);
-    const plan = planSync(rows, existing);
+    const plan = planSync(rows, existing, null, queueFill);
 
     const summary = {
       dryRun,

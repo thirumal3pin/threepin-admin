@@ -51,20 +51,49 @@
     return new URL('property.html?id=' + encodeURIComponent(id), location.href).href;
   }
 
+  // The sheet's Location_Pin column holds either a real Maps URL or just a
+  // place name (both occur in live data). A name still deserves a working
+  // pin — it becomes a Maps search for that name plus the locality.
+  function mapsHref(p){
+    const v = String(p.mapLink||'').trim();
+    if(!v) return '';
+    if(/^https?:\/\//i.test(v)) return v;
+    return 'https://www.google.com/maps/search/?api=1&query=' +
+      encodeURIComponent(v + (p.location ? ', ' + p.location : ''));
+  }
+
+  // What an agent needs to know they can send RIGHT NOW, before the client
+  // asks: brochure, photos, location pin, shareable details. Rendered as one
+  // chips row — green means one tap away, dimmed means not on file yet.
+  function resourceChips(p, compact){
+    const items = [
+      { ok: !!(p.brochureLink && String(p.brochureLink).trim()), icon:'📑', label:'Brochure' },
+      { ok: !!(p.photosLink && String(p.photosLink).trim()),     icon:'🖼️', label:'Photos' },
+      { ok: !!mapsHref(p),                                       icon:'📍', label:'Map Pin' },
+      { ok: !!(p.detailsText && String(p.detailsText).trim()),   icon:'💬', label:'Details' }
+    ];
+    return items.map(it =>
+      `<span class="res-chip ${it.ok?'have':'miss'}" title="${it.label}${it.ok?' available':' not on file yet'}">` +
+      `${it.icon}${compact?'':' '+it.label+' '+(it.ok?'✓':'—')}</span>`).join('');
+  }
+
   // ═══════ RENDERERS ═══════
   function hero(p){
     const e = esc(p);
+    const map = mapsHref(p);
     return `
     <div style="flex:1;min-width:240px;">
-      <div class="dp-builder-tag">${e.propertyCode?e.propertyCode+' · ':''}${e.builder} · ${e.type}</div>
+      <div class="dp-builder-tag">${e.propertyCode?e.propertyCode+' · ':''}${e.builder} · ${e.type}${e.saleType?' · '+e.saleType:''}${e.zone?' · '+e.zone:''}</div>
       <h1 class="dp-title">${e.name}</h1>
-      <div class="dp-loc">📍 ${e.location}</div>
+      <div class="dp-loc">📍 ${e.location}${map?` &nbsp;<a class="dp-maplink" href="${escapeHtml(map)}" target="_blank" rel="noopener">Open Map Pin ↗</a>`:''}</div>
       <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="dp-call">📞 Call ${e.contactName} — ${e.contactNumber}</a>
+      <div class="res-chips">${resourceChips(p)}</div>
     </div>
     <div class="dp-price-box">
       <div class="dp-price">${e.startingPrice}</div>
       ${e.pricePerSqft?`<div class="dp-psf">${e.pricePerSqft}</div>`:''}
-      <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ Under Construction'}</span></div>
+      <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+(e.constructionStage||'Under Construction')}</span></div>
+      ${e.propertyAge?`<div class="dp-age">${e.propertyAge}</div>`:''}
     </div>`;
   }
 
@@ -99,35 +128,76 @@
       </div>`;
   }
 
+  // The agent-on-a-call section: the sheet's free-text notes cell, which
+  // holds the details that fit no structured column (pricing nuance, seller
+  // situation, per-typology breakdowns). Rendered prominently, line breaks
+  // intact — this is what keeps the agent ahead of the client.
+  function sheetNotesBlock(p){
+    const v = String(p.sheetNotes||'').trim();
+    if(!v) return '';
+    return `
+      <div class="sec">
+        <div class="sec-title">📝 Notes (Inventory Sheet)</div>
+        <div class="sheetnotes">${escapeHtml(v)}</div>
+      </div>`;
+  }
+
+  // The WhatsApp-ready description from the intake queue — the exact text
+  // the client receives, so the agent can read from the same script.
+  function detailsTextBlock(p){
+    const v = String(p.detailsText||'').trim();
+    if(!v) return '';
+    return `
+      <div class="sec">
+        <div class="sec-title">💬 Shareable Details (WhatsApp copy)</div>
+        <div class="detailstext">${escapeHtml(v)}</div>
+        <button class="dt-copy" onclick="shareProperty('${escapeHtml(p.id||'')}')">📋 Open & Copy</button>
+      </div>`;
+  }
+
   function overviewTab(p){
     const e = esc(p);
     const highlights = splitList(p.highlights).map(escapeHtml);
     const amenities = splitList(p.amenities).map(escapeHtml);
     const sheetBlock = renderSheetExtras(p);
+    const map = mapsHref(p);
+    const fact = (v,l) => v ? `<div class="stat-b"><div class="stat-b-v">${v}</div><div class="stat-b-l">${l}</div></div>` : '';
     return `
     <div class="tab-panel active">
       <div class="sec">
         <div class="sec-title">📊 Key Facts</div>
         <div class="stats-g">
-          <div class="stat-b"><div class="stat-b-v">${e.config}</div><div class="stat-b-l">Configuration</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.config||'—'}</div><div class="stat-b-l">Configuration</div></div>
           <div class="stat-b"><div class="stat-b-v">${e.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.possession}</div><div class="stat-b-l">Possession</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.totalUnits||'—'}</div><div class="stat-b-l">Total Units</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.totalFloors||'—'}</div><div class="stat-b-l">Floors</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.vastu||'—'}</div><div class="stat-b-l">Vastu</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.possession||'—'}</div><div class="stat-b-l">Possession</div></div>
+          ${fact(e.floorNo,'Floor')}
+          ${fact(e.facing,'Facing')}
+          ${fact(e.bathrooms,'Bathrooms')}
+          ${fact(e.furnishing,'Furnishing')}
+          ${fact(e.parking?e.parking+(e.parkingType?' '+e.parkingType:''):'','Parking')}
+          ${fact(e.totalUnits,'Total Units')}
+          ${fact(e.totalFloors,'Floors')}
+          ${fact(e.vastu,'Vastu')}
+          ${fact(e.propertyAge,'Age')}
+          ${fact(e.approval,'Approval')}
+          ${fact(e.powerBackup,'Power Backup')}
         </div>
       </div>
+      ${sheetNotesBlock(p)}
       ${highlights.length?`<div class="sec"><div class="sec-title">✨ Highlights</div><div class="hi-grid">${highlights.map(h=>`<div class="hi-item">✓ ${h}</div>`).join('')}</div></div>`:''}
       ${amenities.length?`<div class="sec"><div class="sec-title">🏢 Amenities</div><div class="am-wrap">${amenities.map(a=>`<span class="am-chip">${a}</span>`).join('')}</div></div>`:''}
       <div class="sec">
         <div class="sec-title">📍 Location & Connectivity</div>
         <div class="conn-wrap">
+          ${e.zone?`<div class="conn-row"><div class="conn-k">Zone</div><div class="conn-v">${e.zone}</div></div>`:''}
+          ${map?`<div class="conn-row"><div class="conn-k">Map Pin</div><div class="conn-v"><a href="${escapeHtml(map)}" target="_blank" rel="noopener" class="conn-maplink">📍 Open in Google Maps ↗</a></div></div>`:''}
           ${e.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${e.nearby}</div></div>`:''}
           ${e.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${e.nearbyLandmark}</div></div>`:''}
           ${e.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${e.connectivity}</div></div>`:''}
-          ${!p.nearby&&!p.nearbyLandmark&&!p.connectivity?`<div class="conn-row"><div class="conn-v">Information not available</div></div>`:''}
+          ${!p.zone&&!map&&!p.nearby&&!p.nearbyLandmark&&!p.connectivity?`<div class="conn-row"><div class="conn-v">Information not available</div></div>`:''}
         </div>
       </div>
+      ${detailsTextBlock(p)}
       ${sheetBlock}
       <div class="sec">
         <div class="sec-title">📤 Share & Export</div>
@@ -145,28 +215,56 @@
 
   function specsTab(p){
     const e = esc(p);
+    const map = mapsHref(p);
+    const group = t => `<tr class="spec-group"><td colspan="2">${t}</td></tr>`;
+    const link = (url,label) => url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${label} ↗</a>` : '—';
     return `
     <div class="tab-panel">
       <div class="sec"><table class="spec-t">
+        ${group('Identity')}
         ${e.propertyCode?`<tr><td>Property Code</td><td>${e.propertyCode}</td></tr>`:''}
         <tr><td>Property Name</td><td>${e.name}</td></tr>
         <tr><td>Builder</td><td>${e.builder}</td></tr>
-        <tr><td>Type</td><td>${e.type}</td></tr>
+        <tr><td>Type</td><td>${e.type}${e.saleType?' · '+e.saleType:''}</td></tr>
+        ${e.propertyAge?`<tr><td>Property Age</td><td>${e.propertyAge}</td></tr>`:''}
+        ${group('Location')}
         <tr><td>Location</td><td>${e.location}</td></tr>
-        <tr><td>Configuration</td><td>${e.config}</td></tr>
-        <tr><td>Area Range</td><td>${e.sqftRange||'—'}</td></tr>
-        <tr><td>Total Units</td><td>${e.totalUnits||'—'}</td></tr>
-        <tr><td>Land Area</td><td>${e.totalLandArea||'—'}</td></tr>
-        <tr><td>UDS</td><td>${e.uds||'—'}</td></tr>
+        ${e.zone?`<tr><td>Zone</td><td>${e.zone}</td></tr>`:''}
+        <tr><td>Map Pin</td><td>${map?link(map,'Open in Google Maps'):'—'}</td></tr>
+        ${e.nearby?`<tr><td>Nearby</td><td>${e.nearby}</td></tr>`:''}
+        ${e.nearbyLandmark?`<tr><td>Landmark</td><td>${e.nearbyLandmark}</td></tr>`:''}
+        ${e.connectivity?`<tr><td>Connectivity</td><td>${e.connectivity}</td></tr>`:''}
+        ${group('Pricing & Status')}
         <tr><td>Starting Price</td><td>${e.startingPrice}</td></tr>
         <tr><td>Price / SqFt</td><td>${e.pricePerSqft||'—'}</td></tr>
-        <tr><td>Status</td><td>${e.status}</td></tr>
+        <tr><td>Status</td><td>${e.status}${e.constructionStage&&e.constructionStage!==e.status?' ('+e.constructionStage+')':''}</td></tr>
         <tr><td>Possession</td><td>${e.possession}</td></tr>
-        <tr><td>Total Floors</td><td>${e.totalFloors||'—'}</td></tr>
-        <tr><td>Parking</td><td>${e.parking?e.parking+' '+(e.parkingType||''):'—'}</td></tr>
-        <tr><td>Vastu</td><td>${e.vastu||'—'}</td></tr>
         <tr><td>Availability</td><td>${e.availability||'—'}</td></tr>
+        ${group('Dimensions')}
+        <tr><td>Configuration</td><td>${e.config||'—'}</td></tr>
+        <tr><td>Built-up Area</td><td>${e.sqftRange||'—'}</td></tr>
+        ${e.superBuiltupArea?`<tr><td>Super Built-up</td><td>${e.superBuiltupArea}</td></tr>`:''}
+        ${e.carpetArea?`<tr><td>Carpet Area</td><td>${e.carpetArea}</td></tr>`:''}
+        <tr><td>Land Area</td><td>${e.totalLandArea||'—'}</td></tr>
+        <tr><td>UDS</td><td>${e.uds||'—'}</td></tr>
+        ${group('Building')}
+        <tr><td>Total Units</td><td>${e.totalUnits||'—'}</td></tr>
+        ${e.totalTowers?`<tr><td>Total Towers</td><td>${e.totalTowers}</td></tr>`:''}
+        <tr><td>Total Floors</td><td>${e.totalFloors||'—'}</td></tr>
+        ${e.floorNo?`<tr><td>Floor</td><td>${e.floorNo}</td></tr>`:''}
+        ${e.facing?`<tr><td>Facing</td><td>${e.facing}</td></tr>`:''}
+        ${e.bathrooms?`<tr><td>Bathrooms</td><td>${e.bathrooms}</td></tr>`:''}
+        <tr><td>Parking</td><td>${e.parking?e.parking+' '+(e.parkingType||''):'—'}</td></tr>
+        ${e.furnishing?`<tr><td>Furnishing</td><td>${e.furnishing}</td></tr>`:''}
+        ${e.cornerUnit?`<tr><td>Corner Unit</td><td>${e.cornerUnit}</td></tr>`:''}
+        <tr><td>Vastu</td><td>${e.vastu||'—'}</td></tr>
+        ${e.powerBackup?`<tr><td>Power Backup</td><td>${e.powerBackup}</td></tr>`:''}
+        ${e.approval?`<tr><td>Approval</td><td>${e.approval}</td></tr>`:''}
+        ${group('Resources & Contact')}
+        <tr><td>Brochure</td><td>${link(p.brochureLink,'Open Brochure')}</td></tr>
+        <tr><td>Photos</td><td>${link(p.photosLink,'Open Photo Folder')}</td></tr>
         <tr><td>Contact</td><td>${e.contactName} — ${e.contactNumber}</td></tr>
+        ${p.sheetExtras&&p.sheetExtras['Owner_Builder_Contact']?`<tr><td>Owner / Builder</td><td>${escapeHtml(p.sheetExtras['Owner_Builder_Contact'])}</td></tr>`:''}
       </table></div>
     </div>`;
   }
@@ -356,6 +454,7 @@
     hero, overviewTab, specsTab, pitchTab, renderSheetExtras,
     propertyUrl, cacheProperty, cachedProperty,
     escapeHtml, esc, isReady, splitList,
+    mapsHref, resourceChips,
     SHARE_ICON, prefersNativeShare
   };
 

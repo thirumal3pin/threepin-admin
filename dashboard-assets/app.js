@@ -130,7 +130,9 @@ function applyFilters(){
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
     if(currentSearch){
-      const hay = [p.propertyCode,p.name,p.location,p.builder,p.config,p.amenities,p.highlights,p.type].join(' ').toLowerCase();
+      // sheetNotes/detailsText/zone included so free-text facts ("negotiable",
+      // a seller situation, a zone name) are findable, not just structured ones.
+      const hay = [p.propertyCode,p.name,p.location,p.zone,p.builder,p.config,p.amenities,p.highlights,p.type,p.sheetNotes,p.detailsText,p.furnishing,p.facing].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
@@ -197,6 +199,7 @@ function renderGrid(){
         </div>
         <div class="card-foot">
           <div class="card-bldr">${e.builder}</div>
+          <div class="card-res" title="Brochure · Photos · Map Pin · Details">${PinPropertyView.resourceChips(p, true)}</div>
           <label class="card-cmp" onclick="event.stopPropagation()">
             <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${e.id}',this)"> Compare
           </label>
@@ -970,6 +973,8 @@ function refreshAfterDataChange(){
   setupTypeFilters();
   updateStats();
   applyFilters();
+  updateMissingCount();
+  renderMissing();
 }
 
 window.applyPropertiesSnapshot = function(list){
@@ -1097,6 +1102,184 @@ async function applySync(){
 
 function closeSyncModal(){
   document.getElementById('syncModal').classList.remove('open');
+}
+
+// ═══════ MISSING DATA ═══════
+// The agent's data-quality worklist: every property listed with the fields it
+// still lacks, so gaps surface BEFORE a client call instead of during one.
+// Each gap can be fixed in place (saved to the property + change log, ready
+// to copy into the sheet later) or marked "Not required" for that property —
+// stored on the doc as naFields, so a plot stops nagging about floor numbers.
+const MISSING_FIELDS = [
+  { key:'config',        label:'Configuration',   group:'Core' },
+  { key:'sqftRange',     label:'Built-up Area',   group:'Core' },
+  { key:'startingPrice', label:'Price',           group:'Core', empty:['Price on Request'] },
+  { key:'pricePerSqft',  label:'Rate / Sqft',     group:'Core' },
+  { key:'possession',    label:'Possession',      group:'Core', empty:['Contact for details'] },
+  { key:'availability',  label:'Availability',    group:'Core' },
+  { key:'totalLandArea', label:'Land Area',       group:'Specs' },
+  { key:'uds',           label:'UDS',             group:'Specs' },
+  { key:'totalUnits',    label:'Total Units',     group:'Specs' },
+  { key:'totalFloors',   label:'Total Floors',    group:'Specs' },
+  { key:'floorNo',       label:'Floor No',        group:'Specs' },
+  { key:'facing',        label:'Facing',          group:'Specs' },
+  { key:'bathrooms',     label:'Bathrooms',       group:'Specs' },
+  { key:'parking',       label:'Parking',         group:'Specs' },
+  { key:'furnishing',    label:'Furnishing',      group:'Specs' },
+  { key:'vastu',         label:'Vastu',           group:'Specs' },
+  { key:'powerBackup',   label:'Power Backup',    group:'Specs' },
+  { key:'approval',      label:'Approval',        group:'Specs' },
+  { key:'propertyAge',   label:'Property Age',    group:'Specs' },
+  { key:'zone',          label:'Zone',            group:'Location' },
+  { key:'mapLink',       label:'Location Pin',    group:'Location' },
+  { key:'nearbyLandmark',label:'Landmark',        group:'Location' },
+  { key:'connectivity',  label:'Connectivity',    group:'Location' },
+  { key:'highlights',    label:'Highlights',      group:'Marketing' },
+  { key:'amenities',     label:'Amenities',       group:'Marketing' },
+  { key:'photosLink',    label:'Photos Link',     group:'Marketing' },
+  { key:'brochureLink',  label:'Brochure',        group:'Marketing' },
+  { key:'detailsText',   label:'Share Details',   group:'Marketing' },
+  { key:'contactName',   label:'Contact Name',    group:'Contact' },
+  { key:'contactNumber', label:'Contact Number',  group:'Contact' }
+];
+
+function fieldIsMissing(p, f){
+  if(Array.isArray(p.naFields) && p.naFields.includes(f.key)) return false;
+  const v = p[f.key];
+  if(v == null || String(v).trim() === '') return true;
+  // Placeholder defaults count as missing — "Price on Request" on the card
+  // usually means "nobody entered the price", and the agent should know that.
+  return Array.isArray(f.empty) && f.empty.includes(String(v).trim());
+}
+function missingFieldsOf(p){ return MISSING_FIELDS.filter(f => fieldIsMissing(p, f)); }
+
+let missingSearch = '';
+let missingOpenEditor = null; // `${propId}|${fieldKey}` of the expanded editor
+
+function updateMissingCount(){
+  const btn = document.getElementById('missingCountBadge');
+  if(!btn) return;
+  const n = properties.filter(p => missingFieldsOf(p).length).length;
+  btn.textContent = n;
+  btn.style.display = n ? '' : 'none';
+}
+
+function openMissing(){
+  document.getElementById('missingPanel').classList.add('open');
+  renderMissing();
+}
+function closeMissing(){
+  document.getElementById('missingPanel').classList.remove('open');
+  missingOpenEditor = null;
+}
+function onMissingSearch(v){ missingSearch = v.toLowerCase(); renderMissing(); }
+
+function renderMissing(){
+  const body = document.getElementById('missingBody');
+  if(!body || !document.getElementById('missingPanel').classList.contains('open')) return;
+
+  const list = properties
+    .map(p => ({ p, miss: missingFieldsOf(p) }))
+    .filter(x => x.miss.length)
+    .filter(x => !missingSearch ||
+      [x.p.propertyCode, x.p.name, x.p.location].join(' ').toLowerCase().includes(missingSearch))
+    .sort((a,b) => b.miss.length - a.miss.length);
+
+  const total = MISSING_FIELDS.length;
+  document.getElementById('missingCount2').textContent =
+    `${list.length} propert${list.length===1?'y':'ies'} with gaps`;
+
+  if(!list.length){
+    body.innerHTML = '<div class="empty-mini">🎉 Every property has all its agent-facing fields filled (or marked not required).</div>';
+    return;
+  }
+
+  body.innerHTML = list.map(({p, miss}) => {
+    const e = esc(p);
+    const filled = total - miss.length;
+    return `
+    <div class="md-prop">
+      <div class="md-head" onclick="openDetail('${e.id}')" title="Open property">
+        <span class="chg-code">${e.propertyCode||e.id}</span>
+        <span class="md-name">${e.name||'(unnamed)'}</span>
+        <span class="md-loc">${e.location||''}</span>
+        <span class="md-progress"><b>${filled}</b>/${total} filled</span>
+      </div>
+      <div class="md-chips">
+        ${miss.map(f => {
+          const ek = `${p.id}|${f.key}`;
+          const open = missingOpenEditor === ek;
+          return `<div class="md-chip-wrap${open?' open':''}">
+            <button class="md-chip${open?' at':''}" onclick="toggleMissingEditor('${e.id}','${f.key}')">${escapeHtml(f.label)}</button>
+            ${open?`<div class="md-editor">
+              <input class="md-input" id="mdInput" placeholder="${escapeHtml(f.label)}…"
+                onkeydown="if(event.key==='Enter')saveMissingField('${e.id}','${f.key}')">
+              <button class="md-save" onclick="saveMissingField('${e.id}','${f.key}')">✓ Save</button>
+              <button class="md-na" onclick="markFieldNA('${e.id}','${f.key}')" title="This field doesn't apply to this property">Not required</button>
+            </div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const inp = document.getElementById('mdInput');
+  if(inp) inp.focus();
+}
+
+function toggleMissingEditor(propId, fieldKey){
+  const ek = `${propId}|${fieldKey}`;
+  missingOpenEditor = missingOpenEditor === ek ? null : ek;
+  renderMissing();
+}
+
+async function saveMissingField(propId, fieldKey){
+  const inp = document.getElementById('mdInput');
+  const val = inp ? inp.value.trim() : '';
+  if(!val){ if(inp) inp.focus(); return; }
+  const p = properties.find(x => x.id === propId);
+  if(!p) return;
+  const f = MISSING_FIELDS.find(x => x.key === fieldKey);
+  const prev = p[fieldKey] != null ? String(p[fieldKey]) : '';
+  p[fieldKey] = val;
+  p.updatedAt = Date.now();
+  missingOpenEditor = null;
+  renderMissing();
+  updateMissingCount();
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(`✓ ${f ? f.label : fieldKey} saved`);
+    recordChanges(p, 'update', [{ field: fieldKey, label: (f?f.label:fieldKey), from: prev, to: val }]);
+    refreshAfterDataChange();
+  }catch(e){
+    p[fieldKey] = prev;
+    renderMissing();
+    updateMissingCount();
+    showToast('✗ Save failed — check your connection and try again');
+  }
+}
+
+async function markFieldNA(propId, fieldKey){
+  const p = properties.find(x => x.id === propId);
+  if(!p) return;
+  const f = MISSING_FIELDS.find(x => x.key === fieldKey);
+  const prevNA = Array.isArray(p.naFields) ? [...p.naFields] : [];
+  // Stored as an array (not a map) deliberately: Firestore's merge deep-merges
+  // maps, so a removed key would silently come back — arrays replace whole.
+  p.naFields = [...new Set([...prevNA, fieldKey])];
+  missingOpenEditor = null;
+  renderMissing();
+  updateMissingCount();
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(`${f ? f.label : fieldKey} marked not required for this property`);
+    recordChanges(p, 'update', [{ field: fieldKey, label: (f?f.label:fieldKey)+' (not required)', from: '(missing)', to: 'N/A for this property' }]);
+  }catch(e){
+    p.naFields = prevNA;
+    renderMissing();
+    updateMissingCount();
+    showToast('✗ Update failed — check your connection and try again');
+  }
 }
 
 // ═══════ CHANGE LOG VIEW ═══════
