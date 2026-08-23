@@ -220,16 +220,31 @@ the WhatsApp Cloud API.
 │   ├── followup-digest.js         GET (cron, CRON_SECRET) + POST (auth) — WA/email digest
 │   ├── public-config.js           GET — serves non-secret Meta App ID / Config ID to client
 │   ├── data-deletion-callback.js  POST — Meta data-deletion compliance callback (HMAC)
-│   └── data-deletion-status.js    GET — human-facing status page for the above
+│   ├── data-deletion-status.js    GET — human-facing status page for the above
+│   ├── sync-inventory.js          POST — "🔄 Sync from Sheet" button (auth + t_3pinrealty only;
+│   │                              dryRun previews, apply snapshots to syncBackups first)
+│   └── _inventory-shared.js       (not a route) THE property mapping: sheet headers → fields,
+│                                  column-F compound parse, queue fill, planSync/diff — shared by
+│                                  the endpoint AND scripts/sync-inventory.js so they can't drift
 │
 ├── scripts/                       Admin CLI scripts (run locally with a service-account key)
 │   ├── create-tenant.js           Provision a brand-new tenant (business) + owner login
 │   ├── add-team-member.js         Add another login to an EXISTING tenant
 │   ├── migrate-existing-tenant.js One-off: migrate the original single-tenant data → t_3pinrealty
-│   └── connect-whatsapp-manual.js Manually wire a WhatsApp number to a tenant (bypass popup)
+│   ├── connect-whatsapp-manual.js Manually wire a WhatsApp number to a tenant (bypass popup)
+│   ├── sync-inventory.js          Inventory sheet → Firestore (dry-run default; --apply backs up
+│   │                              to backups/ first; --restore <file> undoes; runs on the Mac
+│   │                              after deliver-brochures.js every 30 min)
+│   ├── deliver-brochures.js       Mac-only 30-min scheduler: Queue sheet → Drive upload → email →
+│   │                              sheet Brochure_Link (by header) → property upsert (fill-blanks)
+│   ├── replace-brochure.js        Mac-only: swap a delivered brochure PDF in place
+│   └── deploy-firestore-rules.js  Push firestore.rules live (rules do NOT deploy on git push)
 │
 ├── docs/
-│   └── SOP.md                     Developer-facing operating manual (multi-tenant platform)
+│   ├── SOP.md                     Developer-facing operating manual (multi-tenant platform)
+│   ├── PROPERTY-PIPELINE.md       Property data system: workflow, ownership tiers, external
+│   │                              dependencies, monitoring, troubleshooting, maintenance rules
+│   └── mac-scheduler-handoff.md   Spec used to align the Mac scheduler with the schema (historical)
 │
 └── .vercel/project.json           Vercel project link (projectName: threepin-admin)
 ```
@@ -476,10 +491,46 @@ Readable only by that same uid.
 `{ metaUserId, requestedAt, status }`.
 
 ### `properties` — dashboard listings (`tenantId`-scoped, same model as `leads`)
-Free-form; common fields: `id, tenantId, name, builder, location, type, config, status,
-possession, startingPrice, pricePerSqft, contactName, contactNumber, totalUnits,
-sqftRange, highlights, amenities, nearby, connectivity, vastu, soldOut, …`.
-Accepts an alternate flat schema normalized by `normalizeProperty()`.
+
+> The full field contract, ownership model, sync workflow and troubleshooting
+> live in **[`docs/PROPERTY-PIPELINE.md`](../docs/PROPERTY-PIPELINE.md)** — read
+> that before changing any writer. Summary: every field has exactly one owner
+> (Inventory sheet / dashboard / brochure pipeline / system), the document ID
+> is the sheet's `Property_ID`, and `status` is a strict two-value enum
+> (`Under Construction` | `Ready to Move`).
+
+Canonical fields (sheet-owned unless noted): `id, propertyCode, tenantId, name,
+builder, location, zone, type, saleType, config, status, constructionStage,
+possession, propertyAge, availability, startingPrice, pricePerSqft, sqftRange,
+superBuiltupArea, carpetArea, totalLandArea, uds, totalUnits, totalTowers,
+totalFloors, floorNo, facing, bathrooms, parking, parkingType, furnishing,
+cornerUnit, vastu, powerBackup, approval, highlights, amenities, nearby,
+nearbyLandmark, connectivity, mapLink, contactName, contactNumber, sheetNotes,
+sheetExtras{}` · dashboard-owned: `soldOut, interestLevel, naFields[]` ·
+pipeline-owned: `brochureLink, photosLink, detailsText` · system:
+`createdAt, updatedAt, source` (`inventory-sync` | `pipeline` | `dashboard`).
+`sheetExtras` is a map of any Inventory column with no canonical field —
+rendered automatically, so new sheet columns need no code change. `naFields`
+lists fields marked "not required" in the Missing Data panel.
+`normalizeProperty()` still accepts the legacy alt schema on manual JSON paste,
+canonical fields always winning.
+
+### `properties/{id}/notes` — property notes & events subcollection
+Team-shared notes/events per property (Note / Site Visit / Client Call /
+Price Update / Status Change / Booking), mirroring `leads/{id}/notes`. Entry:
+`{ id, text, kind, eventDate, createdAt, author }`. Loaded on demand when a
+detail panel opens; rules scope it by the parent property's `tenantId`.
+
+### `propertyChanges` — append-only dashboard edit log (`tenantId`-scoped)
+Every dashboard edit as `{ id, propertyId, propertyCode, propertyName,
+propertyLocation, field, label, from, to, kind, at, by, appliedToSheet }` —
+the worklist for manually carrying edits into the Inventory sheet (🕒 Changes
+UI). Deletes carry a full `snapshot` of the property JSON, which is the
+delete-recovery story. Rules allow create/update, **never delete**.
+
+### `syncBackups/{runId}` — server-only pre-sync snapshots
+Written by `api/sync-inventory.js` before any apply; no client access at all.
+The CLI equivalent writes files to `backups/` (gitignored, last 40 kept).
 
 ### `propertiesSeededFlags/{tenantId}` — dashboard per-tenant seed marker
 
@@ -794,9 +845,15 @@ Dashboards/docs: [Firebase Console](https://console.firebase.google.com/project/
 
 ## 13. Troubleshooting
 
+> Property-pipeline symptoms (sync errors, sheet not reflecting, reverting
+> edits, brochure link in the wrong column, undo/restore) have their own
+> matrix in [`docs/PROPERTY-PIPELINE.md`](../docs/PROPERTY-PIPELINE.md) §6.
+
 | Symptom (message) | Likely cause | Fix |
 |---|---|---|
 | CRM board empty; console: `This account has no tenantId claim yet` | The Firebase user has no `tenantId` custom claim | Run `node scripts/create-tenant.js …` (new business) or `add-team-member.js --tenantId t_3pinrealty` (existing); log out/in to refresh the token. |
+| Dashboard: Notes / 🕒 Changes / sync always `permission-denied` while the grid works | `firestore.rules` changed but never deployed (subcollection + `propertyChanges` rules missing live) | `node scripts/deploy-firestore-rules.js`, then verify in Firebase Console → Rules. |
+| 🔄 Sync from Sheet: `Inventory sheet read failed … 403` | Sheet not shared with the service account (domain-wide delegation is NOT enabled — sharing is per-sheet) | Share it with `firebase-adminsdk-fbsvc@pin-realty.iam.gserviceaccount.com` (Viewer). |
 | CRM: `permission-denied` / `Missing or insufficient permissions` in console | Firestore rules reject the read/write (claim missing or wrong tenant), or rules never deployed | Confirm the user's `tenantId` claim; deploy `firestore.rules` via Firebase Console → Firestore → Rules → paste → Publish. |
 | API returns `401 {"error":"Unauthorized"}` | Missing/expired `Authorization: Bearer` token, or user has no `tenantId` | Ensure the client sends `window.crmAuth.getIdToken()`; re-login. For cron, send `Bearer $CRON_SECRET`. |
 | Env var "not loading" in a function | Set only for a different environment, or not redeployed | Set it in Vercel for Production/Preview, then **redeploy** (env changes need a new build). Locally, `vercel env pull` + `vercel dev`. |

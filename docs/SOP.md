@@ -175,7 +175,10 @@ same popup works for any real customer — no code changes needed.
 | `users/{uid}` | Per-user | Maps a Firebase Auth user → their tenant + role |
 | `leads`, `conversations` | Flat, `tenantId`-filtered | CRM leads and WhatsApp conversation history |
 | `dataDeletionRequests/{code}` | Audit log | Records from the Meta data-deletion callback |
-| `properties` | Flat, `tenantId`-filtered | dashboard.html property listings — same tenant model as `leads` |
+| `properties` | Flat, `tenantId`-filtered | dashboard.html property listings — same tenant model as `leads`. Fed by the Inventory-sheet sync; full contract in `PROPERTY-PIPELINE.md` |
+| `properties/{id}/notes` | Subcollection | Team-shared property notes & events (dashboard "Notes & CRM" tab) |
+| `propertyChanges` | Flat, `tenantId`-filtered, **append-only** | Audit log of dashboard edits; the manual reconcile worklist for the Inventory sheet; holds delete snapshots |
+| `syncBackups/{runId}` | Server-only | Pre-sync property snapshots written by `api/sync-inventory.js` |
 | `propertiesSeededFlags/{tenantId}` | Per-tenant | Marks that a tenant's `properties` sample-data seed already ran |
 | `config/*`, `meta/*` | Legacy | Superseded pre-multi-tenant docs, no longer written |
 
@@ -184,6 +187,9 @@ same popup works for any real customer — no code changes needed.
 | Script | Run when |
 |---|---|
 | `scripts/create-tenant.js` | Onboarding a new customer |
+| `scripts/sync-inventory.js` | Inventory sheet → dashboard sync — on the Mac's 30-min schedule after `deliver-brochures.js`, or ad hoc (dry-run by default; see `PROPERTY-PIPELINE.md`) |
+| `scripts/deliver-brochures.js` | Mac-only (launchd, every 30 min) — brochure delivery from the Queue sheet |
+| `scripts/deploy-firestore-rules.js` | After ANY `firestore.rules` change — rules never deploy on git push |
 | `scripts/migrate-existing-tenant.js` | Already run once — do not re-run unless onboarding a *second* pre-existing business the same way |
 | `scripts/migrate-properties-tenant.js` | Already run once, when dashboard.html moved to Firebase Auth + tenant-scoped `properties` — safe to re-run, but shouldn't need to |
 

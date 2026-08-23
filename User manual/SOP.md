@@ -37,6 +37,11 @@ they can do it fast.
 15. [Edit a property](#15-edit-a-property)
 16. [Mark a property Sold Out](#16-mark-a-property-sold-out)
 17. [Delete a property](#17-delete-a-property)
+17a. [Sync from Sheet — pull the latest sheet data now](#17a-sync-from-sheet-pull-the-latest-sheet-data-now)
+17b. [🕒 Changes — carry dashboard edits into the sheet](#17b--changes--carry-dashboard-edits-into-the-sheet)
+17c. [⚠️ Missing Data — fill the gaps before a client call](#17c--missing-data--fill-the-gaps-before-a-client-call)
+17d. [Notes & Events on a property](#17d-notes--events-on-a-property)
+17e. [Reading a property card like an agent](#17e-reading-a-property-card--detail-like-an-agent)
 
 **Media & files**
 18. [Add / replace / remove a photo or file](#18-add--replace--remove-a-photo-or-file)
@@ -210,37 +215,119 @@ lead**. To hand a lead over, just tell your teammate, or add a note:
 
 ## Everyday data — properties (Dashboard)
 
+> **How property data flows (read once, it explains everything):**
+> The **Inventory master sheet is where property details are typed** — by you,
+> or by the brochure automation. The dashboard reads from it (auto every ~30
+> min, or instantly with **🔄 Sync from Sheet**). Edits made **in the dashboard**
+> save to the database only — they do **not** go back to the sheet. Instead
+> every dashboard edit is listed under **🕒 Changes** so you can copy it into
+> the sheet yourself and tick it off. Old properties that were never in the
+> sheet are left alone by the sync.
+
 ### 14. Add a property
 **Who:** Any CRM user (same login as `/crm.html`).
-1. Open `/dashboard.html`, log in with your CRM email/password.
-2. Tap **+ Add Property** (or the **+** button on phone).
-3. Tap **📥 Download JSON Template**, fill it in a notes app, then paste it back
-   into the box. (Minimum: **name** and **location**.)
-4. Tap **✓ Save Property**.
-**Worked?** "✓ Property added"; the card appears for everyone.
-**Undo:** Open it → **🗑️ Delete**.
-**Common mistake:** Broken JSON (missing comma/quote) — the app shows the error;
-fix and paste again.
+
+**The normal way — through the sheet (recommended):**
+1. Add a row in the **Inventory master sheet** with a new **Property_ID**
+   (e.g. `NOL003`) and fill the columns.
+2. Wait for the next auto-sync, or open `/dashboard.html` → **🔄 Sync from
+   Sheet** → check the preview → **✓ Apply to dashboard**.
+**Worked?** The property card appears with all details from the sheet.
+
+**With a brochure (new listing intake):**
+1. Dashboard → **📋 Create Brochure** → fill Property ID & Title, photo folder
+   link, and the full details text → Submit.
+2. Within ~30–60 min the automation builds the PDF, emails it, and the
+   property appears on the dashboard with brochure + photos attached.
+
+**Quick one-off (dashboard only):**
+**+ Add Property** → fill the form (minimum **name** and **location**) →
+**✓ Save Property**. Note: the sheet won't know about this property, and the
+sync will never touch it.
 
 ### 15. Edit a property
 **Who:** Any CRM user (same login as `/crm.html`).
-1. Tap the property card → **✏️ Edit**.
-2. The box is pre-filled with its details — change what you need → **✓ Save
-   Property**.
-**Worked?** "✓ Property updated".
+
+**If the fact changed in the real world** (price, status, possession…):
+best is to edit the **Inventory sheet**, then **🔄 Sync from Sheet** — one
+change, everywhere.
+
+**Quick fix in the dashboard:** card → **✏️ Edit** → change → **✓ Save
+Property**. It saves and shows for everyone, and the edit is recorded under
+**🕒 Changes** — copy it into the sheet when convenient and tick it off.
+**Worked?** "✓ Property updated" — and the edit listed in 🕒 Changes.
 
 ### 16. Mark a property Sold Out
 **Who:** Any CRM user (same login as `/crm.html`).
 1. Open the property → **🏷️ Mark Sold Out** (tap again to unmark).
 **Worked?** A "SOLD OUT" overlay shows; toast confirms. Use **Hide Sold Out**
-filter to hide them.
-**Undo:** Same button → **✓ Marked Sold Out** toggles back to active.
+filter to hide them. Sold Out lives only in the dashboard — the sheet sync
+never changes it.
+**Undo:** Same button toggles back to active.
 
 ### 17. Delete a property
 **Who:** Any CRM user (same login as `/crm.html`).
 1. Open it → **🗑️ Delete** → confirm.
 **Worked?** "Property deleted".
-**Undo:** No undo — you'd re-add it. See [#31](#31-someone-deleted-something-important).
+**Undo:** Yes — open **🕒 Changes**: the delete entry keeps a full copy of the
+property. A developer (or the Firestore console) can restore it from that
+snapshot. If it's in the Inventory sheet, **🔄 Sync from Sheet** simply
+recreates it (dashboard-only extras like notes stay in the deleted doc's
+snapshot).
+
+### 17a. Sync from Sheet (pull the latest sheet data now)
+**Who:** Any CRM user.
+1. Dashboard → **🔄 Sync from Sheet**.
+2. A preview opens first: how many to add, update, already current, and
+   untouched — with each field change shown as old → new. **Nothing is
+   written yet.**
+3. Tap **✓ Apply to dashboard**.
+**Worked?** "✓ Synced N properties"; the grid refreshes by itself.
+**Safe because:** it never writes to the sheet, never touches properties that
+aren't in the sheet, never changes Sold Out / interest levels, and snapshots
+everything it modifies first.
+
+### 17b. 🕒 Changes — carry dashboard edits into the sheet
+**Who:** Whoever maintains the Inventory sheet.
+1. Dashboard → **🕒 Changes**. Default view is **Pending** — every dashboard
+   edit not yet copied into the sheet: property, code, field, old → new, who,
+   when, grouped by day.
+2. Make the same change in the Inventory sheet, then tick the row's checkbox.
+3. **📥 Export CSV** exports exactly what's on screen (filter to Pending first
+   for a to-do list).
+**Note:** entries can't be deleted — the list is the permanent record of edits
+(and of deleted properties).
+
+### 17c. ⚠️ Missing Data — fill the gaps before a client call
+**Who:** Any agent, anytime there's a spare minute.
+1. Dashboard → **⚠️ Missing Data** (the badge shows how many properties have
+   gaps). Properties are listed worst-first, each with chips for its empty
+   fields.
+2. Tap a chip → either **type the value → ✓ Save** (it saves to the dashboard
+   and is also listed in 🕒 Changes for the sheet), or tap **Not required** if
+   that field doesn't apply (a plot has no floor number). Not-required is
+   remembered per property and stops counting as missing.
+**Worked?** The chip disappears; the badge count drops.
+
+### 17d. Notes & Events on a property
+**Who:** Any CRM user. Shared — everyone sees the same notes on every device.
+1. Open a property → **Notes & CRM** tab.
+2. Pick a type — Note, Site Visit, Client Call, Price Update, Status Change,
+   Booking — events take a date; type the text → **Add**.
+**Also here:** the 🔥/🌡️/❄️ client-interest level, shared with the team.
+**Don't confuse with:** the yellow **📝 Notes (Inventory Sheet)** block on the
+Overview tab — that text comes from the sheet's Notes column and is edited in
+the sheet, not here.
+
+### 17e. Reading a property card / detail like an agent
+- **Chips on every card and property:** 📑 Brochure · 🖼️ Photos · 📍 Map Pin ·
+  💬 Details. **Green = you can send it right now; grey = not on file yet.**
+- **📍 Open Map Pin** (top of the property) opens Google Maps.
+- **💬 Shareable Details** on the Overview tab is the exact WhatsApp text —
+  **📋 Open & Copy** and paste into the chat.
+- **🔗 Share Link** copies an internal link to that property
+  (`property.html?id=…`) — for teammates only; it needs a login.
+- The search box also finds text inside notes and details — try "negotiable".
 
 ---
 
