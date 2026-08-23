@@ -281,12 +281,22 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .interest-btn.warm.active{background:var(--amber-bg);border-color:var(--amber);color:var(--amber);}
 .interest-btn.cold.active{background:var(--blue-bg);border-color:var(--blue);color:var(--blue);}
 .note-item{background:var(--gold-lt);border:1px solid #FDE68A;border-radius:10px;padding:12px 15px;margin-bottom:8px;}
-.note-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+.note-meta{display:flex;align-items:center;gap:8px;margin-bottom:5px;}
 .note-time{font-size:11.5px;color:var(--ink3);font-weight:600;}
-.note-delete{background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;line-height:1;}
-.note-text{font-size:14px;color:#78350F;line-height:1.6;}
-.note-add{display:flex;gap:8px;margin-top:10px;}
-.note-input{flex:1;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-family:var(--sans);font-size:14px;outline:none;}
+.note-author{font-size:11px;color:var(--ink3);opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;}
+.note-kind{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:#FEF3C7;color:#92400E;border:1px solid #FDE68A;white-space:nowrap;}
+.note-kind-visit{background:#DBEAFE;color:#1E40AF;border-color:#BFDBFE;}
+.note-kind-call{background:#E0E7FF;color:#3730A3;border-color:#C7D2FE;}
+.note-kind-price{background:#DCFCE7;color:#166534;border-color:#BBF7D0;}
+.note-kind-status{background:#FCE7F3;color:#9D174D;border-color:#FBCFE8;}
+.note-kind-booking{background:#EDE9FE;color:#5B21B6;border-color:#DDD6FE;}
+.note-delete{background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;line-height:1;margin-left:auto;}
+.note-text{font-size:14px;color:#78350F;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;}
+.note-add{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+.note-add-row{display:flex;gap:8px;align-items:center;}
+.note-kind-sel,.note-date{padding:9px 11px;border:1.5px solid var(--border);border-radius:9px;font-family:var(--sans);font-size:13px;outline:none;background:#fff;color:var(--ink);}
+.note-kind-sel:focus,.note-date:focus{border-color:var(--ink);}
+.note-input{flex:1;min-width:0;padding:10px 13px;border:1.5px solid var(--border);border-radius:9px;font-family:var(--sans);font-size:14px;outline:none;}
 .note-input:focus{border-color:var(--ink);}
 .note-btn{padding:10px 18px;border-radius:9px;border:none;background:var(--ink);color:#fff;font-weight:700;font-size:13px;cursor:pointer;}
 .sold-out-overlay{position:absolute;inset:0;z-index:15;pointer-events:none;display:flex;align-items:center;justify-content:center;border-radius:var(--r);}
@@ -382,3 +392,61 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 @media(max-width:420px){
   .dp-hact{padding:6px 9px;font-size:11.5px;}
 }
+
+/* ═══════ CHANGE LOG PANEL ═══════ */
+/* The reconciliation worklist: dashboard edits that still need to be made in
+   the inventory sheet by hand. Shares #dp's full-screen overlay pattern. */
+.changes-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border2);background:var(--white);color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
+.changes-nav-btn:hover{border-color:var(--ink);color:var(--ink);}
+#changesPanel{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
+#changesPanel.open{display:block;animation:fadeSlide .24s ease;}
+.chg-hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 0;position:sticky;top:0;z-index:10;box-shadow:0 2px 14px rgba(0,0,0,.05);}
+.chg-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;padding:14px 0 4px;}
+.chg-title{font-family:var(--serif);font-size:27px;font-weight:600;letter-spacing:-.02em;line-height:1.2;}
+.chg-sub{font-size:13.5px;color:var(--ink3);max-width:64ch;margin-top:5px;line-height:1.55;}
+.chg-count{font-size:12.5px;font-weight:700;color:var(--gold);background:var(--gold-lt);border:1px solid #FDE68A;border-radius:20px;padding:5px 13px;white-space:nowrap;}
+.chg-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0 16px;}
+.chg-search{flex:1;min-width:200px;padding:8px 13px;border:1.5px solid var(--border);border-radius:9px;font-family:var(--sans);font-size:13.5px;outline:none;background:var(--white);color:var(--ink);}
+.chg-search:focus{border-color:var(--ink);}
+.chg-body{padding:22px 28px 60px;max-width:1180px;}
+.chg-day{margin-bottom:26px;}
+.chg-day-hdr{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);padding-bottom:9px;border-bottom:1.5px solid var(--border);margin-bottom:10px;}
+.chg-day-n{font-size:11px;background:var(--bg2);color:var(--ink2);border-radius:20px;padding:1px 8px;letter-spacing:0;}
+.chg-row{display:flex;gap:13px;align-items:flex-start;background:var(--white);border:1px solid var(--border);border-radius:11px;padding:12px 15px;margin-bottom:7px;transition:border-color .15s,opacity .15s;}
+.chg-row:hover{border-color:var(--border2);}
+.chg-row.applied{opacity:.5;background:var(--bg);}
+.chg-row.del{border-left:3px solid var(--red);}
+.chg-row.new{border-left:3px solid var(--green);}
+.chg-tick{display:flex;align-items:center;padding-top:2px;cursor:pointer;}
+.chg-tick input{width:17px;height:17px;cursor:pointer;accent-color:var(--green);}
+.chg-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;}
+.chg-prop{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.chg-code{font-family:'IBM Plex Mono','SF Mono',Menlo,monospace;font-size:11.5px;font-weight:700;letter-spacing:.04em;color:var(--gold);background:var(--gold-lt);border:1px solid #FDE68A;border-radius:5px;padding:1px 6px;}
+.chg-name{font-size:14px;font-weight:650;color:var(--ink);overflow-wrap:anywhere;}
+.chg-delta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px;}
+.chg-field{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);background:var(--bg2);border-radius:4px;padding:1px 7px;white-space:nowrap;}
+.chg-from{color:var(--ink3);text-decoration:line-through;overflow-wrap:anywhere;}
+.chg-arrow{color:var(--ink4);font-weight:700;}
+.chg-to{color:var(--green);font-weight:650;overflow-wrap:anywhere;}
+.chg-row.del .chg-to,.chg-row.del .chg-from{color:var(--red);}
+.chg-meta{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:11px;color:var(--ink3);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.chg-by{max-width:150px;overflow:hidden;text-overflow:ellipsis;opacity:.8;}
+@media(max-width:720px){
+  .chg-hdr{padding:14px 16px 0;}
+  .chg-body{padding:18px 16px 50px;}
+  .chg-row{flex-wrap:wrap;}
+  .chg-meta{flex-direction:row;width:100%;justify-content:flex-start;gap:10px;padding-left:30px;}
+  .changes-nav-btn{display:block;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;text-align:center;margin:0 0 8px;}
+}
+
+/* ═══════ INVENTORY SHEET PASSTHROUGH ═══════ */
+/* Every sheet column with no dedicated field of its own. Long free-text
+   cells (the notes column) keep their line breaks rather than collapsing. */
+.sheet-wrap{border:1px solid var(--border);border-radius:11px;overflow:hidden;background:var(--white);}
+.sheet-row{display:grid;grid-template-columns:minmax(140px,30%) 1fr;gap:0;border-bottom:1px solid var(--bg2);}
+.sheet-row:last-child{border-bottom:none;}
+.sheet-row-long{grid-template-columns:1fr;}
+.sheet-k{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);padding:11px 14px;background:var(--bg);border-right:1px solid var(--bg2);}
+.sheet-row-long .sheet-k{border-right:none;border-bottom:1px solid var(--bg2);}
+.sheet-v{font-size:14px;color:var(--ink2);padding:11px 14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;}
+@media(max-width:600px){.sheet-row{grid-template-columns:1fr;}.sheet-k{border-right:none;border-bottom:1px solid var(--bg2);}}

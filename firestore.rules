@@ -126,6 +126,27 @@ service cloud.firestore {
       allow create: if writingOwnTenantField();
     }
 
+    // Property notes + timeline events, scoped by the PARENT property's
+    // tenant exactly like leads/{leadId}/notes above — rules do not cascade
+    // into subcollections, so this match is required or the dashboard's
+    // Notes & Events tab reads/writes get denied outright.
+    match /properties/{propId}/notes/{noteId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/properties/$(propId)).data.tenantId == tenantId();
+    }
+
+    // Dashboard change log — the audit trail of every property edit, used to
+    // reconcile the dashboard back into the inventory sheet by hand. Entries
+    // are deliberately NOT deletable: the log is the record of what to carry
+    // across to the sheet (and the only copy of a deleted property's data),
+    // so it may be appended to and marked applied, never erased.
+    match /propertyChanges/{changeId} {
+      allow read: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
+      allow create: if writingOwnTenantField();
+      allow delete: if false;
+    }
+
     // Legacy global seed marker from before properties was tenant-scoped.
     // No longer written by the app (superseded by propertiesSeededFlags
     // above) — left readable/writable by no one since nothing should touch

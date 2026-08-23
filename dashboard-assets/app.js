@@ -2,9 +2,13 @@
 let properties = sampleData.map(p=>({...p}));
 let filteredProperties = [...properties];
 let selectedProperties = new Set();
+// Favourites stay per-browser on purpose — they're a personal shortlist,
+// not shared business data. Notes, events and interest level are the
+// opposite: they moved into Firestore so the whole team sees the same
+// history on every device (see the NOTES & EVENTS section below).
 let favorites = JSON.parse(localStorage.getItem('pinFavorites')) || [];
-let notes = JSON.parse(localStorage.getItem('pinNotes')) || {};
-let propertyInterests = JSON.parse(localStorage.getItem('pinInterests')) || {};
+let notes = {};        // property id -> [entry], filled on demand from Firestore
+let notesLoaded = {};  // property id -> true once its subcollection was fetched
 let currentStatus = 'all';
 let currentType = 'all';
 let currentSort = 'newest';
@@ -16,6 +20,23 @@ let currentDetailId = null;
 // ═══════ HELPERS ═══════
 const isReady = p => p.status === 'Ready to Move';
 const splitList = s => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
+// Every property field is free text — typed into the Google Form intake,
+// pasted from a listing, or read out of the inventory sheet — so it can
+// legitimately contain &, <, > or quotes. Interpolating it raw into the
+// card/detail templates silently mangled such values (a name with "&" or a
+// dimension written as 2<3 broke the surrounding markup) and let anything
+// pasted into the intake form inject script. esc() returns a shallow copy
+// with every string escaped, for use in HTML interpolation only — filtering,
+// sorting and saving all keep using the raw property object.
+// A missing key reads as '' rather than the literal text "undefined". The
+// pipeline passes through whatever the source JSON contained, so any field
+// can legitimately be absent on a scheduler-created property — without this,
+// those cards rendered "undefined" in the badge and stat rows.
+function esc(p){
+  const out = {};
+  for(const k in p) out[k] = typeof p[k] === 'string' ? escapeHtml(p[k]) : p[k];
+  return new Proxy(out, { get:(t,k)=> k in t ? t[k] : '' });
+}
 // crude numeric price extraction for sorting (₹, L, Cr, Crores)
 function priceValue(p){
   const s = (p.startingPrice||'').replace(/,/g,'');
@@ -63,9 +84,10 @@ function setupStatusFilters(){
     <button class="fbtn suc" data-s="upcoming" onclick="setStatus('upcoming',this)">⏳ Upcoming</button>`;
 }
 function setupTypeFilters(){
-  const types = [...new Set(properties.map(p => p.type))].sort();
   const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
-  const groups = [...new Set(properties.map(p => norm[p.type]||p.type))].sort();
+  // filter(Boolean) keeps a property with no type from producing an
+  // "undefined" filter button — the pipeline can write one at any time.
+  const groups = [...new Set(properties.map(p => norm[p.type]||p.type).filter(Boolean))].sort();
   let html = `<button class="fbtn at" data-t="all" onclick="setType('all',this)">All Types</button>`;
   groups.forEach(t => html += `<button class="fbtn" data-t="${t}" onclick="setType('${t}',this)">${t}</button>`);
   document.getElementById('typeFilters').innerHTML = html;
@@ -129,7 +151,10 @@ function applyFilters(){
   });
   if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
   else if(currentSort==='price-high') res.sort((a,b)=>priceValue(b)-priceValue(a));
-  else if(currentSort==='name') res.sort((a,b)=>a.name.localeCompare(b.name));
+  // String()-wrapped because the brochure pipeline only guarantees the fields
+  // it computes itself — name comes through from the source JSON and can be
+  // absent, which used to throw here and take the entire grid down with it.
+  else if(currentSort==='name') res.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   else if(currentSort==='newest') res.sort((a,b)=>insertValue(b)-insertValue(a));
   else if(currentSort==='oldest') res.sort((a,b)=>insertValue(a)-insertValue(b));
   filteredProperties = res;
@@ -148,6 +173,7 @@ function renderGrid(){
   noRes.style.display='none';
   rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`;
   grid.innerHTML = filteredProperties.map(p => {
+    const e = esc(p);
     const fav = favorites.includes(p.id);
     const sel = selectedProperties.has(p.id);
     const isSoldOut = !!p.soldOut;
@@ -157,41 +183,41 @@ function renderGrid(){
     <div class="card ${isSoldOut?'sold-out':''}">
       <div class="card-bar ${isReady(p)?'rtm':'uc'}"></div>
       ${isSoldOut?'<div class="sold-out-overlay"><div class="sold-out-overlay-text">SOLD OUT</div></div>':''}
-      <div class="card-body" onclick="openDetail('${p.id}')">
+      <div class="card-body" onclick="openDetail('${e.id}')">
         <div class="card-r1">
           <div>
-            <div class="card-name">${p.propertyCode?`<span class="card-code-inline">${escapeHtml(p.propertyCode)}</span> — `:''}${p.name}</div>
-            <div class="card-loc">📍 ${p.location}</div>
+            <div class="card-name">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
+            <div class="card-loc">📍 ${e.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
-            <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${p.id}',event)" title="Save">★</button>
+            <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${e.id}',event)" title="Save">★</button>
           </div>
         </div>
         <div class="badges">
-          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+p.possession}</span>
-          <span class="badge ${typeBadge}">${p.config}</span>
+          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+e.possession}</span>
+          <span class="badge ${typeBadge}">${e.config}</span>
         </div>
         <div class="price-row">
           <div>
             <div class="price-lbl">Starting Price</div>
-            <div class="price-main">${p.startingPrice}</div>
+            <div class="price-main">${e.startingPrice}</div>
           </div>
-          ${p.pricePerSqft?`<div class="price-psf">${p.pricePerSqft}</div>`:''}
+          ${e.pricePerSqft?`<div class="price-psf">${e.pricePerSqft}</div>`:''}
         </div>
         <div class="card-stats">
-          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${p.sqftRange||'—'}</div></div>
-          <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${p.type}</div></div>
+          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${e.sqftRange||'—'}</div></div>
+          <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${e.type}</div></div>
         </div>
         <div class="card-foot">
-          <div class="card-bldr">${p.builder}</div>
+          <div class="card-bldr">${e.builder}</div>
           <label class="card-cmp" onclick="event.stopPropagation()">
-            <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${p.id}',this)"> Compare
+            <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${e.id}',this)"> Compare
           </label>
         </div>
       </div>
       <div class="card-cta">
-        <a href="tel:${p.contactNumber}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
-        <div class="cta-btn cta-view" onclick="openDetail('${p.id}')">View Details →</div>
+        <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
+        <div class="cta-btn cta-view" onclick="openDetail('${e.id}')">View Details →</div>
       </div>
     </div>`;
   }).join('');
@@ -240,6 +266,10 @@ async function toggleSoldOut(id){
   try{
     await window.dashboardFirebase.saveProperty(p);
     showToast(p.soldOut ? '✓ Property marked as Sold Out' : 'Property unmarked — Back to Active');
+    recordChanges(p, 'update', [{
+      field:'soldOut', label:'Sold Out',
+      from: prev ? 'Yes' : 'No', to: p.soldOut ? 'Yes' : 'No'
+    }]);
   }catch(e){
     p.soldOut = prev;
     document.getElementById('dpSoldOut').classList.toggle('sold-out', p.soldOut);
@@ -263,7 +293,8 @@ function clearSelection(){
 }
 function compareSelected(){
   if(selectedProperties.size<2){showToast('Select at least 2 properties to compare');return;}
-  const comp = Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
+  const comp = Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id)).filter(Boolean).map(esc);
+  if(comp.length<2){showToast('Select at least 2 properties to compare');return;}
   const rows = [
     ['Starting Price','startingPrice'],['Price/SqFt','pricePerSqft'],['Configuration','config'],
     ['Area Range','sqftRange'],['Status','status'],['Possession','possession'],
@@ -299,33 +330,35 @@ function openDetail(id){
   document.getElementById('dpSoldOut').classList.toggle('sold-out',isSoldOut);
   document.getElementById('dpSoldOut').textContent = isSoldOut?'✓ Marked Sold Out':'🏷️ Mark Sold Out';
 
+  const e = esc(p);
   document.getElementById('dpHero').innerHTML = `
     <div style="flex:1;min-width:240px;">
-      <div class="dp-builder-tag">${p.propertyCode?escapeHtml(p.propertyCode)+' · ':''}${p.builder} · ${p.type}</div>
-      <h1 class="dp-title">${p.name}</h1>
-      <div class="dp-loc">📍 ${p.location}</div>
-      <a href="tel:${p.contactNumber}" class="dp-call">📞 Call ${p.contactName} — ${p.contactNumber}</a>
+      <div class="dp-builder-tag">${e.propertyCode?e.propertyCode+' · ':''}${e.builder} · ${e.type}</div>
+      <h1 class="dp-title">${e.name}</h1>
+      <div class="dp-loc">📍 ${e.location}</div>
+      <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="dp-call">📞 Call ${e.contactName} — ${e.contactNumber}</a>
     </div>
     <div class="dp-price-box">
-      <div class="dp-price">${p.startingPrice}</div>
-      ${p.pricePerSqft?`<div class="dp-psf">${p.pricePerSqft}</div>`:''}
+      <div class="dp-price">${e.startingPrice}</div>
+      ${e.pricePerSqft?`<div class="dp-psf">${e.pricePerSqft}</div>`:''}
       <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ Under Construction'}</span></div>
     </div>`;
 
-  const highlights = splitList(p.highlights);
-  const amenities = splitList(p.amenities);
+  const highlights = splitList(p.highlights).map(escapeHtml);
+  const amenities = splitList(p.amenities).map(escapeHtml);
+  const sheetBlock = renderSheetExtras(p);
 
   const overview = `
     <div class="tab-panel active">
       <div class="sec">
         <div class="sec-title">📊 Key Facts</div>
         <div class="stats-g">
-          <div class="stat-b"><div class="stat-b-v">${p.config}</div><div class="stat-b-l">Configuration</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.possession}</div><div class="stat-b-l">Possession</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.totalUnits||'—'}</div><div class="stat-b-l">Total Units</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.totalFloors||'—'}</div><div class="stat-b-l">Floors</div></div>
-          <div class="stat-b"><div class="stat-b-v">${p.vastu||'—'}</div><div class="stat-b-l">Vastu</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.config}</div><div class="stat-b-l">Configuration</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.possession}</div><div class="stat-b-l">Possession</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.totalUnits||'—'}</div><div class="stat-b-l">Total Units</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.totalFloors||'—'}</div><div class="stat-b-l">Floors</div></div>
+          <div class="stat-b"><div class="stat-b-v">${e.vastu||'—'}</div><div class="stat-b-l">Vastu</div></div>
         </div>
       </div>
       ${highlights.length?`<div class="sec"><div class="sec-title">✨ Highlights</div><div class="hi-grid">${highlights.map(h=>`<div class="hi-item">✓ ${h}</div>`).join('')}</div></div>`:''}
@@ -333,20 +366,21 @@ function openDetail(id){
       <div class="sec">
         <div class="sec-title">📍 Location & Connectivity</div>
         <div class="conn-wrap">
-          ${p.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${p.nearby}</div></div>`:''}
-          ${p.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${p.nearbyLandmark}</div></div>`:''}
-          ${p.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${p.connectivity}</div></div>`:''}
+          ${e.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${e.nearby}</div></div>`:''}
+          ${e.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${e.nearbyLandmark}</div></div>`:''}
+          ${e.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${e.connectivity}</div></div>`:''}
           ${!p.nearby&&!p.nearbyLandmark&&!p.connectivity?`<div class="conn-row"><div class="conn-v">Information not available</div></div>`:''}
         </div>
       </div>
+      ${sheetBlock}
       <div class="sec">
         <div class="sec-title">📤 Share & Export</div>
         <div class="export-g">
-          <div class="export-btn" onclick="printProperty('${p.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
-          <div class="export-btn" onclick="exportProperty('${p.id}')"><div class="export-btn-icon">📄</div>JSON</div>
-          <div class="export-btn" onclick="downloadBrochure('${p.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
-          <div class="export-btn" onclick="openPhotos('${p.id}')"><div class="export-btn-icon">🖼️</div>Photos</div>
-          <div class="export-btn" onclick="shareProperty('${p.id}')"><div class="export-btn-icon">🔗</div>Share</div>
+          <div class="export-btn" onclick="printProperty('${e.id}')"><div class="export-btn-icon">🖨️</div>Print</div>
+          <div class="export-btn" onclick="exportProperty('${e.id}')"><div class="export-btn-icon">📄</div>JSON</div>
+          <div class="export-btn" onclick="downloadBrochure('${e.id}')"><div class="export-btn-icon">📑</div>Brochure</div>
+          <div class="export-btn" onclick="openPhotos('${e.id}')"><div class="export-btn-icon">🖼️</div>Photos</div>
+          <div class="export-btn" onclick="shareProperty('${e.id}')"><div class="export-btn-icon">🔗</div>Share</div>
         </div>
       </div>
     </div>`;
@@ -354,25 +388,25 @@ function openDetail(id){
   const specs = `
     <div class="tab-panel">
       <div class="sec"><table class="spec-t">
-        ${p.propertyCode?`<tr><td>Property Code</td><td>${escapeHtml(p.propertyCode)}</td></tr>`:''}
-        <tr><td>Property Name</td><td>${p.name}</td></tr>
-        <tr><td>Builder</td><td>${p.builder}</td></tr>
-        <tr><td>Type</td><td>${p.type}</td></tr>
-        <tr><td>Location</td><td>${p.location}</td></tr>
-        <tr><td>Configuration</td><td>${p.config}</td></tr>
-        <tr><td>Area Range</td><td>${p.sqftRange||'—'}</td></tr>
-        <tr><td>Total Units</td><td>${p.totalUnits||'—'}</td></tr>
-        <tr><td>Land Area</td><td>${p.totalLandArea||'—'}</td></tr>
-        <tr><td>UDS</td><td>${p.uds||'—'}</td></tr>
-        <tr><td>Starting Price</td><td>${p.startingPrice}</td></tr>
-        <tr><td>Price / SqFt</td><td>${p.pricePerSqft||'—'}</td></tr>
-        <tr><td>Status</td><td>${p.status}</td></tr>
-        <tr><td>Possession</td><td>${p.possession}</td></tr>
-        <tr><td>Total Floors</td><td>${p.totalFloors||'—'}</td></tr>
-        <tr><td>Parking</td><td>${p.parking?p.parking+' '+(p.parkingType||''):'—'}</td></tr>
-        <tr><td>Vastu</td><td>${p.vastu||'—'}</td></tr>
-        <tr><td>Availability</td><td>${p.availability||'—'}</td></tr>
-        <tr><td>Contact</td><td>${p.contactName} — ${p.contactNumber}</td></tr>
+        ${e.propertyCode?`<tr><td>Property Code</td><td>${e.propertyCode}</td></tr>`:''}
+        <tr><td>Property Name</td><td>${e.name}</td></tr>
+        <tr><td>Builder</td><td>${e.builder}</td></tr>
+        <tr><td>Type</td><td>${e.type}</td></tr>
+        <tr><td>Location</td><td>${e.location}</td></tr>
+        <tr><td>Configuration</td><td>${e.config}</td></tr>
+        <tr><td>Area Range</td><td>${e.sqftRange||'—'}</td></tr>
+        <tr><td>Total Units</td><td>${e.totalUnits||'—'}</td></tr>
+        <tr><td>Land Area</td><td>${e.totalLandArea||'—'}</td></tr>
+        <tr><td>UDS</td><td>${e.uds||'—'}</td></tr>
+        <tr><td>Starting Price</td><td>${e.startingPrice}</td></tr>
+        <tr><td>Price / SqFt</td><td>${e.pricePerSqft||'—'}</td></tr>
+        <tr><td>Status</td><td>${e.status}</td></tr>
+        <tr><td>Possession</td><td>${e.possession}</td></tr>
+        <tr><td>Total Floors</td><td>${e.totalFloors||'—'}</td></tr>
+        <tr><td>Parking</td><td>${e.parking?e.parking+' '+(e.parkingType||''):'—'}</td></tr>
+        <tr><td>Vastu</td><td>${e.vastu||'—'}</td></tr>
+        <tr><td>Availability</td><td>${e.availability||'—'}</td></tr>
+        <tr><td>Contact</td><td>${e.contactName} — ${e.contactNumber}</td></tr>
       </table></div>
     </div>`;
 
@@ -382,33 +416,44 @@ function openDetail(id){
         <div class="summary-card">
           <div class="sum-lbl">💬 Sales Talking Points</div>
           <div class="sum-txt">
-            <p><strong>${p.name}</strong> by ${p.builder} is a premium ${p.type.toLowerCase()} project in <strong>${p.location}</strong>.</p>
-            <p>Offering ${p.config} configurations${p.sqftRange?` spanning ${p.sqftRange}`:''}, priced from <strong>${p.startingPrice}</strong>.</p>
-            <p><strong>Possession:</strong> ${p.possession} · <strong>Status:</strong> ${p.status}</p>
+            <p><strong>${e.name}</strong> by ${e.builder} is a premium ${escapeHtml(String(p.type||'').toLowerCase())} project in <strong>${e.location}</strong>.</p>
+            <p>Offering ${e.config} configurations${e.sqftRange?` spanning ${e.sqftRange}`:''}, priced from <strong>${e.startingPrice}</strong>.</p>
+            <p><strong>Possession:</strong> ${e.possession} · <strong>Status:</strong> ${e.status}</p>
             ${highlights.length?`<p><strong>Why buy:</strong> ${highlights.join(' · ')}</p>`:''}
-            ${p.connectivity?`<p><strong>Connectivity:</strong> ${p.connectivity}</p>`:''}
-            <p style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);"><strong>📞 Close with:</strong> "Shall I block a site visit for you this weekend? Call ${p.contactName} at ${p.contactNumber}."</p>
+            ${e.connectivity?`<p><strong>Connectivity:</strong> ${e.connectivity}</p>`:''}
+            <p style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);"><strong>📞 Close with:</strong> "Shall I block a site visit for you this weekend? Call ${e.contactName} at ${e.contactNumber}."</p>
           </div>
         </div>
       </div>
     </div>`;
 
+  const lvl = p.interestLevel || '';
   const crm = `
     <div class="tab-panel">
       <div class="sec">
         <div class="sec-title">👤 Client Interest Level</div>
         <div class="interest-buttons">
-          <button class="interest-btn hot ${propertyInterests[id]==='hot'?'active':''}" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
-          <button class="interest-btn warm ${propertyInterests[id]==='warm'?'active':''}" onclick="setInterest('${id}','warm')">🌡️ Warm</button>
-          <button class="interest-btn cold ${propertyInterests[id]==='cold'?'active':''}" onclick="setInterest('${id}','cold')">❄️ Cold</button>
+          <button class="interest-btn hot ${lvl==='hot'?'active':''}" data-lvl="hot" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
+          <button class="interest-btn warm ${lvl==='warm'?'active':''}" data-lvl="warm" onclick="setInterest('${id}','warm')">🌡️ Warm</button>
+          <button class="interest-btn cold ${lvl==='cold'?'active':''}" data-lvl="cold" onclick="setInterest('${id}','cold')">❄️ Cold</button>
         </div>
       </div>
       <div class="sec">
-        <div class="sec-title">📝 Notes & Follow-up</div>
+        <div class="sec-title">📝 Notes & Events</div>
         <div id="notesPanel">${renderNotes(id)}</div>
         <div class="note-add">
-          <input class="note-input" id="noteInput" placeholder="Add a note (e.g. client budget, follow-up date)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
-          <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
+          <div class="note-add-row">
+            <select class="note-kind-sel" id="noteKind" onchange="onNoteKindChange()">
+              ${Object.entries(NOTE_KINDS).map(([k,v])=>`<option value="${k}">${v.icon} ${escapeHtml(v.label)}</option>`).join('')}
+            </select>
+            <span class="note-date-wrap" id="noteDateWrap" style="display:none;">
+              <input type="date" class="note-date" id="noteDate" title="Date this happened / is due">
+            </span>
+          </div>
+          <div class="note-add-row">
+            <input class="note-input" id="noteInput" placeholder="What happened? (e.g. client budget, site visit outcome, revised price)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
+            <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
+          </div>
         </div>
       </div>
     </div>`;
@@ -417,6 +462,41 @@ function openDetail(id){
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  // Notes live in a subcollection, so they arrive after the panel paints —
+  // repaintNotes() checks currentDetailId before writing, so a slow response
+  // for a property the user already navigated away from is discarded.
+  loadPropertyNotes(id);
+}
+
+// Renders every inventory-sheet column that has no dedicated field of its
+// own, straight from the sheetExtras map the sync writes. Because it loops
+// over whatever keys are present rather than a fixed list, a column that
+// only some properties use — or a new one added to the sheet later — shows
+// up here automatically with no code change. Long free-text cells (the notes
+// column especially, which holds many separate details in one cell) keep
+// their line breaks instead of collapsing into a paragraph.
+function renderSheetExtras(p){
+  const extras = p.sheetExtras;
+  if(!extras || typeof extras !== 'object') return '';
+  const keys = Object.keys(extras).filter(k => {
+    const v = extras[k];
+    return v != null && String(v).trim() !== '';
+  }).sort();
+  if(!keys.length) return '';
+  return `
+      <div class="sec">
+        <div class="sec-title">📋 From the Inventory Sheet</div>
+        <div class="sheet-wrap">
+          ${keys.map(k=>{
+            const val = String(extras[k]).trim();
+            const isLong = val.length > 90 || val.includes('\n');
+            return `<div class="sheet-row${isLong?' sheet-row-long':''}">
+              <div class="sheet-k">${escapeHtml(k)}</div>
+              <div class="sheet-v">${escapeHtml(val)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
 }
 
 function showTab(name,btn){
@@ -428,34 +508,174 @@ function showTab(name,btn){
 }
 function closeDetail(){document.getElementById('dp').classList.remove('open');}
 
-// ═══════ NOTES ═══════
+// ═══════ NOTES & EVENTS ═══════
+// Stored in Firestore under properties/{id}/notes so every teammate on the
+// tenant sees the same history — the previous localStorage version was
+// per-browser, invisible to anyone else and lost whenever site data was
+// cleared. Each entry is either a free-text note or a dated event; both
+// share one collection so the panel can show a single chronological log.
+const NOTE_KINDS = {
+  note:    { label:'Note',          icon:'📝' },
+  visit:   { label:'Site Visit',    icon:'🏠' },
+  call:    { label:'Client Call',   icon:'📞' },
+  price:   { label:'Price Update',  icon:'💰' },
+  status:  { label:'Status Change', icon:'🔔' },
+  booking: { label:'Booking',       icon:'🤝' }
+};
+
+// Newest first, using the event date when one was given and the creation
+// timestamp otherwise, so a back-dated site visit files itself correctly.
+function noteSortValue(n){
+  if(n.eventDate){ const t = Date.parse(n.eventDate); if(!isNaN(t)) return t; }
+  return Number(n.createdAt) || 0;
+}
+function sortedNotes(id){
+  return [...(notes[id]||[])].sort((a,b)=>noteSortValue(b)-noteSortValue(a));
+}
+
+function formatNoteWhen(n){
+  if(n.eventDate){
+    const d = new Date(n.eventDate);
+    if(!isNaN(d)) return d.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'});
+  }
+  if(n.createdAt) return new Date(Number(n.createdAt)).toLocaleString();
+  return '';
+}
+
 function renderNotes(id){
-  const list = notes[id]||[];
-  if(!list.length) return `<div class="empty-mini">No notes yet. Add your first observation below.</div>`;
-  return list.map(n=>`
+  if(!notesLoaded[id]) return `<div class="empty-mini">Loading notes…</div>`;
+  const list = sortedNotes(id);
+  if(!list.length) return `<div class="empty-mini">Nothing logged yet. Add the first note or event below.</div>`;
+  return list.map(n=>{
+    const kind = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
+    return `
     <div class="note-item">
-      <div class="note-meta"><span class="note-time">${n.date}</span><button class="note-delete" onclick="deleteNote('${id}',${n.id})">×</button></div>
-      <div class="note-text">${n.text}</div>
-    </div>`).join('');
+      <div class="note-meta">
+        <span class="note-kind note-kind-${escapeHtml(n.kind||'note')}">${kind.icon} ${escapeHtml(kind.label)}</span>
+        <span class="note-time">${escapeHtml(formatNoteWhen(n))}</span>
+        ${n.author?`<span class="note-author">${escapeHtml(n.author)}</span>`:''}
+        <button class="note-delete" onclick="deleteNote('${escapeHtml(id)}','${escapeHtml(n.id)}')" title="Delete">×</button>
+      </div>
+      <div class="note-text">${escapeHtml(n.text)}</div>
+    </div>`;
+  }).join('');
 }
-function addNoteInline(id){
-  const inp=document.getElementById('noteInput');
-  const txt=inp.value.trim();
-  if(!txt) return;
-  if(!notes[id]) notes[id]=[];
-  notes[id].push({text:txt,date:new Date().toLocaleString(),id:Date.now()});
-  localStorage.setItem('pinNotes',JSON.stringify(notes));
-  document.getElementById('notesPanel').innerHTML=renderNotes(id);
-  inp.value=''; showToast('Note added');
+
+function repaintNotes(id){
+  const panel = document.getElementById('notesPanel');
+  // Guard against a slow fetch landing after the user moved to another
+  // property — otherwise it would paint one property's log into another's.
+  if(panel && currentDetailId===id) panel.innerHTML = renderNotes(id);
 }
-function deleteNote(id,noteId){
-  if(notes[id]){notes[id]=notes[id].filter(n=>n.id!==noteId);localStorage.setItem('pinNotes',JSON.stringify(notes));document.getElementById('notesPanel').innerHTML=renderNotes(id);}
+
+// One-time lift of the old per-browser notes into Firestore, so nothing
+// anyone typed before this change is lost. Runs only when the property has
+// no server-side notes at all, so it can never duplicate an existing log.
+async function migrateLegacyNotes(id){
+  let legacy;
+  try{ legacy = JSON.parse(localStorage.getItem('pinNotes')) || {}; }catch(e){ return []; }
+  const list = legacy[id];
+  if(!Array.isArray(list) || !list.length) return [];
+  const migrated = list.map((n,i)=>({
+    id: 'legacy_'+(n.id||Date.now()+i),
+    text: String(n.text||''),
+    kind: 'note',
+    eventDate: '',
+    createdAt: Number(n.id) || Date.now(),
+    author: '(imported)'
+  })).filter(n=>n.text);
+  for(const n of migrated){
+    try{ await window.dashboardFirebase.savePropertyNote(id, n); }catch(e){ return []; }
+  }
+  return migrated;
 }
-function setInterest(id,lvl){
-  propertyInterests[id]= propertyInterests[id]===lvl?null:lvl;
-  localStorage.setItem('pinInterests',JSON.stringify(propertyInterests));
-  document.querySelectorAll('.interest-btn').forEach(b=>b.classList.remove('active'));
-  if(propertyInterests[id]){event.target.classList.add('active');showToast(`Marked as ${lvl} lead`);}
+
+async function loadPropertyNotes(id){
+  if(notesLoaded[id]){ repaintNotes(id); return; }
+  try{
+    let list = await window.dashboardFirebase.getPropertyNotes(id);
+    if(!list.length) list = await migrateLegacyNotes(id);
+    notes[id] = list;
+    notesLoaded[id] = true;
+  }catch(e){
+    notes[id] = [];
+    notesLoaded[id] = true;
+    showToast('✗ Could not load notes — check your connection');
+  }
+  repaintNotes(id);
+}
+
+function onNoteKindChange(){
+  const kind = document.getElementById('noteKind').value;
+  document.getElementById('noteDateWrap').style.display = kind==='note' ? 'none' : '';
+}
+
+async function addNoteInline(id){
+  const inp = document.getElementById('noteInput');
+  const txt = inp.value.trim();
+  if(!txt){ inp.focus(); return; }
+  const kind = document.getElementById('noteKind').value || 'note';
+  const eventDate = kind==='note' ? '' : (document.getElementById('noteDate').value || '');
+  const entry = {
+    id: 'n'+Date.now(),
+    text: txt,
+    kind,
+    eventDate,
+    createdAt: Date.now(),
+    author: (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || ''
+  };
+  if(!notes[id]) notes[id] = [];
+  notes[id].push(entry);
+  inp.value = '';
+  document.getElementById('noteDate').value = '';
+  repaintNotes(id);
+  try{
+    await window.dashboardFirebase.savePropertyNote(id, entry);
+    showToast(kind==='note' ? 'Note added' : `${NOTE_KINDS[kind].label} logged`);
+  }catch(e){
+    notes[id] = notes[id].filter(n=>n.id!==entry.id);
+    repaintNotes(id);
+    showToast('✗ Could not save — check your connection and try again');
+  }
+}
+
+async function deleteNote(id,noteId){
+  const list = notes[id]||[];
+  const removed = list.find(n=>n.id===noteId);
+  if(!removed) return;
+  notes[id] = list.filter(n=>n.id!==noteId);
+  repaintNotes(id);
+  try{
+    await window.dashboardFirebase.deletePropertyNote(id, noteId);
+    showToast('Entry deleted');
+  }catch(e){
+    notes[id].push(removed);
+    repaintNotes(id);
+    showToast('✗ Could not delete — check your connection and try again');
+  }
+}
+
+// Interest level lives on the property document (not localStorage) so it
+// shows up for the whole team and survives a browser reset.
+async function setInterest(id,lvl){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  const prev = p.interestLevel || '';
+  const next = prev===lvl ? '' : lvl;
+  p.interestLevel = next;
+  document.querySelectorAll('.interest-btn').forEach(b=>b.classList.toggle('active', b.dataset.lvl===next));
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(next ? `Marked as ${lvl} lead` : 'Interest level cleared');
+    recordChanges(p, 'update', [{
+      field:'interestLevel', label:'Interest Level',
+      from: prev || '', to: next || ''
+    }]);
+  }catch(e){
+    p.interestLevel = prev;
+    document.querySelectorAll('.interest-btn').forEach(b=>b.classList.toggle('active', b.dataset.lvl===prev));
+    showToast('✗ Update failed — check your connection and try again');
+  }
 }
 
 // ═══════ ADD / EDIT / DELETE PROPERTY ═══════
@@ -604,20 +824,23 @@ function normalizeProperty(data){
   // property actually changes what's displayed instead of being masked
   // by whatever got baked in on the first save.
   const propertyCode = data.propertyCode || data.propertyId || '';
-  const type = data.propertyType || data.type || 'Property';
+  const type = data.type || data.propertyType || 'Property';
   const builder = data.builder || 'Individual Owner';
   let startingPrice;
-  if(data.price) startingPrice = data.price;
+  if(data.startingPrice) startingPrice = data.startingPrice;
+  else if(data.price) startingPrice = data.price;
   else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = data.startingPrice || 'Price on Request';
+  else startingPrice = 'Price on Request';
   let status;
-  if(data.readyToMove !== undefined || data.newOrResale !== undefined){
+  if(data.status){
+    status = data.status;
+  } else if(data.readyToMove !== undefined || data.newOrResale !== undefined){
     status = (data.readyToMove==='Yes' || data.newOrResale==='Resale') ? 'Ready to Move' : 'Under Construction';
   } else {
-    status = data.status || 'Under Construction';
+    status = 'Under Construction';
   }
-  const possession = data.possessionDate || data.possession || 'Contact for details';
-  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
+  const possession = data.possession || data.possessionDate || 'Contact for details';
+  const sqftRange = data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea || '';
   return { ...data, propertyCode, type, builder, startingPrice, status, possession, sqftRange };
 }
 
@@ -712,6 +935,10 @@ async function savePModal(){
 
   const mode = pModalMode;
   let previousEntry = null;
+  // Diff before the array is mutated — afterwards pModalOriginalFull and the
+  // stored entry are the same object and every field compares equal.
+  const diffs = mode==='edit' ? diffPropertyFields(pModalOriginalFull, data) : [];
+  data.updatedAt = Date.now();
   if(mode==='add'){
     data.id = 'p'+Date.now();
     data.createdAt = Date.now();
@@ -729,6 +956,14 @@ async function savePModal(){
   try{
     await window.dashboardFirebase.saveProperty(data);
     showToast(mode==='add' ? '✓ Property added successfully' : '✓ Property updated successfully');
+    if(mode==='edit'){
+      recordChanges(data, 'update', diffs);
+    } else {
+      recordChanges(data, 'create', [{
+        field:'(property)', label:'New property added', from:'',
+        to:`${data.name} — ${data.location}`
+      }]);
+    }
   }catch(e){
     if(mode==='add'){
       properties = properties.filter(p=>p.id!==data.id);
@@ -751,10 +986,80 @@ async function deleteProperty(id){
   try{
     await window.dashboardFirebase.deleteProperty(id);
     showToast('Property deleted');
+    // The full document goes into the change log, which is append-only —
+    // so a delete stays recoverable instead of being gone for good.
+    recordChanges(p, 'delete', [{
+      field:'(property)', label:'Property deleted',
+      from:`${p.name} — ${p.location}`, to:''
+    }], { snapshot: JSON.stringify(p) });
   }catch(e){
     properties.unshift(p);
     refreshAfterDataChange();
     showToast('✗ Delete failed — check your connection and try again');
+  }
+}
+
+// ═══════ CHANGE LOG ═══════
+// The inventory sheet stays the place data is typed, and nothing writes back
+// to it automatically. This log is the bridge: every edit made here is
+// recorded with its before/after value so it can be found later and applied
+// to the sheet by hand, then ticked off. It doubles as the only surviving
+// copy of a deleted property, which is why delete records carry a full
+// snapshot and why nothing in this collection is ever removed.
+let changeLog = [];
+let changeLogLoaded = false;
+let changeFilter = 'pending'; // 'pending' | 'applied' | 'all'
+let changeSearch = '';
+
+function newChangeId(){
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
+
+// Compares only the fields the edit form can actually change, so a value
+// rewritten identically by normalizeProperty never shows up as a false edit.
+function diffPropertyFields(before, after){
+  const out = [];
+  PROPERTY_FIELDS.forEach(f=>{
+    const from = before && before[f.key]!=null ? String(before[f.key]) : '';
+    const to   = after  && after[f.key]!=null  ? String(after[f.key])  : '';
+    if(from !== to) out.push({ field:f.key, label:f.label, from, to });
+  });
+  return out;
+}
+
+function changeStamp(p){
+  return {
+    propertyId: p.id || '',
+    propertyCode: p.propertyCode || '',
+    propertyName: p.name || '',
+    propertyLocation: p.location || '',
+    propertyType: p.type || ''
+  };
+}
+
+// Fire-and-forget on purpose: a failure to write the audit trail must never
+// roll back or block the property edit the user actually asked for. It warns
+// instead, so a silent gap in the log can't go unnoticed.
+async function recordChanges(property, kind, diffs, extra){
+  if(!diffs.length) return;
+  const at = Date.now();
+  const by = (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || '';
+  const stamp = changeStamp(property);
+  const entries = diffs.map(d => ({
+    id: newChangeId(),
+    ...stamp, ...d,
+    kind, at, by,
+    appliedToSheet: false,
+    ...(extra||{})
+  }));
+  changeLog = entries.concat(changeLog);
+  renderChangesIfOpen();
+  try{
+    await window.dashboardFirebase.saveChanges(entries);
+  }catch(e){
+    changeLog = changeLog.filter(c => !entries.some(x => x.id === c.id));
+    renderChangesIfOpen();
+    showToast('⚠ Saved, but the change log entry failed to record');
   }
 }
 
@@ -767,10 +1072,198 @@ function refreshAfterDataChange(){
 window.applyPropertiesSnapshot = function(list){
   properties = list;
   refreshAfterDataChange();
+  migrateLegacyInterests();
 };
 
+// One-time lift of interest levels out of the old per-browser store and onto
+// the property documents. Never overwrites a level already set on the server,
+// and never clears localStorage — the original stays put as a fallback copy
+// in case anything about the upload goes wrong.
+let interestMigrationRan = false;
+async function migrateLegacyInterests(){
+  if(interestMigrationRan || !properties.length) return;
+  interestMigrationRan = true;
+  let legacy;
+  try{ legacy = JSON.parse(localStorage.getItem('pinInterests')) || {}; }catch(e){ return; }
+  let moved = 0;
+  for(const [id,lvl] of Object.entries(legacy)){
+    if(!lvl) continue;
+    const p = properties.find(x=>x.id===id);
+    if(!p || p.interestLevel) continue;
+    p.interestLevel = lvl;
+    try{ await window.dashboardFirebase.saveProperty(p); moved++; }
+    catch(e){ p.interestLevel = ''; interestMigrationRan = false; return; }
+  }
+  if(moved) refreshAfterDataChange();
+}
+
+// ═══════ CHANGE LOG VIEW ═══════
+function dayKey(ms){
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function dayLabel(key){
+  const [y,m,d] = key.split('-').map(Number);
+  const date = new Date(y, m-1, d);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((today - date) / 86400000);
+  const long = date.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if(diff===0) return `Today · ${long}`;
+  if(diff===1) return `Yesterday · ${long}`;
+  return long;
+}
+
+async function openChanges(){
+  document.getElementById('changesPanel').classList.add('open');
+  if(!changeLogLoaded){
+    document.getElementById('changesBody').innerHTML = '<div class="empty-mini">Loading change history…</div>';
+    try{
+      changeLog = await window.dashboardFirebase.getChanges();
+      changeLogLoaded = true;
+    }catch(e){
+      document.getElementById('changesBody').innerHTML =
+        '<div class="empty-mini">Could not load the change history — check your connection and reopen.</div>';
+      return;
+    }
+  }
+  renderChanges();
+}
+function closeChanges(){
+  document.getElementById('changesPanel').classList.remove('open');
+}
+function renderChangesIfOpen(){
+  const panel = document.getElementById('changesPanel');
+  if(panel && panel.classList.contains('open') && changeLogLoaded) renderChanges();
+}
+function setChangeFilter(f, btn){
+  changeFilter = f;
+  document.querySelectorAll('#changesFilters .fbtn').forEach(b=>b.classList.remove('at'));
+  btn.classList.add('at');
+  renderChanges();
+}
+function onChangeSearch(v){
+  changeSearch = v.toLowerCase();
+  renderChanges();
+}
+
+function visibleChanges(){
+  return changeLog.filter(c=>{
+    if(changeFilter==='pending' && c.appliedToSheet) return false;
+    if(changeFilter==='applied' && !c.appliedToSheet) return false;
+    if(changeSearch){
+      const hay = [c.propertyCode,c.propertyName,c.propertyLocation,c.label,c.from,c.to,c.by]
+        .join(' ').toLowerCase();
+      if(!hay.includes(changeSearch)) return false;
+    }
+    return true;
+  }).sort((a,b)=>(b.at||0)-(a.at||0));
+}
+
+function renderChanges(){
+  const body = document.getElementById('changesBody');
+  const list = visibleChanges();
+  const pending = changeLog.filter(c=>!c.appliedToSheet).length;
+  document.getElementById('changesCount').textContent =
+    `${pending} pending · ${changeLog.length} total`;
+
+  if(!list.length){
+    body.innerHTML = `<div class="empty-mini">${
+      changeLog.length ? 'No changes match this filter.'
+                       : 'No changes recorded yet. Every edit you make here will be listed for you to carry across to the sheet.'
+    }</div>`;
+    return;
+  }
+
+  // Grouped by day, newest first — this is the view used to work through
+  // the sheet, so the date heading is the unit of work, not decoration.
+  const groups = [];
+  const byDay = {};
+  list.forEach(c=>{
+    const k = dayKey(c.at||0);
+    if(!byDay[k]){ byDay[k]=[]; groups.push(k); }
+    byDay[k].push(c);
+  });
+
+  body.innerHTML = groups.map(k=>`
+    <div class="chg-day">
+      <div class="chg-day-hdr">${escapeHtml(dayLabel(k))}<span class="chg-day-n">${byDay[k].length}</span></div>
+      ${byDay[k].map(c=>renderChangeRow(c)).join('')}
+    </div>`).join('');
+}
+
+function renderChangeRow(c){
+  const time = c.at ? new Date(c.at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '';
+  const code = c.propertyCode || c.propertyId || '';
+  const line = [c.propertyName, c.propertyLocation].filter(Boolean).join(' · ');
+  const kindCls = c.kind==='delete' ? 'del' : c.kind==='create' ? 'new' : '';
+  return `
+    <div class="chg-row ${c.appliedToSheet?'applied':''} ${kindCls}">
+      <label class="chg-tick" title="${c.appliedToSheet?'Applied to the sheet':'Mark once you have updated the sheet'}">
+        <input type="checkbox" ${c.appliedToSheet?'checked':''} onchange="toggleChangeApplied('${escapeHtml(c.id)}',this)">
+      </label>
+      <div class="chg-main">
+        <div class="chg-prop">
+          ${code?`<span class="chg-code">${escapeHtml(code)}</span>`:''}
+          <span class="chg-name">${escapeHtml(line||'(unnamed property)')}</span>
+        </div>
+        <div class="chg-delta">
+          <span class="chg-field">${escapeHtml(c.label||c.field||'')}</span>
+          <span class="chg-from">${escapeHtml(c.from||'—')}</span>
+          <span class="chg-arrow">→</span>
+          <span class="chg-to">${escapeHtml(c.to||'—')}</span>
+        </div>
+      </div>
+      <div class="chg-meta">
+        <span>${escapeHtml(time)}</span>
+        ${c.by?`<span class="chg-by">${escapeHtml(c.by)}</span>`:''}
+      </div>
+    </div>`;
+}
+
+async function toggleChangeApplied(changeId, cb){
+  const c = changeLog.find(x=>x.id===changeId);
+  if(!c) return;
+  const prev = !!c.appliedToSheet;
+  c.appliedToSheet = cb.checked;
+  renderChanges();
+  try{
+    await window.dashboardFirebase.setChangeApplied(changeId, c.appliedToSheet);
+  }catch(e){
+    c.appliedToSheet = prev;
+    renderChanges();
+    showToast('✗ Could not update — check your connection and try again');
+  }
+}
+
+// Exports what is currently on screen, so filtering to "pending" and
+// exporting gives exactly the list of edits still to be made in the sheet.
+function exportChangesCsv(){
+  const list = visibleChanges();
+  if(!list.length){ showToast('Nothing to export in this view'); return; }
+  const headers = ['Date','Time','Property Code','Property','Location','Field','From','To','Changed By','Applied To Sheet'];
+  const rows = list.map(c=>{
+    const d = new Date(c.at||0);
+    return [
+      d.toLocaleDateString(), d.toLocaleTimeString(),
+      c.propertyCode||c.propertyId||'', c.propertyName||'', c.propertyLocation||'',
+      c.label||c.field||'', c.from||'', c.to||'', c.by||'',
+      c.appliedToSheet?'Yes':'No'
+    ];
+  });
+  const csv = [headers,...rows]
+    .map(r=>r.map(v=>`"${String(v==null?'':v).replace(/"/g,'""')}"`).join(','))
+    .join('\n');
+  downloadFile('﻿'+csv, `3pin_changes_${Date.now()}.csv`, 'text/csv;charset=utf-8');
+  showToast(`${list.length} change${list.length===1?'':'s'} exported`);
+}
+
 // ═══════ EXPORT / SHARE ═══════
-function exportProperty(id){const p=properties.find(x=>x.id===id);downloadFile(JSON.stringify(p,null,2),`${p.name.replace(/\s+/g,'_')}.json`,'application/json');showToast('JSON downloaded');}
+function exportProperty(id){
+  const p=properties.find(x=>x.id===id);
+  if(!p){showToast('Property not found');return;}
+  downloadFile(JSON.stringify(p,null,2),`${String(p.name||'property').replace(/[^\w\-]+/g,'_')}.json`,'application/json');
+  showToast('JSON downloaded');
+}
 function exportSelected(format){
   const sel=Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
   if(!sel.length){showToast('No properties selected');return;}
@@ -788,11 +1281,12 @@ function downloadFile(content,filename,type){
 }
 function openPhotos(id){
   const p=properties.find(x=>x.id===id);
-  if(!p.photosLink){showToast('No photos link saved for this property yet');return;}
+  if(!p || !p.photosLink){showToast('No photos link saved for this property yet');return;}
   window.open(p.photosLink,'_blank','noopener');
 }
 function shareProperty(id){
   const p=properties.find(x=>x.id===id);
+  if(!p){showToast('Property not found');return;}
   const text=(p.detailsText&&p.detailsText.trim())
     ? p.detailsText.trim()
     : `${p.name}, ${p.location} — ${p.startingPrice} (${p.config}). Contact ${p.contactName}: ${p.contactNumber}`;
@@ -813,7 +1307,9 @@ document.getElementById('shareDetailsModal')?.addEventListener('click',e=>{
   if(e.target.id==='shareDetailsModal') closeShareDetailsModal();
 });
 function printProperty(id){
-  const p=properties.find(x=>x.id===id);const w=window.open('','_blank');
+  const raw=properties.find(x=>x.id===id);
+  if(!raw){showToast('Property not found');return;}
+  const p=esc(raw);const w=window.open('','_blank');
   w.document.write(`<html><head><title>${p.name}</title><style>body{font-family:Arial;padding:30px;color:#1c1917}h1{color:#B45309}table{width:100%;border-collapse:collapse;margin-top:16px}td{padding:8px 10px;border-bottom:1px solid #ddd}td:first-child{font-weight:bold;width:32%;color:#78716C}</style></head><body>
     <h1>${p.name}</h1><p><strong>${p.builder}</strong> · ${p.location}</p>
     <table>
@@ -829,6 +1325,7 @@ function printProperty(id){
 }
 function downloadBrochure(id){
   const p=properties.find(x=>x.id===id);
+  if(!p){showToast('Property not found');return;}
   const m=p.brochureLink&&p.brochureLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if(m){
     const a=document.createElement('a');
