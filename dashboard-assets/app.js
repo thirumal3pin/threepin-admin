@@ -2,9 +2,13 @@
 let properties = sampleData.map(p=>({...p}));
 let filteredProperties = [...properties];
 let selectedProperties = new Set();
+// Favourites stay per-browser on purpose — they're a personal shortlist,
+// not shared business data. Notes, events and interest level are the
+// opposite: they moved into Firestore so the whole team sees the same
+// history on every device (see the NOTES & EVENTS section below).
 let favorites = JSON.parse(localStorage.getItem('pinFavorites')) || [];
-let notes = JSON.parse(localStorage.getItem('pinNotes')) || {};
-let propertyInterests = JSON.parse(localStorage.getItem('pinInterests')) || {};
+let notes = {};        // property id -> [entry], filled on demand from Firestore
+let notesLoaded = {};  // property id -> true once its subcollection was fetched
 let currentStatus = 'all';
 let currentType = 'all';
 let currentSort = 'newest';
@@ -15,6 +19,10 @@ let currentDetailId = null;
 
 // ═══════ HELPERS ═══════
 const isReady = p => p.status === 'Ready to Move';
+const splitList = s => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
+// esc()/escapeHtml() live in property-view.js (loaded before this file) —
+// property.html needs them too and doesn't load this file at all, so they
+// can't be defined here.
 // crude numeric price extraction for sorting (₹, L, Cr, Crores)
 function priceValue(p){
   const s = (p.startingPrice||'').replace(/,/g,'');
@@ -62,9 +70,10 @@ function setupStatusFilters(){
     <button class="fbtn suc" data-s="upcoming" onclick="setStatus('upcoming',this)">⏳ Upcoming</button>`;
 }
 function setupTypeFilters(){
-  const types = [...new Set(properties.map(p => p.type))].sort();
   const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
-  const groups = [...new Set(properties.map(p => norm[p.type]||p.type))].sort();
+  // filter(Boolean) keeps a property with no type from producing an
+  // "undefined" filter button — the pipeline can write one at any time.
+  const groups = [...new Set(properties.map(p => norm[p.type]||p.type).filter(Boolean))].sort();
   let html = `<button class="fbtn at" data-t="all" onclick="setType('all',this)">All Types</button>`;
   groups.forEach(t => html += `<button class="fbtn" data-t="${t}" onclick="setType('${t}',this)">${t}</button>`);
   document.getElementById('typeFilters').innerHTML = html;
@@ -121,14 +130,19 @@ function applyFilters(){
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
     if(currentSearch){
-      const hay = [p.propertyCode,p.name,p.location,p.builder,p.config,p.amenities,p.highlights,p.type].join(' ').toLowerCase();
+      // sheetNotes/detailsText/zone included so free-text facts ("negotiable",
+      // a seller situation, a zone name) are findable, not just structured ones.
+      const hay = [p.propertyCode,p.name,p.location,p.zone,p.builder,p.config,p.amenities,p.highlights,p.type,p.sheetNotes,p.detailsText,p.furnishing,p.facing].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
   });
   if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
   else if(currentSort==='price-high') res.sort((a,b)=>priceValue(b)-priceValue(a));
-  else if(currentSort==='name') res.sort((a,b)=>a.name.localeCompare(b.name));
+  // String()-wrapped because the brochure pipeline only guarantees the fields
+  // it computes itself — name comes through from the source JSON and can be
+  // absent, which used to throw here and take the entire grid down with it.
+  else if(currentSort==='name') res.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   else if(currentSort==='newest') res.sort((a,b)=>insertValue(b)-insertValue(a));
   else if(currentSort==='oldest') res.sort((a,b)=>insertValue(a)-insertValue(b));
   filteredProperties = res;
@@ -147,6 +161,7 @@ function renderGrid(){
   noRes.style.display='none';
   rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`;
   grid.innerHTML = filteredProperties.map(p => {
+    const e = esc(p);
     const fav = favorites.includes(p.id);
     const sel = selectedProperties.has(p.id);
     const isSoldOut = !!p.soldOut;
@@ -156,42 +171,43 @@ function renderGrid(){
     <div class="card ${isSoldOut?'sold-out':''}">
       <div class="card-bar ${isReady(p)?'rtm':'uc'}"></div>
       ${isSoldOut?'<div class="sold-out-overlay"><div class="sold-out-overlay-text">SOLD OUT</div></div>':''}
-      <div class="card-body" onclick="openDetail('${p.id}')">
+      <div class="card-body" onclick="openDetail('${e.id}')">
         <div class="card-r1">
           <div>
-            <div class="card-name">${p.propertyCode?`<span class="card-code-inline">${escapeHtml(p.propertyCode)}</span> — `:''}${p.name}</div>
-            <div class="card-loc">📍 ${p.location}</div>
+            <div class="card-name">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
+            <div class="card-loc">📍 ${e.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
-            <button class="card-action-btn card-share" onclick="sharePropertyLink('${p.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
-            <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${p.id}',event)" title="Save">★</button>
+            <button class="card-action-btn card-share" onclick="sharePropertyLink('${e.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
+            <button class="card-action-btn card-star ${fav?'active':''}" onclick="toggleFavorite('${e.id}',event)" title="Save">★</button>
           </div>
         </div>
         <div class="badges">
-          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+p.possession}</span>
-          <span class="badge ${typeBadge}">${p.config}</span>
+          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+e.possession}</span>
+          <span class="badge ${typeBadge}">${e.config}</span>
         </div>
         <div class="price-row">
           <div>
             <div class="price-lbl">Starting Price</div>
-            <div class="price-main">${p.startingPrice}</div>
+            <div class="price-main">${e.startingPrice}</div>
           </div>
-          ${p.pricePerSqft?`<div class="price-psf">${p.pricePerSqft}</div>`:''}
+          ${e.pricePerSqft?`<div class="price-psf">${e.pricePerSqft}</div>`:''}
         </div>
         <div class="card-stats">
-          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${p.sqftRange||'—'}</div></div>
-          <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${p.type}</div></div>
+          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${e.sqftRange||'—'}</div></div>
+          <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${e.type}</div></div>
         </div>
         <div class="card-foot">
-          <div class="card-bldr">${p.builder}</div>
+          <div class="card-bldr">${e.builder}</div>
+          <div class="card-res" title="Brochure · Photos · Map Pin · Details">${PinPropertyView.resourceChips(p, true)}</div>
           <label class="card-cmp" onclick="event.stopPropagation()">
-            <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${p.id}',this)"> Compare
+            <input type="checkbox" ${sel?'checked':''} onchange="toggleSelection('${e.id}',this)"> Compare
           </label>
         </div>
       </div>
       <div class="card-cta">
-        <a href="tel:${p.contactNumber}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
-        <div class="cta-btn cta-view" onclick="openDetail('${p.id}')">View Details →</div>
+        <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
+        <div class="cta-btn cta-view" onclick="openDetail('${e.id}')">View Details →</div>
       </div>
     </div>`;
   }).join('');
@@ -240,6 +256,10 @@ async function toggleSoldOut(id){
   try{
     await window.dashboardFirebase.saveProperty(p);
     showToast(p.soldOut ? '✓ Property marked as Sold Out' : 'Property unmarked — Back to Active');
+    recordChanges(p, 'update', [{
+      field:'soldOut', label:'Sold Out',
+      from: prev ? 'Yes' : 'No', to: p.soldOut ? 'Yes' : 'No'
+    }]);
   }catch(e){
     p.soldOut = prev;
     document.getElementById('dpSoldOut').classList.toggle('sold-out', p.soldOut);
@@ -263,7 +283,8 @@ function clearSelection(){
 }
 function compareSelected(){
   if(selectedProperties.size<2){showToast('Select at least 2 properties to compare');return;}
-  const comp = Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
+  const comp = Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id)).filter(Boolean).map(esc);
+  if(comp.length<2){showToast('Select at least 2 properties to compare');return;}
   const rows = [
     ['Starting Price','startingPrice'],['Price/SqFt','pricePerSqft'],['Configuration','config'],
     ['Area Range','sqftRange'],['Status','status'],['Possession','possession'],
@@ -315,22 +336,33 @@ function renderDetail(id){
   const specs = PinPropertyView.specsTab(p);
   const pitch = PinPropertyView.pitchTab(p);
 
+  const lvl = p.interestLevel || '';
   const crm = `
     <div class="tab-panel">
       <div class="sec">
         <div class="sec-title">👤 Client Interest Level</div>
         <div class="interest-buttons">
-          <button class="interest-btn hot ${propertyInterests[id]==='hot'?'active':''}" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
-          <button class="interest-btn warm ${propertyInterests[id]==='warm'?'active':''}" onclick="setInterest('${id}','warm')">🌡️ Warm</button>
-          <button class="interest-btn cold ${propertyInterests[id]==='cold'?'active':''}" onclick="setInterest('${id}','cold')">❄️ Cold</button>
+          <button class="interest-btn hot ${lvl==='hot'?'active':''}" data-lvl="hot" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
+          <button class="interest-btn warm ${lvl==='warm'?'active':''}" data-lvl="warm" onclick="setInterest('${id}','warm')">🌡️ Warm</button>
+          <button class="interest-btn cold ${lvl==='cold'?'active':''}" data-lvl="cold" onclick="setInterest('${id}','cold')">❄️ Cold</button>
         </div>
       </div>
       <div class="sec">
-        <div class="sec-title">📝 Notes & Follow-up</div>
+        <div class="sec-title">📝 Notes & Events</div>
         <div id="notesPanel">${renderNotes(id)}</div>
         <div class="note-add">
-          <input class="note-input" id="noteInput" placeholder="Add a note (e.g. client budget, follow-up date)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
-          <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
+          <div class="note-add-row">
+            <select class="note-kind-sel" id="noteKind" onchange="onNoteKindChange()">
+              ${Object.entries(NOTE_KINDS).map(([k,v])=>`<option value="${k}">${v.icon} ${escapeHtml(v.label)}</option>`).join('')}
+            </select>
+            <span class="note-date-wrap" id="noteDateWrap" style="display:none;">
+              <input type="date" class="note-date" id="noteDate" title="Date this happened / is due">
+            </span>
+          </div>
+          <div class="note-add-row">
+            <input class="note-input" id="noteInput" placeholder="What happened? (e.g. client budget, site visit outcome, revised price)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
+            <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
+          </div>
         </div>
       </div>
     </div>`;
@@ -339,6 +371,10 @@ function renderDetail(id){
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  // Notes live in a subcollection, so they arrive after the panel paints —
+  // repaintNotes() checks currentDetailId before writing, so a slow response
+  // for a property the user already navigated away from is discarded.
+  loadPropertyNotes(id);
   return true;
 }
 
@@ -382,34 +418,174 @@ window.addEventListener('popstate', e => {
   }
 });
 
-// ═══════ NOTES ═══════
+// ═══════ NOTES & EVENTS ═══════
+// Stored in Firestore under properties/{id}/notes so every teammate on the
+// tenant sees the same history — the previous localStorage version was
+// per-browser, invisible to anyone else and lost whenever site data was
+// cleared. Each entry is either a free-text note or a dated event; both
+// share one collection so the panel can show a single chronological log.
+const NOTE_KINDS = {
+  note:    { label:'Note',          icon:'📝' },
+  visit:   { label:'Site Visit',    icon:'🏠' },
+  call:    { label:'Client Call',   icon:'📞' },
+  price:   { label:'Price Update',  icon:'💰' },
+  status:  { label:'Status Change', icon:'🔔' },
+  booking: { label:'Booking',       icon:'🤝' }
+};
+
+// Newest first, using the event date when one was given and the creation
+// timestamp otherwise, so a back-dated site visit files itself correctly.
+function noteSortValue(n){
+  if(n.eventDate){ const t = Date.parse(n.eventDate); if(!isNaN(t)) return t; }
+  return Number(n.createdAt) || 0;
+}
+function sortedNotes(id){
+  return [...(notes[id]||[])].sort((a,b)=>noteSortValue(b)-noteSortValue(a));
+}
+
+function formatNoteWhen(n){
+  if(n.eventDate){
+    const d = new Date(n.eventDate);
+    if(!isNaN(d)) return d.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'});
+  }
+  if(n.createdAt) return new Date(Number(n.createdAt)).toLocaleString();
+  return '';
+}
+
 function renderNotes(id){
-  const list = notes[id]||[];
-  if(!list.length) return `<div class="empty-mini">No notes yet. Add your first observation below.</div>`;
-  return list.map(n=>`
+  if(!notesLoaded[id]) return `<div class="empty-mini">Loading notes…</div>`;
+  const list = sortedNotes(id);
+  if(!list.length) return `<div class="empty-mini">Nothing logged yet. Add the first note or event below.</div>`;
+  return list.map(n=>{
+    const kind = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
+    return `
     <div class="note-item">
-      <div class="note-meta"><span class="note-time">${n.date}</span><button class="note-delete" onclick="deleteNote('${id}',${n.id})">×</button></div>
-      <div class="note-text">${n.text}</div>
-    </div>`).join('');
+      <div class="note-meta">
+        <span class="note-kind note-kind-${escapeHtml(n.kind||'note')}">${kind.icon} ${escapeHtml(kind.label)}</span>
+        <span class="note-time">${escapeHtml(formatNoteWhen(n))}</span>
+        ${n.author?`<span class="note-author">${escapeHtml(n.author)}</span>`:''}
+        <button class="note-delete" onclick="deleteNote('${escapeHtml(id)}','${escapeHtml(n.id)}')" title="Delete">×</button>
+      </div>
+      <div class="note-text">${escapeHtml(n.text)}</div>
+    </div>`;
+  }).join('');
 }
-function addNoteInline(id){
-  const inp=document.getElementById('noteInput');
-  const txt=inp.value.trim();
-  if(!txt) return;
-  if(!notes[id]) notes[id]=[];
-  notes[id].push({text:txt,date:new Date().toLocaleString(),id:Date.now()});
-  localStorage.setItem('pinNotes',JSON.stringify(notes));
-  document.getElementById('notesPanel').innerHTML=renderNotes(id);
-  inp.value=''; showToast('Note added');
+
+function repaintNotes(id){
+  const panel = document.getElementById('notesPanel');
+  // Guard against a slow fetch landing after the user moved to another
+  // property — otherwise it would paint one property's log into another's.
+  if(panel && currentDetailId===id) panel.innerHTML = renderNotes(id);
 }
-function deleteNote(id,noteId){
-  if(notes[id]){notes[id]=notes[id].filter(n=>n.id!==noteId);localStorage.setItem('pinNotes',JSON.stringify(notes));document.getElementById('notesPanel').innerHTML=renderNotes(id);}
+
+// One-time lift of the old per-browser notes into Firestore, so nothing
+// anyone typed before this change is lost. Runs only when the property has
+// no server-side notes at all, so it can never duplicate an existing log.
+async function migrateLegacyNotes(id){
+  let legacy;
+  try{ legacy = JSON.parse(localStorage.getItem('pinNotes')) || {}; }catch(e){ return []; }
+  const list = legacy[id];
+  if(!Array.isArray(list) || !list.length) return [];
+  const migrated = list.map((n,i)=>({
+    id: 'legacy_'+(n.id||Date.now()+i),
+    text: String(n.text||''),
+    kind: 'note',
+    eventDate: '',
+    createdAt: Number(n.id) || Date.now(),
+    author: '(imported)'
+  })).filter(n=>n.text);
+  for(const n of migrated){
+    try{ await window.dashboardFirebase.savePropertyNote(id, n); }catch(e){ return []; }
+  }
+  return migrated;
 }
-function setInterest(id,lvl){
-  propertyInterests[id]= propertyInterests[id]===lvl?null:lvl;
-  localStorage.setItem('pinInterests',JSON.stringify(propertyInterests));
-  document.querySelectorAll('.interest-btn').forEach(b=>b.classList.remove('active'));
-  if(propertyInterests[id]){event.target.classList.add('active');showToast(`Marked as ${lvl} lead`);}
+
+async function loadPropertyNotes(id){
+  if(notesLoaded[id]){ repaintNotes(id); return; }
+  try{
+    let list = await window.dashboardFirebase.getPropertyNotes(id);
+    if(!list.length) list = await migrateLegacyNotes(id);
+    notes[id] = list;
+    notesLoaded[id] = true;
+  }catch(e){
+    notes[id] = [];
+    notesLoaded[id] = true;
+    showToast('✗ Could not load notes — check your connection');
+  }
+  repaintNotes(id);
+}
+
+function onNoteKindChange(){
+  const kind = document.getElementById('noteKind').value;
+  document.getElementById('noteDateWrap').style.display = kind==='note' ? 'none' : '';
+}
+
+async function addNoteInline(id){
+  const inp = document.getElementById('noteInput');
+  const txt = inp.value.trim();
+  if(!txt){ inp.focus(); return; }
+  const kind = document.getElementById('noteKind').value || 'note';
+  const eventDate = kind==='note' ? '' : (document.getElementById('noteDate').value || '');
+  const entry = {
+    id: 'n'+Date.now(),
+    text: txt,
+    kind,
+    eventDate,
+    createdAt: Date.now(),
+    author: (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || ''
+  };
+  if(!notes[id]) notes[id] = [];
+  notes[id].push(entry);
+  inp.value = '';
+  document.getElementById('noteDate').value = '';
+  repaintNotes(id);
+  try{
+    await window.dashboardFirebase.savePropertyNote(id, entry);
+    showToast(kind==='note' ? 'Note added' : `${NOTE_KINDS[kind].label} logged`);
+  }catch(e){
+    notes[id] = notes[id].filter(n=>n.id!==entry.id);
+    repaintNotes(id);
+    showToast('✗ Could not save — check your connection and try again');
+  }
+}
+
+async function deleteNote(id,noteId){
+  const list = notes[id]||[];
+  const removed = list.find(n=>n.id===noteId);
+  if(!removed) return;
+  notes[id] = list.filter(n=>n.id!==noteId);
+  repaintNotes(id);
+  try{
+    await window.dashboardFirebase.deletePropertyNote(id, noteId);
+    showToast('Entry deleted');
+  }catch(e){
+    notes[id].push(removed);
+    repaintNotes(id);
+    showToast('✗ Could not delete — check your connection and try again');
+  }
+}
+
+// Interest level lives on the property document (not localStorage) so it
+// shows up for the whole team and survives a browser reset.
+async function setInterest(id,lvl){
+  const p = properties.find(x=>x.id===id);
+  if(!p) return;
+  const prev = p.interestLevel || '';
+  const next = prev===lvl ? '' : lvl;
+  p.interestLevel = next;
+  document.querySelectorAll('.interest-btn').forEach(b=>b.classList.toggle('active', b.dataset.lvl===next));
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(next ? `Marked as ${lvl} lead` : 'Interest level cleared');
+    recordChanges(p, 'update', [{
+      field:'interestLevel', label:'Interest Level',
+      from: prev || '', to: next || ''
+    }]);
+  }catch(e){
+    p.interestLevel = prev;
+    document.querySelectorAll('.interest-btn').forEach(b=>b.classList.toggle('active', b.dataset.lvl===prev));
+    showToast('✗ Update failed — check your connection and try again');
+  }
 }
 
 // ═══════ ADD / EDIT / DELETE PROPERTY ═══════
@@ -448,10 +624,6 @@ const PROPERTY_FIELDS = [
   { key:'contactName', label:'Contact Name', group:'Contact', example:'Swaminathan' },
   { key:'contactNumber', label:'Contact Number', group:'Contact', example:'98848 83370' },
 ];
-
-function escapeHtml(s){
-  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
 
 function ensurePModalFormBuilt(){
   const container = document.getElementById('pmForm');
@@ -550,21 +722,13 @@ function discardPModalChanges(){
 }
 
 // Accepts either the dashboard's own schema or the alternate flat schema
-// (propertyType/price/priceInCr/readyToMove/builtupArea/...) some pipeline
-// deliveries used to write, and fills in the fields the grid/detail view
-// rely on.
-//
-// The canonical field ALWAYS wins when present — the alt-schema fallback
-// below exists only to import foreign JSON that never had these fields to
-// begin with (loadPModalJson's paste-to-form feature). Checking the alt
-// name first used to mean: any property still carrying a leftover
-// propertyType/price/priceInCr/readyToMove/newOrResale/possessionDate/
-// builtupArea from an older pipeline write had its type/price/status/
-// possession/area silently reverted to the stale value on every single
-// edit — including picking a new Status in this very form, since
-// buildDataFromForm() starts from the existing document (stale fields and
-// all) and layers only the form's own fields on top of it.
+// (propertyType/price/priceInCr/readyToMove/builtupArea/...) used by some
+// listing sources, and fills in the fields the grid/detail view rely on.
 function normalizeProperty(data){
+  // Raw source fields always win over a previously-derived value, so
+  // re-editing price/type/status/etc. on an already-saved alt-schema
+  // property actually changes what's displayed instead of being masked
+  // by whatever got baked in on the first save.
   const propertyCode = data.propertyCode || data.propertyId || '';
   const type = data.type || data.propertyType || 'Property';
   const builder = data.builder || 'Individual Owner';
@@ -574,7 +738,7 @@ function normalizeProperty(data){
   else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
   else startingPrice = 'Price on Request';
   let status;
-  if(data.status === 'Ready to Move' || data.status === 'Under Construction'){
+  if(data.status){
     status = data.status;
   } else if(data.readyToMove !== undefined || data.newOrResale !== undefined){
     status = (data.readyToMove==='Yes' || data.newOrResale==='Resale') ? 'Ready to Move' : 'Under Construction';
@@ -677,6 +841,10 @@ async function savePModal(){
 
   const mode = pModalMode;
   let previousEntry = null;
+  // Diff before the array is mutated — afterwards pModalOriginalFull and the
+  // stored entry are the same object and every field compares equal.
+  const diffs = mode==='edit' ? diffPropertyFields(pModalOriginalFull, data) : [];
+  data.updatedAt = Date.now();
   if(mode==='add'){
     data.id = 'p'+Date.now();
     data.createdAt = Date.now();
@@ -694,6 +862,14 @@ async function savePModal(){
   try{
     await window.dashboardFirebase.saveProperty(data);
     showToast(mode==='add' ? '✓ Property added successfully' : '✓ Property updated successfully');
+    if(mode==='edit'){
+      recordChanges(data, 'update', diffs);
+    } else {
+      recordChanges(data, 'create', [{
+        field:'(property)', label:'New property added', from:'',
+        to:`${data.name} — ${data.location}`
+      }]);
+    }
   }catch(e){
     if(mode==='add'){
       properties = properties.filter(p=>p.id!==data.id);
@@ -716,6 +892,12 @@ async function deleteProperty(id){
   try{
     await window.dashboardFirebase.deleteProperty(id);
     showToast('Property deleted');
+    // The full document goes into the change log, which is append-only —
+    // so a delete stays recoverable instead of being gone for good.
+    recordChanges(p, 'delete', [{
+      field:'(property)', label:'Property deleted',
+      from:`${p.name} — ${p.location}`, to:''
+    }], { snapshot: JSON.stringify(p) });
   }catch(e){
     properties.unshift(p);
     refreshAfterDataChange();
@@ -723,16 +905,542 @@ async function deleteProperty(id){
   }
 }
 
+// ═══════ CHANGE LOG ═══════
+// The inventory sheet stays the place data is typed, and nothing writes back
+// to it automatically. This log is the bridge: every edit made here is
+// recorded with its before/after value so it can be found later and applied
+// to the sheet by hand, then ticked off. It doubles as the only surviving
+// copy of a deleted property, which is why delete records carry a full
+// snapshot and why nothing in this collection is ever removed.
+let changeLog = [];
+let changeLogLoaded = false;
+let changeFilter = 'pending'; // 'pending' | 'applied' | 'all'
+let changeSearch = '';
+
+function newChangeId(){
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
+
+// Compares only the fields the edit form can actually change, so a value
+// rewritten identically by normalizeProperty never shows up as a false edit.
+function diffPropertyFields(before, after){
+  const out = [];
+  PROPERTY_FIELDS.forEach(f=>{
+    const from = before && before[f.key]!=null ? String(before[f.key]) : '';
+    const to   = after  && after[f.key]!=null  ? String(after[f.key])  : '';
+    if(from !== to) out.push({ field:f.key, label:f.label, from, to });
+  });
+  return out;
+}
+
+function changeStamp(p){
+  return {
+    propertyId: p.id || '',
+    propertyCode: p.propertyCode || '',
+    propertyName: p.name || '',
+    propertyLocation: p.location || '',
+    propertyType: p.type || ''
+  };
+}
+
+// Fire-and-forget on purpose: a failure to write the audit trail must never
+// roll back or block the property edit the user actually asked for. It warns
+// instead, so a silent gap in the log can't go unnoticed.
+async function recordChanges(property, kind, diffs, extra){
+  if(!diffs.length) return;
+  const at = Date.now();
+  const by = (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || '';
+  const stamp = changeStamp(property);
+  const entries = diffs.map(d => ({
+    id: newChangeId(),
+    ...stamp, ...d,
+    kind, at, by,
+    appliedToSheet: false,
+    ...(extra||{})
+  }));
+  changeLog = entries.concat(changeLog);
+  renderChangesIfOpen();
+  try{
+    await window.dashboardFirebase.saveChanges(entries);
+  }catch(e){
+    changeLog = changeLog.filter(c => !entries.some(x => x.id === c.id));
+    renderChangesIfOpen();
+    showToast('⚠ Saved, but the change log entry failed to record');
+  }
+}
+
 function refreshAfterDataChange(){
   setupTypeFilters();
   updateStats();
   applyFilters();
+  updateMissingCount();
+  renderMissing();
 }
 
 window.applyPropertiesSnapshot = function(list){
   properties = list;
   refreshAfterDataChange();
+  migrateLegacyInterests();
 };
+
+// One-time lift of interest levels out of the old per-browser store and onto
+// the property documents. Never overwrites a level already set on the server,
+// and never clears localStorage — the original stays put as a fallback copy
+// in case anything about the upload goes wrong.
+let interestMigrationRan = false;
+async function migrateLegacyInterests(){
+  if(interestMigrationRan || !properties.length) return;
+  interestMigrationRan = true;
+  let legacy;
+  try{ legacy = JSON.parse(localStorage.getItem('pinInterests')) || {}; }catch(e){ return; }
+  let moved = 0;
+  for(const [id,lvl] of Object.entries(legacy)){
+    if(!lvl) continue;
+    const p = properties.find(x=>x.id===id);
+    if(!p || p.interestLevel) continue;
+    p.interestLevel = lvl;
+    try{ await window.dashboardFirebase.saveProperty(p); moved++; }
+    catch(e){ p.interestLevel = ''; interestMigrationRan = false; return; }
+  }
+  if(moved) refreshAfterDataChange();
+}
+
+// ═══════ SYNC FROM INVENTORY SHEET ═══════
+// Pulls the Inventory master sheet into the dashboard on demand, via
+// api/sync-inventory.js. Always previews first: the button runs a dry run,
+// shows exactly what would change, and only writes after confirmation — a
+// sheet sync touches every property, so it should never be one careless click.
+let syncBusy = false;
+
+async function callSync(dryRun){
+  const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
+  if(!token) throw new Error('You appear to be signed out. Reload and sign in again.');
+  const res = await fetch('/api/sync-inventory', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dryRun })
+  });
+  let data;
+  try{ data = await res.json(); }
+  catch{ throw new Error(`Server returned ${res.status}. Try again in a moment.`); }
+  if(!res.ok || data.error) throw new Error(data.error || `Sync failed (${res.status}).`);
+  return data;
+}
+
+function renderSyncPreview(d){
+  const rows = (d.changes || []).map(c => {
+    const fields = (c.fields || []).map(f =>
+      `<div class="sync-f"><span class="chg-field">${escapeHtml(f.field)}</span>
+        <span class="chg-from">${escapeHtml(f.from || '—')}</span>
+        <span class="chg-arrow">→</span>
+        <span class="chg-to">${escapeHtml(f.to || '—')}</span></div>`).join('');
+    return `<div class="sync-row ${c.kind==='create'?'new':''}">
+      <div class="sync-head">
+        <span class="chg-code">${escapeHtml(c.id)}</span>
+        <span class="chg-name">${escapeHtml(c.name || '')}</span>
+        <span class="sync-kind">${c.kind === 'create' ? 'NEW' : 'UPDATE'}</span>
+      </div>
+      ${fields}
+      ${c.moreFields ? `<div class="sync-more">…and ${c.moreFields} more field${c.moreFields===1?'':'s'}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="sync-stats">
+      <div class="sync-stat"><b>${d.created}</b><span>to add</span></div>
+      <div class="sync-stat"><b>${d.updated}</b><span>to update</span></div>
+      <div class="sync-stat"><b>${d.unchanged}</b><span>already current</span></div>
+      <div class="sync-stat quiet"><b>${d.untouched}</b><span>not in sheet — untouched</span></div>
+    </div>
+    ${(d.created + d.updated) === 0
+      ? `<div class="empty-mini">Everything already matches the sheet. Nothing to do.</div>`
+      : `<div class="sync-list">${rows}</div>`}`;
+}
+
+async function openSyncModal(){
+  if(syncBusy) return;
+  syncBusy = true;
+  const modal = document.getElementById('syncModal');
+  const body = document.getElementById('syncBody');
+  const btn = document.getElementById('syncApplyBtn');
+  modal.classList.add('open');
+  btn.style.display = 'none';
+  body.innerHTML = '<div class="empty-mini">Reading the inventory sheet…</div>';
+  try{
+    const d = await callSync(true);
+    body.innerHTML = renderSyncPreview(d);
+    if((d.created + d.updated) > 0) btn.style.display = '';
+  }catch(e){
+    body.innerHTML = `<div class="pmodal-err show">${escapeHtml(e.message)}</div>`;
+  }finally{
+    syncBusy = false;
+  }
+}
+
+async function applySync(){
+  if(syncBusy) return;
+  syncBusy = true;
+  const body = document.getElementById('syncBody');
+  const btn = document.getElementById('syncApplyBtn');
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try{
+    const d = await callSync(false);
+    body.innerHTML = `<div class="sync-done">✓ Synced ${d.written} propert${d.written===1?'y':'ies'} from the sheet.
+      <div class="sync-done-sub">${d.untouched} propert${d.untouched===1?'y':'ies'} not in the sheet were left untouched.</div></div>`;
+    btn.style.display = 'none';
+    showToast(`✓ Synced ${d.written} propert${d.written===1?'y':'ies'}`);
+    // The grid updates itself — the Firestore listener fires on every write.
+  }catch(e){
+    body.innerHTML = `<div class="pmodal-err show">${escapeHtml(e.message)}</div>`;
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '✓ Apply to dashboard';
+    syncBusy = false;
+  }
+}
+
+function closeSyncModal(){
+  document.getElementById('syncModal').classList.remove('open');
+}
+
+// ═══════ MISSING DATA ═══════
+// The agent's data-quality worklist: every property listed with the fields it
+// still lacks, so gaps surface BEFORE a client call instead of during one.
+// Each gap can be fixed in place (saved to the property + change log, ready
+// to copy into the sheet later) or marked "Not required" for that property —
+// stored on the doc as naFields, so a plot stops nagging about floor numbers.
+const MISSING_FIELDS = [
+  { key:'config',        label:'Configuration',   group:'Core' },
+  { key:'sqftRange',     label:'Built-up Area',   group:'Core' },
+  { key:'startingPrice', label:'Price',           group:'Core', empty:['Price on Request'] },
+  { key:'pricePerSqft',  label:'Rate / Sqft',     group:'Core' },
+  { key:'possession',    label:'Possession',      group:'Core', empty:['Contact for details'] },
+  { key:'availability',  label:'Availability',    group:'Core' },
+  { key:'totalLandArea', label:'Land Area',       group:'Specs' },
+  { key:'uds',           label:'UDS',             group:'Specs' },
+  { key:'totalUnits',    label:'Total Units',     group:'Specs' },
+  { key:'totalFloors',   label:'Total Floors',    group:'Specs' },
+  { key:'floorNo',       label:'Floor No',        group:'Specs' },
+  { key:'facing',        label:'Facing',          group:'Specs' },
+  { key:'bathrooms',     label:'Bathrooms',       group:'Specs' },
+  { key:'parking',       label:'Parking',         group:'Specs' },
+  { key:'furnishing',    label:'Furnishing',      group:'Specs' },
+  { key:'vastu',         label:'Vastu',           group:'Specs' },
+  { key:'powerBackup',   label:'Power Backup',    group:'Specs' },
+  { key:'approval',      label:'Approval',        group:'Specs' },
+  { key:'propertyAge',   label:'Property Age',    group:'Specs' },
+  { key:'zone',          label:'Zone',            group:'Location' },
+  { key:'mapLink',       label:'Location Pin',    group:'Location' },
+  { key:'nearbyLandmark',label:'Landmark',        group:'Location' },
+  { key:'connectivity',  label:'Connectivity',    group:'Location' },
+  { key:'highlights',    label:'Highlights',      group:'Marketing' },
+  { key:'amenities',     label:'Amenities',       group:'Marketing' },
+  { key:'photosLink',    label:'Photos Link',     group:'Marketing' },
+  { key:'brochureLink',  label:'Brochure',        group:'Marketing' },
+  { key:'detailsText',   label:'Share Details',   group:'Marketing' },
+  { key:'contactName',   label:'Contact Name',    group:'Contact' },
+  { key:'contactNumber', label:'Contact Number',  group:'Contact' }
+];
+
+function fieldIsMissing(p, f){
+  if(Array.isArray(p.naFields) && p.naFields.includes(f.key)) return false;
+  const v = p[f.key];
+  if(v == null || String(v).trim() === '') return true;
+  // Placeholder defaults count as missing — "Price on Request" on the card
+  // usually means "nobody entered the price", and the agent should know that.
+  return Array.isArray(f.empty) && f.empty.includes(String(v).trim());
+}
+function missingFieldsOf(p){ return MISSING_FIELDS.filter(f => fieldIsMissing(p, f)); }
+
+let missingSearch = '';
+let missingOpenEditor = null; // `${propId}|${fieldKey}` of the expanded editor
+
+function updateMissingCount(){
+  const btn = document.getElementById('missingCountBadge');
+  if(!btn) return;
+  const n = properties.filter(p => missingFieldsOf(p).length).length;
+  btn.textContent = n;
+  btn.style.display = n ? '' : 'none';
+}
+
+function openMissing(){
+  document.getElementById('missingPanel').classList.add('open');
+  renderMissing();
+}
+function closeMissing(){
+  document.getElementById('missingPanel').classList.remove('open');
+  missingOpenEditor = null;
+}
+function onMissingSearch(v){ missingSearch = v.toLowerCase(); renderMissing(); }
+
+function renderMissing(){
+  const body = document.getElementById('missingBody');
+  if(!body || !document.getElementById('missingPanel').classList.contains('open')) return;
+
+  const list = properties
+    .map(p => ({ p, miss: missingFieldsOf(p) }))
+    .filter(x => x.miss.length)
+    .filter(x => !missingSearch ||
+      [x.p.propertyCode, x.p.name, x.p.location].join(' ').toLowerCase().includes(missingSearch))
+    .sort((a,b) => b.miss.length - a.miss.length);
+
+  const total = MISSING_FIELDS.length;
+  document.getElementById('missingCount2').textContent =
+    `${list.length} propert${list.length===1?'y':'ies'} with gaps`;
+
+  if(!list.length){
+    body.innerHTML = '<div class="empty-mini">🎉 Every property has all its agent-facing fields filled (or marked not required).</div>';
+    return;
+  }
+
+  body.innerHTML = list.map(({p, miss}) => {
+    const e = esc(p);
+    const filled = total - miss.length;
+    return `
+    <div class="md-prop">
+      <div class="md-head" onclick="openDetail('${e.id}')" title="Open property">
+        <span class="chg-code">${e.propertyCode||e.id}</span>
+        <span class="md-name">${e.name||'(unnamed)'}</span>
+        <span class="md-loc">${e.location||''}</span>
+        <span class="md-progress"><b>${filled}</b>/${total} filled</span>
+      </div>
+      <div class="md-chips">
+        ${miss.map(f => {
+          const ek = `${p.id}|${f.key}`;
+          const open = missingOpenEditor === ek;
+          return `<div class="md-chip-wrap${open?' open':''}">
+            <button class="md-chip${open?' at':''}" onclick="toggleMissingEditor('${e.id}','${f.key}')">${escapeHtml(f.label)}</button>
+            ${open?`<div class="md-editor">
+              <input class="md-input" id="mdInput" placeholder="${escapeHtml(f.label)}…"
+                onkeydown="if(event.key==='Enter')saveMissingField('${e.id}','${f.key}')">
+              <button class="md-save" onclick="saveMissingField('${e.id}','${f.key}')">✓ Save</button>
+              <button class="md-na" onclick="markFieldNA('${e.id}','${f.key}')" title="This field doesn't apply to this property">Not required</button>
+            </div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const inp = document.getElementById('mdInput');
+  if(inp) inp.focus();
+}
+
+function toggleMissingEditor(propId, fieldKey){
+  const ek = `${propId}|${fieldKey}`;
+  missingOpenEditor = missingOpenEditor === ek ? null : ek;
+  renderMissing();
+}
+
+async function saveMissingField(propId, fieldKey){
+  const inp = document.getElementById('mdInput');
+  const val = inp ? inp.value.trim() : '';
+  if(!val){ if(inp) inp.focus(); return; }
+  const p = properties.find(x => x.id === propId);
+  if(!p) return;
+  const f = MISSING_FIELDS.find(x => x.key === fieldKey);
+  const prev = p[fieldKey] != null ? String(p[fieldKey]) : '';
+  p[fieldKey] = val;
+  p.updatedAt = Date.now();
+  missingOpenEditor = null;
+  renderMissing();
+  updateMissingCount();
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(`✓ ${f ? f.label : fieldKey} saved`);
+    recordChanges(p, 'update', [{ field: fieldKey, label: (f?f.label:fieldKey), from: prev, to: val }]);
+    refreshAfterDataChange();
+  }catch(e){
+    p[fieldKey] = prev;
+    renderMissing();
+    updateMissingCount();
+    showToast('✗ Save failed — check your connection and try again');
+  }
+}
+
+async function markFieldNA(propId, fieldKey){
+  const p = properties.find(x => x.id === propId);
+  if(!p) return;
+  const f = MISSING_FIELDS.find(x => x.key === fieldKey);
+  const prevNA = Array.isArray(p.naFields) ? [...p.naFields] : [];
+  // Stored as an array (not a map) deliberately: Firestore's merge deep-merges
+  // maps, so a removed key would silently come back — arrays replace whole.
+  p.naFields = [...new Set([...prevNA, fieldKey])];
+  missingOpenEditor = null;
+  renderMissing();
+  updateMissingCount();
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+    showToast(`${f ? f.label : fieldKey} marked not required for this property`);
+    recordChanges(p, 'update', [{ field: fieldKey, label: (f?f.label:fieldKey)+' (not required)', from: '(missing)', to: 'N/A for this property' }]);
+  }catch(e){
+    p.naFields = prevNA;
+    renderMissing();
+    updateMissingCount();
+    showToast('✗ Update failed — check your connection and try again');
+  }
+}
+
+// ═══════ CHANGE LOG VIEW ═══════
+function dayKey(ms){
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function dayLabel(key){
+  const [y,m,d] = key.split('-').map(Number);
+  const date = new Date(y, m-1, d);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((today - date) / 86400000);
+  const long = date.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if(diff===0) return `Today · ${long}`;
+  if(diff===1) return `Yesterday · ${long}`;
+  return long;
+}
+
+async function openChanges(){
+  document.getElementById('changesPanel').classList.add('open');
+  if(!changeLogLoaded){
+    document.getElementById('changesBody').innerHTML = '<div class="empty-mini">Loading change history…</div>';
+    try{
+      changeLog = await window.dashboardFirebase.getChanges();
+      changeLogLoaded = true;
+    }catch(e){
+      document.getElementById('changesBody').innerHTML =
+        '<div class="empty-mini">Could not load the change history — check your connection and reopen.</div>';
+      return;
+    }
+  }
+  renderChanges();
+}
+function closeChanges(){
+  document.getElementById('changesPanel').classList.remove('open');
+}
+function renderChangesIfOpen(){
+  const panel = document.getElementById('changesPanel');
+  if(panel && panel.classList.contains('open') && changeLogLoaded) renderChanges();
+}
+function setChangeFilter(f, btn){
+  changeFilter = f;
+  document.querySelectorAll('#changesFilters .fbtn').forEach(b=>b.classList.remove('at'));
+  btn.classList.add('at');
+  renderChanges();
+}
+function onChangeSearch(v){
+  changeSearch = v.toLowerCase();
+  renderChanges();
+}
+
+function visibleChanges(){
+  return changeLog.filter(c=>{
+    if(changeFilter==='pending' && c.appliedToSheet) return false;
+    if(changeFilter==='applied' && !c.appliedToSheet) return false;
+    if(changeSearch){
+      const hay = [c.propertyCode,c.propertyName,c.propertyLocation,c.label,c.from,c.to,c.by]
+        .join(' ').toLowerCase();
+      if(!hay.includes(changeSearch)) return false;
+    }
+    return true;
+  }).sort((a,b)=>(b.at||0)-(a.at||0));
+}
+
+function renderChanges(){
+  const body = document.getElementById('changesBody');
+  const list = visibleChanges();
+  const pending = changeLog.filter(c=>!c.appliedToSheet).length;
+  document.getElementById('changesCount').textContent =
+    `${pending} pending · ${changeLog.length} total`;
+
+  if(!list.length){
+    body.innerHTML = `<div class="empty-mini">${
+      changeLog.length ? 'No changes match this filter.'
+                       : 'No changes recorded yet. Every edit you make here will be listed for you to carry across to the sheet.'
+    }</div>`;
+    return;
+  }
+
+  // Grouped by day, newest first — this is the view used to work through
+  // the sheet, so the date heading is the unit of work, not decoration.
+  const groups = [];
+  const byDay = {};
+  list.forEach(c=>{
+    const k = dayKey(c.at||0);
+    if(!byDay[k]){ byDay[k]=[]; groups.push(k); }
+    byDay[k].push(c);
+  });
+
+  body.innerHTML = groups.map(k=>`
+    <div class="chg-day">
+      <div class="chg-day-hdr">${escapeHtml(dayLabel(k))}<span class="chg-day-n">${byDay[k].length}</span></div>
+      ${byDay[k].map(c=>renderChangeRow(c)).join('')}
+    </div>`).join('');
+}
+
+function renderChangeRow(c){
+  const time = c.at ? new Date(c.at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '';
+  const code = c.propertyCode || c.propertyId || '';
+  const line = [c.propertyName, c.propertyLocation].filter(Boolean).join(' · ');
+  const kindCls = c.kind==='delete' ? 'del' : c.kind==='create' ? 'new' : '';
+  return `
+    <div class="chg-row ${c.appliedToSheet?'applied':''} ${kindCls}">
+      <label class="chg-tick" title="${c.appliedToSheet?'Applied to the sheet':'Mark once you have updated the sheet'}">
+        <input type="checkbox" ${c.appliedToSheet?'checked':''} onchange="toggleChangeApplied('${escapeHtml(c.id)}',this)">
+      </label>
+      <div class="chg-main">
+        <div class="chg-prop">
+          ${code?`<span class="chg-code">${escapeHtml(code)}</span>`:''}
+          <span class="chg-name">${escapeHtml(line||'(unnamed property)')}</span>
+        </div>
+        <div class="chg-delta">
+          <span class="chg-field">${escapeHtml(c.label||c.field||'')}</span>
+          <span class="chg-from">${escapeHtml(c.from||'—')}</span>
+          <span class="chg-arrow">→</span>
+          <span class="chg-to">${escapeHtml(c.to||'—')}</span>
+        </div>
+      </div>
+      <div class="chg-meta">
+        <span>${escapeHtml(time)}</span>
+        ${c.by?`<span class="chg-by">${escapeHtml(c.by)}</span>`:''}
+      </div>
+    </div>`;
+}
+
+async function toggleChangeApplied(changeId, cb){
+  const c = changeLog.find(x=>x.id===changeId);
+  if(!c) return;
+  const prev = !!c.appliedToSheet;
+  c.appliedToSheet = cb.checked;
+  renderChanges();
+  try{
+    await window.dashboardFirebase.setChangeApplied(changeId, c.appliedToSheet);
+  }catch(e){
+    c.appliedToSheet = prev;
+    renderChanges();
+    showToast('✗ Could not update — check your connection and try again');
+  }
+}
+
+// Exports what is currently on screen, so filtering to "pending" and
+// exporting gives exactly the list of edits still to be made in the sheet.
+function exportChangesCsv(){
+  const list = visibleChanges();
+  if(!list.length){ showToast('Nothing to export in this view'); return; }
+  const headers = ['Date','Time','Property Code','Property','Location','Field','From','To','Changed By','Applied To Sheet'];
+  const rows = list.map(c=>{
+    const d = new Date(c.at||0);
+    return [
+      d.toLocaleDateString(), d.toLocaleTimeString(),
+      c.propertyCode||c.propertyId||'', c.propertyName||'', c.propertyLocation||'',
+      c.label||c.field||'', c.from||'', c.to||'', c.by||'',
+      c.appliedToSheet?'Yes':'No'
+    ];
+  });
+  const csv = [headers,...rows]
+    .map(r=>r.map(v=>`"${String(v==null?'':v).replace(/"/g,'""')}"`).join(','))
+    .join('\n');
+  downloadFile('﻿'+csv, `3pin_changes_${Date.now()}.csv`, 'text/csv;charset=utf-8');
+  showToast(`${list.length} change${list.length===1?'':'s'} exported`);
+}
 
 // ═══════ EXPORT / SHARE ═══════
 // Single-property export/share/print actions (and showToast/downloadFile)
@@ -749,6 +1457,7 @@ function exportSelected(format){
   }
   showToast('Export downloaded');
 }
+
 // Look properties up out of this page's in-memory list for the shared
 // export/share/print actions in property-view.js.
 PinPropertyView.setResolver(id => properties.find(x => x.id === id));

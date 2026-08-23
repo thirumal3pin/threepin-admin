@@ -126,6 +126,37 @@ service cloud.firestore {
       allow create: if writingOwnTenantField();
     }
 
+    // Property notes + timeline events, scoped by the PARENT property's
+    // tenant exactly like leads/{leadId}/notes above — rules do not cascade
+    // into subcollections, so this match is required or the dashboard's
+    // Notes & Events tab reads/writes get denied outright.
+    match /properties/{propId}/notes/{noteId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/properties/$(propId)).data.tenantId == tenantId();
+    }
+
+    // Dashboard change log — the audit trail of every property edit, used to
+    // reconcile the dashboard back into the inventory sheet by hand. Entries
+    // are deliberately NOT deletable: the log is the record of what to carry
+    // across to the sheet (and the only copy of a deleted property's data),
+    // so it may be appended to and marked applied, never erased.
+    match /propertyChanges/{changeId} {
+      allow read: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
+      allow create: if writingOwnTenantField();
+      allow delete: if false;
+    }
+
+    // Pre-sync snapshots written by api/sync-inventory.js before it changes
+    // anything, so a sheet sync triggered from the dashboard is reversible
+    // (the CLI writes equivalent files to backups/, which Vercel's ephemeral
+    // filesystem cannot do). Server-only via the Admin SDK, which bypasses
+    // these rules — no client ever reads or writes it. Denied explicitly
+    // rather than relying on the default, so the intent is on the record.
+    match /syncBackups/{runId} {
+      allow read, write: if false;
+    }
+
     // Legacy global seed marker from before properties was tenant-scoped.
     // No longer written by the app (superseded by propertiesSeededFlags
     // above) — left readable/writable by no one since nothing should touch

@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, writeBatch, query, where
+  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -72,24 +72,68 @@ function subscribeToProperties(tenantId){
 const pageMode = window.__pinPageMode || 'list';
 
 window.dashboardFirebase = {
-  saveProperty: (data) => setDoc(doc(db, 'properties', data.id), { ...data, tenantId: currentTenantId })
+  // merge:true is deliberate and load-bearing. The dashboard form only knows
+  // about PROPERTY_FIELDS, but the document also carries fields written by
+  // the brochure pipeline (brochureLink, photosLink, detailsText, source
+  // sheet columns...). A plain setDoc would delete every one of those the
+  // first time anyone pressed Save from a tab whose data predated them.
+  // Clearing a field in the form still works — that writes an explicit ''.
+  saveProperty: (data) => setDoc(doc(db, 'properties', data.id), { ...data, tenantId: currentTenantId }, { merge: true })
     .catch(e => { console.error('Firestore save error:', e); throw e; }),
   deleteProperty: (id) => deleteDoc(doc(db, 'properties', id))
     .catch(e => { console.error('Firestore delete error:', e); throw e; }),
-  // Live single-property subscription. Costs the same as a one-shot read but
-  // keeps the standalone page as up-to-date as the dashboard grid — an edit
-  // made elsewhere shows up here without a refresh. Returns an unsubscribe.
+  // Live single-property subscription, used by property.html. Costs the same
+  // as a one-shot read but keeps the standalone page as up-to-date as the
+  // dashboard grid — an edit made elsewhere shows up here without a refresh.
+  // Returns an unsubscribe.
   subscribeToProperty: (id, onData, onError) => onSnapshot(
     doc(db, 'properties', id),
     snap => onData(snap.exists() ? { ...snap.data(), id: snap.id } : null),
     err => { console.error('Firestore property sync error:', err); if (onError) onError(err); }
-  )
+  ),
+
+  // ── Notes / events subcollection ──
+  // Kept OUT of the property document on purpose, mirroring the CRM's
+  // per-lead notes subcollection (crm-assets/firebase-sync.js): the grid's
+  // onSnapshot listener streams every property doc continuously, so putting
+  // a growing note history inline would re-send the whole log on every
+  // unrelated edit. Loaded on demand when a detail panel opens instead.
+  getPropertyNotes: (propId) => getDocs(collection(db, 'properties', propId, 'notes'))
+    .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+    .catch(e => { console.error('Firestore get notes error:', e); throw e; }),
+  savePropertyNote: (propId, note) =>
+    setDoc(doc(db, 'properties', propId, 'notes', note.id), note)
+      .catch(e => { console.error('Firestore save note error:', e); throw e; }),
+  deletePropertyNote: (propId, noteId) =>
+    deleteDoc(doc(db, 'properties', propId, 'notes', noteId))
+      .catch(e => { console.error('Firestore delete note error:', e); throw e; }),
+
+  // ── Change log ──
+  // A flat, tenant-scoped collection rather than a per-property subcollection,
+  // because the whole point of it is the cross-property date-wise view: "what
+  // changed anywhere since I last updated the sheet". Sorting happens client
+  // side so this needs no composite index to deploy.
+  saveChanges: (entries) => {
+    const batch = writeBatch(db);
+    entries.forEach(c => batch.set(doc(db, 'propertyChanges', c.id), { ...c, tenantId: currentTenantId }));
+    return batch.commit().catch(e => { console.error('Firestore save changes error:', e); throw e; });
+  },
+  getChanges: () => getDocs(query(collection(db, 'propertyChanges'), where('tenantId', '==', currentTenantId)))
+    .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+    .catch(e => { console.error('Firestore get changes error:', e); throw e; }),
+  setChangeApplied: (changeId, applied) =>
+    setDoc(doc(db, 'propertyChanges', changeId), { appliedToSheet: !!applied }, { merge: true })
+      .catch(e => { console.error('Firestore change-applied error:', e); throw e; })
 };
 
 window.dashboardAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOut(auth),
-  getTenantId: () => currentTenantId
+  getTenantId: () => currentTenantId,
+  getUserEmail: () => (auth.currentUser && auth.currentUser.email) || '',
+  // Bearer token for calls to api/*, which verify it server-side rather than
+  // trusting anything the page claims about who is signed in.
+  getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
 };
 
 onAuthStateChanged(auth, async (user) => {
