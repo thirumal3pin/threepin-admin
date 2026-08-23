@@ -114,7 +114,10 @@ window.dashboardAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOut(auth),
   getTenantId: () => currentTenantId,
-  getUserEmail: () => (auth.currentUser && auth.currentUser.email) || ''
+  getUserEmail: () => (auth.currentUser && auth.currentUser.email) || '',
+  // Bearer token for calls to api/*, which verify it server-side rather than
+  // trusting anything the page claims about who is signed in.
+  getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
 };
 
 onAuthStateChanged(auth, async (user) => {

@@ -1097,6 +1097,105 @@ async function migrateLegacyInterests(){
   if(moved) refreshAfterDataChange();
 }
 
+// ═══════ SYNC FROM INVENTORY SHEET ═══════
+// Pulls the Inventory master sheet into the dashboard on demand, via
+// api/sync-inventory.js. Always previews first: the button runs a dry run,
+// shows exactly what would change, and only writes after confirmation — a
+// sheet sync touches every property, so it should never be one careless click.
+let syncBusy = false;
+
+async function callSync(dryRun){
+  const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
+  if(!token) throw new Error('You appear to be signed out. Reload and sign in again.');
+  const res = await fetch('/api/sync-inventory', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dryRun })
+  });
+  let data;
+  try{ data = await res.json(); }
+  catch{ throw new Error(`Server returned ${res.status}. Try again in a moment.`); }
+  if(!res.ok || data.error) throw new Error(data.error || `Sync failed (${res.status}).`);
+  return data;
+}
+
+function renderSyncPreview(d){
+  const rows = (d.changes || []).map(c => {
+    const fields = (c.fields || []).map(f =>
+      `<div class="sync-f"><span class="chg-field">${escapeHtml(f.field)}</span>
+        <span class="chg-from">${escapeHtml(f.from || '—')}</span>
+        <span class="chg-arrow">→</span>
+        <span class="chg-to">${escapeHtml(f.to || '—')}</span></div>`).join('');
+    return `<div class="sync-row ${c.kind==='create'?'new':''}">
+      <div class="sync-head">
+        <span class="chg-code">${escapeHtml(c.id)}</span>
+        <span class="chg-name">${escapeHtml(c.name || '')}</span>
+        <span class="sync-kind">${c.kind === 'create' ? 'NEW' : 'UPDATE'}</span>
+      </div>
+      ${fields}
+      ${c.moreFields ? `<div class="sync-more">…and ${c.moreFields} more field${c.moreFields===1?'':'s'}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="sync-stats">
+      <div class="sync-stat"><b>${d.created}</b><span>to add</span></div>
+      <div class="sync-stat"><b>${d.updated}</b><span>to update</span></div>
+      <div class="sync-stat"><b>${d.unchanged}</b><span>already current</span></div>
+      <div class="sync-stat quiet"><b>${d.untouched}</b><span>not in sheet — untouched</span></div>
+    </div>
+    ${(d.created + d.updated) === 0
+      ? `<div class="empty-mini">Everything already matches the sheet. Nothing to do.</div>`
+      : `<div class="sync-list">${rows}</div>`}`;
+}
+
+async function openSyncModal(){
+  if(syncBusy) return;
+  syncBusy = true;
+  const modal = document.getElementById('syncModal');
+  const body = document.getElementById('syncBody');
+  const btn = document.getElementById('syncApplyBtn');
+  modal.classList.add('open');
+  btn.style.display = 'none';
+  body.innerHTML = '<div class="empty-mini">Reading the inventory sheet…</div>';
+  try{
+    const d = await callSync(true);
+    body.innerHTML = renderSyncPreview(d);
+    if((d.created + d.updated) > 0) btn.style.display = '';
+  }catch(e){
+    body.innerHTML = `<div class="pmodal-err show">${escapeHtml(e.message)}</div>`;
+  }finally{
+    syncBusy = false;
+  }
+}
+
+async function applySync(){
+  if(syncBusy) return;
+  syncBusy = true;
+  const body = document.getElementById('syncBody');
+  const btn = document.getElementById('syncApplyBtn');
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try{
+    const d = await callSync(false);
+    body.innerHTML = `<div class="sync-done">✓ Synced ${d.written} propert${d.written===1?'y':'ies'} from the sheet.
+      <div class="sync-done-sub">${d.untouched} propert${d.untouched===1?'y':'ies'} not in the sheet were left untouched.</div></div>`;
+    btn.style.display = 'none';
+    showToast(`✓ Synced ${d.written} propert${d.written===1?'y':'ies'}`);
+    // The grid updates itself — the Firestore listener fires on every write.
+  }catch(e){
+    body.innerHTML = `<div class="pmodal-err show">${escapeHtml(e.message)}</div>`;
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '✓ Apply to dashboard';
+    syncBusy = false;
+  }
+}
+
+function closeSyncModal(){
+  document.getElementById('syncModal').classList.remove('open');
+}
+
 // ═══════ CHANGE LOG VIEW ═══════
 function dayKey(ms){
   const d = new Date(ms);
