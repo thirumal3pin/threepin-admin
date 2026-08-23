@@ -25,6 +25,14 @@ Consequences that follow from the rule:
 - The Inventory sheet is **never written to** by any sync. Reconciliation of
   dashboard edits back into the sheet is **manual**, driven by the dashboard's
   **Changes** worklist.
+- **A pending dashboard edit is protected from sync.** While an edit sits
+  un-ticked in the Changes worklist, the sync strips that field from the
+  incoming sheet row (`loadPendingProtections` + `planSync` in
+  `api/_inventory-shared.js`), so the agent's value survives every sync run.
+  **Ticking the edit "applied to sheet" is the handover** — from then on the
+  sheet governs that field again, so only tick it once the sheet really has
+  the value. A pending **delete** protects the whole property from being
+  recreated by the sync until it's ticked (or the sheet row is removed).
 - The sync **fills blanks but never overwrites** Tier C, and never touches
   Tier B at all. A re-run cannot un-sell a property or wipe a rating.
 - A property with **no Inventory row is never touched** by the sync — the 53
@@ -188,6 +196,8 @@ do if the Mac schedule is healthy).
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Edited a property, value reverted | Historic bug (fixed 23 Aug 2026) — if it recurs, a writer is claiming a field it doesn't own | Check the doc's `source` and `updatedAt` in Firestore console; see §1 ownership and check recent code changes to any writer |
+| Sheet edit not landing on ONE field while others sync fine | That field has a pending dashboard edit — protection is keeping the dashboard's value (sync preview shows it under 🛡) | Intended. Reconcile: put the right value in the sheet, tick the edit off in 🕒 Changes, sync again |
+| Deleted property doesn't come back after re-adding its sheet row | Its delete is still pending in 🕒 Changes | Tick the delete entry as applied, then sync |
 | Notes / Changes / sync always error "permission denied" | `firestore.rules` not deployed after a change | `node scripts/deploy-firestore-rules.js`, then verify in Firebase console |
 | Sync button: "This sheet is not available for your account" | Logged-in user's `tenantId` ≠ `t_3pinrealty` | Expected for other tenants; for a teammate, provision via `scripts/add-team-member.js` |
 | Sync button: 500 "missing FIREBASE_SERVICE_ACCOUNT_JSON" | Vercel env var lost/renamed | Re-add in Vercel → Settings → Env, redeploy |

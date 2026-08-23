@@ -247,19 +247,58 @@ export function diffProperty(before, after){
   return changes;
 }
 
+// ── Pending-edit protection ──
+// A dashboard edit that hasn't been carried into the Inventory sheet yet must
+// NOT be overwritten by a sync — otherwise "edit in dashboard, forget to
+// update the sheet, sync runs" silently reverts the agent's change (the exact
+// class of bug this whole system exists to prevent). The un-applied entries
+// in the propertyChanges worklist ARE the protection list: while an edit is
+// pending there, its field belongs to the dashboard; ticking it "applied to
+// sheet" is the explicit handover that lets the sheet govern the field again.
+// A pending DELETE protects the whole property from being recreated.
+export async function loadPendingProtections(db){
+  const snap = await db.collection('propertyChanges')
+    .where('tenantId', '==', TENANT_ID)
+    .where('appliedToSheet', '==', false)
+    .get();
+  const fieldsByProp = new Map(); // propId -> Set(fieldKey)
+  const deletedProps = new Set();
+  snap.forEach(d => {
+    const c = d.data();
+    const id = c.propertyId;
+    if(!id) return;
+    if(c.kind === 'delete'){ deletedProps.add(id); return; }
+    if(!c.field || c.field.startsWith('(')) return; // '(property)' create markers
+    if(!fieldsByProp.has(id)) fieldsByProp.set(id, new Set());
+    fieldsByProp.get(id).add(c.field);
+  });
+  return { fieldsByProp, deletedProps };
+}
+
 // Works out what a sync would do, without writing anything. Both callers use
 // this so the dry run and the real run can never disagree. `queueFill` (from
 // readQueueFill) supplies photosLink/detailsText for properties whose sheet
 // row and Firestore doc both lack them — fill blanks, never overwrite.
-export function planSync(rows, existing, onlyId, queueFill){
+// `protections` (from loadPendingProtections) keeps un-reconciled dashboard
+// edits from being overwritten.
+export function planSync(rows, existing, onlyId, queueFill, protections){
   const headers = rows[0] || [];
-  const plan = { headers, creates: [], updates: [], unchanged: 0, writes: [], matchedIds: new Set() };
+  const plan = { headers, creates: [], updates: [], unchanged: 0, writes: [], matchedIds: new Set(),
+                 protectedFields: [], skippedDeleted: [] };
 
   for(let i = 1; i < rows.length; i++){
     let prop = rowToProperty(headers, rows[i] || []);
     if(!prop) continue;
     if(onlyId && prop.id !== onlyId) continue;
     plan.matchedIds.add(prop.id);
+
+    // Deleted in the dashboard, delete not yet reflected in the sheet: do not
+    // resurrect it. Removing the sheet row (or ticking the delete as applied)
+    // hands control back.
+    if(protections && protections.deletedProps.has(prop.id)){
+      plan.skippedDeleted.push(prop.id);
+      continue;
+    }
 
     const before = existing.get(prop.id);
     if(queueFill && queueFill.has(prop.id)){
@@ -273,6 +312,24 @@ export function planSync(rows, existing, onlyId, queueFill){
         if(q[k] && !inSheet && !inDb) prop[k] = q[k];
       }
     }
+
+    // Strip protected fields from the incoming row BEFORE diffing, so the
+    // dashboard's value stays (merge write never touches an absent key) and
+    // the field doesn't show up as a spurious sheet-vs-db difference.
+    if(before && protections){
+      const prot = protections.fieldsByProp.get(prop.id);
+      if(prot && prot.size){
+        const kept = [];
+        for(const k of prot){
+          if(k in prop && String(prop[k]) !== String(before[k] == null ? '' : before[k])){
+            kept.push(k);
+          }
+          delete prop[k];
+        }
+        if(kept.length) plan.protectedFields.push({ id: prop.id, fields: kept });
+      }
+    }
+
     if(!before) prop = withCreateDefaults(prop);
     const changes = diffProperty(before, prop);
 

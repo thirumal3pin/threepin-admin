@@ -295,6 +295,17 @@ everything it modifies first.
 2. Make the same change in the Inventory sheet, then tick the row's checkbox.
 3. **📥 Export CSV** exports exactly what's on screen (filter to Pending first
    for a to-do list).
+
+**Your dashboard edits are safe until you tick them.** While an edit is
+Pending here, the sync **keeps your dashboard value** — it will not be
+overwritten by the sheet, no matter how many syncs run (you'll see it listed
+under **🛡 Your dashboard edits are kept** in the sync preview). **Ticking the
+box is the handover:** it tells the system "the sheet has this now", and from
+then on the sheet's value wins for that field again. So only tick after you
+really updated the sheet. Same for deletes — a deleted property won't be
+re-created by the sync until its delete entry is ticked (or its sheet row
+removed).
+
 **Note:** entries can't be deleted — the list is the permanent record of edits
 (and of deleted properties).
 
