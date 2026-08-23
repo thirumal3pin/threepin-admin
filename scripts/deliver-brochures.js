@@ -37,7 +37,12 @@ const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
 const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
-const INVENTORY_BROCHURE_LINK_COL = 'AH'; // Brochure_Link — Inventory sheet was revised down to 36 cols (A-AJ); this used to be AR under the old 46-col layout
+// No hardcoded column letters here on purpose — the Inventory sheet has
+// already been reorganized once (46 cols -> 36, which silently moved
+// Brochure_Link from AR to AH and had this script writing links into empty
+// space for weeks with no error). Column position is resolved by header
+// text at the start of every run instead — see resolveInventoryColumns().
+const INVENTORY_PROPERTY_ID_HEADER = 'Property_ID';
 const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
 const DASHBOARD_TENANT_ID = 't_3pinrealty'; // dashboard.html / crm.html tenant, confirmed against live Firestore data
 
@@ -206,20 +211,29 @@ async function logDelivery(token, propertyId, result, detail) {
   }
 }
 
-// Checked once per run (not once per row) — the header can't change between
-// rows of the same run, so there's no reason to re-fetch it for every one.
-let brochureColumnChecked = false;
-async function assertInventoryBrochureColumn(token) {
-  if (brochureColumnChecked) return;
-  const [headerRow] = await sheetsGet(token, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}1`);
-  const actual = headerRow && headerRow[0];
-  if (actual !== INVENTORY_BROCHURE_LINK_HEADER) {
-    throw new Error(
-      `Inventory sheet column ${INVENTORY_BROCHURE_LINK_COL} is now "${actual}", not "${INVENTORY_BROCHURE_LINK_HEADER}" — ` +
-      `the sheet has been reorganized again. Update INVENTORY_BROCHURE_LINK_COL in this file before this script writes anything else.`
-    );
-  }
-  brochureColumnChecked = true;
+function columnLetter(zeroBasedIndex) {
+  return zeroBasedIndex < 26
+    ? String.fromCharCode(65 + zeroBasedIndex)
+    : String.fromCharCode(64 + Math.floor(zeroBasedIndex / 26)) + String.fromCharCode(65 + (zeroBasedIndex % 26));
+}
+
+// Reads the Inventory header row once per run and resolves both columns by
+// their header text rather than a hardcoded letter — a future reorg then
+// either keeps working automatically or fails loudly (skip + warn below),
+// instead of silently writing into whatever that letter now points at.
+let resolvedInventoryColumns = null;
+async function resolveInventoryColumns(token) {
+  if (resolvedInventoryColumns) return resolvedInventoryColumns;
+  const [headerRow] = await sheetsGet(token, INVENTORY_SHEET_ID, 'Inventory!A1:BZ1');
+  const findColumn = header => {
+    const idx = (headerRow || []).findIndex(h => String(h || '').trim() === header);
+    return idx === -1 ? null : columnLetter(idx);
+  };
+  resolvedInventoryColumns = {
+    propertyId: findColumn(INVENTORY_PROPERTY_ID_HEADER),
+    brochureLink: findColumn(INVENTORY_BROCHURE_LINK_HEADER),
+  };
+  return resolvedInventoryColumns;
 }
 
 function extractFolderId(driveUrl) {
@@ -302,16 +316,28 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   data.brochureLink = finish.drive_file_url;
   fs.writeFileSync(local.jsonPath, JSON.stringify(data, null, 2));
 
-  const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A:A');
-  const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
-  if (invRowIndex !== -1) {
-    // The Sheets API writes to whatever column you name — it won't complain
-    // if the sheet's been reorganized and that column now holds something
-    // else. Confirm the header matches before writing, so a future column
-    // shuffle fails loudly here instead of silently clobbering the wrong
-    // field with a Drive URL.
-    await assertInventoryBrochureColumn(sheetsToken);
-    await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}${invRowIndex + 1}`, finish.drive_file_url);
+  let inventoryRowUpdated = false;
+  let inventoryWarning = null;
+  const cols = await resolveInventoryColumns(sheetsToken);
+  const missingHeaders = [
+    !cols.propertyId && INVENTORY_PROPERTY_ID_HEADER,
+    !cols.brochureLink && INVENTORY_BROCHURE_LINK_HEADER,
+  ].filter(Boolean);
+  if (missingHeaders.length) {
+    // Never fall back to a hardcoded letter here — writing the link into the
+    // wrong column (silently, since the Sheets API doesn't complain) is
+    // worse than not writing it at all. The Drive upload and email above
+    // already succeeded, so the property isn't lost, just not cross-linked
+    // in the Inventory sheet until someone fixes the header.
+    inventoryWarning = `Inventory sheet header(s) not found: ${missingHeaders.join(', ')} — skipped Inventory update`;
+    console.warn(`[WARN] ${propertyId}: ${inventoryWarning}`);
+  } else {
+    const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.propertyId}:${cols.propertyId}`);
+    const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
+    if (invRowIndex !== -1) {
+      await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.brochureLink}${invRowIndex + 1}`, finish.drive_file_url);
+      inventoryRowUpdated = true;
+    }
   }
 
   let dashboardAdded = false;
@@ -325,7 +351,7 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   return {
     propertyId, ok: true, drive_file_url: finish.drive_file_url,
-    inventoryRowUpdated: invRowIndex !== -1, dashboardAdded, dashboardError
+    inventoryRowUpdated, inventoryWarning, dashboardAdded, dashboardError
   };
 }
 
@@ -359,9 +385,10 @@ async function main() {
       const result = await deliverRow(sheetsToken, rowIndex, row);
       if (result.ok) {
         const dashboardNote = result.dashboardAdded ? 'dashboard: added' : `dashboard: FAILED (${result.dashboardError})`;
-        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (inventory row updated: ${result.inventoryRowUpdated}, ${dashboardNote})`);
+        const inventoryNote = result.inventoryWarning || `inventory row updated: ${result.inventoryRowUpdated}`;
+        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (${inventoryNote}, ${dashboardNote})`);
         await logDelivery(sheetsToken, result.propertyId, 'Delivered',
-          `${result.drive_file_url} | ${dashboardNote}`);
+          `${result.drive_file_url} | ${inventoryNote} | ${dashboardNote}`);
       } else {
         console.log(`[SKIP] ${result.propertyId}: ${result.error}`);
         await logDelivery(sheetsToken, result.propertyId, 'Skipped', result.error);
