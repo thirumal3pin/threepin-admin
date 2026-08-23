@@ -101,88 +101,100 @@ function setIfPresent(target, key, value) {
 // separately; this stops the pipeline from planting the stale fields that
 // trigger it.
 //
+function isBlank(v) {
+  return v === undefined || v === null || v === '';
+}
+
 // `existing` is the property's current Firestore doc (or null if this is a
-// brand-new property) — passed in so createdAt survives a re-delivery
-// (a correction re-running this script) instead of jumping to "just added"
-// every time, and so fields this delivery doesn't mention aren't touched.
+// brand-new property).
+//
+// Two writers touch this collection: this script (Queue sheet + local
+// brochure JSON, every 30 min) and scripts/sync-inventory.js (the Inventory
+// sheet, run separately). They overlap on every property that's in both
+// places, and on every descriptive field — name, type, status, possession,
+// startingPrice, sqftRange, and more. Whichever ran last used to win, so a
+// brochure re-delivery could silently revert a correction made in the
+// Inventory sheet (the same class of bug as the readyToMove/status one
+// below, one level up — see docs/mac-scheduler-handoff.md, Problem 3).
+//
+// The fix: the Inventory sheet owns descriptive fields once a property
+// exists. This script only ever WRITES a descriptive field for a brand-new
+// property (so a card is never blank while waiting for the next Inventory
+// sync) or to fill one still blank on an existing doc. It never overwrites
+// a descriptive field that's already set — that's the sync's job, and it
+// doesn't matter which of the two ran most recently. Delivery artifacts
+// (brochureLink/photosLink/detailsText) and audit fields are this script's
+// own, always written regardless.
 function mapToDashboardProperty(data, existing) {
   const out = {};
+  const setDescriptive = existing
+    ? (key, value) => { if (isBlank(existing[key])) setIfPresent(out, key, value); }
+    : (key, value) => setIfPresent(out, key, value);
 
-  // Identity
+  // Identity — system-owned, always written
   const propertyId = data.propertyId || data.propertyCode || (existing && existing.propertyCode) || '';
   out.propertyCode = propertyId;
   out.tenantId = DASHBOARD_TENANT_ID;
 
   // Basic info
-  setIfPresent(out, 'name', data.name);
-  setIfPresent(out, 'builder', data.builder || 'Individual Owner');
-  setIfPresent(out, 'location', data.location);
-  setIfPresent(out, 'type', data.propertyType || data.type);
-  setIfPresent(out, 'config', data.config);
+  setDescriptive('name', data.name);
+  setDescriptive('builder', data.builder || 'Individual Owner');
+  setDescriptive('location', data.location);
+  setDescriptive('type', data.propertyType || data.type);
+  setDescriptive('config', data.config);
 
   // Status / sale info
-  Object.assign(out, normalizeStatus(data));
-  setIfPresent(out, 'saleType', data.newOrResale);
-  setIfPresent(out, 'propertyAge', data.ageOfProperty);
-  setIfPresent(out, 'possession', data.possessionDate || data.possession || 'Contact for details');
+  const { status, constructionStage } = normalizeStatus(data);
+  setDescriptive('status', status);
+  if (constructionStage !== undefined) setDescriptive('constructionStage', constructionStage);
+  setDescriptive('saleType', data.newOrResale);
+  setDescriptive('propertyAge', data.ageOfProperty);
+  setDescriptive('possession', data.possessionDate || data.possession || 'Contact for details');
 
   // Pricing
-  if (data.startingPrice) out.startingPrice = data.startingPrice;
-  else if (data.price) out.startingPrice = data.price;
-  else if (data.priceInCr) out.startingPrice = `₹${data.priceInCr} Cr`;
-  else out.startingPrice = 'Price on Request';
-  setIfPresent(out, 'pricePerSqft', data.pricePerSqft);
+  let startingPrice;
+  if (data.startingPrice) startingPrice = data.startingPrice;
+  else if (data.price) startingPrice = data.price;
+  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
+  else startingPrice = 'Price on Request';
+  setDescriptive('startingPrice', startingPrice);
+  setDescriptive('pricePerSqft', data.pricePerSqft);
 
   // Specs — sqftRange falls back through built-up -> super built-up -> carpet,
   // same priority order the old code used, just without keeping the raw
   // builtupArea name around afterwards.
-  setIfPresent(out, 'sqftRange', data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea);
-  setIfPresent(out, 'superBuiltupArea', data.superBuiltupArea);
-  setIfPresent(out, 'carpetArea', data.carpetArea);
-  setIfPresent(out, 'uds', data.uds);
-  setIfPresent(out, 'totalUnits', data.totalUnits);
-  setIfPresent(out, 'totalLandArea', data.totalLandArea);
-  setIfPresent(out, 'totalTowers', data.totalTowers);
-  setIfPresent(out, 'totalFloors', data.totalFloors);
-  setIfPresent(out, 'floorNo', data.floorNo);
-  setIfPresent(out, 'facing', data.facing);
-  setIfPresent(out, 'bathrooms', data.bathrooms);
-  setIfPresent(out, 'parking', data.parking);
-  setIfPresent(out, 'parkingType', data.parkingType);
-  setIfPresent(out, 'furnishing', data.furnishing);
-  setIfPresent(out, 'cornerUnit', data.cornerUnit);
-  setIfPresent(out, 'vastu', data.vastu);
-  setIfPresent(out, 'powerBackup', data.ebGenerator);
-  setIfPresent(out, 'approval', data.approval);
+  setDescriptive('sqftRange', data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea);
+  setDescriptive('superBuiltupArea', data.superBuiltupArea);
+  setDescriptive('carpetArea', data.carpetArea);
+  setDescriptive('uds', data.uds);
+  setDescriptive('totalUnits', data.totalUnits);
+  setDescriptive('totalLandArea', data.totalLandArea);
+  setDescriptive('totalTowers', data.totalTowers);
+  setDescriptive('totalFloors', data.totalFloors);
+  setDescriptive('floorNo', data.floorNo);
+  setDescriptive('facing', data.facing);
+  setDescriptive('bathrooms', data.bathrooms);
+  setDescriptive('parking', data.parking);
+  setDescriptive('parkingType', data.parkingType);
+  setDescriptive('furnishing', data.furnishing);
+  setDescriptive('cornerUnit', data.cornerUnit);
+  setDescriptive('vastu', data.vastu);
+  setDescriptive('powerBackup', data.ebGenerator);
+  setDescriptive('approval', data.approval);
 
   // Description
-  setIfPresent(out, 'highlights', data.highlights);
-  setIfPresent(out, 'amenities', data.amenities);
-  setIfPresent(out, 'nearbyLandmark', data.nearbyLandmark);
-  setIfPresent(out, 'connectivity', data.connectivity);
-  setIfPresent(out, 'contactName', data.contactName);
-  setIfPresent(out, 'contactNumber', data.contactNumber);
+  setDescriptive('highlights', data.highlights);
+  setDescriptive('amenities', data.amenities);
+  setDescriptive('nearbyLandmark', data.nearbyLandmark);
+  setDescriptive('connectivity', data.connectivity);
+  setDescriptive('contactName', data.contactName);
+  setDescriptive('contactNumber', data.contactNumber);
+  setDescriptive('sheetNotes', data.notes);
 
-  // Delivery artifacts — this pipeline owns these
-  setIfPresent(out, 'brochureLink', data.brochureLink);
-  setIfPresent(out, 'photosLink', data.photosLink);
-  setIfPresent(out, 'detailsText', data.detailsText);
-
-  // Deliberately NOT written, even though the source JSON may carry them:
-  //   - soldOut, interestLevel — dashboard-owned; writing either would
-  //     un-sell a property or wipe a lead rating on the next scheduler run.
-  //   - availability — Inventory sheet's own column owns this once a sync
-  //     script exists; the pipeline racing it to write the same field is
-  //     exactly the kind of two-writers-one-field bug this cleanup is for.
-
-  // Notes column, kept whole rather than merged into the generic bucket —
-  // it's long-form and worth its own field.
-  setIfPresent(out, 'sheetNotes', data.notes);
-
-  // Everything else the source JSON carries with no canonical field above.
-  // Not currently rendered by the dashboard (nothing reads sheetExtras yet),
-  // but kept rather than dropped so a future UI pass has the data to surface
-  // instead of needing to re-run every past delivery to recover it.
+  // Everything else the source JSON carries with no canonical field above —
+  // same descriptive-tier ownership, so fill in only when the existing doc
+  // has none at all rather than merging key by key (a partial overwrite of
+  // a bag-of-extras is more confusing than helpful).
   const extras = {};
   setIfPresent(extras, 'Nearby', data.nearby);
   setIfPresent(extras, 'Main Door Facing', data.mainDoorFacing);
@@ -193,7 +205,18 @@ function mapToDashboardProperty(data, existing) {
   setIfPresent(extras, 'Registration Extra', data.registrationExtra);
   setIfPresent(extras, 'Loan Eligible', data.loanEligible);
   setIfPresent(extras, 'Site Visit Status', data.siteVisitStatus);
-  if (Object.keys(extras).length) out.sheetExtras = extras;
+  if (Object.keys(extras).length && (!existing || isBlank(existing.sheetExtras))) out.sheetExtras = extras;
+
+  // Delivery artifacts — this pipeline owns these outright, always written
+  // regardless of what else exists on the doc.
+  setIfPresent(out, 'brochureLink', data.brochureLink);
+  setIfPresent(out, 'photosLink', data.photosLink);
+  setIfPresent(out, 'detailsText', data.detailsText);
+
+  // Deliberately NOT written, even though the source JSON may carry them:
+  //   - soldOut, interestLevel — dashboard-owned; writing either would
+  //     un-sell a property or wipe a lead rating on the next scheduler run.
+  //   - availability — Inventory sheet's own column.
 
   // Audit
   out.createdAt = (existing && existing.createdAt) || Date.now();
