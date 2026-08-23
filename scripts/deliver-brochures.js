@@ -62,41 +62,156 @@ function getFirestoreDb() {
   return getFirestore();
 }
 
-// Maps the brochure pipeline's property JSON (propertyId/propertyType/price/
-// priceInCr/readyToMove/builtupArea/...) onto dashboard.html's own schema —
-// the same mapping dashboard-assets/app.js's normalizeProperty() does
-// client-side for pasted JSON, mirrored here since this runs server-side.
-function mapToDashboardProperty(data) {
-  const type = data.propertyType || data.type || 'Property';
-  const builder = data.builder || 'Individual Owner';
-  let startingPrice;
-  if (data.price) startingPrice = data.price;
-  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = data.startingPrice || 'Price on Request';
-  let status;
-  if (data.readyToMove !== undefined || data.newOrResale !== undefined) {
-    status = (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') ? 'Ready to Move' : 'Under Construction';
-  } else {
-    status = data.status || 'Under Construction';
+// The dashboard's status filter recognizes exactly these two strings — any
+// other value drops a property out of BOTH filter buttons, making it
+// invisible on the grid without any visible error. A stage description the
+// source uses ("Pre-Launch", "Demolition stage", ...) is kept verbatim in
+// constructionStage instead of being discarded.
+const STATUS_READY = 'Ready to Move';
+const STATUS_UNDER_CONSTRUCTION = 'Under Construction';
+
+function normalizeStatus(data) {
+  if (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') {
+    return { status: STATUS_READY };
   }
-  const possession = data.possessionDate || data.possession || 'Contact for details';
-  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
-  return {
-    ...data,
-    propertyCode: data.propertyCode || data.propertyId || '',
-    type, builder, startingPrice, status, possession, sqftRange,
-    tenantId: DASHBOARD_TENANT_ID,
-    soldOut: false,
-    // Matches the dashboard's own add-property convention (savePModal in
-    // app.js) so "Recently Added" sort actually surfaces these — without
-    // this, insertValue() falls back to 0 and they sort as if seeded
-    // on day one, buried under everything actually added since.
-    createdAt: data.createdAt || Date.now()
-  };
+  const raw = String(data.status || '').trim();
+  if (raw === STATUS_READY) return { status: STATUS_READY };
+  if (!raw || raw === STATUS_UNDER_CONSTRUCTION) return { status: STATUS_UNDER_CONSTRUCTION };
+  return { status: STATUS_UNDER_CONSTRUCTION, constructionStage: raw };
+}
+
+// Only assigns the key when the value is present — Firestore merge writes an
+// empty string or null right over whatever real value was already there, so
+// "not stated in this delivery" must mean "leave it alone", not "blank it".
+function setIfPresent(target, key, value) {
+  if (value !== undefined && value !== null && value !== '') target[key] = value;
+}
+
+// Maps the brochure pipeline's property JSON onto dashboard.html's actual
+// schema (see the PMODAL_FIELDS list in dashboard-assets/app.js for what the
+// dashboard's own Add/Edit form edits — that list is the ground truth for
+// "canonical", not this pipeline's convenience). Built key by key rather
+// than spreading `data`: a spread let every dead source field name
+// (propertyId, propertyType, price, priceInCr, readyToMove, newOrResale,
+// possessionDate, builtupArea) ride along forever, and dashboard-assets/
+// app.js's normalizeProperty() re-derives `status` from the leftover
+// readyToMove/newOrResale on every manual save — so a user switching a
+// property to "Ready to Move" in the UI got silently reverted back to
+// "Under Construction" on the next edit. That dashboard-side bug is fixed
+// separately; this stops the pipeline from planting the stale fields that
+// trigger it.
+//
+// `existing` is the property's current Firestore doc (or null if this is a
+// brand-new property) — passed in so createdAt survives a re-delivery
+// (a correction re-running this script) instead of jumping to "just added"
+// every time, and so fields this delivery doesn't mention aren't touched.
+function mapToDashboardProperty(data, existing) {
+  const out = {};
+
+  // Identity
+  const propertyId = data.propertyId || data.propertyCode || (existing && existing.propertyCode) || '';
+  out.propertyCode = propertyId;
+  out.tenantId = DASHBOARD_TENANT_ID;
+
+  // Basic info
+  setIfPresent(out, 'name', data.name);
+  setIfPresent(out, 'builder', data.builder || 'Individual Owner');
+  setIfPresent(out, 'location', data.location);
+  setIfPresent(out, 'type', data.propertyType || data.type);
+  setIfPresent(out, 'config', data.config);
+
+  // Status / sale info
+  Object.assign(out, normalizeStatus(data));
+  setIfPresent(out, 'saleType', data.newOrResale);
+  setIfPresent(out, 'propertyAge', data.ageOfProperty);
+  setIfPresent(out, 'possession', data.possessionDate || data.possession || 'Contact for details');
+
+  // Pricing
+  if (data.startingPrice) out.startingPrice = data.startingPrice;
+  else if (data.price) out.startingPrice = data.price;
+  else if (data.priceInCr) out.startingPrice = `₹${data.priceInCr} Cr`;
+  else out.startingPrice = 'Price on Request';
+  setIfPresent(out, 'pricePerSqft', data.pricePerSqft);
+
+  // Specs — sqftRange falls back through built-up -> super built-up -> carpet,
+  // same priority order the old code used, just without keeping the raw
+  // builtupArea name around afterwards.
+  setIfPresent(out, 'sqftRange', data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea);
+  setIfPresent(out, 'superBuiltupArea', data.superBuiltupArea);
+  setIfPresent(out, 'carpetArea', data.carpetArea);
+  setIfPresent(out, 'uds', data.uds);
+  setIfPresent(out, 'totalUnits', data.totalUnits);
+  setIfPresent(out, 'totalLandArea', data.totalLandArea);
+  setIfPresent(out, 'totalTowers', data.totalTowers);
+  setIfPresent(out, 'totalFloors', data.totalFloors);
+  setIfPresent(out, 'floorNo', data.floorNo);
+  setIfPresent(out, 'facing', data.facing);
+  setIfPresent(out, 'bathrooms', data.bathrooms);
+  setIfPresent(out, 'parking', data.parking);
+  setIfPresent(out, 'parkingType', data.parkingType);
+  setIfPresent(out, 'furnishing', data.furnishing);
+  setIfPresent(out, 'cornerUnit', data.cornerUnit);
+  setIfPresent(out, 'vastu', data.vastu);
+  setIfPresent(out, 'powerBackup', data.ebGenerator);
+  setIfPresent(out, 'approval', data.approval);
+
+  // Description
+  setIfPresent(out, 'highlights', data.highlights);
+  setIfPresent(out, 'amenities', data.amenities);
+  setIfPresent(out, 'nearbyLandmark', data.nearbyLandmark);
+  setIfPresent(out, 'connectivity', data.connectivity);
+  setIfPresent(out, 'contactName', data.contactName);
+  setIfPresent(out, 'contactNumber', data.contactNumber);
+
+  // Delivery artifacts — this pipeline owns these
+  setIfPresent(out, 'brochureLink', data.brochureLink);
+  setIfPresent(out, 'photosLink', data.photosLink);
+  setIfPresent(out, 'detailsText', data.detailsText);
+
+  // Deliberately NOT written, even though the source JSON may carry them:
+  //   - soldOut, interestLevel — dashboard-owned; writing either would
+  //     un-sell a property or wipe a lead rating on the next scheduler run.
+  //   - availability — Inventory sheet's own column owns this once a sync
+  //     script exists; the pipeline racing it to write the same field is
+  //     exactly the kind of two-writers-one-field bug this cleanup is for.
+
+  // Notes column, kept whole rather than merged into the generic bucket —
+  // it's long-form and worth its own field.
+  setIfPresent(out, 'sheetNotes', data.notes);
+
+  // Everything else the source JSON carries with no canonical field above.
+  // Not currently rendered by the dashboard (nothing reads sheetExtras yet),
+  // but kept rather than dropped so a future UI pass has the data to surface
+  // instead of needing to re-run every past delivery to recover it.
+  const extras = {};
+  setIfPresent(extras, 'Nearby', data.nearby);
+  setIfPresent(extras, 'Main Door Facing', data.mainDoorFacing);
+  setIfPresent(extras, 'Plot Size', data.plotSize);
+  setIfPresent(extras, 'Maintenance', data.maintenance);
+  setIfPresent(extras, 'Negotiable', data.negotiable);
+  setIfPresent(extras, 'GST Applicable', data.gstApplicable);
+  setIfPresent(extras, 'Registration Extra', data.registrationExtra);
+  setIfPresent(extras, 'Loan Eligible', data.loanEligible);
+  setIfPresent(extras, 'Site Visit Status', data.siteVisitStatus);
+  if (Object.keys(extras).length) out.sheetExtras = extras;
+
+  // Audit
+  out.createdAt = (existing && existing.createdAt) || Date.now();
+  out.updatedAt = Date.now();
+  out.source = 'pipeline';
+
+  return out;
 }
 
 async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, photosLink, detailsText) {
   const db = getFirestoreDb();
+  const ref = db.collection('properties').doc(propertyId);
+  // Read first so createdAt survives a re-delivery (e.g. a brochure
+  // correction re-running this script) instead of jumping back to "just
+  // added" on the dashboard's Recently Added sort every single time.
+  const existingSnap = await ref.get();
+  const existing = existingSnap.exists ? existingSnap.data() : null;
+
   const mapped = mapToDashboardProperty({
     ...propertyJson,
     brochureLink: driveFileUrl,
@@ -105,14 +220,14 @@ async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, p
     // buttons have something to show without a second sheet read.
     photosLink: photosLink || '',
     detailsText: detailsText || ''
-  });
+  }, existing);
   // The dashboard's own client code (savePModal in app.js) always bakes an
   // explicit `id` field into the document data, matching the doc path —
   // firebase-sync.js's onSnapshot listener reads that field, not Firestore's
   // real doc.id, so leaving it out here made every card silently unclickable
   // (openDetail's lookup against the real `id` never matched).
   mapped.id = propertyId;
-  await db.collection('properties').doc(propertyId).set(mapped, { merge: true });
+  await ref.set(mapped, { merge: true });
 }
 const SECRET = process.env.WEBHOOK_SHARED_SECRET;
 

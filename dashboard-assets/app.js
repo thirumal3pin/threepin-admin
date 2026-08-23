@@ -550,28 +550,39 @@ function discardPModalChanges(){
 }
 
 // Accepts either the dashboard's own schema or the alternate flat schema
-// (propertyType/price/priceInCr/readyToMove/builtupArea/...) used by some
-// listing sources, and fills in the fields the grid/detail view rely on.
+// (propertyType/price/priceInCr/readyToMove/builtupArea/...) some pipeline
+// deliveries used to write, and fills in the fields the grid/detail view
+// rely on.
+//
+// The canonical field ALWAYS wins when present — the alt-schema fallback
+// below exists only to import foreign JSON that never had these fields to
+// begin with (loadPModalJson's paste-to-form feature). Checking the alt
+// name first used to mean: any property still carrying a leftover
+// propertyType/price/priceInCr/readyToMove/newOrResale/possessionDate/
+// builtupArea from an older pipeline write had its type/price/status/
+// possession/area silently reverted to the stale value on every single
+// edit — including picking a new Status in this very form, since
+// buildDataFromForm() starts from the existing document (stale fields and
+// all) and layers only the form's own fields on top of it.
 function normalizeProperty(data){
-  // Raw source fields always win over a previously-derived value, so
-  // re-editing price/type/status/etc. on an already-saved alt-schema
-  // property actually changes what's displayed instead of being masked
-  // by whatever got baked in on the first save.
   const propertyCode = data.propertyCode || data.propertyId || '';
-  const type = data.propertyType || data.type || 'Property';
+  const type = data.type || data.propertyType || 'Property';
   const builder = data.builder || 'Individual Owner';
   let startingPrice;
-  if(data.price) startingPrice = data.price;
+  if(data.startingPrice) startingPrice = data.startingPrice;
+  else if(data.price) startingPrice = data.price;
   else if(data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = data.startingPrice || 'Price on Request';
+  else startingPrice = 'Price on Request';
   let status;
-  if(data.readyToMove !== undefined || data.newOrResale !== undefined){
+  if(data.status === 'Ready to Move' || data.status === 'Under Construction'){
+    status = data.status;
+  } else if(data.readyToMove !== undefined || data.newOrResale !== undefined){
     status = (data.readyToMove==='Yes' || data.newOrResale==='Resale') ? 'Ready to Move' : 'Under Construction';
   } else {
-    status = data.status || 'Under Construction';
+    status = 'Under Construction';
   }
-  const possession = data.possessionDate || data.possession || 'Contact for details';
-  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
+  const possession = data.possession || data.possessionDate || 'Contact for details';
+  const sqftRange = data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea || '';
   return { ...data, propertyCode, type, builder, startingPrice, status, possession, sqftRange };
 }
 
