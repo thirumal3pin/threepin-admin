@@ -127,6 +127,40 @@ export async function readInventoryRows(token){
   return data.values || [];
 }
 
+// ── Queue sheet (brochure intake form responses) ──
+// Column C holds the photo-folder link and column D the full WhatsApp-ready
+// property description — data the Inventory sheet doesn't carry. Read-only,
+// keyed by the Property ID parsed from column B ("MYLA002 - 6BHK Maha
+// Palace" → MYLA002). Used to FILL BLANKS only: the pipeline owns
+// photosLink/detailsText on delivered properties, so a value already present
+// in Firestore is never overwritten from here.
+export const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
+const QUEUE_RANGE = "'Form Responses 1'!A1:F1000";
+
+export async function readQueueFill(token){
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${QUEUE_SHEET_ID}/values/${encodeURIComponent(QUEUE_RANGE)}`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json();
+  // The Queue sheet being unreadable must never block an Inventory sync —
+  // it only enriches. Missing permission degrades to "no fill data".
+  if(!res.ok) return new Map();
+  const rows = data.values || [];
+  const fill = new Map();
+  for(let i = 1; i < rows.length; i++){
+    const r = rows[i] || [];
+    const id = String(r[1] || '').split(' - ')[0].trim();
+    if(!id) continue;
+    // Later rows win — the sheet is append-ordered by submission time, so a
+    // re-submitted property's newer photos/details replace the older entry.
+    fill.set(id, {
+      photosLink: String(r[2] || '').trim(),
+      detailsText: String(r[3] || '').trim()
+    });
+  }
+  return fill;
+}
+
 // Builds the canonical property document from one sheet row.
 export function rowToProperty(headers, row){
   const cell = i => { const v = row[i]; return v == null ? '' : String(v).trim(); };
@@ -214,8 +248,10 @@ export function diffProperty(before, after){
 }
 
 // Works out what a sync would do, without writing anything. Both callers use
-// this so the dry run and the real run can never disagree.
-export function planSync(rows, existing, onlyId){
+// this so the dry run and the real run can never disagree. `queueFill` (from
+// readQueueFill) supplies photosLink/detailsText for properties whose sheet
+// row and Firestore doc both lack them — fill blanks, never overwrite.
+export function planSync(rows, existing, onlyId, queueFill){
   const headers = rows[0] || [];
   const plan = { headers, creates: [], updates: [], unchanged: 0, writes: [], matchedIds: new Set() };
 
@@ -226,6 +262,17 @@ export function planSync(rows, existing, onlyId){
     plan.matchedIds.add(prop.id);
 
     const before = existing.get(prop.id);
+    if(queueFill && queueFill.has(prop.id)){
+      const q = queueFill.get(prop.id);
+      for(const k of ['photosLink','detailsText']){
+        // Three-way blank check: the queue value only lands when the
+        // inventory row didn't supply one AND the live document doesn't
+        // already have one — so it can never displace pipeline-written data.
+        const inSheet = prop[k] && String(prop[k]).trim();
+        const inDb = before && before[k] && String(before[k]).trim();
+        if(q[k] && !inSheet && !inDb) prop[k] = q[k];
+      }
+    }
     if(!before) prop = withCreateDefaults(prop);
     const changes = diffProperty(before, prop);
 

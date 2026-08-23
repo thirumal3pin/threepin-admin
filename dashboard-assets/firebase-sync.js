@@ -64,6 +64,13 @@ function subscribeToProperties(tenantId){
     });
 }
 
+// property.html sets window.__pinPageMode='single' (in a plain inline script,
+// which runs before this deferred module) to say "I only need ONE property".
+// That page then skips the whole-collection listener below and opens a
+// single-doc listener instead — one document read instead of the entire
+// inventory, which is what makes a shared link open fast.
+const pageMode = window.__pinPageMode || 'list';
+
 window.dashboardFirebase = {
   // merge:true is deliberate and load-bearing. The dashboard form only knows
   // about PROPERTY_FIELDS, but the document also carries fields written by
@@ -75,6 +82,15 @@ window.dashboardFirebase = {
     .catch(e => { console.error('Firestore save error:', e); throw e; }),
   deleteProperty: (id) => deleteDoc(doc(db, 'properties', id))
     .catch(e => { console.error('Firestore delete error:', e); throw e; }),
+  // Live single-property subscription, used by property.html. Costs the same
+  // as a one-shot read but keeps the standalone page as up-to-date as the
+  // dashboard grid — an edit made elsewhere shows up here without a refresh.
+  // Returns an unsubscribe.
+  subscribeToProperty: (id, onData, onError) => onSnapshot(
+    doc(db, 'properties', id),
+    snap => onData(snap.exists() ? { ...snap.data(), id: snap.id } : null),
+    err => { console.error('Firestore property sync error:', err); if (onError) onError(err); }
+  ),
 
   // ── Notes / events subcollection ──
   // Kept OUT of the property document on purpose, mirroring the CRM's
@@ -128,6 +144,9 @@ onAuthStateChanged(auth, async (user) => {
     currentTenantId = tokenResult.claims.tenantId || null;
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
+    } else if (pageMode === 'single') {
+      // Single-property page: it loads its own doc, no collection listener.
+      if (window.onPinTenantReady) window.onPinTenantReady(currentTenantId);
     } else {
       subscribeToProperties(currentTenantId);
     }

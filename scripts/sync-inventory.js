@@ -29,7 +29,7 @@ import path from 'node:path';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
-  getSheetsToken, readInventoryRows, planSync, unmappedHeaders,
+  getSheetsToken, readInventoryRows, readQueueFill, planSync, unmappedHeaders,
   commitWrites, loadExistingProperties, TENANT_ID
 } from '../api/_inventory-shared.js';
 
@@ -79,7 +79,9 @@ async function main(){
                     : '── DRY RUN — nothing will be written. Re-run with --apply to commit. ──\n');
 
   const sa = JSON.parse(fs.readFileSync(SA_PATH, 'utf8'));
-  const rows = await readInventoryRows(await getSheetsToken(sa));
+  const sheetsToken = await getSheetsToken(sa);
+  const rows = await readInventoryRows(sheetsToken);
+  const queueFill = await readQueueFill(sheetsToken);
   const headers = rows[0] || [];
   console.log(`sheet: ${rows.length - 1} rows, ${headers.length} columns`);
   const unmapped = unmappedHeaders(headers);
@@ -90,7 +92,7 @@ async function main(){
   const existing = await loadExistingProperties(db);
   console.log(`firestore: ${existing.size} properties for ${TENANT_ID}\n`);
 
-  const plan = planSync(rows, existing, ONLY_ID);
+  const plan = planSync(rows, existing, ONLY_ID, queueFill);
 
   plan.creates.forEach(c => console.log(`  + CREATE ${c.id.padEnd(10)} ${trunc(c.name, 46)}`));
   plan.updates.forEach(u => {

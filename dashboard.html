@@ -55,6 +55,7 @@
       <div class="hstat a"><div class="hstat-n" id="cU">0</div><div class="hstat-l">Upcoming</div></div>
       <div class="hstat t"><div class="hstat-n" id="cT">0</div><div class="hstat-l">Total</div></div>
       <button type="button" class="sync-nav-btn" onclick="openSyncModal()" title="Pull the latest data from the Inventory master sheet">🔄 Sync from Sheet</button>
+      <button type="button" class="missing-nav-btn" onclick="openMissing()" title="Properties with agent-facing fields still empty">⚠️ Missing Data <span class="missing-badge" id="missingCountBadge" style="display:none">0</span></button>
       <button type="button" class="changes-nav-btn" onclick="openChanges()" title="Changes made here, to carry across to the inventory sheet">🕒 Changes</button>
       <button type="button" class="brochure-nav-btn" onclick="openBrochureModal()" title="New Listing Intake — Create Brochure">📋 Create Brochure</button>
       <a href="crm.html" class="crm-nav-btn" title="Open Lead CRM">💬 Lead CRM</a>
@@ -124,6 +125,7 @@
         All Properties
       </button>
       <div class="dp-hdr-actions">
+        <button class="dp-hact share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
         <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
         <button class="dp-hact crm-btn" id="dpCrm" onclick="openLeadCrm(currentDetailId)">📋 Lead CRM</button>
         <button class="dp-hact" id="dpSoldOut" onclick="toggleSoldOut(currentDetailId)">🏷️ Mark Sold Out</button>
@@ -159,6 +161,29 @@
       <button class="pmodal-save" id="syncApplyBtn" onclick="applySync()" style="display:none">✓ Apply to dashboard</button>
     </div>
   </div>
+</div>
+
+<!-- MISSING DATA PANEL -->
+<div id="missingPanel">
+  <div class="chg-hdr">
+    <div class="dp-hdr-nav">
+      <button class="dp-back" onclick="closeMissing()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Properties
+      </button>
+    </div>
+    <div class="chg-title-row">
+      <div>
+        <h1 class="chg-title">Missing data</h1>
+        <div class="chg-sub">Agent-facing fields still empty, per property. Fill one right here (it saves to the dashboard and lands in the Changes list for the sheet), or mark it Not required if it doesn't apply — a plot has no floor number.</div>
+      </div>
+      <div class="chg-count" id="missingCount2"></div>
+    </div>
+    <div class="chg-controls">
+      <input class="chg-search" id="missingSearch" placeholder="Search property, code or location…" oninput="onMissingSearch(this.value)">
+    </div>
+  </div>
+  <div class="chg-body" id="missingBody"></div>
 </div>
 
 <!-- CHANGE LOG PANEL -->
@@ -264,10 +289,11 @@
 <div id="shareDetailsModal">
   <div class="pmodal-box share-box">
     <div class="pmodal-hdr">
-      <div class="pmodal-title">🔗 Share Details</div>
+      <div class="pmodal-title">💬 Client Details — WhatsApp</div>
       <button class="pmodal-x" onclick="closeShareDetailsModal()">×</button>
     </div>
     <div class="pmodal-body">
+      <p class="share-hint">Safe to send to customers — plain details only, no internal link. To send a colleague the property page, use <b>🔗 Share Link</b> instead.</p>
       <textarea id="shareDetailsTa" class="pmodal-ta" rows="14" readonly></textarea>
     </div>
     <div class="pmodal-ftr">
@@ -281,6 +307,7 @@
 
 <script src="dashboard-assets/sample-data.js"></script>
 <script src="dashboard-assets/auth.js"></script>
+<script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>
 <script src="dashboard-assets/brochure-form.js"></script>
 <script type="module" src="dashboard-assets/firebase-sync.js"></script>
