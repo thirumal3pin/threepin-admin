@@ -513,5 +513,36 @@
   }
 </script>
 
+<script>
+  (function() {
+    function loadTailorTalkWidget(callback) {
+      var script = document.createElement('script');
+      script.src = "https://plugins.tailortalk.ai/widget.js";
+      script.onload = callback;
+      document.head.appendChild(script);
+    }
+
+    loadTailorTalkWidget(function() {
+      // Now TailorTalk is defined
+      TailorTalk.init({
+        chatWindowTitle: "threepin",
+        agentId: "nlthkiyo",
+        color: "#092421",
+        position: "right",
+        fullscreen: true,
+        options: {
+    "buttonText": "Let's Chat",
+    "welcomeMessage": "Hello This is AIRA AI from 3 PIN REALTY! How can I assist you today?",
+    "buttonIcon": "bot",
+    "popupMessageDelay": 0,
+    "popupMessage": "Need help? ",
+    "quickQuestions": [],
+    "askDetails": true
+}
+      });
+    });
+  })();
+</script>
+
 </body>
 </html>
