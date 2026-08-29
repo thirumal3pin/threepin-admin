@@ -24,7 +24,11 @@ let dashboardEmailSettingsDraft = { enabled:false, recipients:[] };
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
   whatsapp: { label: 'WhatsApp', icon: '🟢' },
-  instagram: { label: 'Instagram', icon: '📸' }
+  instagram: { label: 'Instagram', icon: '📸' },
+  // Written by api/meta-webhook.js from the lead's `platform` field, so a
+  // Facebook lead ad and an Instagram one stay distinguishable in the channel
+  // mix rather than collapsing into one bucket.
+  facebook: { label: 'Facebook', icon: '🔵' }
 };
 function channelLabel(c){
   const m = CHANNEL_META[c];
@@ -120,6 +124,7 @@ function refreshAll(){
 // ═══════ INIT ═══════
 function init(){
   setupSearch();
+  loadFilterPrefs();
   updateNavState();
   applyFilters();
   updateStats();
@@ -216,14 +221,178 @@ function clearSearch(){
   applyFilters();
 }
 
+// ── Filter bar wiring ──
+const FILTER_PREF_KEY = 'crmFilterPrefs';
+
+function saveFilterPrefs(){
+  // Per-browser, like the theme and row-density preferences — a filter is a
+  // personal working view, not shared team state.
+  try{
+    localStorage.setItem(FILTER_PREF_KEY, JSON.stringify({ quickFilter, dimFilters, currentSort }));
+  }catch(e){ /* private mode / blocked storage — filters still work in-session */ }
+}
+function loadFilterPrefs(){
+  try{
+    const raw = localStorage.getItem(FILTER_PREF_KEY);
+    if(!raw) return;
+    const p = JSON.parse(raw) || {};
+    if(p.quickFilter && QUICK_FILTERS[p.quickFilter]) quickFilter = p.quickFilter;
+    if(p.currentSort && SORTS[p.currentSort]) currentSort = p.currentSort;
+    if(p.dimFilters) dimFilters = { ...dimFilters, ...p.dimFilters };
+  }catch(e){ /* corrupt value — fall back to defaults rather than breaking init */ }
+}
+
+function opt(value, label, selected){
+  return `<option value="${escapeHtml(value)}"${selected===value?' selected':''}>${escapeHtml(label)}</option>`;
+}
+
+// Options come from the leads actually present, so the bar never offers a
+// filter that would return nothing. Rebuilt on every pass because stages,
+// enquiry types and owners all change under the user.
+function buildFilterOptions(){
+  const set = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
+
+  set('fStage', opt('', 'All stages', dimFilters.stage) +
+    stages.map(s=>opt(s.id, s.name, dimFilters.stage)).join(''));
+
+  const sources = [...new Set(leads.map(l=>l.source || 'manual'))].sort();
+  set('fSource', opt('', 'All sources', dimFilters.source) +
+    sources.map(s=>opt(s, sourceLabel(s), dimFilters.source)).join(''));
+
+  const channels = [...new Set(leads.map(l=>l.channel).filter(Boolean))].sort();
+  set('fChannel', opt('', 'All channels', dimFilters.channel) +
+    channels.map(c=>opt(c, channelLabel(c), dimFilters.channel)).join(''));
+
+  const types = [...new Set(leads.map(l=>l.enquiryType).filter(Boolean))].sort();
+  set('fType', opt('', 'All types', dimFilters.enquiryType) +
+    types.map(x=>opt(x, x, dimFilters.enquiryType)).join(''));
+
+  const owners = [...new Set(leads.map(l=>l.updatedBy).filter(Boolean))].sort();
+  set('fOwner', opt('', 'Anyone', dimFilters.owner) +
+    owners.map(o=>opt(o, o.split('@')[0], dimFilters.owner)).join(''));
+
+  set('fSort', Object.entries(SORTS).map(([k,v])=>opt(k, v.label, currentSort)).join(''));
+}
+
+function syncFilterBar(){
+  buildFilterOptions();
+  document.querySelectorAll('.fchip').forEach(b=>b.classList.toggle('at', b.dataset.q === quickFilter));
+
+  const n = activeFilterCount();
+  const clear = document.getElementById('fClear');
+  if(clear) clear.classList.toggle('show', n > 0 || !!currentSearch);
+
+  const count = document.getElementById('fCount');
+  if(count){
+    const showing = filteredLeads.length, total = leads.length;
+    count.textContent = (showing === total)
+      ? `${total} lead${total===1?'':'s'}`
+      : `${showing} of ${total}`;
+    count.classList.toggle('filtered', showing !== total);
+  }
+}
+
+function setQuickFilter(key){
+  quickFilter = QUICK_FILTERS[key] ? key : 'all';
+  saveFilterPrefs();
+  applyFilters();
+}
+function onFilterChange(){
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  dimFilters = {
+    stage: val('fStage'),
+    source: val('fSource'),
+    channel: val('fChannel'),
+    enquiryType: val('fType'),
+    owner: val('fOwner')
+  };
+  currentSort = SORTS[val('fSort')] ? val('fSort') : 'updated';
+  saveFilterPrefs();
+  applyFilters();
+}
+function clearAllFilters(){
+  quickFilter = 'all';
+  dimFilters = { stage:'', source:'', channel:'', enquiryType:'', owner:'' };
+  const inp = document.getElementById('searchInput');
+  if(inp) inp.value = '';
+  currentSearch = '';
+  const sc = document.getElementById('srchClear');
+  if(sc) sc.classList.remove('show');
+  saveFilterPrefs();
+  applyFilters();
+}
+
+// ═══════ FILTER BAR ═══════
+// Quick filters answer the questions the daily routine actually asks ("what
+// came in today?", "what's gone cold?"). The dropdowns narrow by dimension and
+// stack with each other, the search box and the quick filter. Everything runs
+// inside applyFilters(), so a selection filters the Board, the List AND the
+// Follow-ups view at once rather than each view growing its own controls.
+const QUICK_FILTERS = {
+  all:     { label:'All',           test: () => true },
+  today:   { label:'New today',     test: l => isToday(l.createdAt) },
+  overdue: { label:'Overdue',       test: (l,t) => !!l.followUpAt && l.followUpAt < t.now },
+  due:     { label:'Due today',     test: (l,t) => !!l.followUpAt && l.followUpAt >= t.now && l.followUpAt < t.tomorrow },
+  nofu:    { label:'No follow-up',  test: l => !l.followUpAt },
+  meta:    { label:'Meta Ads',      test: l => l.source === 'meta' },
+  // "Cold" matches the Analytics definition — untouched for 7+ days — so the
+  // chip and the Cold Leads figure can never disagree.
+  cold:    { label:'Cold 7d+',      test: (l,t) => (l.updatedAt || l.createdAt || 0) < t.cold }
+};
+
+const SORTS = {
+  updated:  { label:'Recently updated', fn:(a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0) },
+  newest:   { label:'Newest first',     fn:(a,b)=>(b.createdAt||0)-(a.createdAt||0) },
+  oldest:   { label:'Oldest first',     fn:(a,b)=>(a.createdAt||0)-(b.createdAt||0) },
+  // Leads with no follow-up sort last rather than first, so the soonest due
+  // work stays at the top where it is actionable.
+  followup: { label:'Follow-up soonest',fn:(a,b)=>(a.followUpAt||Infinity)-(b.followUpAt||Infinity) },
+  budget:   { label:'Budget high–low',  fn:(a,b)=>budgetRank(b)-budgetRank(a) },
+  name:     { label:'Name A–Z',         fn:(a,b)=>String(a.name||'').localeCompare(String(b.name||'')) }
+};
+
+// Unparseable budgets rank last instead of as zero, matching how Analytics
+// leaves them out of pipeline value rather than counting them as nothing.
+function budgetRank(l){
+  const v = window.parseBudgetToINR ? window.parseBudgetToINR(l.budget) : 0;
+  return Number.isFinite(v) && v > 0 ? v : -1;
+}
+
+let quickFilter = 'all';
+let dimFilters = { stage:'', source:'', channel:'', enquiryType:'', owner:'' };
+let currentSort = 'updated';
+
+function activeFilterCount(){
+  return (quickFilter !== 'all' ? 1 : 0) + Object.values(dimFilters).filter(Boolean).length;
+}
+
 function applyFilters(){
+  const now = Date.now();
+  const t = {
+    now,
+    tomorrow: new Date(new Date().setHours(0,0,0,0)).getTime() + 86400000,
+    cold: now - 7*86400000
+  };
+  const quick = QUICK_FILTERS[quickFilter] || QUICK_FILTERS.all;
+
   filteredLeads = leads.filter(l=>{
     if(currentSearch){
       const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel)].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
+    if(dimFilters.stage       && l.stageId !== dimFilters.stage) return false;
+    if(dimFilters.source      && (l.source || 'manual') !== dimFilters.source) return false;
+    if(dimFilters.channel     && (l.channel || '') !== dimFilters.channel) return false;
+    if(dimFilters.enquiryType && (l.enquiryType || '') !== dimFilters.enquiryType) return false;
+    if(dimFilters.owner       && (l.updatedBy || '') !== dimFilters.owner) return false;
+    if(!quick.test(l, t)) return false;
     return true;
   });
+
+  const sort = SORTS[currentSort];
+  if(sort) filteredLeads.sort(sort.fn);
+
+  syncFilterBar();
   if(currentView==='kanban') renderBoard();
   else if(currentView==='list') renderList();
   else if(currentView==='followups') renderFollowups();
@@ -597,7 +766,7 @@ function leadCardHtml(l){
   <div class="lcard" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
     <div class="lcard-top">
       <div class="lcard-name">${escapeHtml(l.name)}</div>
-      <div class="lcard-src ${l.source}">${l.source==='meta'?'Meta':'Manual'}</div>
+      <div class="lcard-src ${l.source}">${l.source==='meta'?'Meta Ads':'Manual'}</div>
     </div>
     <div class="lcard-meta">
       ${l.phone?`<div>📞 ${escapeHtml(l.phone)}</div>`:''}
@@ -615,7 +784,7 @@ function leadCardHtml(l){
 }
 
 // ═══════ LIST VIEW (sortable + per-column filter, Excel-style) ═══════
-function sourceLabel(s){ return s==='meta'?'📱 Meta':(s==='whatsapp_bot'?'🤖 WhatsApp Bot':'✍️ Manual'); }
+function sourceLabel(s){ return s==='meta'?'📱 Meta Ads':(s==='whatsapp_bot'?'🤖 WhatsApp Bot':'✍️ Manual'); }
 const LIST_COLUMNS = [
   { key:'name', label:'Name', filterable:true, get:l=>l.name||'', sortVal:l=>(l.name||'').toLowerCase() },
   { key:'contact', label:'Contact', filterable:false, get:l=>l.phone||l.email||'—', sortVal:l=>(l.phone||l.email||'').toLowerCase() },
@@ -2400,7 +2569,7 @@ function renderBotChat(){
     win.innerHTML = '<div class="bot-chat-empty">Send a message to test the bot with your current draft workflow.</div>';
     return;
   }
-  win.innerHTML = botTestHistory.map(m=>`<div class="bot-msg ${m.role}">${m.content}</div>`).join('');
+  win.innerHTML = botTestHistory.map(m=>`<div class="bot-msg ${m.role}">${escapeHtml(m.content)}</div>`).join('');
   win.scrollTop = win.scrollHeight;
 }
 
@@ -2412,24 +2581,16 @@ async function sendBotTestMessage(){
   botTestHistory.push({ role:'user', content:text });
   inp.value='';
   renderBotChat();
-  try{
-    const idToken = await window.crmAuth.getIdToken();
-    const res = await fetch('/api/bot-test-message', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
-      body: JSON.stringify({ config: botConfigDraft, history: botTestHistory })
-    });
-    if(!res.ok){
-      const err = await res.json().catch(()=>({}));
-      throw new Error(err.error || ('HTTP '+res.status));
-    }
-    const data = await res.json();
-    botTestHistory.push({ role:'assistant', content:data.reply || '(no reply)' });
-    renderBotChat();
-  } catch(e){
-    console.error('Bot test message error:', e);
-    showToast('Test message failed — see console');
-  }
+  // Bot replies are off, and the endpoint that used to return this same canned
+  // line has been removed — it was one of only 12 Serverless Functions the
+  // Hobby plan allows, and Meta Lead Ads intake needed the slot. Answering
+  // locally costs no function and no round trip. To restore real replies,
+  // re-add api/bot-test-message.js and call it from here again.
+  botTestHistory.push({
+    role: 'assistant',
+    content: 'AI Bot replies are turned off. The test endpoint was removed to free a Vercel function slot for Meta Lead Ads intake — see docs/META-LEAD-ADS.md.'
+  });
+  renderBotChat();
 }
 function clearBotTestChat(){
   botTestHistory = [];

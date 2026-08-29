@@ -159,6 +159,31 @@ function toggleDensity(){
       <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
       <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
     </div>
+
+    <!-- Filters apply in applyFilters(), the single funnel feeding the Board,
+         List and Follow-ups — so one selection filters every view at once. -->
+    <div class="fbar">
+      <div class="fbar-quick">
+        <button class="fchip at" data-q="all"     onclick="setQuickFilter('all')">All</button>
+        <button class="fchip"    data-q="today"   onclick="setQuickFilter('today')">New today</button>
+        <button class="fchip"    data-q="overdue" onclick="setQuickFilter('overdue')">Overdue</button>
+        <button class="fchip"    data-q="due"     onclick="setQuickFilter('due')">Due today</button>
+        <button class="fchip"    data-q="nofu"    onclick="setQuickFilter('nofu')">No follow-up</button>
+        <button class="fchip"    data-q="meta"    onclick="setQuickFilter('meta')">Meta Ads</button>
+        <button class="fchip"    data-q="cold"    onclick="setQuickFilter('cold')">Cold 7d+</button>
+      </div>
+      <div class="fbar-sel">
+        <select id="fStage"   onchange="onFilterChange()" title="Stage"></select>
+        <select id="fSource"  onchange="onFilterChange()" title="Source"></select>
+        <select id="fChannel" onchange="onFilterChange()" title="Channel"></select>
+        <select id="fType"    onchange="onFilterChange()" title="Enquiry type"></select>
+        <select id="fOwner"   onchange="onFilterChange()" title="Last touched by"></select>
+        <span class="fbar-div"></span>
+        <select id="fSort"    onchange="onFilterChange()" title="Sort order"></select>
+        <button class="fclear" id="fClear" onclick="clearAllFilters()">Clear filters</button>
+        <span class="fcount" id="fCount"></span>
+      </div>
+    </div>
   </div>
 
   <!-- MAIN -->
@@ -396,6 +421,7 @@ function toggleDensity(){
               <option value="call">📞 Direct Call</option>
               <option value="whatsapp">🟢 WhatsApp</option>
               <option value="instagram">📸 Instagram</option>
+              <option value="facebook">🔵 Facebook</option>
             </select>
           </div>
           <div class="field">
@@ -734,9 +760,12 @@ function toggleDensity(){
      implementations of the same numbers. This bridges it into the classic-
      script global scope that app.js/dashboardView.js share. -->
 <script type="module">
-  import { computeDashboardMetrics, formatINR } from './crm-assets/dashboardMetrics.js';
+  import { computeDashboardMetrics, formatINR, parseBudgetToINR } from './crm-assets/dashboardMetrics.js';
   window.computeDashboardMetrics = computeDashboardMetrics;
   window.formatINR = formatINR;
+  // Sorting the board by budget must rank leads exactly the way Analytics
+  // values them, so it reuses the metrics parser rather than a second one.
+  window.parseBudgetToINR = parseBudgetToINR;
 </script>
 <script src="crm-assets/dashboardView.js"></script>
 <script type="module" src="crm-assets/firebase-sync.js"></script>

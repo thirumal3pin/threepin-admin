@@ -953,3 +953,59 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
   .lcard:hover,.fu-row:hover,.dash-stat:hover{transform:none;}
 }
+
+/* ═══════ FILTER BAR ═══════
+   Sits under the search box and feeds applyFilters(), so one selection
+   narrows the Board, the List and the Follow-ups view together. Quick chips
+   cover the daily routine; the selects narrow by dimension and stack. */
+.fbar{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+.fbar-quick{display:flex;flex-wrap:wrap;gap:6px;}
+.fchip{
+  font:inherit;font-size:12px;font-weight:600;line-height:1;
+  padding:7px 11px;border-radius:999px;cursor:pointer;white-space:nowrap;
+  background:var(--card);color:var(--ink3);
+  border:1px solid var(--border);
+  transition:background .12s,color .12s,border-color .12s;
+}
+.fchip:hover{color:var(--ink);border-color:var(--border2);}
+.fchip.at{background:var(--brand-soft);color:var(--brand-ink);border-color:var(--brand-line);}
+.fchip:focus-visible{outline:2px solid var(--brand);outline-offset:2px;}
+
+.fbar-sel{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+.fbar-sel select{
+  font:inherit;font-size:12px;font-weight:500;
+  padding:6px 26px 6px 9px;border-radius:7px;cursor:pointer;
+  background:var(--card);color:var(--ink2);
+  border:1px solid var(--border);
+  max-width:150px;
+  /* Native arrow is inconsistent across platforms; draw a single chevron so
+     the controls read as one set with the chips above them. */
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238A867F' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 9px center;
+}
+.fbar-sel select:hover{border-color:var(--border2);color:var(--ink);}
+.fbar-sel select:focus-visible{outline:2px solid var(--brand);outline-offset:1px;}
+.fbar-div{width:1px;height:20px;background:var(--border);margin:0 2px;}
+
+.fclear{
+  display:none;font:inherit;font-size:12px;font-weight:600;
+  padding:6px 10px;border-radius:7px;cursor:pointer;
+  background:transparent;color:var(--ink3);border:1px solid transparent;
+}
+.fclear.show{display:inline-block;}
+.fclear:hover{color:var(--ink);background:var(--bg2);}
+.fclear:focus-visible{outline:2px solid var(--brand);outline-offset:2px;}
+
+.fcount{font-size:12px;font-weight:600;color:var(--ink4);margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.fcount.filtered{color:var(--brand-ink);}
+
+@media (max-width:640px){
+  /* Chips scroll rather than stacking into a tall block that pushes the board
+     off-screen on a phone. */
+  .fbar-quick{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px;}
+  .fbar-quick::-webkit-scrollbar{display:none;}
+  .fbar-sel select{flex:1 1 44%;max-width:none;}
+  .fcount{width:100%;margin-left:0;}
+  .fbar-div{display:none;}
+}
