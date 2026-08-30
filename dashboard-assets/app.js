@@ -114,7 +114,7 @@ document.addEventListener('click', e=>{
 function setupSearch(){
   const inp = document.getElementById('searchInput');
   inp.addEventListener('input', e => {
-    currentSearch = e.target.value.toLowerCase();
+    currentSearch = e.target.value.toLowerCase().replace(/\s+/g, '');
     document.getElementById('srchClear').classList.toggle('show', !!currentSearch);
     applyFilters();
   });
@@ -132,7 +132,7 @@ function applyFilters(){
     if(currentSearch){
       // sheetNotes/detailsText/zone included so free-text facts ("negotiable",
       // a seller situation, a zone name) are findable, not just structured ones.
-      const hay = [p.propertyCode,p.name,p.location,p.zone,p.builder,p.config,p.amenities,p.highlights,p.type,p.sheetNotes,p.detailsText,p.furnishing,p.facing].join(' ').toLowerCase();
+      const hay = [p.propertyCode,p.name,p.location,p.zone,p.builder,p.config,p.amenities,p.highlights,p.type,p.sheetNotes,p.detailsText,p.furnishing,p.facing].join(' ').toLowerCase().replace(/\s+/g, '');
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
