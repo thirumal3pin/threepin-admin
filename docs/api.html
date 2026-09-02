@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lead API Reference — 3 PIN Realty</title>
+<meta name="description" content="HTTP API reference for delivering leads into the 3 PIN Realty CRM and receiving pipeline status updates.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" type="image/jpeg" href="../logo.jpg">
+<style>
+  /* Tokens are lifted verbatim from index.html so this page is the same
+     material as the rest of the site, not a lookalike. The espresso brand
+     surface stays constant across themes — as it does on the home page —
+     and is reused here as the code-panel ground. */
+  :root {
+    --brand: #F58A07;
+    --brand-600: #DB7A05;
+    --brand-200: #F9C88A;
+
+    --bs: #191108;
+    --bs-2: #241809;
+    --bs-line: rgba(250,247,242,.13);
+    --on-bs: #FAF7F2;
+    --on-bs-2: #B5A896;
+    --on-bs-3: #7E7364;
+
+    --bg: light-dark(#FBFAF8, #121110);
+    --card: light-dark(#FFFFFF, #1B1918);
+    --card-2: light-dark(#F5F2ED, #232120);
+    --line: light-dark(#E7E1D7, #2C2825);
+    --line-2: light-dark(#D3CABC, #3D3733);
+    --ink: light-dark(#17150F, #F2EFEA);
+    --ink-2: light-dark(#5A5348, #B3ABA0);
+    --ink-3: light-dark(#8A8174, #877F74);
+
+    --live: #23A35A;
+    --alert: light-dark(#B3261E, #F2A5A0);
+
+    --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+    --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
+    --s12: 48px; --s16: 64px;
+
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 18px;
+
+    --sans: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+    --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --ring: 0 0 0 3px rgba(245,138,7,.34);
+
+    --nav-w: 248px;
+  }
+  :root { color-scheme: light dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+
+  body {
+    margin: 0;
+    background: #FBFAF8;
+    background: var(--bg);
+    color: #17150F;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--brand-600); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
+
+  /* ── Top bar ─────────────────────────────────────────────────────── */
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: var(--s4);
+    height: 60px; padding: 0 var(--s5);
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); }
+  .brand:hover { text-decoration: none; }
+  .brand img {
+    width: 30px; height: 30px; object-fit: contain;
+    background: #fff; border-radius: var(--r-sm); padding: 3px;
+  }
+  .brand-name { font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; line-height: 1.15; }
+  .brand-sub { font-size: 11.5px; color: var(--ink-3); line-height: 1.15; margin-top: 1px; }
+  .topbar-meta {
+    margin-left: auto; display: flex; align-items: center; gap: var(--s4);
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+  }
+  .navtoggle {
+    display: none; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border: 1px solid var(--line-2);
+    background: var(--card); border-radius: var(--r-sm);
+    color: var(--ink); cursor: pointer; font-size: 15px; line-height: 1;
+  }
+
+  /* ── Shell ───────────────────────────────────────────────────────── */
+  .shell { display: block; max-width: 1180px; margin: 0 auto; }
+  @media (min-width: 940px) {
+    .shell { display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr); gap: var(--s12); }
+  }
+
+  /* ── Sidebar ─────────────────────────────────────────────────────── */
+  .nav {
+    padding: var(--s6) var(--s5) var(--s10);
+    border-right: 1px solid var(--line);
+  }
+  @media (min-width: 940px) {
+    .nav { position: sticky; top: 60px; height: calc(100vh - 60px); overflow-y: auto; }
+  }
+  @media (max-width: 939px) {
+    .nav { display: none; border-right: none; border-bottom: 1px solid var(--line); }
+    .nav.open { display: block; }
+    .navtoggle { display: inline-flex; }
+  }
+  .nav-group {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+    margin: var(--s6) 0 var(--s2);
+  }
+  .nav-group:first-child { margin-top: 0; }
+  .nav a {
+    display: block; padding: 5px 0 5px var(--s3);
+    font-size: 13.5px; color: var(--ink-2);
+    border-left: 2px solid var(--line);
+    transition: color .12s, border-color .12s;
+  }
+  .nav a:hover { color: var(--ink); text-decoration: none; border-left-color: var(--line-2); }
+  .nav a.active { color: var(--brand-600); border-left-color: var(--brand); font-weight: 500; }
+
+  /* ── Content ─────────────────────────────────────────────────────── */
+  main { padding: var(--s8) var(--s5) var(--s16); min-width: 0; }
+  section { scroll-margin-top: 76px; margin-bottom: var(--s16); }
+
+  .hero { margin-bottom: var(--s12); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    letter-spacing: .13em; text-transform: uppercase;
+    color: var(--brand-600); margin: 0 0 var(--s3);
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(2rem, 3.4vw, 2.75rem); line-height: 1.08;
+    letter-spacing: -.015em; margin: 0 0 var(--s4); max-width: 18ch;
+  }
+  h2 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: 27px; line-height: 1.2; letter-spacing: -.012em;
+    margin: 0 0 var(--s3); padding-bottom: var(--s3);
+    border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 16.5px; font-weight: 600; letter-spacing: -.008em; margin: var(--s8) 0 var(--s3); }
+  h4 {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+    margin: var(--s6) 0 var(--s3);
+  }
+  p { margin: 0 0 var(--s4); max-width: 70ch; color: var(--ink-2); }
+  main p strong, li strong { color: var(--ink); font-weight: 600; }
+  .lede { font-size: 17px; max-width: 66ch; }
+  .sub { color: var(--ink-3); margin-top: calc(var(--s3) * -1 + 2px); margin-bottom: var(--s5); max-width: 68ch; }
+  ul, ol { margin: 0 0 var(--s4); padding-left: var(--s5); max-width: 68ch; color: var(--ink-2); }
+  li { margin-bottom: 6px; }
+
+  code {
+    font-family: var(--mono); font-size: .87em;
+    background: var(--card-2); border: 1px solid var(--line);
+    padding: 1px 5px; border-radius: 5px; color: var(--ink); white-space: nowrap;
+  }
+
+  /* ── Facts strip ─────────────────────────────────────────────────── */
+  .facts {
+    display: grid; gap: 1px; background: var(--line);
+    border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    margin-bottom: var(--s6);
+  }
+  .fact { background: var(--card); padding: var(--s3) var(--s4); }
+  .fact dt {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 3px;
+  }
+  .fact dd { margin: 0; font-family: var(--mono); font-size: 13px; color: var(--ink); word-break: break-all; }
+
+  /* ── Endpoint header ─────────────────────────────────────────────── */
+  .endpoint {
+    display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+    background: var(--card-2); border: 1px solid var(--line);
+    border-radius: var(--r-md); padding: var(--s3) var(--s4); margin-bottom: var(--s4);
+  }
+  .method {
+    font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .06em;
+    padding: 2px 7px; border-radius: 5px; border: 1px solid;
+  }
+  .method.post { color: var(--live); border-color: color-mix(in srgb, var(--live) 40%, transparent); }
+  .method.get  { color: var(--brand-600); border-color: color-mix(in srgb, var(--brand) 40%, transparent); }
+  .endpoint .path { font-family: var(--mono); font-size: 14px; color: var(--ink); word-break: break-all; }
+  .tag {
+    margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .tag.live { color: var(--live); }
+  .tag.planned { color: var(--brand-600); }
+
+  /* ── Code ────────────────────────────────────────────────────────── */
+  .code {
+    background: var(--bs); border: 1px solid var(--bs-line);
+    border-radius: var(--r-md); overflow: hidden; margin: 0 0 var(--s5);
+  }
+  .code-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--on-bs-3);
+    padding: 9px var(--s4); border-bottom: 1px solid var(--bs-line);
+  }
+  .code pre {
+    margin: 0; padding: var(--s4); overflow-x: auto;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+    color: var(--on-bs-2); white-space: pre; tab-size: 2;
+  }
+  .code pre .k { color: var(--brand-200); }
+  .code pre .s { color: var(--on-bs); }
+  .code pre .c { color: var(--on-bs-3); }
+
+  /* ── Tables ──────────────────────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); margin: 0 0 var(--s5); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+  th {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+    text-align: left; padding: 10px var(--s4);
+    background: var(--card-2); border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  td { padding: 10px var(--s4); border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td:first-child { color: var(--ink); }
+  .num { font-family: var(--mono); font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .req { font-family: var(--mono); font-size: 10.5px; color: var(--alert); letter-spacing: .05em; }
+  .opt { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em; }
+
+  /* ── Callout ─────────────────────────────────────────────────────── */
+  .callout {
+    border: 1px solid var(--line); border-left: 3px solid var(--line-2);
+    background: var(--card); border-radius: var(--r-sm);
+    padding: var(--s4); margin: 0 0 var(--s5);
+  }
+  .callout p { margin: 0; font-size: 14px; }
+  .callout p + p { margin-top: var(--s3); }
+  .callout .title {
+    font-size: 13px; font-weight: 600; color: var(--ink);
+    margin-bottom: 5px; letter-spacing: -.005em;
+  }
+  .callout.important { border-left-color: var(--brand); }
+  .callout.important .title { color: var(--brand-600); }
+  .callout.caution { border-left-color: var(--alert); }
+  .callout.caution .title { color: var(--alert); }
+
+  footer {
+    border-top: 1px solid var(--line); padding-top: var(--s6);
+    margin-top: var(--s16); font-size: 13px; color: var(--ink-3);
+  }
+  footer p { color: var(--ink-3); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html">
+    <img src="../logo.jpg" alt="">
+    <span>
+      <span class="brand-name">3 PIN Realty</span>
+      <span class="brand-sub">Lead API</span>
+    </span>
+  </a>
+  <div class="topbar-meta">
+    <span>v1.0</span>
+    <button class="navtoggle" id="navToggle" aria-label="Contents" aria-expanded="false">&#9776;</button>
+  </div>
+</div>
+
+<div class="shell">
+
+  <nav class="nav" id="nav" aria-label="Contents">
+    <div class="nav-group">Getting started</div>
+    <a href="#introduction">Introduction</a>
+    <a href="#availability">Availability</a>
+    <a href="#authentication">Authentication</a>
+
+    <div class="nav-group">Leads</div>
+    <a href="#create-lead">Create a lead</a>
+    <a href="#lead-object">The lead object</a>
+    <a href="#values">Accepted values</a>
+    <a href="#normalisation">Value handling</a>
+    <a href="#duplicates">Duplicates</a>
+    <a href="#errors">Errors</a>
+
+    <div class="nav-group">Webhooks</div>
+    <a href="#webhooks">Status callbacks</a>
+
+    <div class="nav-group">Reference</div>
+    <a href="#rate-limits">Rate limits</a>
+    <a href="#existing">Platform endpoints</a>
+    <a href="#data-model">Data model</a>
+    <a href="#checklist">Integration checklist</a>
+  </nav>
+
+  <main>
+
+    <div class="hero">
+      <p class="eyebrow">Partner Integration</p>
+      <h1>Lead API Reference</h1>
+      <p class="lede">Deliver leads into the 3 PIN Realty CRM over HTTP, and receive pipeline
+      status back as the sales team works them.</p>
+
+      <dl class="facts">
+        <div class="fact"><dt>Base URL</dt><dd>https://admin.threepin.in</dd></div>
+        <div class="fact"><dt>Format</dt><dd>JSON over HTTPS</dd></div>
+        <div class="fact"><dt>Authentication</dt><dd>HMAC-SHA256</dd></div>
+        <div class="fact"><dt>Version</dt><dd>1.0</dd></div>
+      </dl>
+    </div>
+
+    <!-- ─────────────── INTRODUCTION ─────────────── -->
+    <section id="introduction">
+      <h2>Introduction</h2>
+      <p>3 PIN Realty operates a real-estate CRM at <code>admin.threepin.in</code>. Leads arrive on a
+      pipeline, are assigned to an agent, and move through stages until they close. Today they come from
+      three sources: entered by an agent, captured by the WhatsApp assistant, or pulled from Meta Lead
+      Ads. This API adds a fourth — leads delivered by an integration partner.</p>
+
+      <p>The integration has two halves. You send us leads, one per request, signed with a shared
+      secret. We send you status updates as those leads progress. Both directions use the same
+      signature scheme, so a single verification routine serves both.</p>
+
+      <h3>How a lead flows</h3>
+      <div class="code">
+        <div class="code-label">Lifecycle</div>
+<pre><span class="c">Your system captures an enquiry
+  &rarr;</span> POST /api/partner-leads <span class="c">(signed)
+  &rarr;</span> signature and timestamp verified
+<span class="c">  &rarr;</span> phone normalised, checked against existing leads
+<span class="c">  &rarr;</span> lead created, or merged into the existing record
+<span class="c">  &rarr;</span> appears on the agent board in real time
+<span class="c">  &rarr;</span> POST to your callback URL on every stage change</pre>
+      </div>
+    </section>
+
+    <!-- ─────────────── AVAILABILITY ─────────────── -->
+    <section id="availability">
+      <h2>Availability</h2>
+      <p class="sub">Each endpoint in this reference is marked either <strong>Live</strong> or
+      <strong>Planned</strong>. Read the marking before you build against it.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Marking</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tag live">Live</span></td><td>Deployed and serving production traffic today.</td></tr>
+          <tr><td><span class="tag planned">Planned</span></td><td>Agreed contract; implementation scheduled. Build against it, but expect to test after our release.</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout caution">
+        <p class="title">Do not send leads to the Meta webhook</p>
+        <p><code>/api/meta-webhook</code> is a Meta-specific route. It verifies a signature generated
+        with Meta's own application secret, and accepts only a Meta <code>leadgen_id</code> which it
+        then resolves through the Meta Graph API. It cannot accept a lead from any other source, and
+        the credential required to call it is not one we can share.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── AUTHENTICATION ─────────────── -->
+    <section id="authentication">
+      <h2>Authentication</h2>
+      <p class="sub">Every request is signed. There are no API keys in query strings, and no bearer
+      tokens for partner traffic.</p>
+
+      <p>We issue two values out of band. The signing secret is a credential: it must never appear in a
+      URL, a log line, or any client-side code.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Value</th><th>Example</th><th>Use</th></tr></thead>
+        <tbody>
+          <tr><td><code>partnerId</code></td><td class="num">tp_acme</td><td>Sent as a header. Identifies you and selects your secret.</td></tr>
+          <tr><td><code>signingSecret</code></td><td class="num">whsec_&hellip;</td><td>Never transmitted. Used only to compute the signature.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Request headers</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Header</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td><code>Content-Type</code></td><td>application/json</td></tr>
+          <tr><td><code>X-3Pin-Partner</code></td><td>Your <code>partnerId</code></td></tr>
+          <tr><td><code>X-3Pin-Timestamp</code></td><td>Unix time in seconds at the moment of signing</td></tr>
+          <tr><td><code>X-3Pin-Signature</code></td><td><code>sha256=</code> followed by the lowercase hex digest</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Computing the signature</h3>
+      <p>The signed message is the timestamp, a literal full stop, then the exact raw request body:</p>
+
+      <div class="code">
+        <div class="code-label">Base string</div>
+<pre>signature = <span class="s">"sha256="</span> + HMAC_SHA256(signingSecret, timestamp + <span class="s">"."</span> + rawBody)</pre>
+      </div>
+
+      <div class="callout important">
+        <p class="title">Sign the bytes you send</p>
+        <p>Parsing JSON and re-serialising it changes key order and whitespace, which changes the
+        digest. Build the body string once, sign that string, and transmit that same string. A
+        re-serialised body is the most common cause of a rejected signature.</p>
+      </div>
+
+      <p>Including the timestamp in the signed message is what makes a captured request
+      non-replayable. We reject any request whose timestamp differs from ours by more than
+      <strong>300 seconds</strong>, and compare digests in constant time.</p>
+
+      <div class="code">
+        <div class="code-label">Node.js</div>
+<pre><span class="k">import</span> crypto <span class="k">from</span> <span class="s">'node:crypto'</span>;
+
+<span class="k">const</span> secret = <span class="s">'whsec_3pin_demo_do_not_use'</span>;
+<span class="k">const</span> timestamp = String(Math.floor(Date.now() / <span class="s">1000</span>));
+
+<span class="c">// Build the body once, as a string. Do not parse and re-stringify it.</span>
+<span class="k">const</span> rawBody = JSON.stringify({
+  event: <span class="s">'lead.created'</span>,
+  idempotencyKey: <span class="s">'tp_9f2c41d8'</span>,
+  lead: {
+    name: <span class="s">'Anitha Raghavan'</span>,
+    phone: <span class="s">'+91 99418 80088'</span>,
+    channel: <span class="s">'facebook'</span>,
+    enquiryType: <span class="s">'Property Enquiry'</span>,
+    propertyInterest: <span class="s">'Oragadam Plots - Phase 2'</span>,
+    budget: <span class="s">'45 to 60 L'</span>
+  }
+});
+
+<span class="k">const</span> signature = <span class="s">'sha256='</span> + crypto
+  .createHmac(<span class="s">'sha256'</span>, secret)
+  .update(timestamp + <span class="s">'.'</span> + rawBody)
+  .digest(<span class="s">'hex'</span>);
+
+<span class="k">await</span> fetch(<span class="s">'https://admin.threepin.in/api/partner-leads'</span>, {
+  method: <span class="s">'POST'</span>,
+  headers: {
+    <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span>,
+    <span class="s">'X-3Pin-Partner'</span>: <span class="s">'tp_acme'</span>,
+    <span class="s">'X-3Pin-Timestamp'</span>: timestamp,
+    <span class="s">'X-3Pin-Signature'</span>: signature
+  },
+  body: rawBody <span class="c">// the same string that was signed</span>
+});</pre>
+      </div>
+
+      <div class="code">
+        <div class="code-label">Python</div>
+<pre><span class="k">import</span> hmac, hashlib, json, time, requests
+
+secret = <span class="s">b'whsec_3pin_demo_do_not_use'</span>
+timestamp = <span class="k">str</span>(<span class="k">int</span>(time.time()))
+
+raw_body = json.dumps({
+    <span class="s">"event"</span>: <span class="s">"lead.created"</span>,
+    <span class="s">"idempotencyKey"</span>: <span class="s">"tp_9f2c41d8"</span>,
+    <span class="s">"lead"</span>: {
+        <span class="s">"name"</span>: <span class="s">"Anitha Raghavan"</span>,
+        <span class="s">"phone"</span>: <span class="s">"+91 99418 80088"</span>,
+        <span class="s">"channel"</span>: <span class="s">"facebook"</span>,
+        <span class="s">"enquiryType"</span>: <span class="s">"Property Enquiry"</span>,
+        <span class="s">"propertyInterest"</span>: <span class="s">"Oragadam Plots - Phase 2"</span>,
+        <span class="s">"budget"</span>: <span class="s">"45 to 60 L"</span>,
+    },
+}, separators=(<span class="s">","</span>, <span class="s">":"</span>))
+
+signature = <span class="s">"sha256="</span> + hmac.new(
+    secret, (timestamp + <span class="s">"."</span> + raw_body).encode(), hashlib.sha256
+).hexdigest()
+
+requests.post(
+    <span class="s">"https://admin.threepin.in/api/partner-leads"</span>,
+    data=raw_body,
+    headers={
+        <span class="s">"Content-Type"</span>: <span class="s">"application/json"</span>,
+        <span class="s">"X-3Pin-Partner"</span>: <span class="s">"tp_acme"</span>,
+        <span class="s">"X-3Pin-Timestamp"</span>: timestamp,
+        <span class="s">"X-3Pin-Signature"</span>: signature,
+    },
+    timeout=<span class="s">15</span>,
+)</pre>
+      </div>
+
+      <h3>Test vector</h3>
+      <p>Verify your implementation against this before calling the API. The values are exact.</p>
+
+      <div class="code">
+        <div class="code-label">Known input and expected output</div>
+<pre><span class="c">secret</span>    whsec_3pin_demo_do_not_use
+<span class="c">timestamp</span> 1772442862
+<span class="c">rawBody</span>   {"event":"lead.created","idempotencyKey":"tp_9f2c41d8","lead":
+          {"name":"Anitha Raghavan","phone":"+91 99418 80088","channel":
+          "facebook","enquiryType":"Property Enquiry","propertyInterest":
+          "Oragadam Plots - Phase 2","budget":"45 to 60 L"}}
+
+<span class="c">length</span>    237 bytes, no trailing newline
+<span class="s">expected  sha256=783c764580a50aa5b1221a9e8e05c9f165fea92437c8b5986aea9b771fa1dcea</span></pre>
+      </div>
+
+      <div class="callout">
+        <p class="title">If your digest differs</p>
+        <p>Compare the byte length of your body first. The <code>rawBody</code> above is shown wrapped
+        for readability but is a single line of 237 bytes. A trailing newline, a pretty-printer, or a
+        byte-order mark will each change the result.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── CREATE LEAD ─────────────── -->
+    <section id="create-lead">
+      <h2>Create a lead</h2>
+      <p class="sub">One lead per request. The response tells you exactly what happened to it; there is
+      nothing to poll.</p>
+
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="path">/api/partner-leads</span>
+        <span class="tag planned">Planned</span>
+      </div>
+
+      <div class="code">
+        <div class="code-label">Request body</div>
+<pre>{
+  <span class="k">"event"</span>: <span class="s">"lead.created"</span>,              <span class="c">// required, only value today</span>
+  <span class="k">"idempotencyKey"</span>: <span class="s">"tp_9f2c41d8"</span>,      <span class="c">// required, unique, max 128 chars</span>
+  <span class="k">"sentAt"</span>: <span class="s">"2026-09-02T09:14:22.000Z"</span>, <span class="c">// optional, ISO 8601</span>
+
+  <span class="k">"lead"</span>: {
+    <span class="k">"name"</span>:             <span class="s">"Anitha Raghavan"</span>,          <span class="c">// required</span>
+    <span class="k">"phone"</span>:            <span class="s">"+91 99418 80088"</span>,          <span class="c">// required</span>
+    <span class="k">"channel"</span>:          <span class="s">"facebook"</span>,                 <span class="c">// required</span>
+    <span class="k">"enquiryType"</span>:      <span class="s">"Property Enquiry"</span>,         <span class="c">// required</span>
+    <span class="k">"propertyInterest"</span>: <span class="s">"Oragadam Plots - Phase 2"</span>, <span class="c">// required</span>
+
+    <span class="k">"email"</span>:            <span class="s">"anitha.r@example.com"</span>,
+    <span class="k">"budget"</span>:           <span class="s">"45 to 60 L"</span>,
+    <span class="k">"notes"</span>:            <span class="s">"Prefers a site visit on Sunday."</span>,
+    <span class="k">"contactAt"</span>:        <span class="s">1772442000000</span>,             <span class="c">// epoch milliseconds</span>
+
+    <span class="k">"campaign"</span>: {
+      <span class="k">"name"</span>:     <span class="s">"Oragadam Plots - Sep"</span>,
+      <span class="k">"adId"</span>:     <span class="s">"238471193"</span>,
+      <span class="k">"adsetId"</span>:  <span class="s">"238471100"</span>,
+      <span class="k">"platform"</span>: <span class="s">"facebook"</span>
+    },
+
+    <span class="k">"raw"</span>: {                                  <span class="c">// free-form, stored verbatim</span>
+      <span class="k">"plot_size"</span>: <span class="s">"1200 sqft"</span>,
+      <span class="k">"timeline"</span>:  <span class="s">"3-6 months"</span>
+    }
+  }
+}</pre>
+      </div>
+
+      <div class="callout important">
+        <p class="title">Five fields are mandatory</p>
+        <p><code>name</code>, <code>phone</code>, <code>channel</code>, <code>enquiryType</code> and
+        <code>propertyInterest</code>. This mirrors exactly what the CRM's own lead form requires, so a
+        partner-supplied lead is never less complete than one an agent typed. If your source genuinely
+        has no property, send the campaign or landing-page name rather than an empty string —
+        <code>propertyInterest</code> is the field agents work from.</p>
+      </div>
+
+      <h3>Responses</h3>
+
+      <div class="code">
+        <div class="code-label">201 &mdash; created</div>
+<pre>{
+  <span class="k">"ok"</span>: <span class="s">true</span>,
+  <span class="k">"result"</span>: <span class="s">"created"</span>,
+  <span class="k">"leadId"</span>: <span class="s">"partner_tp_acme_9f2c41d8"</span>,
+  <span class="k">"stageId"</span>: <span class="s">"new"</span>,
+  <span class="k">"receivedAt"</span>: <span class="s">1772442863120</span>
+}</pre>
+      </div>
+
+      <div class="code">
+        <div class="code-label">200 &mdash; merged into an existing lead</div>
+<pre>{
+  <span class="k">"ok"</span>: <span class="s">true</span>,
+  <span class="k">"result"</span>: <span class="s">"merged"</span>,
+  <span class="k">"leadId"</span>: <span class="s">"lead_1771903442188"</span>,
+  <span class="k">"stageId"</span>: <span class="s">"site_visit"</span>,
+  <span class="k">"merged"</span>: [<span class="s">"email"</span>, <span class="s">"budget"</span>],  <span class="c">// only previously empty fields</span>
+  <span class="k">"receivedAt"</span>: <span class="s">1772442863120</span>
+}</pre>
+      </div>
+
+      <div class="code">
+        <div class="code-label">200 &mdash; idempotency key already seen</div>
+<pre>{
+  <span class="k">"ok"</span>: <span class="s">true</span>,
+  <span class="k">"result"</span>: <span class="s">"duplicate"</span>,
+  <span class="k">"leadId"</span>: <span class="s">"partner_tp_acme_9f2c41d8"</span>,
+  <span class="k">"receivedAt"</span>: <span class="s">1772442863120</span>
+}</pre>
+      </div>
+
+      <div class="callout">
+        <p class="title">All three results are success</p>
+        <p>Treat <code>created</code>, <code>merged</code> and <code>duplicate</code> identically in
+        retry logic — the lead is with us, stop retrying. Only a 5xx or a network failure warrants
+        another attempt.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── LEAD OBJECT ─────────────── -->
+    <section id="lead-object">
+      <h2>The lead object</h2>
+      <p class="sub">What each field becomes inside the CRM.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Field</th><th>Type</th><th></th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>string</td><td><span class="req">required</span></td><td>Displayed as the record title.</td></tr>
+          <tr><td><code>phone</code></td><td>string</td><td><span class="req">required</span></td><td>Any format. Normalised for matching only; the original is stored and shown.</td></tr>
+          <tr><td><code>channel</code></td><td>enum</td><td><span class="req">required</span></td><td>How the enquiry reached you. Drives channel reporting.</td></tr>
+          <tr><td><code>enquiryType</code></td><td>string</td><td><span class="req">required</span></td><td>Free text, but a value outside the known list creates a new type. Prefer the listed values.</td></tr>
+          <tr><td><code>propertyInterest</code></td><td>string</td><td><span class="req">required</span></td><td>Property or locality. Groups the property performance report.</td></tr>
+          <tr><td><code>email</code></td><td>string</td><td><span class="opt">optional</span></td><td>Not validated. Empty string and omitted are equivalent.</td></tr>
+          <tr><td><code>budget</code></td><td>string</td><td><span class="opt">optional</span></td><td>Must carry a unit to count toward pipeline value. See value handling.</td></tr>
+          <tr><td><code>notes</code></td><td>string</td><td><span class="opt">optional</span></td><td>Stored as the lead's first note, attributed to your partner ID.</td></tr>
+          <tr><td><code>contactAt</code></td><td>integer</td><td><span class="opt">optional</span></td><td>Epoch milliseconds. When the enquiry actually happened. Defaults to receipt time.</td></tr>
+          <tr><td><code>campaign</code></td><td>object</td><td><span class="opt">optional</span></td><td>Attribution. Stored for reporting, not shown on the record.</td></tr>
+          <tr><td><code>raw</code></td><td>object</td><td><span class="opt">optional</span></td><td>Flat string map. Rendered as text, never as markup.</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout important">
+        <p class="title">Timestamps are epoch milliseconds</p>
+        <p>Integers, not seconds and not ISO strings. The one exception is <code>sentAt</code> on the
+        envelope, which is ISO 8601 and informational. Sending seconds where milliseconds are expected
+        dates the lead to January 1970 and sorts it to the bottom of every view.</p>
+      </div>
+
+      <h4>Assigned by us</h4>
+      <p>These are set server-side. Sending them has no effect.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Field</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td><code>id</code></td><td><code>partner_&lt;partnerId&gt;_&lt;idempotencyKey&gt;</code>, restricted to <code>A-Z a-z 0-9 _ -</code></td></tr>
+          <tr><td><code>source</code></td><td>Always <code>partner</code></td></tr>
+          <tr><td><code>stageId</code></td><td>First pipeline stage, currently <code>new</code></td></tr>
+          <tr><td><code>detailsSent</code></td><td><code>false</code></td></tr>
+          <tr><td><code>followUpAt</code></td><td><code>null</code>; agents schedule follow-ups themselves</td></tr>
+          <tr><td><code>createdAt</code>, <code>updatedAt</code></td><td>Epoch milliseconds at receipt</td></tr>
+          <tr><td><code>createdBy</code>, <code>updatedBy</code></td><td><code>partner:&lt;partnerId&gt;</code></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ─────────────── VALUES ─────────────── -->
+    <section id="values">
+      <h2>Accepted values</h2>
+      <p class="sub">Taken from the live CRM configuration. A value outside these lists is stored, but
+      it will not render correctly and it fragments reporting.</p>
+
+      <h4>channel</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Value</th><th>When to use it</th></tr></thead>
+        <tbody>
+          <tr><td><code>facebook</code></td><td>Facebook lead form, page message, or Facebook-sourced ad.</td></tr>
+          <tr><td><code>instagram</code></td><td>Instagram lead form, direct message, or Instagram-sourced ad.</td></tr>
+          <tr><td><code>whatsapp</code></td><td>Enquiry arrived over WhatsApp.</td></tr>
+          <tr><td><code>call</code></td><td>Inbound telephone call, including click-to-call.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>enquiryType</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>Property Enquiry</code></td><td>Someone looking to buy. The default and the large majority.</td></tr>
+          <tr><td><code>Seller Listing</code></td><td>Someone with a property to sell or list.</td></tr>
+          <tr><td><code>General</code></td><td>Anything else, including unclear intent.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>stageId</h4>
+      <p>Read-only. You never set a stage; these are the values returned in responses and callbacks.
+      The pipeline is configurable by the business, so treat this as the current state rather than a
+      fixed contract, and handle an unrecognised value without failing.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Value</th><th>Name</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>new</code></td><td>New</td><td>Received, not yet contacted. Every partner lead starts here.</td></tr>
+          <tr><td><code>contacted</code></td><td>Contacted</td><td>An agent has reached the person.</td></tr>
+          <tr><td><code>site_visit</code></td><td>Site Visit</td><td>A visit is scheduled or has taken place.</td></tr>
+          <tr><td><code>negotiation</code></td><td>Negotiation</td><td>Actively discussing terms.</td></tr>
+          <tr><td><code>closed_won</code></td><td>Closed Won</td><td>Deal completed.</td></tr>
+          <tr><td><code>closed_lost</code></td><td>Closed Lost</td><td>Not proceeding. A reason is included where one was recorded.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ─────────────── NORMALISATION ─────────────── -->
+    <section id="normalisation">
+      <h2>Value handling</h2>
+      <p class="sub">Two fields are transformed on arrival. Both tables below are observed output from
+      the CRM's own functions.</p>
+
+      <h3>Phone numbers</h3>
+      <p>A canonical key is derived for duplicate matching only. The number you send is what is stored
+      and displayed — normalisation never rewrites it. Bare ten-digit numbers are assumed Indian.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Submitted</th><th>Matching key</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td class="num">9941880088</td><td class="num">919941880088</td><td>Ten digits, prefixed with 91</td></tr>
+          <tr><td class="num">09941880088</td><td class="num">919941880088</td><td>Leading zero removed, then prefixed</td></tr>
+          <tr><td class="num">+91 99418 80088</td><td class="num">919941880088</td><td>Non-digits removed</td></tr>
+          <tr><td class="num">919941880088</td><td class="num">919941880088</td><td>Already canonical</td></tr>
+          <tr><td class="num">+1 415 555 0123</td><td class="num">14155550123</td><td>Non-Indian numbers kept as given</td></tr>
+        </tbody>
+      </table></div>
+
+      <p>All four Indian formats collapse to one key, so a lead you send as <code>+91 99418 80088</code>
+      correctly matches one an agent typed as <code>9941880088</code>. Send whatever format you hold;
+      E.164 is preferred but not required.</p>
+
+      <h3>Budget</h3>
+      <p>Budget feeds the open pipeline value, which the business manages against. Values are
+      normalised into the CRM's own notation before being parsed.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Submitted</th><th>Normalised</th><th>Counted as</th></tr></thead>
+        <tbody>
+          <tr><td class="num">&#8377;30&ndash;50 Lakhs</td><td class="num">30 to 50 L</td><td class="num">&#8377;40 L</td></tr>
+          <tr><td class="num">Below &#8377;25 Lakhs</td><td class="num">25 L</td><td class="num">&#8377;25 L</td></tr>
+          <tr><td class="num">3 - 5 Crores</td><td class="num">3 to 5 Cr</td><td class="num">&#8377;4 Cr</td></tr>
+          <tr><td class="num">&#8377;70 Lakhs+</td><td class="num">70 L</td><td class="num">&#8377;70 L</td></tr>
+          <tr><td class="num">Above 5 Cr</td><td class="num">5 Cr</td><td class="num">&#8377;5 Cr</td></tr>
+          <tr><td class="num">1.5 Cr</td><td class="num">1.5 Cr</td><td class="num">&#8377;1.5 Cr</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout caution">
+        <p class="title">Always send a unit</p>
+        <p>A budget without <code>L</code> or <code>Cr</code> is dropped from pipeline value without an
+        error. <code>12000000</code> parses to null, and <code>&#8377;1,20,00,000</code> normalises to
+        the unusable string <code>1 20 00 000</code> because thousands separators become spaces. Neither
+        case is visibly wrong on the record; the value simply never reaches the total.</p>
+        <p><code>1.2 Cr</code> works. <code>12000000</code> does not. A range such as
+        <code>45 to 60 L</code> is averaged. Convert raw integers before sending.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── DUPLICATES ─────────────── -->
+    <section id="duplicates">
+      <h2>Duplicates</h2>
+      <p class="sub">Two independent mechanisms: one protects against your retries, the other against
+      the same person enquiring twice.</p>
+
+      <h3>Idempotency key</h3>
+      <p>Generate one stable, unique key per lead and reuse it across every retry of that lead. If we
+      have already processed the key we return <code>result: "duplicate"</code> with the original lead
+      ID and change nothing, so a network timeout is always safe to retry. Keys are scoped to your
+      partner ID and only need to be unique within your own system — your own primary key is usually
+      the right value.</p>
+
+      <h3>Phone matching</h3>
+      <p>Before creating anything we look for an existing lead with the same normalised phone key. If
+      one exists we merge rather than create, because a second record for the same person is work an
+      agent then has to undo by hand.</p>
+
+      <div class="callout">
+        <p class="title">Merging only fills blanks</p>
+        <p>We populate <code>email</code>, <code>budget</code> and <code>propertyInterest</code> only
+        where the existing record has no value. We never overwrite what an agent entered, never move a
+        lead back to <code>new</code>, and never clear a scheduled follow-up. The merge is written to
+        the lead's history, and the <code>merged</code> array in the response lists exactly which
+        fields were filled.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── ERRORS ─────────────── -->
+    <section id="errors">
+      <h2>Errors</h2>
+      <p class="sub">Every failure returns JSON with a stable <code>code</code>. Branch on the code,
+      never on the message text.</p>
+
+      <div class="code">
+        <div class="code-label">Error shape</div>
+<pre>{
+  <span class="k">"ok"</span>: <span class="s">false</span>,
+  <span class="k">"code"</span>: <span class="s">"missing_field"</span>,
+  <span class="k">"error"</span>: <span class="s">"propertyInterest is required"</span>,
+  <span class="k">"field"</span>: <span class="s">"propertyInterest"</span>  <span class="c">// validation errors only</span>
+}</pre>
+      </div>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Status</th><th>Code</th><th>Cause</th><th>Retry</th></tr></thead>
+        <tbody>
+          <tr><td class="num">400</td><td><code>invalid_json</code></td><td>Body did not parse.</td><td>No</td></tr>
+          <tr><td class="num">400</td><td><code>missing_field</code></td><td>A required field is absent or empty.</td><td>No</td></tr>
+          <tr><td class="num">400</td><td><code>invalid_enum</code></td><td><code>channel</code> outside the accepted list.</td><td>No</td></tr>
+          <tr><td class="num">401</td><td><code>bad_signature</code></td><td>Digest mismatch, usually a re-serialised body.</td><td>No</td></tr>
+          <tr><td class="num">401</td><td><code>unknown_partner</code></td><td><code>X-3Pin-Partner</code> not recognised.</td><td>No</td></tr>
+          <tr><td class="num">408</td><td><code>stale_timestamp</code></td><td>Outside the 300-second window. Check clock sync.</td><td>Yes</td></tr>
+          <tr><td class="num">413</td><td><code>payload_too_large</code></td><td>Body over 128 KB.</td><td>No</td></tr>
+          <tr><td class="num">429</td><td><code>rate_limited</code></td><td>Over the rate limit. Honour <code>Retry-After</code>.</td><td>Yes</td></tr>
+          <tr><td class="num">500</td><td><code>internal</code></td><td>Fault on our side.</td><td>Yes</td></tr>
+          <tr><td class="num">503</td><td><code>storage_unavailable</code></td><td>Database write failed.</td><td>Yes</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout important">
+        <p class="title">A 4xx will not succeed on retry</p>
+        <p>Retrying a 400 or 401 unchanged consumes capacity on both sides and will trip the rate
+        limiter. Send those to a dead-letter queue and alert someone. Only 408, 429 and 5xx are worth
+        another attempt.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── WEBHOOKS ─────────────── -->
+    <section id="webhooks">
+      <h2>Status callbacks</h2>
+      <p class="sub">So you can measure lead quality without asking us for a report.</p>
+
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="path">https://your-endpoint.example.com/&hellip;</span>
+        <span class="tag planned">Planned</span>
+      </div>
+
+      <p>Give us one HTTPS endpoint. We post to it whenever a lead you supplied changes stage, and when
+      it closes. We sign with the same scheme you use — same header names, same base string — so your
+      verification code works in both directions.</p>
+
+      <div class="code">
+        <div class="code-label">Callback payload</div>
+<pre>POST https://your-endpoint.example.com/3pin/leads
+X-3Pin-Partner: tp_acme
+X-3Pin-Timestamp: 1772449001
+X-3Pin-Signature: sha256=&lt;digest of timestamp + "." + body&gt;
+
+{
+  <span class="k">"event"</span>: <span class="s">"lead.stage_changed"</span>,
+  <span class="k">"sentAt"</span>: <span class="s">"2026-09-02T11:03:21.000Z"</span>,
+  <span class="k">"leadId"</span>: <span class="s">"partner_tp_acme_9f2c41d8"</span>,
+  <span class="k">"idempotencyKey"</span>: <span class="s">"tp_9f2c41d8"</span>,  <span class="c">// your key, echoed back</span>
+  <span class="k">"from"</span>: <span class="s">"new"</span>,
+  <span class="k">"to"</span>: <span class="s">"contacted"</span>,
+  <span class="k">"changedAt"</span>: <span class="s">1772449001482</span>,
+  <span class="k">"reason"</span>: <span class="s">null</span>
+}</pre>
+      </div>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Event</th><th>Fires when</th></tr></thead>
+        <tbody>
+          <tr><td><code>lead.stage_changed</code></td><td>An agent moves the lead between any two stages.</td></tr>
+          <tr><td><code>lead.closed_won</code></td><td>The lead reaches <code>closed_won</code>.</td></tr>
+          <tr><td><code>lead.closed_lost</code></td><td>The lead reaches <code>closed_lost</code>, with a reason where recorded.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Requirements for your endpoint</h3>
+      <ul>
+        <li>Return a 2xx status. Anything else counts as a failure.</li>
+        <li>Respond within <strong>10 seconds</strong>, then process asynchronously.</li>
+        <li>Be idempotent — deduplicate on <code>leadId</code> together with <code>changedAt</code>.</li>
+        <li>Verify our signature before trusting the body.</li>
+      </ul>
+
+      <p>On failure we retry <strong>three times with exponential backoff</strong>, roughly at one
+      minute, five minutes and twenty-five minutes. After that the event is dropped and logged. There
+      is no replay queue, so a prolonged outage means permanently missed events.</p>
+    </section>
+
+    <!-- ─────────────── RATE LIMITS ─────────────── -->
+    <section id="rate-limits">
+      <h2>Rate limits</h2>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Constraint</th><th>Value</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Request rate</td><td class="num">60 / minute</td><td>Per partner ID. Returns 429 with <code>Retry-After</code>.</td></tr>
+          <tr><td>Maximum body</td><td class="num">128 KB</td><td>Trim <code>raw</code> if you approach it.</td></tr>
+          <tr><td>Batching</td><td class="num">Not supported</td><td>One lead per request, so one failure never poisons a batch.</td></tr>
+          <tr><td>Timestamp window</td><td class="num">&plusmn; 300 s</td><td>Keep your servers synchronised to NTP.</td></tr>
+          <tr><td>Typical response</td><td class="num">under 3 s</td><td>Set your client timeout no lower than 15 s.</td></tr>
+          <tr><td>Callback retries</td><td class="num">3</td><td>Approximately 1, 5 and 25 minutes apart.</td></tr>
+          <tr><td>Transport</td><td class="num">TLS 1.2+</td><td>HTTPS only. Plain HTTP is refused, not redirected.</td></tr>
+        </tbody>
+      </table></div>
+
+      <p>Retry only 408, 429 and 5xx, with exponential backoff and jitter, up to five attempts across
+      roughly thirty minutes. Reuse the same idempotency key on every attempt.</p>
+
+      <div class="callout caution">
+        <p class="title">There is no reconciliation sweep for partner leads</p>
+        <p>The Meta integration has one because Meta retains a copy we can re-read. We will never hold a
+        copy of a lead you failed to deliver. Your retry logic is the only safety net — if a submission
+        exhausts its retries, alert someone rather than dropping it.</p>
+      </div>
+    </section>
+
+    <!-- ─────────────── EXISTING ─────────────── -->
+    <section id="existing">
+      <h2>Platform endpoints</h2>
+      <p class="sub">Deployed today and listed for completeness. None are partner integration points;
+      all require credentials that are not issued to partners.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Authentication</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="num">POST</td><td><code>/api/meta-webhook</code></td><td>Meta signature</td><td>Facebook and Instagram Lead Ads intake.</td></tr>
+          <tr><td class="num">GET</td><td><code>/api/meta-webhook</code></td><td>Verify token or cron secret</td><td>Meta subscription handshake, and the daily reconciliation sweep.</td></tr>
+          <tr><td class="num">GET</td><td><code>/api/public-config</code></td><td>None</td><td>Non-secret Meta identifiers needed by the browser SDK.</td></tr>
+          <tr><td class="num">POST</td><td><code>/api/generate-lead-summary</code></td><td>Firebase ID token</td><td>Regenerates one lead's AI summary.</td></tr>
+          <tr><td class="num">POST</td><td><code>/api/backfill-lead-summaries</code></td><td>Firebase ID token</td><td>Bulk summary generation, five leads per request.</td></tr>
+          <tr><td class="num">GET / POST</td><td><code>/api/followup-digest</code></td><td>Cron secret or ID token</td><td>Daily follow-up digest by WhatsApp and email.</td></tr>
+          <tr><td class="num">GET / POST</td><td><code>/api/dashboard-summary</code></td><td>Cron secret or ID token</td><td>End-of-day analytics email.</td></tr>
+          <tr><td class="num">POST</td><td><code>/api/data-deletion-callback</code></td><td>Meta signed request</td><td>Meta's mandatory data deletion callback.</td></tr>
+          <tr><td class="num">GET</td><td><code>/api/data-deletion-status</code></td><td>None</td><td>Human-readable deletion status page.</td></tr>
+          <tr><td class="num">GET / POST</td><td><code>/api/knowledge-sync</code></td><td>Firebase ID token</td><td>Manages the assistant's knowledge sources.</td></tr>
+          <tr><td class="num">POST</td><td><code>/api/sync-inventory</code></td><td>Firebase ID token</td><td>Syncs the property inventory sheet.</td></tr>
+          <tr><td class="num">POST</td><td><code>/api/brochure</code></td><td>Shared secret</td><td>Generates and delivers property brochures.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ─────────────── DATA MODEL ─────────────── -->
+    <section id="data-model">
+      <h2>Data model</h2>
+      <p class="sub">Included so you can reason about what happens to a lead after we accept it.
+      Partners have no direct database access.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Collection</th><th>Holds</th></tr></thead>
+        <tbody>
+          <tr><td><code>leads</code></td><td>The lead record, with a tenant identifier on every document.</td></tr>
+          <tr><td><code>leads/{id}/notes</code></td><td>Notes as a subcollection, so adding one does not rewrite the lead.</td></tr>
+          <tr><td><code>leads/{id}/history</code></td><td>Append-only audit trail of every field, stage and follow-up change.</td></tr>
+          <tr><td><code>pipelines</code></td><td>The ordered stage list, configurable per business.</td></tr>
+          <tr><td><code>settings</code></td><td>Enquiry types, known properties, digest recipients.</td></tr>
+        </tbody>
+      </table></div>
+
+      <p>Every document carries a tenant identifier, and access is scoped to it. Your leads are written
+      under the 3 PIN Realty tenant and are not visible to any other. Notes and history are append-only:
+      neither your submission nor an agent's edit erases what came before, so the provenance of every
+      field remains auditable.</p>
+    </section>
+
+    <!-- ─────────────── CHECKLIST ─────────────── -->
+    <section id="checklist">
+      <h2>Integration checklist</h2>
+      <p class="sub">Every item is verifiable; none depend on judgement.</p>
+
+      <h4>Your side</h4>
+      <ul>
+        <li>Signer reproduces the test vector digest exactly.</li>
+        <li>The body you sign is the body you transmit, with no re-serialisation between.</li>
+        <li>All five required fields are populated on every lead, with no empty strings.</li>
+        <li><code>channel</code> is one of the four accepted values.</li>
+        <li>Budgets carry an <code>L</code> or <code>Cr</code> unit, never a bare integer.</li>
+        <li>Timestamps are epoch milliseconds.</li>
+        <li>Idempotency keys are stable across retries and unique per lead.</li>
+        <li>Retries cover only 408, 429 and 5xx.</li>
+        <li>Callback endpoint returns 2xx within ten seconds and verifies our signature.</li>
+        <li>Callback handling is idempotent.</li>
+        <li>Servers are synchronised to NTP.</li>
+        <li>A dead-letter queue exists and alerts a person.</li>
+      </ul>
+
+      <h4>Our side</h4>
+      <ul>
+        <li><code>/api/partner-leads</code> deployed.</li>
+        <li>Partner identifier and signing secret provisioned.</li>
+        <li>Callback URL registered.</li>
+        <li>Stage-change events firing.</li>
+        <li>Ten-lead end-to-end test passed, including a deliberate duplicate and a deliberate merge.</li>
+      </ul>
+    </section>
+
+    <footer>
+      <p>3 PIN Realty Lead API &middot; Reference version 1.0 &middot; Last updated 2 September 2026</p>
+      <p>Signing secrets are exchanged out of band, never over email or chat. Questions about this
+      reference go to your 3 PIN Realty technical contact.</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  // Mobile contents toggle.
+  (function () {
+    var btn = document.getElementById('navToggle');
+    var nav = document.getElementById('nav');
+    if (!btn || !nav) return;
+    btn.addEventListener('click', function () {
+      var open = nav.classList.toggle('open');
+      btn.setAttribute('aria-expanded', String(open));
+    });
+    nav.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A' && window.innerWidth < 940) {
+        nav.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+
+  // Highlight the section currently in view. Falls back silently on browsers
+  // without IntersectionObserver — the nav still works as plain anchors.
+  (function () {
+    if (!('IntersectionObserver' in window)) return;
+    var links = {};
+    document.querySelectorAll('.nav a').forEach(function (a) {
+      links[a.getAttribute('href').slice(1)] = a;
+    });
+    var visible = new Set();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) visible.add(en.target.id);
+        else visible.delete(en.target.id);
+      });
+      var order = Object.keys(links);
+      var current = order.find(function (id) { return visible.has(id); });
+      order.forEach(function (id) {
+        links[id].classList.toggle('active', id === current);
+      });
+    }, { rootMargin: '-70px 0px -65% 0px' });
+    document.querySelectorAll('main section[id]').forEach(function (s) { io.observe(s); });
+  })();
+</script>
+
+</body>
+</html>

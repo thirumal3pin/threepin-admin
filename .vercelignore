@@ -1,0 +1,28 @@
+# Files that must never be served as public static assets.
+#
+# Vercel uploads every tracked file and serves it at its path, so before this
+# existed https://admin.threepin.in/docs/SOP.md returned 200 to anyone. The
+# runtime needs none of the below: api/*.js imports only from api/ and from
+# crm-assets/dashboardMetrics.js, and every scripts/ reference in api/ is a
+# comment, not an import.
+#
+# docs/api.html is deliberately NOT excluded — it is the public partner-facing
+# API reference. Only the internal markdown in that folder is blocked.
+
+docs/*.md
+User manual/
+backups/
+scripts/
+*.tsv
+
+# The security rules are enforced server-side, but publishing them hands an
+# attacker the whole tenancy model for free.
+firestore.rules
+
+# Internal repo readme, not a site page.
+README.md
+
+# Belt-and-braces: also covered by .gitignore, so this only matters for a
+# `vercel deploy` run from a working tree that has one lying around.
+*firebase-adminsdk*.json
+.env*
