@@ -5,3 +5,6 @@ node_modules/
 .DS_Store
 backups/
 .vscode/
+# Local, per-machine record of which scheduler failures have been emailed —
+# state, not source. Deleting it only re-sends alerts for still-open failures.
+.deliver-brochures-alerts.json

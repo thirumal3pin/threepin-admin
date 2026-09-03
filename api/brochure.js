@@ -141,6 +141,59 @@ async function handleFinish(db, body) {
   return json({ success: true, drive_file_id, drive_file_url, email_sent: true, whatsapp_sent: false });
 }
 
+// Phase 3 (alert) — { alert: true, scheduler, reason, impact, property_id?,
+// to } — a plain no-attachment email used by the Mac scheduler to report a
+// run that failed or a brochure it could not deliver. It lives here rather
+// than in its own route only because Vercel's Hobby plan caps a deployment
+// at 12 Serverless Functions and this deployment is already at 11.
+async function handleAlert(db, body) {
+  const { scheduler, reason, impact, property_id, to } = body;
+  if (!scheduler || !reason || !to) {
+    return fail('validation', 'Missing required field (scheduler, reason, to)', 400);
+  }
+
+  const subjectTarget = property_id ? ` — ${property_id}` : '';
+  const subject = `[FAILED] ${scheduler}${subjectTarget}`;
+  const bodyText = [
+    `Scheduler: ${scheduler}`,
+    property_id ? `Property:  ${property_id}` : null,
+    `Time:      ${new Date().toISOString()}`,
+    '',
+    'Reason',
+    '------',
+    String(reason),
+    '',
+    'Impact',
+    '------',
+    String(impact || 'Not specified.'),
+    '',
+    'This is an automated alert from the 3PIN brochure pipeline. It is sent',
+    'once per distinct failure, not once per run, so a recurring problem will',
+    'not flood this inbox — but it also will not repeat itself as a reminder.'
+  ].filter(l => l !== null).join('\n');
+
+  let sent = false;
+  let emailError = null;
+  try {
+    const r = await sendEmail(String(to), subject, bodyText, null, null);
+    sent = !!r.ok;
+    if (!r.ok) emailError = r.error;
+  } catch (e) {
+    emailError = String(e.message || e);
+  }
+
+  await logBrochureCall(db, {
+    property_id: property_id || '(run-level)',
+    step: 'alert',
+    success: sent,
+    error: emailError,
+    detail: `${scheduler}: ${reason}`
+  }).catch(() => {});
+
+  if (!sent) return fail('email', emailError || 'Alert email send failed', 502);
+  return json({ success: true, alert_sent: true });
+}
+
 export async function POST(request) {
   if (!checkAuth(request)) return fail('auth', 'Unauthorized', 401);
 
@@ -156,5 +209,6 @@ export async function POST(request) {
   }
   if (!body || typeof body !== 'object') return fail('validation', 'Invalid JSON body', 400);
 
+  if (body.alert) return handleAlert(db, body);
   return body.drive_file_id ? handleFinish(db, body) : handleInit(db, body);
 }

@@ -20,20 +20,44 @@ export const TENANT_ID = 't_3pinrealty';
 // inserting or reordering a column cannot silently start writing values into
 // the wrong field. Anything absent from this map still reaches the dashboard
 // through sheetExtras.
+//
+// Several columns are listed under TWO spellings. The sheet was re-headed at
+// some point — parentheses became plain words ('Configuration_(BHK)' →
+// 'Configuration_BHK', 'Car_Parking_(No)' → 'Car_Parking_as_No',
+// 'UDS_(sq_ft)' → 'UDS_in_sq_ft') — and because an unmapped header silently
+// falls through to sheetExtras rather than erroring, eleven fields quietly
+// stopped populating: config, pricePerSqft, sqftRange, superBuiltupArea,
+// carpetArea, uds, totalLandArea, parking, powerBackup, mapLink, approval.
+// Nothing looked broken because rowToProperty drops empty values, so every
+// property already carrying those fields simply kept its old ones — only
+// newly-synced properties came out blank (a BHK config that never reaches
+// `config` is also invisible to the dashboard search bar, which does not
+// look inside sheetExtras).
+//
+// Both spellings are kept so the map works whichever way the sheet is
+// headed. assertHeadersMapped() below turns any FUTURE rename into a loud
+// failure instead of another silent one.
 export const FIELD_MAP = {
   'Property_ID': 'propertyCode',
   'Property_Name_Project': 'name',
   'Zone': 'zone',
   'Location_Area': 'location',
   'Configuration_(BHK)': 'config',
+  'Configuration_BHK': 'config',
   'Availability_Status': 'availability',
   'Price': 'startingPrice',
   'Rate_per_Sqft_(INR)': 'pricePerSqft',
+  'Rate_per_Sqft_INR': 'pricePerSqft',
   'Total_Land_Area_(sq_ft)': 'totalLandArea',
+  'Total_Land_Area_in_sq_ft': 'totalLandArea',
   'Built-up_Area_(sq_ft)': 'sqftRange',
+  'Built-up_Area_in_sq_ft': 'sqftRange',
   'Super_Built-up_Area_(sq_ft)': 'superBuiltupArea',
+  'Super_Built-up_Area_in_sq_ft': 'superBuiltupArea',
   'Carpet_Area_(sq_ft)': 'carpetArea',
+  'Carpet_Area_in_sq_ft': 'carpetArea',
   'UDS_(sq_ft)': 'uds',
+  'UDS_in_sq_ft': 'uds',
   'Total_Units': 'totalUnits',
   'Total_Towers': 'totalTowers',
   'Total_Floors': 'totalFloors',
@@ -41,15 +65,19 @@ export const FIELD_MAP = {
   'Facing': 'facing',
   'Bathrooms': 'bathrooms',
   'Car_Parking_(No)': 'parking',
+  'Car_Parking_as_No': 'parking',
   'Car_Parking_Type': 'parkingType',
   'Furnishing': 'furnishing',
   'Corner_Unit': 'cornerUnit',
   'Vastu_Compliant': 'vastu',
   'Power_Backup_(EB_Generator)': 'powerBackup',
+  'Power_Backup_as_EB_Generator': 'powerBackup',
   'Nearby_Landmarks': 'nearbyLandmark',
   'Connectivity_Metro': 'connectivity',
   'Location_Pin_(Maps_URL)': 'mapLink',
+  'Location_Pin_as_Maps_URL': 'mapLink',
   'Approval_(CMDA_DTCP)': 'approval',
+  'Approval_as_CMDA_DTCP': 'approval',
   'Highlights': 'highlights',
   'Amenities': 'amenities',
   'Images_URL': 'photosLink',
@@ -57,6 +85,26 @@ export const FIELD_MAP = {
   'Owner_Builder_Contact': 'ownerContact',
   'Notes': 'sheetNotes'
 };
+
+// The canonical fields that must be reachable from SOME header in the live
+// sheet. If a rename ever orphans one again, callers surface it instead of
+// syncing a quietly hollowed-out property.
+const REQUIRED_FIELDS = [
+  'propertyCode', 'name', 'location', 'config', 'startingPrice',
+  'highlights', 'amenities', 'brochureLink'
+];
+
+// Returns a list of human-readable problems (empty when the sheet is sane).
+export function assertHeadersMapped(headers){
+  const reachable = new Set();
+  for(const h of headers){
+    const f = FIELD_MAP[String(h || '').trim()];
+    if(f) reachable.add(f);
+  }
+  return REQUIRED_FIELDS
+    .filter(f => !reachable.has(f))
+    .map(f => `no Inventory column maps to "${f}" — a header was probably renamed`);
+}
 
 // Column F packs five facts into one pipe-separated cell:
 //   "Apartment | Resale | Ready to Move | - | 5 Years"

@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { rowToProperty, assertHeadersMapped } from '../api/_inventory-shared.js';
 
 // Runs locally (via launchd, not on Vercel) so it has real, unrestricted
 // network access — unlike the Cowork task that generates these brochures,
@@ -37,6 +38,15 @@ const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
 const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
+const SCHEDULER_NAME = 'deliver-brochures (Mac launchd, every 30 min)';
+const ALERT_RECIPIENTS = 'thirumal@threepin.in,swami@threepin.in,pradeep@threepin.in';
+// Remembers which failures have already been emailed. Without this the
+// scheduler would send the same alert 48 times a day for one stuck property
+// — the NAVI0005/VGN000x skip repeated every 30 minutes for over a day.
+const ALERT_STATE_PATH = path.join(import.meta.dirname, '..', '.deliver-brochures-alerts.json');
+// Re-alert on a still-unresolved failure only this often, so a problem that
+// is genuinely being ignored resurfaces without becoming noise.
+const ALERT_REPEAT_AFTER_MS = 24 * 60 * 60 * 1000;
 // No hardcoded column letters here on purpose — the Inventory sheet has
 // already been reorganized once (46 cols -> 36, which silently moved
 // Brochure_Link from AR to AH and had this script writing links into empty
@@ -382,6 +392,19 @@ function extractFolderId(driveUrl) {
 // Finds the local property folder/PDF/JSON for a given Property ID by
 // matching the folder name prefix (folders are named "<PropertyID> <title>"
 // or "<PropertyID> - <title>", per the Cowork task's own naming convention).
+// The PDF is the deliverable; the JSON only supplies the metadata used for
+// the email subject/body and the dashboard card. Requiring BOTH used to mean
+// a brochure sat undelivered forever whenever the generation step wrote the
+// PDF but not the JSON — which is exactly what happened to NAVI0005 and
+// VGN0001-0003 on 2026-09-03 (their run summary claimed all eight properties
+// had a *_property.json; only the first four actually did). Nothing errored,
+// the scheduler just logged "No local folder/PDF found" every 30 minutes for
+// a day and the properties never reached the dashboard at all.
+//
+// So a missing JSON is now a degraded case, not a blocking one: the folder
+// is returned with data:null and deliverRow() rebuilds the metadata from the
+// Inventory sheet row instead (see inventoryFallbackData). Only a missing
+// PDF is genuinely undeliverable.
 function findLocalBrochure(propertyId) {
   for (const entry of fs.readdirSync(BROCHURE_FOLDER, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -389,11 +412,23 @@ function findLocalBrochure(propertyId) {
     const dir = path.join(BROCHURE_FOLDER, entry.name);
     let files;
     try { files = fs.readdirSync(dir); } catch { continue; }
+
     const jsonFile = files.find(f => f.endsWith('_property.json'));
-    if (!jsonFile) continue;
-    const jsonPath = path.join(dir, jsonFile);
-    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-    const pdfName = data.brochureLink && !/^https?:\/\//i.test(data.brochureLink)
+    let data = null;
+    let jsonPath = null;
+    if (jsonFile) {
+      jsonPath = path.join(dir, jsonFile);
+      try {
+        data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+      } catch (e) {
+        // A corrupt JSON is the same situation as an absent one — fall back
+        // rather than crash the whole run on one bad file.
+        console.warn(`[WARN] ${propertyId}: ${path.basename(jsonPath)} is unreadable (${e.message}) — falling back to the Inventory sheet`);
+        data = null;
+      }
+    }
+
+    const pdfName = data && data.brochureLink && !/^https?:\/\//i.test(data.brochureLink)
       ? data.brochureLink
       : files.find(f => f.toLowerCase().endsWith('.pdf'));
     if (!pdfName) continue;
@@ -402,6 +437,103 @@ function findLocalBrochure(propertyId) {
     return { dir, jsonPath, data, pdfPath };
   }
   return null;
+}
+
+// Rebuilds the delivery metadata from the Inventory sheet when the local
+// *_property.json is missing or unreadable. rowToProperty() is the same
+// mapping scripts/sync-inventory.js uses, so the fallback and the sync agree
+// field for field rather than being a second, drifting interpretation.
+// mapToDashboardProperty() already reads both naming schemes (data.type as
+// well as data.propertyType, data.possession as well as data.possessionDate),
+// so its output drops straight in.
+let inventoryRowsCache = null;
+async function getInventoryRows(token) {
+  if (!inventoryRowsCache) {
+    const rows = await sheetsGet(token, INVENTORY_SHEET_ID, 'Inventory!A1:AZ1000');
+    const headers = rows[0] || [];
+    const problems = assertHeadersMapped(headers);
+    if (problems.length) {
+      // Loud, because this is the failure mode that hid eleven unmapped
+      // columns for weeks: an unmapped header silently becomes sheetExtras.
+      console.warn(`[WARN] Inventory sheet header problems:\n  - ${problems.join('\n  - ')}`);
+    }
+    inventoryRowsCache = { headers, rows: rows.slice(1), problems };
+  }
+  return inventoryRowsCache;
+}
+
+async function inventoryFallbackData(token, propertyId) {
+  const { headers, rows } = await getInventoryRows(token);
+  const row = rows.find(r => String(r[0] || '').trim() === propertyId);
+  if (!row) return null;
+  return rowToProperty(headers, row);
+}
+
+// ── Failure alerting ──────────────────────────────────────────────────────
+// A skipped or failed delivery used to be visible only in a log file on this
+// Mac, which is why four properties sat undelivered for a day without anyone
+// knowing. Every failure now emails the same people who receive the
+// brochures, naming the scheduler, the reason, and what it means in practice.
+
+function readAlertState() {
+  try { return JSON.parse(fs.readFileSync(ALERT_STATE_PATH, 'utf8')); } catch { return {}; }
+}
+
+function writeAlertState(state) {
+  try {
+    fs.writeFileSync(ALERT_STATE_PATH, JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.warn(`[WARN] could not persist alert state (${e.message}) — alerts may repeat`);
+  }
+}
+
+// key identifies the failure (property id, or '(run-level)'); reason is
+// matched too, so a property whose failure CHANGES alerts again immediately
+// rather than hiding behind the previous one.
+async function sendAlert(key, reason, impact) {
+  const state = readAlertState();
+  const prev = state[key];
+  const now = Date.now();
+  if (prev && prev.reason === reason && (now - prev.sentAt) < ALERT_REPEAT_AFTER_MS) {
+    console.log(`[ALERT suppressed] ${key}: already reported ${Math.round((now - prev.sentAt) / 60000)} min ago`);
+    return;
+  }
+
+  try {
+    const res = await fetch(BROCHURE_API, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alert: true,
+        scheduler: SCHEDULER_NAME,
+        property_id: key === '(run-level)' ? '' : key,
+        reason,
+        impact,
+        to: ALERT_RECIPIENTS
+      })
+    }).then(r => r.json());
+
+    if (res.success) {
+      state[key] = { reason, sentAt: now };
+      writeAlertState(state);
+      console.log(`[ALERT sent] ${key}: ${reason}`);
+    } else {
+      // Deliberately not recorded as sent, so the next run tries again.
+      console.error(`[ALERT FAILED] ${key}: could not email the alert — ${res.error}`);
+    }
+  } catch (e) {
+    console.error(`[ALERT FAILED] ${key}: ${e.message || e}`);
+  }
+}
+
+// Clears a property's remembered failure once it succeeds, so a future
+// failure of the same kind alerts immediately instead of being suppressed.
+function clearAlert(key) {
+  const state = readAlertState();
+  if (state[key]) {
+    delete state[key];
+    writeAlertState(state);
+  }
 }
 
 async function deliverRow(sheetsToken, rowIndex, row) {
@@ -413,6 +545,22 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   const local = findLocalBrochure(propertyId);
   if (!local) return { propertyId, ok: false, error: 'No local folder/PDF found on this Mac yet' };
+
+  // No usable local JSON — rebuild the metadata from the Inventory sheet so
+  // the delivery still goes out with a real title, price and dashboard card.
+  let metadataSource = 'local JSON';
+  if (!local.data) {
+    const fallback = await inventoryFallbackData(sheetsToken, propertyId);
+    if (!fallback) {
+      return {
+        propertyId, ok: false,
+        error: `No ${propertyId}_property.json in "${path.basename(local.dir)}" and no Inventory sheet row for ${propertyId} — cannot build the email or the dashboard card`
+      };
+    }
+    local.data = fallback;
+    metadataSource = 'Inventory sheet (local JSON missing)';
+    console.log(`[INFO] ${propertyId}: no local *_property.json — using the Inventory sheet row instead`);
+  }
 
   const init = await fetch(BROCHURE_API, {
     method: 'POST',
@@ -430,8 +578,13 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   if (!putRes.id) return { propertyId, ok: false, error: `drive put: ${JSON.stringify(putRes)}` };
 
   const data = local.data;
-  const title = data.name || `${data.config || ''} ${data.propertyType || ''} — ${data.location || ''}`.trim();
-  const priceLine = data.priceInCr || data.price ? ` Price: ${data.priceInCr || data.price}.` : '';
+  // `type`/`startingPrice` are the Inventory sheet's names for what the
+  // brochure JSON calls `propertyType`/`price` — read both, so a fallback
+  // delivery gets a real subject line and price instead of "undefined".
+  const title = data.name
+    || `${data.config || ''} ${data.propertyType || data.type || ''} — ${data.location || ''}`.trim();
+  const priceValue = data.priceInCr || data.price || data.startingPrice;
+  const priceLine = priceValue ? ` Price: ${priceValue}.` : '';
   const finish = await fetch(BROCHURE_API, {
     method: 'POST',
     headers: { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' },
@@ -452,7 +605,18 @@ async function deliverRow(sheetsToken, rowIndex, row) {
     `Yes - ${new Date().toISOString()} - ${finish.drive_file_url}`);
 
   data.brochureLink = finish.drive_file_url;
-  fs.writeFileSync(local.jsonPath, JSON.stringify(data, null, 2));
+  // In fallback mode there was no JSON to update, so write the reconstructed
+  // metadata to the canonical filename. The folder ends up in the same shape
+  // the generation step should have left it in, and the next run reads it
+  // locally instead of hitting the sheet again.
+  const jsonOutPath = local.jsonPath || path.join(local.dir, `${propertyId}_property.json`);
+  try {
+    fs.writeFileSync(jsonOutPath, JSON.stringify(data, null, 2));
+  } catch (e) {
+    // Never fail a delivery that already went out over a local bookkeeping
+    // write — the email and Drive upload are the parts that matter.
+    console.warn(`[WARN] ${propertyId}: could not write ${path.basename(jsonOutPath)} (${e.message})`);
+  }
 
   let inventoryRowUpdated = false;
   let inventoryWarning = null;
@@ -489,7 +653,8 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   return {
     propertyId, ok: true, drive_file_url: finish.drive_file_url,
-    inventoryRowUpdated, inventoryWarning, dashboardAdded, dashboardError
+    inventoryRowUpdated, inventoryWarning, dashboardAdded, dashboardError,
+    metadataSource
   };
 }
 
@@ -524,18 +689,51 @@ async function main() {
       if (result.ok) {
         const dashboardNote = result.dashboardAdded ? 'dashboard: added' : `dashboard: FAILED (${result.dashboardError})`;
         const inventoryNote = result.inventoryWarning || `inventory row updated: ${result.inventoryRowUpdated}`;
-        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (${inventoryNote}, ${dashboardNote})`);
+        console.log(`[OK] ${result.propertyId} -> ${result.drive_file_url} (${inventoryNote}, ${dashboardNote}, metadata: ${result.metadataSource})`);
         await logDelivery(sheetsToken, result.propertyId, 'Delivered',
-          `${result.drive_file_url} | ${inventoryNote} | ${dashboardNote}`);
+          `${result.drive_file_url} | ${inventoryNote} | ${dashboardNote} | metadata: ${result.metadataSource}`);
+
+        // The brochure went out, but the dashboard card is what the team
+        // actually works from — a silent failure here leaves a delivered
+        // property invisible on admin.threepin.in.
+        if (result.dashboardAdded) {
+          clearAlert(result.propertyId);
+        } else {
+          await sendAlert(result.propertyId,
+            `Brochure delivered, but writing the dashboard listing failed: ${result.dashboardError}`,
+            `${result.propertyId} was emailed and uploaded to Drive (${result.drive_file_url}), but it will NOT appear on the admin.threepin.in dashboard until this is fixed. The Queue row is already marked delivered, so the scheduler will not retry it on its own.`);
+        }
       } else {
         console.log(`[SKIP] ${result.propertyId}: ${result.error}`);
         await logDelivery(sheetsToken, result.propertyId, 'Skipped', result.error);
+        await sendAlert(result.propertyId, result.error,
+          `${result.propertyId} is marked Done in the Queue sheet but its brochure has NOT been emailed, NOT uploaded to Drive, and it does NOT appear on the admin.threepin.in dashboard. The scheduler will retry every 30 minutes, but it cannot resolve this on its own.`);
       }
     } catch (e) {
       console.error(`[ERROR] row ${rowIndex + 1}: ${e.message || e}`);
+      await sendAlert(String(row[1] || `row ${rowIndex + 1}`).split(' - ')[0].trim() || `row ${rowIndex + 1}`,
+        `Unexpected error during delivery: ${e.message || e}`,
+        `This property's brochure was not delivered. Depending on where the error occurred it may have been partially processed (uploaded to Drive but not emailed, or emailed but not listed on the dashboard) — worth checking before re-running.`);
       await logDelivery(sheetsToken, row[1] || `row ${rowIndex + 1}`, 'Error', String(e.message || e));
     }
   }
 }
 
-main();
+// A run-level throw (most often Google Sheets answering 503 UNAVAILABLE,
+// which happened repeatedly on 2026-09-03) used to surface as nothing but an
+// unhandled rejection stack in a local log file. The next run recovers on its
+// own, so a single 503 is genuinely transient — but a persistent one would
+// have stopped every delivery indefinitely with no signal at all, so it is
+// alerted like any other failure. sendAlert's de-duplication keeps an
+// intermittent 503 from emailing on every run.
+main().catch(async (e) => {
+  const message = String(e && e.message || e);
+  console.error(`[FATAL] run aborted: ${message}`);
+  const transient = /\b(503|UNAVAILABLE|500|502|504|ECONNRESET|ETIMEDOUT)\b/i.test(message);
+  await sendAlert('(run-level)',
+    `The scheduler run aborted before finishing: ${message}`,
+    transient
+      ? 'No brochure was delivered on this run. This looks like a transient Google API error, and the next run in 30 minutes will usually recover on its own — but if this alert keeps arriving, deliveries are stalled and need looking at.'
+      : 'No brochure was delivered on this run, and every pending property stays undelivered until this is resolved. The scheduler will keep retrying every 30 minutes.');
+  process.exit(1);
+});
