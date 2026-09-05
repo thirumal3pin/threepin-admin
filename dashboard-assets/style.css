@@ -198,6 +198,10 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .share-box{max-width:600px;}
 #shareDetailsTa{min-height:280px;font-family:var(--sans);font-size:14px;}
 .brochure-hint{font-size:13px;color:var(--ink2);background:var(--gold-lt);border:1px solid #FDE68A;border-radius:8px;padding:10px 13px;margin-bottom:16px;line-height:1.5;}
+/* Sits under the intake modal's internal-notes box. Muted rather than a full
+   callout — it reassures, it isn't a warning, and the 🔒 on the label already
+   carries the signal. */
+.bf-internal-hint{font-size:11.5px;color:var(--ink3);margin-top:5px;line-height:1.45;}
 .pmodal-form{display:flex;flex-direction:column;gap:14px;}
 .req-star{color:var(--red);}
 

@@ -4,9 +4,15 @@
 // still fires — without ever leaving or showing the Google Forms UI.
 const BROCHURE_FORM_ACTION = 'https://docs.google.com/forms/d/e/1FAIpQLSdhhCVV3frLlFaN8FXpGB0exOXT2He4VWPnOqTdEUeV82fLMA/formResponse';
 const BROCHURE_FIELD_MAP = {
-  title:   'entry.1238821452', // Property ID & Title
-  drive:   'entry.1785532374', // Google Drive Photo Folder Link
-  details: 'entry.134248436'   // Property Details (required)
+  title:    'entry.1238821452', // Property ID & Title
+  drive:    'entry.1785532374', // Google Drive Photo Folder Link
+  details:  'entry.134248436',  // Property Details (required)
+  // Q4 on the form, and column E of the Queue sheet. Submitting without it
+  // is what left the Internal Notes tab permanently empty for every listing
+  // created from this modal rather than from the Google Form UI — the
+  // scheduler imports that column, but nothing was ever putting anything in
+  // it from here.
+  internal: 'entry.1764716931'  // Internal TEAM Instructions and Notes
 };
 
 function openBrochureModal(){
@@ -26,6 +32,7 @@ async function submitBrochureForm(){
   const title = document.getElementById('bfTitle').value.trim();
   const drive = document.getElementById('bfDrive').value.trim();
   const details = document.getElementById('bfDetails').value.trim();
+  const internal = document.getElementById('bfInternal').value.trim();
   const err = document.getElementById('bfErr');
 
   if(!details){
@@ -44,6 +51,9 @@ async function submitBrochureForm(){
   body.append(BROCHURE_FIELD_MAP.title, title);
   body.append(BROCHURE_FIELD_MAP.drive, drive);
   body.append(BROCHURE_FIELD_MAP.details, details);
+  // Optional on the form, so only send it when there is something to send —
+  // an empty value would still create a blank column E cell.
+  if(internal) body.append(BROCHURE_FIELD_MAP.internal, internal);
 
   try {
     // Google Forms' response endpoint doesn't send CORS headers, so the
