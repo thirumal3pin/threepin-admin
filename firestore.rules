@@ -135,6 +135,16 @@ service cloud.firestore {
         get(/databases/$(database)/documents/properties/$(propId)).data.tenantId == tenantId();
     }
 
+    // Internal team notes & instructions — same parent-tenant scoping as
+    // notes above. Deliberately a SUBcollection: nothing here may ever reach
+    // property.html (the link sent to customers), and keeping it off the
+    // property document means neither the Inventory sync nor the "Sync from
+    // Sheet" button can overwrite it, since both write only the parent doc.
+    match /properties/{propId}/internalNotes/{noteId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/properties/$(propId)).data.tenantId == tenantId();
+    }
+
     // Dashboard change log — the audit trail of every property edit, used to
     // reconcile the dashboard back into the inventory sheet by hand. Entries
     // are deliberately NOT deletable: the log is the record of what to carry

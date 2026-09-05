@@ -9,6 +9,9 @@ let selectedProperties = new Set();
 let favorites = JSON.parse(localStorage.getItem('pinFavorites')) || [];
 let notes = {};        // property id -> [entry], filled on demand from Firestore
 let notesLoaded = {};  // property id -> true once its subcollection was fetched
+let internalNotes = {};       // property id -> [entry], same on-demand pattern
+let internalNotesLoaded = {};
+let editingInternalNoteId = null; // id of the entry currently open for editing
 let currentStatus = 'all';
 let currentType = 'all';
 let currentSort = 'newest';
@@ -367,7 +370,23 @@ function renderDetail(id){
       </div>
     </div>`;
 
-  document.getElementById('dpBody').innerHTML = overview + specs + pitch + crm;
+  const internal = `
+    <div class="tab-panel">
+      <div class="sec">
+        <div class="sec-title">🔒 Internal Notes &amp; Instructions</div>
+        <div class="int-warn">Team-only. Never shown on the shared property link, never written to the Inventory sheet, and never touched by Sync from Sheet.</div>
+        <div id="internalNotesPanel">${renderInternalNotes(id)}</div>
+        <div class="note-add">
+          <textarea class="int-input" id="intInput" rows="3" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();addInternalNote('${id}');}" placeholder="Add a pointer or a paragraph — owner's number, negotiation floor, access instructions, anything the team needs but the client must not see…"></textarea>
+          <div class="note-add-row int-add-actions">
+            <span class="int-hint">Enter for a new line · Ctrl+Enter to add</span>
+            <button class="note-btn" onclick="addInternalNote('${id}')">Add</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('dpBody').innerHTML = overview + specs + pitch + crm + internal;
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
@@ -375,14 +394,22 @@ function renderDetail(id){
   // repaintNotes() checks currentDetailId before writing, so a slow response
   // for a property the user already navigated away from is discarded.
   loadPropertyNotes(id);
+  // Internal notes are a second on-demand subcollection, loaded the same way
+  // and for the same reason. editingInternalNoteId is per-panel state, so a
+  // half-finished edit must not follow the user to the next property.
+  editingInternalNoteId = null;
+  loadInternalNotes(id);
   return true;
 }
 
+// Panel order here must match the .tab-panel order built in renderDetail —
+// the lookup is positional, so appending a tab means appending its name.
+const DETAIL_TABS = ['overview','specs','pitch','notes','internal'];
 function showTab(name,btn){
   document.querySelectorAll('.dp-tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
-  const idx=['overview','specs','pitch','notes'].indexOf(name);
+  const idx=DETAIL_TABS.indexOf(name);
   document.querySelectorAll('.tab-panel')[idx].classList.add('active');
 }
 
@@ -561,6 +588,163 @@ async function deleteNote(id,noteId){
   }catch(e){
     notes[id].push(removed);
     repaintNotes(id);
+    showToast('✗ Could not delete — check your connection and try again');
+  }
+}
+
+// ═══════ INTERNAL NOTES & INSTRUCTIONS ═══════
+// A list of independently editable entries, each of which may be a one-line
+// pointer or a multi-line paragraph (newlines are preserved on render). Kept
+// deliberately separate from Notes & Events above: that log is a dated
+// history of what happened, this is standing instructions for the team.
+//
+// Two writers reach this list — a person here, and the brochure scheduler
+// importing the Queue sheet's "Internal TEAM Instructions and Notes" column
+// (scripts/deliver-brochures.js). They are kept apart by `source`: an
+// imported entry has source:'queue-sheet' and a fixed document id derived
+// from the row, so a re-delivery updates that one entry and can never
+// duplicate it or touch anything typed here by hand.
+const INTERNAL_SOURCES = {
+  'queue-sheet': { label: 'From Queue sheet', cls: 'src-sheet' }
+};
+
+function sortedInternalNotes(id){
+  // Oldest first: these read as a standing list of instructions, so a stable
+  // order people can scan beats newest-first churn.
+  return [...(internalNotes[id]||[])].sort((a,b)=>(Number(a.createdAt)||0)-(Number(b.createdAt)||0));
+}
+
+function renderInternalNotes(id){
+  if(!internalNotesLoaded[id]) return `<div class="empty-mini">Loading internal notes…</div>`;
+  const list = sortedInternalNotes(id);
+  if(!list.length) return `<div class="empty-mini">No internal notes yet. Add the first pointer or paragraph below.</div>`;
+  return list.map(n=>{
+    if(editingInternalNoteId===n.id){
+      return `
+      <div class="int-item editing">
+        <textarea class="int-input" id="intEdit_${escapeHtml(n.id)}" rows="4">${escapeHtml(n.text)}</textarea>
+        <div class="int-edit-actions">
+          <button class="int-btn-cancel" onclick="cancelEditInternalNote('${escapeHtml(id)}')">Cancel</button>
+          <button class="note-btn" onclick="saveInternalNoteEdit('${escapeHtml(id)}','${escapeHtml(n.id)}')">Save</button>
+        </div>
+      </div>`;
+    }
+    const src = INTERNAL_SOURCES[n.source];
+    const when = n.updatedAt && n.updatedAt !== n.createdAt
+      ? 'edited ' + new Date(Number(n.updatedAt)).toLocaleDateString(undefined,{day:'numeric',month:'short'})
+      : (n.createdAt ? new Date(Number(n.createdAt)).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}) : '');
+    return `
+    <div class="int-item">
+      <div class="int-text">${escapeHtml(n.text)}</div>
+      <div class="int-meta">
+        ${src?`<span class="int-src ${src.cls}">${escapeHtml(src.label)}</span>`:''}
+        ${n.author?`<span class="int-author">${escapeHtml(n.author)}</span>`:''}
+        <span class="int-time">${escapeHtml(when)}</span>
+        <button class="int-act" onclick="startEditInternalNote('${escapeHtml(id)}','${escapeHtml(n.id)}')" title="Edit">✏️</button>
+        <button class="int-act int-del" onclick="deleteInternalNote('${escapeHtml(id)}','${escapeHtml(n.id)}')" title="Delete">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function repaintInternalNotes(id){
+  const panel = document.getElementById('internalNotesPanel');
+  // Same stale-response guard as repaintNotes.
+  if(panel && currentDetailId===id) panel.innerHTML = renderInternalNotes(id);
+}
+
+async function loadInternalNotes(id){
+  if(internalNotesLoaded[id]){ repaintInternalNotes(id); return; }
+  try{
+    internalNotes[id] = await window.dashboardFirebase.getInternalNotes(id);
+    internalNotesLoaded[id] = true;
+  }catch(e){
+    internalNotes[id] = [];
+    internalNotesLoaded[id] = true;
+    showToast('✗ Could not load internal notes — check your connection');
+  }
+  repaintInternalNotes(id);
+}
+
+async function addInternalNote(id){
+  const inp = document.getElementById('intInput');
+  const txt = inp.value.trim();
+  if(!txt){ inp.focus(); return; }
+  const entry = {
+    id: 'i'+Date.now(),
+    text: txt,
+    source: 'manual',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    author: (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || ''
+  };
+  if(!internalNotes[id]) internalNotes[id] = [];
+  internalNotes[id].push(entry);
+  inp.value = '';
+  repaintInternalNotes(id);
+  try{
+    await window.dashboardFirebase.saveInternalNote(id, entry);
+    showToast('Internal note added');
+  }catch(e){
+    internalNotes[id] = internalNotes[id].filter(n=>n.id!==entry.id);
+    repaintInternalNotes(id);
+    showToast('✗ Could not save — check your connection and try again');
+  }
+}
+
+function startEditInternalNote(id,noteId){
+  editingInternalNoteId = noteId;
+  repaintInternalNotes(id);
+  const ta = document.getElementById('intEdit_'+noteId);
+  if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+}
+
+function cancelEditInternalNote(id){
+  editingInternalNoteId = null;
+  repaintInternalNotes(id);
+}
+
+async function saveInternalNoteEdit(id,noteId){
+  const ta = document.getElementById('intEdit_'+noteId);
+  if(!ta) return;
+  const txt = ta.value.trim();
+  if(!txt){ ta.focus(); return; }
+  const entry = (internalNotes[id]||[]).find(n=>n.id===noteId);
+  if(!entry) return;
+  const prevText = entry.text, prevAuthor = entry.author, prevUpdated = entry.updatedAt;
+  entry.text = txt;
+  entry.updatedAt = Date.now();
+  // An edited import stops being the sheet's copy — it's now the team's, so
+  // the next scheduler run must not silently revert it. See the ownership
+  // note in scripts/deliver-brochures.js.
+  entry.source = 'manual';
+  entry.author = (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || entry.author || '';
+  editingInternalNoteId = null;
+  repaintInternalNotes(id);
+  try{
+    await window.dashboardFirebase.saveInternalNote(id, entry);
+    showToast('Internal note updated');
+  }catch(e){
+    entry.text = prevText; entry.author = prevAuthor; entry.updatedAt = prevUpdated;
+    repaintInternalNotes(id);
+    showToast('✗ Could not save — check your connection and try again');
+  }
+}
+
+async function deleteInternalNote(id,noteId){
+  const list = internalNotes[id]||[];
+  const removed = list.find(n=>n.id===noteId);
+  if(!removed) return;
+  if(!confirm('Delete this internal note? This cannot be undone.')) return;
+  internalNotes[id] = list.filter(n=>n.id!==noteId);
+  if(editingInternalNoteId===noteId) editingInternalNoteId = null;
+  repaintInternalNotes(id);
+  try{
+    await window.dashboardFirebase.deleteInternalNote(id, noteId);
+    showToast('Internal note deleted');
+  }catch(e){
+    internalNotes[id].push(removed);
+    repaintInternalNotes(id);
     showToast('✗ Could not delete — check your connection and try again');
   }
 }

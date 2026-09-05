@@ -93,7 +93,7 @@ export async function POST(request){
       });
     }
 
-    await commitWrites(db, plan.writes);
+    await commitWrites(db, plan.writes, plan.staleExtras);
     return json({ ok: true, ...summary, written: plan.writes.length, backupId: before.length ? runId : null });
   } catch (e) {
     console.error('sync-inventory failed:', e);

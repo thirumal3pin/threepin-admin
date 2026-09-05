@@ -183,7 +183,25 @@ export async function readInventoryRows(token){
 // photosLink/detailsText on delivered properties, so a value already present
 // in Firestore is never overwritten from here.
 export const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
-const QUEUE_RANGE = "'Form Responses 1'!A1:F1000";
+const QUEUE_RANGE = "'Form Responses 1'!A1:Z1000";
+
+// Columns C and D were read by hardcoded index here. They happen to still be
+// right, but an "Internal TEAM Instructions and Notes" column was inserted at
+// E and shifted everything after it — so the same assumption was already
+// wrong two columns to the right (see scripts/deliver-brochures.js). Resolve
+// by header prefix instead, normalized for the stray double/trailing spaces
+// Google Forms leaves in its question text.
+//
+// The internal-notes column is deliberately NOT listed. It must never be read
+// here: this function feeds the property DOCUMENT, which the dashboard's
+// "Sync from Sheet" button writes, and internal notes are required to stay out
+// of that path. They live in a properties/{id}/internalNotes subcollection and
+// are imported only by the brochure scheduler.
+const QUEUE_FILL_COLUMNS = {
+  idTitle:     'property id',
+  photosLink:  'google drive photo folder',
+  detailsText: 'property details'
+};
 
 export async function readQueueFill(token){
   const res = await fetch(
@@ -195,15 +213,23 @@ export async function readQueueFill(token){
   if(!res.ok) return new Map();
   const rows = data.values || [];
   const fill = new Map();
+  const norm = (rows[0] || []).map(h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' '));
+  const col = prefix => norm.findIndex(h => h.startsWith(prefix));
+  const cols = Object.fromEntries(Object.entries(QUEUE_FILL_COLUMNS).map(([k, pfx]) => [k, col(pfx)]));
+  // Enriching is optional by design (see the !res.ok path above), so a header
+  // we can't find degrades to "no fill data" rather than reading the wrong
+  // column — which is the failure that started all of this.
+  if(cols.idTitle === -1) return fill;
+
   for(let i = 1; i < rows.length; i++){
     const r = rows[i] || [];
-    const id = String(r[1] || '').split(' - ')[0].trim();
+    const id = String(r[cols.idTitle] || '').split(' - ')[0].trim();
     if(!id) continue;
     // Later rows win — the sheet is append-ordered by submission time, so a
     // re-submitted property's newer photos/details replace the older entry.
     fill.set(id, {
-      photosLink: String(r[2] || '').trim(),
-      detailsText: String(r[3] || '').trim()
+      photosLink: cols.photosLink === -1 ? '' : String(r[cols.photosLink] || '').trim(),
+      detailsText: cols.detailsText === -1 ? '' : String(r[cols.detailsText] || '').trim()
     });
   }
   return fill;
@@ -332,7 +358,7 @@ export async function loadPendingProtections(db){
 export function planSync(rows, existing, onlyId, queueFill, protections){
   const headers = rows[0] || [];
   const plan = { headers, creates: [], updates: [], unchanged: 0, writes: [], matchedIds: new Set(),
-                 protectedFields: [], skippedDeleted: [] };
+                 protectedFields: [], skippedDeleted: [], staleExtras: [] };
 
   for(let i = 1; i < rows.length; i++){
     let prop = rowToProperty(headers, rows[i] || []);
@@ -381,6 +407,19 @@ export function planSync(rows, existing, onlyId, queueFill, protections){
     if(!before) prop = withCreateDefaults(prop);
     const changes = diffProperty(before, prop);
 
+    // sheetExtras keys the sheet no longer produces. They matter because a
+    // { merge: true } write deep-merges maps: it can add and overwrite keys
+    // but never remove one, so a header that gets renamed (or newly mapped to
+    // a real field, as eleven of them just were) leaves its old key behind
+    // forever. The diff then sees 12 stored keys against 1 incoming key on
+    // every single run and reports the property as changed in perpetuity.
+    // Collected here and cleared explicitly in commitWrites.
+    if(before && before.sheetExtras){
+      const incoming = prop.sheetExtras || {};
+      const stale = Object.keys(before.sheetExtras).filter(k => !(k in incoming));
+      if(stale.length) plan.staleExtras.push({ id: prop.id, keys: stale });
+    }
+
     if(!before){
       plan.creates.push({ id: prop.id, name: prop.name || '', changes });
     } else if(changes.length){
@@ -407,10 +446,25 @@ export function unmappedHeaders(headers){
 }
 
 // Chunked well under Firestore's 500-operation batch limit.
-export async function commitWrites(db, writes){
+//
+// `staleExtras` (from planSync) names sheetExtras keys that must be removed.
+// They need a second pass because the set() above merges — the only way to
+// drop a key from a map is to replace the whole field, and update() does
+// exactly that for a top-level field, unlike set({merge:true}). It runs after
+// its own set() so the document is guaranteed to exist by then.
+export async function commitWrites(db, writes, staleExtras = []){
   for(let i = 0; i < writes.length; i += 400){
     const batch = db.batch();
     writes.slice(i, i + 400).forEach(p => batch.set(db.collection('properties').doc(p.id), p, { merge: true }));
+    await batch.commit();
+  }
+  if(!staleExtras.length) return;
+  const byId = new Map(writes.map(p => [p.id, p]));
+  const pending = staleExtras.filter(st => byId.has(st.id));
+  for(let i = 0; i < pending.length; i += 400){
+    const batch = db.batch();
+    pending.slice(i, i + 400).forEach(st =>
+      batch.update(db.collection('properties').doc(st.id), { sheetExtras: byId.get(st.id).sheetExtras || {} }));
     await batch.commit();
   }
 }

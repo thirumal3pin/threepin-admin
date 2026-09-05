@@ -108,6 +108,25 @@ window.dashboardFirebase = {
     deleteDoc(doc(db, 'properties', propId, 'notes', noteId))
       .catch(e => { console.error('Firestore delete note error:', e); throw e; }),
 
+  // ── Internal notes & instructions subcollection ──
+  // Team-only pointers and paragraphs (owner's number, negotiation floor,
+  // access instructions...). Kept in its own subcollection rather than on
+  // the property document for the same reason as notes above — the grid
+  // streams every property doc continuously — and, more importantly, so it
+  // is structurally impossible for the Inventory sync or the "Sync from
+  // Sheet" button to touch it: both write only to the property document.
+  // It is also never rendered by property.html, which is the link customers
+  // get sent.
+  getInternalNotes: (propId) => getDocs(collection(db, 'properties', propId, 'internalNotes'))
+    .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+    .catch(e => { console.error('Firestore get internal notes error:', e); throw e; }),
+  saveInternalNote: (propId, note) =>
+    setDoc(doc(db, 'properties', propId, 'internalNotes', note.id), note, { merge: true })
+      .catch(e => { console.error('Firestore save internal note error:', e); throw e; }),
+  deleteInternalNote: (propId, noteId) =>
+    deleteDoc(doc(db, 'properties', propId, 'internalNotes', noteId))
+      .catch(e => { console.error('Firestore delete internal note error:', e); throw e; }),
+
   // ── Change log ──
   // A flat, tenant-scoped collection rather than a per-property subcollection,
   // because the whole point of it is the cross-property date-wise view: "what

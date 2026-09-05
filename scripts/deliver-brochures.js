@@ -54,6 +54,29 @@ const ALERT_REPEAT_AFTER_MS = 24 * 60 * 60 * 1000;
 // text at the start of every run instead — see resolveInventoryColumns().
 const INVENTORY_PROPERTY_ID_HEADER = 'Property_ID';
 const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
+
+// The Queue sheet's columns were hardcoded as A-F here, and that broke the
+// same way the Inventory sheet did: a new "Internal TEAM Instructions and
+// Notes" column was inserted at E, pushing Status E->F and Brochure Emailed
+// F->G. The read then tested the (always blank) notes column for "Done", so
+// every run found zero candidates, and the write-back to a literal "F"
+// pointed at Status - one fixed read away from overwriting it. Resolve by
+// header text instead, exactly like resolveInventoryColumns() below.
+//
+// These are Google Form question texts, not short database-style headers:
+// they are long, contain parenthetical examples, and carry stray double and
+// trailing spaces. So match on a normalized, stable PREFIX rather than the
+// full string - except Status, which is matched exactly so it cannot collide
+// with a future "Construction Status"-type column.
+const QUEUE_COLUMNS = {
+  idTitle:       { match: 'property id',                 mode: 'prefix', required: true },
+  photosLink:    { match: 'google drive photo folder',   mode: 'prefix', required: true },
+  detailsText:   { match: 'property details',            mode: 'prefix', required: false },
+  internalNotes: { match: 'internal team instructions',  mode: 'prefix', required: false },
+  status:        { match: 'status',                      mode: 'exact',  required: true },
+  emailed:       { match: 'brochure emailed',            mode: 'prefix', required: true }
+};
+const normalizeHeader = h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const DASHBOARD_TENANT_ID = 't_3pinrealty'; // dashboard.html / crm.html tenant, confirmed against live Firestore data
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
@@ -384,6 +407,101 @@ async function resolveInventoryColumns(token) {
   return resolvedInventoryColumns;
 }
 
+// Resolves every Queue column to a 0-based index by header text. Returns null
+// for an optional column that is not there; throws if a required one is
+// missing, because guessing at that point is how the last outage happened.
+function resolveQueueColumns(headerRow) {
+  const norm = (headerRow || []).map(normalizeHeader);
+  const cols = {};
+  const missing = [];
+  for (const [key, spec] of Object.entries(QUEUE_COLUMNS)) {
+    const idx = norm.findIndex(h => spec.mode === 'exact' ? h === spec.match : h.startsWith(spec.match));
+    if (idx === -1) {
+      cols[key] = null;
+      if (spec.required) missing.push(`${key} (expected header ${spec.mode} "${spec.match}")`);
+    } else {
+      cols[key] = idx;
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      `Queue sheet header(s) not found: ${missing.join('; ')}. ` +
+      `Headers present: ${norm.filter(Boolean).map(h => JSON.stringify(h)).join(', ')}. ` +
+      `Refusing to run rather than act on the wrong columns.`
+    );
+  }
+  return cols;
+}
+
+// -- Internal notes: Queue sheet -> the property's Internal Notes tab --
+// Stored in the properties/{id}/internalNotes SUBcollection, which is why
+// neither the Inventory sync nor the dashboard's "Sync from Sheet" button can
+// reach it - both write only the property document.
+//
+// The sheet's cell maps to exactly ONE entry, at the fixed document id below,
+// so re-running this can never duplicate it. Ownership follows the same
+// never-clobber rule as everything else here: the entry is refreshed from the
+// sheet only while it is still the sheet's copy. The moment someone edits it
+// in the dashboard, app.js rewrites its `source` to 'manual' and this stops
+// touching it - the team's wording wins over the form's.
+const QUEUE_NOTE_DOC_ID = 'queue-sheet';
+
+async function upsertInternalNoteFromQueue(propertyId, text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return { changed: false, reason: 'blank in sheet' };
+
+  const db = getFirestoreDb();
+  // Never create a note for a property that does not exist - an internalNotes
+  // subcollection under a missing parent would be invisible in the dashboard
+  // and unreachable by firestore.rules, which scopes it by the PARENT's
+  // tenantId.
+  const propRef = db.collection('properties').doc(propertyId);
+  if (!(await propRef.get()).exists) return { changed: false, reason: 'no property document' };
+
+  const noteRef = propRef.collection('internalNotes').doc(QUEUE_NOTE_DOC_ID);
+  const snap = await noteRef.get();
+  const existing = snap.exists ? snap.data() : null;
+
+  if (existing && existing.source !== 'queue-sheet') return { changed: false, reason: 'edited in dashboard - left alone' };
+  if (existing && String(existing.text || '') === trimmed) return { changed: false, reason: 'unchanged' };
+
+  await noteRef.set({
+    id: QUEUE_NOTE_DOC_ID,
+    text: trimmed,
+    source: 'queue-sheet',
+    author: 'Queue sheet',
+    createdAt: (existing && existing.createdAt) || Date.now(),
+    updatedAt: Date.now()
+  }, { merge: true });
+  return { changed: true, reason: existing ? 'updated' : 'created' };
+}
+
+// Runs over EVERY Queue row each cycle, not just the ones being delivered: a
+// row is delivered once, but its internal instructions get edited long
+// afterwards, and those edits still need to reach the tab.
+async function syncInternalNotesFromQueue(rows, cols) {
+  if (cols.internalNotes === null) {
+    console.warn('[WARN] Queue sheet has no "Internal TEAM Instructions" column - skipping internal notes sync');
+    return;
+  }
+  let created = 0, updated = 0, skipped = 0, failed = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const propertyId = String(row[cols.idTitle] || '').split(' - ')[0].trim();
+    const text = row[cols.internalNotes];
+    if (!propertyId || !String(text || '').trim()) continue;
+    try {
+      const r = await upsertInternalNoteFromQueue(propertyId, text);
+      if (r.changed) { r.reason === 'created' ? created++ : updated++; }
+      else skipped++;
+    } catch (e) {
+      failed++;
+      console.error(`[ERROR] internal notes ${propertyId}: ${e.message || e}`);
+    }
+  }
+  console.log(`Internal notes: ${created} created, ${updated} updated, ${skipped} unchanged/protected, ${failed} failed.`);
+}
+
 function extractFolderId(driveUrl) {
   const m = String(driveUrl || '').match(/\/folders\/([a-zA-Z0-9_-]+)/);
   return m ? m[1] : null;
@@ -536,11 +654,11 @@ function clearAlert(key) {
   }
 }
 
-async function deliverRow(sheetsToken, rowIndex, row) {
-  const propertyId = String(row[1] || '').split(' - ')[0].trim();
+async function deliverRow(sheetsToken, rowIndex, row, cols) {
+  const propertyId = String(row[cols.idTitle] || '').split(' - ')[0].trim();
   if (!propertyId) return { propertyId: '(blank)', ok: false, error: 'Could not parse Property ID from column B' };
 
-  const driveFolderId = extractFolderId(row[2]);
+  const driveFolderId = extractFolderId(row[cols.photosLink]);
   if (!driveFolderId) return { propertyId, ok: false, error: 'No Drive folder link in column C' };
 
   const local = findLocalBrochure(propertyId);
@@ -601,7 +719,7 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   // The one write that actually prevents a duplicate send on the next run —
   // do this even if the local JSON / Inventory writes below fail somehow.
-  await sheetsUpdateCell(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!F${rowIndex + 1}`,
+  await sheetsUpdateCell(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!${columnLetter(cols.emailed)}${rowIndex + 1}`,
     `Yes - ${new Date().toISOString()} - ${finish.drive_file_url}`);
 
   data.brochureLink = finish.drive_file_url;
@@ -620,10 +738,10 @@ async function deliverRow(sheetsToken, rowIndex, row) {
 
   let inventoryRowUpdated = false;
   let inventoryWarning = null;
-  const cols = await resolveInventoryColumns(sheetsToken);
+  const invCols = await resolveInventoryColumns(sheetsToken);
   const missingHeaders = [
-    !cols.propertyId && INVENTORY_PROPERTY_ID_HEADER,
-    !cols.brochureLink && INVENTORY_BROCHURE_LINK_HEADER,
+    !invCols.propertyId && INVENTORY_PROPERTY_ID_HEADER,
+    !invCols.brochureLink && INVENTORY_BROCHURE_LINK_HEADER,
   ].filter(Boolean);
   if (missingHeaders.length) {
     // Never fall back to a hardcoded letter here — writing the link into the
@@ -634,10 +752,10 @@ async function deliverRow(sheetsToken, rowIndex, row) {
     inventoryWarning = `Inventory sheet header(s) not found: ${missingHeaders.join(', ')} — skipped Inventory update`;
     console.warn(`[WARN] ${propertyId}: ${inventoryWarning}`);
   } else {
-    const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.propertyId}:${cols.propertyId}`);
+    const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${invCols.propertyId}:${invCols.propertyId}`);
     const invRowIndex = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
     if (invRowIndex !== -1) {
-      await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${cols.brochureLink}${invRowIndex + 1}`, finish.drive_file_url);
+      await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${invCols.brochureLink}${invRowIndex + 1}`, finish.drive_file_url);
       inventoryRowUpdated = true;
     }
   }
@@ -645,7 +763,8 @@ async function deliverRow(sheetsToken, rowIndex, row) {
   let dashboardAdded = false;
   let dashboardError = null;
   try {
-    await upsertDashboardProperty(propertyId, data, finish.drive_file_url, row[2], row[3]);
+    await upsertDashboardProperty(propertyId, data, finish.drive_file_url,
+      row[cols.photosLink], cols.detailsText === null ? '' : row[cols.detailsText]);
     dashboardAdded = true;
   } catch (e) {
     dashboardError = String(e.message || e);
@@ -666,13 +785,32 @@ async function main() {
   }
 
   const sheetsToken = await getAccessToken(['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']);
-  const rows = await sheetsGet(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!A:F`);
+  // A:Z rather than A:F - the sheet has already grown past F once, and a
+  // narrow read would silently truncate the very columns we now resolve.
+  const rows = await sheetsGet(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!A:Z`);
+
+  let cols;
+  try {
+    cols = resolveQueueColumns(rows[0] || []);
+  } catch (e) {
+    console.error(`[FATAL] ${e.message}`);
+    await logDelivery(sheetsToken, '', 'Error', String(e.message || e));
+    await sendAlert('(run-level)', String(e.message || e),
+      'The scheduler cannot tell which Queue column is which, so nothing was delivered this run.');
+    process.exit(1);
+  }
+  console.log(`Queue columns resolved: ${Object.entries(cols)
+    .map(([k, i]) => `${k}=${i === null ? '(absent)' : columnLetter(i)}`).join(' ')}`);
+
+  // Independent of delivery: internal instructions get edited long after a row
+  // is delivered, and those edits still have to reach the dashboard.
+  await syncInternalNotesFromQueue(rows, cols);
 
   const candidates = [];
   for (let i = 1; i < rows.length; i++) { // skip header row
     const row = rows[i];
-    const status = row[4];
-    const alreadyEmailed = row[5];
+    const status = row[cols.status];
+    const alreadyEmailed = row[cols.emailed];
     if (status === 'Done' && !alreadyEmailed) candidates.push({ rowIndex: i, row });
   }
 
@@ -685,7 +823,7 @@ async function main() {
 
   for (const { rowIndex, row } of candidates) {
     try {
-      const result = await deliverRow(sheetsToken, rowIndex, row);
+      const result = await deliverRow(sheetsToken, rowIndex, row, cols);
       if (result.ok) {
         const dashboardNote = result.dashboardAdded ? 'dashboard: added' : `dashboard: FAILED (${result.dashboardError})`;
         const inventoryNote = result.inventoryWarning || `inventory row updated: ${result.inventoryRowUpdated}`;
@@ -711,10 +849,10 @@ async function main() {
       }
     } catch (e) {
       console.error(`[ERROR] row ${rowIndex + 1}: ${e.message || e}`);
-      await sendAlert(String(row[1] || `row ${rowIndex + 1}`).split(' - ')[0].trim() || `row ${rowIndex + 1}`,
+      await sendAlert(String(row[cols.idTitle] || `row ${rowIndex + 1}`).split(' - ')[0].trim() || `row ${rowIndex + 1}`,
         `Unexpected error during delivery: ${e.message || e}`,
         `This property's brochure was not delivered. Depending on where the error occurred it may have been partially processed (uploaded to Drive but not emailed, or emailed but not listed on the dashboard) — worth checking before re-running.`);
-      await logDelivery(sheetsToken, row[1] || `row ${rowIndex + 1}`, 'Error', String(e.message || e));
+      await logDelivery(sheetsToken, row[cols.idTitle] || `row ${rowIndex + 1}`, 'Error', String(e.message || e));
     }
   }
 }

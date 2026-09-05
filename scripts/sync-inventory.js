@@ -157,7 +157,7 @@ async function main(){
     .sort().reverse().slice(40)
     .forEach(f => { try { fs.unlinkSync(path.join(backupDir, f)); } catch {} });
 
-  await commitWrites(db, plan.writes);
+  await commitWrites(db, plan.writes, plan.staleExtras);
   console.log(`\n✓ Wrote ${plan.writes.length} propert${plan.writes.length === 1 ? 'y' : 'ies'}. ${plan.orphans.length} left untouched.`);
 }
 
