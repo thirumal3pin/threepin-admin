@@ -766,6 +766,21 @@ async function deliverRow(sheetsToken, rowIndex, row, cols) {
     await upsertDashboardProperty(propertyId, data, finish.drive_file_url,
       row[cols.photosLink], cols.detailsText === null ? '' : row[cols.detailsText]);
     dashboardAdded = true;
+    // Import this row's internal notes now that the property document
+    // exists. syncInternalNotesFromQueue() already ran at the top of this
+    // run, but it had to skip a brand-new property because its document was
+    // only created on the line above — without this the notes would not
+    // appear until the next run, half an hour later. It cannot move to after
+    // the delivery loop instead, because that loop is skipped entirely on a
+    // no-candidates run, which is most of them. Same upsert, so it stays
+    // idempotent and still defers to anything edited in the dashboard.
+    if (cols.internalNotes !== null) {
+      try {
+        await upsertInternalNoteFromQueue(propertyId, row[cols.internalNotes]);
+      } catch (e) {
+        console.error(`[WARN] ${propertyId}: internal notes import failed: ${e.message || e}`);
+      }
+    }
   } catch (e) {
     dashboardError = String(e.message || e);
   }
