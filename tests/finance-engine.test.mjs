@@ -15,6 +15,9 @@ import {
   tdsFyTotal, complianceCalendar, upcomingCash, agedReceivables, taxProvision,
 } from '../finance-assets/finance-core.js';
 import { EV, PARTY_FIELDS, gstSync } from '../finance-assets/finance-events.js';
+import {
+  filterTxns, previousRange, periodKey, seriesByPeriod, runningCash, breakdown, kpis, dealFunnel, collectionDays, byChannel,
+} from '../finance-assets/finance-analytics.js';
 
 // ═══════ TINY TEST RUNNER ═══════
 
@@ -591,6 +594,60 @@ section('TDS thresholds, ageing, calendar, cash, tax');
   eq('Tax provision at the s.115BAA rate', tp.tax, 25168);
   eq('Profit after tax', tp.pat, 74832);
   eq('No tax on a loss', taxProvision(-5000).tax, 0);
+}
+
+section('Analytics — filters');
+{
+  const all = s.txns;
+  const sep = filterTxns(all, { from: '2026-09-01', to: '2026-09-30', includeReversed: true });
+  check('Date range keeps only September', sep.every(t => t.date.startsWith('2026-09')) && sep.length > 5, String(sep.length));
+  const noRev = filterTxns(all, { from: '2026-09-01', to: '2026-12-31', includeReversed: false });
+  check('Reversed pairs drop out by default', !noRev.some(t => t.reversedBy || t.reversalOf));
+  const withRev = filterTxns(all, { from: '2026-09-01', to: '2026-12-31', includeReversed: true });
+  check('…and come back when asked for', withRev.length === noRev.length + 2);
+  const onDeal = filterTxns(all, { from: '2026-09-01', to: '2026-12-31', deal: deal1, includeReversed: true });
+  check('Deal filter matches lines tagged with the deal', onDeal.length >= 3 && onDeal.every(t => t.lines.some(l => l.deal === deal1)));
+  const card = filterTxns(all, { from: '2026-09-01', to: '2026-12-31', channel: '2300', includeReversed: true });
+  check('Channel filter finds the card entries', card.length >= 3 && card.every(t => t.lines.some(l => l.acc === '2300')));
+  const big = filterTxns(all, { from: '2026-09-01', to: '2026-12-31', minAmt: 100000, includeReversed: true });
+  check('Amount floor keeps only the large entries', big.length >= 2 && big.every(t => num(t.totals.dr) >= 100000));
+  const prev = previousRange({ from: '2026-10-01', to: '2026-10-31' });
+  check('Previous range is the same length, immediately before', prev.from === '2026-09-01' && prev.to === '2026-09-30', JSON.stringify(prev));
+}
+
+section('Analytics — periods and rollups');
+{
+  check('Quarter key', periodKey('2026-11-15', 'quarter') === '2026-Q4');
+  check('Year key', periodKey('2026-02-01', 'year') === '2026');
+  const inRange = filterTxns(s.txns, { from: '2026-09-01', to: '2026-12-31', includeReversed: false });
+  const series = seriesByPeriod(inRange, 'month', '2026-09-01', '2026-12-31');
+  check('One row per month across the range, gaps filled', series.length === 4 && series.map(r => r.key).join() === '2026-09,2026-10,2026-11,2026-12', series.map(r => r.key).join());
+  eq('October income in the series matches the P&L', series[1].income, pl('2026-10').ti);
+  eq('October profit in the series matches the P&L', series[1].profit, pl('2026-10').profit);
+  const q = seriesByPeriod(inRange, 'quarter', '2026-09-01', '2026-12-31');
+  check('Quarterly rollup spans Q3 and Q4', q.length === 2 && q[0].key === '2026-Q3');
+  const cash = runningCash(s.txns.filter(t => !t.reversedBy && !t.reversalOf), series, 'month');
+  eq('Running cash at end of December equals bank + petty', cash[3].balance, bal('1000', { upto: '2026-12-31' }) + bal('1010', { upto: '2026-12-31' }));
+  const exp = breakdown(inRange, 'expense');
+  check('Expense breakdown is sorted largest first', exp.rows.every((r, i) => i === 0 || r.amount <= exp.rows[i - 1].amount));
+  eq('Breakdown shares sum to 100', exp.rows.reduce((a, r) => a + r.share, 0), 100, 0.5);
+  const k = kpis(filterTxns(s.txns, { from: '2026-10-01', to: '2026-10-31' }), filterTxns(s.txns, { from: '2026-09-01', to: '2026-09-30' }));
+  eq('KPI income is October income', k.income, pl('2026-10').ti);
+  check('KPI delta is computed against September', typeof k.delta.expense === 'number');
+  const ch = byChannel(inRange);
+  check('Channel table has all three channels', ch.length === 3 && ch.some(c => c.code === '2300' && c.out > 0));
+}
+
+section('Analytics — deals and collection');
+{
+  const f = dealFunnel(s);
+  const d1 = f.find(d => d.id === deal1);
+  eq('Deal funnel: invoiced brokerage', d1.invoiced, 100000);
+  eq('Deal funnel: expected from both sides', d1.expected, 300000);
+  eq('Deal funnel: nothing outstanding after payment', d1.outstanding, 0);
+  check('Deal funnel: cash received on the deal is positive', d1.received > 0);
+  const c = collectionDays(s);
+  check('Days to collect measured from invoice to payment', c.count === 1 && c.avg === 8, JSON.stringify(c));
 }
 
 section('Number formatting');

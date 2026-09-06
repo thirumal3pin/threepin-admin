@@ -28,6 +28,7 @@ import { renderSettings, mountSettings, renderProfile, mountProfile, renderOpeni
 import { renderGuide } from './views-guide.js';
 import { renderDeals } from './views-deals.js';
 import { renderGst } from './views-gst.js';
+import { renderAnalytics } from './views-analytics.js';
 
 // ═══════ NAVIGATION ═══════
 //
@@ -45,6 +46,7 @@ const NAV = [
   ['invoices', 'Invoices', '§'],
   ['bank', 'Bank', '⌸'],
   ['gst', 'GST', '∑'],
+  ['analytics', 'Analytics', '≋'],
   ['reports', 'Reports', '◫'],
   ['books', 'Books', '⊞'],
   ['profile', 'Profile', '☖'],
@@ -163,7 +165,7 @@ function repaint() {
     invoices: renderInvoices, bank: renderBank,
     reports: renderReports, books: renderBooks,
     profile: renderProfile, settings: renderSettings, guide: renderGuide, opening: renderOpening,
-    deals: renderDeals, gst: renderGst,
+    deals: renderDeals, gst: renderGst, analytics: renderAnalytics,
   };
   main.innerHTML = (views[view] || overview)();
 
@@ -690,7 +692,7 @@ async function runUploads() {
 
 // ═══════ TRANSACTIONS ═══════
 
-let txnFilters = { month: '', event: '', party: '', q: '' };
+let txnFilters = { month: '', event: '', party: '', q: '', channel: '', min: '', max: '', hideReversed: false };
 
 function txns() {
   const s = getState();
@@ -708,6 +710,10 @@ function txns() {
     .filter(t => !txnFilters.event || t.event === txnFilters.event)
     .filter(t => !txnFilters.party || t.lines.some(l => l.party === txnFilters.party))
     .filter(t => !txnFilters.q || (t.desc || '').toLowerCase().includes(txnFilters.q.toLowerCase()))
+    .filter(t => !txnFilters.channel || t.lines.some(l => l.acc === txnFilters.channel))
+    .filter(t => txnFilters.min === '' || num(t.totals?.dr) >= num(txnFilters.min))
+    .filter(t => txnFilters.max === '' || num(t.totals?.dr) <= num(txnFilters.max))
+    .filter(t => !txnFilters.hideReversed || !(t.reversedBy || t.reversalOf))
     .sort((a, b) => b.date.localeCompare(a.date) || num(b.no) - num(a.no) || String(b.createdAt).localeCompare(String(a.createdAt)));
 
   const profitEffect = t => t.lines.reduce((sum, l) => {
@@ -739,6 +745,16 @@ function txns() {
       </select>
       <input type="search" placeholder="Search description" value="${esc(txnFilters.q)}"
         oninput="fin.filter('q',this.value)" aria-label="Search descriptions">
+      <select onchange="fin.filter('channel',this.value)" aria-label="Paid through">
+        <option value="">Any channel</option>
+        <option value="1000" ${txnFilters.channel === '1000' ? 'selected' : ''}>Bank / UPI</option>
+        <option value="1010" ${txnFilters.channel === '1010' ? 'selected' : ''}>Petty cash</option>
+        <option value="2300" ${txnFilters.channel === '2300' ? 'selected' : ''}>Credit card</option>
+      </select>
+      <input type="number" placeholder="Min ₹" value="${esc(txnFilters.min)}" onchange="fin.filter('min',this.value)" aria-label="Minimum amount">
+      <input type="number" placeholder="Max ₹" value="${esc(txnFilters.max)}" onchange="fin.filter('max',this.value)" aria-label="Maximum amount">
+      <label class="small" style="display:flex;align-items:center;gap:6px;min-height:44px">
+        <input type="checkbox" ${txnFilters.hideReversed ? 'checked' : ''} onchange="fin.filter('hideReversed',this.checked)" style="width:auto;min-height:0"> hide reversed</label>
     </div>
 
     ${rows.length ? table(

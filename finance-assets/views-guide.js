@@ -671,6 +671,10 @@ const FAQ = [
     a: 'Nothing. It knows which months each asset and prepaid plan have already been processed for, so a second run posts no entries at all. It is safe to press if you are unsure.',
   },
   {
+    q: 'How do I see income by month, or one deal, or only what went on the card?',
+    a: 'The <b>Analytics</b> tab. Set a date range and month / quarter / year, then narrow by deal, party, channel, category, type or amount — every chart and table redraws from the same filters, each period is compared with the one before it, and everything exports as CSV. Transactions has the same channel and amount filters for finding one entry.',
+  },
+  {
     q: 'Where do I see what GST to pay this month?',
     a: 'The <b>GST tab</b>. Pick the month and it shows the liability per head, the credit available, the set-off in the order the rules allow (IGST credit first, CGST against CGST, SGST against SGST — never across), and the cash due. <b>Pay GST</b> opens the payment already filled in. The ITC and GSTR-1 registers export as CSV for your CA.',
   },

@@ -67,7 +67,7 @@ check('Bottom tab bar visible at phone width', await page.evaluate(() => getComp
 
 // ── every view at phone width ───────────────────────────────────────────────────
 section('Every view renders at 390px with no horizontal scroll');
-const VIEWS = ['overview', 'record', 'txns', 'deals', 'gst', 'owed', 'services', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
+const VIEWS = ['overview', 'record', 'txns', 'deals', 'gst', 'analytics', 'owed', 'services', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
 for (const v of VIEWS) {
   await page.evaluate(k => window.fin.go(k), v);
   await page.waitForTimeout(350);
