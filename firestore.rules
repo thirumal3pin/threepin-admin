@@ -174,5 +174,187 @@ service cloud.firestore {
     match /meta/{docId} {
       allow read, write: if false;
     }
+
+    // ---------------------------------------------------------------------
+    // Finance subtree — the agency's double-entry books, rooted at
+    // finance/{tid}. The first-level doc ID IS the tenant (same shape as
+    // botConfigs/settings above; the only tenant in production today is
+    // t_3pinrealty), so ownsTenantDoc(tid) is the single gate on every path
+    // below. Nothing down here is scoped by a tenantId FIELD, which is
+    // deliberate: there is then no field a client could rewrite to re-parent
+    // a ledger entry into somebody else's books, so the ownsTenantField() /
+    // writingOwnTenantField() pair that leads and properties need has no job
+    // to do in this section.
+    //
+    // Every collection is written as its OWN explicit match block. A single
+    // `match /finance/{tid}/{coll}/{docId}` would have been six lines instead
+    // of sixty, but Firestore does NOT resolve rules most-specific-wins the
+    // way an HTTP router resolves routes: it evaluates EVERY match statement
+    // whose path pattern matches the request, and grants access if ANY of
+    // them allows it. A permissive wildcard would therefore sit alongside the
+    // txns rules rather than being overridden by them, and would hand back
+    // precisely the powers those rules exist to remove. Concretely, the
+    // wildcard's `delete: if ... resource.data.hasTxns != true` evaluates to
+    // TRUE on a journal entry — a txn doc has no hasTxns field at all, and a
+    // missing field is not equal to true — so the wildcard would silently
+    // authorise deleting ledger history and defeat the append-only guarantee
+    // below without producing an error anywhere. Explicit blocks are verbose
+    // and cannot fail that way; when the collection list grows, add another
+    // block here rather than reaching for a wildcard.
+    // ---------------------------------------------------------------------
+
+    // The finance settings singleton: chart-of-accounts defaults, tax config,
+    // and booksStartDate — the cutover date before which no entry may be
+    // posted, read back live by the txns create rule below via get().
+    match /finance/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+
+    // The general ledger. This is the collection everything else in the
+    // finance module is built to trust, so it is the one carrying real
+    // constraints rather than a bare tenant check.
+    //
+    // create enforces the three invariants that make the books meaningful,
+    // at the only layer a browser cannot route around: (1) the entry balances
+    // — totals.dr == totals.cr, so a half-posted journal can never land even
+    // if the UI's arithmetic drifts; (2) it has at least one line, because an
+    // empty entry is a placeholder that quietly breaks every report that
+    // joins on lines; (3) its date is on or after booksStartDate, read from
+    // the settings doc above, so nobody can back-date an entry into a period
+    // that has already been closed and filed. The get() costs one document
+    // read per create, which is the right trade for not discovering a
+    // pre-cutover entry inside a filed period months later.
+    //
+    // update is the delicate one. Once posted, an entry is history: amounts,
+    // lines, date and narration are frozen. But two things about an entry do
+    // legitimately change AFTER posting — the pointer to the reversal that
+    // cancels it (reversedBy, written when a mistake is corrected by posting
+    // the opposite entry) and the scanned paperwork hung off it (attachments,
+    // which arrive whenever somebody gets round to uploading it). So the rule
+    // diffs the incoming document against the stored one and demands that the
+    // set of affected keys be EXACTLY {reversedBy} or EXACTLY {attachments}.
+    //
+    // "Exactly" needs both halves of each clause, and the two operators are
+    // not interchangeable. hasOnly() alone says the change set is a SUBSET of
+    // the listed keys — which is also true of the empty set, so a no-op write
+    // would pass. hasAny() alone says the change set INTERSECTS the listed
+    // keys — which is also true of a write that rewrites reversedBy AND every
+    // amount on the entry. Only together do they pin the change set to that
+    // one key and nothing else.
+    //
+    // The two clauses are ORed rather than collapsed into a single
+    // hasOnly(['reversedBy', 'attachments']), and that difference is the
+    // whole point: the collapsed form would permit an update changing BOTH
+    // keys at once, and each of these is only ever legitimate on its own — a
+    // reversal is written by the reversal flow, an attachment by the upload
+    // flow, and a request claiming to do both is neither of them. Written
+    // this way, changing an amount, a line, a date, a narration, or any
+    // combination that includes them is rejected, and so is touching
+    // reversedBy and attachments in the same write.
+    //
+    // delete is closed permanently. The ledger is append-only: a mistake is
+    // corrected by posting a reversal, never by erasing history, because
+    // every downstream number — trial balance, month-end, filed returns — is
+    // a sum over rows that must still exist to be re-derived. Spelled
+    // `if false` rather than omitted, so the intent is on the record.
+    match /finance/{tid}/txns/{txnId} {
+      allow read: if ownsTenantDoc(tid);
+      allow create: if ownsTenantDoc(tid) &&
+        request.resource.data.totals.dr == request.resource.data.totals.cr &&
+        request.resource.data.lines.size() > 0 &&
+        request.resource.data.date >=
+          get(/databases/$(database)/documents/finance/$(tid)).data.booksStartDate;
+      allow update: if ownsTenantDoc(tid) && (
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reversedBy']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAny(['reversedBy'])) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attachments']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAny(['attachments']))
+      );
+      allow delete: if false;
+    }
+
+    // Month-end close records, one per month (the doc ID is the month key).
+    // A month-end is not a setting, it is a FACT about what was posted when
+    // the close ran — depreciation, accruals, and the rest — and the close is
+    // idempotent: re-running it against an already-closed month posts
+    // nothing. So there is no legitimate reason to rewrite or erase the
+    // record, and update/delete are shut.
+    //
+    // The one exception is bank reconciliation, which runs on a different
+    // clock from the close: the statement arrives after the month is closed,
+    // somebody ticks it off, and that status has to live somewhere. Rather
+    // than a parallel collection duplicating the month key, it is two fields
+    // on this doc, and update is opened for those fields ALONE — the change
+    // set must be exactly {reconciled} or exactly {reconciledAt, reconciled}.
+    // Same pairing as the txns rule above and for the same reason: hasOnly by
+    // itself would let an empty write through and neither operator alone pins
+    // a set, so the single-key case uses hasOnly+hasAny and the two-key case
+    // uses hasOnly+hasAll. What the close wrote — the entries it posted, the
+    // totals, its timestamp — stays untouchable; only the reconciliation flag
+    // moves. reconciledAt can never move on its own, because a timestamp
+    // without the flag it is timestamping means nothing.
+    match /finance/{tid}/monthEnds/{month} {
+      allow read, create: if ownsTenantDoc(tid);
+      allow update: if ownsTenantDoc(tid) && (
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciled']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAny(['reconciled'])) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciledAt', 'reconciled']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAll(['reconciledAt', 'reconciled']))
+      );
+      allow delete: if false;
+    }
+
+    // The remaining finance collections: reference data and the subledgers
+    // that FEED the ledger. These are ordinary read/create/update for the
+    // owning tenant — they get edited in place all the time, and unlike a
+    // journal entry there is nothing historical about an account's name or a
+    // party's phone number.
+    //
+    // delete carries the one shared guard: `resource.data.hasTxns != true`.
+    // Once a subscription, loan or asset has generated journal entries, the
+    // ledger holds rows pointing back at it, and deleting the parent would
+    // leave those rows orphaned — a trial balance that still foots but whose
+    // lines can no longer be explained. The app sets hasTxns on the first
+    // posting; the guard is read here so the delete is refused at the
+    // database instead of depending on the UI remembering to hide a button.
+    // The `!= true` form (rather than `== false`) is deliberate: a doc that
+    // predates the flag has no hasTxns field at all, and a missing field must
+    // read as "no transactions yet, deleting is fine" rather than blocking
+    // every legacy row. That is exactly the comparison that made a wildcard
+    // over txns unsafe, as described at the top of this section — it is the
+    // right behaviour here only because these docs are not append-only
+    // history.
+    match /finance/{tid}/accounts/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/parties/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/deals/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/subscriptions/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/loans/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/assets/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/invoices/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
+    match /finance/{tid}/bankStatements/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
+    }
   }
 }

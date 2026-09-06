@@ -1,0 +1,106 @@
+rules_version = '2';
+
+// Tenant-isolation rules for Firebase Storage — the attachment bucket behind
+// the finance module (receipts and bills hung off a journal entry, and issued
+// invoice PDFs).
+//
+// Firebase Storage has NEVER been used in this project before. It must be
+// ENABLED in the Firebase Console (Build > Storage > Get started) before these
+// rules can take effect or a bucket exists to apply them to — until then every
+// upload fails at the SDK, not at the rules, and no amount of editing this
+// file changes that. Enabling Storage creates a default bucket with Google's
+// starter rules, which are wide open to any signed-in user across all paths;
+// these replace them.
+//
+// These are deployed SEPARATELY from firestore.rules — different product,
+// different deploy target:
+//   firebase deploy --only storage        (this file)
+//   firebase deploy --only firestore:rules  (firestore.rules)
+// Deploying one does not touch the other, and `--only firestore:rules` will
+// happily leave the starter Storage rules in place. Both need doing.
+//
+// The helpers below are intentionally a small local copy rather than a shared
+// import: Storage rules and Firestore rules are separate rulesets evaluated by
+// separate services and cannot share functions, so ownsTenant() here mirrors
+// ownsTenantDoc() in firestore.rules by hand. If the tenant claim ever changes
+// shape, both files need the edit.
+//
+// As in Firestore, these govern CLIENT-SIDE access only. Server-side uploads
+// from api/*.js go through the Admin SDK, which bypasses these rules entirely.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // The tenant gate: the same tenantId custom claim the CRM already issues
+    // and firestore.rules already trusts, compared against the {tid} segment
+    // of the object path. Objects are namespaced by tenant in the path
+    // exactly so this comparison is possible — there is no per-object
+    // metadata to consult and no way for a client to move a file between
+    // tenants without landing on a path its own claim does not match.
+    function ownsTenant(tid) {
+      return request.auth != null && request.auth.token.tenantId == tid;
+    }
+
+    // Upload constraints, applied to writes only. 10 MB is a deliberate
+    // ceiling for a phone photo of a bill or a scanned PDF; anything larger
+    // is a video or a mistake, and either way it does not belong in the
+    // ledger's attachment store where the whole folder gets pulled down when
+    // an entry is opened. The content type is restricted to images and PDFs
+    // for the same reason plus one more: attachments are rendered inline in
+    // the finance UI, and an arbitrary uploaded file type served back from
+    // the bucket is a delivery mechanism, not a receipt.
+    function validUpload() {
+      return request.resource.size < 10 * 1024 * 1024 &&
+        (request.resource.contentType.matches('image/.*') ||
+         request.resource.contentType == 'application/pdf');
+    }
+
+    // Transaction attachments: finance/{tid}/{yyyy}/{txnId}/{fileName}. The
+    // year segment exists so the bucket stays browsable in the console and so
+    // a whole closed year can be lifecycle-archived later without a migration
+    // — it is not a security boundary, {tid} is.
+    //
+    // Note the split of `write` into create/update and delete rather than a
+    // single `allow write`. Storage's write covers all three, but on a DELETE
+    // there is no incoming object, so request.resource is null and any rule
+    // that reaches into request.resource.size or .contentType fails — a
+    // single `allow write: if ownsTenant(tid) && validUpload()` would silently
+    // block every delete the tenant is supposed to be able to make. Splitting
+    // them keeps the size/type checks on the paths where an object actually
+    // exists to check.
+    match /finance/{tid}/{yyyy}/{txnId}/{fileName} {
+      allow read: if ownsTenant(tid);
+      allow create, update: if ownsTenant(tid) && validUpload();
+      allow delete: if ownsTenant(tid);
+    }
+
+    // Issued invoice PDFs: finance/{tid}/invoices/{fileName}. This is four
+    // path segments where the rule above is five, so the two patterns cannot
+    // both match one object and there is no ambiguity between them — an
+    // invoice can never be read through the txn-attachment rule or vice
+    // versa. That is also why "invoices" as a literal here does not collide
+    // with the {yyyy} wildcard above: a file directly under it has one
+    // segment fewer than that pattern requires.
+    match /finance/{tid}/invoices/{fileName} {
+      allow read: if ownsTenant(tid);
+      allow create, update: if ownsTenant(tid) && validUpload();
+      allow delete: if ownsTenant(tid);
+    }
+
+    // Everything else in the bucket: denied. Written out rather than left to
+    // the implicit default so that the intent is on the record and so a
+    // future path added by hand has to be added deliberately, not inherited.
+    //
+    // Read this for what it is, though: it does NOT revoke the grants above.
+    // Storage rules, like Firestore rules, evaluate every matching statement
+    // and allow the request if ANY of them allows it — an `if false` never
+    // subtracts from an `if true` elsewhere. It only makes the default-deny
+    // explicit for paths nothing else matches, which today is the entire
+    // bucket outside finance/. If a genuinely public path is ever needed
+    // (a logo, say), it needs its own match block above; loosening this one
+    // would open the whole bucket.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
