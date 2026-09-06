@@ -12,7 +12,7 @@ import {
   fyOf, num, fmt, ym, addMonths, bal, pl, trialBalance, balanceSheet, partyBalances,
   monthEndEntries, schedule, prepaidLeft, splitGst, words, A,
 } from '../finance-assets/finance-core.js';
-import { EV, PARTY_FIELDS } from '../finance-assets/finance-events.js';
+import { EV, PARTY_FIELDS, gstSync } from '../finance-assets/finance-events.js';
 
 // ═══════ TINY TEST RUNNER ═══════
 
@@ -176,17 +176,17 @@ const s = fresh();
 section('September 2026 — setting up');
 
 save('funding', { date: '2026-09-01', kind: '3000', who: 'Swaminathan N G', amt: 500000 });
-save('asset', { date: '2026-09-03', name: 'MacBook Air', cost: 95000, gstin: 0, life: 36, via: '1000' });
-save('asset', { date: '2026-09-04', name: 'Sony A7 camera', cost: 80000, gstin: 0, life: 36, via: '2300' });
+save('asset', { date: '2026-09-03', name: 'MacBook Air', amt: 95000, gst: 'no', life: 36, via: '1000' });
+save('asset', { date: '2026-09-04', name: 'Sony A7 camera', amt: 80000, gst: 'no', life: 36, via: '2300' });
 save('subnew', {
   date: '2026-09-05', name: 'Zoho CRM', vendor: 'Zoho', use: 'Lead pipeline',
-  payMode: 'upfront', amount: 24000, months: 12, via: '1000',
+  payMode: 'upfront', amt: 24000, gst: 'no', months: 12, via: '1000',
 });
 save('subnew', {
   date: '2026-09-05', name: 'Claude Pro', vendor: 'Anthropic', use: 'Content',
-  payMode: 'monthly', amount: 1800, via: '2300',
+  payMode: 'monthly', amt: 1800, gst: 'no', via: '2300',
 });
-save('expense', { date: '2026-09-08', desc: 'Office rent — Sep', acc: '5000', amt: 35000, gstin: 0, via: '1000' });
+save('expense', { date: '2026-09-08', desc: 'Office rent — Sep', acc: '5000', amt: 35000, gst: 'no', via: '1000' });
 
 save('newdeal', {
   date: '2026-09-09', nickname: 'Rajan — Nungambakkam 2BHK',
@@ -198,10 +198,10 @@ const deal1 = byName(s.deals, 'Rajan — Nungambakkam 2BHK').id;
 save('token', { date: '2026-09-10', deal: deal1, from: 'buyer', amt: 50000, via: '1000' });
 save('bill', {
   date: '2026-09-12', vendor: { __new: true, name: 'Balaji & Co' }, desc: 'Title opinion',
-  acc: '5120', amt: 10000, gstin: 0, tds: 'none', tdsrate: 0,
+  acc: '5120', amt: 10000, gst: 'no', tds: 'none', tdsrate: 0,
 });
 const claude = byName(s.subs, 'Claude Pro').id;
-save('confirmcharge', { sub: claude, month: M0, date: '2026-09-05', result: 'charged', amt: 1800 });
+save('confirmcharge', { sub: claude, month: M0, date: '2026-09-05', result: 'charged', amt: 1800, gst: 'no' });
 save('transfer', { date: '2026-09-15', kind: '1000>1010', amt: 10000 });
 save('petty', { date: '2026-09-20', a1: 3000, c1: '5050', a2: 0, c2: '5050', a3: 0, c3: '5050' });
 save('salary', { date: '2026-09-28', emp: { __new: true, name: 'Priya' }, kind: '5010', gross: 25000, tds: 0, pf: 0 });
@@ -229,7 +229,7 @@ check('Running September month-end twice posts nothing', meSepAgain === 0, `post
 section('October 2026 — deal closes, card converted to EMI');
 
 save('invoice', {
-  date: '2026-10-06', deal: deal1, from: 'buyer', base: 100000, gst: 18, tds: 0,
+  date: '2026-10-06', deal: deal1, from: 'buyer', amt: 100000, gst: 'yes', gstRate: 18, gstAmt: 18000, total: 118000, tds: 0,
   adv: 50000, recv: 'later',
 });
 eq('Income booked at registration', pl(M1).ti, 100000);
@@ -246,8 +246,8 @@ const balaji = s.parties.find(p => p.name === 'Balaji & Co').id;
 save('paybill', { date: '2026-10-15', party: balaji, amt: 10000, via: '1000' });
 eq('Vendor is settled', bal('2000', { party: balaji }), 0);
 
-save('confirmcharge', { sub: claude, month: M1, date: '2026-10-05', result: 'charged', amt: 1800 });
-save('expense', { date: '2026-10-08', desc: 'Office rent — Oct', acc: '5000', amt: 35000, gstin: 0, via: '1000' });
+save('confirmcharge', { sub: claude, month: M1, date: '2026-10-05', result: 'charged', amt: 1800, gst: 'no' });
+save('expense', { date: '2026-10-08', desc: 'Office rent — Oct', acc: '5000', amt: 35000, gst: 'no', via: '1000' });
 save('salary', { date: '2026-10-28', emp: 'Priya', kind: '5010', gross: 25000, tds: 0, pf: 0 });
 
 const cardBefore = bal('2300');
@@ -313,7 +313,7 @@ check('Both instalments marked paid', s.loans.find(l => l.id === loan.id).paid.l
 
 // A cost paid for a client, then written off when they refuse to pay.
 save('dealcost', {
-  date: '2026-11-07', deal: deal2, what: 'EC extract', amt: 5000,
+  date: '2026-11-07', deal: deal2, what: 'EC extract', amt: 5000, gst: 'no',
   bear: 'seller', how: '1000',
 });
 eq('Recoverable cost is not an expense', bal('1100', { deal: deal2 }), 5000);
@@ -321,14 +321,14 @@ save('writeoff', { date: '2026-11-20', deal: deal2, from: 'seller', amt: 5000, w
 eq('Write-off clears the receivable', bal('1100', { deal: deal2 }), 0);
 eq('Write-off books the loss', bal('5190'), 5000);
 
-save('expense', { date: '2026-11-08', desc: 'Office rent — Nov', acc: '5000', amt: 35000, gstin: 0, via: '1000' });
+save('expense', { date: '2026-11-08', desc: 'Office rent — Nov', acc: '5000', amt: 35000, gst: 'no', via: '1000' });
 save('salary', { date: '2026-11-28', emp: 'Priya', kind: '5010', gross: 25000, tds: 0, pf: 0 });
 
 // A wrong entry, reversed. The pair must net to nothing anywhere it is counted.
 section('Reversing a mistake');
 const profitBeforeMistake = pl(M2).profit;
 const cashBeforeMistake = bal('1000');
-const wrong = save('expense', { date: '2026-11-22', desc: 'Wrong amount', acc: '5180', amt: 7777, gstin: 0, via: '1000' });
+const wrong = save('expense', { date: '2026-11-22', desc: 'Wrong amount', acc: '5180', amt: 7777, gst: 'no', via: '1000' });
 check('The mistake did land', !near(pl(M2).profit, profitBeforeMistake));
 reverse(wrong);
 eq('Reversal returns profit to where it was', pl(M2).profit, profitBeforeMistake);
@@ -434,6 +434,44 @@ check('No more depreciation on a disposed asset',
 
 check('Trial balance still balances after disposal', trialBalance().balanced);
 check('Balance sheet still balances after disposal', balanceSheet().balanced);
+
+section('GST widget');
+{
+  const v = { amt: 1000, gst: 'yes', gstRate: 18 };
+  gstSync('amt', v);
+  eq('Amount + rate fills the tax', v.gstAmt, 180);
+  eq('Amount + rate fills the total', v.total, 1180);
+  v.total = 1000; gstSync('total', v);
+  eq('Editing the total backs out the amount', v.amt, 847.46);
+  eq('Editing the total backs out the tax', v.gstAmt, 152.54);
+  eq('Amount + tax still equals the total', v.amt + v.gstAmt, 1000);
+  v.gstAmt = 200; gstSync('gstAmt', v);
+  eq('Editing the tax moves the total', v.total, 1047.46);
+  const off = { amt: 500, gst: 'no', gstRate: 18, gstAmt: 90, total: 590 };
+  gstSync('amt', off);
+  eq('GST off zeroes the tax', off.gstAmt, 0);
+  eq('GST off makes total equal the amount', off.total, 500);
+  const untouched = { amt: 1000, gst: 'yes', gstRate: 18, gstAmt: 999, total: 1999, desc: 'x' };
+  gstSync('desc', untouched);
+  eq('Typing in an unrelated field leaves a hand-edited tax alone', untouched.gstAmt, 999);
+}
+
+section('GST lands on the right accounts');
+{
+  const inputBefore = bal('1400');
+  const expenseBefore = bal('5000');
+  save('expense', { date: '2026-11-25', desc: 'Rent with GST', acc: '5000', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, via: '1000' });
+  eq('Only the taxable amount is a cost', bal('5000') - expenseBefore, 10000);
+  eq('The tax goes to input credit', bal('1400') - inputBefore, 1800);
+  const outputBefore = bal('2200');
+  save('otherinc', { date: '2026-11-26', desc: 'Consultancy', acc: '4020', amt: 5000, gst: 'yes', gstRate: 18, gstAmt: 900, total: 5900, via: '1000' });
+  eq('Only the taxable amount is income', bal('4020'), 5000);
+  eq('Charged GST goes to GST payable', bal('2200') - outputBefore, 900);
+  const payBefore = bal('2000');
+  save('bill', { date: '2026-11-27', vendor: 'Balaji & Co', desc: 'Audit fee', acc: '5120', amt: 20000, gst: 'yes', gstRate: 18, gstAmt: 3600, total: 23600, tds: 'none', tdsrate: 0 });
+  eq('A bill with GST is owed in full, tax included', bal('2000') - payBefore, 23600);
+  check('Books still balance with GST both ways', trialBalance().balanced && balanceSheet().balanced);
+}
 
 section('Number formatting');
 check('Indian grouping at lakh scale', fmt(1234567) === '₹12,34,567', fmt(1234567));

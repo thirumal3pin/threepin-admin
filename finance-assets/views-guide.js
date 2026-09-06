@@ -105,10 +105,10 @@ const SCENARIOS = [
   },
   {
     group: 'A deal, start to finish',
-    id: 'invoice',
+    id: 'invoice', button: 'Deal closed — brokerage from the buyer',
     situation: 'The deal registers. Your brokerage is ₹1,00,000 plus GST, and the ₹50,000 token comes off what they owe.',
     event: 'invoice',
-    values: { date: '2026-10-06', deal: 'D1', from: 'buyer', base: 100000, gst: 18, tds: 0, adv: 50000, recv: 'later' },
+    values: { date: '2026-10-06', deal: 'D1', from: 'buyer', amt: 100000, gst: 'yes', gstRate: 18, gstAmt: 18000, total: 118000, tds: 0, adv: 50000, recv: 'later' },
     point: 'This is the moment income exists. The token converts, GST is collected on the government\'s behalf, and the rest becomes money they owe you.',
   },
   {
@@ -148,7 +148,7 @@ const SCENARIOS = [
     id: 'bill',
     situation: 'A lawyer sends a ₹10,000 bill for a title opinion. You will pay next month.',
     event: 'bill',
-    values: { date: '2026-10-12', vendor: 'P2', desc: 'Title opinion', acc: '5120', amt: 10000, gstin: 0, tds: 'none', tdsrate: 0 },
+    values: { date: '2026-10-12', vendor: 'P2', desc: 'Title opinion', acc: '5120', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, tds: 'none', tdsrate: 0 },
     point: 'The cost belongs to the month the work happened, not the month you pay. No cash has moved yet.',
   },
   {
@@ -172,7 +172,7 @@ const SCENARIOS = [
     id: 'asset',
     situation: 'You buy a ₹95,000 laptop that will last about three years.',
     event: 'asset',
-    values: { date: '2026-10-03', name: 'MacBook Air', cost: 95000, gstin: 0, life: 36, via: '1000' },
+    values: { date: '2026-10-03', name: 'MacBook Air', amt: 95000, gst: 'no', life: 36, via: '1000' },
     point: 'A big cash outflow that is not a cost yet. Spreading it over 36 months is what stops one purchase wrecking one month\'s profit.',
   },
   {
@@ -180,7 +180,7 @@ const SCENARIOS = [
     id: 'subnew',
     situation: 'You pay ₹24,000 upfront for a year of CRM software.',
     event: 'subnew',
-    values: { date: '2026-10-05', name: 'Zoho CRM', vendor: 'Zoho', use: 'Lead pipeline', payMode: 'upfront', amount: 24000, months: 12, via: '1000' },
+    values: { date: '2026-10-05', name: 'Zoho CRM', vendor: 'Zoho', use: 'Lead pipeline', payMode: 'upfront', amt: 24000, gst: 'no', months: 12, via: '1000' },
     point: 'Paid once, used twelve times. Month-end releases ₹2,000 of cost each month, so every month carries its fair share.',
   },
   {
@@ -378,7 +378,7 @@ function renderScenario(sc) {
     <div class="card">
       <h3>${esc(sc.situation)}</h3>
       <p class="small muted" style="margin:2px 0 12px">
-        Record → <b>${esc(EV[sc.event].title)}</b></p>
+        Record → <b>${esc(sc.button || EV[sc.event].title)}</b></p>
 
       <div class="grid g1" style="gap:0;margin-bottom:12px">
         <ul class="effects" style="margin-bottom:10px">

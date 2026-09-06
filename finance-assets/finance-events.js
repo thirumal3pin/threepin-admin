@@ -53,13 +53,56 @@ const pick = (code, label) => Object.entries(partyBalances(code))
 
 const need = msg => ({ desc: '', lines: [], effects: [msg], incomplete: true });
 
+// ═══════ GST ON A FORM ═══════
+//
+// The same five fields on every form where GST applies: the taxable amount, whether GST is
+// on, the rate, the tax and the total. Typing in any of them keeps the rest consistent — enter
+// an amount and a rate and the total fills in; correct the total to what the bill actually
+// says and the amount and tax adjust to match. Money OUT carries GST as input credit (1400);
+// money IN carries it as GST payable (2200).
+export function gstFields(amtLabel, o = {}) {
+  const base = v => !o.show || o.show(v);
+  const gstVisible = v => base(v) && (!o.gstShow || o.gstShow(v));
+  const on = v => gstVisible(v) && v.gst === 'yes';
+  return [
+    F('amt', amtLabel, 'number', { hint: o.hint, show: o.show }),
+    F('gst', o.kind === 'output' ? 'Charge GST on this?' : 'GST on this?', 'select', {
+      opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no', show: gstVisible,
+    }),
+    F('gstRate', 'GST %', 'number', { def: gstRate(), show: on }),
+    F('gstAmt', 'GST amount', 'number', { def: 0, show: on }),
+    F('total', 'Total including GST', 'number', {
+      show: on, hint: 'Change either the amount or the total — the other one adjusts.',
+    }),
+  ];
+}
+
+export function gstSync(k, v) {
+  if (!['amt', 'gst', 'gstRate', 'gstAmt', 'total'].includes(k)) return;
+  const r2 = x => Math.round(num(x) * 100) / 100;
+  if (v.gst !== 'yes') { v.gstAmt = 0; v.total = r2(v.amt); return; }
+  const rate = num(v.gstRate);
+  if (k === 'total') {
+    v.amt = r2(num(v.total) / (1 + rate / 100));
+    v.gstAmt = r2(num(v.total) - v.amt);
+  } else if (k === 'gstAmt') {
+    v.total = r2(num(v.amt) + num(v.gstAmt));
+  } else {
+    v.gstAmt = r2(num(v.amt) * rate / 100);
+    v.total = r2(num(v.amt) + v.gstAmt);
+  }
+}
+
+// The tax a form produced, or nothing when GST is off.
+const gstOf = v => v.gst === 'yes' ? num(v.gstAmt) : 0;
+
 export const EV = {};
 
 // ═══════ DEALS ═══════
 
 EV.newdeal = {
-  title: 'New deal', group: 'Deals',
-  when: 'Open a deal as soon as you have a property and a client. Tokens, costs and the invoice all hang off it. A deal can be created without linking a property — the nickname is what you will recognise it by.',
+  title: 'Add a deal', group: 'Deals',
+  when: 'Sets a deal up so income and costs can be mapped to it. The expected brokerage is an <b>estimate</b> for your pipeline — <b>nothing here counts as income</b>. Income is recorded when the deal registers, with "Deal closed — brokerage earned". A deal can be added without linking a property.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK' }),
@@ -98,7 +141,7 @@ EV.newdeal = {
 };
 
 EV.token = {
-  title: 'Token / advance received', group: 'Deals',
+  title: 'Token / advance received', group: 'Money in',
   when: 'Money received <b>before</b> registration is not income. It is held for the client and shows against this deal until it is adjusted on the invoice, refunded or forfeited.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
@@ -126,13 +169,13 @@ EV.token = {
 };
 
 EV.dealcost = {
-  title: 'Cost for this deal', group: 'Deals',
-  when: 'EC, patta, legal, documentation, travel. Choose who bears it: <b>you</b> (a deal expense) or the <b>client</b> (you paid on their behalf — it sits as recoverable from them and goes onto their settlement).',
+  title: 'Cost for a deal', group: 'Money out',
+  when: 'EC, patta, legal, documentation, travel — spent on one particular deal. Choose who bears it: <b>you</b> (a deal expense, reduces profit) or the <b>client</b> (you paid on their behalf — it sits as recoverable from them and goes onto their settlement, not your profit).',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealOpts() }),
     F('what', 'What', 'text', { hint: 'EC extract, patta transfer, lawyer opinion, site travel…' }),
-    F('amt', 'Amount', 'number'),
+    ...gstFields('Amount (before GST)', { kind: 'input' }),
     F('bear', 'Who bears it', 'select', {
       opts: [['self', 'Company (deal expense)'], ['seller', 'Recover from seller'], ['buyer', 'Recover from buyer']],
       def: 'self',
@@ -149,30 +192,36 @@ EV.dealcost = {
     }),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor', show: x => x.how === 'bill' }),
   ],
+  onchange: gstSync,
   build: v => {
     const d = deal(v.deal);
     if (!d) return need('Pick a deal.');
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
+    const gi = gstOf(v);
+    const total = amt + gi;
     const lines = [], eff = [];
 
     if (v.bear === 'self') {
       lines.push({ acc: v.acc || '5045', dr: amt, deal: d.id });
+      if (gi) lines.push({ acc: '1400', dr: gi });
       eff.push(`Deal expense ${fmt(amt)} — reduces this deal's net and this month's profit.`);
+      if (gi) eff.push(`${fmt(gi)} GST on it becomes input credit, not a cost.`);
     } else {
       const pid = sideParty(d, v.bear);
       if (!pid) return need(`This deal has no ${v.bear} yet — add one on the deal, or choose "Company".`);
-      lines.push({ acc: '1100', dr: amt, party: pid, deal: d.id });
-      eff.push(`${fmt(amt)} paid on behalf of ${esc(pname(pid))} — <b>recoverable</b>, not your expense. It joins their settlement and your chase list.`);
+      lines.push({ acc: '1100', dr: total, party: pid, deal: d.id });
+      eff.push(`${fmt(total)} paid on behalf of ${esc(pname(pid))} — <b>recoverable</b>, not your expense. It joins their settlement and your chase list.`);
     }
 
     if (v.how === 'bill') {
       const vid = pidOf(v.vendor);
       if (!vid) return need('Name the vendor you owe.');
-      lines.push({ acc: '2000', cr: amt, party: vid });
-      eff.push(`You owe ${esc(pnameOf(v.vendor))} ${fmt(amt)} — it joins payables.`);
+      lines.push({ acc: '2000', cr: total, party: vid });
+      eff.push(`You owe ${esc(pnameOf(v.vendor))} ${fmt(total)} — it joins payables.`);
     } else {
-      lines.push({ acc: v.how || '1000', cr: amt });
+      lines.push({ acc: v.how || '1000', cr: total });
+      eff.push(`${fmt(total)} leaves ${A[v.how || '1000'].name}.`);
     }
 
     return { desc: `${v.what || 'Deal cost'} — ${dealLabel(d)}`, lines, effects: eff };
@@ -180,16 +229,16 @@ EV.dealcost = {
 };
 
 EV.invoice = {
-  title: 'Deal closed — raise brokerage invoice', group: 'Deals',
-  when: 'The deal registered. <b>Now</b> income is earned. Tokens held convert to income, recoverable costs are added to what the client owes, and a GST invoice is generated.',
+  title: 'Deal closed — brokerage earned', group: 'Money in',
+  when: 'The deal has registered. <b>This is the moment income exists</b> — profit goes up by the brokerage. Any token held from this client comes off what they owe, GST is added on top, and an invoice is numbered for you. Do this once per side you are billing.',
   fields: v => [
     F('date', 'Registration date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealOpts() }),
-    F('from', 'Invoice to', 'select', { opts: partySides(v.deal) }),
-    F('base', 'Brokerage (before GST)', 'number', {
+    F('from', 'Who is paying you', 'select', { opts: partySides(v.deal) }),
+    ...gstFields('Brokerage (before GST)', {
+      kind: 'output', def: 'yes',
       hint: x => { const d = deal(x.deal); return d ? 'Expected: ' + fmt(x.from === 'buyer' ? d.expBuyer : d.expSeller) : ''; },
     }),
-    F('gst', 'GST %', 'number', { def: gstRate() }),
     F('tds', 'TDS % the client deducts', 'number', { def: 0, show: () => tdsOn() }),
     F('adv', 'Adjust token held', 'number', {
       def: 0,
@@ -209,22 +258,25 @@ EV.invoice = {
     if (k === 'deal' || k === 'from') {
       const d = deal(v.deal);
       if (d) {
-        v.base = v.from === 'buyer' ? d.expBuyer : d.expSeller;
+        v.amt = v.from === 'buyer' ? d.expBuyer : d.expSeller;
         const p = sideParty(d, v.from);
         v.adv = p ? bal('2100', { party: p, deal: v.deal }) : 0;
       }
+      gstSync('amt', v);
+      return;
     }
+    gstSync(k, v);
   },
   build: v => {
     const d = deal(v.deal);
     if (!d) return need('Pick a deal.');
     const pid = sideParty(d, v.from);
     if (!pid) return need('No ' + (v.from || 'party') + ' on this deal yet.');
-    const base = num(v.base);
+    const base = num(v.amt);
     if (!base) return need('Enter the brokerage amount.');
 
-    const rate = num(v.gst);
-    const gst = base * rate / 100;
+    const gst = gstOf(v);
+    const rate = v.gst === 'yes' ? num(v.gstRate) : 0;
     const total = base + gst;
     const tds = tdsOn() ? Math.round(base * num(v.tds) / 100) : 0;
     const held = bal('2100', { party: pid, deal: d.id });
@@ -243,8 +295,8 @@ EV.invoice = {
         : { acc: '1100', dr: rem, party: pid, deal: d.id });
     }
 
-    const eff = [`Income <b>${fmt(base)}</b> earned this month (${A[acc].name}).`];
-    if (gst) eff.push(`${fmt(gst)} GST collected — owed to government, not yours.`);
+    const eff = [`Income <b>${fmt(base)}</b> earned this month (${A[acc].name}). Profit goes up by that.`];
+    if (gst) eff.push(`${fmt(gst)} GST collected — owed to the government, not yours.`);
     if (adv) eff.push(`${fmt(adv)} token converts to income.`);
     if (tds) eff.push(`${fmt(tds)} TDS withheld by the client — claim it at year-end.`);
     if (rem > 0.5) {
@@ -279,8 +331,8 @@ function partyState(pid) {
 }
 
 EV.dealpay = {
-  title: 'Client pays', group: 'Deals',
-  when: 'Payment against what this client owes on this deal (invoice plus recoverable costs). <b>No income again</b> — that was recorded at registration.',
+  title: 'Client pays what they owe', group: 'Money in',
+  when: 'Money arriving against a deal you have already closed (the invoice plus any recoverable costs). Cash goes up, what they owe goes down. <b>Profit does not change</b> — the income was counted when the deal closed.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealsWith('1100', x => x > 0.5) }),
@@ -438,28 +490,39 @@ EV.subnew = {
     F('payMode', 'Payment', 'select', {
       opts: [['monthly', 'Charged every month'], ['upfront', 'Paid upfront for a term']], def: 'monthly',
     }),
-    F('amount', 'Amount', 'number', {
-      hint: x => x.payMode === 'upfront' ? 'Total paid upfront' : 'Expected per month (pay-as-you-go: your best estimate)',
+    ...gstFields('Amount', {
+      kind: 'input',
+      hint: x => x.payMode === 'upfront' ? 'Total paid upfront, before GST' : 'Expected per month (pay-as-you-go: your best estimate)',
+      gstShow: x => x.payMode === 'upfront',
     }),
     F('months', 'Term (months)', 'number', { def: 12, show: x => x.payMode === 'upfront' }),
     F('via', 'Charged to', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
+  onchange: gstSync,
   build: v => {
-    const amt = num(v.amount);
+    const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
     if (!String(v.name || '').trim()) return need('Name the service.');
     const up = v.payMode === 'upfront';
     const m = up ? Math.max(1, num(v.months)) : 1;
     const monthly = up ? amt / m : amt;
+    const gi = up ? gstOf(v) : 0;
     const start = ym(v.date || today());
-    const lines = up ? [{ acc: '1200', dr: amt }, { acc: v.via || '1000', cr: amt }] : [];
+    const lines = [];
+    if (up) {
+      lines.push({ acc: '1200', dr: amt });
+      if (gi) lines.push({ acc: '1400', dr: gi });
+      lines.push({ acc: v.via || '1000', cr: amt + gi });
+    }
 
     return {
       desc: up ? `Subscription paid upfront — ${v.name}` : '',
       lines,
       effects: up
-        ? [`Cash out ${fmt(amt)} now — but it is <b>not</b> all this month's cost.`,
-        `Cost ${fmt(monthly)}/month for ${m} months, released automatically at each month-end.`]
+        ? [`Cash out ${fmt(amt + gi)} now — but it is <b>not</b> all this month's cost.`,
+        `Cost ${fmt(monthly)}/month for ${m} months, released automatically at each month-end.`,
+        gi ? `${fmt(gi)} GST becomes input credit.` : '']
+          .filter(Boolean)
         : [`Expected ${fmt(amt)}/month from ${mlabel(start)}.`,
         'Confirm the actual charge each month on the Services tab.'],
       docs: [{
@@ -488,10 +551,11 @@ EV.confirmcharge = {
     F('result', 'What happened', 'select', {
       opts: [['charged', 'Charged'], ['skipped', 'Not charged this month']], def: 'charged',
     }),
-    F('amt', 'Actual amount', 'number', { show: x => x.result !== 'skipped' }),
+    ...gstFields('Actual amount (before GST)', { kind: 'input', show: x => x.result !== 'skipped' }),
   ],
   onchange: (k, v) => {
-    if (k === 'sub') { const s = S().subs.find(x => x.id === v.sub); if (s) v.amt = s.monthly; }
+    if (k === 'sub') { const s = S().subs.find(x => x.id === v.sub); if (s) v.amt = s.monthly; gstSync('amt', v); return; }
+    gstSync(k, v);
   },
   build: v => {
     const s = S().subs.find(x => x.id === v.sub);
@@ -507,11 +571,18 @@ EV.confirmcharge = {
     }
     const amt = num(v.amt);
     if (!amt) return need('Enter the actual amount charged.');
+    const gi = gstOf(v);
     const diff = amt - num(s.monthly);
+    const lines = [{ acc: '5080', dr: amt }];
+    if (gi) lines.push({ acc: '1400', dr: gi });
+    lines.push({ acc: s.via || '1000', cr: amt + gi });
     return {
       desc: `${s.name} — ${mlabel(month)}`,
-      lines: [{ acc: '5080', dr: amt }, { acc: s.via || '1000', cr: amt }],
-      effects: [`Actual ${fmt(amt)} for ${mlabel(month)}${Math.abs(diff) > 0.5 ? ` (${diff > 0 ? '+' : ''}${fmt(diff)} vs expected)` : ' — as expected'}.`],
+      lines,
+      effects: [
+        `Actual ${fmt(amt)} for ${mlabel(month)}${Math.abs(diff) > 0.5 ? ` (${diff > 0 ? '+' : ''}${fmt(diff)} vs expected)` : ' — as expected'}.`,
+        gi ? `${fmt(gi)} GST becomes input credit; ${fmt(amt + gi)} leaves ${A[s.via || '1000'].name}.` : '',
+      ].filter(Boolean),
       updates: [{ coll: 'subscriptions', id: s.id, data: { [`charges.${month}`]: { actual: amt }, hasTxns: true } }],
     };
   },
@@ -643,30 +714,31 @@ EV.subcancel = {
 
 EV.expense = {
   title: 'Expense paid now', group: 'Money out',
-  when: 'Rent, EB, fuel, a print job — used and paid in the same period. Deal-related? Use "Cost for this deal" instead so it counts against that deal.',
+  when: 'Rent, EB, fuel, a print job — used and paid in the same period. Profit goes down by the amount. If it belongs to one particular deal, use "Cost for a deal" instead so it counts against that deal.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('desc', 'What', 'text'),
     F('acc', 'Category', 'select', { opts: EXP.map(a => [a.code, a.name]) }),
-    F('amt', 'Amount', 'number'),
-    F('gstin', 'GST input you can claim', 'number', { def: 0, hint: '0 if unsure' }),
+    ...gstFields('Amount (before GST)', { kind: 'input' }),
     F('via', 'Paid via', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
+  onchange: gstSync,
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
     if (!v.acc) return need('Pick a category.');
-    const gi = Math.min(num(v.gstin), amt);
-    const lines = [{ acc: v.acc, dr: amt - gi }];
+    const gi = gstOf(v);
+    const lines = [{ acc: v.acc, dr: amt }];
     if (gi) lines.push({ acc: '1400', dr: gi });
-    lines.push({ acc: v.via || '1000', cr: amt });
+    lines.push({ acc: v.via || '1000', cr: amt + gi });
     return {
       desc: v.desc || A[v.acc].name,
       lines,
       effects: [
-        `Cost ${fmt(amt - gi)} this month.`,
-        gi ? `${fmt(gi)} GST input credit claimed — reduces your GST bill.` : '',
-        v.via === '2300' ? 'On the card: your card balance grows. Paying the card bill later is a transfer, not another expense.' : '',
+        `Cost ${fmt(amt)} this month — profit goes down by that.`,
+        gi ? `${fmt(gi)} GST paid on it is claimed as input credit. It reduces your next GST bill, so it is not a cost.` : '',
+        `${fmt(amt + gi)} leaves ${A[v.via || '1000'].name}.`,
+        v.via === '2300' ? 'On the card, so the card balance grows. Paying the card bill later is a transfer, not another expense.' : '',
       ].filter(Boolean),
     };
   },
@@ -674,18 +746,18 @@ EV.expense = {
 
 EV.bill = {
   title: 'Bill received — pay later', group: 'Money out',
-  when: 'The cost belongs to now; the payment is a separate event later.',
+  when: 'A vendor has billed you and you will pay later. The cost belongs to now and profit goes down now; the money leaving is a separate event — record it with "Pay a bill you recorded earlier" when it goes.',
   fields: () => [
     F('date', 'Bill date', 'date', { def: today() }),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor' }),
     F('desc', 'What for', 'text'),
     F('acc', 'Category', 'select', { opts: EXP.map(a => [a.code, a.name]) }),
-    F('amt', 'Bill amount', 'number'),
-    F('gstin', 'GST input you can claim', 'number', { def: 0 }),
+    ...gstFields('Bill amount (before GST)', { kind: 'input' }),
     F('tds', 'TDS section', 'select', { opts: TDS_SECTIONS.map(t => [t[0], t[1]]), show: () => tdsOn() }),
     F('tdsrate', 'TDS %', 'number', { def: 0, show: () => tdsOn(), hint: 'Auto-filled from the section — verify rates with your CA' }),
   ],
   onchange: (k, v) => {
+    gstSync(k, v);
     if (k === 'tds') { const t = TDS_SECTIONS.find(x => x[0] === v.tds); if (t) v.tdsrate = t[2]; }
   },
   build: v => {
@@ -694,43 +766,47 @@ EV.bill = {
     if (!v.acc) return need('Pick a category.');
     const pid = pidOf(v.vendor);
     if (!pid) return need('Name the vendor.');
-    const gi = Math.min(num(v.gstin), amt);
-    const net = amt - gi;
-    const tds = tdsOn() ? Math.round(net * num(v.tdsrate) / 100) : 0;
-    const lines = [{ acc: v.acc, dr: net }];
+    const gi = gstOf(v);
+    const tds = tdsOn() ? Math.round(amt * num(v.tdsrate) / 100) : 0;
+    const owed = amt + gi - tds;
+    const lines = [{ acc: v.acc, dr: amt }];
     if (gi) lines.push({ acc: '1400', dr: gi });
     if (tds) lines.push({ acc: '2250', cr: tds });
-    lines.push({ acc: '2000', cr: amt - tds, party: pid });
+    lines.push({ acc: '2000', cr: owed, party: pid });
     return {
       desc: `${v.desc || A[v.acc].name} — ${pnameOf(v.vendor)}`,
       lines,
       effects: [
-        `Cost ${fmt(net)} this month. No cash has moved yet.`,
-        `You owe ${esc(pnameOf(v.vendor))} ${fmt(amt - tds)}.`,
-        tds ? `${fmt(tds)} TDS to deposit by the 7th of next month.` : '',
+        `Cost ${fmt(amt)} this month — profit goes down by that. No cash has moved yet.`,
+        gi ? `${fmt(gi)} GST on the bill becomes input credit.` : '',
+        `You owe ${esc(pnameOf(v.vendor))} ${fmt(owed)}. It shows on the Owed tab until you pay it.`,
+        tds ? `${fmt(tds)} TDS withheld, to deposit by the 7th of next month.` : '',
       ].filter(Boolean),
     };
   },
 };
 
 EV.paybill = {
-  title: 'Pay a vendor', group: 'Money out',
-  when: 'Settles a bill you already recorded. This is not an expense again — the cost was booked when the bill arrived.',
+  title: 'Pay a bill you recorded earlier', group: 'Money out',
+  when: 'For a bill you entered with "Bill received — pay later". The cost was counted then, so <b>profit does not change now</b> — this only records the money leaving and clears what you owe the vendor.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
-    F('party', 'Who', 'select', { opts: pick('2000', 'owes') }),
-    F('amt', 'Amount', 'number'),
+    F('party', 'Which vendor', 'select', { opts: pick('2000', 'you owe'), hint: 'Only vendors you still owe appear here.' }),
+    F('amt', 'Amount paid', 'number'),
     F('via', 'Paid via', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
   onchange: (k, v) => { if (k === 'party') v.amt = bal('2000', { party: v.party }); },
   build: v => {
-    if (!v.party) return need('Pick who you are paying.');
+    if (!v.party) return need('Pick who you are paying. If they are not listed, you have not recorded a bill from them yet — use "Bill received" or "Expense paid now" instead.');
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
     return {
       desc: `Paid ${pname(v.party)}`,
       lines: [{ acc: '2000', dr: amt, party: v.party }, { acc: v.via || '1000', cr: amt }],
-      effects: [`What you owe ${esc(pname(v.party))} drops by ${fmt(amt)}. Profit unchanged.`],
+      effects: [
+        `${fmt(amt)} leaves ${A[v.via || '1000'].name}.`,
+        `What you owe ${esc(pname(v.party))} drops by ${fmt(amt)}. Profit unchanged — the cost was counted when the bill came in.`,
+      ],
     };
   },
 };
@@ -769,39 +845,40 @@ EV.salary = {
 
 EV.asset = {
   title: 'Buy an asset', group: 'Money out',
-  when: 'Something that lasts over a year is not an expense. Its cost spreads over its useful life as monthly depreciation.',
+  when: 'Something that lasts over a year is not an expense. Its cost spreads over its useful life as monthly depreciation — so cash goes out now but profit is untouched today.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('name', 'Item', 'text'),
-    F('cost', 'Cost', 'number', {
+    ...gstFields('Cost (before GST)', {
+      kind: 'input',
       hint: () => `Anything under ${fmt(S().settings.capitalisationThreshold)} is normally a straight expense, not an asset`,
     }),
-    F('gstin', 'GST input you can claim', 'number', { def: 0 }),
     F('life', 'Useful life (months)', 'number', { def: 36 }),
     F('via', 'Paid via', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
+  onchange: gstSync,
   build: v => {
-    const c = num(v.cost);
+    const c = num(v.amt);
     if (!c) return need('Enter the cost.');
     if (!String(v.name || '').trim()) return need('Name the item.');
-    const gi = Math.min(num(v.gstin), c);
-    const net = c - gi;
+    const gi = gstOf(v);
     const life = Math.max(1, num(v.life));
-    const lines = [{ acc: '1300', dr: net }];
+    const lines = [{ acc: '1300', dr: c }];
     if (gi) lines.push({ acc: '1400', dr: gi });
-    lines.push({ acc: v.via || '1000', cr: c });
+    lines.push({ acc: v.via || '1000', cr: c + gi });
     return {
       desc: `Asset — ${v.name}`,
       lines,
       effects: [
-        `Cash out ${fmt(c)}, but profit is <b>unchanged</b> right now.`,
-        `Depreciation ${fmt(net / life)}/month for ${life} months, posted automatically at each month-end.`,
-      ],
+        `Cash out ${fmt(c + gi)}, but profit is <b>unchanged</b> right now.`,
+        `Depreciation ${fmt(c / life)}/month for ${life} months, posted automatically at each month-end.`,
+        gi ? `${fmt(gi)} GST becomes input credit.` : '',
+      ].filter(Boolean),
       docs: [{
         coll: 'assets',
         data: {
-          name: v.name, cost: net, date: v.date || today(), start: ym(v.date || today()),
-          life, monthly: net / life, depreciated: [], status: 'in use', hasTxns: true,
+          name: v.name, cost: c, date: v.date || today(), start: ym(v.date || today()),
+          life, monthly: c / life, depreciated: [], status: 'in use', hasTxns: true,
         },
       }],
     };
@@ -909,7 +986,7 @@ EV.director = {
 
 EV.otherinc = {
   title: 'Other income', group: 'Money in',
-  when: "Interest, a referral fee, anything earned that is not a deal.",
+  when: 'Consultancy, a referral fee, interest — anything earned that is not a deal. Profit goes up by the amount.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('desc', 'What', 'text'),
@@ -917,16 +994,24 @@ EV.otherinc = {
       opts: [['4040', 'Other income'], ['4020', 'Consultancy income'], ['4050', 'Bad debt recovered']],
       def: '4040',
     }),
-    F('amt', 'Amount', 'number'),
-    F('via', 'Into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+    ...gstFields('Amount (before GST)', { kind: 'output' }),
+    F('via', 'Received into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
   ],
+  onchange: gstSync,
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
+    const gi = gstOf(v);
+    const lines = [{ acc: v.via || '1000', dr: amt + gi }, { acc: v.acc || '4040', cr: amt }];
+    if (gi) lines.push({ acc: '2200', cr: gi });
     return {
       desc: v.desc || A[v.acc || '4040'].name,
-      lines: [{ acc: v.via || '1000', dr: amt }, { acc: v.acc || '4040', cr: amt }],
-      effects: [`Income ${fmt(amt)} this month.`],
+      lines,
+      effects: [
+        `Income ${fmt(amt)} this month — profit goes up by that.`,
+        gi ? `${fmt(gi)} GST collected on top — owed to the government, not yours.` : '',
+        `${fmt(amt + gi)} arrives in ${A[v.via || '1000'].name}.`,
+      ].filter(Boolean),
     };
   },
 };
@@ -1174,13 +1259,52 @@ EV.vendorrefund = {
 
 // ═══════ GROUPING FOR THE RECORD SCREEN ═══════
 
+// Grouped the way the owner thinks about money, not the way an accountant would. Each entry
+// carries a one-line answer to the question people actually ask: "does this change my profit?"
+// An entry may open the same event with fields pre-filled — that is how "brokerage from the
+// buyer" and "from the seller" are two buttons over one form.
 export const CHOOSER = [
-  ['Deals', ['newdeal', 'token', 'dealcost', 'invoice', 'dealpay', 'settle']],
-  ['Money out', ['expense', 'bill', 'paybill', 'salary', 'asset', 'assetdispose', 'petty', 'director']],
-  ['Money in & funding', ['otherinc', 'funding', 'bankloan']],
-  ['Services', ['subnew', 'confirmcharge', 'subchange', 'subcancel']],
-  ['Move money', ['emi', 'card2emi', 'transfer', 'statutory']],
-  ['Corrections', ['writeoff', 'absorb', 'vendorrefund']],
+  ['Money in', [
+    { key: 'invoice', label: 'Deal closed — brokerage from the buyer', preset: { from: 'buyer' }, sub: 'Income. Profit goes up. Invoice is generated.' },
+    { key: 'invoice', label: 'Deal closed — brokerage from the seller', preset: { from: 'seller' }, sub: 'Income. Profit goes up. Invoice is generated.' },
+    { key: 'dealpay', label: 'Client pays what they owe', sub: 'Cash in against a closed deal. Profit unchanged.' },
+    { key: 'token', label: 'Token / advance received', sub: 'Held for the client. Not income yet.' },
+    { key: 'otherinc', label: 'Other income', sub: 'Consultancy, referral fee, interest. Profit goes up.' },
+    { key: 'funding', label: 'Capital or director loan received', sub: 'Never income. Profit unchanged.' },
+    { key: 'bankloan', label: 'Bank / NBFC loan received', sub: 'Not income. Creates the EMI schedule.' },
+  ]],
+  ['Money out', [
+    { key: 'expense', label: 'Expense paid now', sub: 'Used and paid together. Profit goes down.' },
+    { key: 'bill', label: 'Bill received — pay later', sub: 'Cost now, cash later. Profit goes down now.' },
+    { key: 'paybill', label: 'Pay a bill you recorded earlier', sub: 'Clears what you owe. Profit unchanged.' },
+    { key: 'dealcost', label: 'Cost for a deal', sub: 'EC, patta, legal — mapped to one deal.' },
+    { key: 'salary', label: 'Salary / bonus', sub: 'Gross is the cost. Profit goes down.' },
+    { key: 'asset', label: 'Buy an asset', sub: 'Cash out now, cost spread monthly.' },
+    { key: 'petty', label: 'Petty cash vouchers', sub: 'Up to three spends from the box.' },
+    { key: 'director', label: 'Director paid a cost personally', sub: 'Cost now; company owes the director.' },
+  ]],
+  ['Deals — set up and map', [
+    { key: 'newdeal', label: 'Add a deal', sub: 'Estimates only. Nothing counts as income until it closes.' },
+  ]],
+  ['Services', [
+    { key: 'subnew', label: 'Add a service / subscription', sub: 'Sets the expected charge.' },
+    { key: 'confirmcharge', label: "Confirm this month's charge", sub: 'The real amount debited.' },
+    { key: 'subchange', label: 'Upgrade / downgrade', sub: 'Old line closes, new one starts.' },
+    { key: 'subcancel', label: 'Cancel / pause / resume', sub: 'Unused prepaid leaves the books.' },
+  ]],
+  ['Move money', [
+    { key: 'emi', label: 'Pay an EMI', sub: 'Only the interest is a cost.' },
+    { key: 'card2emi', label: 'Convert a card purchase to EMI', sub: 'Restructures the debt.' },
+    { key: 'transfer', label: 'Move money between your own pockets', sub: 'Bank, petty cash, card bill, director. Never a cost.' },
+    { key: 'statutory', label: 'Pay GST / TDS / PF to government', sub: 'Remitting what you held. Not a cost.' },
+  ]],
+  ['Corrections', [
+    { key: 'settle', label: 'Settle a token — refund / keep', sub: 'Refund: no profit change. Keep: becomes income.' },
+    { key: 'writeoff', label: 'Write off what a client will never pay', sub: 'Books the loss.' },
+    { key: 'absorb', label: 'Absorb a cost the client will not repay', sub: 'Recoverable becomes your expense.' },
+    { key: 'vendorrefund', label: 'Vendor refunded you', sub: 'Reduces the original cost.' },
+    { key: 'assetdispose', label: 'Sell or scrap an asset', sub: 'Gain or loss is worked out.' },
+  ]],
 ];
 
 // Which field keys on each event hold a party, so finance-sync.js knows what to

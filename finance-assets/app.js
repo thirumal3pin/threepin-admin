@@ -9,15 +9,14 @@
 // view modules never need to import app.js back (which would be a cycle).
 
 import {
-  A, ACCOUNTS, EXP, getState, fmt, esc, num, today, ym, addMonths, mlabel,
-  pl, bal, cashPosition, serviceRunRate, dname, pname, deal, partySides,
-  trialBalance, balanceSheet, prepaidLeft,
+  A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
+  pl, cashPosition, serviceRunRate, dname, pname,
 } from './finance-core.js';
-import { EV, CHOOSER, fieldsFor, PARTY_FIELDS } from './finance-events.js';
+import { EV, CHOOSER, fieldsFor } from './finance-events.js';
 import * as SY from './finance-sync.js';
 import {
-  toast, modal, closeModal, confirmDialog, stat, signed, empty, loading, note, tag,
-  table, picker, downloadCsv, monthOptions, daysAgo, attachmentStrip,
+  toast, modal, closeModal, confirmDialog, stat, signed, empty, note, tag,
+  table, picker, downloadCsv, monthOptions,
 } from './ui.js';
 
 import { renderOwed } from './views-owed.js';
@@ -54,6 +53,8 @@ const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
 let view = 'overview';
 let ready = false;
 
+const entryNo = t => t?.no ? '#' + String(t.no).padStart(4, '0') : '—';
+
 // ═══════ BOOT ═══════
 
 window.onFinanceAuthChange = (user, tenantId) => {
@@ -76,7 +77,9 @@ window.onFinanceAuthChange = (user, tenantId) => {
   }
 };
 
-window.onFinanceData = () => { if (ready) repaint(); };
+// A data change repaints every view except Record, where a snapshot echo mid-typing would
+// throw away the form. The preview there reads live state on its next keystroke anyway.
+window.onFinanceData = () => { if (ready && view !== 'record') repaint(); };
 
 window.financeAttemptLogin = e => {
   e.preventDefault();
@@ -150,32 +153,19 @@ function repaint() {
   }
 
   const views = {
-    overview: overview,
-    record: record,
-    txns: txns,
+    overview, record, txns,
     owed: renderOwed,
-    services: renderServices,
-    loans: renderLoans,
-    assets: renderAssets,
-    invoices: renderInvoices,
-    bank: renderBank,
-    reports: renderReports,
-    books: renderBooks,
-    profile: renderProfile,
-    settings: renderSettings,
-    guide: renderGuide,
-    opening: renderOpening,
+    services: renderServices, loans: renderLoans, assets: renderAssets,
+    invoices: renderInvoices, bank: renderBank,
+    reports: renderReports, books: renderBooks,
+    profile: renderProfile, settings: renderSettings, guide: renderGuide, opening: renderOpening,
   };
   main.innerHTML = (views[view] || overview)();
 
   // Views that need real event listeners rather than inline handlers wire up here.
   ({
-    record: mountRecord,
-    invoices: mountInvoices,
-    bank: mountBank,
-    settings: mountSettings,
-    profile: mountProfile,
-    opening: mountOpening,
+    record: mountRecord, invoices: mountInvoices, bank: mountBank,
+    settings: mountSettings, profile: mountProfile, opening: mountOpening,
   })[view]?.();
 }
 
@@ -225,9 +215,7 @@ function overview() {
       ${stat('Income this month', fmt(p.ti))}
       ${stat('Expenses this month', fmt(p.te))}
       ${stat('Profit this month', signed(p.profit), { raw: true, hero: true })}
-      ${stat('Free to use', fmt(cash.free), {
-        sub: 'Cash after vendor dues and client tokens',
-      })}
+      ${stat('Free to use', fmt(cash.free), { sub: 'Cash after vendor dues and client tokens' })}
     </div>
 
     <h2>Where the money is</h2>
@@ -240,7 +228,7 @@ function overview() {
 
     <h2>Who owes whom</h2>
     <div class="grid g3">
-      ${stat('Clients owe you', fmt(cash.receivable), { sub: 'Tap to chase', subRaw: false })}
+      ${stat('Clients owe you', fmt(cash.receivable))}
       ${stat('You owe vendors', fmt(cash.vendorDues))}
       ${stat('Client tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers' })}
       ${stat('GST due (net)', fmt(cash.gstDue), { cls: cash.gstDue > 0 ? 'neg' : '' })}
@@ -271,26 +259,36 @@ function overview() {
 
 // ═══════ RECORD ═══════
 //
-// One screen for everything that happens. The left side picks the event and fills the form;
-// the right side is a live dry run of what saving will do, which is the only thing standing
-// between the user and a wrong entry. Save stays disabled until the journal balances.
+// One screen for everything that happens. The chooser picks the event; the form fills it; the
+// preview is a live dry run of what saving will do — the only thing standing between the
+// user and a wrong entry. Save stays disabled until the journal balances, is disabled again
+// the instant it is pressed, and is replaced by an unmistakable result panel afterwards.
 
 let evKey = null;
+let evLabel = null;
+let evPreset = {};
 let vals = {};
 let pendingFiles = [];
+let saving = false;
+let result = null;
 
 function record() {
+  if (result) return resultPanel();
+
   if (!evKey) {
     return `
       <h1>Record what happened</h1>
       <p class="lead">Pick the thing that actually happened. The bookkeeping underneath is worked out for you,
       and you will see exactly what it does before anything is saved.</p>
-      ${CHOOSER.map(([group, keys]) => `
+      ${CHOOSER.map(([group, items], gi) => `
         <div class="chooser-group">
           <div class="eh">${esc(group)}</div>
           <div class="chooser-grid">
-            ${keys.filter(k => EV[k]).map(k =>
-      `<button type="button" onclick="fin.pick('${k}')"><b>${esc(EV[k].title)}</b></button>`).join('')}
+            ${items.filter(it => EV[it.key]).map((it, ii) =>
+        `<button type="button" onclick="fin.pickAt(${gi},${ii})">
+                <b>${esc(it.label || EV[it.key].title)}</b>
+                ${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ''}
+              </button>`).join('')}
           </div>
         </div>`).join('')}`;
   }
@@ -300,9 +298,29 @@ function record() {
     <div class="actions">
       <button class="btn ghost sm" type="button" onclick="fin.pick(null)">← All actions</button>
     </div>
-    <h1>${esc(ev.title)}</h1>
+    <h1>${esc(evLabel || ev.title)}</h1>
     <div class="record-split">
-      <div><form id="evForm" autocomplete="off"></form></div>
+      <div>
+        <form id="evForm" autocomplete="off" onsubmit="return false"></form>
+
+        <div class="card" style="margin-top:4px">
+          <h3>Attach the bill or receipt</h3>
+          <div class="actions" style="margin-bottom:0">
+            <label class="btn" style="cursor:pointer">📷 Take photo
+              <input type="file" class="js-attach" accept="image/*" capture="environment" hidden></label>
+            <label class="btn" style="cursor:pointer">Choose file
+              <input type="file" class="js-attach" accept="image/*,application/pdf" multiple hidden></label>
+          </div>
+          <ul class="stage" id="stageList"></ul>
+          <p class="small faint" style="margin:8px 0 0">Photos are shrunk before upload, so a bill from your phone camera is fine. Add as many as you like.</p>
+        </div>
+
+        <div class="save-bar">
+          <div class="sum" id="barSum">Fill in the form</div>
+          <button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button>
+        </div>
+      </div>
+
       <div class="preview">
         <div class="card">
           <div class="when">${ev.when}</div>
@@ -313,42 +331,42 @@ function record() {
             <div id="pvJournal"></div>
           </details>
         </div>
-        <div class="actions">
-          <button class="btn primary" type="button" id="saveBtn" onclick="fin.save()">Save</button>
-          <label class="btn" style="cursor:pointer">
-            Attach
-            <input type="file" id="attachInput" accept="image/*,application/pdf" multiple capture="environment" hidden>
-          </label>
+        <div class="actions desk-only">
+          <button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button>
         </div>
-        <div id="attachStrip"></div>
       </div>
     </div>`;
 }
 
 function mountRecord() {
+  if (result) { mountResult(); return; }
   if (!evKey) return;
   buildForm();
-  document.getElementById('attachInput')?.addEventListener('change', e => {
-    for (const f of e.target.files) {
-      if (f.size > 10 * 1024 * 1024) { toast(`${f.name} is larger than 10 MB`); continue; }
-      pendingFiles.push(f);
-    }
-    e.target.value = '';
-    drawAttachments();
+  document.querySelectorAll('.js-attach').forEach(input => {
+    input.addEventListener('change', e => {
+      for (const f of e.target.files) pendingFiles.push(f);
+      e.target.value = '';
+      drawStage();
+      updatePreview();
+    });
   });
-  drawAttachments();
+  drawStage();
 }
 
-function drawAttachments() {
-  const el = document.getElementById('attachStrip');
+// The files waiting to go up with this entry. Nothing is uploaded until Save, so an abandoned
+// form leaves no orphaned files in Drive.
+function drawStage() {
+  const el = document.getElementById('stageList');
   if (!el) return;
-  const shown = pendingFiles.map(f => ({
-    name: f.name, type: f.type,
-    url: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
-  }));
-  el.innerHTML = attachmentStrip(shown, { onRemove: true });
+  el.innerHTML = pendingFiles.map((f, i) => `
+    <li>
+      <div class="pv">${f.type.startsWith('image/') ? `<img src="${URL.createObjectURL(f)}" alt="">` : 'PDF'}</div>
+      <div class="nm">${esc(f.name)}<br><span class="small faint">${(f.size / 1024).toFixed(0)} KB</span></div>
+      <span class="st ok">Ready</span>
+      <button type="button" class="rm" data-rm="${i}" aria-label="Remove ${esc(f.name)}">✕</button>
+    </li>`).join('');
   el.querySelectorAll('[data-rm]').forEach(b => {
-    b.onclick = () => { pendingFiles.splice(+b.dataset.rm, 1); drawAttachments(); };
+    b.onclick = () => { pendingFiles.splice(+b.dataset.rm, 1); drawStage(); updatePreview(); };
   });
 }
 
@@ -395,10 +413,16 @@ function buildForm() {
     }
   }
 
-  // Text and number fields only refresh the preview, so typing never loses focus. Selects
-  // rebuild the form, because they can change which fields are shown and what the options are.
+  // Text and number fields never rebuild the form, so typing never loses focus: the event's
+  // onchange runs (that is where the GST maths lives) and any OTHER input whose value it
+  // changed is updated in place. Selects rebuild, because they can change which fields show.
   form.querySelectorAll('input[data-k]').forEach(el => {
-    el.oninput = () => { vals[el.dataset.k] = el.value; updatePreview(); };
+    el.oninput = () => {
+      vals[el.dataset.k] = el.value;
+      EV[evKey].onchange?.(el.dataset.k, vals);
+      syncInputs(el);
+      updatePreview();
+    };
   });
   form.querySelectorAll('select[data-k]').forEach(el => {
     el.onchange = () => {
@@ -415,6 +439,15 @@ function buildForm() {
   }
 
   updatePreview();
+}
+
+function syncInputs(except) {
+  document.querySelectorAll('#evForm input[data-k]').forEach(el => {
+    if (el === except) return;
+    const want = vals[el.dataset.k];
+    if (want === undefined || want === null) return;
+    if (String(el.value) !== String(want)) el.value = want;
+  });
 }
 
 function mountPartyPicker(f) {
@@ -457,7 +490,7 @@ function mountDealPicker(f) {
   const allowed = new Set(opts.map(o => o[0]));
   picker(box, {
     value: vals[f.k] ? getState().deals.find(d => d.id === vals[f.k]) : null,
-    placeholder: opts.length ? 'Search deals' : 'No deals available',
+    placeholder: opts.length ? 'Search deals' : 'No deals available — add one first',
     allowNew: false,
     describe: d => d.nickname || d.propertyName || d.id,
     search: async q => getState().deals
@@ -478,7 +511,6 @@ function mountDealPicker(f) {
 function updatePreview() {
   const effectsEl = document.getElementById('pvEffects');
   const journalEl = document.getElementById('pvJournal');
-  const saveBtn = document.getElementById('saveBtn');
   if (!effectsEl) return;
 
   let out;
@@ -507,7 +539,104 @@ function updatePreview() {
     </table></div>`
     : '<p class="small faint">This action does not move money — nothing is posted to the ledger.</p>';
 
-  saveBtn.disabled = out.incomplete || (!balanced && !createsOnly) || (!lines.length && !createsOnly);
+  const canSave = !out.incomplete && (balanced || createsOnly) && (lines.length || createsOnly) && !saving;
+  document.querySelectorAll('.js-save').forEach(b => { b.disabled = !canSave; });
+
+  const bar = document.getElementById('barSum');
+  if (bar) {
+    const files = pendingFiles.length ? ` · ${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'}` : '';
+    bar.innerHTML = out.incomplete ? esc(out.effects?.[0] || 'Fill in the form')
+      : lines.length ? `<b>${fmt(dr)}</b> · ${balanced ? 'Balanced ✓' : 'Does not balance'}${files}`
+        : 'Ready — nothing posts to the ledger' + files;
+  }
+}
+
+// ═══════ SAVE RESULT ═══════
+//
+// After Save the form is replaced by a panel that says exactly what happened. An entry that
+// committed but whose attachments failed is reported as that — saved, with a retry for the
+// files — because the alternative (an error toast over a still-filled form) is how the same
+// ₹684 coffee got saved seven times on the first day.
+
+function resultPanel() {
+  const r = result;
+  if (r.kind === 'err') {
+    return `
+      <div class="result err">
+        <h3>Not saved</h3>
+        <p style="margin:6px 0 0">${esc(r.message)}</p>
+        <p class="small muted" style="margin:6px 0 0">Nothing was written. Your entries are still in the form.</p>
+        <div class="actions">
+          <button class="btn primary" type="button" onclick="fin.retryForm()">Back to the form</button>
+          <button class="btn" type="button" onclick="fin.pick(null)">Start over</button>
+        </div>
+      </div>`;
+  }
+
+  const title = r.label || EV[r.key]?.title || 'Entry';
+  const uploads = r.uploads || [];
+  const failed = uploads.filter(u => u.status === 'err').length;
+  const busy = uploads.some(u => u.status === 'busy' || u.status === 'pending');
+
+  return `
+    <div class="result ${failed ? 'warn' : 'ok'}">
+      <h3>${failed ? 'Saved — but a file did not upload' : 'Saved ✓'}</h3>
+      ${r.no ? `<div class="eno">Entry ${entryNo(r)}${r.invoiceNo ? ` · Invoice ${esc(r.invoiceNo)}` : ''}</div>` : ''}
+      ${r.total ? `<div class="big">${fmt(r.total)}</div>` : ''}
+      <div>${esc(r.desc || title)}</div>
+
+      ${uploads.length ? `<ul class="stage" id="uplList">${uploads.map(uploadRow).join('')}</ul>` : ''}
+
+      <div class="actions">
+        <button class="btn primary" type="button" onclick="fin.again()">Record another</button>
+        <button class="btn" type="button" onclick="fin.pick(null)">Something else</button>
+        ${r.txnId ? `<button class="btn" type="button" onclick="fin.openTxn('${r.txnId}')">View entry</button>` : ''}
+        ${r.txnId && !busy ? `<button class="btn ghost" type="button" onclick="fin.reverse('${r.txnId}')">Undo</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function uploadRow(u, i) {
+  const st = u.status === 'ok' ? '<span class="st ok">Attached ✓</span>'
+    : u.status === 'err' ? `<span class="st err">Failed</span> <button class="btn sm" type="button" onclick="fin.retryUpload(${i})">Retry</button>`
+      : `<span class="st busy">${esc(u.note || 'Waiting…')}</span>`;
+  return `<li>
+    <div class="pv">${u.preview ? `<img src="${u.preview}" alt="">` : 'PDF'}</div>
+    <div class="nm">${esc(u.file.name)}${u.error ? `<br><span class="small neg">${esc(u.error)}</span>` : ''}</div>
+    ${st}
+  </li>`;
+}
+
+function mountResult() {
+  const r = result;
+  if (r?.kind === 'ok' && (r.uploads || []).some(u => u.status === 'pending')) runUploads();
+}
+
+function refreshUploads() {
+  const el = document.getElementById('uplList');
+  if (el && result?.uploads) el.innerHTML = result.uploads.map(uploadRow).join('');
+  // The heading and the Undo button depend on upload state, so redraw once nothing is moving.
+  if (!result?.uploads?.some(u => u.status === 'busy' || u.status === 'pending')) repaint();
+}
+
+async function runUploads() {
+  const r = result;
+  for (const u of r.uploads) {
+    if (u.status !== 'pending') continue;
+    u.status = 'busy';
+    refreshUploads();
+    try {
+      const att = await SY.uploadAttachment(u.file, r.txnId, msg => { u.note = msg; refreshUploads(); });
+      await SY.addAttachments(r.txnId, [att]);
+      u.status = 'ok';
+      u.error = null;
+    } catch (e) {
+      u.status = 'err';
+      u.error = e.message || 'Upload failed';
+    }
+    if (result !== r) return;
+    refreshUploads();
+  }
 }
 
 // ═══════ TRANSACTIONS ═══════
@@ -530,7 +659,7 @@ function txns() {
     .filter(t => !txnFilters.event || t.event === txnFilters.event)
     .filter(t => !txnFilters.party || t.lines.some(l => l.party === txnFilters.party))
     .filter(t => !txnFilters.q || (t.desc || '').toLowerCase().includes(txnFilters.q.toLowerCase()))
-    .sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
+    .sort((a, b) => b.date.localeCompare(a.date) || num(b.no) - num(a.no) || String(b.createdAt).localeCompare(String(a.createdAt)));
 
   const profitEffect = t => t.lines.reduce((sum, l) => {
     const a = A[l.acc];
@@ -545,7 +674,7 @@ function txns() {
 
   return `
     <h1>Transactions</h1>
-    <p class="lead">${rows.length} of ${s.txns.length} entries. Tap any row for the full journal.</p>
+    <p class="lead">${rows.length} of ${s.txns.length} entries. Tap any row for the full journal and its attachments.</p>
     <div class="filters">
       <select onchange="fin.filter('month',this.value)" aria-label="Filter by month">
         <option value="">All months</option>
@@ -564,10 +693,11 @@ function txns() {
     </div>
 
     ${rows.length ? table(
-    `<th>Date</th><th>Description</th><th class="n">Profit</th><th class="n">Cash</th><th></th>`,
+    `<th>#</th><th>Date</th><th>Description</th><th class="n">Profit</th><th class="n">Cash</th><th></th>`,
     rows.map(t => {
       const pe = profitEffect(t), ce = cashEffect(t);
       return `<tr class="click" onclick="fin.openTxn('${t.id}')">
+          <td class="eno nowrap">${entryNo(t)}</td>
           <td class="nowrap">${esc(t.date)}</td>
           <td>${esc(t.desc)}
             ${t.auto ? tag('auto', 'auto') : ''}
@@ -582,15 +712,31 @@ function txns() {
       : empty('Nothing matches those filters.')}`;
 }
 
+function attachmentGrid(t) {
+  const atts = t.attachments || [];
+  if (!atts.length) return '<p class="small faint">Nothing attached.</p>';
+  return `<div class="att-grid">${atts.map((a, i) => `
+    <div class="att">
+      <a href="${esc(a.url)}" target="_blank" rel="noopener" title="Open ${esc(a.name)}">
+        <div class="img">${a.thumb || a.type?.startsWith('image/')
+      ? `<img src="${esc(a.thumb || a.url)}" alt="${esc(a.name)}" loading="lazy" data-kind="${a.type?.includes('pdf') ? 'PDF' : 'Open'}">`
+      : (a.type?.includes('pdf') ? 'PDF' : 'Open')}</div>
+        <div class="cap">${esc(a.name)}</div>
+      </a>
+      <button type="button" class="del" data-del="${i}" aria-label="Remove ${esc(a.name)}">✕</button>
+    </div>`).join('')}</div>`;
+}
+
 function openTxn(id) {
   const t = getState().txns.find(x => x.id === id);
   if (!t) return;
-  const atts = (t.attachments || []);
   modal({
     title: t.desc || 'Transaction',
     body: `
-      <p class="small muted">${esc(t.date)} · ${esc(EV[t.event]?.title || t.event)} · recorded by ${esc(t.createdBy || '—')}
-      ${t.reversedBy ? ' · <b>reversed</b>' : ''}${t.reversalOf ? ' · this is a reversal' : ''}</p>
+      <p class="small muted" style="margin:0 0 10px">
+        <span class="eno">${entryNo(t)}</span> · ${esc(t.date)} · ${esc(EV[t.event]?.title || t.event)}
+        · by ${esc(t.createdBy || '—')}
+        ${t.reversedBy ? ' · <b>reversed</b>' : ''}${t.reversalOf ? ' · this is a reversal' : ''}</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead>
         <tbody>${t.lines.map(l => `<tr>
@@ -601,32 +747,76 @@ function openTxn(id) {
           <td class="n">${l.cr ? fmt(l.cr) : ''}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td>Total</td><td class="n">${fmt(t.totals?.dr)}</td><td class="n">${fmt(t.totals?.cr)}</td></tr></tfoot>
       </table></div>
+
       <h3 style="margin-top:16px">Attachments</h3>
-      ${atts.length ? `<div class="thumbs">${atts.map(a =>
-      `<a class="thumb" href="${esc(a.url)}" target="_blank" rel="noopener">${a.type?.startsWith('image/')
-        ? `<img src="${esc(a.url)}" alt="${esc(a.name)}">` : 'PDF'}</a>`).join('')}</div>`
-      : '<p class="small faint">None attached.</p>'}
-      <label class="btn sm" style="cursor:pointer;margin-top:10px">Add attachment
-        <input type="file" id="lateAttach" accept="image/*,application/pdf" multiple hidden></label>`,
+      <div id="drawerAtts">${attachmentGrid(t)}</div>
+      <div class="actions" style="margin-top:10px">
+        <label class="btn sm" style="cursor:pointer">📷 Add photo
+          <input type="file" class="js-late" accept="image/*" capture="environment" hidden></label>
+        <label class="btn sm" style="cursor:pointer">Add file
+          <input type="file" class="js-late" accept="image/*,application/pdf" multiple hidden></label>
+      </div>
+      <p class="small faint" style="margin:8px 0 0">Ref ${esc(t.id)}</p>`,
     foot: t.reversedBy ? '<span class="small muted">Already reversed.</span>'
       : `<button class="btn danger" type="button" onclick="fin.reverse('${t.id}')">Reverse this entry</button>`,
   });
+  wireDrawer(t);
+}
 
-  document.getElementById('lateAttach').onchange = async e => {
-    const files = [...e.target.files];
-    if (!files.length) return;
-    toast('Uploading…');
-    try {
-      const uploaded = [];
-      for (const f of files) uploaded.push(await SY.uploadAttachment(f, t.id));
-      await SY.addAttachments(t.id, uploaded);
-      toast('Attached');
-      closeModal();
-    } catch (err) { toast(err.message || 'Upload failed'); }
-  };
+function wireDrawer(t) {
+  const ov = document.getElementById('ov');
+
+  // A preview that will not load (a file removed from Drive by hand) falls back to a label.
+  ov.querySelectorAll('img[data-kind]').forEach(img => {
+    img.onerror = () => { img.replaceWith(Object.assign(document.createElement('span'), { textContent: img.dataset.kind })); };
+  });
+
+  ov.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      const att = (t.attachments || [])[+b.dataset.del];
+      if (!att) return;
+      const ok = await confirmDialog({ title: 'Remove this attachment?', message: `<b>${esc(att.name)}</b> is deleted from Drive and unlinked from this entry.`, confirmLabel: 'Remove', danger: true });
+      if (!ok) return;
+      try {
+        await SY.removeAttachment(t.id, att);
+        toast('Removed');
+        setTimeout(() => openTxn(t.id), 300);
+      } catch (e) { toast(e.message || 'Could not remove'); }
+    };
+  });
+
+  ov.querySelectorAll('.js-late').forEach(input => {
+    input.onchange = async e => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      if (!files.length) return;
+      let done = 0;
+      for (const f of files) {
+        try {
+          toast(`Uploading ${f.name}…`);
+          const att = await SY.uploadAttachment(f, t.id, msg => toast(`${f.name}: ${msg}`));
+          await SY.addAttachments(t.id, [att]);
+          done++;
+        } catch (err) {
+          toast(`${f.name}: ${err.message || 'upload failed'}`);
+        }
+      }
+      if (done) { toast(`Attached ${done} file${done === 1 ? '' : 's'}`); setTimeout(() => openTxn(t.id), 300); }
+    };
+  });
 }
 
 // ═══════ ACTIONS EXPOSED TO INLINE HANDLERS ═══════
+
+function startEvent(key, preset = {}, label = null) {
+  evKey = key;
+  evLabel = label;
+  evPreset = { ...preset };
+  vals = { ...preset };
+  pendingFiles = [];
+  result = null;
+  if (EV[key]?.onchange) for (const k of Object.keys(preset)) EV[key].onchange(k, vals);
+}
 
 window.fin = {
   go, repaint,
@@ -634,20 +824,38 @@ window.fin = {
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
 
   pick(k) {
-    evKey = k;
-    vals = {};
-    pendingFiles = [];
+    if (k) startEvent(k);
+    else { evKey = null; evLabel = null; evPreset = {}; vals = {}; pendingFiles = []; result = null; }
+    repaint();
+  },
+
+  pickAt(gi, ii) {
+    const it = CHOOSER[gi][1].filter(x => EV[x.key])[ii];
+    if (!it) return;
+    startEvent(it.key, it.preset || {}, it.label || null);
     repaint();
   },
 
   // Open the Record screen on a specific event with some fields already filled — used by the
   // "Pay", "Record payment" and similar buttons on the other views.
   record(k, preset = {}) {
-    evKey = k;
-    vals = { ...preset };
-    pendingFiles = [];
-    if (EV[k]?.onchange) for (const key of Object.keys(preset)) EV[k].onchange(key, vals);
+    startEvent(k, preset);
     go('record');
+  },
+
+  // "Record another" keeps the same event and the pre-filled fields it started with.
+  again() {
+    const r = result;
+    startEvent(r.key, r.preset || {}, r.label || null);
+    repaint();
+  },
+
+  retryForm() {
+    const r = result;
+    vals = { ...(r.vals || {}) };
+    pendingFiles = r.files || [];
+    result = null;
+    repaint();
   },
 
   filter(k, v) {
@@ -661,34 +869,42 @@ window.fin = {
   openTxn,
 
   async save() {
-    const btn = document.getElementById('saveBtn');
-    btn.disabled = true;
-    const key = evKey;
+    if (saving) return;
+    saving = true;
+    document.querySelectorAll('.js-save').forEach(b => { b.disabled = true; b.textContent = 'Saving…'; });
+
+    const key = evKey, label = evLabel, preset = { ...evPreset };
+    const snapshotVals = { ...vals };
+    const files = [...pendingFiles];
+
     try {
-      const { txnId } = await SY.save(key, vals);
-
-      // Files are uploaded only after the entry exists, so they land under its real id and an
-      // abandoned form never leaves orphaned uploads behind.
-      if (txnId && pendingFiles.length) {
-        const uploaded = [];
-        for (const f of pendingFiles) uploaded.push(await SY.uploadAttachment(f, txnId));
-        await SY.addAttachments(txnId, uploaded);
-      }
-
+      const r = await SY.save(key, vals);
+      // From here the entry is committed. Whatever happens to the files next must never be
+      // presented as "not saved".
+      result = {
+        kind: 'ok', key, label, preset, ...r,
+        uploads: files.map(f => ({
+          file: f, status: 'pending',
+          preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+        })),
+      };
       vals = {};
       pendingFiles = [];
-      buildForm();
-      drawAttachments();
-
-      if (txnId) {
-        toast('Saved', { label: 'Undo', run: () => window.fin.reverse(txnId, true) });
-      } else {
-        toast('Saved');
-      }
     } catch (e) {
-      toast(e.message || 'Could not save');
-      btn.disabled = false;
+      result = { kind: 'err', key, label, preset, message: e.message || 'Could not save', vals: snapshotVals, files };
+    } finally {
+      saving = false;
     }
+    repaint();
+    window.scrollTo(0, 0);
+  },
+
+  async retryUpload(i) {
+    const r = result;
+    const u = r?.uploads?.[i];
+    if (!u || u.status === 'busy') return;
+    u.status = 'pending';
+    runUploads();
   },
 
   async reverse(id, silent) {
@@ -702,9 +918,11 @@ window.fin = {
       if (!ok) return;
     }
     try {
-      await SY.reverse(id);
+      const r = await SY.reverse(id);
       closeModal();
-      toast('Reversed — both entries stay on record');
+      if (result?.txnId === id) result = null;
+      toast(`Reversed with entry ${entryNo(r)} — both stay on record`);
+      if (view === 'record') repaint();
     } catch (e) { toast(e.message || 'Could not reverse'); }
   },
 
