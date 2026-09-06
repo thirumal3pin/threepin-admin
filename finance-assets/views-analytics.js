@@ -16,7 +16,7 @@ import { stat, signed, empty, note, tag, table, seg, downloadCsv } from './ui.js
 
 let F = defaultFilters();
 
-const ORANGE = '#FE8D00', INK = '#111111', GREY = '#D9D9D9', GREEN = '#147A3D', LINE = '#E6E6E6', MUTED = '#6B6B6B';
+const ORANGE = '#F58A07', INK = '#17150F', GREY = '#D3CABC', GREEN = '#1F7A4D', LINE = '#E7E1D7', MUTED = '#8A8174';
 
 // A phone gets a narrower drawing so bars and labels stay readable rather than the desktop
 // picture scaled down to a third of its size.
@@ -188,7 +188,7 @@ function groupedBars(series, keys, lineKey, lineLabel, extraLine) {
   const y = v => base - (v / peak) * (base - top);
 
   const grid = [0.25, 0.5, 0.75, 1].map(f => `<line x1="${padL}" y1="${y(peak * f)}" x2="${W - padR}" y2="${y(peak * f)}" stroke="${LINE}" stroke-dasharray="2 3"/>
-    <text x="${padL - 5}" y="${y(peak * f) + 3}" text-anchor="end" font-size="9" fill="#949494">${short(peak * f)}</text>`).join('');
+    <text x="${padL - 5}" y="${y(peak * f) + 3}" text-anchor="end" font-size="9" fill="#8A8174">${short(peak * f)}</text>`).join('');
 
   const bars = series.map((p, i) => keys.map(([k, color, label], j) => {
     const v = Math.max(0, p[k]);

@@ -122,7 +122,7 @@ function trendChart() {
     <div class="card">
       <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" preserveAspectRatio="xMidYMid meet">
         <title>${esc(summary)}</title>
-        <line x1="${pad}" y1="${mid}" x2="${W - pad}" y2="${mid}" stroke="#E6E6E6" stroke-width="1"/>
+        <line x1="${pad}" y1="${mid}" x2="${W - pad}" y2="${mid}" stroke="#E7E1D7" stroke-width="1"/>
         ${data.map((d, i) => {
     const x = pad + i * (barW + gap);
     const h = Math.max(2, (Math.abs(d.profit) / peak) * (mid - 34));
@@ -130,11 +130,11 @@ function trendChart() {
     const y = up ? mid - h : mid;
     return `
             <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="3"
-                  fill="${up ? '#FE8D00' : '#C0261B'}"></rect>
+                  fill="${up ? '#F58A07' : '#B3261E'}"></rect>
             <text x="${x + barW / 2}" y="${up ? y - 7 : y + h + 15}" text-anchor="middle"
-                  font-size="11" fill="#3F3F3F" font-weight="600">${esc(fmt(d.profit))}</text>
+                  font-size="11" fill="#5A5348" font-weight="600">${esc(fmt(d.profit))}</text>
             <text x="${x + barW / 2}" y="${H - 6}" text-anchor="middle"
-                  font-size="11" fill="#949494">${esc(mlabel(d.m).replace(' ', ' '))}</text>`;
+                  font-size="11" fill="#8A8174">${esc(mlabel(d.m).replace(' ', ' '))}</text>`;
   }).join('')}
       </svg>
     </div>`;

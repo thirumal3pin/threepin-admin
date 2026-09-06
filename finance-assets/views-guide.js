@@ -470,25 +470,25 @@ function cashVsProfitChart() {
   return `
     <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
       <title>Cash movement versus profit for September, October and November. October has the worst cash and the best profit.</title>
-      <line x1="${pad}" y1="${mid}" x2="${W - pad}" y2="${mid}" stroke="#E6E6E6"/>
+      <line x1="${pad}" y1="${mid}" x2="${W - pad}" y2="${mid}" stroke="#E7E1D7"/>
       ${data.map((d, i) => {
     const cx = pad + i * groupW + groupW / 2;
     const bars = [
-      { v: d.cash, x: cx - bw - 5, fill: '#111111', label: 'Cash' },
-      { v: d.profit, x: cx + 5, fill: '#FE8D00', label: 'Profit' },
+      { v: d.cash, x: cx - bw - 5, fill: '#17150F', label: 'Cash' },
+      { v: d.profit, x: cx + 5, fill: '#F58A07', label: 'Profit' },
     ];
     return bars.map(b => {
       const h = Math.max(2, Math.abs(b.v) / peak * 92);
       const y = b.v >= 0 ? mid - h : mid;
       return `<rect x="${b.x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${b.fill}"/>
                 <text x="${b.x + bw / 2}" y="${b.v >= 0 ? y - 6 : y + h + 14}" text-anchor="middle"
-                  font-size="10.5" fill="#3F3F3F" font-weight="600">${esc(fmt(b.v))}</text>`;
-    }).join('') + `<text x="${cx}" y="246" text-anchor="middle" font-size="12" fill="#6B6B6B">${d.m}</text>`;
+                  font-size="10.5" fill="#5A5348" font-weight="600">${esc(fmt(b.v))}</text>`;
+    }).join('') + `<text x="${cx}" y="246" text-anchor="middle" font-size="12" fill="#8A8174">${d.m}</text>`;
   }).join('')}
-      <rect x="${pad}" y="264" width="11" height="11" rx="2" fill="#111111"/>
-      <text x="${pad + 17}" y="273" font-size="11" fill="#6B6B6B">Cash in / out</text>
-      <rect x="${pad + 110}" y="264" width="11" height="11" rx="2" fill="#FE8D00"/>
-      <text x="${pad + 127}" y="273" font-size="11" fill="#6B6B6B">Profit</text>
+      <rect x="${pad}" y="264" width="11" height="11" rx="2" fill="#17150F"/>
+      <text x="${pad + 17}" y="273" font-size="11" fill="#8A8174">Cash in / out</text>
+      <rect x="${pad + 110}" y="264" width="11" height="11" rx="2" fill="#F58A07"/>
+      <text x="${pad + 127}" y="273" font-size="11" fill="#8A8174">Profit</text>
     </svg>`;
 }
 
@@ -502,20 +502,20 @@ function prepaidChart() {
   return `
     <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
       <title>Twenty-four thousand rupees paid once in September, released as two thousand rupees of cost each month for twelve months.</title>
-      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E6E6E6"/>
-      <rect x="${pad}" y="${base - cashH}" width="34" height="${cashH}" rx="3" fill="#111111"/>
-      <text x="${pad + 17}" y="${base - cashH - 7}" text-anchor="middle" font-size="10.5" font-weight="600" fill="#3F3F3F">${esc(fmt(24000))}</text>
-      <text x="${pad + 17}" y="${base + 15}" text-anchor="middle" font-size="10.5" fill="#6B6B6B">paid</text>
+      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E7E1D7"/>
+      <rect x="${pad}" y="${base - cashH}" width="34" height="${cashH}" rx="3" fill="#17150F"/>
+      <text x="${pad + 17}" y="${base - cashH - 7}" text-anchor="middle" font-size="10.5" font-weight="600" fill="#5A5348">${esc(fmt(24000))}</text>
+      <text x="${pad + 17}" y="${base + 15}" text-anchor="middle" font-size="10.5" fill="#8A8174">paid</text>
       ${months.map((m, i) => {
     const x = pad + 60 + i * step;
-    return `<rect x="${x}" y="${base - costH}" width="${step - 5}" height="${costH}" rx="2" fill="#FE8D00"/>
-              <text x="${x + (step - 5) / 2}" y="${base + 15}" text-anchor="middle" font-size="9" fill="#949494">${esc(mlabel(m).slice(0, 3))}</text>`;
+    return `<rect x="${x}" y="${base - costH}" width="${step - 5}" height="${costH}" rx="2" fill="#F58A07"/>
+              <text x="${x + (step - 5) / 2}" y="${base + 15}" text-anchor="middle" font-size="9" fill="#8A8174">${esc(mlabel(m).slice(0, 3))}</text>`;
   }).join('')}
-      <text x="${pad + 60}" y="${base - costH - 8}" font-size="10.5" font-weight="600" fill="#3F3F3F">${esc(fmt(2000))} of cost a month</text>
-      <rect x="${pad}" y="${H - 18}" width="11" height="11" rx="2" fill="#111111"/>
-      <text x="${pad + 17}" y="${H - 9}" font-size="11" fill="#6B6B6B">Cash out</text>
-      <rect x="${pad + 100}" y="${H - 18}" width="11" height="11" rx="2" fill="#FE8D00"/>
-      <text x="${pad + 117}" y="${H - 9}" font-size="11" fill="#6B6B6B">Actual monthly cost</text>
+      <text x="${pad + 60}" y="${base - costH - 8}" font-size="10.5" font-weight="600" fill="#5A5348">${esc(fmt(2000))} of cost a month</text>
+      <rect x="${pad}" y="${H - 18}" width="11" height="11" rx="2" fill="#17150F"/>
+      <text x="${pad + 17}" y="${H - 9}" font-size="11" fill="#8A8174">Cash out</text>
+      <rect x="${pad + 100}" y="${H - 18}" width="11" height="11" rx="2" fill="#F58A07"/>
+      <text x="${pad + 117}" y="${H - 9}" font-size="11" fill="#8A8174">Actual monthly cost</text>
     </svg>`;
 }
 
@@ -529,52 +529,52 @@ function emiChart() {
   return `
     <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
       <title>Twelve EMIs on an eighty thousand rupee loan. Each instalment is mostly principal, with a shrinking slice of interest that is the only real cost.</title>
-      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E6E6E6"/>
+      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E7E1D7"/>
       ${sch.map((s, i) => {
     const x = pad + i * step;
     const w = step - 6;
     const total = (s.emi / peak) * 120;
     const ih = Math.max(2, (s.int / peak) * 120);
     const ph = Math.max(2, total - ih);
-    return `<rect x="${x}" y="${base - ph}" width="${w}" height="${ph}" rx="2" fill="#D9D9D9"/>
-              <rect x="${x}" y="${base - ph - ih}" width="${w}" height="${ih}" rx="2" fill="#FE8D00"/>
-              <text x="${x + w / 2}" y="${base + 14}" text-anchor="middle" font-size="9" fill="#949494">${s.n}</text>`;
+    return `<rect x="${x}" y="${base - ph}" width="${w}" height="${ph}" rx="2" fill="#D3CABC"/>
+              <rect x="${x}" y="${base - ph - ih}" width="${w}" height="${ih}" rx="2" fill="#F58A07"/>
+              <text x="${x + w / 2}" y="${base + 14}" text-anchor="middle" font-size="9" fill="#8A8174">${s.n}</text>`;
   }).join('')}
-      <text x="${pad}" y="${base - 135}" font-size="11" fill="#6B6B6B">Interest falls from ${esc(fmt(sch[0].int))} to ${esc(fmt(sch.at(-1).int))} a month</text>
-      <rect x="${pad}" y="${H - 18}" width="11" height="11" rx="2" fill="#D9D9D9"/>
-      <text x="${pad + 17}" y="${H - 9}" font-size="11" fill="#6B6B6B">Principal — not a cost</text>
-      <rect x="${pad + 160}" y="${H - 18}" width="11" height="11" rx="2" fill="#FE8D00"/>
-      <text x="${pad + 177}" y="${H - 9}" font-size="11" fill="#6B6B6B">Interest — the only cost</text>
+      <text x="${pad}" y="${base - 135}" font-size="11" fill="#8A8174">Interest falls from ${esc(fmt(sch[0].int))} to ${esc(fmt(sch.at(-1).int))} a month</text>
+      <rect x="${pad}" y="${H - 18}" width="11" height="11" rx="2" fill="#D3CABC"/>
+      <text x="${pad + 17}" y="${H - 9}" font-size="11" fill="#8A8174">Principal — not a cost</text>
+      <rect x="${pad + 160}" y="${H - 18}" width="11" height="11" rx="2" fill="#F58A07"/>
+      <text x="${pad + 177}" y="${H - 9}" font-size="11" fill="#8A8174">Interest — the only cost</text>
     </svg>`;
 }
 
 // A small flow diagram. Boxes and arrows, no library.
 function tokenFlowChart() {
   const W = 620, H = 210;
-  const box = (x, y, w, h, fill, stroke, label, sub, textFill = '#111111') => `
+  const box = (x, y, w, h, fill, stroke, label, sub, textFill = '#17150F') => `
     <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${fill}" stroke="${stroke}"/>
     <text x="${x + w / 2}" y="${y + (sub ? 24 : h / 2 + 4)}" text-anchor="middle" font-size="12.5" font-weight="600" fill="${textFill}">${esc(label)}</text>
-    ${sub ? `<text x="${x + w / 2}" y="${y + 42}" text-anchor="middle" font-size="10.5" fill="#6B6B6B">${esc(sub)}</text>` : ''}`;
+    ${sub ? `<text x="${x + w / 2}" y="${y + 42}" text-anchor="middle" font-size="10.5" fill="#8A8174">${esc(sub)}</text>` : ''}`;
   const arrow = (x1, y1, x2, y2) =>
-    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#B5B5B5" stroke-width="1.5" marker-end="url(#gArrow)"/>`;
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#B3ABA0" stroke-width="1.5" marker-end="url(#gArrow)"/>`;
 
   return `
     <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
       <title>A token is received into a holding account, and leaves it in one of three ways: refunded, adjusted against the invoice, or forfeited to income.</title>
       <defs><marker id="gArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-        <path d="M0,0 L10,5 L0,10 z" fill="#B5B5B5"/></marker></defs>
+        <path d="M0,0 L10,5 L0,10 z" fill="#B3ABA0"/></marker></defs>
 
-      ${box(14, 78, 130, 54, '#FFF4E3', '#FFDCAE', 'Token received', 'Cash in')}
+      ${box(14, 78, 130, 54, '#FDF1E3', '#F9C88A', 'Token received', 'Cash in')}
       ${arrow(148, 105, 196, 105)}
-      ${box(200, 70, 140, 70, '#111111', '#111111', 'Held for client', 'Not income', '#FFFFFF')}
+      ${box(200, 70, 140, 70, '#17150F', '#17150F', 'Held for client', 'Not income', '#FAF7F2')}
 
       ${arrow(344, 92, 396, 42)}
       ${arrow(344, 105, 396, 105)}
       ${arrow(344, 118, 396, 168)}
 
-      ${box(400, 16, 206, 50, '#FFFFFF', '#E6E6E6', 'Refunded', 'Cash out · profit untouched')}
-      ${box(400, 80, 206, 50, '#FFFFFF', '#E6E6E6', 'Adjusted on the invoice', 'Becomes income at registration')}
-      ${box(400, 144, 206, 50, '#FFF4E3', '#FFDCAE', 'Forfeited', 'Income now, less GST')}
+      ${box(400, 16, 206, 50, '#FFFFFF', '#E7E1D7', 'Refunded', 'Cash out · profit untouched')}
+      ${box(400, 80, 206, 50, '#FFFFFF', '#E7E1D7', 'Adjusted on the invoice', 'Becomes income at registration')}
+      ${box(400, 144, 206, 50, '#FDF1E3', '#F9C88A', 'Forfeited', 'Income now, less GST')}
     </svg>`;
 }
 
@@ -597,21 +597,21 @@ function waterfallChart() {
     const x = pad + i * step + 10;
     const w = step - 26;
     let y, height, fill;
-    if (s.kind === 'start') { height = h(s.v); y = base - height; running = s.v; fill = '#111111'; }
-    else if (s.kind === 'end') { height = h(s.v); y = base - height; fill = '#FE8D00'; }
-    else { height = h(s.v); running += s.v; y = base - h(running) - height; fill = '#D9D9D9'; }
+    if (s.kind === 'start') { height = h(s.v); y = base - height; running = s.v; fill = '#17150F'; }
+    else if (s.kind === 'end') { height = h(s.v); y = base - height; fill = '#F58A07'; }
+    else { height = h(s.v); running += s.v; y = base - h(running) - height; fill = '#D3CABC'; }
     return `<rect x="${x}" y="${y}" width="${w}" height="${height}" rx="3" fill="${fill}"/>
       <text x="${x + w / 2}" y="${y - 6}" text-anchor="middle" font-size="10.5" font-weight="600"
-        fill="${s.kind === 'down' ? '#C0261B' : '#3F3F3F'}">${s.kind === 'down' ? '−' : ''}${esc(fmt(Math.abs(s.v)))}</text>
-      <text x="${x + w / 2}" y="${base + 16}" text-anchor="middle" font-size="10.5" fill="#6B6B6B">${esc(s.label)}</text>`;
+        fill="${s.kind === 'down' ? '#B3261E' : '#5A5348'}">${s.kind === 'down' ? '−' : ''}${esc(fmt(Math.abs(s.v)))}</text>
+      <text x="${x + w / 2}" y="${base + 16}" text-anchor="middle" font-size="10.5" fill="#8A8174">${esc(s.label)}</text>`;
   }).join('');
 
   return `
     <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
       <title>A one lakh eighteen thousand rupee invoice reduces to seventy-five thousand kept, after GST, a referral fee and deal costs.</title>
-      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E6E6E6"/>
+      <line x1="${pad}" y1="${base}" x2="${W - pad}" y2="${base}" stroke="#E7E1D7"/>
       ${bars}
-      <text x="${pad}" y="${H - 8}" font-size="11" fill="#949494">GST was never yours — you collected it for the government.</text>
+      <text x="${pad}" y="${H - 8}" font-size="11" fill="#8A8174">GST was never yours — you collected it for the government.</text>
     </svg>`;
 }
 
