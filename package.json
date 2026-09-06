@@ -6,7 +6,9 @@
   "description": "3 PIN Realty admin landing page",
   "scripts": {
     "start": "live-server --port=5173 --no-browser",
-    "dev": "live-server --port=5173"
+    "dev": "live-server --port=5173",
+    "test": "node tests/finance-engine.test.mjs && node tests/finance-views.test.mjs",
+    "test:finance": "node tests/finance-engine.test.mjs && node tests/finance-views.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.2",
