@@ -128,7 +128,8 @@ a { color: var(--brand-dark); }
   backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--line);
 }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.01em; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.top .btn { white-space: nowrap; }
 .brand img {
   width: 30px; height: 30px; border-radius: 8px; object-fit: cover; display: block;
   border: 1px solid var(--line);
@@ -559,6 +560,7 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0
    floating over it. Two-column field rows collapse, and table action cells wrap. */
 
 @media (max-width: 859px) {
+  .who { display: none; }
   .preview { position: static; }
   .save-bar {
     position: sticky; bottom: calc(var(--tab-h) + 8px); z-index: 30;

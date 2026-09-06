@@ -402,6 +402,11 @@ function buildForm() {
   }).join('');
 
   // Seed any defaults that have not been typed yet, so the preview reflects the visible form.
+  // A field that only just appeared (the GST rate, once GST is switched on) gets its default
+  // here — AFTER the select's onchange already ran without it — so the event's onchange is
+  // run again for each seeded key and the inputs are refreshed, otherwise the tax and total
+  // would sit at zero until the user touched the rate by hand.
+  const seeded = [];
   for (const f of fields) {
     if (vals[f.k] === undefined) {
       if (f.type === 'select') {
@@ -409,8 +414,15 @@ function buildForm() {
         vals[f.k] = f.def ?? (opts[0] ? opts[0][0] : '');
       } else if (f.def !== undefined) {
         vals[f.k] = f.def;
+      } else {
+        continue;
       }
+      seeded.push(f.k);
     }
+  }
+  if (seeded.length && EV[evKey].onchange) {
+    for (const k of seeded) EV[evKey].onchange(k, vals);
+    syncInputs(null);
   }
 
   // Text and number fields never rebuild the form, so typing never loses focus: the event's
