@@ -25,7 +25,8 @@ import { renderServices, renderLoans, renderAssets } from './views-services.js';
 import { renderInvoices, mountInvoices } from './views-invoices.js';
 import { renderBank, mountBank } from './views-bank.js';
 import { renderReports, renderBooks } from './views-reports.js';
-import { renderSettings, mountSettings, renderProfile, mountProfile, renderGuide, renderOpening, mountOpening } from './views-admin.js';
+import { renderSettings, mountSettings, renderProfile, mountProfile, renderOpening, mountOpening } from './views-admin.js';
+import { renderGuide } from './views-guide.js';
 
 // ═══════ NAVIGATION ═══════
 //
