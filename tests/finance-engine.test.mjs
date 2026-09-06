@@ -471,6 +471,26 @@ section('GST lands on the right accounts');
   save('bill', { date: '2026-11-27', vendor: 'Balaji & Co', desc: 'Audit fee', acc: '5120', amt: 20000, gst: 'yes', gstRate: 18, gstAmt: 3600, total: 23600, tds: 'none', tdsrate: 0 });
   eq('A bill with GST is owed in full, tax included', bal('2000') - payBefore, 23600);
   check('Books still balance with GST both ways', trialBalance().balanced && balanceSheet().balanced);
+
+  // s.17(5): no input credit on food — the tax is part of the cost.
+  const foodBefore = bal('5030'), creditBefore = bal('1400');
+  save('expense', { date: '2026-11-28', desc: 'Team lunch', acc: '5030', amt: 1000, gst: 'yes', gstRate: 5, gstAmt: 50, total: 1050, via: '1010' });
+  eq('Blocked-credit category: the whole bill is the cost', bal('5030') - foodBefore, 1050);
+  eq('Blocked-credit category: nothing goes to input credit', bal('1400') - creditBefore, 0);
+}
+
+section('Place of supply follows the property');
+{
+  const dealTN = s.deals.find(d => d.id === deal1);
+  dealTN.propertyState = 'Tamil Nadu';
+  const outTN = EV.invoice.build({ date: '2026-11-29', deal: deal1, from: 'buyer', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, tds: 0, adv: 0, recv: 'later' });
+  eq('Tamil Nadu property → CGST', outTN.invoice.cgst, 900);
+  eq('Tamil Nadu property → no IGST', outTN.invoice.igst, 0);
+  dealTN.propertyState = 'Karnataka';
+  const outKA = EV.invoice.build({ date: '2026-11-29', deal: deal1, from: 'buyer', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, tds: 0, adv: 0, recv: 'later' });
+  eq('Karnataka property → IGST', outKA.invoice.igst, 1800);
+  check('Place of supply is recorded on the invoice', outKA.invoice.placeOfSupply === 'Karnataka');
+  dealTN.propertyState = 'Tamil Nadu';
 }
 
 section('Number formatting');

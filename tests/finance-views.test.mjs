@@ -63,7 +63,7 @@ s.deals = [
     others: [], expSeller: 200000, expBuyer: 100000, status: 'registered', opened: '2026-09-09',
   },
   {
-    id: 'D2', nickname: 'Anand — Whitefield', propertyCode: '', propertyName: '',
+    id: 'D2', nickname: 'Anand — Whitefield', propertyCode: '', propertyName: '', propertyState: 'Karnataka',
     seller: { partyId: 'P3', name: 'Anand (Bengaluru)', phone: '9840033333' },
     buyer: null, others: [], expSeller: 150000, expBuyer: 0, status: 'open', opened: '2026-10-01',
   },
@@ -234,7 +234,19 @@ check('Bill-to carries the client name', JSON.stringify(inv1.billTo).includes('K
 check('Nothing is missing on a complete profile', (inv1.missing || []).length === 0,
   (inv1.missing || []).join(', '));
 
-section('Invoice model — out-of-state client charges IGST');
+section('Invoice model — a client from another state, property in Tamil Nadu');
+{
+  // Place of supply follows the property, so a Bengaluru buyer of a Chennai flat is intra-state.
+  const inv = invoiceModel({
+    invoice: { id: 'I3', invoiceNo: '3PIN/26-27/003', date: '2026-11-02', partyId: 'P3', dealId: 'D1', base: 100000, gstRate: 18, total: 118000 },
+    party: s.parties[2], deal: s.deals[0], settings: s.settings,
+  });
+  check('Property in TN → CGST even for a Karnataka client', num(inv.tax.cgst) === 9000, String(inv.tax.cgst));
+  check('Property in TN → no IGST for a Karnataka client', num(inv.tax.igst) === 0, String(inv.tax.igst));
+  check('Place of supply printed is the property state', inv.placeOfSupply === 'Tamil Nadu', inv.placeOfSupply);
+}
+
+section('Invoice model — property outside Tamil Nadu charges IGST');
 const inv2 = invoiceModel({
   invoice: {
     id: 'I2', invoiceNo: '3PIN/26-27/002', date: '2026-11-02', partyId: 'P3', dealId: 'D2',
@@ -242,8 +254,9 @@ const inv2 = invoiceModel({
   },
   party: s.parties[2], deal: s.deals[1], settings: s.settings,
 });
-check('IGST charged for Karnataka', num(inv2.tax.igst) === 27000, String(inv2.tax.igst));
-check('No CGST for Karnataka', num(inv2.tax.cgst) === 0, String(inv2.tax.cgst));
+check('IGST charged when the property is in Karnataka', num(inv2.tax.igst) === 27000, String(inv2.tax.igst));
+check('No CGST when the property is in Karnataka', num(inv2.tax.cgst) === 0, String(inv2.tax.cgst));
+check('Place of supply printed is Karnataka', inv2.placeOfSupply === 'Karnataka', inv2.placeOfSupply);
 
 section('Invoice model — incomplete profile is reported');
 const bare = invoiceModel({

@@ -128,10 +128,13 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
     phone: p?.phone || '',
     gstin: p?.gstin || '',
     address: p?.address || '',
-    // The client's state is what decides CGST/SGST vs IGST below, so fall back to ours
-    // rather than leaving it blank — an unknown state is treated as intra-state.
-    state: p?.state || company.state,
+    state: p?.state || '',
   };
+
+  // For brokerage the place of supply is where the PROPERTY is (IGST Act s.12(3)), not the
+  // client's address. It is stored on the invoice when it is raised; older records fall back
+  // to the deal, then to the company's own state.
+  const placeOfSupply = inv.placeOfSupply || d?.propertyState || company.state;
 
   const dealInfo = {
     nickname: d?.nickname || (inv.dealId ? dname(inv.dealId) : ''),
@@ -154,7 +157,7 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   const stored = inv.cgst != null || inv.sgst != null || inv.igst != null;
   const split = stored
     ? { cgst: num(inv.cgst), sgst: num(inv.sgst), igst: num(inv.igst) }
-    : splitGst(taxable, rate, billTo.state, company.state);
+    : splitGst(taxable, rate, placeOfSupply, company.state);
 
   const taxTotal = num(split.cgst) + num(split.sgst) + num(split.igst);
   const tax = {
@@ -187,7 +190,8 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   }
 
   return {
-    company, invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
+    company,
+    placeOfSupply, invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
     totalWords: words(total),
     bank, missing,
   };
@@ -293,7 +297,7 @@ export async function renderInvoicePdf(model) {
   };
   meta('Invoice no.', m.invoiceNo);
   meta('Date', dmy(m.date));
-  meta('Place of supply', billTo.state);
+  meta('Place of supply', m.placeOfSupply);
 
   y = Math.max(ly, ry) + 4;
 

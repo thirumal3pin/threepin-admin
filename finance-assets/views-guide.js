@@ -671,6 +671,18 @@ const FAQ = [
     a: 'Nothing. It knows which months each asset and prepaid plan have already been processed for, so a second run posts no entries at all. It is safe to press if you are unsure.',
   },
   {
+    q: 'Why does a client from Bengaluru still get CGST+SGST?',
+    a: 'Because for brokerage the place of supply is where the <b>property</b> is, not where the client lives (IGST Act s.12(3)). A Chennai flat sold to a Bengaluru buyer is a Tamil Nadu supply. IGST only arises when the property itself is in another state — set that on the deal.',
+  },
+  {
+    q: 'I paid GST on lunch for the team. Why is it not showing as input credit?',
+    a: 'Input credit on food and beverages, and on running vehicles, is blocked by s.17(5). The app knows this: on Staff welfare & food and Conveyance & fuel the tax is added to the cost instead of being parked as a claim you could never make.',
+  },
+  {
+    q: 'What should I confirm with my CA before the first GST return?',
+    a: '<b>Forfeited tokens</b> — the app charges GST on a kept token by default; CBIC Circular 178/10/2022 treats many forfeitures as not a supply, so your CA may say to set that rate to 0. <b>Advocate fees</b> — legal services from an advocate fall under reverse charge, which the app does not yet post; tell your CA which bills those were. <b>TDS thresholds</b> — the app applies the rate you enter and does not track the annual thresholds. <b>Depreciation</b> — the books use straight-line over useful life; the tax computation uses WDV blocks, which your CA will redo. <b>Tokens received</b> — held for the client and not taxed; if any part is really your own advance brokerage, GST is due on receipt.',
+  },
+  {
     q: 'I have not entered my opening balances yet. Does it matter?',
     a: 'Yes — until you do, the books think you started from nothing, so your balance sheet and cash figures will be wrong. Go to Overview → Enter opening balances. That screen locks after one use, so do it carefully, ideally with your CA.',
   },

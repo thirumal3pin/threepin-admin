@@ -96,6 +96,18 @@ export function gstSync(k, v) {
 // The tax a form produced, or nothing when GST is off.
 const gstOf = v => v.gst === 'yes' ? num(v.gstAmt) : 0;
 
+// Input credit is blocked by s.17(5) on food and beverages, and on motor-vehicle running
+// costs for a business that does not deal in vehicles. GST paid under these categories cannot
+// be claimed back, so it is added to the cost rather than parked in 1400 as if it were.
+export const BLOCKED_ITC = new Set(['5030', '5050']);
+
+// Where the tax on a purchase goes: the cost line itself when credit is blocked, 1400 when
+// it can be claimed. Returns the extra to add to the cost line and the 1400 line, if any.
+function inputTax(acc, gi) {
+  if (!gi) return { onCost: 0, credit: 0 };
+  return BLOCKED_ITC.has(acc) ? { onCost: gi, credit: 0 } : { onCost: 0, credit: gi };
+}
+
 export const EV = {};
 
 // ═══════ DEALS ═══════
@@ -107,6 +119,10 @@ EV.newdeal = {
     F('date', 'Date', 'date', { def: today() }),
     F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK' }),
     F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name' }),
+    F('propertyState', 'State the property is in', 'text', {
+      def: S().settings.state || 'Tamil Nadu',
+      hint: 'Decides CGST+SGST or IGST on the invoice. For brokerage the place of supply is where the property is, not where the client lives.',
+    }),
     F('seller', 'Seller', 'party', { partyType: 'client' }),
     F('buyer', 'Buyer', 'party', { partyType: 'client', hint: 'Leave blank until you have one' }),
     F('expSeller', 'Expected brokerage from seller', 'number', { def: 0 }),
@@ -128,6 +144,7 @@ EV.newdeal = {
           propertyRef: v.property?.id || null,
           propertyCode: v.property?.propertyCode || '',
           propertyName: v.property?.name || '',
+          propertyState: String(v.propertyState || S().settings.state || 'Tamil Nadu').trim(),
           seller: v.seller ? { partyId: pidOf(v.seller), name: pnameOf(v.seller), phone: v.seller?.phone || '' } : null,
           buyer: v.buyer ? { partyId: pidOf(v.buyer), name: pnameOf(v.buyer), phone: v.buyer?.phone || '' } : null,
           others: [],
@@ -307,16 +324,19 @@ EV.invoice = {
     if (held - adv > 0.5) eff.push(`${fmt(held - adv)} token still held — settle it separately.`);
     if (gst) eff.push('A GST invoice will be generated and numbered automatically.');
 
+    // Brokerage is a service "directly in relation to immovable property" (IGST Act s.12(3)),
+    // so the place of supply is where the PROPERTY is. A Bengaluru buyer of a Chennai flat is
+    // charged CGST+SGST; IGST only arises when the property itself is in another state.
     const st = S().settings;
-    const clientState = partyState(pid) || st.state;
-    const gstSplit = splitGst(base, rate, clientState, st.state);
+    const placeOfSupply = d.propertyState || st.state;
+    const gstSplit = splitGst(base, rate, placeOfSupply, st.state);
 
     return {
       desc: `Brokerage — ${dealLabel(d)} (${pname(pid)})`,
       lines, effects: eff,
       updates: [{ coll: 'deals', id: d.id, data: { status: 'registered' } }],
       invoice: gst ? {
-        partyId: pid, dealId: d.id, base, gstRate: rate,
+        partyId: pid, dealId: d.id, base, gstRate: rate, placeOfSupply,
         cgst: gstSplit.cgst, sgst: gstSplit.sgst, igst: gstSplit.igst,
         total, date: v.date || today(),
       } : null,
@@ -324,11 +344,6 @@ EV.invoice = {
   },
 };
 
-// A party's state drives CGST/SGST vs IGST. Unknown state falls back to the company's own.
-function partyState(pid) {
-  const p = getState().parties.find(x => x.id === pid);
-  return p?.state || '';
-}
 
 EV.dealpay = {
   title: 'Client pays what they owe', group: 'Money in',
@@ -728,15 +743,17 @@ EV.expense = {
     if (!amt) return need('Enter the amount.');
     if (!v.acc) return need('Pick a category.');
     const gi = gstOf(v);
-    const lines = [{ acc: v.acc, dr: amt }];
-    if (gi) lines.push({ acc: '1400', dr: gi });
+    const tax = inputTax(v.acc, gi);
+    const lines = [{ acc: v.acc, dr: amt + tax.onCost }];
+    if (tax.credit) lines.push({ acc: '1400', dr: tax.credit });
     lines.push({ acc: v.via || '1000', cr: amt + gi });
     return {
       desc: v.desc || A[v.acc].name,
       lines,
       effects: [
-        `Cost ${fmt(amt)} this month — profit goes down by that.`,
-        gi ? `${fmt(gi)} GST paid on it is claimed as input credit. It reduces your next GST bill, so it is not a cost.` : '',
+        `Cost ${fmt(amt + tax.onCost)} this month — profit goes down by that.`,
+        tax.credit ? `${fmt(gi)} GST paid on it is claimed as input credit. It reduces your next GST bill, so it is not a cost.` : '',
+        tax.onCost ? `${fmt(gi)} GST cannot be claimed on ${A[v.acc].name.toLowerCase()} (blocked credit), so it is part of the cost.` : '',
         `${fmt(amt + gi)} leaves ${A[v.via || '1000'].name}.`,
         v.via === '2300' ? 'On the card, so the card balance grows. Paying the card bill later is a transfer, not another expense.' : '',
       ].filter(Boolean),
@@ -767,18 +784,20 @@ EV.bill = {
     const pid = pidOf(v.vendor);
     if (!pid) return need('Name the vendor.');
     const gi = gstOf(v);
+    const tax = inputTax(v.acc, gi);
     const tds = tdsOn() ? Math.round(amt * num(v.tdsrate) / 100) : 0;
     const owed = amt + gi - tds;
-    const lines = [{ acc: v.acc, dr: amt }];
-    if (gi) lines.push({ acc: '1400', dr: gi });
+    const lines = [{ acc: v.acc, dr: amt + tax.onCost }];
+    if (tax.credit) lines.push({ acc: '1400', dr: tax.credit });
     if (tds) lines.push({ acc: '2250', cr: tds });
     lines.push({ acc: '2000', cr: owed, party: pid });
     return {
       desc: `${v.desc || A[v.acc].name} — ${pnameOf(v.vendor)}`,
       lines,
       effects: [
-        `Cost ${fmt(amt)} this month — profit goes down by that. No cash has moved yet.`,
-        gi ? `${fmt(gi)} GST on the bill becomes input credit.` : '',
+        `Cost ${fmt(amt + tax.onCost)} this month — profit goes down by that. No cash has moved yet.`,
+        tax.credit ? `${fmt(gi)} GST on the bill becomes input credit.` : '',
+        tax.onCost ? `${fmt(gi)} GST cannot be claimed on ${A[v.acc].name.toLowerCase()} (blocked credit), so it is part of the cost.` : '',
         `You owe ${esc(pnameOf(v.vendor))} ${fmt(owed)}. It shows on the Owed tab until you pay it.`,
         tds ? `${fmt(tds)} TDS withheld, to deposit by the 7th of next month.` : '',
       ].filter(Boolean),
