@@ -53,6 +53,10 @@
     <div class="brand"><img src="logo.jpg" alt="3 PIN Realty" width="30" height="30">3 PIN Realty <span class="small">Finance</span></div>
     <div class="spacer"></div>
     <span class="who" id="whoami"></span>
+    <div class="cur-tog" id="curTog" role="group" aria-label="Display currency">
+      <button type="button" data-cur="INR" class="on" aria-pressed="true" onclick="fin.setCurrency('INR')">INR</button>
+      <button type="button" data-cur="USD" aria-pressed="false" onclick="fin.setCurrency('USD')">USD</button>
+    </div>
     <button class="btn ghost sm" type="button" onclick="financeLogout()">Sign out</button>
   </header>
 

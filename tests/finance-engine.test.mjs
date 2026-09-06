@@ -11,6 +11,7 @@ import {
   getState, setState, blank, defaultSettings, normalise, validate, reversalLines,
   fyOf, num, fmt, ym, addMonths, bal, pl, trialBalance, balanceSheet, partyBalances,
   monthEndEntries, schedule, prepaidLeft, splitGst, words, A,
+  setDisplayCurrency, displayCurrency, fmtInr,
   gstOutputBal, gstInputBal, gstHeads, gstSetOff, gstComputation, itcRegister,
   tdsFyTotal, complianceCalendar, upcomingCash, agedReceivables, taxProvision,
 } from '../finance-assets/finance-core.js';
@@ -648,6 +649,22 @@ section('Analytics — deals and collection');
   check('Deal funnel: cash received on the deal is positive', d1.received > 0);
   const c = collectionDays(s);
   check('Days to collect measured from invoice to payment', c.count === 1 && c.avg === 8, JSON.stringify(c));
+}
+
+section('Display currency');
+{
+  check('Default is rupees', displayCurrency().code === 'INR');
+  setDisplayCurrency('USD', 88);
+  check('Large amounts convert with no cents', fmt(88000) === '$1,000', fmt(88000));
+  check('Small amounts keep their cents', fmt(880) === '$10.00', fmt(880));
+  check('Negatives keep the minus', fmt(-4400) === '−$50.00', fmt(-4400));
+  check('Exactly $100 loses the cents', fmt(-8800) === '−$100', fmt(-8800));
+  setDisplayCurrency('USD', 80);
+  check('A different rate gives a different figure', fmt(80000) === '$1,000', fmt(80000));
+  check('fmtInr ignores the toggle — documents stay in rupees', fmtInr(88000) === '₹88,000', fmtInr(88000));
+  setDisplayCurrency('INR');
+  check('Switching back restores rupees', fmt(88000) === '₹88,000', fmt(88000));
+  check('Nothing in the ledger moved', trialBalance().balanced && balanceSheet().balanced);
 }
 
 section('Number formatting');

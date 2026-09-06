@@ -127,9 +127,9 @@ a { color: var(--brand-600); text-decoration-thickness: 1px; text-underline-offs
 .eh, th, .stat .l {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: .12em;
+  letter-spacing: .09em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 /* ═══════ ACCESSIBILITY ═══════ */
@@ -169,6 +169,17 @@ a { color: var(--brand-600); text-decoration-thickness: 1px; text-underline-offs
 .brand .small { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-left: 2px; }
 .top .btn { white-space: nowrap; }
 .who { font-size: 12.5px; color: var(--ink-3); }
+
+/* A reading aid, so it stays quiet: hairline, small caps, and only the active side inked. */
+.cur-tog { display: inline-flex; border: 1px solid var(--line-2); border-radius: 999px; overflow: hidden; background: var(--card); flex: none; }
+.cur-tog button {
+  border: 0; background: none; cursor: pointer; font: inherit;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .08em;
+  padding: 5px 9px; min-height: 28px; color: var(--ink-3); transition: background .15s, color .15s;
+}
+.cur-tog button + button { border-left: 1px solid var(--line); }
+.cur-tog button:hover { color: var(--ink); }
+.cur-tog button.on { background: var(--es); color: var(--on-es); }
 
 .shell { display: block; }
 .side { display: none; }
@@ -228,7 +239,7 @@ main > * { animation: rise .18s ease-out both; }
 
 .stat { padding: 14px 16px 16px; }
 .stat .l { margin-bottom: var(--s2); }
-.stat .v { font-family: var(--serif); font-size: 1.9rem; line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: lining-nums; }
+.stat .v { font-family: var(--sans); font-weight: 600; font-size: 1.7rem; line-height: 1.1; letter-spacing: -.03em; font-variant-numeric: tabular-nums lining-nums; color: var(--ink); }
 .stat .s { font-size: 12.5px; color: var(--ink-3); margin-top: var(--s2); line-height: 1.4; }
 .stat.hero { background: var(--card-2); border-color: var(--line); position: relative; overflow: hidden; }
 .stat.hero::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--brand); }
@@ -326,6 +337,7 @@ table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
 th { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
 th.n { text-align: right; }
 td { padding: 13px 14px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
+td.n { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr.click { cursor: pointer; transition: background .12s; }
 tbody tr.click:hover { background: var(--card-2); }
@@ -415,7 +427,7 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
 .result h3 { margin: 0 0 2px; font-family: var(--serif); font-weight: 400; font-size: 1.35rem; }
 .result.ok h3 { color: var(--good); }
 .result.err h3 { color: var(--bad); }
-.result .big { font-family: var(--serif); font-size: 2.4rem; line-height: 1; letter-spacing: -.02em; margin: var(--s2) 0 var(--s1); }
+.result .big { font-family: var(--sans); font-weight: 600; font-size: 2.1rem; line-height: 1.05; letter-spacing: -.03em; font-variant-numeric: tabular-nums; margin: var(--s2) 0 var(--s1); }
 .result .actions { margin: var(--s4) 0 0; }
 .result .btn { min-height: 44px; }
 
@@ -446,6 +458,7 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
 
 @media (max-width: 859px) {
   .who { display: none; }
+  .top { gap: var(--s2); padding: 0 var(--s3); }
   h1 { font-size: 1.8rem; }
   h2 { font-size: 1.3rem; }
   .stat .v { font-size: 1.6rem; }
@@ -457,7 +470,7 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
     padding: 10px 10px 10px 14px; margin: var(--s3) 0; display: flex; gap: var(--s2); align-items: center;
   }
   .save-bar .sum { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.3; color: var(--ink-2); }
-  .save-bar .sum b { color: var(--ink); font-family: var(--serif); font-size: 17px; letter-spacing: -.01em; }
+  .save-bar .sum b { color: var(--ink); font-weight: 600; font-size: 16px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .row2 { grid-template-columns: 1fr; }
   td.n.nowrap { white-space: normal; }
   td .btn.sm { margin: 2px 4px 2px 0; }
@@ -514,4 +527,9 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
   main { padding: 0; }
   .card { border: 0; padding: 0; }
   body { background: #fff; }
+}
+
+@media (max-width: 430px) {
+  .brand .small { display: none; }
+  .brand { font-size: 17px; }
 }

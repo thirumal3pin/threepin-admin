@@ -15,7 +15,7 @@
 // it did not pass.
 
 import {
-  fmt, num, words, esc, splitGst, getState, pname, dname, today,
+  fmtInr, num, words, esc, splitGst, getState, pname, dname, today,
 } from './finance-core.js';
 
 // ═══════ jsPDF LOADER ═══════
@@ -447,8 +447,9 @@ export async function shareInvoice(model) {
         await navigator.share({
           files: [file],
           title: 'Tax invoice ' + (model?.invoiceNo || ''),
-          // fmt() is fine here (unlike on the PDF) — the OS share sheet renders '₹'.
-          text: `Tax invoice ${model?.invoiceNo || ''} — ${fmt(model?.total)}`,
+          // The OS share sheet renders '₹' (unlike the PDF), but this must stay in rupees
+          // whatever the display toggle says — an invoice is a record, not a reading.
+          text: `Tax invoice ${model?.invoiceNo || ''} — ${fmtInr(model?.total)}`,
         });
         return 'shared';
       } catch (e) {

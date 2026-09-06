@@ -11,6 +11,7 @@
 import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
+  setDisplayCurrency, displayCurrency,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -78,7 +79,14 @@ window.onFinanceAuthChange = (user, tenantId) => {
         '<b>This account is not set up for the finance module yet.</b><br>It has no tenant assigned, so there is no data to show. Ask whoever provisioned your login to finish onboarding.');
       return;
     }
-    if (!ready) { ready = true; routeFromHash(); }
+    if (!ready) {
+      ready = true;
+      routeFromHash();
+      // Restore the last-used display currency without blocking the first paint.
+      let saved = null;
+      try { saved = localStorage.getItem('fin.cur'); } catch { }
+      if (saved === 'USD') window.fin.setCurrency('USD'); else paintCurrency();
+    }
   } else {
     ready = false;
     app.style.display = 'none';
@@ -102,6 +110,65 @@ window.financeAttemptLogin = e => {
     });
   return false;
 };
+
+// ═══════ DISPLAY CURRENCY ═══════
+//
+// A reading aid, not a setting: the books stay in rupees and nothing converted is written
+// back. The rate is fetched once a day from a free, key-less endpoint and cached, so the
+// toggle is instant and still works offline on the last known rate.
+
+const FX_KEY = 'fin.usdInr';
+// Only reached if both providers are unreachable AND nothing was ever cached. Roughly the
+// rate at the time of writing, so a first-ever offline toggle is in the right region rather
+// than wildly wrong.
+const FX_FALLBACK = 94.5;
+
+// Two key-less providers. The first is the primary; the second covers it being down. Note
+// the .dev host: api.frankfurter.app now 301s here, and a cross-origin redirect is a good
+// way to fail a CORS preflight, so it is addressed directly.
+const FX_SOURCES = [
+  { url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=INR', pick: d => ({ rate: d?.rates?.INR, at: d?.date }) },
+  { url: 'https://open.er-api.com/v6/latest/USD', pick: d => ({ rate: d?.rates?.INR, at: (d?.time_last_update_utc || '').slice(5, 16) }) },
+];
+
+function cachedRate() {
+  try { return JSON.parse(localStorage.getItem(FX_KEY) || 'null'); } catch { return null; }
+}
+
+async function usdRate() {
+  const hit = cachedRate();
+  if (hit?.rate && hit.day === today()) return hit;
+  for (const src of FX_SOURCES) {
+    try {
+      const r = await fetch(src.url, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const got = src.pick(await r.json());
+      const rate = num(got.rate);
+      if (rate > 0) {
+        const fresh = { rate, at: got.at || today(), day: today() };
+        try { localStorage.setItem(FX_KEY, JSON.stringify(fresh)); } catch { }
+        return fresh;
+      }
+    } catch { /* offline, or this provider is down — try the next */ }
+  }
+  // Yesterday's cached rate beats a constant, so it is preferred over the fallback.
+  return hit || { rate: FX_FALLBACK, at: null, day: today() };
+}
+
+function paintCurrency() {
+  const c = displayCurrency();
+  document.querySelectorAll('#curTog button').forEach(b => {
+    const on = b.dataset.cur === c.code;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  const tog = document.getElementById('curTog');
+  if (tog) {
+    tog.title = c.code === 'USD'
+      ? `Showing US dollars at ₹${c.rate.toFixed(2)} to $1${c.at ? ' (rate of ' + c.at + ')' : ''}. The books stay in rupees.`
+      : 'Showing rupees. Switch to USD to read the same figures in dollars.';
+  }
+}
 
 window.financeLogout = () => window.financeAuth.logout();
 window.financeCloseModal = closeModal;
@@ -224,9 +291,9 @@ function overview() {
     ${booksNote}
 
     <div class="grid g3">
-      ${stat('Income this month', fmt(p.ti))}
-      ${stat('Expenses this month', fmt(p.te))}
-      ${stat('Profit this month', signed(p.profit), { raw: true, hero: true })}
+      ${stat('Income', fmt(p.ti))}
+      ${stat('Expenses', fmt(p.te))}
+      ${stat('Profit', signed(p.profit), { raw: true, hero: true })}
       ${stat('Free to use', fmt(cash.free), { sub: 'Cash after vendor dues and client tokens' })}
     </div>
 
@@ -234,16 +301,16 @@ function overview() {
     <div class="grid g3">
       ${stat('Bank', fmt(cash.bank))}
       ${stat('Petty cash', fmt(cash.petty))}
-      ${stat('Credit card owed', fmt(cash.card), { cls: cash.card > 0 ? 'neg' : '' })}
-      ${stat('Loans outstanding', fmt(cash.loans))}
+      ${stat('Credit card', fmt(cash.card), { cls: cash.card > 0 ? 'neg' : '', sub: 'Owed' })}
+      ${stat('Loans', fmt(cash.loans), { sub: 'Outstanding' })}
     </div>
 
     <h2>Who owes whom</h2>
     <div class="grid g3">
       ${stat('Clients owe you', fmt(cash.receivable))}
       ${stat('You owe vendors', fmt(cash.vendorDues))}
-      ${stat('Client tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers' })}
-      ${stat('GST due (net)', fmt(cash.gstDue), { cls: cash.gstDue > 0 ? 'neg' : '' })}
+      ${stat('Tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers' })}
+      ${stat('GST due', fmt(cash.gstDue), { cls: cash.gstDue > 0 ? 'neg' : '', sub: 'Net of input credit' })}
     </div>
     <div class="actions"><button class="btn" type="button" onclick="fin.go('owed')">Open Owed both ways</button></div>
 
@@ -251,8 +318,8 @@ function overview() {
     <div class="grid g3">
       ${stat('Run rate', fmt(svc.monthly) + '/mo')}
       ${stat('Annual commitment', fmt(svc.annual))}
-      ${stat('Prepaid sitting with vendors', fmt(svc.prepaidUnused))}
-      ${stat('Active services', String(svc.active.length))}
+      ${stat('Prepaid', fmt(svc.prepaidUnused), { sub: 'Sitting with vendors' })}
+      ${stat('Active', String(svc.active.length), { sub: 'Services running' })}
     </div>
 
     <h2>Coming up</h2>
@@ -1044,6 +1111,19 @@ window.fin = {
       const n = await SY.runMonthEnd(month);
       toast(`Month-end ${mlabel(month)}: ${n} automatic ${n === 1 ? 'entry' : 'entries'}`);
     } catch (e) { toast(e.message || 'Month-end failed'); }
+  },
+
+  async setCurrency(code) {
+    if (code === 'USD') {
+      const { rate, at } = await usdRate();
+      setDisplayCurrency('USD', rate, at);
+      toast(`Showing US dollars at ₹${rate.toFixed(2)} to $1 — the books stay in rupees`);
+    } else {
+      setDisplayCurrency('INR');
+    }
+    try { localStorage.setItem('fin.cur', displayCurrency().code); } catch { }
+    paintCurrency();
+    repaint();
   },
 
   async seed() {

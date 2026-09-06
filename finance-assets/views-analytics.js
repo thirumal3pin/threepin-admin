@@ -6,7 +6,7 @@
 // went, deal by deal, and who the largest clients and vendors are. Every figure comes from
 // finance-analytics.js, and every table exports.
 
-import { A, EXP, fmt, esc, num, today, ym, addMonths, getState } from './finance-core.js';
+import { A, EXP, fmt, esc, num, today, ym, addMonths, getState, displayCurrency } from './finance-core.js';
 import { EV } from './finance-events.js';
 import {
   CHANNELS, defaultFilters, filterTxns, previousRange, seriesByPeriod, runningCash,
@@ -21,12 +21,21 @@ const ORANGE = '#F58A07', INK = '#17150F', GREY = '#D3CABC', GREEN = '#1F7A4D', 
 // A phone gets a narrower drawing so bars and labels stay readable rather than the desktop
 // picture scaled down to a third of its size.
 const phone = () => typeof window !== 'undefined' && window.innerWidth < 600;
+// Axis labels are drawn from raw rupees, so they have to follow the display toggle too —
+// otherwise the bars would be dollars and the scale beside them lakhs.
 const short = n => {
-  const a = Math.abs(n);
-  if (a >= 1e7) return (n / 1e7).toFixed(1).replace(/\.0$/, '') + 'Cr';
-  if (a >= 1e5) return (n / 1e5).toFixed(1).replace(/\.0$/, '') + 'L';
-  if (a >= 1e3) return (n / 1e3).toFixed(0) + 'k';
-  return String(Math.round(n));
+  const c = displayCurrency();
+  const v = c.code === 'USD' ? num(n) / (c.rate || 1) : num(n);
+  const a = Math.abs(v);
+  if (c.code === 'USD') {
+    if (a >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (a >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+    return String(Math.round(v));
+  }
+  if (a >= 1e7) return (v / 1e7).toFixed(1).replace(/\.0$/, '') + 'Cr';
+  if (a >= 1e5) return (v / 1e5).toFixed(1).replace(/\.0$/, '') + 'L';
+  if (a >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+  return String(Math.round(v));
 };
 
 // ═══════ RENDER ═══════

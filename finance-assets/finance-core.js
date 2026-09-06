@@ -106,12 +106,46 @@ export function addMonths(y, n) {
 export const mlabel = y =>
   new Date(y + '-01T00:00:00').toLocaleString('en-IN', { month: 'short', year: 'numeric' });
 
+// ═══════ DISPLAY CURRENCY ═══════
+//
+// The books are kept in rupees and always will be — every stored figure, every journal line,
+// every invoice. This is a lens for reading them: flip to USD and every displayed amount is
+// divided by the live rate, so an owner can size the business against a dollar figure without
+// anything in the ledger changing. Nothing converted is ever written back.
+
+const CUR = { code: 'INR', rate: 1, at: null };
+
+export const displayCurrency = () => ({ ...CUR });
+
+// rate is rupees per dollar, so INR ÷ rate = USD.
+export function setDisplayCurrency(code, rate, at) {
+  CUR.code = code === 'USD' ? 'USD' : 'INR';
+  if (rate) CUR.rate = num(rate) || 1;
+  if (at) CUR.at = at;
+  return displayCurrency();
+}
+
 // Indian digit grouping: 12,34,567 — not 1,234,567.
-export function fmt(n) {
+function inr(n) {
   const neg = num(n) < 0;
   let s = String(Math.abs(Math.round(num(n))));
   if (s.length > 3) s = s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + s.slice(-3);
   return (neg ? '−' : '') + '₹' + s;
+}
+
+// Always rupees, whatever the toggle says — for invoices and anything else that is a record
+// rather than a reading.
+export const fmtInr = inr;
+
+export function fmt(n) {
+  if (CUR.code === 'INR') return inr(n);
+  const v = num(n) / (CUR.rate || 1);
+  const abs = Math.abs(v);
+  // Small amounts keep their cents; anything you would quote as a round figure loses them.
+  const digits = abs < 100 ? 2 : 0;
+  return (v < 0 ? '−' : '') + '$' + abs.toLocaleString('en-US', {
+    minimumFractionDigits: digits, maximumFractionDigits: digits,
+  });
 }
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
