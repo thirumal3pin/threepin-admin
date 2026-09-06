@@ -13,7 +13,7 @@
 // does not exist anywhere else in the repo — brochures always upload into a folder whose id
 // came from an already-shared Drive URL.
 
-import { verifyCrmUser } from './_bot-shared.js';
+import { verifyCrmUser, getDb } from './_bot-shared.js';
 import { getDriveAccessToken, makeDriveFilePublic, json, fail } from './_brochure-shared.js';
 
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
@@ -55,11 +55,26 @@ async function ensureFolder(token, name, parentId) {
   return created.id;
 }
 
-// "3PIN Finance / {FY} / {txnId}" under the operator-configured root.
+// The configured folder IS the finance root, so only "{FY}/{txnId}" is built beneath it.
+// Pointing the root at the finance folder rather than at its parent means this code can
+// never create or touch anything among the property folders it sits next to.
 async function ensurePath(token, rootId, fy, txnId) {
-  const base = await ensureFolder(token, '3PIN Finance', rootId);
-  const year = await ensureFolder(token, String(fy || 'unfiled'), base);
+  const year = await ensureFolder(token, String(fy || 'unfiled'), rootId);
   return ensureFolder(token, String(txnId || 'unfiled'), year);
+}
+
+// The folder id lives on the finance settings document so it can be changed from the
+// Settings screen without a redeploy. The environment variable stays as a fallback for an
+// operator who would rather pin it outside the database.
+async function resolveRootFolder(tenantId) {
+  try {
+    const snap = await getDb().collection('finance').doc(tenantId).get();
+    const configured = snap.exists ? snap.data().driveFolderId : null;
+    if (configured) return String(configured).trim();
+  } catch (e) {
+    console.error('finance-upload: could not read settings:', e);
+  }
+  return process.env.FINANCE_DRIVE_FOLDER_ID || null;
 }
 
 async function openSession(token, fileName, mimeType, folderId) {
@@ -106,10 +121,10 @@ export async function uploadPost(request) {
   try { body = await request.json(); }
   catch { return fail('validation', 'Body must be JSON', 400); }
 
-  const rootId = process.env.FINANCE_DRIVE_FOLDER_ID;
+  const rootId = await resolveRootFolder(user.tenantId);
   if (!rootId) {
     return fail('config',
-      'FINANCE_DRIVE_FOLDER_ID is not set. Create a Drive folder for finance attachments, share it with the service account, and set its id as that environment variable — or switch Settings → Attachments back to Firebase Storage.',
+      'No Drive folder is configured for finance attachments. Set the folder id in Settings, or switch Settings to Firebase Storage.',
       400);
   }
 

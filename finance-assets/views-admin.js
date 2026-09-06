@@ -187,8 +187,10 @@ export function renderSettings() {
             <option value="storage" ${s.attachmentBackend === 'storage' ? 'selected' : ''}>Firebase Storage</option>
             <option value="drive" ${s.attachmentBackend === 'drive' ? 'selected' : ''}>Google Drive</option>
           </select>
-          <div class="hint">Storage needs to be enabled once in the Firebase console. If it is not, switch to Drive — that reuses the same service account the brochure system already uses.</div>
+          <div class="hint">Drive reuses the same service account the brochure system already uses, so nothing extra has to be enabled. Firebase Storage has to be switched on once in the Firebase console before it will work.</div>
         </div>
+        ${field('Drive folder id', 'driveFolderId', s.driveFolderId,
+          { placeholder: '1OuHgdyLyQCD…', hint: 'The folder attachments are filed into, as {financial year}/{entry}. Take it from the folder URL: drive.google.com/drive/folders/<b>THIS PART</b>.' })}
       </div>
 
       <div class="actions">

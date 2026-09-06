@@ -164,7 +164,8 @@ export function defaultSettings() {
     emailDigest: { enabled: true, to: [] },
     bankAccounts: [],
     bankDetails: { bankName: '', accountName: '', accountNo: '', ifsc: '', branch: '' },
-    attachmentBackend: 'storage',   // 'storage' | 'drive'
+    attachmentBackend: 'drive',     // 'storage' | 'drive'
+    driveFolderId: '',              // Drive folder that holds finance attachments
     openingPosted: false,
     columnMappings: {},
   };
