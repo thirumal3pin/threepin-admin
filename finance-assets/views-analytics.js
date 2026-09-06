@@ -16,7 +16,11 @@ import { stat, signed, empty, note, tag, table, seg, downloadCsv } from './ui.js
 
 let F = defaultFilters();
 
-const ORANGE = '#FE8D00', INK = '#111111', GREY = '#D9D9D9', RED = '#C0261B', LINE = '#E6E6E6', MUTED = '#6B6B6B';
+const ORANGE = '#FE8D00', INK = '#111111', GREY = '#D9D9D9', GREEN = '#147A3D', LINE = '#E6E6E6', MUTED = '#6B6B6B';
+
+// A phone gets a narrower drawing so bars and labels stay readable rather than the desktop
+// picture scaled down to a third of its size.
+const phone = () => typeof window !== 'undefined' && window.innerWidth < 600;
 const short = n => {
   const a = Math.abs(n);
   if (a >= 1e7) return (n / 1e7).toFixed(1).replace(/\.0$/, '') + 'Cr';
@@ -173,47 +177,50 @@ function kpi(label, value, delta, invert = false, hero = false) {
 
 function groupedBars(series, keys, lineKey, lineLabel, extraLine) {
   if (!series.length) return '<p class="small faint">Nothing in this range.</p>';
-  const W = 720, H = 250, padL = 44, padR = 16, top = 22, base = 196;
+  const W = phone() ? 380 : 720, H = 230, padL = phone() ? 38 : 44, padR = 12, top = 18, base = 196;
   const n = series.length;
   const slot = (W - padL - padR) / n;
-  const bw = Math.max(4, Math.min(28, (slot - 10) / keys.length));
+  const bw = Math.max(3, Math.min(28, (slot - 8) / keys.length));
   const vals = series.flatMap(p => keys.map(([k]) => p[k]));
   if (lineKey) vals.push(...series.map(p => Math.abs(p[lineKey])));
   if (extraLine) vals.push(...extraLine.map(p => Math.abs(p.balance)));
   const peak = Math.max(1, ...vals.map(Math.abs));
   const y = v => base - (v / peak) * (base - top);
-  const zero = base;
 
   const grid = [0.25, 0.5, 0.75, 1].map(f => `<line x1="${padL}" y1="${y(peak * f)}" x2="${W - padR}" y2="${y(peak * f)}" stroke="${LINE}" stroke-dasharray="2 3"/>
-    <text x="${padL - 6}" y="${y(peak * f) + 3}" text-anchor="end" font-size="9" fill="#949494">${short(peak * f)}</text>`).join('');
+    <text x="${padL - 5}" y="${y(peak * f) + 3}" text-anchor="end" font-size="9" fill="#949494">${short(peak * f)}</text>`).join('');
 
-  const bars = series.map((p, i) => keys.map(([k, color], j) => {
+  const bars = series.map((p, i) => keys.map(([k, color, label], j) => {
     const v = Math.max(0, p[k]);
     const x = padL + i * slot + (slot - keys.length * bw - (keys.length - 1) * 3) / 2 + j * (bw + 3);
-    return `<rect x="${x}" y="${y(v)}" width="${bw}" height="${Math.max(0, zero - y(v))}" rx="2" fill="${color}"><title>${esc(p.label)} — ${keys[j][2]}: ${esc(fmt(p[k]))}</title></rect>`;
+    return `<rect x="${x}" y="${y(v)}" width="${bw}" height="${Math.max(0, base - y(v))}" rx="2" fill="${color}"><title>${esc(p.label)} — ${esc(label)}: ${esc(fmt(p[k]))}</title></rect>`;
   }).join('')).join('');
 
-  const poly = (pts, color) => pts.length > 1 ? `<polyline points="${pts.map(([px, py]) => `${px},${py}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>` +
-    pts.map(([px, py, v, lbl]) => `<circle cx="${px}" cy="${py}" r="3" fill="${color}"><title>${esc(lbl)}: ${esc(fmt(v))}</title></circle>`).join('') : '';
   const cx = i => padL + i * slot + slot / 2;
+  const clampY = v => Math.min(base, Math.max(top, y(v)));
+  const poly = (pts, color, dashed) => pts.length > 1
+    ? `<polyline points="${pts.map(([px, py]) => `${px},${py}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2" ${dashed ? 'stroke-dasharray="4 3"' : ''}/>` +
+      pts.map(([px, py, v, lbl]) => `<circle cx="${px}" cy="${py}" r="3" fill="${color}"><title>${esc(lbl)}: ${esc(fmt(v))}</title></circle>`).join('')
+    : '';
 
   let lines = '';
-  if (lineKey) {
-    const pts = series.map((p, i) => [cx(i), Math.min(base, Math.max(top, y(p[lineKey]))), p[lineKey], p.label + ' — ' + lineLabel]);
-    lines += poly(pts, RED).replace(/stroke="#C0261B"/g, `stroke="${ORANGE}" stroke-dasharray="4 3"`).replace(/fill="#C0261B"/g, `fill="${ORANGE}"`);
-  }
-  if (extraLine) {
-    const pts = extraLine.map((p, i) => [cx(i), Math.min(base, Math.max(top, y(p.balance))), p.balance, p.label + ' — balance']);
-    lines += poly(pts, RED);
-  }
+  if (lineKey) lines += poly(series.map((p, i) => [cx(i), clampY(p[lineKey]), p[lineKey], p.label + ' — ' + lineLabel]), GREEN, true);
+  if (extraLine) lines += poly(extraLine.map((p, i) => [cx(i), clampY(p.balance), p.balance, p.label + ' — balance']), GREEN, false);
 
-  const labels = series.map((p, i) => `<text x="${cx(i)}" y="${base + 14}" text-anchor="middle" font-size="10" fill="${MUTED}">${esc(p.label)}</text>`).join('');
-  const legend = [...keys.map(([, c, l]) => [c, l]), ...(lineKey ? [[ORANGE, lineLabel + ' (line)']] : []), ...(extraLine ? [[RED, 'Balance (line)']] : [])]
-    .map(([c, l], i) => `<rect x="${padL + i * 130}" y="${H - 14}" width="10" height="10" rx="2" fill="${c}"/><text x="${padL + i * 130 + 14}" y="${H - 5}" font-size="10" fill="${MUTED}">${esc(l)}</text>`).join('');
+  // Too many periods for every label to fit: show every other one on a phone.
+  const step = phone() && n > 6 ? 2 : 1;
+  const labels = series.map((p, i) => i % step ? '' : `<text x="${cx(i)}" y="${base + 14}" text-anchor="middle" font-size="10" fill="${MUTED}">${esc(p.label)}</text>`).join('');
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
+  // The legend lives outside the SVG so it wraps on a narrow screen instead of overflowing.
+  const legend = [...keys.map(([, c, l]) => [c, l]),
+    ...(lineKey ? [[GREEN, lineLabel + ' (line)']] : []),
+    ...(extraLine ? [[GREEN, 'Balance (line)']] : [])]
+    .map(([c, l]) => `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};vertical-align:-1px"></span> ${esc(l)}</span>`).join(' &nbsp; ');
+
+  return `<svg viewBox="0 0 ${W} ${H - 18}" width="100%" role="img" preserveAspectRatio="xMidYMid meet">
     <title>${esc(keys.map(k => k[2]).join(' and '))} by period</title>
-    ${grid}<line x1="${padL}" y1="${base}" x2="${W - padR}" y2="${base}" stroke="${LINE}"/>${bars}${lines}${labels}${legend}</svg>`;
+    ${grid}<line x1="${padL}" y1="${base}" x2="${W - padR}" y2="${base}" stroke="${LINE}"/>${bars}${lines}${labels}</svg>
+    <p class="small muted" style="margin:6px 0 0">${legend}</p>`;
 }
 
 function hbars(rows, color) {
@@ -246,6 +253,12 @@ function dealBars(funnel) {
 // ═══════ ACTIONS ═══════
 
 if (typeof window !== 'undefined') {
+  let wasPhone = phone();
+  window.addEventListener('resize', () => {
+    if (phone() === wasPhone) return;
+    wasPhone = phone();
+    if (location.hash === '#analytics') window.fin.repaint();
+  });
   window.finAn = {
     set(k, v) { F[k] = v; window.fin.repaint(); },
     gran(v) { F.granularity = v; window.fin.repaint(); },

@@ -45,13 +45,22 @@ export function filterTxns(txns, f) {
   });
 }
 
-// The same range, one step earlier, for "compared with the previous period".
+// The same range, one step earlier, for "compared with the previous period". A range that
+// is whole calendar months steps back by months — October compares with September, not
+// with 31 August to 30 September — and anything else steps back by its length in days.
 export function previousRange(f) {
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const from = new Date(f.from + 'T00:00:00'), to = new Date(f.to + 'T00:00:00');
+  const lastOfMonth = d => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() === d.getDate();
+  if (from.getDate() === 1 && lastOfMonth(to)) {
+    const months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth()) + 1;
+    const pFrom = new Date(from.getFullYear(), from.getMonth() - months, 1);
+    const pTo = new Date(from.getFullYear(), from.getMonth(), 0);
+    return { ...f, from: iso(pFrom), to: iso(pTo) };
+  }
   const days = Math.max(1, Math.round((to - from) / 86400000) + 1);
   const pTo = new Date(from); pTo.setDate(pTo.getDate() - 1);
   const pFrom = new Date(pTo); pFrom.setDate(pFrom.getDate() - days + 1);
-  const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   return { ...f, from: iso(pFrom), to: iso(pTo) };
 }
 

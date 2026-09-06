@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../finance-assets/style.css"><title>Analytics preview</title></head>
+<body><main id="main" style="max-width:1080px;margin:0 auto;padding:20px"></main>
+<div class="ov" id="ov"></div><div class="toast" id="toast"></div>
+<script type="module">
+// The Analytics tab with four months of a plausible brokerage's books, no login and no
+// Firestore. Serve the repo root (python -m http.server 5199) and open
+// /tests/analytics-preview.html, or run tests/analytics-preview.mjs for screenshots.
+import { setState, blank, defaultSettings } from '../finance-assets/finance-core.js';
+import { renderAnalytics } from '../finance-assets/views-analytics.js';
+
+const s = blank();
+s.settings = { ...defaultSettings(), booksStartDate: '2026-06-01' };
+s.parties = [
+  { id: 'P1', name: 'Mr. Karthik', type: 'client' }, { id: 'P2', name: 'Mrs. Lakshmi', type: 'client' },
+  { id: 'P3', name: 'Balaji & Co', type: 'vendor' }, { id: 'P4', name: 'Meta', type: 'vendor' }, { id: 'P5', name: 'Priya', type: 'employee' },
+];
+s.deals = [
+  { id: 'D1', nickname: 'Karthik — Nungambakkam 2BHK', status: 'registered', expSeller: 0, expBuyer: 100000 },
+  { id: 'D2', nickname: 'Lakshmi — Velachery villa', status: 'registered', expSeller: 250000, expBuyer: 0 },
+  { id: 'D3', nickname: 'Anand — OMR plot', status: 'open', expSeller: 120000, expBuyer: 0 },
+];
+let no = 1;
+const T = (date, event, desc, lines) => ({ id: 'T' + no, no: no++, date, event, desc, lines,
+  totals: { dr: lines.reduce((a, l) => a + (l.dr || 0), 0), cr: lines.reduce((a, l) => a + (l.cr || 0), 0) },
+  meta: {}, attachments: [], auto: false, fy: '2026-27', createdBy: 'x', createdAt: 1 });
+s.txns = [
+  T('2026-06-01', 'funding', 'Share capital', [{ acc: '1000', dr: 400000 }, { acc: '3000', cr: 400000 }]),
+  T('2026-06-05', 'expense', 'Office rent — Jun', [{ acc: '5000', dr: 35000 }, { acc: '1000', cr: 35000 }]),
+  T('2026-06-28', 'salary', 'Salary — Priya', [{ acc: '5010', dr: 25000, party: 'P5' }, { acc: '1000', cr: 25000 }]),
+  T('2026-06-20', 'expense', 'Meta ads', [{ acc: '5090', dr: 12000 }, { acc: '1400', dr: 1080 }, { acc: '1401', dr: 1080 }, { acc: '2300', cr: 14160 }]),
+  T('2026-06-22', 'token', 'Token — Karthik', [{ acc: '1000', dr: 50000 }, { acc: '2100', cr: 50000, party: 'P1', deal: 'D1' }]),
+  T('2026-07-05', 'expense', 'Office rent — Jul', [{ acc: '5000', dr: 35000 }, { acc: '1000', cr: 35000 }]),
+  T('2026-07-10', 'invoice', 'Brokerage — Karthik', [{ acc: '4010', cr: 100000, deal: 'D1', party: 'P1' }, { acc: '2200', cr: 9000, deal: 'D1' }, { acc: '2201', cr: 9000, deal: 'D1' }, { acc: '2100', dr: 50000, party: 'P1', deal: 'D1' }, { acc: '1100', dr: 68000, party: 'P1', deal: 'D1' }]),
+  T('2026-07-18', 'dealpay', 'Payment — Karthik', [{ acc: '1000', dr: 68000 }, { acc: '1100', cr: 68000, party: 'P1', deal: 'D1' }]),
+  T('2026-07-25', 'expense', 'Meta ads', [{ acc: '5090', dr: 9000 }, { acc: '1400', dr: 810 }, { acc: '1401', dr: 810 }, { acc: '2300', cr: 10620 }]),
+  T('2026-07-28', 'salary', 'Salary — Priya', [{ acc: '5010', dr: 25000, party: 'P5' }, { acc: '1000', cr: 25000 }]),
+  T('2026-07-30', 'transfer', 'Pay card bill', [{ acc: '2300', dr: 24780 }, { acc: '1000', cr: 24780 }]),
+  T('2026-08-05', 'expense', 'Office rent — Aug', [{ acc: '5000', dr: 35000 }, { acc: '1000', cr: 35000 }]),
+  T('2026-08-12', 'bill', 'Title opinion — Balaji', [{ acc: '5120', dr: 15000 }, { acc: '1400', dr: 1350 }, { acc: '1401', dr: 1350 }, { acc: '2000', cr: 17700, party: 'P3' }]),
+  T('2026-08-14', 'dealcost', 'EC & patta — Lakshmi', [{ acc: '5045', dr: 8000, deal: 'D2' }, { acc: '1010', cr: 8000 }]),
+  T('2026-08-20', 'invoice', 'Brokerage — Lakshmi', [{ acc: '4000', cr: 250000, deal: 'D2', party: 'P2' }, { acc: '2200', cr: 22500, deal: 'D2' }, { acc: '2201', cr: 22500, deal: 'D2' }, { acc: '1100', dr: 295000, party: 'P2', deal: 'D2' }]),
+  T('2026-08-28', 'salary', 'Salary — Priya', [{ acc: '5010', dr: 25000, party: 'P5' }, { acc: '1000', cr: 25000 }]),
+  T('2026-09-02', 'dealpay', 'Payment — Lakshmi', [{ acc: '1000', dr: 150000 }, { acc: '1100', cr: 150000, party: 'P2', deal: 'D2' }]),
+  T('2026-09-05', 'expense', 'Office rent — Sep', [{ acc: '5000', dr: 35000 }, { acc: '1000', cr: 35000 }]),
+  T('2026-09-06', 'expense', 'Espresso', [{ acc: '5030', dr: 684 }, { acc: '1000', cr: 684 }]),
+  T('2026-09-15', 'otherinc', 'Valuation report', [{ acc: '1000', dr: 11800 }, { acc: '4020', cr: 10000, party: 'P1' }, { acc: '2200', cr: 900 }, { acc: '2201', cr: 900 }]),
+  T('2026-09-20', 'statutory', 'GST for Aug remitted', [{ acc: '2200', dr: 31500 }, { acc: '2201', dr: 31500 }, { acc: '1400', cr: 3240 }, { acc: '1401', cr: 3240 }, { acc: '1000', cr: 56520 }]),
+  T('2026-09-22', 'paybill', 'Paid Balaji & Co', [{ acc: '2000', dr: 17700, party: 'P3' }, { acc: '1000', cr: 17700 }]),
+  T('2026-09-28', 'salary', 'Salary — Priya', [{ acc: '5010', dr: 25000, party: 'P5' }, { acc: '1000', cr: 25000 }]),
+];
+setState(s);
+window.fin = { repaint: () => { document.getElementById('main').innerHTML = renderAnalytics(); }, openTxn() {}, go() {} };
+window.finDeals = { open() {} };
+window.fin.repaint();
+window.__ready = true;
+</script></body></html>
