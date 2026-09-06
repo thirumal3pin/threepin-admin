@@ -2,7 +2,7 @@
   "crons": [
     { "path": "/api/followup-digest", "schedule": "30 3 * * *" },
     { "path": "/api/dashboard-summary", "schedule": "0 16 * * *" },
-    { "path": "/api/finance-digest", "schedule": "30 2 * * *" }
+    { "path": "/api/finance", "schedule": "30 2 * * *" }
   ],
   "rewrites": [
     { "source": "/3pinfinance", "destination": "/3pinfinance.html" }

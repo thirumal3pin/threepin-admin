@@ -97,7 +97,7 @@ async function withDrive(run) {
   }
 }
 
-export async function POST(request) {
+export async function uploadPost(request) {
   const user = await verifyCrmUser(request);
   if (!user) return fail('auth', 'Not signed in', 401);
   if (!user.tenantId) return fail('auth', 'This account has no tenant assigned', 403);

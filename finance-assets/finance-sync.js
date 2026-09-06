@@ -381,7 +381,7 @@ export async function attachInvoicePdf(invoiceId, path, field = 'pdfPath') {
 // ═══════ ATTACHMENTS ═══════
 
 // Firebase Storage is the default. If the operator has never enabled it, Settings can flip
-// attachmentBackend to 'drive' and uploads route through api/finance-upload.js instead,
+// attachmentBackend to 'drive' and uploads route through api/finance?task=upload instead,
 // reusing the service account the brochure pipeline already uses.
 export async function uploadAttachment(file, txnId) {
   const s = getState();
@@ -402,7 +402,7 @@ export async function uploadAttachment(file, txnId) {
 async function uploadViaDrive(file, txnId) {
   const token = await window.financeAuth.getIdToken();
   const s = getState();
-  const callApi = (body) => fetch('/api/finance-upload', {
+  const callApi = (body) => fetch('/api/finance?task=upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
     body: JSON.stringify(body),
@@ -429,7 +429,7 @@ export async function deleteAttachment(att) {
     await deleteObject(storageRef(storage, att.path));
   } else {
     const token = await window.financeAuth.getIdToken();
-    await fetch('/api/finance-upload', {
+    await fetch('/api/finance?task=upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
       body: JSON.stringify({ action: 'delete', fileId: att.path }),

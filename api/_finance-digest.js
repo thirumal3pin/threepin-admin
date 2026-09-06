@@ -596,7 +596,7 @@ const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 // Triggered by Vercel Cron (see vercel.json) at 02:30 UTC = 08:00 IST daily.
-export async function GET(request) {
+export async function digestGet(request) {
   const auth = request.headers.get('authorization') || '';
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
@@ -612,7 +612,7 @@ export async function GET(request) {
 
 // Manual "Send now" from the finance page. ?force=weekly|monthly|renewals runs
 // one report on demand whatever day it is, so each can be tested end to end.
-export async function POST(request) {
+export async function digestPost(request) {
   try {
     const user = await verifyCrmUser(request);
     if (!user || user.tenantId !== TENANT_ID) {
