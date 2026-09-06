@@ -26,3 +26,11 @@ README.md
 # `vercel deploy` run from a working tree that has one lying around.
 *firebase-adminsdk*.json
 .env*
+
+# Internal to the finance build — the reference prototype, the build kit and the test
+# suite are working material, not part of the deployed site. Without these they would be
+# served as static files at their own URLs.
+reference/
+FINANCE/
+tests/
+storage.rules
