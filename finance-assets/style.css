@@ -194,7 +194,7 @@ main > * { animation: rise .18s ease-out both; }
   font: inherit; font-size: 10.5px; letter-spacing: .02em; color: var(--ink-3);
   min-height: 44px; padding: 0; position: relative;
 }
-.bottom button .ic { font-size: 17px; line-height: 1; }
+.bottom button .ic { font-size: 16px; line-height: 1; height: 18px; display: grid; place-items: center; }
 .bottom button.on { color: var(--ink); font-weight: 600; }
 .bottom button.on::after { content: ''; position: absolute; top: 0; left: 30%; right: 30%; height: 2px; background: var(--brand); border-radius: 0 0 2px 2px; }
 .bottom button.rec .ic {
@@ -472,18 +472,18 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
 @media (min-width: 860px) {
   .shell { display: grid; grid-template-columns: 224px 1fr; max-width: 1280px; margin: 0 auto; }
 
-  .side { display: block; position: sticky; top: var(--nav-h); align-self: start; height: calc(100vh - var(--nav-h)); overflow-y: auto; padding: var(--s5) var(--s3); border-right: 1px solid var(--line); }
+  .side { display: block; position: sticky; top: var(--nav-h); align-self: start; height: calc(100vh - var(--nav-h)); overflow-y: auto; padding: var(--s4) var(--s3) var(--s6); border-right: 1px solid var(--line); }
+  .side .eh { margin: var(--s5) 12px var(--s2); }
+  .side .eh:first-child { margin-top: var(--s2); }
   .side button {
-    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
-    border: 0; background: none; font: inherit; font-size: 14px; color: var(--ink-2);
-    padding: 9px 12px; border-radius: var(--r); cursor: pointer; margin-bottom: 1px; min-height: 40px;
+    display: flex; align-items: center; width: 100%; text-align: left;
+    border: 0; background: none; font: inherit; font-size: 14.5px; color: var(--ink-2);
+    padding: 8px 12px 8px 20px; border-radius: var(--r); cursor: pointer; margin-bottom: 1px; min-height: 38px;
     position: relative; transition: background .12s, color .12s;
   }
   .side button:hover { background: var(--card-2); color: var(--ink); }
-  .side button.on { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--line); }
-  .side button.on::before { content: ''; position: absolute; left: -12px; top: 10px; bottom: 10px; width: 2px; background: var(--brand); border-radius: 2px; }
-  .side .ic { width: 18px; text-align: center; color: var(--ink-3); }
-  .side button.on .ic { color: var(--brand); }
+  .side button.on { color: var(--ink); font-weight: 600; background: var(--card-2); }
+  .side button.on::before { content: ''; position: absolute; left: 8px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--brand); }
 
   .bottom { display: none; }
   .save-bar { display: none; }

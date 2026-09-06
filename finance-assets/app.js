@@ -34,24 +34,27 @@ import { renderAnalytics } from './views-analytics.js';
 //
 // Five tabs fit across the bottom bar on a phone; everything else lives behind "More".
 
+// Grouped the way the work is done. The side nav on a desktop is text only — a considered
+// interface does not need a glyph beside every word — and the groups carry the structure.
+// The phone tab bar keeps icons, because at that size they are the label.
 const NAV = [
-  ['overview', 'Overview', '◎'],
-  ['record', 'Record', '＋'],
-  ['txns', 'Transactions', '≡'],
-  ['deals', 'Deals', '◆'],
-  ['owed', 'Owed', '⇄'],
-  ['services', 'Services', '↻'],
-  ['loans', 'Loans', '％'],
-  ['assets', 'Assets', '▣'],
-  ['invoices', 'Invoices', '§'],
-  ['bank', 'Bank', '⌸'],
-  ['gst', 'GST', '∑'],
-  ['analytics', 'Analytics', '≋'],
-  ['reports', 'Reports', '◫'],
-  ['books', 'Books', '⊞'],
-  ['profile', 'Profile', '☖'],
-  ['settings', 'Settings', '⚙'],
-  ['guide', 'Guide', '?'],
+  ['overview', 'Overview', 'fa-solid fa-gauge-high', 'Daily'],
+  ['record', 'Record', 'fa-solid fa-plus', 'Daily'],
+  ['txns', 'Transactions', 'fa-solid fa-list', 'Daily'],
+  ['deals', 'Deals', 'fa-regular fa-handshake', 'Daily'],
+  ['owed', 'Owed', 'fa-solid fa-right-left', 'Daily'],
+  ['services', 'Services', 'fa-solid fa-rotate', 'Running'],
+  ['loans', 'Loans', 'fa-solid fa-percent', 'Running'],
+  ['assets', 'Assets', 'fa-regular fa-square', 'Running'],
+  ['invoices', 'Invoices', 'fa-regular fa-file-lines', 'Running'],
+  ['bank', 'Bank', 'fa-solid fa-building-columns', 'Running'],
+  ['gst', 'GST', 'fa-solid fa-stamp', 'Insight'],
+  ['analytics', 'Analytics', 'fa-solid fa-chart-column', 'Insight'],
+  ['reports', 'Reports', 'fa-regular fa-chart-bar', 'Insight'],
+  ['books', 'Books', 'fa-solid fa-book', 'Insight'],
+  ['profile', 'Profile', 'fa-regular fa-id-badge', 'Setup'],
+  ['settings', 'Settings', 'fa-solid fa-sliders', 'Setup'],
+  ['guide', 'Guide', 'fa-regular fa-circle-question', 'Setup'],
 ];
 
 const BOTTOM = ['overview', 'txns', 'record', 'deals', 'more'];
@@ -130,25 +133,27 @@ function go(next) {
 function repaint() {
   const s = getState();
 
-  document.getElementById('sidenav').innerHTML = NAV.map(([k, label, ic]) =>
-    `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">
-       <span class="ic" aria-hidden="true">${ic}</span>${esc(label)}</button>`).join('');
+  const groups = [...new Set(NAV.map(n => n[3]))];
+  document.getElementById('sidenav').innerHTML = groups.map(g => `
+    <div class="eh">${esc(g)}</div>
+    ${NAV.filter(n => n[3] === g).map(([k, label]) =>
+      `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">${esc(label)}</button>`).join('')}`).join('');
 
   document.getElementById('bottomnav').innerHTML = BOTTOM.map(k => {
     if (k === 'more') {
       const on = !BOTTOM.includes(view);
       return `<button type="button" class="${on ? 'on' : ''}" onclick="fin.openSheet()">
-                <span class="ic" aria-hidden="true">⋯</span>More</button>`;
+                <i class="ic fa-solid fa-ellipsis" aria-hidden="true"></i>More</button>`;
     }
     const [, label, ic] = NAV.find(n => n[0] === k);
     const isRec = k === 'record';
     return `<button type="button" class="${view === k ? 'on' : ''} ${isRec ? 'rec' : ''}" onclick="fin.go('${k}')">
-              <span class="ic" aria-hidden="true">${ic}</span>${esc(label)}</button>`;
+              <i class="ic ${ic}" aria-hidden="true"></i>${esc(label)}</button>`;
   }).join('');
 
   document.getElementById('sheetGrid').innerHTML = NAV.map(([k, label, ic]) =>
     `<button type="button" class="${view === k ? 'on' : ''}" onclick="fin.go('${k}')">
-       <span aria-hidden="true" style="font-size:17px">${ic}</span>${esc(label)}</button>`).join('');
+       <i class="${ic}" aria-hidden="true" style="font-size:16px"></i>${esc(label)}</button>`).join('');
 
   const main = document.getElementById('main');
 
@@ -308,6 +313,11 @@ function record() {
       <h1>Record what happened</h1>
       <p class="lead">Pick the thing that actually happened. The bookkeeping underneath is worked out for you,
       and you will see exactly what it does before anything is saved.</p>
+      <div class="field" style="max-width:420px">
+        <input type="search" id="actFind" placeholder="Find an action — rent, token, EMI…" aria-label="Find an action"
+          oninput="fin.findAction(this.value)" autocomplete="off">
+      </div>
+      <div id="chooser">
       ${CHOOSER.map(([group, items], gi) => `
         <div class="chooser-group">
           <div class="eh">${esc(group)}</div>
@@ -318,7 +328,9 @@ function record() {
                 ${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ''}
               </button>`).join('')}
           </div>
-        </div>`).join('')}`;
+        </div>`).join('')}
+      </div>
+      <p id="actNone" class="small faint" hidden>Nothing matches — try another word, or clear the box.</p>`;
   }
 
   const ev = EV[evKey];
@@ -887,6 +899,23 @@ window.fin = {
   go, repaint,
 
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
+
+  findAction(q) {
+    const needle = String(q || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#chooser .chooser-group').forEach(g => {
+      let any = false;
+      g.querySelectorAll('button').forEach(b => {
+        const hit = !needle || b.textContent.toLowerCase().includes(needle);
+        b.hidden = !hit;
+        if (hit) any = true;
+      });
+      g.hidden = !any;
+      if (any) shown++;
+    });
+    const none = document.getElementById('actNone');
+    if (none) none.hidden = shown > 0;
+  },
 
   pick(k) {
     if (k) startEvent(k);
