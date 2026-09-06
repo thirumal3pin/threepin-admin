@@ -671,6 +671,26 @@ const FAQ = [
     a: 'Nothing. It knows which months each asset and prepaid plan have already been processed for, so a second run posts no entries at all. It is safe to press if you are unsure.',
   },
   {
+    q: 'Where do I see what GST to pay this month?',
+    a: 'The <b>GST tab</b>. Pick the month and it shows the liability per head, the credit available, the set-off in the order the rules allow (IGST credit first, CGST against CGST, SGST against SGST — never across), and the cash due. <b>Pay GST</b> opens the payment already filled in. The ITC and GSTR-1 registers export as CSV for your CA.',
+  },
+  {
+    q: 'I entered GST on a purchase. Why is it marked "at risk"?',
+    a: 'A credit claim rests on a tax invoice from a registered vendor. Enter the <b>vendor GSTIN and invoice number</b> when you record the bill — that is what GSTR-2B matches against. Without them the credit is a figure in your books the government will never accept. Reverse the entry and record it again with the details.',
+  },
+  {
+    q: 'Can I invoice something that is not a deal?',
+    a: 'Yes. <b>Other income</b> with GST on and a client named raises a numbered tax invoice like a deal does, with its own SAC code (998311 for consultancy). Choose "Not yet — the client will pay later" and it becomes a receivable on the Owed tab.',
+  },
+  {
+    q: 'What happens to the invoice if I reverse a closed deal?',
+    a: 'A <b>credit note</b> is issued automatically against the original invoice number, because GST does not allow an invoice to simply disappear. Both appear on the Invoices tab and in the GSTR-1 register.',
+  },
+  {
+    q: 'The lawyer\'s bill had no GST. Do I still owe some?',
+    a: 'Under <b>reverse charge</b>, yes. Legal services from an advocate are taxed in the recipient\'s hands: choose "Reverse charge — yes" on the bill and the app books the tax as a liability you pay in cash with the return, and at the same time as your input credit. The vendor is owed only the bare fee.',
+  },
+  {
     q: 'Why does a client from Bengaluru still get CGST+SGST?',
     a: 'Because for brokerage the place of supply is where the <b>property</b> is, not where the client lives (IGST Act s.12(3)). A Chennai flat sold to a Bengaluru buyer is a Tamil Nadu supply. IGST only arises when the property itself is in another state — set that on the deal.',
   },

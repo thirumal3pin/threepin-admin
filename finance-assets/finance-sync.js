@@ -310,8 +310,12 @@ export async function reverse(txnId) {
   if (!t) throw new Error('Transaction not found');
   if (t.reversedBy) throw new Error('This entry has already been reversed');
 
+  // Reversing an invoiced entry has to issue a credit note against the original — GST does
+  // not allow an invoice to simply disappear.
+  const inv = getState().invoices.find(i => i.txnId === txnId && i.kind !== 'creditnote');
+
   return runTransaction(db, async tx => {
-    const { nos, patch } = await reserveNumbers(tx, 1);
+    const { settings, nos, patch } = await reserveNumbers(tx, 1);
     const rref = doc(col('txns'));
     tx.set(rref, stamp({
       date: today(),
@@ -321,8 +325,23 @@ export async function reverse(txnId) {
       reversalOf: t.id,
     }, nos[0]));
     tx.update(ref('txns', t.id), { reversedBy: rref.id });
+
+    let creditNoteNo = null;
+    if (inv) {
+      const n = num(settings.nextCreditNoteNo) || 1;
+      creditNoteNo = (settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0');
+      tx.set(doc(col('invoices')), {
+        kind: 'creditnote', against: inv.invoiceNo, againstId: inv.id, invoiceNo: creditNoteNo,
+        date: today(), partyId: inv.partyId, dealId: inv.dealId || null,
+        base: inv.base, gstRate: inv.gstRate, cgst: inv.cgst || 0, sgst: inv.sgst || 0, igst: inv.igst || 0,
+        total: inv.total, placeOfSupply: inv.placeOfSupply || null, sac: inv.sac || null,
+        desc: 'Credit note — ' + t.desc, txnId: rref.id, status: 'issued',
+        createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
+      });
+      patch.nextCreditNoteNo = n + 1;
+    }
     tx.set(root(), patch, { merge: true });
-    return { id: rref.id, no: nos[0] };
+    return { id: rref.id, no: nos[0], creditNoteNo };
   });
 }
 
@@ -595,15 +614,14 @@ export async function seedFinance() {
   if (!snap.exists()) {
     await setDoc(root(), { ...defaultSettings(), nextTxnNo: 1, seededAt: Date.now() });
   }
-  const accounts = await getDocs(query(col('accounts'), limit(1)));
-  if (accounts.empty) {
-    for (let i = 0; i < ACCOUNTS.length; i += 400) {
-      const batch = writeBatch(db);
-      for (const a of ACCOUNTS.slice(i, i + 400)) batch.set(ref('accounts', a.code), a);
-      await batch.commit();
-    }
+  // Always upsert the whole chart: an account added to the code later (the GST heads were)
+  // reaches an existing project the next time this runs, and nothing already there is lost.
+  for (let i = 0; i < ACCOUNTS.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const a of ACCOUNTS.slice(i, i + 400)) batch.set(ref('accounts', a.code), a, { merge: true });
+    await batch.commit();
   }
-  return { settings: !snap.exists(), accounts: accounts.empty ? ACCOUNTS.length : 0 };
+  return { settings: !snap.exists(), accounts: ACCOUNTS.length };
 }
 
 // ═══════ OPENING BALANCES ═══════

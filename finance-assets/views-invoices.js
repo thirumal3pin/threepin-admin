@@ -14,7 +14,10 @@ import * as SY from './finance-sync.js';
 // Paid / part-paid / unpaid is not stored — it is whatever the client still owes on that deal
 // right now. Storing it would mean two sources of truth that drift apart.
 function statusOf(inv) {
-  const outstanding = bal('1100', { party: inv.partyId, deal: inv.dealId });
+  if (inv.kind === 'creditnote') return { key: 'cn', label: 'Credit note', cls: 'rev' };
+  const outstanding = inv.dealId
+    ? bal('1100', { party: inv.partyId, deal: inv.dealId })
+    : bal('1100', { party: inv.partyId });
   if (outstanding <= 0.5) return { key: 'paid', label: 'Paid', cls: 'ok' };
   if (outstanding < num(inv.total) - 0.5) return { key: 'part', label: 'Part paid', cls: 'warn' };
   return { key: 'unpaid', label: 'Unpaid', cls: '' };
@@ -42,13 +45,14 @@ export function renderInvoices() {
   // A missing GSTIN or bank account does not block anything, but it does make the PDF wrong,
   // so it is surfaced here rather than discovered by a client.
   const gaps = modelFor(s.invoices[0]).missing || [];
-  const rows = [...s.invoices].sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  const total = rows.reduce((a, i) => a + num(i.total), 0);
-  const unpaid = rows.filter(i => statusOf(i).key !== 'paid').reduce((a, i) => a + num(i.total), 0);
+  const rows = [...s.invoices].sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.invoiceNo).localeCompare(String(a.invoiceNo)));
+  const isCn = i => i.kind === 'creditnote';
+  const total = rows.filter(i => !isCn(i)).reduce((a, i) => a + num(i.total), 0) - rows.filter(isCn).reduce((a, i) => a + num(i.total), 0);
+  const unpaid = rows.filter(i => !isCn(i) && statusOf(i).key !== 'paid').reduce((a, i) => a + num(i.total), 0);
 
   return `
     <h1>Invoices</h1>
-    <p class="lead">${rows.length} raised, ${fmt(total)} in total.</p>
+    <p class="lead">${rows.filter(i => !isCn(i)).length} invoices${rows.some(isCn) ? ` and ${rows.filter(isCn).length} credit note${rows.filter(isCn).length === 1 ? '' : 's'}` : ''}, ${fmt(total)} net. Deal brokerage and other income both raise invoices; reversing an invoiced entry issues a credit note against it.</p>
     ${gaps.length ? note(
     `<b>Your invoices are missing ${gaps.length === 1 ? 'a detail' : 'some details'}:</b> ${esc(gaps.join(', '))}.
        Fill these in on the <a href="#profile" onclick="fin.go('profile');return false">Profile tab</a> — every PDF you
@@ -59,10 +63,12 @@ export function renderInvoices() {
     rows.map(inv => {
       const st = statusOf(inv);
       return `<tr>
-          <td class="nowrap"><b>${esc(inv.invoiceNo || '—')}</b></td>
+          <td class="nowrap"><b>${esc(inv.invoiceNo || '—')}</b>
+            ${inv.kind === 'creditnote' ? `<br><span class="small faint">against ${esc(inv.against || '')}</span>` : inv.kind === 'other' ? tag('other income') : tag('brokerage')}
+            ${s.parties.find(p => p.id === inv.partyId)?.gstin ? tag('B2B', 'ok') : ''}</td>
           <td class="nowrap small">${esc(inv.date)}</td>
           <td>${esc(pname(inv.partyId))}</td>
-          <td class="small">${esc(dname(inv.dealId))}</td>
+          <td class="small">${inv.dealId ? esc(dname(inv.dealId)) : esc(inv.desc || '—')}</td>
           <td class="n">${fmt(inv.total)}
             <br><span class="small faint">${inv.igst ? 'IGST' : 'CGST+SGST'}</span></td>
           <td>${tag(st.label, st.cls)}</td>

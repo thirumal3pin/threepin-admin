@@ -14,7 +14,9 @@
 import {
   A, EXP, PAY_VIA, TDS_SECTIONS, num, today, ym, addMonths, mlabel, fmt, esc,
   getState, deal, pname, partySides, sideParty, bal, partyBalances,
-  schedule, prepaidLeft, splitGst,
+  schedule, prepaidLeft, splitGst, fyOf,
+  gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal,
+  GST_OUTPUT, GST_INPUT, GST_RCM,
 } from './finance-core.js';
 
 // ═══════ FIELD + PARTY HELPERS ═══════
@@ -58,13 +60,14 @@ const need = msg => ({ desc: '', lines: [], effects: [msg], incomplete: true });
 // The same five fields on every form where GST applies: the taxable amount, whether GST is
 // on, the rate, the tax and the total. Typing in any of them keeps the rest consistent — enter
 // an amount and a rate and the total fills in; correct the total to what the bill actually
-// says and the amount and tax adjust to match. Money OUT carries GST as input credit (1400);
-// money IN carries it as GST payable (2200).
+// says and the amount and tax adjust to match. Money OUT carries GST as input credit
+// (1400–1402 by head); money IN carries it as GST payable (2200–2202 by head).
 export function gstFields(amtLabel, o = {}) {
   const base = v => !o.show || o.show(v);
   const gstVisible = v => base(v) && (!o.gstShow || o.gstShow(v));
   const on = v => gstVisible(v) && v.gst === 'yes';
-  return [
+  const home = S().settings.state || 'Tamil Nadu';
+  const fields = [
     F('amt', amtLabel, 'number', { hint: o.hint, show: o.show }),
     F('gst', o.kind === 'output' ? 'Charge GST on this?' : 'GST on this?', 'select', {
       opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no', show: gstVisible,
@@ -75,6 +78,20 @@ export function gstFields(amtLabel, o = {}) {
       show: on, hint: 'Change either the amount or the total — the other one adjusts.',
     }),
   ];
+  // On a purchase the credit is only as good as the invoice behind it: the vendor's GSTIN and
+  // invoice number are what GSTR-2B matches on, and whether the vendor is in-state decides
+  // which heads the credit lands in.
+  if (o.kind !== 'output') {
+    fields.push(
+      F('gstType', 'GST charged as', 'select', {
+        opts: [['intra', `CGST + SGST — vendor in ${home}`], ['inter', 'IGST — vendor in another state']],
+        def: 'intra', show: on,
+      }),
+      F('vgstin', 'Vendor GSTIN', 'text', { show: on, hint: 'From the vendor\'s tax invoice. Without it the credit cannot be claimed.' }),
+      F('vinv', 'Vendor invoice no.', 'text', { show: on }),
+    );
+  }
+  return fields;
 }
 
 export function gstSync(k, v) {
@@ -103,10 +120,19 @@ export const BLOCKED_ITC = new Set(['5030', '5050']);
 
 // Where the tax on a purchase goes: the cost line itself when credit is blocked, 1400 when
 // it can be claimed. Returns the extra to add to the cost line and the 1400 line, if any.
-function inputTax(acc, gi) {
-  if (!gi) return { onCost: 0, credit: 0 };
-  return BLOCKED_ITC.has(acc) ? { onCost: gi, credit: 0 } : { onCost: 0, credit: gi };
+function inputTax(acc, gi, v = {}) {
+  if (!gi) return { onCost: 0, credit: 0, lines: [] };
+  if (BLOCKED_ITC.has(acc)) return { onCost: gi, credit: 0, lines: [] };
+  return { onCost: 0, credit: gi, lines: inputTaxLines(gi, (v.gstType || 'intra') !== 'inter') };
 }
+
+// Is a place of supply inside the company's own state? Unknown counts as in-state.
+const isIntra = place => {
+  const home = (S().settings.state || 'Tamil Nadu').trim().toLowerCase();
+  const p = String(place || '').trim().toLowerCase();
+  return !p || p === home;
+};
+const r2 = x => Math.round(num(x) * 100) / 100;
 
 export const EV = {};
 
@@ -221,7 +247,7 @@ EV.dealcost = {
 
     if (v.bear === 'self') {
       lines.push({ acc: v.acc || '5045', dr: amt, deal: d.id });
-      if (gi) lines.push({ acc: '1400', dr: gi });
+      if (gi) lines.push(...inputTaxLines(gi, (v.gstType || 'intra') !== 'inter'));
       eff.push(`Deal expense ${fmt(amt)} — reduces this deal's net and this month's profit.`);
       if (gi) eff.push(`${fmt(gi)} GST on it becomes input credit, not a cost.`);
     } else {
@@ -303,7 +329,7 @@ EV.invoice = {
     const acc = v.from === 'buyer' ? '4010' : '4000';
 
     const lines = [{ acc, cr: base, deal: d.id, party: pid }];
-    if (gst) lines.push({ acc: '2200', cr: gst, deal: d.id });
+    if (gst) lines.push(...outputTaxLines(gst, isIntra(d.propertyState), { deal: d.id }));
     if (tds) lines.push({ acc: '1150', dr: tds, party: pid, deal: d.id });
     if (adv) lines.push({ acc: '2100', dr: adv, party: pid, deal: d.id });
     if (rem > 0.5) {
@@ -418,7 +444,7 @@ EV.settle = {
       const g = keep - base;
       lines.push({ acc: '2100', dr: keep, party: pid, deal: d.id },
         { acc: '4030', cr: base, deal: d.id, party: pid });
-      if (g > 0.5) lines.push({ acc: '2200', cr: g, deal: d.id });
+      if (g > 0.5) lines.push(...outputTaxLines(g, isIntra(d.propertyState), { deal: d.id }));
       eff.push(`Keep ${fmt(keep)} → <b>income ${fmt(base)}</b> this month${g > 0.5 ? ' + ' + fmt(g) + ' GST' : ''}. No cash moves.`);
     }
     if (rest > 0.5) {
@@ -526,7 +552,7 @@ EV.subnew = {
     const lines = [];
     if (up) {
       lines.push({ acc: '1200', dr: amt });
-      if (gi) lines.push({ acc: '1400', dr: gi });
+      if (gi) lines.push(...inputTaxLines(gi, (v.gstType || 'intra') !== 'inter'));
       lines.push({ acc: v.via || '1000', cr: amt + gi });
     }
 
@@ -589,7 +615,7 @@ EV.confirmcharge = {
     const gi = gstOf(v);
     const diff = amt - num(s.monthly);
     const lines = [{ acc: '5080', dr: amt }];
-    if (gi) lines.push({ acc: '1400', dr: gi });
+    if (gi) lines.push(...inputTaxLines(gi, (v.gstType || 'intra') !== 'inter'));
     lines.push({ acc: s.via || '1000', cr: amt + gi });
     return {
       desc: `${s.name} — ${mlabel(month)}`,
@@ -743,9 +769,8 @@ EV.expense = {
     if (!amt) return need('Enter the amount.');
     if (!v.acc) return need('Pick a category.');
     const gi = gstOf(v);
-    const tax = inputTax(v.acc, gi);
-    const lines = [{ acc: v.acc, dr: amt + tax.onCost }];
-    if (tax.credit) lines.push({ acc: '1400', dr: tax.credit });
+    const tax = inputTax(v.acc, gi, v);
+    const lines = [{ acc: v.acc, dr: amt + tax.onCost }, ...tax.lines];
     lines.push({ acc: v.via || '1000', cr: amt + gi });
     return {
       desc: v.desc || A[v.acc].name,
@@ -764,14 +789,33 @@ EV.expense = {
 EV.bill = {
   title: 'Bill received — pay later', group: 'Money out',
   when: 'A vendor has billed you and you will pay later. The cost belongs to now and profit goes down now; the money leaving is a separate event — record it with "Pay a bill you recorded earlier" when it goes.',
-  fields: () => [
+  fields: v => [
     F('date', 'Bill date', 'date', { def: today() }),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor' }),
     F('desc', 'What for', 'text'),
     F('acc', 'Category', 'select', { opts: EXP.map(a => [a.code, a.name]) }),
-    ...gstFields('Bill amount (before GST)', { kind: 'input' }),
+    F('rcm', 'Reverse charge?', 'select', {
+      opts: [['no', 'No — the vendor charges GST, or none applies'], ['yes', 'Yes — I pay the GST myself (advocate, goods transport)']],
+      def: 'no',
+      hint: 'An advocate or a transporter does not charge you GST. You pay it to the government with the month\'s return, and it then becomes your input credit.',
+    }),
+    ...gstFields('Bill amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes' }),
+    F('rcmRate', 'GST % under reverse charge', 'number', { def: gstRate(), show: x => x.rcm === 'yes' }),
+    F('rcmType', 'Vendor is in', 'select', {
+      opts: [['intra', S().settings.state || 'Tamil Nadu'], ['inter', 'another state']], def: 'intra', show: x => x.rcm === 'yes',
+    }),
     F('tds', 'TDS section', 'select', { opts: TDS_SECTIONS.map(t => [t[0], t[1]]), show: () => tdsOn() }),
-    F('tdsrate', 'TDS %', 'number', { def: 0, show: () => tdsOn(), hint: 'Auto-filled from the section — verify rates with your CA' }),
+    F('tdsrate', 'TDS %', 'number', {
+      def: 0, show: () => tdsOn(),
+      hint: x => {
+        const pid = typeof x.vendor === 'string' ? x.vendor : null;
+        const st = S().settings;
+        const th = st.tdsThresholds?.[x.tds];
+        if (!pid || !th) return 'Auto-filled from the section — verify rates with your CA';
+        const fy = fyOf(x.date || today(), st.fyStartMonth);
+        return `Billed ${fmt(tdsFyTotal(pid, fy))} by this vendor in FY ${fy}. ${x.tds} applies once ${fmt(th)} is crossed in the year.`;
+      },
+    }),
   ],
   onchange: (k, v) => {
     gstSync(k, v);
@@ -783,21 +827,31 @@ EV.bill = {
     if (!v.acc) return need('Pick a category.');
     const pid = pidOf(v.vendor);
     if (!pid) return need('Name the vendor.');
-    const gi = gstOf(v);
-    const tax = inputTax(v.acc, gi);
+    const rcm = v.rcm === 'yes';
+    const gi = rcm ? 0 : gstOf(v);
+    const rcmTax = rcm ? r2(amt * num(v.rcmRate) / 100) : 0;
+    const tax = inputTax(v.acc, gi, v);
     const tds = tdsOn() ? Math.round(amt * num(v.tdsrate) / 100) : 0;
     const owed = amt + gi - tds;
-    const lines = [{ acc: v.acc, dr: amt + tax.onCost }];
-    if (tax.credit) lines.push({ acc: '1400', dr: tax.credit });
+
+    const lines = [{ acc: v.acc, dr: amt + tax.onCost }, ...tax.lines];
+    if (rcmTax) {
+      // Reverse charge: the tax is a liability to the government, paid in cash, and at the
+      // same time our own input credit. The vendor is owed only the bare amount.
+      lines.push(...inputTaxLines(rcmTax, (v.rcmType || 'intra') !== 'inter'));
+      lines.push({ acc: GST_RCM, cr: rcmTax });
+    }
     if (tds) lines.push({ acc: '2250', cr: tds });
     lines.push({ acc: '2000', cr: owed, party: pid });
+
     return {
       desc: `${v.desc || A[v.acc].name} — ${pnameOf(v.vendor)}`,
       lines,
       effects: [
         `Cost ${fmt(amt + tax.onCost)} this month — profit goes down by that. No cash has moved yet.`,
-        tax.credit ? `${fmt(gi)} GST on the bill becomes input credit.` : '',
+        tax.credit ? `${fmt(gi)} GST on the bill becomes input credit${v.gstType === 'inter' ? ' (IGST)' : ' (CGST + SGST)'}.` : '',
         tax.onCost ? `${fmt(gi)} GST cannot be claimed on ${A[v.acc].name.toLowerCase()} (blocked credit), so it is part of the cost.` : '',
+        rcmTax ? `${fmt(rcmTax)} GST under reverse charge — you pay it in cash with the month's return, and it is your input credit. It is not owed to the vendor and not a cost.` : '',
         `You owe ${esc(pnameOf(v.vendor))} ${fmt(owed)}. It shows on the Owed tab until you pay it.`,
         tds ? `${fmt(tds)} TDS withheld, to deposit by the 7th of next month.` : '',
       ].filter(Boolean),
@@ -883,7 +937,7 @@ EV.asset = {
     const gi = gstOf(v);
     const life = Math.max(1, num(v.life));
     const lines = [{ acc: '1300', dr: c }];
-    if (gi) lines.push({ acc: '1400', dr: gi });
+    if (gi) lines.push(...inputTaxLines(gi, (v.gstType || 'intra') !== 'inter'));
     lines.push({ acc: v.via || '1000', cr: c + gi });
     return {
       desc: `Asset — ${v.name}`,
@@ -1005,32 +1059,64 @@ EV.director = {
 
 EV.otherinc = {
   title: 'Other income', group: 'Money in',
-  when: 'Consultancy, a referral fee, interest — anything earned that is not a deal. Profit goes up by the amount.',
-  fields: () => [
+  when: 'Consultancy, a referral fee, interest — anything earned that is not a deal. Profit goes up by the amount. With GST on and a client named, a tax invoice is numbered and generated exactly as for a deal.',
+  fields: v => [
     F('date', 'Date', 'date', { def: today() }),
+    F('party', 'Client', 'party', { partyType: 'client', hint: 'Needed for an invoice, or if they are paying later.' }),
     F('desc', 'What', 'text'),
     F('acc', 'Type', 'select', {
-      opts: [['4040', 'Other income'], ['4020', 'Consultancy income'], ['4050', 'Bad debt recovered']],
-      def: '4040',
+      opts: [['4020', 'Consultancy income'], ['4040', 'Other income'], ['4050', 'Bad debt recovered']],
+      def: '4020',
     }),
     ...gstFields('Amount (before GST)', { kind: 'output' }),
-    F('via', 'Received into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+    F('sac', 'SAC code on the invoice', 'text', {
+      def: S().settings.sacCodes?.consultancy || '998311', show: x => x.gst === 'yes',
+      hint: '998311 is management consulting; 997221 is brokerage.',
+    }),
+    F('via', 'Received', 'select', {
+      opts: [['1000', 'Now — Bank / UPI'], ['1010', 'Now — Petty cash'], ['later', 'Not yet — the client will pay later']],
+      def: '1000',
+    }),
   ],
   onchange: gstSync,
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
     const gi = gstOf(v);
-    const lines = [{ acc: v.via || '1000', dr: amt + gi }, { acc: v.acc || '4040', cr: amt }];
-    if (gi) lines.push({ acc: '2200', cr: gi });
+    const total = amt + gi;
+    const pid = pidOf(v.party);
+    if (v.via === 'later' && !pid) return need('Name the client if they are paying later — the amount has to be owed by someone.');
+    if (gi && !pid) return need('Name the client — a GST invoice needs a recipient.');
+
+    // For a service the place of supply is the recipient's location (IGST Act s.12(2)) —
+    // unlike brokerage, which follows the property.
+    const st = S().settings;
+    const clientState = typeof v.party === 'string' ? S().parties.find(p => p.id === v.party)?.state : v.party?.state;
+    const pos = clientState || st.state;
+    const intra = isIntra(pos);
+
+    const lines = [];
+    if (v.via === 'later') lines.push({ acc: '1100', dr: total, party: pid });
+    else lines.push({ acc: v.via || '1000', dr: total });
+    lines.push({ acc: v.acc || '4020', cr: amt, ...(pid ? { party: pid } : {}) });
+    if (gi) lines.push(...outputTaxLines(gi, intra));
+    const split = gstHeads(gi, intra);
+
     return {
-      desc: v.desc || A[v.acc || '4040'].name,
+      desc: v.desc || A[v.acc || '4020'].name,
       lines,
       effects: [
         `Income ${fmt(amt)} this month — profit goes up by that.`,
-        gi ? `${fmt(gi)} GST collected on top — owed to the government, not yours.` : '',
-        `${fmt(amt + gi)} arrives in ${A[v.via || '1000'].name}.`,
+        gi ? `${fmt(gi)} GST charged (${intra ? 'CGST + SGST' : 'IGST'}) — owed to the government, not yours.` : '',
+        v.via === 'later' ? `${fmt(total)} is now owed by ${esc(pnameOf(v.party))}.` : `${fmt(total)} arrives in ${A[v.via || '1000'].name}.`,
+        gi ? 'A tax invoice will be numbered and generated.' : '',
       ].filter(Boolean),
+      invoice: gi ? {
+        kind: 'other', partyId: pid, dealId: null, base: amt, gstRate: num(v.gstRate),
+        cgst: split.cgst, sgst: split.sgst, igst: split.igst, total,
+        placeOfSupply: pos, sac: v.sac || st.sacCodes?.consultancy || '998311',
+        desc: v.desc || A[v.acc || '4020'].name, date: v.date || today(),
+      } : null,
     };
   },
 };
@@ -1216,43 +1302,84 @@ EV.transfer = {
 
 EV.statutory = {
   title: 'Pay GST / TDS / PF to government', group: 'Move money',
-  when: 'Remitting what you collected or withheld on someone else\'s behalf. Not an expense — you were only holding it.',
-  fields: () => [
-    F('date', 'Date', 'date', { def: today() }),
-    F('kind', 'Which', 'select', {
-      opts: [['gst', 'GST (net of input credit)'], ['tds', 'TDS'], ['pf', 'PF / ESI']], def: 'gst',
-    }),
-    F('amt', 'Paid from bank', 'number', {
-      hint: x => ({
-        gst: `GST payable ${fmt(bal('2200'))} · input credit available ${fmt(bal('1400'))}`,
-        tds: 'TDS payable ' + fmt(bal('2250')),
-        pf: 'Dues ' + fmt(bal('2550')),
-      }[x.kind || 'gst']),
-    }),
-    F('input', 'Input credit used', 'number', { def: 0, show: x => (x.kind || 'gst') === 'gst' }),
-    F('late', 'Interest / late fee', 'number', { def: 0 }),
-  ],
+  when: 'Remitting what you collected or withheld on someone else\'s behalf. Not an expense — you were only holding it. For GST the set-off is worked out the way GSTR-3B does it: IGST credit first, then CGST credit against CGST and SGST against SGST. What is left is paid in cash, per head.',
+  fields: v => {
+    const isGst = (v.kind || 'gst') === 'gst';
+    return [
+      F('date', 'Paid on', 'date', { def: today() }),
+      F('kind', 'Which', 'select', { opts: [['gst', 'GST — monthly return'], ['tds', 'TDS'], ['pf', 'PF / ESI']], def: 'gst' }),
+      F('month', 'For the month', 'month', { def: addMonths(ym(today()), -1), show: () => isGst }),
+      F('cgst', 'CGST paid in cash', 'number', { def: 0, show: () => isGst, hint: x => gstPayHint(x) }),
+      F('sgst', 'SGST paid in cash', 'number', { def: 0, show: () => isGst }),
+      F('igst', 'IGST paid in cash', 'number', { def: 0, show: () => isGst }),
+      F('rcm', 'Reverse-charge GST paid in cash', 'number', { def: 0, show: () => isGst, hint: 'Credit cannot be used against this.' }),
+      F('amt', 'Paid from bank', 'number', {
+        show: () => !isGst,
+        hint: x => ({ tds: 'TDS payable ' + fmt(bal('2250')), pf: 'Dues ' + fmt(bal('2550')) })[x.kind] || '',
+      }),
+      F('late', 'Interest / late fee', 'number', { def: 0 }),
+    ];
+  },
+  onchange: (k, v) => {
+    if ((v.kind || 'gst') !== 'gst') return;
+    if (k === 'month' || k === 'kind') {
+      const g = gstComputation(v.month || addMonths(ym(today()), -1));
+      v.cgst = g.setoff.payable.cgst;
+      v.sgst = g.setoff.payable.sgst;
+      v.igst = g.setoff.payable.igst;
+      v.rcm = g.rcmDue;
+    }
+  },
   build: v => {
-    const amt = num(v.amt);
-    const inp = num(v.input);
     const late = num(v.late);
-    if (!amt && !inp) return need('Enter what you paid.');
-    const acc = { gst: '2200', tds: '2250', pf: '2550' }[v.kind || 'gst'];
-    const lines = [{ acc, dr: amt + inp - late }];
-    if (inp) lines.push({ acc: '1400', cr: inp });
+    if ((v.kind || 'gst') === 'gst') {
+      const month = v.month || addMonths(ym(today()), -1);
+      const g = gstComputation(month);
+      const lines = [], eff = [];
+      // Credit utilisation per Rule 88A: each pair is a debit to the liability head and a
+      // credit to the input head it was drawn from.
+      for (const u of g.setoff.util) {
+        lines.push({ acc: GST_OUTPUT[u.to], dr: u.amt });
+        lines.push({ acc: GST_INPUT[u.from], cr: u.amt });
+      }
+      const cash = { cgst: num(v.cgst), sgst: num(v.sgst), igst: num(v.igst) };
+      for (const h of ['cgst', 'sgst', 'igst']) if (cash[h]) lines.push({ acc: GST_OUTPUT[h], dr: cash[h] });
+      const rcm = num(v.rcm);
+      if (rcm) lines.push({ acc: GST_RCM, dr: rcm });
+      const totalCash = cash.cgst + cash.sgst + cash.igst + rcm;
+      if (late) lines.push({ acc: '5160', dr: late });
+      if (totalCash + late > 0) lines.push({ acc: '1000', cr: totalCash + late });
+      if (!lines.length) return need(`Nothing to pay for ${mlabel(month)} — no liability outstanding and no credit to set off.`);
+
+      const liab = g.liability.cgst + g.liability.sgst + g.liability.igst;
+      const used = g.setoff.util.reduce((a, u) => a + u.amt, 0);
+      eff.push(`GSTR-3B for ${mlabel(month)}: liability ${fmt(liab)}, credit set off ${fmt(used)}, cash ${fmt(totalCash)}.`);
+      g.setoff.util.forEach(u => eff.push(`${fmt(u.amt)} ${u.from.toUpperCase()} credit used against ${u.to.toUpperCase()}.`));
+      if (rcm) eff.push(`${fmt(rcm)} reverse-charge GST paid in cash — credit cannot be used for it.`);
+      const carry = g.setoff.carry.cgst + g.setoff.carry.sgst + g.setoff.carry.igst;
+      if (carry > 0.5) eff.push(`${fmt(carry)} input credit carries forward to next month.`);
+      if (late) eff.push(`${fmt(late)} late fee is a real cost this month.`);
+      return { desc: `GST for ${mlabel(month)} remitted`, lines, effects: eff };
+    }
+    const amt = num(v.amt);
+    if (!amt) return need('Enter what you paid.');
+    const acc = { tds: '2250', pf: '2550' }[v.kind];
+    const lines = [{ acc, dr: amt }];
     if (late) lines.push({ acc: '5160', dr: late });
-    lines.push({ acc: '1000', cr: amt });
+    lines.push({ acc: '1000', cr: amt + late });
     return {
-      desc: `${(v.kind || 'gst').toUpperCase()} remitted`,
+      desc: `${v.kind.toUpperCase()} remitted`,
       lines,
-      effects: [
-        `Liability cleared by ${fmt(amt + inp - late)}.`,
-        inp ? `${fmt(inp)} settled using input credit rather than cash.` : '',
-        late ? `${fmt(late)} late fee is a real cost this month.` : '',
-      ].filter(Boolean),
+      effects: [`Liability cleared by ${fmt(amt)}.`, late ? `${fmt(late)} late fee is a real cost this month.` : ''].filter(Boolean),
     };
   },
 };
+
+function gstPayHint(x) {
+  const g = gstComputation(x.month || addMonths(ym(today()), -1));
+  const L = g.liability, C = g.credit, P = g.setoff.payable;
+  return `Liability C ${fmt(L.cgst)} · S ${fmt(L.sgst)} · I ${fmt(L.igst)}. Credit C ${fmt(C.cgst)} · S ${fmt(C.sgst)} · I ${fmt(C.igst)}. After set-off pay C ${fmt(P.cgst)} · S ${fmt(P.sgst)} · I ${fmt(P.igst)}.`;
+}
 
 EV.vendorrefund = {
   title: 'Vendor refunded you', group: 'Corrections',
@@ -1330,6 +1457,7 @@ export const CHOOSER = [
 // materialise before it calls build() for real.
 export const PARTY_FIELDS = {
   newdeal: ['seller', 'buyer'],
+  otherinc: ['party'],
   dealcost: ['vendor'],
   bill: ['vendor'],
   salary: ['emp'],

@@ -67,7 +67,7 @@ check('Bottom tab bar visible at phone width', await page.evaluate(() => getComp
 
 // ── every view at phone width ───────────────────────────────────────────────────
 section('Every view renders at 390px with no horizontal scroll');
-const VIEWS = ['overview', 'record', 'txns', 'owed', 'services', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
+const VIEWS = ['overview', 'record', 'txns', 'deals', 'gst', 'owed', 'services', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
 for (const v of VIEWS) {
   await page.evaluate(k => window.fin.go(k), v);
   await page.waitForTimeout(350);
@@ -143,7 +143,7 @@ const after = await root.collection('txns').get();
 check('Exactly ONE entry was created by the double click', after.size === before.txns + 1, `${after.size - before.txns} created`);
 const testTxn = after.docs.map(d => ({ id: d.id, ...d.data() })).find(t => t.desc === 'E2E rent with GST');
 check('Entry has an attachment record with a Drive file id', !!testTxn?.attachments?.[0]?.path, JSON.stringify(testTxn?.attachments?.[0] || null));
-check('Entry lines: 5000 dr 2000, 1400 dr 360, 1000 cr 2360', !!testTxn && JSON.stringify(testTxn.lines.map(l => [l.acc, l.dr || 0, l.cr || 0])) === JSON.stringify([['5000', 2000, 0], ['1400', 360, 0], ['1000', 0, 2360]]), JSON.stringify(testTxn?.lines));
+check('Entry lines: 5000 dr 2000, CGST 180, SGST 180, 1000 cr 2360', !!testTxn && JSON.stringify(testTxn.lines.map(l => [l.acc, l.dr || 0, l.cr || 0])) === JSON.stringify([['5000', 2000, 0], ['1400', 180, 0], ['1401', 180, 0], ['1000', 0, 2360]]), JSON.stringify(testTxn?.lines));
 
 // ── the drawer shows the preview ────────────────────────────────────────────────
 section('Transactions drawer');

@@ -10,7 +10,7 @@
 
 import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
-  pl, cashPosition, serviceRunRate, dname, pname,
+  pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -26,6 +26,8 @@ import { renderBank, mountBank } from './views-bank.js';
 import { renderReports, renderBooks } from './views-reports.js';
 import { renderSettings, mountSettings, renderProfile, mountProfile, renderOpening, mountOpening } from './views-admin.js';
 import { renderGuide } from './views-guide.js';
+import { renderDeals } from './views-deals.js';
+import { renderGst } from './views-gst.js';
 
 // ═══════ NAVIGATION ═══════
 //
@@ -35,12 +37,14 @@ const NAV = [
   ['overview', 'Overview', '◎'],
   ['record', 'Record', '＋'],
   ['txns', 'Transactions', '≡'],
+  ['deals', 'Deals', '◆'],
   ['owed', 'Owed', '⇄'],
   ['services', 'Services', '↻'],
   ['loans', 'Loans', '％'],
   ['assets', 'Assets', '▣'],
   ['invoices', 'Invoices', '§'],
   ['bank', 'Bank', '⌸'],
+  ['gst', 'GST', '∑'],
   ['reports', 'Reports', '◫'],
   ['books', 'Books', '⊞'],
   ['profile', 'Profile', '☖'],
@@ -48,7 +52,7 @@ const NAV = [
   ['guide', 'Guide', '?'],
 ];
 
-const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
+const BOTTOM = ['overview', 'txns', 'record', 'deals', 'more'];
 
 let view = 'overview';
 let ready = false;
@@ -159,6 +163,7 @@ function repaint() {
     invoices: renderInvoices, bank: renderBank,
     reports: renderReports, books: renderBooks,
     profile: renderProfile, settings: renderSettings, guide: renderGuide, opening: renderOpening,
+    deals: renderDeals, gst: renderGst,
   };
   main.innerHTML = (views[view] || overview)();
 
@@ -243,6 +248,27 @@ function overview() {
       ${stat('Active services', String(svc.active.length))}
     </div>
 
+    <h2>Coming up</h2>
+    <div class="grid g1" style="grid-template-columns:1fr 1fr">
+      <div class="card">
+        <h3>Compliance dates</h3>
+        <ul class="checklist">
+          ${complianceCalendar(today(), { tdsEnabled: s.settings.tdsEnabled, limit: 5 }).map(c => `
+            <li class="todo"><span class="mark" aria-hidden="true">${esc(c.date.slice(8))}<span class="small faint">/${esc(c.date.slice(5, 7))}</span></span>
+              <span><b>${esc(c.what)}</b><br><span class="small muted">${esc(c.note)}</span></span></li>`).join('')}
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Cash needed soon</h3>
+        ${(() => { const u = upcomingCash(today()); return u.items.length ? `
+          <ul class="checklist">${u.items.map(i => `<li class="todo"><span class="mark" aria-hidden="true">₹</span>
+            <span style="flex:1">${esc(i.what)}<br><span class="small muted">${esc(mlabel(i.when))}</span></span><span class="n">${fmt(i.amt)}</span></li>`).join('')}
+          </ul>
+          <p class="small ${u.total > u.cash ? 'neg' : 'muted'}" style="margin:10px 0 0"><b>${fmt(u.total)}</b> against ${fmt(u.cash)} in bank and box${u.total > u.cash ? ' — short' : ''}.</p>`
+          : '<p class="small faint" style="margin:0">Nothing known is due in the next month.</p>'; })()}
+      </div>
+    </div>
+
     <h2>Month-end</h2>
     <div class="card">
       <p class="small muted">Month-end posts the automatic entries — depreciation, and the monthly
@@ -324,6 +350,7 @@ function record() {
       <div class="preview">
         <div class="card">
           <div class="when">${ev.when}</div>
+          <div id="pvDup"></div>
           <h3>What saving this does</h3>
           <ul class="effects" id="pvEffects"></ul>
           <details class="journal">
@@ -536,6 +563,16 @@ function updatePreview() {
   const createsOnly = !lines.length && ((out.docs || []).length || (out.updates || []).length);
 
   effectsEl.innerHTML = (out.effects || []).map(e => `<li>${e}</li>`).join('');
+
+  // The same event, the same total, the same date, saved in the last day — almost always the
+  // second press of a button rather than the same thing happening twice.
+  const dupEl = document.getElementById('pvDup');
+  if (dupEl) {
+    const twin = lines.length ? getState().txns.find(t =>
+      t.event === evKey && !t.reversedBy && t.date === (vals.date || today()) &&
+      Math.abs(num(t.totals?.dr) - dr) < 0.5 && Date.now() - num(t.createdAt) < 86400000) : null;
+    dupEl.innerHTML = twin ? note(`<b>Looks like a duplicate.</b> Entry ${entryNo(twin)} — ${esc(twin.desc)}, ${fmt(twin.totals.dr)} — was saved ${Math.max(1, Math.round((Date.now() - twin.createdAt) / 60000))} min ago. Save only if it really happened twice.`) : '';
+  }
 
   journalEl.innerHTML = lines.length ? `
     <div class="tbl-wrap"><table>

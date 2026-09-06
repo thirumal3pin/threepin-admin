@@ -177,6 +177,28 @@ export function renderSettings() {
           ${field('Invoice prefix', 'invoicePrefix', s.invoicePrefix)}
           ${field('Next invoice number', 'nextInvoiceNo', s.nextInvoiceNo, { type: 'number', hint: 'Change only if you are continuing a sequence from elsewhere.' })}
         </div>
+        <div class="row2">
+          ${field('Credit note prefix', 'creditNotePrefix', s.creditNotePrefix)}
+          ${field('Next credit note number', 'nextCreditNoteNo', s.nextCreditNoteNo, { type: 'number' })}
+        </div>
+        <div class="row2">
+          ${field('SAC — brokerage', 'sacCodes.brokerage', s.sacCodes?.brokerage, { hint: '997221 is real-estate agency services.' })}
+          ${field('SAC — consultancy', 'sacCodes.consultancy', s.sacCodes?.consultancy, { hint: '998311 is management consulting.' })}
+        </div>
+      </div>
+
+      <h2>Income tax and TDS thresholds</h2>
+      <div class="card">
+        ${field('Income-tax rate % (for the estimate on Reports)', 'incomeTaxRate', s.incomeTaxRate, { type: 'number', hint: '25.168 is the s.115BAA rate: 22% + 10% surcharge + 4% cess. Your CA may set a different one.' })}
+        <p class="small muted">Annual amount paid to one vendor above which TDS applies. The bill form shows how much you have paid each vendor this year against these.</p>
+        <div class="row2">
+          ${field('194H commission', 'tdsThresholds.194H', s.tdsThresholds?.['194H'], { type: 'number' })}
+          ${field('194J professional fees', 'tdsThresholds.194J', s.tdsThresholds?.['194J'], { type: 'number' })}
+        </div>
+        <div class="row2">
+          ${field('194I rent', 'tdsThresholds.194I', s.tdsThresholds?.['194I'], { type: 'number' })}
+          ${field('194C contractor (aggregate)', 'tdsThresholds.194C', s.tdsThresholds?.['194C'], { type: 'number' })}
+        </div>
       </div>
 
       <h2>Attachments</h2>

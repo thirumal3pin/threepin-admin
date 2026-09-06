@@ -75,7 +75,8 @@ s.txns = [
     [{ acc: '5120', dr: 10000 }, { acc: '2000', cr: 10000, party: 'P2' }]),
   txn('T4', '2026-10-06', 'invoice', 'Brokerage — Rajan (Mr. Karthik)', [
     { acc: '4010', cr: 100000, deal: 'D1', party: 'P1' },
-    { acc: '2200', cr: 18000, deal: 'D1' },
+    { acc: '2200', cr: 9000, deal: 'D1' },
+    { acc: '2201', cr: 9000, deal: 'D1' },
     { acc: '1150', dr: 2000, party: 'P1', deal: 'D1' },
     { acc: '1100', dr: 116000, party: 'P1', deal: 'D1' },
   ]),

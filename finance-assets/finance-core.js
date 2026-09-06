@@ -20,12 +20,17 @@ export const ACCOUNTS = [
   ['1200', 'Prepaid expenses', 'asset'],
   ['1300', 'Fixed assets', 'asset'],
   ['1350', 'Accumulated depreciation', 'asset'],
-  ['1400', 'GST input credit', 'asset'],
+  ['1400', 'GST input credit — CGST', 'asset'],
+  ['1401', 'GST input credit — SGST', 'asset'],
+  ['1402', 'GST input credit — IGST', 'asset'],
   ['1500', 'Advances to staff', 'asset'],
 
   ['2000', 'Payable to vendors & partners', 'liability'],
   ['2100', 'Advances held from clients', 'liability'],
-  ['2200', 'GST payable', 'liability'],
+  ['2200', 'GST payable — CGST', 'liability'],
+  ['2201', 'GST payable — SGST', 'liability'],
+  ['2202', 'GST payable — IGST', 'liability'],
+  ['2205', 'GST payable — reverse charge', 'liability'],
   ['2250', 'TDS payable', 'liability'],
   ['2300', 'Credit card', 'liability'],
   ['2400', 'Loans', 'liability'],
@@ -160,6 +165,10 @@ export function defaultSettings() {
     tdsEnabled: false,
     tdsRates: { '194H': 2, '194J': 10, '194I': 10, '194C': 2 },
     invoicePrefix: '3PIN/26-27/', nextInvoiceNo: 1,
+    creditNotePrefix: '3PIN/CN/26-27/', nextCreditNoteNo: 1,
+    sacCodes: { brokerage: '997221', consultancy: '998311' },
+    incomeTaxRate: 25.168,          // s.115BAA: 22% + 10% surcharge + 4% cess
+    tdsThresholds: { '194H': 20000, '194J': 50000, '194I': 600000, '194C': 100000 },
     capitalisationThreshold: 5000,
     emailDigest: { enabled: true, to: [] },
     bankAccounts: [],
@@ -233,6 +242,8 @@ export function bal(code, f = {}) {
     if (f.upto && t.date > f.upto) continue;
     if (f.from && t.date < f.from) continue;
     if (f.month && ym(t.date) !== f.month) continue;
+    if (f.event && t.event !== f.event) continue;
+    if (f.notEvent && t.event === f.notEvent) continue;
     for (const l of t.lines) {
       if (l.acc !== code) continue;
       if (f.party && l.party !== f.party) continue;
@@ -412,7 +423,7 @@ export function cashPosition(upto) {
     vendorDues, tokens,
     receivable: bal('1100', { upto }),
     loans: bal('2400', { upto }),
-    gstDue: bal('2200', { upto }) - bal('1400', { upto }),
+    gstDue: gstOutputBal({ upto }) - gstInputBal({ upto }) + bal('2205', { upto }),
     tdsDue: bal('2250', { upto }),
   };
 }
@@ -541,4 +552,275 @@ export function splitGst(base, rate, clientState, companyState) {
   return intra
     ? { cgst: total / 2, sgst: total / 2, igst: 0, total }
     : { cgst: 0, sgst: 0, igst: total, total };
+}
+
+
+// ═══════ GST — HEADS, SET-OFF, RETURNS ═══════
+//
+// GST is three taxes, not one. Output tax is CGST+SGST on an in-state supply or IGST on an
+// inter-state one, and input credit arrives the same way from vendors. They live in separate
+// ledgers because GSTR-3B reports each head on its own, and because credit can only be used
+// across heads in one fixed order (Rule 88A). A single "GST" account would make the return
+// impossible to fill and the set-off impossible to check.
+
+export const GST_INPUT = { cgst: '1400', sgst: '1401', igst: '1402' };
+export const GST_OUTPUT = { cgst: '2200', sgst: '2201', igst: '2202' };
+export const GST_RCM = '2205';
+const HEADS = ['cgst', 'sgst', 'igst'];
+const r2 = x => Math.round(num(x) * 100) / 100;
+const pad2 = n => String(n).padStart(2, '0');
+const isoLocal = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+
+export const gstInputBal = (f = {}) => HEADS.reduce((a, h) => a + bal(GST_INPUT[h], f), 0);
+export const gstOutputBal = (f = {}) => HEADS.reduce((a, h) => a + bal(GST_OUTPUT[h], f), 0);
+
+// Split one tax figure into heads. In-state: half CGST, half SGST, the odd paisa to SGST.
+export function gstHeads(tax, intra) {
+  const t = r2(tax);
+  if (!intra) return { cgst: 0, sgst: 0, igst: t };
+  const half = r2(t / 2);
+  return { cgst: half, sgst: r2(t - half), igst: 0 };
+}
+
+export function outputTaxLines(tax, intra, extra = {}) {
+  const h = gstHeads(tax, intra);
+  return HEADS.filter(k => h[k] > 0.004).map(k => ({ acc: GST_OUTPUT[k], cr: h[k], ...extra }));
+}
+
+export function inputTaxLines(tax, intra, extra = {}) {
+  const h = gstHeads(tax, intra);
+  return HEADS.filter(k => h[k] > 0.004).map(k => ({ acc: GST_INPUT[k], dr: h[k], ...extra }));
+}
+
+// Rule 88A set-off. IGST credit is used first and against anything; CGST credit against CGST
+// then IGST; SGST credit against SGST then IGST; CGST and SGST never cross.
+export function gstSetOff(liability, credit) {
+  const L = { cgst: r2(liability.cgst), sgst: r2(liability.sgst), igst: r2(liability.igst) };
+  const C = { cgst: r2(credit.cgst), sgst: r2(credit.sgst), igst: r2(credit.igst) };
+  const util = [];
+  const use = (from, to) => {
+    const a = r2(Math.min(C[from], L[to]));
+    if (a <= 0.004) return;
+    C[from] = r2(C[from] - a);
+    L[to] = r2(L[to] - a);
+    util.push({ from, to, amt: a });
+  };
+  use('igst', 'igst'); use('igst', 'cgst'); use('igst', 'sgst');
+  use('cgst', 'cgst'); use('cgst', 'igst');
+  use('sgst', 'sgst'); use('sgst', 'igst');
+  return { util, payable: L, carry: C };
+}
+
+// Debit-minus-credit movement on an account within a month, optionally leaving one kind of
+// event out — the remittance itself must not count as that month's liability.
+function movement(code, month, notEvent) {
+  let s = 0;
+  for (const t of S.txns) {
+    if (ym(t.date) !== month) continue;
+    if (notEvent && t.event === notEvent) continue;
+    for (const l of t.lines) if (l.acc === code) s += num(l.dr) - num(l.cr);
+  }
+  return s;
+}
+
+// Mirrors BLOCKED_ITC in finance-events.js: categories whose GST can never be claimed.
+const BLOCKED = new Set(['5030', '5050']);
+
+// Everything GSTR-3B needs for one month, and the set-off the remittance should use.
+//
+// Liability and credit are the balances as at the month's end, so an earlier month left
+// unpaid is still owed. A remittance for this month is normally posted in the next one, so
+// any statutory entry tagged with this month is subtracted whatever its date — that is what
+// makes paying the same month twice show a zero.
+export function gstComputation(month) {
+  const end = month + '-31';
+  const output = {}, availed = {}, liability = {}, credit = {};
+  for (const h of HEADS) {
+    output[h] = r2(-movement(GST_OUTPUT[h], month, 'statutory'));
+    availed[h] = r2(movement(GST_INPUT[h], month, 'statutory'));
+    liability[h] = r2(bal(GST_OUTPUT[h], { upto: end, notEvent: 'statutory' }));
+    credit[h] = r2(bal(GST_INPUT[h], { upto: end, notEvent: 'statutory' }));
+  }
+  let rcmDue = r2(bal(GST_RCM, { upto: end, notEvent: 'statutory' }));
+  const rcmMonth = r2(-movement(GST_RCM, month, 'statutory'));
+
+  // Remittances already made — for this month, or for earlier months (dated up to the end
+  // of this one) — come off the balances.
+  for (const t of S.txns) {
+    if (t.event !== 'statutory') continue;
+    const forMonth = t.meta?.month;
+    const counts = forMonth ? forMonth <= month : t.date <= end;
+    if (!counts) continue;
+    for (const l of t.lines) {
+      for (const h of HEADS) {
+        if (l.acc === GST_OUTPUT[h]) liability[h] = r2(liability[h] - num(l.dr) + num(l.cr));
+        if (l.acc === GST_INPUT[h]) credit[h] = r2(credit[h] - num(l.cr) + num(l.dr));
+      }
+      if (l.acc === GST_RCM) rcmDue = r2(rcmDue - num(l.dr) + num(l.cr));
+    }
+  }
+  for (const h of HEADS) { liability[h] = Math.max(0, liability[h]); credit[h] = Math.max(0, credit[h]); }
+  rcmDue = Math.max(0, rcmDue);
+
+  let blocked = 0;
+  for (const t of S.txns) {
+    if (ym(t.date) !== month) continue;
+    const m = t.meta || {};
+    if (m.gst === 'yes' && BLOCKED.has(m.acc)) blocked += num(m.gstAmt);
+  }
+  const setoff = gstSetOff(liability, credit);
+  const cash = r2(HEADS.reduce((a, h) => a + setoff.payable[h], 0) + rcmDue);
+  return { month, output, availed, liability, credit, rcmMonth, rcmDue, blocked: r2(blocked), setoff, cash };
+}
+
+// Outward register for GSTR-1: every invoice and credit note of the month.
+export function gstr1Rows(month) {
+  return S.invoices
+    .filter(i => ym(i.date) === month)
+    .map(i => {
+      const p = S.parties.find(x => x.id === i.partyId);
+      const cn = i.kind === 'creditnote';
+      const sign = cn ? -1 : 1;
+      return {
+        type: cn ? 'Credit note' : (p?.gstin ? 'B2B' : 'B2C'),
+        no: i.invoiceNo, date: i.date, party: p?.name || '', gstin: p?.gstin || '',
+        placeOfSupply: i.placeOfSupply || S.settings.state, sac: i.sac || S.settings.sacCode,
+        taxable: sign * num(i.base), rate: num(i.gstRate),
+        cgst: sign * num(i.cgst), sgst: sign * num(i.sgst), igst: sign * num(i.igst),
+        total: sign * num(i.total), against: i.against || '',
+      };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || String(a.no).localeCompare(String(b.no)));
+}
+
+// Inward register: every purchase carrying GST, and what each credit claim rests on. A claim
+// needs a tax invoice from a registered vendor — without the GSTIN and invoice number it is
+// a figure in the books that GSTR-2B will never match.
+const ITC_EVENTS = new Set(['expense', 'bill', 'dealcost', 'asset', 'subnew', 'confirmcharge']);
+export function itcRegister(month) {
+  const rows = [];
+  for (const t of S.txns) {
+    if (ym(t.date) !== month || !ITC_EVENTS.has(t.event)) continue;
+    const m = t.meta || {};
+    const rcm = m.rcm === 'yes';
+    if (m.gst !== 'yes' && !rcm) continue;
+    const heads = {};
+    for (const h of HEADS) {
+      heads[h] = r2(t.lines.filter(l => l.acc === GST_INPUT[h]).reduce((a, l) => a + num(l.dr) - num(l.cr), 0));
+    }
+    const blocked = BLOCKED.has(m.acc) && !rcm;
+    const vendorLine = t.lines.find(l => l.acc === '2000' && l.party);
+    const vendor = vendorLine ? (S.parties.find(p => p.id === vendorLine.party)?.name || '') : (m.vendor || '');
+    const tax = rcm ? heads.cgst + heads.sgst + heads.igst : num(m.gstAmt);
+    rows.push({
+      no: t.no, date: t.date, desc: t.desc, vendor, gstin: m.vgstin || '', invoice: m.vinv || '',
+      taxable: num(m.amt), tax: r2(tax), ...heads, blocked, rcm,
+      eligible: !blocked && (rcm || (!!m.vgstin && !!m.vinv)),
+      reason: blocked ? 'Blocked under s.17(5) — part of the cost'
+        : rcm ? 'Reverse charge — pay in cash with the return, then claim'
+          : (!m.vgstin || !m.vinv) ? 'Vendor GSTIN or invoice no. missing — claim at risk' : '',
+    });
+  }
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || num(a.no) - num(b.no));
+}
+
+// ═══════ TDS THRESHOLDS ═══════
+
+// Total billed by one vendor this financial year — the figure the s.194 thresholds test.
+export function tdsFyTotal(partyId, fy) {
+  let s = 0;
+  for (const t of S.txns) {
+    if (t.event !== 'bill' || t.fy !== fy) continue;
+    if (!t.lines.some(l => l.acc === '2000' && l.party === partyId)) continue;
+    s += num(t.meta?.amt);
+  }
+  return s;
+}
+
+// ═══════ COMPLIANCE CALENDAR ═══════
+
+// The next filing and payment dates, computed rather than typed, so the Overview always
+// shows what is actually coming rather than a list that goes stale. ROC dates depend on the
+// AGM and are shown as the usual latest dates.
+export function complianceCalendar(from, opts = {}) {
+  const base = new Date((from || today()) + 'T00:00:00');
+  const out = [];
+  const push = (d, what, note) => { if (d >= base) out.push({ date: isoLocal(d), what, note }); };
+  const monthName = d => d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+  const prev = d => monthName(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  const y = base.getFullYear(), mo = base.getMonth();
+  for (let k = 0; k < 4; k++) {
+    const d = new Date(y, mo + k, 1);
+    push(new Date(d.getFullYear(), d.getMonth(), 11), 'GSTR-1', `Outward supplies for ${prev(d)}`);
+    push(new Date(d.getFullYear(), d.getMonth(), 20), 'GSTR-3B + GST payment', `For ${prev(d)}`);
+    if (opts.tdsEnabled) push(new Date(d.getFullYear(), d.getMonth(), 7), 'TDS deposit', `Deducted in ${prev(d)}`);
+  }
+  const fyY = mo >= 3 ? y : y - 1;
+  [[fyY, 5, 15, '15%'], [fyY, 8, 15, '45%'], [fyY, 11, 15, '75%'], [fyY + 1, 2, 15, '100%']]
+    .forEach(([yy, m, d, pct]) => push(new Date(yy, m, d), 'Advance tax', `${pct} of the year's estimated tax`));
+  if (opts.tdsEnabled) {
+    [[fyY, 6, 31], [fyY, 9, 31], [fyY + 1, 0, 31], [fyY + 1, 4, 31]]
+      .forEach(([yy, m, d]) => push(new Date(yy, m, d), 'TDS return (26Q)', 'Quarterly'));
+  }
+  push(new Date(fyY + 1, 9, 31), 'Income-tax return', `Company return for FY ${fyY}-${String(fyY + 1).slice(2)}`);
+  push(new Date(fyY + 1, 9, 29), 'ROC — AOC-4', 'Financial statements; 30 days from the AGM');
+  push(new Date(fyY + 1, 10, 28), 'ROC — MGT-7', 'Annual return; 60 days from the AGM');
+  return out.sort((a, b) => a.date.localeCompare(b.date)).slice(0, opts.limit || 6);
+}
+
+// ═══════ WHAT NEEDS CASH SOON ═══════
+
+// The next month's known outgoings, set against what is in the bank and the box.
+export function upcomingCash(fromDate) {
+  const from = fromDate || today();
+  const month = ym(from), next = addMonths(month, 1);
+  const items = [];
+  for (const l of S.loans) {
+    if (l.status !== 'active') continue;
+    const due = (l.schedule || []).find(x => !(l.paid || []).includes(x.n));
+    if (due && due.month <= next) items.push({ what: `EMI ${due.n}/${l.n} — ${l.lender}`, amt: due.emi, when: due.month });
+  }
+  for (const s of S.subs) {
+    if (s.status !== 'active') continue;
+    if (s.payMode === 'upfront' && s.end && s.end <= next) items.push({ what: `${s.name} renews`, amt: s.amount, when: s.end });
+    if (s.payMode === 'monthly') items.push({ what: `${s.name}`, amt: s.monthly, when: next });
+  }
+  const vendor = bal('2000', { upto: from });
+  if (vendor > 0.5) items.push({ what: 'Vendor bills outstanding', amt: vendor, when: month });
+  const g = gstComputation(month);
+  if (g.cash > 0.5) items.push({ what: `GST for ${mlabel(month)} (after set-off)`, amt: g.cash, when: next });
+  const tds = bal('2250', { upto: from });
+  if (tds > 0.5) items.push({ what: 'TDS to deposit', amt: tds, when: next });
+  const total = r2(items.reduce((a, i) => a + num(i.amt), 0));
+  return { items, total, cash: bal('1000', { upto: from }) + bal('1010', { upto: from }) };
+}
+
+// ═══════ RECEIVABLES AGEING ═══════
+
+export function agedReceivables(asOf) {
+  const at = asOf || today();
+  const buckets = { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+  const per = partyBalances('1100', { upto: at });
+  for (const [pid, amt] of Object.entries(per)) {
+    if (amt <= 0.5) continue;
+    const dates = S.txns
+      .filter(t => t.date <= at && t.lines.some(l => l.acc === '1100' && l.party === pid && num(l.dr) > 0))
+      .map(t => t.date).sort();
+    const days = dates[0] ? Math.round((new Date(at) - new Date(dates[0])) / 86400000) : 0;
+    const b = days <= 30 ? '0-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '90+';
+    buckets[b] += amt;
+  }
+  return buckets;
+}
+
+// ═══════ TAX PROVISION ═══════
+
+// A private company under s.115BAA pays 22% + 10% surcharge + 4% cess = 25.168%. The rate
+// lives in Settings so the CA can change it. This is an estimate for the owner, not the
+// computation the return will use — that adds back disallowances and uses tax depreciation.
+export function taxProvision(profit, rate) {
+  const r = num(rate ?? S.settings.incomeTaxRate) || 25.168;
+  const pbt = num(profit);
+  const tax = pbt > 0 ? r2(pbt * r / 100) : 0;
+  return { pbt, rate: r, tax, pat: r2(pbt - tax) };
 }

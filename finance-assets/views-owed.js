@@ -5,9 +5,9 @@
 // in, so there is exactly one place in the app where money is recorded.
 
 import {
-  fmt, esc, num, today, getState, bal, partyBalances, pname, deal,
+  fmt, esc, num, today, getState, bal, partyBalances, pname, deal, agedReceivables,
 } from './finance-core.js';
-import { empty, note, tag, table, daysAgo } from './ui.js';
+import { stat, empty, note, tag, table, daysAgo } from './ui.js';
 
 // Which deal and which side of it a party sits on, so a button can pre-fill the Record form.
 // A client can appear on several deals; the one with an outstanding balance is the one meant.
@@ -78,8 +78,15 @@ function sectionReceivable(rows) {
     .map(([id, amt]) => ({ id, amt, since: oldestOpen(id, '1100') }))
     .sort((a, b) => (a.since || '9999').localeCompare(b.since || '9999'));
 
+  const buckets = agedReceivables(today());
   return `
     <h2>Clients owe you</h2>
+    <div class="grid g3">
+      ${stat('0–30 days', fmt(buckets['0-30']))}
+      ${stat('31–60 days', fmt(buckets['31-60']), { cls: buckets['31-60'] > 0.5 ? 'neg' : '' })}
+      ${stat('61–90 days', fmt(buckets['61-90']), { cls: buckets['61-90'] > 0.5 ? 'neg' : '' })}
+      ${stat('Over 90 days', fmt(buckets['90+']), { cls: buckets['90+'] > 0.5 ? 'neg' : '', sub: buckets['90+'] > 0.5 ? 'Consider writing off' : '' })}
+    </div>
     <p class="small muted">Oldest first — that is the order worth chasing in.</p>
     ${table(
     `<th>Client</th><th class="n">Owes</th><th class="n">Waiting</th><th></th>`,

@@ -307,8 +307,8 @@ function buildWeekly(state, names, ist) {
   const lastMonth = addMonths(ist.month, -1);
   const w = {
     cash,
-    gstPayable: bal('2200', { upto: todayIso }),
-    gstInput: bal('1400', { upto: todayIso }),
+    gstPayable: ['2200', '2201', '2202', '2205'].reduce((a, c) => a + bal(c, { upto: todayIso }), 0),
+    gstInput: ['1400', '1401', '1402'].reduce((a, c) => a + bal(c, { upto: todayIso }), 0),
     overdue: overdueClients(state, names, todayIso),
     bills: vendorBillsDue(state, names, todayIso, addDaysIso(todayIso, BILLS_LOOKAHEAD_DAYS)),
     renewals: renewingSubs(state, todayIso, d => d >= 0 && d <= RENEWAL_LOOKAHEAD_DAYS),

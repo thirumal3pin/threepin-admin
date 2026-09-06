@@ -146,8 +146,8 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   const rate = num(inv.gstRate ?? st.gstRate) || 18;
 
   const item = {
-    desc: 'Brokerage / consultancy services',
-    sac: st.sacCode || '997221',
+    desc: inv.desc || 'Brokerage / consultancy services',
+    sac: inv.sac || st.sacCode || '997221',
     taxable,
   };
 
@@ -191,7 +191,9 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
 
   return {
     company,
-    placeOfSupply, invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
+    placeOfSupply,
+    docType: inv.kind === 'creditnote' ? 'CREDIT NOTE' : 'TAX INVOICE',
+    against: inv.against || '', invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
     totalWords: words(total),
     bank, missing,
   };
@@ -252,7 +254,7 @@ export async function renderInvoicePdf(model) {
   font('bold', 16);
   put(company.name, M, 14);
   font('bold', 13);
-  put('TAX INVOICE', R, 13, { align: 'right' });
+  put(m.docType || 'TAX INVOICE', R, 13, { align: 'right' });
   font('normal', 7.5);
   put('Original for recipient', R, 18.5, { align: 'right' });
 
@@ -298,6 +300,7 @@ export async function renderInvoicePdf(model) {
   meta('Invoice no.', m.invoiceNo);
   meta('Date', dmy(m.date));
   meta('Place of supply', m.placeOfSupply);
+  if (m.against) meta('Against invoice', m.against);
 
   y = Math.max(ly, ry) + 4;
 

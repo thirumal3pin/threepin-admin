@@ -6,7 +6,7 @@
 
 import {
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
-  pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname,
+  pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -85,6 +85,18 @@ export function renderReports() {
       ${stat('Profit', signed(p.profit), { raw: true, hero: true, sub: periodLabel })}
       ${stat('Margin', p.ti ? Math.round((p.profit / p.ti) * 100) + '%' : '—')}
     </div>
+
+    ${(() => { const t = taxProvision(p.profit); return `
+    <h2>After tax</h2>
+    <div class="card">
+      <div class="tbl-wrap"><table>
+        <tbody>
+          <tr><td>Profit before tax</td><td class="n">${signed(t.pbt)}</td></tr>
+          <tr><td>Estimated income tax @ ${t.rate}%<br><span class="small faint">s.115BAA rate from Settings — an estimate, not the return</span></td><td class="n">${fmt(t.tax)}</td></tr>
+          <tr><td><b>Profit after tax</b></td><td class="n"><b>${signed(t.pat)}</b></td></tr>
+        </tbody>
+      </table></div>
+    </div>`; })()}
 
     <h2>Last six months</h2>
     ${trendChart()}

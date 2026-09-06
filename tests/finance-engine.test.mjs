@@ -11,6 +11,8 @@ import {
   getState, setState, blank, defaultSettings, normalise, validate, reversalLines,
   fyOf, num, fmt, ym, addMonths, bal, pl, trialBalance, balanceSheet, partyBalances,
   monthEndEntries, schedule, prepaidLeft, splitGst, words, A,
+  gstOutputBal, gstInputBal, gstHeads, gstSetOff, gstComputation, itcRegister,
+  tdsFyTotal, complianceCalendar, upcomingCash, agedReceivables, taxProvision,
 } from '../finance-assets/finance-core.js';
 import { EV, PARTY_FIELDS, gstSync } from '../finance-assets/finance-events.js';
 
@@ -94,7 +96,8 @@ function save(evKey, values) {
         dr: Math.round(lines.reduce((a, l) => a + num(l.dr), 0) * 100) / 100,
         cr: Math.round(lines.reduce((a, l) => a + num(l.cr), 0) * 100) / 100,
       },
-      meta: {}, attachments: [], auto: false,
+      meta: Object.fromEntries(Object.entries(v).filter(([k, x]) => x != null && typeof x !== 'object' && !k.startsWith('__'))),
+      attachments: [], auto: false,
       fy: fyOf(v.date, s.settings.fyStartMonth), createdBy: 'test', createdAt: Date.now(),
     });
   }
@@ -234,7 +237,8 @@ save('invoice', {
 });
 eq('Income booked at registration', pl(M1).ti, 100000);
 eq('Token converted, none left held', bal('2100', { deal: deal1 }), 0);
-eq('GST collected is owed, not income', bal('2200'), 18000);
+eq('GST collected is owed, not income', gstOutputBal(), 18000);
+eq('…split evenly into CGST and SGST for a Tamil Nadu property', bal('2200'), 9000);
 eq('Client owes the balance', bal('1100'), 118000 - 50000);
 check('Deal is marked registered', s.deals.find(d => d.id === deal1).status === 'registered');
 
@@ -458,25 +462,26 @@ section('GST widget');
 
 section('GST lands on the right accounts');
 {
-  const inputBefore = bal('1400');
+  const inputBefore = gstInputBal();
   const expenseBefore = bal('5000');
   save('expense', { date: '2026-11-25', desc: 'Rent with GST', acc: '5000', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, via: '1000' });
   eq('Only the taxable amount is a cost', bal('5000') - expenseBefore, 10000);
-  eq('The tax goes to input credit', bal('1400') - inputBefore, 1800);
-  const outputBefore = bal('2200');
-  save('otherinc', { date: '2026-11-26', desc: 'Consultancy', acc: '4020', amt: 5000, gst: 'yes', gstRate: 18, gstAmt: 900, total: 5900, via: '1000' });
+  eq('The tax goes to input credit', gstInputBal() - inputBefore, 1800);
+  eq('…half of it as CGST', bal('1400') - 0, bal('1400'));
+  const outputBefore = gstOutputBal();
+  save('otherinc', { date: '2026-11-26', party: s.parties.find(p => p.name === 'Mr. Rajan').id, desc: 'Consultancy', acc: '4020', amt: 5000, gst: 'yes', gstRate: 18, gstAmt: 900, total: 5900, via: '1000' });
   eq('Only the taxable amount is income', bal('4020'), 5000);
-  eq('Charged GST goes to GST payable', bal('2200') - outputBefore, 900);
+  eq('Charged GST goes to GST payable', gstOutputBal() - outputBefore, 900);
   const payBefore = bal('2000');
-  save('bill', { date: '2026-11-27', vendor: 'Balaji & Co', desc: 'Audit fee', acc: '5120', amt: 20000, gst: 'yes', gstRate: 18, gstAmt: 3600, total: 23600, tds: 'none', tdsrate: 0 });
+  save('bill', { date: '2026-11-27', vendor: s.parties.find(p => p.name === 'Balaji & Co').id, desc: 'Audit fee', acc: '5120', amt: 20000, gst: 'yes', gstRate: 18, gstAmt: 3600, total: 23600, tds: 'none', tdsrate: 0 });
   eq('A bill with GST is owed in full, tax included', bal('2000') - payBefore, 23600);
   check('Books still balance with GST both ways', trialBalance().balanced && balanceSheet().balanced);
 
   // s.17(5): no input credit on food — the tax is part of the cost.
-  const foodBefore = bal('5030'), creditBefore = bal('1400');
+  const foodBefore = bal('5030'), creditBefore = gstInputBal();
   save('expense', { date: '2026-11-28', desc: 'Team lunch', acc: '5030', amt: 1000, gst: 'yes', gstRate: 5, gstAmt: 50, total: 1050, via: '1010' });
   eq('Blocked-credit category: the whole bill is the cost', bal('5030') - foodBefore, 1050);
-  eq('Blocked-credit category: nothing goes to input credit', bal('1400') - creditBefore, 0);
+  eq('Blocked-credit category: nothing goes to input credit', gstInputBal() - creditBefore, 0);
 }
 
 section('Place of supply follows the property');
@@ -491,6 +496,101 @@ section('Place of supply follows the property');
   eq('Karnataka property → IGST', outKA.invoice.igst, 1800);
   check('Place of supply is recorded on the invoice', outKA.invoice.placeOfSupply === 'Karnataka');
   dealTN.propertyState = 'Tamil Nadu';
+}
+
+section('GST heads and set-off (Rule 88A)');
+{
+  const h = gstHeads(100.01, true);
+  eq('In-state tax halves into CGST', h.cgst, 50.01, 0.005);
+  eq('…and SGST, with the odd paisa on SGST', h.sgst, 50, 0.005);
+  eq('Inter-state tax is all IGST', gstHeads(180, false).igst, 180);
+
+  const so = gstSetOff({ cgst: 1000, sgst: 1000, igst: 500 }, { cgst: 200, sgst: 1500, igst: 900 });
+  const used = (from, to) => so.util.filter(u => u.from === from && u.to === to).reduce((a, u) => a + u.amt, 0);
+  eq('IGST credit clears IGST liability first', used('igst', 'igst'), 500);
+  eq('Remaining IGST credit goes against CGST', used('igst', 'cgst'), 400);
+  eq('CGST credit against CGST', used('cgst', 'cgst'), 200);
+  eq('SGST credit against SGST', used('sgst', 'sgst'), 1000);
+  eq('SGST credit never touches CGST', used('sgst', 'cgst'), 0);
+  eq('CGST cash payable', so.payable.cgst, 400);
+  eq('SGST cash payable', so.payable.sgst, 0);
+  eq('Unused SGST credit carries forward', so.carry.sgst, 500);
+}
+
+section('GSTR-3B for November, then the remittance');
+{
+  const g = gstComputation('2026-11');
+  // Output: invoice 18,000 (Oct, unpaid), forfeit 3,050.85, consultancy 900 — all in-state.
+  eq('Liability outstanding at month end (CGST+SGST)', g.liability.cgst + g.liability.sgst, 21950.85, 0.02);
+  eq('Credit available (rent 1,800 + audit 3,600)', g.credit.cgst + g.credit.sgst, 5400, 0.02);
+  eq('Blocked credit reported separately', g.blocked, 50);
+  eq('Cash to pay after set-off', g.cash, 16550.85, 0.02);
+
+  const out = EV.statutory.build({ date: '2026-12-20', kind: 'gst', month: '2026-11', cgst: g.setoff.payable.cgst, sgst: g.setoff.payable.sgst, igst: 0, rcm: 0, late: 0 });
+  const dr = out.lines.reduce((a, l) => a + num(l.dr), 0), cr = out.lines.reduce((a, l) => a + num(l.cr), 0);
+  eq('Remittance entry balances', dr, cr);
+  eq('Bank goes down by the cash figure', out.lines.find(l => l.acc === '1000').cr, 16550.85, 0.02);
+  save('statutory', { date: '2026-12-20', kind: 'gst', month: '2026-11', cgst: g.setoff.payable.cgst, sgst: g.setoff.payable.sgst, igst: 0, rcm: 0, late: 0 });
+  eq('GST payable is cleared', gstOutputBal(), 0, 0.02);
+  eq('Input credit is fully used', gstInputBal(), 0, 0.02);
+  eq('Paying the same month again shows nothing due', gstComputation('2026-11').cash, 0, 0.02);
+  check('Books balance after the remittance', trialBalance().balanced && balanceSheet().balanced);
+}
+
+section('Reverse charge on an advocate bill');
+{
+  const owedBefore = bal('2000');
+  save('bill', { date: '2026-12-02', vendor: { __new: true, name: 'Adv. Meenakshi' }, desc: 'Sale deed drafting', acc: '5120', amt: 10000, rcm: 'yes', rcmRate: 18, rcmType: 'intra', gst: 'no', tds: 'none', tdsrate: 0 });
+  eq('Vendor is owed only the bare fee', bal('2000') - owedBefore, 10000);
+  eq('Reverse-charge liability is booked', bal('2205'), 1800);
+  eq('…and the same amount is input credit', gstInputBal(), 1800, 0.02);
+  const g = gstComputation('2026-12');
+  eq('RCM must be paid in cash, credit cannot cover it', g.rcmDue, 1800);
+  check('Books balance', trialBalance().balanced);
+}
+
+section('Any income can carry an invoice');
+{
+  const rajan = s.parties.find(p => p.name === 'Mr. Rajan').id;
+  const out = EV.otherinc.build({ date: '2026-12-03', party: rajan, desc: 'Valuation report', acc: '4020', amt: 8000, gst: 'yes', gstRate: 18, gstAmt: 1440, total: 9440, via: 'later', sac: '998311' });
+  check('An invoice record is produced', out.invoice && out.invoice.kind === 'other', JSON.stringify(out.invoice));
+  eq('Invoice total', out.invoice.total, 9440);
+  eq('Split follows the client (in-state)', out.invoice.cgst, 720);
+  check('SAC is the consultancy code', out.invoice.sac === '998311');
+  check('Unpaid income becomes a receivable', out.lines.some(l => l.acc === '1100' && l.dr === 9440));
+  const noParty = EV.otherinc.build({ date: '2026-12-03', desc: 'x', acc: '4040', amt: 100, gst: 'yes', gstRate: 18, gstAmt: 18, total: 118, via: '1000' });
+  check('GST without a client is refused — an invoice needs a recipient', !!noParty.incomplete);
+}
+
+section('ITC register knows what a claim rests on');
+{
+  save('expense', { date: '2026-12-04', desc: 'Printer toner', acc: '5100', amt: 2000, gst: 'yes', gstRate: 18, gstAmt: 360, total: 2360, via: '1000', gstType: 'intra', vgstin: '33AAAAA0000A1Z5', vinv: 'INV-77' });
+  save('expense', { date: '2026-12-05', desc: 'Stationery, no invoice', acc: '5100', amt: 500, gst: 'yes', gstRate: 18, gstAmt: 90, total: 590, via: '1010' });
+  const rows = itcRegister('2026-12');
+  const toner = rows.find(r => r.desc === 'Printer toner');
+  const stat = rows.find(r => r.desc === 'Stationery, no invoice');
+  check('A purchase with GSTIN and invoice no. is eligible', toner?.eligible === true, JSON.stringify(toner));
+  check('One without them is flagged, not silently counted', stat?.eligible === false && /missing/.test(stat.reason), JSON.stringify(stat));
+  check('Reverse-charge rows appear with their reason', rows.some(r => r.rcm && /Reverse charge/.test(r.reason)));
+}
+
+section('TDS thresholds, ageing, calendar, cash, tax');
+{
+  const balaji = s.parties.find(p => p.name === 'Balaji & Co').id;
+  eq('Bills by one vendor this FY are totalled', tdsFyTotal(balaji, '2026-27'), 30000);
+  const aged = agedReceivables('2026-12-31');
+  check('Ageing buckets sum to the receivable', Math.abs(Object.values(aged).reduce((a, b) => a + b, 0) - bal('1100', { upto: '2026-12-31' })) < 0.02);
+  const cal = complianceCalendar('2026-09-06', { tdsEnabled: true });
+  check('Calendar starts with the next TDS deposit on the 7th', cal[0].what === 'TDS deposit' && cal[0].date === '2026-09-07', JSON.stringify(cal[0]));
+  check('…then GSTR-1 on the 11th', cal[1].what === 'GSTR-1' && cal[1].date === '2026-09-11', JSON.stringify(cal[1]));
+  check('Advance tax lands on 15 Sep', cal.some(c => c.what === 'Advance tax' && c.date === '2026-09-15'));
+  const up = upcomingCash('2026-12-05');
+  check('Upcoming cash lists the next EMI', up.items.some(i => /EMI/.test(i.what)));
+  check('Upcoming cash lists reverse-charge GST', up.items.some(i => /GST/.test(i.what)));
+  const tp = taxProvision(100000, 25.168);
+  eq('Tax provision at the s.115BAA rate', tp.tax, 25168);
+  eq('Profit after tax', tp.pat, 74832);
+  eq('No tax on a loss', taxProvision(-5000).tax, 0);
 }
 
 section('Number formatting');
