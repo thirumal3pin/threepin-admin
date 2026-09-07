@@ -164,7 +164,7 @@ try {
   await page.waitForTimeout(500);
   let txt = await mainText();
   check('Services shows the service with the new expectation from December', /E2E Claude/.test(txt) && /10,000 from Dec 2026/.test(txt), txt.slice(0, 400));
-  check('November shows as billed but unpaid, with the variance and reason', /4,320 — unpaid/.test(txt) && /\+₹2,520/.test(txt) && /prorated/i.test(txt), JSON.stringify([/4,320 — unpaid/.test(txt), /\+₹2,520/.test(txt), /prorated/i.test(txt)]) + ' ' + (txt.match(/Nov 2026.{0,160}/)?.[0] || ''));
+  check('November shows as billed but unpaid, with the variance and reason', /4,320 — not paid yet/.test(txt) && /\+₹2,520/.test(txt) && /prorated/i.test(txt), JSON.stringify([/4,320 — not paid yet/.test(txt), /\+₹2,520/.test(txt), /prorated/i.test(txt)]) + ' ' + (txt.match(/Nov 2026.{0,160}/)?.[0] || ''));
   await page.screenshot({ path: `${SHOTS}m-services.png`, fullPage: true });
 
   await page.evaluate(() => window.fin.go('owed'));

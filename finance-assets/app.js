@@ -11,7 +11,7 @@
 import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
-openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
+  bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   setDisplayCurrency, displayCurrency,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
