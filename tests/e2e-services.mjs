@@ -203,7 +203,7 @@ try {
   await page.waitForSelector('#f_a1');
   await page.fill('#f_a1', '999999');
   await page.waitForTimeout(200);
-  check('Petty cash beyond the box is refused', /box only holds/.test(await errText('a1')), await errText('a1'));
+  check('Petty cash beyond the box is refused', /petty cash only holds/i.test(await errText('a1')), await errText('a1'));
   check('Second voucher row appears once the first has a figure', await page.$('#f_c1') !== null && await page.$('#f_a2') !== null);
 
   // ═══════ 7. Direction cues on the chooser ═══════

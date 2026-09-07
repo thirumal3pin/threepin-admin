@@ -381,4 +381,38 @@ section('Reporting reads the plan in force and each due date');
   check('Service variance groups by the reason given', sv.rows.length > 0 && Object.keys(sv.byReason).length > 0, JSON.stringify(sv.byReason));
 }
 
+section('A bill blocks a reversal only while a payment still stands against it');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: 'Owner', amt: 100000 });
+  save('bill', {
+    date: '2026-09-02', vendor: { __new: true, name: 'Reversal Test Co', type: 'vendor' },
+    desc: 'Signage', acc: '5100', amt: 5000, gst: 'no', rcm: 'no', tds: 'none', tdsrate: 0,
+  });
+  const vend = party('Reversal Test Co');
+  const billTxn = g.txns.at(-1).id;
+  const theBill = g.bills.at(-1);
+  const payTxn = save('paybill', { date: '2026-09-10', party: vend, amt: 5000, via: '1000', useAdvance: 'no' });
+  refuses('A bill with a payment against it cannot be reversed',
+    () => reverse(billTxn), 'reverse the payment first');
+  reverse(payTxn);
+  check('The bill reopens when the payment is undone', theBill.status === 'open' && near(theBill.paid, 0), JSON.stringify(theBill));
+  reverse(billTxn);
+  check('…and now the bill itself can be reversed, which voids it', theBill.status === 'void', theBill.status);
+  eq('Nothing is owed to that vendor any more', bal('2000', { party: vend }), 0);
+
+  // A month paid on the spot creates a bill that is born paid, with no separate payment to
+  // undo — reversing it must take the bill with it in one step.
+  save('subnew', {
+    date: '2026-09-01', name: 'Straight-through', vendor: { __new: true, name: 'SaaS Co', type: 'vendor' },
+    payMode: 'monthly', billing: 'auto', amt: 1000, via: '1000',
+  });
+  const sub2 = byName(g.subs, 'Straight-through');
+  const paidTxn = save('confirmcharge', { sub: sub2.id, month: '2026-09', date: '2026-09-05', result: 'paid', via: '1000', amt: 1000, gst: 'no', rcm: 'no' });
+  const bornPaid = g.bills.at(-1);
+  check('The bill is born paid, with no allocation behind it', bornPaid.status === 'paid' && (bornPaid.allocations || []).length === 0);
+  reverse(paidTxn);
+  check('Reversing it voids the bill in one step', bornPaid.status === 'void', bornPaid.status);
+}
+
 report();

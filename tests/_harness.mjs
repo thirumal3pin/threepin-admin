@@ -235,7 +235,8 @@ export function reverse(txnId) {
   const t = s.txns.find(x => x.id === txnId);
   if (!t) throw new Error('Transaction not found');
   if (t.reversedBy) throw new Error('This entry has already been reversed');
-  const settled = s.bills.find(b => b.txnId === txnId && b.status !== 'void' && (b.allocations || []).some(a => num(a.amt) > 0));
+  const settled = s.bills.find(b => b.txnId === txnId && b.status !== 'void'
+    && (b.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005);
   if (settled) throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
   const rid = nid('TX');
   const lines = normalise(reversalLines(t.lines));

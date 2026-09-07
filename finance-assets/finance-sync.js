@@ -398,7 +398,8 @@ export async function reverse(txnId) {
   // open on the Owed tab.
   const madeSnap = await getDocs(query(col('bills'), where('txnId', '==', txnId)));
   const madeBills = madeSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.status !== 'void');
-  const settled = madeBills.find(b => (b.allocations || []).some(a => num(a.amt) > 0));
+  const stillSettled = b => (b.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005;
+  const settled = madeBills.find(stillSettled);
   if (settled) {
     throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
   }
