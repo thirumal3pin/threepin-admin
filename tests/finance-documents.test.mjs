@@ -115,6 +115,19 @@ eq('Variance against the 10,000 expected', claude.charges['2026-12'].variance, -
 
 // ═══════ 2. A PLAN CHANGE WITH NO BILL YET ═══════
 
+section('An annual plan from a vendor abroad — reverse charge on the upfront payment');
+{
+  const rcmBefore = bal(GST_RCM), itcBefore = bal('1402'), prepaidBefore = bal('1200');
+  save('subnew', {
+    date: '2026-09-02', name: 'Google Workspace', plan: 'Business', vendor: { __new: true, name: 'Google', type: 'vendor' },
+    payMode: 'upfront', amt: 12000, months: 12, via: '1000', rcm: 'yes', rcmRate: 18, rcmType: 'inter',
+  });
+  eq('Prepaid carries the bare amount', bal('1200') - prepaidBefore, 12000);
+  eq('IGST under reverse charge is input credit', bal('1402') - itcBefore, 2160);
+  eq('…and a liability to pay in cash', bal(GST_RCM) - rcmBefore, 2160);
+  eq('Only the bare amount left the bank for the vendor', bal('1000'), 300000 - 8000 - 3600 - 12000);
+}
+
 section('Changing a plan ahead of time, without a bill');
 save('subnew', {
   date: '2026-09-01', name: 'Zoho CRM', plan: 'Standard', vendor: { __new: true, name: 'Zoho', type: 'vendor' },

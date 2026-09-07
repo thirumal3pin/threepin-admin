@@ -747,10 +747,11 @@ EV.subnew = {
       opts: [['auto', 'Auto-charged to a card / bank'], ['invoice', 'Invoiced, and I pay it']], def: 'auto',
       show: x => x.payMode !== 'upfront',
     }),
+    ...rcmFields(x => x.payMode === 'upfront'),
     ...gstFields('Amount', {
       kind: 'input',
       hint: x => x.payMode === 'upfront' ? 'Total paid upfront, before GST' : 'Expected per month, before GST (pay-as-you-go: your best estimate)',
-      gstShow: x => x.payMode === 'upfront',
+      gstShow: x => x.payMode === 'upfront' && x.rcm !== 'yes',
     }),
     F('months', 'Term (months)', 'number', { def: 12, show: x => x.payMode === 'upfront' }),
     F('via', 'Charged to', 'select', { opts: PAY_VIA, def: '1000' }),
@@ -761,7 +762,7 @@ EV.subnew = {
     ...(String(v.name || '').trim() ? [] : [err('name', 'Name the service')]),
     ...partyReq(v, 'vendor', 'Name the vendor — every bill is raised against them'),
     ...posAmt(v),
-    ...(v.payMode === 'upfront' ? [...gstChecks(v), ...(num(v.months) >= 1 ? [] : [err('months', 'Term must be at least one month')])] : []),
+    ...(v.payMode === 'upfront' ? [...(v.rcm === 'yes' ? [] : gstChecks(v)), ...(num(v.months) >= 1 ? [] : [err('months', 'Term must be at least one month')])] : []),
     ...(v.payMode === 'upfront' && v.via === '1010' && num(v.amt) + gstOf(v) > bal('1010') + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010'))}`)] : []),
   ],
   build: v => {
@@ -771,12 +772,14 @@ EV.subnew = {
     const up = v.payMode === 'upfront';
     const m = up ? Math.max(1, num(v.months)) : 1;
     const monthly = up ? r2(amt / m) : amt;
-    const gi = up ? gstOf(v) : 0;
+    const rcm = up ? rcmLines(amt, v) : { tax: 0, lines: [] };
+    const gi = up && v.rcm !== 'yes' ? gstOf(v) : 0;
     const start = ym(v.date || today());
     const lines = [];
     if (up) {
       lines.push({ acc: '1200', dr: amt });
       if (gi) lines.push(...inputTaxLines(gi, (v.gstType || 'intra') !== 'inter'));
+      lines.push(...rcm.lines);
       lines.push({ acc: v.via || '1000', cr: amt + gi });
     }
 
@@ -786,7 +789,8 @@ EV.subnew = {
       effects: up
         ? [`Cash out ${fmt(amt + gi)} now — but it is <b>not</b> all this month's cost.`,
         `Cost ${fmt(monthly)}/month for ${m} months, released automatically at each month-end.`,
-        gi ? `${fmt(gi)} GST becomes input credit.` : '']
+        gi ? `${fmt(gi)} GST becomes input credit.` : '',
+        rcm.tax ? `${fmt(rcm.tax)} IGST under reverse charge — paid with the month's return, then claimed back. Not owed to the vendor.` : '']
           .filter(Boolean)
         : [`Expected ${fmt(amt)}/month from ${mlabel(start)}${v.billing === 'invoice' ? ', invoiced each month' : ', auto-charged'}.`,
         'Nothing is posted yet. Record each month\'s bill or charge on the Services tab — the actual amount, and why it differs if it does.'],
