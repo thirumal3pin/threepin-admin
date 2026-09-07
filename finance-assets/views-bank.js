@@ -316,7 +316,7 @@ if (typeof window !== 'undefined') {
       const amount = r.debit || r.credit;
       if (account === '2300') {
         window.fin.record(isOut ? 'expense' : 'vendorrefund',
-          { date: r.date, amt: amount, via: '2300', desc: r.desc });
+          { date: r.date, amt: amount, via: '2300', how: '2300', desc: r.desc });
       } else {
         window.fin.record(isOut ? 'expense' : 'otherinc',
           { date: r.date, amt: amount, via: '1000', desc: r.desc });

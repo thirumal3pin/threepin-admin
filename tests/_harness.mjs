@@ -200,12 +200,20 @@ export function save(evKey, values, opts = {}) {
   }
   for (const a of allocations) {
     const cur = s[COLL_KEY[a.coll]].find(x => x.id === a.id);
-    if (!cur) continue;
+    if (!cur || cur.status === 'void') continue;
     const paid = r2(num(cur.paid) + num(a.amt));
     const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
     cur.paid = paid;
     cur.status = docStatus(r2(total - paid), total);
-    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date }];
+    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date, ...(a.writtenOff ? { writtenOff: true } : {}) }];
+  }
+
+  if (out.selfInvoice && txnId) {
+    const n = num(s.settings.nextSelfInvoiceNo) || 1;
+    const t = s.txns.at(-1);
+    t.selfInvoiceNo = (s.settings.selfInvoicePrefix || '3PIN/SI/') + String(n).padStart(3, '0');
+    t.selfInvoice = out.selfInvoice;
+    s.settings.nextSelfInvoiceNo = n + 1;
   }
 
   if (out.invoice && txnId) {
@@ -227,6 +235,8 @@ export function reverse(txnId) {
   const t = s.txns.find(x => x.id === txnId);
   if (!t) throw new Error('Transaction not found');
   if (t.reversedBy) throw new Error('This entry has already been reversed');
+  const settled = s.bills.find(b => b.txnId === txnId && b.status !== 'void' && (b.allocations || []).some(a => num(a.amt) > 0));
+  if (settled) throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
   const rid = nid('TX');
   const lines = normalise(reversalLines(t.lines));
   s.txns.push({
@@ -244,15 +254,20 @@ export function reverse(txnId) {
   // service month marked reversed so it can be recorded again.
   for (const a of t.allocations || []) {
     const cur = s[COLL_KEY[a.coll]].find(x => x.id === a.id);
-    if (!cur) continue;
+    if (!cur || cur.status === 'void') continue;
     const paid = Math.max(0, r2(num(cur.paid) - num(a.amt)));
     const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
     cur.paid = paid;
     cur.status = docStatus(total - paid, total);
     cur.allocations = [...(cur.allocations || []), { txnId: rid, amt: -num(a.amt), date: t.date, reversal: true }];
   }
-  const madeBills = s.bills.filter(b => b.txnId === txnId);
+  const madeBills = s.bills.filter(b => b.txnId === txnId && b.status !== 'void');
   for (const b of madeBills) { b.status = 'void'; b.voidedBy = rid; }
+  // Firestore issues a credit note and voids the original; the ledger effect is the same
+  // reversal, so here it is enough to close the document.
+  for (const i of s.invoices.filter(x => x.txnId === txnId && x.kind !== 'creditnote')) {
+    i.status = 'void'; i.voidedBy = rid;
+  }
   for (const sb of s.subs) {
     for (const [m, c] of Object.entries(sb.charges || {})) {
       if (c && madeBills.some(b => b.id === c.billId)) { c.reversed = true; c.reversedBy = rid; }

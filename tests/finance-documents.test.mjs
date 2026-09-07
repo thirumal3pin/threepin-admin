@@ -13,7 +13,7 @@
 //   node tests/finance-documents.test.mjs
 
 import {
-  getState, num, bal, pl, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
+  getState, num, bal, pl, today, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
@@ -249,9 +249,9 @@ eq('Bank: lunch, top-up, card bill', bal('1000'), bankW - 840 - 2000 - 4720);
 eq('Ads GST is IGST credit (vendor in another state)', bal('1402') - igstW, 720);
 eq('Lunch GST is blocked — it stays in the cost', bal('5030'), 120 + 840);
 refuses('Vouchers beyond the box are refused',
-  () => save('petty', { date: '2026-11-15', a1: 999999, c1: '5030', a2: 0, a3: 0 }), 'box only holds');
+  () => save('petty', { date: '2026-11-15', a1: 999999, c1: '5030', a2: 0, a3: 0 }), 'petty cash only holds');
 refuses('Moving more than the box holds to the bank is refused',
-  () => save('transfer', { date: '2026-11-15', kind: '1010>1000', amt: 999999 }), 'box only holds');
+  () => save('transfer', { date: '2026-11-15', kind: '1010>1000', amt: 999999 }), 'petty cash only holds');
 refuses('Paying the card more than it owes is refused',
   () => save('transfer', { date: '2026-11-15', kind: '1000>2300', amt: 1 }), 'card only has');
 
@@ -278,7 +278,12 @@ refuses('GST total must agree', () => save('expense', { date: '2026-11-01', desc
 refuses('A GSTIN must look like one', () => save('expense', { date: '2026-11-01', desc: 'x', acc: '5100', amt: 100, gst: 'yes', gstRate: 18, gstAmt: 18, total: 118, vgstin: 'ABC', via: '1000' }), '15 characters');
 refuses('A date before the books start is refused', () => save('expense', { date: '2026-01-01', desc: 'x', acc: '5100', amt: 10, gst: 'no', via: '1000' }), 'before the books start');
 refuses('A date a year ahead is refused', () => save('expense', { date: '2028-01-01', desc: 'x', acc: '5100', amt: 10, gst: 'no', via: '1000' }), 'check the year');
-refuses('An asset under the threshold is refused', () => save('asset', { date: '2026-11-01', name: 'Mouse', amt: 800, gst: 'no', life: 36, how: '1000' }), 'threshold');
+{
+  // Below the capitalisation threshold the app advises rather than blocks — a cheap part of
+  // a bigger asset is still capital.
+  const w = validateEvent('asset', { date: today(), name: 'Mouse', amt: 800, gst: 'no', rcm: 'no', life: 36, how: '1000' });
+  check('An asset under the threshold warns rather than refuses', w.length === 1 && w[0].warn && w[0].k === 'amt', JSON.stringify(w));
+}
 refuses('An asset on credit needs a vendor', () => save('asset', { date: '2026-11-01', name: 'Desk', amt: 30000, gst: 'no', life: 60, how: 'bill' }), 'vendor');
 save('dealcost', { date: '2026-11-01', deal: dealL, what: 'EC extract for Lakshmi', amt: 700, gst: 'no', bear: 'seller', how: '1000' });
 refuses('A write-off needs a reason', () => save('writeoff', { date: '2026-11-01', deal: dealL, from: 'seller', amt: 1, why: '' }), 'reason');

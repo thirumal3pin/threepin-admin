@@ -66,7 +66,9 @@ export const ACCOUNTS = [
   ['5140', 'Bank & card charges', 'expense'],
   ['5150', 'Interest & finance cost', 'expense'],
   ['5160', 'Rates, taxes & filing fees', 'expense'],
+  ['5075', 'Club & membership fees', 'expense'],
   ['5170', 'Insurance', 'expense'],
+  ['5185', 'Gifts & client hospitality', 'expense'],
   ['5180', 'Miscellaneous', 'expense'],
   ['5190', 'Bad debts written off', 'expense'],
   ['5200', 'Depreciation', 'expense'],
@@ -463,13 +465,18 @@ export function cashPosition(upto) {
   };
 }
 
-// Monthly run-rate across active services, regardless of how each one is paid.
-export function serviceRunRate() {
+// Monthly run-rate across active services, regardless of how each one is paid. The
+// expectation for a month is the plan that was in force THAT month — a rise dated for
+// January must not inflate today's run-rate, which is why this reads the history rather
+// than sub.monthly (which always holds the latest plan entered).
+export function serviceRunRate(month) {
+  const m = month || ym(today());
   const active = S.subs.filter(s => s.status === 'active');
+  const at = x => x.payMode === 'upfront' ? num(x.monthly) : expectedFor(x, m);
   return {
     active,
-    monthly: active.reduce((s, x) => s + num(x.monthly), 0),
-    annual: active.reduce((s, x) => s + num(x.monthly), 0) * 12,
+    monthly: r2(active.reduce((s, x) => s + at(x), 0)),
+    annual: r2(active.reduce((s, x) => s + at(x), 0) * 12),
     prepaidUnused: S.subs
       .filter(s => s.payMode === 'upfront' && !s.closedOut)
       .reduce((s, x) => s + prepaidLeft(x), 0),
@@ -488,12 +495,18 @@ export function monthEndEntries(m) {
     if (s.payMode !== 'upfront' || s.closedOut) continue;
     if (m < s.start || (s.end && m > s.end)) continue;
     if ((s.amortized || []).includes(m)) continue;
+    // The final month releases whatever is left, so the rounded slices always sum to the
+    // amount actually paid and 1200 closes at zero.
+    const doneM = (s.amortized || []).length;
+    const left = prepaidLeft(s);
+    const slice = doneM + 1 >= num(s.months) ? left : Math.min(num(s.monthly), left);
+    if (slice <= 0.005) continue;
     entries.push({
       kind: 'prepaid', ref: s.id,
       txn: {
         date: m + '-28', event: 'monthend', auto: true,
         desc: `Prepaid released — ${s.name} (${mlabel(m)})`,
-        lines: [{ acc: '5080', dr: s.monthly }, { acc: '1200', cr: s.monthly }],
+        lines: [{ acc: '5080', dr: r2(slice) }, { acc: '1200', cr: r2(slice) }],
       },
     });
   }
@@ -502,12 +515,16 @@ export function monthEndEntries(m) {
     if (m < a.start) continue;
     if ((a.depreciated || []).includes(m)) continue;
     if ((a.depreciated || []).length >= a.life) continue;
+    const doneA = (a.depreciated || []).length;
+    const written = r2(doneA * num(a.monthly));
+    const slice = doneA + 1 >= num(a.life) ? r2(num(a.cost) - written) : num(a.monthly);
+    if (slice <= 0.005) continue;
     entries.push({
       kind: 'depreciation', ref: a.id,
       txn: {
         date: m + '-28', event: 'monthend', auto: true,
         desc: `Depreciation — ${a.name} (${mlabel(m)})`,
-        lines: [{ acc: '5200', dr: a.monthly }, { acc: '1350', cr: a.monthly }],
+        lines: [{ acc: '5200', dr: slice }, { acc: '1350', cr: slice }],
       },
     });
   }
@@ -659,7 +676,7 @@ function movement(code, month, notEvent) {
 }
 
 // Mirrors BLOCKED_ITC in finance-events.js: categories whose GST can never be claimed.
-const BLOCKED = new Set(['5030', '5050']);
+const BLOCKED = new Set(['5030', '5050', '5075', '5185']);
 
 // Everything GSTR-3B needs for one month, and the set-off the remittance should use.
 //
@@ -716,8 +733,14 @@ export function gstr1Rows(month) {
       const p = S.parties.find(x => x.id === i.partyId);
       const cn = i.kind === 'creditnote';
       const sign = cn ? -1 : 1;
+      const interState = String(i.placeOfSupply || S.settings.state).trim().toLowerCase()
+        !== String(S.settings.state || '').trim().toLowerCase();
+      const type = cn
+        ? (p?.gstin ? 'CDNR' : 'CDNUR')
+        : p?.gstin ? 'B2B'
+          : (interState && num(i.total) > 250000) ? 'B2CL' : 'B2CS';
       return {
-        type: cn ? 'Credit note' : (p?.gstin ? 'B2B' : 'B2C'),
+        type,
         no: i.invoiceNo, date: i.date, party: p?.name || '', gstin: p?.gstin || '',
         placeOfSupply: i.placeOfSupply || S.settings.state, sac: i.sac || S.settings.sacCode,
         taxable: sign * num(i.base), rate: num(i.gstRate),
@@ -738,6 +761,10 @@ export function itcRegister(month) {
     if (ym(t.date) !== month || !ITC_EVENTS.has(t.event)) continue;
     const m = t.meta || {};
     const rcm = m.rcm === 'yes';
+    // s.16(4): credit for a financial year may be taken up to 30 November of the next one.
+    // Booking an old invoice late is the commonest way a claim is lost.
+    const invFy = fyOf(m.vinvDate || t.date, S.settings.fyStartMonth);
+    const timeBarred = !rcm && t.date > `${Number(invFy.slice(0, 4)) + 1}-11-30`;
     if (m.gst !== 'yes' && !rcm) continue;
     const heads = {};
     for (const h of HEADS) {
@@ -745,18 +772,46 @@ export function itcRegister(month) {
     }
     const blocked = BLOCKED.has(m.acc) && !rcm;
     const vendorLine = t.lines.find(l => l.acc === '2000' && l.party);
-    const vendor = vendorLine ? (S.parties.find(p => p.id === vendorLine.party)?.name || '') : (m.vendor || '');
+    const vendor = vendorLine ? (S.parties.find(p => p.id === vendorLine.party)?.name || '') : (m.vendor ? pname(m.vendor) : '');
     const tax = rcm ? heads.cgst + heads.sgst + heads.igst : num(m.gstAmt);
     rows.push({
       no: t.no, date: t.date, desc: t.desc, vendor, gstin: m.vgstin || '', invoice: m.vinv || '',
       taxable: num(m.amt), tax: r2(tax), ...heads, blocked, rcm,
-      eligible: !blocked && (rcm || (!!m.vgstin && !!m.vinv)),
+      eligible: !blocked && !timeBarred && (rcm || (!!m.vgstin && !!m.vinv)),
+      timeBarred,
       reason: blocked ? 'Blocked under s.17(5) — part of the cost'
-        : rcm ? 'Reverse charge — pay in cash with the return, then claim'
-          : (!m.vgstin || !m.vinv) ? 'Vendor GSTIN or invoice no. missing — claim at risk' : '',
+        : timeBarred ? `Time-barred under s.16(4) — the window for FY ${invFy} closed on 30 Nov ${Number(invFy.slice(0, 4)) + 1}`
+          : rcm ? 'Reverse charge — pay in cash with the return, then claim'
+            : (!m.vgstin || !m.vinv) ? 'Vendor GSTIN or invoice no. missing — claim at risk' : '',
     });
   }
   return rows.sort((a, b) => a.date.localeCompare(b.date) || num(a.no) - num(b.no));
+}
+
+// ═══════ RULE 37 — ITC ON BILLS UNPAID FOR 180 DAYS ═══════
+//
+// s.16(2) second proviso with Rule 37(1): credit taken on a supply whose consideration is
+// not paid within 180 days of the invoice date must be added back to output liability, with
+// interest under s.50(1). It is reclaimed when the bill is finally paid. Nothing here posts
+// anything — it lists what the return has to carry, because only the CA can decide the
+// interest period.
+
+export function rule37Rows(month) {
+  const at = lastDayOfMonth(month || ym(today()));
+  const cutoff = addDays(at, -180);
+  return (S.bills || [])
+    .filter(b => b.status !== 'void' && num(b.gst) > 0 && billOutstanding(b) > HALF_PAISA && b.date <= cutoff)
+    .map(b => {
+      const unpaidShare = billOutstanding(b) / (num(b.net ?? b.total) || 1);
+      return {
+        billId: b.id, no: b.no, date: b.date, dueDate: b.dueDate || null,
+        vendor: b.vendorName || pname(b.partyId), desc: b.desc,
+        total: num(b.net ?? b.total), outstanding: billOutstanding(b),
+        days: daysApart(b.date, at),
+        reverse: r2(num(b.gst) * unpaidShare),
+      };
+    })
+    .sort((a, b) => b.days - a.days);
 }
 
 // ═══════ TDS THRESHOLDS ═══════
@@ -817,11 +872,29 @@ export function upcomingCash(fromDate) {
   }
   for (const s of S.subs) {
     if (s.status !== 'active') continue;
-    if (s.payMode === 'upfront' && s.end && s.end <= next) items.push({ what: `${s.name} renews`, amt: s.amount, when: s.end });
-    if (s.payMode === 'monthly') items.push({ what: `${s.name}`, amt: s.monthly, when: next });
+    if (s.payMode === 'upfront' && s.end && s.end <= next) {
+      items.push({ what: `${s.name} renews`, amt: num(s.amount) || num(s.monthly) * num(s.months), when: s.end });
+    }
+    if (s.payMode === 'monthly') items.push({ what: `${s.name}`, amt: expectedFor(s, next), when: next });
   }
-  const vendor = bal('2000', { upto: from });
-  if (vendor > 0.5) items.push({ what: 'Vendor bills outstanding', amt: vendor, when: month });
+  // One row per bill, on the date it is actually due — a bill due in six weeks is not money
+  // needed now, and one that went overdue in April is not "due next month".
+  const limit = lastDayOfMonth(next);
+  let documented = 0;
+  for (const b of openBills(null)) {
+    const outstanding = billOutstanding(b);
+    documented = r2(documented + outstanding);
+    const due = b.dueDate || b.date;
+    if (due > limit) continue;
+    items.push({
+      what: `${b.vendorName || pname(b.partyId)} — ${b.desc}`,
+      amt: outstanding, when: ym(due), due, overdue: due < from,
+    });
+  }
+  // Anything owed that has no bill behind it — opening balances, entries from before
+  // documents were tracked — is still real money, so it is shown as one undated row.
+  const undocumented = r2(bal('2000', { upto: from }) - documented);
+  if (undocumented > 0.5) items.push({ what: 'Vendor dues with no bill on record', amt: undocumented, when: month });
   const g = gstComputation(month);
   if (g.cash > 0.5) items.push({ what: `GST for ${mlabel(month)} (after set-off)`, amt: g.cash, when: next });
   const tds = bal('2250', { upto: from });
@@ -832,20 +905,103 @@ export function upcomingCash(fromDate) {
 
 // ═══════ RECEIVABLES AGEING ═══════
 
+// Ageing runs per INVOICE, from the day it fell due — not from a party's first-ever debit.
+// A ten-year client's invoice raised last week is not ninety days old. What a party owes
+// beyond their open invoices (recovered costs, opening balances) has no due date of its own,
+// so it is reported separately rather than dated by guesswork.
+const AGE_BUCKETS = () => ({ '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0, 'no document': 0 });
+const bucketFor = days => days <= 30 ? '0-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '90+';
+
 export function agedReceivables(asOf) {
   const at = asOf || today();
-  const buckets = { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+  const buckets = AGE_BUCKETS();
   const per = partyBalances('1100', { upto: at });
   for (const [pid, amt] of Object.entries(per)) {
     if (amt <= 0.5) continue;
-    const dates = S.txns
-      .filter(t => t.date <= at && t.lines.some(l => l.acc === '1100' && l.party === pid && num(l.dr) > 0))
-      .map(t => t.date).sort();
-    const days = dates[0] ? Math.round((new Date(at) - new Date(dates[0])) / 86400000) : 0;
-    const b = days <= 30 ? '0-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '90+';
-    buckets[b] += amt;
+    let documented = 0;
+    for (const i of openInvoices(pid)) {
+      if (i.date > at) continue;
+      const outstanding = invoiceOutstanding(i);
+      documented = r2(documented + outstanding);
+      buckets[bucketFor(daysApart(i.dueDate || i.date, at))] += outstanding;
+    }
+    const rest = r2(amt - documented);
+    if (Math.abs(rest) > 0.005) buckets['no document'] += rest;
   }
+  for (const k of Object.keys(buckets)) buckets[k] = r2(buckets[k]);
   return buckets;
+}
+
+// The same picture the other way round: how long you have been sitting on what you owe.
+export function agedPayables(asOf) {
+  const at = asOf || today();
+  const buckets = AGE_BUCKETS();
+  let documented = 0;
+  for (const b of openBills(null)) {
+    if (b.date > at) continue;
+    const outstanding = billOutstanding(b);
+    documented = r2(documented + outstanding);
+    buckets[bucketFor(daysApart(b.dueDate || b.date, at))] += outstanding;
+  }
+  const rest = r2(bal('2000', { upto: at }) - documented);
+  if (Math.abs(rest) > 0.005) buckets['no document'] += rest;
+  for (const k of Object.keys(buckets)) buckets[k] = r2(buckets[k]);
+  return buckets;
+}
+
+const daysApart = (from, to) => Math.round((new Date(to) - new Date(from)) / 86400000);
+
+// ═══════ CASH ↔ PROFIT BRIDGE ═══════
+//
+// "I made ₹4 lakh and the bank went down" is the question every owner asks. Each step is a
+// real movement that explains part of the gap; `residual` is what none of them explain and
+// should be nil. Anything left in it is a bug worth seeing rather than hiding.
+
+export function cashProfitBridge(month) {
+  const m = month || ym(today());
+  const prev = addMonths(m, -1) + '-31';
+  const end = m + '-31';
+  const delta = (code, opts = {}) => r2(bal(code, { ...opts, upto: end }) - bal(code, { ...opts, upto: prev }));
+
+  const profit = r2(pl(m).profit);
+  const receivables = r2(-delta('1100'));
+  const payables = delta('2000');
+  const tokens = delta('2100');
+  const advances = r2(-delta('1550'));
+  // Month-end costs that never moved cash.
+  const noncash = r2(S.txns
+    .filter(t => t.event === 'monthend' && ym(t.date) === m)
+    .reduce((a, t) => a + t.lines.reduce((x, l) => x + num(l.dr), 0), 0));
+  // Cash that never touched profit.
+  const capex = r2(-S.txns.filter(t => ym(t.date) === m)
+    .reduce((a, t) => a + t.lines.reduce((x, l) => x + (l.acc === '1300' ? num(l.dr) - num(l.cr) : 0), 0), 0));
+  const prepaid = r2(-S.txns.filter(t => ym(t.date) === m && t.event !== 'monthend')
+    .reduce((a, t) => a + t.lines.reduce((x, l) => x + (l.acc === '1200' ? num(l.dr) - num(l.cr) : 0), 0), 0));
+  const principal = r2(delta('2400'));
+  const funding = r2(delta('3000') + delta('2450'));
+  const taxes = r2(delta('2200') + delta('2201') + delta('2202') + delta('2205') + delta('2250') + delta('2550')
+    - delta('1400') - delta('1401') - delta('1402') - delta('1150'));
+  const card = r2(delta('2300'));
+
+  const steps = [
+    { label: 'Profit for the month', amt: profit },
+    { label: 'Depreciation and prepaid released (no cash)', amt: noncash },
+    { label: 'Money clients still owe', amt: receivables },
+    { label: 'Bills not yet paid', amt: payables },
+    { label: 'Client tokens held', amt: tokens },
+    { label: 'Advances paid to vendors', amt: advances },
+    { label: 'Assets bought', amt: capex },
+    { label: 'Paid ahead for services', amt: prepaid },
+    { label: 'Loan drawn / repaid', amt: principal },
+    { label: 'Capital and director loans', amt: funding },
+    { label: 'Credit card balance', amt: card },
+    { label: 'Taxes collected less claimed', amt: taxes },
+  ].filter(x => Math.abs(x.amt) > 0.5);
+
+  const cashMoved = r2(bal('1000', { upto: end }) + bal('1010', { upto: end })
+    - bal('1000', { upto: prev }) - bal('1010', { upto: prev }));
+  const explained = r2(steps.reduce((a, x) => a + x.amt, 0));
+  return { month: m, steps, explained, cashMoved, residual: r2(cashMoved - explained) };
 }
 
 // ═══════ TAX PROVISION ═══════
@@ -884,6 +1040,7 @@ export function docStatus(outstanding, total) {
 
 export function openBills(partyId, opts = {}) {
   return (S.bills || [])
+    .filter(b => b.paid !== undefined)
     .filter(b => (!partyId || b.partyId === partyId) && b.status !== 'void' && billOutstanding(b) > HALF_PAISA)
     .filter(b => !opts.serviceId || b.serviceId === opts.serviceId)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)) || num(a.no) - num(b.no));
@@ -891,6 +1048,7 @@ export function openBills(partyId, opts = {}) {
 
 export function openInvoices(partyId, dealId) {
   return (S.invoices || [])
+    .filter(i => i.paid !== undefined && i.status !== 'void')
     .filter(i => i.kind !== 'creditnote' && (!partyId || i.partyId === partyId) && (!dealId || i.dealId === dealId))
     .filter(i => invoiceOutstanding(i) > HALF_PAISA)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.invoiceNo).localeCompare(String(b.invoiceNo)));
@@ -968,6 +1126,8 @@ export function serviceMonths(sub, upto) {
     if (sub.payMode === 'upfront') status = (sub.amortized || []).includes(m) ? 'released' : 'pending';
     else if (rec?.skipped) status = 'skipped';
     else if (rec) status = unpaid ? 'billed' : 'recorded';
+    // A dated expectation of nothing is a pause, not a month somebody forgot.
+    else if (expected <= 0.005) status = 'paused';
     else status = m > end ? 'upcoming' : m === end ? 'due' : 'missing';
     const actual = rec && !rec.skipped ? num(rec.actual) : 0;
     out.push({

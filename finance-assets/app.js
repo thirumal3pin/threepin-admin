@@ -614,7 +614,7 @@ function mountAlloc(f) {
   const rows = vals[f.k] || [];
   const amtFor = id => num(rows.find(r => r.id === id)?.amt);
   const applied = rows.reduce((a, r) => a + num(r.amt), 0);
-  const paying = num(vals.amt) + (isBill && vals.useAdvance !== 'no' ? Math.min(vendorAdvance(vals[f.partyKey]), docs.reduce((a, d) => a + outstanding(d), 0)) : 0);
+  const paying = num(vals.amt) + (isBill && vals.useAdvance !== 'no' ? Math.min(vendorAdvance(vals[f.partyKey]), bal('2000', { party: vals[f.partyKey] })) : 0);
   box.innerHTML = `
     <div class="tbl-wrap alloc"><table>
       <thead><tr><th>${isBill ? 'Bill' : 'Invoice'}</th><th>Due</th><th class="n">Open</th><th class="n">Apply</th></tr></thead>

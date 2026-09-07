@@ -231,7 +231,8 @@ export async function save(evKey, values, opts = {}) {
   };
 
   // 5. One transaction for the entry, its number, the documents, the updates, the
-  //    allocations and the invoice.
+  //    allocations and the invoice. Any party invented along the way is only real once this
+  //    commits, so the cache entry is confirmed or removed either way.
   return runTransaction(db, async tx => {
     const { settings, nos, patch } = await reserveNumbers(tx, lines.length ? 1 : 0);
 
@@ -268,13 +269,16 @@ export async function save(evKey, values, opts = {}) {
     for (const { a, snap } of allocSnaps) {
       if (!snap.exists()) continue;
       const cur = snap.data();
+      // A voided document is closed for good — allocating to it would resurrect it.
+      if (cur.status === 'void') continue;
       const paid = Math.round((num(cur.paid) + num(a.amt)) * 100) / 100;
       const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
       const outstanding = Math.round((total - paid) * 100) / 100;
       tx.update(ref(a.coll, a.id), {
         paid,
         status: docStatus(outstanding, total),
-        allocations: [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date || today() }],
+        allocations: [...(cur.allocations || []),
+          { txnId, amt: a.amt, date: v.date || today(), ...(a.writtenOff ? { writtenOff: true } : {}) }],
       });
     }
 
@@ -296,12 +300,23 @@ export async function save(evKey, values, opts = {}) {
       patch.nextInvoiceNo = n + 1;
     }
 
+    let selfInvoiceNo = null;
+    if (out.selfInvoice && txnId) {
+      const n = num(settings.nextSelfInvoiceNo) || 1;
+      selfInvoiceNo = (settings.selfInvoicePrefix || '3PIN/SI/') + String(n).padStart(3, '0');
+      tx.update(ref('txns', txnId), { selfInvoiceNo, selfInvoice: out.selfInvoice });
+      patch.nextSelfInvoiceNo = n + 1;
+    }
+
     if (Object.keys(patch).length) tx.set(root(), patch, { merge: true });
     return {
-      txnId, no, invoiceId, invoiceNo, desc: out.desc,
+      txnId, no, invoiceId, invoiceNo, selfInvoiceNo, desc: out.desc,
       total: lines.reduce((a, l) => a + num(l.dr), 0),
     };
-  });
+  }).then(
+    r => { clearPendingParties(newParties, true); return r; },
+    e => { clearPendingParties(newParties, false); throw e; },
+  );
 }
 
 // Party values arrive either as an existing id or as {__new:true, name, phone}. New ones get
@@ -326,14 +341,27 @@ function resolveParty(value, newParties) {
   // Seed the cache straight away. build() runs before the onSnapshot echo gets back, and it
   // asks for this party's name to write the transaction description — without this it would
   // render as "—" on the very entry that created the party.
-  getState().parties.push({ ...record, id: pref.id });
+  getState().parties.push({ ...record, id: pref.id, __pending: true });
   return pref.id;
+}
+
+// A pending party exists only in this browser's cache until the transaction commits, so it
+// must never satisfy a lookup — otherwise a retry after a failed save silently reuses an id
+// that was never written.
+function clearPendingParties(newParties, committed) {
+  const s = getState();
+  for (const p of newParties) {
+    const hit = s.parties.find(x => x.id === p.ref.id);
+    if (!hit) continue;
+    if (committed) delete hit.__pending;
+    else s.parties.splice(s.parties.indexOf(hit), 1);
+  }
 }
 
 function findPartyByName(name) {
   if (!name) return null;
   const hit = getState().parties.find(
-    p => p.name.trim().toLowerCase() === String(name).trim().toLowerCase());
+    p => !p.__pending && p.name.trim().toLowerCase() === String(name).trim().toLowerCase());
   return hit ? hit.id : null;
 }
 
@@ -365,8 +393,16 @@ export async function reverse(txnId) {
   // A reversed payment gives its allocations back to the bills it settled; a reversed bill
   // is voided so it stops showing as owed.
   const allocs = t.allocations || [];
-  const madeBills = getState().bills.filter(b => b.txnId === txnId);
-  const svcMonth = getState().subs.flatMap(sb => Object.entries(sb.charges || {}).filter(([, c]) => madeBills.some(b => b.id === c.billId)).map(([m]) => ({ sub: sb, m })));
+  // Read the documents this entry created from the SERVER, not the snapshot cache: undo
+  // pressed a moment after saving would otherwise find nothing and silently leave the bill
+  // open on the Owed tab.
+  const madeSnap = await getDocs(query(col('bills'), where('txnId', '==', txnId)));
+  const madeBills = madeSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.status !== 'void');
+  const settled = madeBills.find(b => (b.allocations || []).some(a => num(a.amt) > 0));
+  if (settled) {
+    throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
+  }
+  const svcMonth = madeBills.filter(b => b.serviceId && b.month).map(b => ({ subId: b.serviceId, m: b.month }));
 
   return runTransaction(db, async tx => {
     const { settings, nos, patch } = await reserveNumbers(tx, 1);
@@ -386,6 +422,7 @@ export async function reverse(txnId) {
     for (const { a, snap } of allocSnaps) {
       if (!snap.exists()) continue;
       const cur = snap.data();
+      if (cur.status === 'void' || madeBills.some(b => b.id === a.id)) continue;
       const paid = Math.max(0, Math.round((num(cur.paid) - num(a.amt)) * 100) / 100);
       const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
       tx.update(ref(a.coll, a.id), {
@@ -394,21 +431,27 @@ export async function reverse(txnId) {
       });
     }
     for (const b of madeBills) tx.update(ref('bills', b.id), { status: 'void', voidedBy: rref.id });
-    for (const { sub: sb, m } of svcMonth) tx.update(ref('subscriptions', sb.id), { [`charges.${m}.reversed`]: true, [`charges.${m}.reversedBy`]: rref.id });
+    for (const { subId, m } of svcMonth) tx.update(ref('subscriptions', subId), { [`charges.${m}.reversed`]: true, [`charges.${m}.reversedBy`]: rref.id });
 
     let creditNoteNo = null;
     if (inv) {
       const n = num(settings.nextCreditNoteNo) || 1;
       creditNoteNo = (settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0');
+      const invFy = fyOf(inv.date, settings.fyStartMonth);
+      const window = `${Number(invFy.slice(0, 4)) + 1}-11-30`;
       tx.set(doc(col('invoices')), {
         kind: 'creditnote', against: inv.invoiceNo, againstId: inv.id, invoiceNo: creditNoteNo,
-        date: today(), partyId: inv.partyId, dealId: inv.dealId || null,
+        date: today(), beyondS34: today() > window, s34Window: window,
+        partyId: inv.partyId, dealId: inv.dealId || null,
         base: inv.base, gstRate: inv.gstRate, cgst: inv.cgst || 0, sgst: inv.sgst || 0, igst: inv.igst || 0,
         total: inv.total, placeOfSupply: inv.placeOfSupply || null, sac: inv.sac || null,
         desc: 'Credit note — ' + t.desc, txnId: rref.id, status: 'issued',
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
       });
       patch.nextCreditNoteNo = n + 1;
+      // The original stops being a live receivable the moment it is credit-noted, or the
+      // Owed list and the ageing keep claiming money the ledger has already reversed.
+      tx.update(ref('invoices', inv.id), { status: 'void', voidedBy: rref.id, creditNote: creditNoteNo });
     }
     tx.set(root(), patch, { merge: true });
     return { id: rref.id, no: nos[0], creditNoteNo };
