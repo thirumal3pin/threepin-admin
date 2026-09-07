@@ -124,7 +124,8 @@ function drawer(id) {
         ${d.status !== 'cancelled' ? act('dealcost', { deal: d.id }, 'Cost for this deal') : ''}
         ${d.status !== 'cancelled' && d.buyer?.partyId ? act('invoice', { deal: d.id, from: 'buyer' }, 'Close — bill the buyer', 'btn sm primary') : ''}
         ${d.status !== 'cancelled' && d.seller?.partyId ? act('invoice', { deal: d.id, from: 'seller' }, 'Close — bill the seller', 'btn sm primary') : ''}
-        ${f.recv > 0.5 ? act('dealpay', { deal: d.id }, 'Client pays') : ''}
+        ${[d.buyer, d.seller].filter(p => p?.partyId && bal('1100', { party: p.partyId, deal: d.id }) > 0.5)
+          .map(p => act('dealpay', { party: p.partyId }, `${p.name || 'Client'} pays`)).join('')}
         ${f.tokens > 0.5 ? act('settle', { deal: d.id }, 'Settle the token') : ''}
       </div>
 

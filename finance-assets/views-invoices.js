@@ -11,13 +11,16 @@ import { empty, note, tag, table, toast, modal, closeModal } from './ui.js';
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
 import * as SY from './finance-sync.js';
 
-// Paid / part-paid / unpaid is not stored — it is whatever the client still owes on that deal
-// right now. Storing it would mean two sources of truth that drift apart.
+// An invoice's status is derived from the payments allocated to it (its `paid` figure). An
+// invoice from before allocations existed has no such figure, so for those it falls back to
+// whatever the client still owes on that deal.
 function statusOf(inv) {
   if (inv.kind === 'creditnote') return { key: 'cn', label: 'Credit note', cls: 'rev' };
-  const outstanding = inv.dealId
-    ? bal('1100', { party: inv.partyId, deal: inv.dealId })
-    : bal('1100', { party: inv.partyId });
+  const outstanding = inv.paid !== undefined
+    ? num(inv.total) - num(inv.paid)
+    : inv.dealId
+      ? bal('1100', { party: inv.partyId, deal: inv.dealId })
+      : bal('1100', { party: inv.partyId });
   if (outstanding <= 0.5) return { key: 'paid', label: 'Paid', cls: 'ok' };
   if (outstanding < num(inv.total) - 0.5) return { key: 'part', label: 'Part paid', cls: 'warn' };
   return { key: 'unpaid', label: 'Unpaid', cls: '' };

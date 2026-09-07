@@ -32,7 +32,7 @@ const st = () => getState();
 const KIND_OF = {
   invoice: 'Income', otherinc: 'Income', settle: 'Income',
   expense: 'Expense', bill: 'Expense', paybill: 'Expense', salary: 'Expense',
-  petty: 'Expense', director: 'Expense', confirmcharge: 'Expense', dealcost: 'Expense',
+  petty: 'Expense', director: 'Expense', confirmcharge: 'Expense', dealcost: 'Expense', vendorrefund: 'Expense',
   subnew: 'Expense', subchange: 'Expense', subcancel: 'Expense',
   funding: 'Funding', bankloan: 'Funding',
   emi: 'Repayment', statutory: 'Repayment',

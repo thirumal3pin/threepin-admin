@@ -11,9 +11,10 @@
 import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
+openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   setDisplayCurrency, displayCurrency,
 } from './finance-core.js';
-import { EV, CHOOSER, fieldsFor } from './finance-events.js';
+import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
 import {
   toast, modal, closeModal, confirmDialog, stat, signed, empty, note, tag,
@@ -390,7 +391,7 @@ function record() {
           <div class="eh">${esc(group)}</div>
           <div class="chooser-grid">
             ${items.filter(it => EV[it.key]).map((it, ii) =>
-        `<button type="button" onclick="fin.pickAt(${gi},${ii})">
+        `<button type="button" class="dir-${dirOf(it.key)}" onclick="fin.pickAt(${gi},${ii})">
                 <b>${esc(it.label || EV[it.key].title)}</b>
                 ${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ''}
               </button>`).join('')}
@@ -405,10 +406,11 @@ function record() {
     <div class="actions">
       <button class="btn ghost sm" type="button" onclick="fin.pick(null)">← All actions</button>
     </div>
-    <h1>${esc(evLabel || ev.title)}</h1>
-    <div class="record-split">
-      <div>
-        <form id="evForm" autocomplete="off" onsubmit="return false"></form>
+    <h1>${esc(evLabel || ev.title)} ${dirBadge(evKey)}</h1>
+    <div class="record-split dir-${dirOf(evKey)}">
+      <div class="form-col">
+        <form id="evForm" autocomplete="off" onsubmit="return false" novalidate></form>
+        <div id="formProblems"></div>
 
         <div class="card" style="margin-top:4px">
           <h3>Attach the bill or receipt</h3>
@@ -445,6 +447,9 @@ function record() {
       </div>
     </div>`;
 }
+
+const DIR_LABEL = { in: 'Money in', out: 'Money out', move: 'Move money', fix: 'Correction', setup: 'Set up' };
+const dirBadge = key => `<span class="dirtag dir-${dirOf(key)}">${DIR_LABEL[dirOf(key)] || ''}</span>`;
 
 function mountRecord() {
   if (result) { mountResult(); return; }
@@ -489,24 +494,28 @@ function buildForm() {
     const hintHtml = hint ? `<div class="hint">${hint}</div>` : '';
     const label = `<label for="${id}">${esc(f.label)}</label>`;
 
+    const errSlot = `<div class="ferr" id="err_${f.k}" hidden></div>`;
     if (f.type === 'party' || f.type === 'property' || f.type === 'deal') {
-      return `<div class="field">${label}<div id="pick_${f.k}"></div>${hintHtml}</div>`;
+      return `<div class="field" data-field="${f.k}">${label}<div id="pick_${f.k}"></div>${hintHtml}${errSlot}</div>`;
+    }
+    if (f.type === 'alloc') {
+      return `<div class="field" data-field="${f.k}">${label}<div id="alloc_${f.k}"></div>${hintHtml}${errSlot}</div>`;
     }
     if (f.type === 'select') {
       const opts = typeof f.opts === 'function' ? f.opts(vals) : (f.opts || []);
       const cur = vals[f.k] ?? f.def ?? (opts[0] ? opts[0][0] : '');
-      return `<div class="field">${label}
+      return `<div class="field" data-field="${f.k}">${label}
         <select id="${id}" data-k="${f.k}">
           ${opts.length ? '' : '<option value="">— nothing available —</option>'}
           ${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}
-        </select>${hintHtml}</div>`;
+        </select>${hintHtml}${errSlot}</div>`;
     }
     const val = vals[f.k] ?? f.def ?? '';
     const type = f.type === 'number' ? 'number' : f.type;
-    return `<div class="field">${label}
+    return `<div class="field" data-field="${f.k}">${label}
       <input type="${type}" id="${id}" data-k="${f.k}" value="${esc(val)}"
-        ${f.type === 'number' ? 'inputmode="decimal" step="0.01"' : ''} ${f.required ? 'required' : ''}>
-      ${hintHtml}</div>`;
+        ${f.type === 'number' ? 'inputmode="decimal" step="0.01" min="0"' : ''} ${f.required ? 'required' : ''}>
+      ${hintHtml}${errSlot}</div>`;
   }).join('');
 
   // Seed any defaults that have not been typed yet, so the preview reflects the visible form.
@@ -536,11 +545,28 @@ function buildForm() {
   // Text and number fields never rebuild the form, so typing never loses focus: the event's
   // onchange runs (that is where the GST maths lives) and any OTHER input whose value it
   // changed is updated in place. Selects rebuild, because they can change which fields show.
+  // Some fields appear because of a NUMBER, not a select: the "why it differs" reason once
+  // the amount is not the expected one, the over-payment choice once the amount exceeds what
+  // is owed, the second petty-cash row once the first has a figure. So after every keystroke
+  // the visible set is compared and the form is rebuilt only when it changed — with focus
+  // put back where it was, so typing is never interrupted.
+  const visibleKeys = () => fieldsFor(evKey, vals).map(f => f.k).join('|');
+  let shown = visibleKeys();
   form.querySelectorAll('input[data-k]').forEach(el => {
     el.oninput = () => {
       vals[el.dataset.k] = el.value;
       EV[evKey].onchange?.(el.dataset.k, vals);
       syncInputs(el);
+      const now = visibleKeys();
+      if (now !== shown) {
+        const id = el.id, pos = el.selectionStart;
+        buildForm();
+        const again = document.getElementById(id);
+        if (again) { again.focus(); try { if (pos !== null && pos !== undefined) again.setSelectionRange(pos, pos); } catch { /* number inputs */ } }
+        return;
+      }
+      const allocField = fields.find(f => f.type === 'alloc');
+      if (allocField && el.dataset.k === 'amt') mountAlloc(allocField);
       updatePreview();
     };
   });
@@ -556,9 +582,92 @@ function buildForm() {
     if (f.type === 'party') mountPartyPicker(f);
     if (f.type === 'property') mountPropertyPicker(f);
     if (f.type === 'deal') mountDealPicker(f);
+    if (f.type === 'alloc') mountAlloc(f);
   }
 
   updatePreview();
+}
+
+// ═══════ ALLOCATION TABLE ═══════
+//
+// A payment is applied to the open documents of the party — bills when paying a vendor,
+// invoices when a client pays. The split is proposed oldest-first and every row can be
+// edited, so a client who says "this is for the October invoice" can be recorded that way.
+// The rows live in vals.alloc as [{id, amt, due}] and go to the ledger as allocations.
+
+function allocDocs(f) {
+  const pid = vals[f.partyKey];
+  if (!pid) return [];
+  return f.source === 'bills' ? openBills(pid) : openInvoices(pid);
+}
+
+function mountAlloc(f) {
+  const box = document.getElementById('alloc_' + f.k);
+  if (!box) return;
+  const docs = allocDocs(f);
+  const isBill = f.source === 'bills';
+  const outstanding = isBill ? billOutstanding : invoiceOutstanding;
+  if (!docs.length) {
+    box.innerHTML = `<p class="small faint" style="margin:0">No open ${isBill ? 'bills' : 'invoices'} on record for them — the payment will reduce their balance as a whole.</p>`;
+    return;
+  }
+  const rows = vals[f.k] || [];
+  const amtFor = id => num(rows.find(r => r.id === id)?.amt);
+  const applied = rows.reduce((a, r) => a + num(r.amt), 0);
+  const paying = num(vals.amt) + (isBill && vals.useAdvance !== 'no' ? Math.min(vendorAdvance(vals[f.partyKey]), docs.reduce((a, d) => a + outstanding(d), 0)) : 0);
+  box.innerHTML = `
+    <div class="tbl-wrap alloc"><table>
+      <thead><tr><th>${isBill ? 'Bill' : 'Invoice'}</th><th>Due</th><th class="n">Open</th><th class="n">Apply</th></tr></thead>
+      <tbody>${docs.map(d => `<tr>
+        <td>${isBill ? esc(d.desc) : `<span class="eno">${esc(d.invoiceNo)}</span>`}<br><span class="small faint">${esc(d.date)}${isBill && d.billNo ? ' · ' + esc(d.billNo) : ''}</span></td>
+        <td class="small ${d.dueDate && d.dueDate < today() ? 'neg' : ''}">${esc(d.dueDate || '—')}</td>
+        <td class="n">${fmt(outstanding(d))}</td>
+        <td class="n"><input type="number" inputmode="decimal" step="0.01" min="0" max="${outstanding(d)}" data-alloc="${esc(d.id)}" value="${amtFor(d.id) || ''}" aria-label="Apply to ${esc(isBill ? d.desc : d.invoiceNo)}"></td>
+      </tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="2">Applied</td><td class="n small faint">of ${fmt(paying)}</td><td class="n ${applied > paying + 0.005 ? 'neg' : ''}">${fmt(applied)}</td></tr></tfoot>
+    </table></div>
+    <div class="actions" style="margin:8px 0 0">
+      <button class="btn ghost sm" type="button" data-autoalloc>Oldest first</button>
+    </div>`;
+  box.querySelectorAll('input[data-alloc]').forEach(el => {
+    el.oninput = () => {
+      const id = el.dataset.alloc;
+      const d = docs.find(x => x.id === id);
+      const next = (vals[f.k] || []).filter(r => r.id !== id);
+      const amt = Math.max(0, Math.min(num(el.value), outstanding(d)));
+      if (amt > 0) next.push({ id, amt, due: outstanding(d) });
+      vals[f.k] = docs.map(x => next.find(r => r.id === x.id)).filter(Boolean);
+      // Keep the footer honest without rebuilding the inputs under the user's fingers.
+      const tot = vals[f.k].reduce((a, r) => a + num(r.amt), 0);
+      const foot = box.querySelector('tfoot td:last-child');
+      if (foot) { foot.textContent = fmt(tot); foot.classList.toggle('neg', tot > paying + 0.005); }
+      updatePreview();
+    };
+  });
+  box.querySelector('[data-autoalloc]').onclick = () => {
+    vals[f.k] = allocate(paying, docs, outstanding).rows;
+    mountAlloc(f);
+    updatePreview();
+  };
+}
+
+// Field-level problems, painted under the fields they belong to. Warnings advise in amber;
+// errors block in red. The first error is also what the save bar says.
+function paintProblems(problems) {
+  document.querySelectorAll('#evForm .ferr').forEach(el => { el.hidden = true; el.textContent = ''; el.className = 'ferr'; });
+  document.querySelectorAll('#evForm .field').forEach(el => el.classList.remove('has-err', 'has-warn'));
+  const general = [];
+  for (const p of problems) {
+    const slot = p.k ? document.getElementById('err_' + p.k) : null;
+    if (!slot) { general.push(p); continue; }
+    if (slot.textContent) continue;
+    slot.textContent = p.msg;
+    slot.hidden = false;
+    slot.classList.add(p.warn ? 'warn' : 'err');
+    slot.closest('.field')?.classList.add(p.warn ? 'has-warn' : 'has-err');
+  }
+  const gen = document.getElementById('formProblems');
+  if (gen) gen.innerHTML = general.map(p => `<div class="ferr ${p.warn ? 'warn' : 'err'}" style="margin-bottom:10px">${esc(p.msg)}</div>`).join('');
 }
 
 function syncInputs(except) {
@@ -585,7 +694,10 @@ function mountPartyPicker(f) {
       .slice(0, 12),
     onChange: v => {
       vals[f.k] = v && v.__new ? { __new: true, name: v.name, type: f.partyType || 'other' } : (v ? v.id : null);
-      updatePreview();
+      EV[evKey].onchange?.(f.k, vals);
+      // A party can change which fields show (an allocation table appears once a vendor is
+      // known), so the form is rebuilt; the picker takes its value back from vals.
+      if (fieldsFor(evKey, vals).some(x => x.type === 'alloc')) buildForm(); else updatePreview();
     },
   });
 }
@@ -635,7 +747,11 @@ function updatePreview() {
 
   let out;
   try { out = EV[evKey].build({ ...vals }); }
-  catch (e) { out = { desc: '', lines: [], effects: ['Fill in the form.'], incomplete: true }; }
+  catch (e) { console.error(e); out = { desc: '', lines: [], effects: ['Fill in the form.'], incomplete: true }; }
+
+  const problems = validateEvent(evKey, vals);
+  const blocking = problems.filter(p => !p.warn);
+  paintProblems(problems);
 
   const lines = (out.lines || []).filter(l => num(l.dr) || num(l.cr));
   const dr = lines.reduce((s, l) => s + num(l.dr), 0);
@@ -669,15 +785,16 @@ function updatePreview() {
     </table></div>`
     : '<p class="small faint">This action does not move money — nothing is posted to the ledger.</p>';
 
-  const canSave = !out.incomplete && (balanced || createsOnly) && (lines.length || createsOnly) && !saving;
+  const canSave = !out.incomplete && !blocking.length && (balanced || createsOnly) && (lines.length || createsOnly) && !saving;
   document.querySelectorAll('.js-save').forEach(b => { b.disabled = !canSave; });
 
   const bar = document.getElementById('barSum');
   if (bar) {
     const files = pendingFiles.length ? ` · ${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'}` : '';
-    bar.innerHTML = out.incomplete ? esc(out.effects?.[0] || 'Fill in the form')
-      : lines.length ? `<b>${fmt(dr)}</b> · ${balanced ? 'Balanced ✓' : 'Does not balance'}${files}`
-        : 'Ready — nothing posts to the ledger' + files;
+    bar.innerHTML = blocking.length ? `<span class="neg">${esc(blocking[0].msg)}</span>`
+      : out.incomplete ? esc(out.effects?.[0] || 'Fill in the form')
+        : lines.length ? `<b class="${dirOf(evKey) === 'in' ? 'pos' : dirOf(evKey) === 'out' ? 'neg' : ''}">${fmt(dr)}</b> · ${balanced ? 'Balanced ✓' : 'Does not balance'}${files}`
+          : 'Ready — nothing posts to the ledger' + files;
   }
 }
 
@@ -709,8 +826,8 @@ function resultPanel() {
   const busy = uploads.some(u => u.status === 'busy' || u.status === 'pending');
 
   return `
-    <div class="result ${failed ? 'warn' : 'ok'}">
-      <h3>${failed ? 'Saved — but a file did not upload' : 'Saved ✓'}</h3>
+    <div class="result ${failed ? 'warn' : 'ok'} dir-${dirOf(r.key)}">
+      <h3>${failed ? 'Saved — but a file did not upload' : 'Saved ✓'} ${dirBadge(r.key)}</h3>
       ${r.no ? `<div class="eno">Entry ${entryNo(r)}${r.invoiceNo ? ` · Invoice ${esc(r.invoiceNo)}` : ''}</div>` : ''}
       ${r.total ? `<div class="big">${fmt(r.total)}</div>` : ''}
       <div>${esc(r.desc || title)}</div>
@@ -960,6 +1077,8 @@ function startEvent(key, preset = {}, label = null) {
   pendingFiles = [];
   result = null;
   if (EV[key]?.onchange) for (const k of Object.keys(preset)) EV[key].onchange(k, vals);
+  // A preset picks the party; the amount default lands during buildForm's seeding, so the
+  // amount onchange runs again then. Nothing else to do here.
 }
 
 window.fin = {

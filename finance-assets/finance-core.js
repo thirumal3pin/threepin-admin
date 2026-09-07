@@ -24,6 +24,7 @@ export const ACCOUNTS = [
   ['1401', 'GST input credit — SGST', 'asset'],
   ['1402', 'GST input credit — IGST', 'asset'],
   ['1500', 'Advances to staff', 'asset'],
+  ['1550', 'Advances to vendors', 'asset'],
 
   ['2000', 'Payable to vendors & partners', 'liability'],
   ['2100', 'Advances held from clients', 'liability'],
@@ -218,7 +219,7 @@ export function blank() {
   return {
     settings: defaultSettings(),
     parties: [], deals: [], txns: [], subs: [], loans: [], assets: [],
-    invoices: [], bankStatements: [], monthEnds: {},
+    invoices: [], bills: [], bankStatements: [], monthEnds: {},
   };
 }
 
@@ -857,4 +858,147 @@ export function taxProvision(profit, rate) {
   const pbt = num(profit);
   const tax = pbt > 0 ? r2(pbt * r / 100) : 0;
   return { pbt, rate: r, tax, pat: r2(pbt - tax) };
+}
+
+
+// ═══════ DOCUMENTS — BILLS, INVOICES, ALLOCATION ═══════
+//
+// A ledger of events cannot answer "which bill did this payment settle?" or "what did we
+// expect this month against what was billed?". Documents can. A bill (payable) or invoice
+// (receivable) has an identity, a total, what has been paid against it so far, and links to
+// the service, deal and month it belongs to. A payment is ALLOCATED to documents — oldest
+// first unless the owner says otherwise — and a document's status is derived from its
+// allocations, never typed.
+
+const HALF_PAISA = 0.005;
+
+export const billOutstanding = b => r2(num(b.net ?? b.total) - num(b.paid));
+export const invoiceOutstanding = i => r2(num(i.total) - num(i.paid));
+
+// Status is a fact about the numbers, so it is computed, not stored as an opinion.
+export function docStatus(outstanding, total) {
+  if (outstanding <= HALF_PAISA) return 'paid';
+  if (outstanding < num(total) - HALF_PAISA) return 'part';
+  return 'open';
+}
+
+export function openBills(partyId, opts = {}) {
+  return (S.bills || [])
+    .filter(b => (!partyId || b.partyId === partyId) && b.status !== 'void' && billOutstanding(b) > HALF_PAISA)
+    .filter(b => !opts.serviceId || b.serviceId === opts.serviceId)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || num(a.no) - num(b.no));
+}
+
+export function openInvoices(partyId, dealId) {
+  return (S.invoices || [])
+    .filter(i => i.kind !== 'creditnote' && (!partyId || i.partyId === partyId) && (!dealId || i.dealId === dealId))
+    .filter(i => invoiceOutstanding(i) > HALF_PAISA)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.invoiceNo).localeCompare(String(b.invoiceNo)));
+}
+
+// Spread an amount across documents, oldest first. Returns the allocations and what is left
+// over — which the caller decides about (an advance, or a validation error).
+export function allocate(amount, docs, outstandingOf) {
+  let left = r2(amount);
+  const rows = [];
+  for (const d of docs) {
+    if (left <= HALF_PAISA) break;
+    const due = r2(outstandingOf(d));
+    if (due <= HALF_PAISA) continue;
+    const take = Math.min(left, due);
+    rows.push({ id: d.id, amt: r2(take), due });
+    left = r2(left - take);
+  }
+  return { rows, leftover: left };
+}
+
+export const vendorAdvance = pid => bal('1550', { party: pid });
+
+// Bills for a vendor, open or not, newest first — the vendor statement.
+export function vendorBills(partyId) {
+  return (S.bills || []).filter(b => b.partyId === partyId)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+// ═══════ SERVICES — EXPECTED VS ACTUAL, MONTH BY MONTH ═══════
+//
+// A service's expected charge changes over time — a plan upgrade from October, a price rise
+// in January. That is a dated history, not a single number, so the expectation for any past
+// month is the one that was true then and a month's variance means something.
+
+export function expectedFor(sub, month) {
+  const hist = [...(sub.history || [])].filter(h => h.from && h.from <= month).sort((a, b) => a.from.localeCompare(b.from));
+  if (hist.length) return num(hist[hist.length - 1].amount);
+  return num(sub.monthly);
+}
+
+export function currentPlan(sub, month) {
+  const m = month || ym(today());
+  const hist = [...(sub.history || [])].filter(h => h.from && h.from <= m).sort((a, b) => a.from.localeCompare(b.from));
+  return hist.length ? hist[hist.length - 1] : { from: sub.start, amount: num(sub.monthly), plan: sub.plan || '' };
+}
+
+// The next change already scheduled after this month, if any.
+export function nextPlanChange(sub, month) {
+  const m = month || ym(today());
+  return [...(sub.history || [])].filter(h => h.from && h.from > m).sort((a, b) => a.from.localeCompare(b.from))[0] || null;
+}
+
+// Every month a monthly service has been running, with what was expected, what was recorded,
+// and whether anything is missing. Upfront plans are released by month-end and have no
+// monthly record, so they are described by their amortisation instead.
+export function serviceMonths(sub, upto) {
+  const end = upto || ym(today());
+  const out = [];
+  if (!sub.start) return out;
+  // Months already carrying a record beyond today (a month billed in advance) still belong
+  // on the grid, so the range runs to the later of today and the last recorded month.
+  const recorded = Object.keys(sub.charges || {}).sort().at(-1) || '';
+  let last = sub.end && sub.end < end ? sub.end : end;
+  if (recorded > last) last = recorded;
+  for (let m = sub.start, guard = 0; m <= last && guard < 240; m = addMonths(m, 1), guard++) {
+    const raw = (sub.charges || {})[m] || null;
+    const rec = raw && !raw.reversed ? raw : null;
+    const expected = expectedFor(sub, m);
+    // Paid or not is a fact about the bill document, which a later payment updates — the
+    // month record only knows what was true when it was written.
+    const bill = rec?.billId ? (S.bills || []).find(b => b.id === rec.billId) : null;
+    const unpaid = bill ? bill.status !== 'void' && billOutstanding(bill) > HALF_PAISA : rec?.paid === false;
+    let status;
+    if (sub.payMode === 'upfront') status = (sub.amortized || []).includes(m) ? 'released' : 'pending';
+    else if (rec?.skipped) status = 'skipped';
+    else if (rec) status = unpaid ? 'billed' : 'recorded';
+    else status = m > end ? 'upcoming' : m === end ? 'due' : 'missing';
+    const actual = rec && !rec.skipped ? num(rec.actual) : 0;
+    out.push({
+      month: m, expected, actual, rec, status,
+      variance: rec && !rec.skipped ? r2(actual - expected) : 0,
+      billId: rec?.billId || null, billStatus: bill?.status || null,
+    });
+  }
+  return out;
+}
+
+// Months a monthly service has run but nothing was recorded for — the thing that quietly
+// makes a run-rate wrong.
+export function missingServiceMonths(upto) {
+  const out = [];
+  for (const sub of (S.subs || [])) {
+    if (sub.payMode !== 'monthly' || sub.status !== 'active') continue;
+    for (const m of serviceMonths(sub, upto)) if (m.status === 'missing' || m.status === 'due') out.push({ sub, ...m });
+  }
+  return out;
+}
+
+// ═══════ DATE HELPERS FOR VALIDATION ═══════
+
+export function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return isoLocal(d);
+}
+
+export function lastDayOfMonth(month) {
+  const [y, m] = month.split('-').map(Number);
+  return isoLocal(new Date(y, m, 0));
 }

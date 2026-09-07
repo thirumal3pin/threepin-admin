@@ -32,8 +32,9 @@ import {
 import {
   ACCOUNTS, getState, setState, blank, defaultSettings,
   validate, normalise, reversalLines, fyOf, today, ym, num,
-  monthEndEntries,
+  monthEndEntries, billOutstanding, invoiceOutstanding, docStatus,
 } from './finance-core.js';
+import { validateEvent } from './finance-events.js';
 import { EV, PARTY_FIELDS } from './finance-events.js';
 
 const firebaseConfig = {
@@ -63,6 +64,7 @@ const COLLECTIONS = [
   ['loans', 'loans'],
   ['assets', 'assets'],
   ['invoices', 'invoices'],
+  ['bills', 'bills'],
   ['bankStatements', 'bankStatements'],
 ];
 
@@ -162,6 +164,7 @@ function stamp(t, no) {
     createdBy: currentUser?.email || 'unknown',
     createdAt: Date.now(),
     ...(t.reversalOf ? { reversalOf: t.reversalOf } : {}),
+    ...(t.allocations && t.allocations.length ? { allocations: t.allocations } : {}),
   };
 }
 
@@ -199,19 +202,43 @@ export async function save(evKey, values, opts = {}) {
     v.__lender = resolveParty(findPartyByName('Card EMI') || { __new: true, name: 'Card EMI', type: 'lender' }, newParties);
   }
 
-  // 2. Build for real. Nothing in here writes — it only describes what should happen.
+  // 2. The same field-level checks the form shows. Nothing reaches the ledger past them.
+  const problems = validateEvent(evKey, v).filter(p => !p.warn);
+  if (problems.length) throw new Error(problems[0].msg);
+
+  // 3. Build for real. Nothing in here writes — it only describes what should happen.
   const out = ev.build(v);
   if (out.incomplete) throw new Error(out.effects[0] || 'Fill in the form');
 
   const lines = normalise(out.lines || []);
   const docs = out.docs || [];
   const updates = out.updates || [];
+  const allocations = out.allocations || [];
   if (!lines.length && !docs.length && !updates.length) throw new Error('Nothing to save');
   if (lines.length) validate({ ...out, date: v.date, lines });
 
-  // 3. One transaction for the entry, its number, any master records, and the invoice.
+  // 4. Document ids are reserved before the transaction so an update elsewhere in the same
+  //    save can point at a document that does not exist yet — the service month's record
+  //    naming the bill it produced, for instance.
+  const docRefs = docs.map(d => ({ ...d, ref: doc(col(d.coll)) }));
+  const keyIds = {};
+  for (const d of docRefs) if (d._key) keyIds['$' + d._key] = d.ref.id;
+  const link = val => {
+    if (typeof val === 'string' && keyIds[val] !== undefined) return keyIds[val];
+    if (Array.isArray(val)) return val.map(link);
+    if (val && typeof val === 'object') return Object.fromEntries(Object.entries(val).map(([k, x]) => [k, link(x)]));
+    return val;
+  };
+
+  // 5. One transaction for the entry, its number, the documents, the updates, the
+  //    allocations and the invoice.
   return runTransaction(db, async tx => {
     const { settings, nos, patch } = await reserveNumbers(tx, lines.length ? 1 : 0);
+
+    // Every document a payment is allocated to is read first — Firestore wants all reads
+    // before any write — so paid-so-far is taken from the live document, not the cache.
+    const allocSnaps = [];
+    for (const a of allocations) allocSnaps.push({ a, snap: await tx.get(ref(a.coll, a.id)) });
 
     for (const p of newParties) tx.set(p.ref, p.record);
 
@@ -224,13 +251,32 @@ export async function save(evKey, values, opts = {}) {
         ...out, lines, date: v.date, event: evKey,
         meta: stripForMeta(v),
         attachments: opts.attachments || [],
+        allocations: allocations.map(a => ({ coll: a.coll, id: a.id, amt: a.amt })),
       }, no));
     }
 
-    for (const d of docs) {
-      tx.set(doc(col(d.coll)), { ...d.data, createdBy: currentUser?.email || 'unknown', createdAt: Date.now() });
+    for (const d of docRefs) {
+      const data = { ...link(d.data), createdBy: currentUser?.email || 'unknown', createdAt: Date.now() };
+      if (d._linkTxn && txnId) data.txnId = txnId;
+      if (d.coll === 'bills' && no) data.no = no;
+      tx.set(d.ref, data);
     }
-    for (const u of updates) tx.update(ref(u.coll, u.id), u.data);
+    for (const u of updates) tx.update(ref(u.coll, u.id), link(u.data));
+
+    // Allocations: paid-so-far and status move together, and the payment is recorded on the
+    // document so the vendor statement can show which payment settled which bill.
+    for (const { a, snap } of allocSnaps) {
+      if (!snap.exists()) continue;
+      const cur = snap.data();
+      const paid = Math.round((num(cur.paid) + num(a.amt)) * 100) / 100;
+      const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
+      const outstanding = Math.round((total - paid) * 100) / 100;
+      tx.update(ref(a.coll, a.id), {
+        paid,
+        status: docStatus(outstanding, total),
+        allocations: [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date || today() }],
+      });
+    }
 
     // A GST invoice takes the next invoice number off the same settings document, in the
     // same transaction, so the sequence stays gapless and can never double up.
@@ -240,8 +286,11 @@ export async function save(evKey, values, opts = {}) {
       invoiceNo = (settings.invoicePrefix || '3PIN/') + String(n).padStart(3, '0');
       const iref = doc(col('invoices'));
       invoiceId = iref.id;
+      const invPaid = num(out.invoice.paid);
       tx.set(iref, {
-        ...out.invoice, txnId, invoiceNo, status: 'unpaid',
+        ...out.invoice, txnId, invoiceNo,
+        paid: invPaid, status: docStatus(num(out.invoice.total) - invPaid, out.invoice.total),
+        allocations: [],
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
       });
       patch.nextInvoiceNo = n + 1;
@@ -293,7 +342,7 @@ function findPartyByName(name) {
 function stripForMeta(v) {
   const out = {};
   for (const [k, val] of Object.entries(v)) {
-    if (val === undefined || val === null || k.startsWith('__')) continue;
+    if (val === undefined || val === null || k.startsWith('__') || k === 'alloc') continue;
     if (typeof val === 'object') {
       out[k] = val.id || val.name || JSON.stringify(val).slice(0, 200);
     } else {
@@ -313,9 +362,17 @@ export async function reverse(txnId) {
   // Reversing an invoiced entry has to issue a credit note against the original — GST does
   // not allow an invoice to simply disappear.
   const inv = getState().invoices.find(i => i.txnId === txnId && i.kind !== 'creditnote');
+  // A reversed payment gives its allocations back to the bills it settled; a reversed bill
+  // is voided so it stops showing as owed.
+  const allocs = t.allocations || [];
+  const madeBills = getState().bills.filter(b => b.txnId === txnId);
+  const svcMonth = getState().subs.flatMap(sb => Object.entries(sb.charges || {}).filter(([, c]) => madeBills.some(b => b.id === c.billId)).map(([m]) => ({ sub: sb, m })));
 
   return runTransaction(db, async tx => {
     const { settings, nos, patch } = await reserveNumbers(tx, 1);
+    const allocSnaps = [];
+    for (const a of allocs) allocSnaps.push({ a, snap: await tx.get(ref(a.coll, a.id)) });
+
     const rref = doc(col('txns'));
     tx.set(rref, stamp({
       date: today(),
@@ -325,6 +382,19 @@ export async function reverse(txnId) {
       reversalOf: t.id,
     }, nos[0]));
     tx.update(ref('txns', t.id), { reversedBy: rref.id });
+
+    for (const { a, snap } of allocSnaps) {
+      if (!snap.exists()) continue;
+      const cur = snap.data();
+      const paid = Math.max(0, Math.round((num(cur.paid) - num(a.amt)) * 100) / 100);
+      const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
+      tx.update(ref(a.coll, a.id), {
+        paid, status: docStatus(total - paid, total),
+        allocations: [...(cur.allocations || []), { txnId: rref.id, amt: -num(a.amt), date: today(), reversal: true }],
+      });
+    }
+    for (const b of madeBills) tx.update(ref('bills', b.id), { status: 'void', voidedBy: rref.id });
+    for (const { sub: sb, m } of svcMonth) tx.update(ref('subscriptions', sb.id), { [`charges.${m}.reversed`]: true, [`charges.${m}.reversedBy`]: rref.id });
 
     let creditNoteNo = null;
     if (inv) {

@@ -14,167 +14,18 @@ import {
   setDisplayCurrency, displayCurrency, fmtInr,
   gstOutputBal, gstInputBal, gstHeads, gstSetOff, gstComputation, itcRegister,
   tdsFyTotal, complianceCalendar, upcomingCash, agedReceivables, taxProvision,
+  expectedFor, serviceMonths, openInvoices, openBills, invoiceOutstanding, billOutstanding,
 } from '../finance-assets/finance-core.js';
 import { EV, PARTY_FIELDS, gstSync } from '../finance-assets/finance-events.js';
 import {
   filterTxns, previousRange, periodKey, seriesByPeriod, runningCash, breakdown, kpis, dealFunnel, collectionDays, byChannel,
 } from '../finance-assets/finance-analytics.js';
 
-// ═══════ TINY TEST RUNNER ═══════
-
-let passed = 0, failed = 0;
-const failures = [];
-
-function check(label, condition, detail) {
-  if (condition) { passed++; return true; }
-  failed++;
-  failures.push(`${label}${detail ? ' — ' + detail : ''}`);
-  console.log(`  FAIL  ${label}${detail ? ' — ' + detail : ''}`);
-  return false;
-}
-
-// Money comparisons tolerate a paisa of float drift; anything larger is a real bug.
-const near = (a, b, tol = 0.02) => Math.abs(num(a) - num(b)) <= tol;
-
-function eq(label, actual, expected, tol) {
-  return check(label, near(actual, expected, tol), `got ${fmt(actual)} (${actual}), expected ${fmt(expected)} (${expected})`);
-}
-
-function section(name) { console.log(`\n── ${name}`); }
-
-// ═══════ HARNESS ═══════
-//
-// Mirrors finance-sync.js save(). Kept deliberately close to it, line for line, so a change
-// there that this does not reflect shows up as a behaviour difference rather than passing
-// silently.
-
-let seq = 0;
-const nid = p => `${p}${String(++seq).padStart(4, '0')}`;
-
-function resolveParty(value) {
-  if (!value) return null;
-  if (typeof value === 'string') return value;
-  const s = getState();
-  const hit = s.parties.find(p => p.name.trim().toLowerCase() === String(value.name).trim().toLowerCase());
-  if (hit) return hit.id;
-  const id = nid('P');
-  s.parties.push({ id, name: String(value.name).trim(), type: value.type || 'other', phone: '', state: '' });
-  return id;
-}
-
-function applyUpdate(obj, data) {
-  // Firestore treats a dotted key as a nested path; charges.2026-09 must not create a
-  // literal "charges.2026-09" property or confirmcharge silently stops working.
-  for (const [k, v] of Object.entries(data)) {
-    if (k.includes('.')) {
-      const keys = k.split('.');
-      let node = obj;
-      keys.slice(0, -1).forEach(key => { node = node[key] = node[key] || {}; });
-      node[keys.at(-1)] = v;
-    } else obj[k] = v;
-  }
-}
-
-const COLL_KEY = { deals: 'deals', subscriptions: 'subs', loans: 'loans', assets: 'assets', parties: 'parties' };
-
-function save(evKey, values) {
-  const s = getState();
-  const ev = EV[evKey];
-  if (!ev) throw new Error('Unknown event ' + evKey);
-  const v = { ...values };
-
-  for (const k of (PARTY_FIELDS[evKey] || [])) v[k] = resolveParty(v[k]);
-  if (evKey === 'card2emi') v.__lender = resolveParty({ __new: true, name: 'Card EMI', type: 'lender' });
-
-  const out = ev.build(v);
-  if (out.incomplete) throw new Error(out.effects[0]);
-
-  const lines = normalise(out.lines || []);
-  let txnId = null;
-  if (lines.length) {
-    validate({ ...out, date: v.date, lines });
-    txnId = nid('TX');
-    s.txns.push({
-      id: txnId, date: v.date, event: evKey, desc: out.desc, lines,
-      totals: {
-        dr: Math.round(lines.reduce((a, l) => a + num(l.dr), 0) * 100) / 100,
-        cr: Math.round(lines.reduce((a, l) => a + num(l.cr), 0) * 100) / 100,
-      },
-      meta: Object.fromEntries(Object.entries(v).filter(([k, x]) => x != null && typeof x !== 'object' && !k.startsWith('__'))),
-      attachments: [], auto: false,
-      fy: fyOf(v.date, s.settings.fyStartMonth), createdBy: 'test', createdAt: Date.now(),
-    });
-  }
-
-  for (const d of out.docs || []) {
-    const key = COLL_KEY[d.coll];
-    s[key].push({ ...d.data, id: nid(d.coll[0].toUpperCase()) });
-  }
-  for (const u of out.updates || []) {
-    const key = COLL_KEY[u.coll];
-    const target = s[key].find(x => x.id === u.id);
-    if (target) applyUpdate(target, u.data);
-  }
-  return txnId;
-}
-
-function reverse(txnId) {
-  const s = getState();
-  const t = s.txns.find(x => x.id === txnId);
-  const rid = nid('TX');
-  const lines = normalise(reversalLines(t.lines));
-  s.txns.push({
-    id: rid, date: t.date, event: 'reverse', desc: 'Reversal — ' + t.desc, lines,
-    totals: {
-      dr: lines.reduce((a, l) => a + num(l.dr), 0),
-      cr: lines.reduce((a, l) => a + num(l.cr), 0),
-    },
-    reversalOf: t.id, auto: false, attachments: [], meta: {},
-    fy: t.fy, createdBy: 'test', createdAt: Date.now(),
-  });
-  t.reversedBy = rid;
-  return rid;
-}
-
-function runMonthEnd(month) {
-  const s = getState();
-  const entries = monthEndEntries(month);
-  for (const e of entries) {
-    const lines = normalise(e.txn.lines);
-    s.txns.push({
-      id: nid('TX'), ...e.txn, lines,
-      totals: {
-        dr: lines.reduce((a, l) => a + num(l.dr), 0),
-        cr: lines.reduce((a, l) => a + num(l.cr), 0),
-      },
-      meta: {}, attachments: [], fy: fyOf(e.txn.date, s.settings.fyStartMonth),
-      createdBy: 'test', createdAt: Date.now(),
-    });
-    if (e.kind === 'prepaid') {
-      const sub = s.subs.find(x => x.id === e.ref);
-      sub.amortized = [...(sub.amortized || []), month];
-    } else {
-      const a = s.assets.find(x => x.id === e.ref);
-      a.depreciated = [...(a.depreciated || []), month];
-    }
-  }
-  s.monthEnds[month] = { ranAt: Date.now(), entriesPosted: entries.length };
-  return entries.length;
-}
-
-const byName = (arr, name) => arr.find(x => x.name === name || x.nickname === name);
+import { check, eq, near, section, refuses, report, fresh, save, reverse, runMonthEnd, byName, party } from './_harness.mjs';
 
 // ═══════ SCENARIO ═══════
 
 const M0 = '2026-09', M1 = '2026-10', M2 = '2026-11';
-
-function fresh() {
-  seq = 0;
-  const s = blank();
-  s.settings = { ...defaultSettings(), booksStartDate: '2026-09-01', tdsEnabled: false };
-  setState(s);
-  return s;
-}
 
 console.log('3 PIN Realty — finance engine tests');
 const s = fresh();
@@ -183,14 +34,14 @@ const s = fresh();
 section('September 2026 — setting up');
 
 save('funding', { date: '2026-09-01', kind: '3000', who: 'Swaminathan N G', amt: 500000 });
-save('asset', { date: '2026-09-03', name: 'MacBook Air', amt: 95000, gst: 'no', life: 36, via: '1000' });
-save('asset', { date: '2026-09-04', name: 'Sony A7 camera', amt: 80000, gst: 'no', life: 36, via: '2300' });
+save('asset', { date: '2026-09-03', name: 'MacBook Air', amt: 95000, gst: 'no', life: 36, how: '1000' });
+save('asset', { date: '2026-09-04', name: 'Sony A7 camera', amt: 80000, gst: 'no', life: 36, how: '2300' });
 save('subnew', {
-  date: '2026-09-05', name: 'Zoho CRM', vendor: 'Zoho', use: 'Lead pipeline',
+  date: '2026-09-05', name: 'Zoho CRM', vendor: { __new: true, name: 'Zoho', type: 'vendor' }, use: 'Lead pipeline',
   payMode: 'upfront', amt: 24000, gst: 'no', months: 12, via: '1000',
 });
 save('subnew', {
-  date: '2026-09-05', name: 'Claude Pro', vendor: 'Anthropic', use: 'Content',
+  date: '2026-09-05', name: 'Claude Pro', vendor: { __new: true, name: 'Anthropic', type: 'vendor' }, use: 'Content',
   payMode: 'monthly', amt: 1800, gst: 'no', via: '2300',
 });
 save('expense', { date: '2026-09-08', desc: 'Office rent — Sep', acc: '5000', amt: 35000, gst: 'no', via: '1000' });
@@ -208,7 +59,7 @@ save('bill', {
   acc: '5120', amt: 10000, gst: 'no', tds: 'none', tdsrate: 0,
 });
 const claude = byName(s.subs, 'Claude Pro').id;
-save('confirmcharge', { sub: claude, month: M0, date: '2026-09-05', result: 'charged', amt: 1800, gst: 'no' });
+save('confirmcharge', { sub: claude, month: M0, date: '2026-09-05', result: 'paid', amt: 1800, gst: 'no' });
 save('transfer', { date: '2026-09-15', kind: '1000>1010', amt: 10000 });
 save('petty', { date: '2026-09-20', a1: 3000, c1: '5050', a2: 0, c2: '5050', a3: 0, c3: '5050' });
 save('salary', { date: '2026-09-28', emp: { __new: true, name: 'Priya' }, kind: '5010', gross: 25000, tds: 0, pf: 0 });
@@ -246,15 +97,23 @@ eq('…split evenly into CGST and SGST for a Tamil Nadu property', bal('2200'), 
 eq('Client owes the balance', bal('1100'), 118000 - 50000);
 check('Deal is marked registered', s.deals.find(d => d.id === deal1).status === 'registered');
 
-save('dealpay', { date: '2026-10-14', deal: deal1, from: 'buyer', amt: 68000, via: '1000' });
+const karthik = party('Mr. Karthik');
+const inv1 = s.invoices.find(i => i.partyId === karthik);
+check('Invoice was created with the token already applied', inv1 && near(inv1.paid, 50000) && inv1.status === 'part', JSON.stringify(inv1));
+save('dealpay', { date: '2026-10-14', party: karthik, amt: 68000, via: '1000' });
 eq('Nothing left owed on the deal', bal('1100', { deal: deal1 }), 0);
 eq('Paying does not book income again', pl(M1).ti, 100000);
+check('The payment was allocated to the invoice and it is now paid', inv1.status === 'paid' && near(inv1.paid, 118000), JSON.stringify(inv1));
+check('The ledger entry names the invoice it settled', s.txns.at(-1).allocations?.[0]?.id === inv1.id);
 
 const balaji = s.parties.find(p => p.name === 'Balaji & Co').id;
+const bill1 = s.bills.find(b => b.partyId === balaji);
+check('The bill exists as a document, open, with a due date', bill1 && bill1.status === 'open' && bill1.dueDate === '2026-10-12', JSON.stringify(bill1));
 save('paybill', { date: '2026-10-15', party: balaji, amt: 10000, via: '1000' });
 eq('Vendor is settled', bal('2000', { party: balaji }), 0);
+check('The bill is marked paid by the allocation', bill1.status === 'paid' && near(bill1.paid, 10000), JSON.stringify(bill1));
 
-save('confirmcharge', { sub: claude, month: M1, date: '2026-10-05', result: 'charged', amt: 1800, gst: 'no' });
+save('confirmcharge', { sub: claude, month: M1, date: '2026-10-05', result: 'paid', amt: 1800, gst: 'no' });
 save('expense', { date: '2026-10-08', desc: 'Office rent — Oct', acc: '5000', amt: 35000, gst: 'no', via: '1000' });
 save('salary', { date: '2026-10-28', emp: 'Priya', kind: '5010', gross: 25000, tds: 0, pf: 0 });
 
@@ -301,14 +160,17 @@ check('Deal marked cancelled', s.deals.find(d => d.id === deal3).status === 'can
 // Cancelling an annual plan part-way: unused balance leaves the books.
 const zoho = byName(s.subs, 'Zoho CRM');
 eq('Two months of prepaid used', prepaidLeft(zoho), 24000 - 4000);
-save('subcancel', { date: '2026-11-15', sub: zoho.id, action: 'cancel', refund: 12000 });
+save('subcancel', { from: '2026-11', date: '2026-11-15', sub: zoho.id, action: 'cancel', refund: 12000 });
 eq('Cancellation loss is the unrefunded remainder', bal('5210'), 20000 - 12000);
 eq('Prepaid account is emptied', bal('1200'), 0);
 
-// Upgrading a monthly service closes the old line and opens a new one.
-save('subchange', { date: '2026-11-16', sub: claude, plan: 'Max', payMode: 'monthly', amount: 3000, months: 12, refund: 0 });
-check('Old service line closed', s.subs.find(x => x.id === claude).status === 'changed');
-check('New service line is active', s.subs.some(x => x.parent === claude && x.status === 'active'));
+// Upgrading a monthly service is a dated change of expectation — one line, a history.
+save('subchange', { from: '2026-12', sub: claude, plan: 'Max', payMode: 'monthly', amt: 3000 });
+const claudeSub = s.subs.find(x => x.id === claude);
+check('The service line stays active', claudeSub.status === 'active');
+eq('November still expects the old amount', expectedFor(claudeSub, '2026-11'), 1800);
+eq('December expects the new amount', expectedFor(claudeSub, '2026-12'), 3000);
+check('Plan name follows the change', claudeSub.plan === 'Max');
 
 // Two EMIs. Only the interest is a cost.
 const i1 = loan.schedule[0], i2 = loan.schedule[1];
@@ -680,11 +542,4 @@ check('September falls in 2026-27', fyOf('2026-09-06', 4) === '2026-27', fyOf('2
 
 // ═══════ RESULT ═══════
 
-console.log(`\n${'─'.repeat(58)}`);
-console.log(`${passed} passed, ${failed} failed  ·  ${getState().txns.length} entries posted`);
-if (failed) {
-  console.log('\nFailures:');
-  failures.forEach(f => console.log('  · ' + f));
-  process.exit(1);
-}
-console.log('All green.');
+report();

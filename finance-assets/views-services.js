@@ -7,10 +7,15 @@
 import {
   fmt, esc, num, today, ym, addMonths, mlabel, getState, bal,
   prepaidLeft, serviceRunRate, pname,
+  expectedFor, nextPlanChange, serviceMonths, missingServiceMonths, openBills, billOutstanding,
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, daysBetween } from './ui.js';
 
 // ═══════ SERVICES ═══════
+//
+// A service is a commitment (what you expect each month, with a dated history of plan
+// changes), a stream of documents (each month's bill, paid or not) and the variance between
+// the two, with a reason. The page shows all three, month by month.
 
 // An upfront plan's term ends on the last day of its end month; that is the date the vendor
 // will actually take the renewal, so it is what "renews soon" has to measure against.
@@ -20,16 +25,61 @@ function renewalDate(sub) {
   return new Date(y, m, 0).toISOString().slice(0, 10);
 }
 
-function thisMonthCell(sub, month) {
-  if (sub.payMode === 'upfront') {
-    return (sub.amortized || []).includes(month)
-      ? `<span class="pos">released</span>`
-      : `<span class="faint">auto at month-end</span>`;
+const REASONS = {
+  prorate: 'Plan changed mid-month (prorated)', usage: 'Usage-based', price: 'Vendor changed the price',
+  discount: 'Discount / credit', fx: 'Exchange rate moved', other: 'Other',
+};
+
+const recordBtn = (sub, month, label = 'Record') =>
+  `<button class="btn ghost sm" type="button" onclick="fin.record('confirmcharge',{sub:'${esc(sub.id)}',month:'${esc(month)}'})">${label}</button>`;
+
+function monthCell(m, sub) {
+  switch (m.status) {
+    case 'released': return '<span class="pos">released</span>';
+    case 'pending': return '<span class="faint">auto at month-end</span>';
+    case 'skipped': return '<span class="faint">not charged</span>';
+    case 'billed': return `<span class="neg">${fmt(m.actual)} — unpaid</span>`;
+    case 'recorded': return `<span class="pos">${fmt(m.actual)} paid</span>`;
+    case 'due': return `<span class="faint">not yet</span> ${recordBtn(sub, m.month)}`;
+    case 'upcoming': return `<span class="faint">upcoming</span> ${recordBtn(sub, m.month, 'Record early')}`;
+    default: return `${tag('missing', 'warn')} ${recordBtn(sub, m.month)}`;
   }
-  const c = (sub.charges || {})[month];
-  if (!c) return `<span class="faint">not yet</span>`;
-  if (c.skipped) return `<span class="faint">skipped</span>`;
-  return `<span class="pos">${fmt(c.actual)}</span>`;
+}
+
+// An expense variance reads the other way round from income: over what was expected is the
+// bad direction.
+function varianceCell(v) {
+  if (Math.abs(v) <= 0.5) return '<span class="faint">—</span>';
+  return `<span class="${v > 0 ? 'neg' : 'pos'}">${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</span>`;
+}
+
+function planHistory(sub) {
+  const hist = [...(sub.history || [])].sort((a, b) => a.from.localeCompare(b.from));
+  if (hist.length < 2) return '';
+  return `<p class="small muted" style="margin:10px 0 0"><b>Plan history:</b> ${hist.map(h =>
+    `${esc(mlabel(h.from))} → ${fmt(h.amount)}/mo${h.plan ? ' (' + esc(h.plan) + ')' : ''}`).join(' · ')}</p>`;
+}
+
+function monthByMonth(sub) {
+  const rows = serviceMonths(sub);
+  if (!rows.length) return '';
+  const unpaidBills = openBills(null, { serviceId: sub.id });
+  return `
+    <details class="journal" style="margin-top:0">
+      <summary>${esc(sub.name)}${sub.plan ? ' (' + esc(sub.plan) + ')' : ''} — expected vs billed vs paid, month by month</summary>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Month</th><th class="n">Expected</th><th class="n">Billed</th><th class="n">Variance</th><th>Why</th><th>Status</th></tr></thead>
+        <tbody>${rows.slice().reverse().map(m => `<tr>
+          <td class="nowrap">${esc(mlabel(m.month))}</td>
+          <td class="n">${fmt(m.expected)}</td>
+          <td class="n">${m.rec && !m.rec.skipped ? fmt(m.actual) : '<span class="faint">—</span>'}</td>
+          <td class="n">${m.rec && !m.rec.skipped ? varianceCell(m.variance) : '<span class="faint">—</span>'}</td>
+          <td class="small">${esc(REASONS[m.rec?.reason] || '')}${m.rec?.note ? (REASONS[m.rec?.reason] ? ' — ' : '') + esc(m.rec.note) : ''}</td>
+          <td class="small nowrap">${monthCell(m, sub)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      ${planHistory(sub)}
+      ${unpaidBills.length ? `<p class="small neg" style="margin:10px 0 0">${unpaidBills.length} unpaid bill${unpaidBills.length === 1 ? '' : 's'} on this service — ${fmt(unpaidBills.reduce((a, b) => a + billOutstanding(b), 0))}. Pay from the Owed tab.</p>` : ''}
+    </details>`;
 }
 
 export function renderServices() {
@@ -37,58 +87,91 @@ export function renderServices() {
   const month = ym(today());
   const rr = serviceRunRate();
   const active = s.subs.filter(x => x.status === 'active');
-  const past = s.subs.filter(x => x.status !== 'active');
+  const paused = s.subs.filter(x => x.status === 'paused');
+  const past = s.subs.filter(x => !['active', 'paused'].includes(x.status));
 
   if (!s.subs.length) {
     return `<h1>Services</h1>
-      ${empty('<b>No services yet.</b><br>Add your subscriptions — CRM, ads, phone, software — and this page tells you what they really cost you every month.',
+      ${empty('<b>No services yet.</b><br>Add your subscriptions — CRM, ads, phone, software — and this page tells you what they really cost you every month, what you expected, and why the two differ.',
       '<button class="btn primary" type="button" onclick="fin.record(\'subnew\')">Add a service</button>')}`;
   }
 
+  // The run-rate is what is EXPECTED this month, plan changes included — not the number
+  // typed when the service was first added.
+  const expectedNow = active.reduce((a, x) => a + (x.payMode === 'upfront' ? num(x.monthly) : expectedFor(x, month)), 0);
+  const nextMonth = addMonths(month, 1);
+  const expectedNext = active.reduce((a, x) => a + (x.payMode === 'upfront' ? (x.end && x.end < nextMonth ? 0 : num(x.monthly)) : expectedFor(x, nextMonth)), 0);
+  const missing = missingServiceMonths(month).filter(m => m.status === 'missing');
+  const dueNow = missingServiceMonths(month).filter(m => m.status === 'due');
+  const svcBills = openBills(null).filter(b => b.serviceId);
+  const unpaid = svcBills.reduce((a, b) => a + billOutstanding(b), 0);
+
   return `
     <h1>Services</h1>
-    <p class="lead">What your tools actually cost per month, whether you pay monthly or once a year.</p>
+    <p class="lead">What your tools cost each month — expected, actually billed, and paid — whether you pay monthly or once a year.</p>
 
     <div class="grid g3">
-      ${stat('Run rate', fmt(rr.monthly) + '/mo')}
+      ${stat('Expected this month', fmt(expectedNow), { sub: Math.abs(expectedNext - expectedNow) > 0.5 ? `${fmt(expectedNext)} from ${mlabel(nextMonth)}` : 'Same next month' })}
       ${stat('Annual commitment', fmt(rr.annual))}
       ${stat('Prepaid with vendors', fmt(rr.prepaidUnused), { sub: 'Paid for but not yet used' })}
-      ${stat('Active', String(active.length))}
+      ${stat('Unpaid service bills', fmt(unpaid), { cls: unpaid > 0.5 ? 'neg' : '', sub: svcBills.length ? `${svcBills.length} bill${svcBills.length === 1 ? '' : 's'} on Owed` : 'Nothing outstanding' })}
     </div>
+
+    ${missing.length ? note(`<b>${missing.length} month${missing.length === 1 ? '' : 's'} not recorded.</b> Until each is recorded (or marked not charged) the books are missing that cost: ${missing.map(m => `${esc(m.sub.name)} — ${esc(mlabel(m.month))} ${recordBtn(m.sub, m.month)}`).join(' · ')}`, 'warn') : ''}
+    ${dueNow.length && !missing.length ? note(`${dueNow.length} service${dueNow.length === 1 ? '' : 's'} still to record for ${esc(mlabel(month))}.`, 'info') : ''}
 
     <div class="actions">
       <button class="btn primary" type="button" onclick="fin.record('subnew')">Add a service</button>
     </div>
 
     ${active.length ? table(
-    `<th>Service</th><th>What for</th><th class="n">Per month</th><th>Paid</th><th>Period</th><th>${esc(mlabel(month))}</th><th></th>`,
+    `<th>Service</th><th>What for</th><th class="n">Expected / mo</th><th>Billing</th><th>Period</th><th>${esc(mlabel(month))}</th><th></th>`,
     active.map(sub => {
       const rd = renewalDate(sub);
       const soon = rd && daysBetween(today(), rd) >= 0 && daysBetween(today(), rd) <= 7;
+      const next = sub.payMode === 'upfront' ? null : nextPlanChange(sub, month);
+      const thisM = serviceMonths(sub).find(m => m.month === month) || { status: sub.payMode === 'upfront' ? 'pending' : 'due', month };
+      const billing = sub.payMode === 'upfront' ? 'Upfront' : sub.billing === 'invoice' ? 'Invoiced monthly' : 'Auto-charged';
       return `<tr>
-          <td><b>${esc(sub.name)}</b>${soon ? tag('renews soon', 'warn') : ''}
+          <td><b>${esc(sub.name)}</b>${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}${soon ? tag('renews soon', 'warn') : ''}
             ${sub.vendor ? `<br><span class="small faint">${esc(sub.vendor)}</span>` : ''}</td>
           <td class="small">${esc(sub.use || '—')}</td>
-          <td class="n">${fmt(sub.monthly)}</td>
-          <td class="small">${sub.payMode === 'upfront' ? 'Upfront' : 'Monthly'}</td>
+          <td class="n">${fmt(sub.payMode === 'upfront' ? sub.monthly : expectedFor(sub, month))}
+            ${next ? `<br><span class="small muted nowrap">→ ${fmt(next.amount)} from ${esc(mlabel(next.from))}</span>` : ''}</td>
+          <td class="small">${billing}</td>
           <td class="small nowrap">${esc(mlabel(sub.start))}${sub.end ? ' → ' + esc(mlabel(sub.end)) : ' → ongoing'}</td>
-          <td class="small">${thisMonthCell(sub, month)}</td>
+          <td class="small nowrap">${monthCell(thisM, sub)}</td>
           <td class="n nowrap">
-            ${sub.payMode === 'monthly'
-          ? `<button class="btn ghost sm" type="button" onclick="fin.record('confirmcharge',{sub:'${esc(sub.id)}'})">Confirm charge</button>` : ''}
-            <button class="btn ghost sm" type="button" onclick="fin.record('subchange',{sub:'${esc(sub.id)}'})">Change</button>
+            ${sub.payMode === 'monthly' ? recordBtn(sub, month, 'Record a month') : ''}
+            <button class="btn ghost sm" type="button" onclick="fin.record('subchange',{sub:'${esc(sub.id)}'})">Change plan</button>
             <button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}'})">Cancel</button>
           </td></tr>`;
     }).join(''),
-    `<tr><td colspan="2">Total per month</td><td class="n">${fmt(rr.monthly)}</td><td colspan="4"></td></tr>`)
+    `<tr><td colspan="2">Expected this month</td><td class="n">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`)
       : empty('No active services.')}
+
+    ${active.some(x => x.payMode === 'monthly') ? `
+      <h2>Month by month</h2>
+      <p class="small muted">Every month a service has run: what you expected, what the vendor billed, whether it is paid, and why it differs. A missing month is a cost the books do not yet know about.</p>
+      ${active.filter(x => x.payMode === 'monthly').map(monthByMonth).join('')}` : ''}
+
+    ${paused.length ? `
+      <h2>Paused</h2>
+      ${table(
+        `<th>Service</th><th class="n">Was per month</th><th>Since</th><th></th>`,
+        paused.map(sub => `<tr>
+            <td>${esc(sub.name)}</td>
+            <td class="n">${fmt(expectedFor(sub, month))}</td>
+            <td class="small">${sub.end ? esc(mlabel(sub.end)) : '—'}</td>
+            <td class="n"><button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}',action:'resume'})">Resume</button></td>
+          </tr>`).join(''))}` : ''}
 
     ${past.length ? `
       <h2>No longer active</h2>
       ${table(
         `<th>Service</th><th class="n">Was per month</th><th>Status</th><th>Ended</th>`,
         past.map(sub => `<tr>
-            <td>${esc(sub.name)}</td>
+            <td>${esc(sub.name)}${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}</td>
             <td class="n">${fmt(sub.monthly)}</td>
             <td class="small">${esc(sub.status)}</td>
             <td class="small">${sub.end ? esc(mlabel(sub.end)) : '—'}</td>

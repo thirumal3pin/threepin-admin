@@ -352,6 +352,12 @@ service cloud.firestore {
       allow read, create, update: if ownsTenantDoc(tid);
       allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
     }
+    // Vendor bills. A payment is allocated to specific bills, so the document carries
+    // paid-so-far and a derived status; it is never deleted, only voided by a reversal.
+    match /finance/{tid}/bills/{docId} {
+      allow read, create, update: if ownsTenantDoc(tid);
+      allow delete: if false;
+    }
     match /finance/{tid}/bankStatements/{docId} {
       allow read, create, update: if ownsTenantDoc(tid);
       allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;

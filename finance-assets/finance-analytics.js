@@ -237,8 +237,10 @@ export function collectionDays(state) {
   for (const inv of state.txns.filter(t => t.event === 'invoice')) {
     for (const l of inv.lines) {
       if (l.acc !== '1100' || !num(l.dr)) continue;
-      const pay = state.txns.find(t => t.event === 'dealpay' && t.date >= inv.date &&
-        t.lines.some(x => x.acc === '1100' && x.party === l.party && x.deal === l.deal && num(x.cr)));
+      const doc = (state.invoices || []).find(i => i.txnId === inv.id);
+      const pay = state.txns.find(t => t.event === 'dealpay' && t.date >= inv.date && (
+        (doc && (t.allocations || []).some(a => a.id === doc.id)) ||
+        t.lines.some(x => x.acc === '1100' && x.party === l.party && x.deal === l.deal && num(x.cr))));
       if (pay) spans.push(Math.round((new Date(pay.date) - new Date(inv.date)) / 86400000));
     }
   }

@@ -52,7 +52,7 @@
   --faint: var(--ink-3);
 
   --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --serif: 'Fraunces', 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
   --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
 
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
@@ -78,7 +78,6 @@ body {
   line-height: 1.55;
   color: var(--ink);
   background: var(--bg);
-  -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
 
@@ -270,8 +269,44 @@ main > * { animation: rise .18s ease-out both; }
 /* ═══════ FORMS ═══════ */
 
 .field { margin-bottom: var(--s4); }
-.field > label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--ink-2); }
-.field .hint { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; line-height: 1.45; }
+.field > label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
+.field .hint { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.45; }
+.ferr { font-size: 12.5px; margin-top: 6px; line-height: 1.4; font-weight: 500; padding: 6px 10px; border-radius: var(--r-sm); }
+.ferr.err { color: var(--bad); background: var(--bad-soft); }
+.ferr.warn { color: var(--warn); background: var(--warn-soft); }
+.field.has-err input, .field.has-err select { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.field.has-warn input, .field.has-warn select { border-color: #D9A441; }
+.warn-ink { color: var(--warn); }
+
+/* Direction — green for money in, red for money out, slate for moving your own money, amber
+   for corrections. On the chooser it is a left rule; on the form and the result it is the
+   same rule, so the colour follows the entry from the first tap to the confirmation. */
+.dir-in { --dir: var(--good); --dir-soft: var(--good-soft); }
+.dir-out { --dir: var(--bad); --dir-soft: var(--bad-soft); }
+.dir-move { --dir: #4A5B73; --dir-soft: #EDF1F6; }
+.dir-fix { --dir: var(--warn); --dir-soft: var(--warn-soft); }
+.dir-setup { --dir: var(--ink-3); --dir-soft: var(--card-2); }
+.chooser-grid button[class*="dir-"] { border-left: 4px solid var(--dir); }
+.chooser-grid button[class*="dir-"]:hover { background: var(--dir-soft); }
+.record-split[class*="dir-"] .form-col > form { border-left: 4px solid var(--dir); padding-left: var(--s4); }
+.record-split[class*="dir-"] .save-bar { border-top: 3px solid var(--dir); }
+.result[class*="dir-"]::before { background: var(--dir); }
+.dirtag { display: inline-block; vertical-align: middle; font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 4px 9px; border-radius: 999px; background: var(--dir-soft); color: var(--dir); margin-left: 8px; }
+.btn.in { border-color: var(--good); color: var(--good); }
+.btn.out { border-color: var(--bad); color: var(--bad); }
+.btn.in:hover:not(:disabled) { background: var(--good-soft); }
+.btn.out:hover:not(:disabled) { background: var(--bad-soft); }
+
+/* Allocation table inside a form */
+.alloc table { font-size: 13px; }
+.alloc input { max-width: 130px; min-height: 36px; padding: 6px 8px; text-align: right; }
+.alloc tfoot td { font-weight: 600; }
+
+/* Documents under a party on the Owed lists */
+.doclist { margin-top: 6px; display: grid; gap: 3px; }
+.docrow { display: grid; grid-template-columns: minmax(0, 1.4fr) auto auto; gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--ink-2); }
+.docrow .n { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+.docrow > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 input[type=text], input[type=number], input[type=date], input[type=month],
 input[type=email], input[type=password], input[type=search], select, textarea {
@@ -533,3 +568,11 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
   .brand .small { display: none; }
   .brand { font-size: 17px; }
 }
+
+/* Guide */
+.guide-bar { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; margin-bottom: var(--s5); }
+.guide-bar .seg { margin: 0; }
+.guide-bar input { flex: 1 1 240px; max-width: 380px; }
+.guide-scenario[class*="dir-"], .guide-action { border-left: 4px solid var(--dir, var(--line-2)); }
+.guide-faq { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 14px; margin-bottom: 8px; }
+.guide-faq summary { font-weight: 600; color: var(--ink); font-size: 14.5px; }
