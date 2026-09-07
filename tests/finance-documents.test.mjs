@@ -117,7 +117,7 @@ eq('Variance against the 10,000 expected', claude.charges['2026-12'].variance, -
 
 section('An annual plan from a vendor abroad — reverse charge on the upfront payment');
 {
-  const rcmBefore = bal(GST_RCM), itcBefore = bal('1402'), prepaidBefore = bal('1200');
+  const rcmBefore = bal(GST_RCM), itcBefore = bal('1402'), prepaidBefore = bal('1200'), bankBefore = bal('1000');
   save('subnew', {
     date: '2026-09-02', name: 'Google Workspace', plan: 'Business', vendor: { __new: true, name: 'Google', type: 'vendor' },
     payMode: 'upfront', amt: 12000, months: 12, via: '1000', rcm: 'yes', rcmRate: 18, rcmType: 'inter',
@@ -125,7 +125,7 @@ section('An annual plan from a vendor abroad — reverse charge on the upfront p
   eq('Prepaid carries the bare amount', bal('1200') - prepaidBefore, 12000);
   eq('IGST under reverse charge is input credit', bal('1402') - itcBefore, 2160);
   eq('…and a liability to pay in cash', bal(GST_RCM) - rcmBefore, 2160);
-  eq('Only the bare amount left the bank for the vendor', bal('1000'), 300000 - 8000 - 3600 - 12000);
+  eq('Only the bare amount left the bank for the vendor', bankBefore - bal('1000'), 12000);
 }
 
 section('Changing a plan ahead of time, without a bill');
@@ -236,7 +236,7 @@ refuses('A credit note bigger than what you owe is refused',
 // ═══════ 6. A WEEK OF MIXED MONEY: UPI, PETTY CASH, CARD ═══════
 
 section('A mixed week — UPI, the box, the card');
-const bankW = bal('1000'), boxW = bal('1010'), cardW = bal('2300');
+const bankW = bal('1000'), boxW = bal('1010'), cardW = bal('2300'), igstW = bal('1402');
 save('expense', { date: '2026-11-10', desc: 'Auto to registrar office', acc: '5050', amt: 240, gst: 'no', via: '1010' });
 save('petty', { date: '2026-11-11', a1: 120, c1: '5030', d1: 'Tea for clients', a2: 300, c2: '5100', d2: 'Courier', a3: 0 });
 save('expense', { date: '2026-11-12', desc: 'Meta ads', acc: '5090', amt: 4000, gst: 'yes', gstRate: 18, gstAmt: 720, total: 4720, gstType: 'inter', vgstin: '29AABCF1234A1Z5', vinv: 'FB-2211', via: '2300', vendor: { __new: true, name: 'Meta', type: 'vendor' } });
@@ -246,7 +246,7 @@ save('transfer', { date: '2026-11-14', kind: '1000>2300', amt: 4720 });
 eq('Box: minus the auto and the vouchers, plus the top-up', bal('1010'), boxW - 240 - 420 + 2000);
 eq('Card: charged then paid off', bal('2300'), cardW);
 eq('Bank: lunch, top-up, card bill', bal('1000'), bankW - 840 - 2000 - 4720);
-eq('Ads GST is IGST credit (vendor in another state)', bal('1402'), 777.6 + 720);
+eq('Ads GST is IGST credit (vendor in another state)', bal('1402') - igstW, 720);
 eq('Lunch GST is blocked — it stays in the cost', bal('5030'), 120 + 840);
 refuses('Vouchers beyond the box are refused',
   () => save('petty', { date: '2026-11-15', a1: 999999, c1: '5030', a2: 0, a3: 0 }), 'box only holds');
