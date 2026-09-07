@@ -309,7 +309,7 @@ try {
   await page.evaluate(() => window.fin.go('txns'));
   await page.waitForTimeout(500);
   const scopedTxt = await mainText();
-  check('The switch is loud: a banner says the view is filtered', /Petty cash only/.test(scopedTxt) && !!(await page.$('.scope-banner')));
+  check('The switch is loud: a banner says the view is filtered', /Petty cash only/i.test(scopedTxt) && !!(await page.$('.scope-banner')));
   check('Only entries through the box remain', !/E2E Claude \(Pro\) — Sept 2026/.test(scopedTxt));
   await page.evaluate(() => window.fin.setScope('without'));
   await page.waitForTimeout(400);
@@ -320,11 +320,11 @@ try {
   await page.evaluate(() => window.fin.setScope('with'));
   await page.evaluate(() => window.fin.go('petty'));
   await page.waitForTimeout(500);
-  check('Petty cash page renders its four numbers', /In the box now/.test(await mainText()) && /Last top-up/.test(await mainText()));
+  check('Petty cash page renders its four numbers', /In the box now/i.test(await mainText()) && /Last top-up/i.test(await mainText()));
   await page.evaluate(() => window.fin.go('budget'));
   await page.waitForTimeout(500);
   const bud = await mainText();
-  check('Budget shows expected against actual from the recurring cost', /E2E Claude/.test(bud) && /Expected income/.test(bud), bud.slice(0, 200));
+  check('Budget shows expected against actual from the recurring cost', /E2E Claude/i.test(bud) && /Expected income/i.test(bud), bud.replace(/\s+/g, ' ').slice(0, 300));
   await page.screenshot({ path: `${SHOTS}m-budget.png`, fullPage: true });
 
   // ═══════ 9. Guide ═══════

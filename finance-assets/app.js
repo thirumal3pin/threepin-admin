@@ -185,8 +185,14 @@ function paintScope() {
 
 function scopeBanner() {
   const mode = scopeMode();
-  if (mode === 'with' || !SCOPED_VIEWS.has(view)) return '';
-  return `<div class="scope-banner" role="status">
+  if (!SCOPED_VIEWS.has(view)) return '';
+  // The same three choices as the header, for screens where the header cannot hold them.
+  const inline = `<div class="scope-inline"><span class="lbl">Petty cash</span><div class="seg" role="tablist">
+    ${[['with', 'All'], ['without', 'Without'], ['only', 'Only']].map(([m, l]) =>
+      `<button type="button" role="tab" class="${mode === m ? 'on' : ''}" aria-selected="${mode === m}" onclick="fin.setScope('${m}')">${l}</button>`).join('')}
+  </div></div>`;
+  if (mode === 'with') return inline;
+  return inline + `<div class="scope-banner" role="status">
     <b>${esc(scopeLabel(mode))}</b> — ${mode === 'only' ? 'showing only entries that went through the cash box.' : 'entries through the cash box are left out.'}
     ${view === 'books' ? 'The trial balance and balance sheet always show everything.' : ''}
     <button type="button" class="btn ghost sm" onclick="fin.setScope('with')">Show all money</button>

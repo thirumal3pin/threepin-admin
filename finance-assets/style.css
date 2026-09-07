@@ -688,3 +688,12 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--line-2); border-bottom:
   .scope-tog .lbl { display: none; }
   .dir-tiles .tile { min-height: 84px; padding: var(--s3); }
 }
+
+/* The petty-cash switch: in the header on a desk, at the top of the page on a phone. */
+.scope-inline { display: none; align-items: center; gap: 10px; margin: 0 0 var(--s3); }
+.scope-inline .lbl { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.scope-inline .seg { margin: 0; }
+@media (max-width: 859px) {
+  #scopeTog { display: none; }
+  .scope-inline { display: flex; }
+}
