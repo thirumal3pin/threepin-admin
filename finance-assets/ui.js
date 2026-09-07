@@ -111,8 +111,12 @@ export const note = (html, kind = '') => `<div class="note ${kind}">${html}</div
 
 export const tag = (text, kind = '') => `<span class="tag ${kind}">${esc(text)}</span>`;
 
-export const table = (head, rows, foot = '') => `
-  <div class="card pad0"><div class="tbl-wrap"><table>
+// A table that reads on a phone. Pass { stack: true } for anything with more than about
+// four columns: below 640px those rows become label-and-value blocks instead of a grid the
+// reader has to scroll sideways and then remember the heading of. Cells opt in by carrying
+// data-label; a cell without one still shows, just without its heading repeated.
+export const table = (head, rows, foot = '', o = {}) => `
+  <div class="card pad0"><div class="tbl-wrap"><table class="${o.stack ? 'stack' : ''}">
     <thead><tr>${head}</tr></thead>
     <tbody>${rows}</tbody>
     ${foot ? `<tfoot>${foot}</tfoot>` : ''}

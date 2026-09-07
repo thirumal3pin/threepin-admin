@@ -44,7 +44,7 @@ const sortedBalances = code => Object.entries(partyBalances(code))
   .sort((a, b) => b[1] - a[1]);
 
 const totalRow = (label, amount, span = 1) =>
-  `<tr><td colspan="${span}">${esc(label)}</td><td class="n">${fmt(amount)}</td><td></td></tr>`;
+  `<tr><td colspan="${span}" data-label="${esc(label)}">${esc(label)}</td><td class="n">${fmt(amount)}</td><td></td></tr>`;
 
 export function renderOwed() {
   const s = getState();
@@ -107,7 +107,7 @@ function sectionReceivable(rows) {
       const docTotal = invs.reduce((a, i) => a + invoiceOutstanding(i), 0);
       const undocumented = r.amt - docTotal;
       return `<tr>
-          <td>${esc(pname(r.id))}
+          <td class="lead">${esc(pname(r.id))}
             ${days > 30 ? tag('overdue', 'warn') : ''}
             ${ctx ? `<br><span class="small faint">${esc(deal(ctx.deal)?.nickname || '')}</span>` : ''}
             ${invs.length ? `<div class="doclist">${invs.map(i => `
@@ -115,14 +115,14 @@ function sectionReceivable(rows) {
                 <span class="n">${fmt(invoiceOutstanding(i))}${i.status === 'part' ? ` <span class="small faint">of ${fmt(i.total)}</span>` : ''}</span>
                 <span>${dueCell(i.dueDate)}</span></div>`).join('')}</div>` : ''}
             ${undocumented > 0.5 ? `<div class="small faint" style="margin-top:4px">${fmt(undocumented)} recoverable costs / no invoice</div>` : ''}</td>
-          <td class="n">${fmt(r.amt)}</td>
-          <td class="n">${days === null ? '—' : days + ' day' + (days === 1 ? '' : 's')}</td>
-          <td class="n nowrap">
+          <td class="n" data-label="Owes">${fmt(r.amt)}</td>
+          <td class="n" data-label="Waiting">${days === null ? '—' : days + ' day' + (days === 1 ? '' : 's')}</td>
+          <td class="n">
             <button class="btn ghost sm in" type="button" onclick="fin.record('dealpay',{party:'${esc(r.id)}'})">Record payment</button>
             ${ctx ? `<button class="btn ghost sm" type="button" onclick="fin.record('writeoff',${preset})">Write off</button>` : ''}
           </td></tr>`;
     }).join(''),
-    totalRow('Total to collect', total, 1))}`;
+    totalRow('Total to collect', total, 1), { stack: true })}`;
 }
 
 // ═══════ YOU OWE VENDORS ═══════
@@ -158,7 +158,7 @@ function sectionPayable(rows) {
       const undocumented = amt - docTotal;
       const adv = vendorAdvance(id);
       return `<tr>
-        <td>${esc(pname(id))}
+        <td class="lead">${esc(pname(id))}
           ${bills.length ? `<div class="doclist">${bills.map(b => `
             <div class="docrow"><span class="small">${esc(b.desc)}</span> <span class="small faint">${esc(b.date)}${b.billNo ? ' · ' + esc(b.billNo) : ''}</span>
               <span class="n">${fmt(billOutstanding(b))}${b.status === 'part' ? ` <span class="small faint">of ${fmt(b.net ?? b.total)}</span>` : ''}</span>
@@ -168,11 +168,11 @@ function sectionPayable(rows) {
               </span></div>`).join('')}</div>` : ''}
           ${undocumented > 0.5 ? `<div class="small faint" style="margin-top:4px">${fmt(undocumented)} owed from entries before bills were tracked</div>` : ''}
           ${adv > 0.5 ? `<div class="small pos" style="margin-top:4px">${fmt(adv)} advance already with them — used first when you pay</div>` : ''}</td>
-        <td class="n">${fmt(amt)}</td>
+        <td class="n" data-label="You owe">${fmt(amt)}</td>
         <td class="n"><button class="btn ghost sm out" type="button" onclick="fin.record('paybill',{party:'${esc(id)}'})">Pay</button></td>
       </tr>`;
     }).join(''),
-    totalRow('Total to pay', total, 1))}`;
+    totalRow('Total to pay', total, 1), { stack: true })}`;
 }
 
 // ═══════ ADVANCES WITH VENDORS ═══════

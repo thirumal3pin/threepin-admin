@@ -94,17 +94,17 @@ export function renderInvoices() {
     rows.map(inv => {
       const st = statusOf(inv);
       return `<tr>
-          <td class="nowrap"><b>${esc(inv.invoiceNo || '—')}</b>
+          <td class="lead nowrap">${esc(inv.invoiceNo || '—')}
             ${inv.kind === 'creditnote' ? `<br><span class="small faint">against ${esc(inv.against || '')}</span>` : inv.kind === 'other' ? tag('other income') : tag('brokerage')}
             ${s.parties.find(p => p.id === inv.partyId)?.gstin ? tag('B2B', 'ok') : ''}</td>
-          <td class="nowrap small">${esc(inv.date)}</td>
-          <td>${esc(pname(inv.partyId))}</td>
-          <td class="small">${inv.dealId ? esc(dname(inv.dealId)) : esc(inv.desc || '—')}</td>
-          <td class="n">${fmt(inv.total)}
+          <td class="nowrap small" data-label="Date">${esc(inv.date)}</td>
+          <td data-label="Client">${esc(pname(inv.partyId))}</td>
+          <td class="small" data-label="For">${inv.dealId ? esc(dname(inv.dealId)) : esc(inv.desc || '—')}</td>
+          <td class="n" data-label="Total">${fmt(inv.total)}
             ${inv.paid > 0.005 && st.key !== 'paid' ? `<br><span class="small neg">${fmt(invoiceOutstanding(inv))} left</span>` : ''}
             <br><span class="small faint">${inv.igst ? 'IGST' : 'CGST+SGST'}</span></td>
-          <td class="small nowrap">${isCn(inv) || !inv.dueDate ? '—' : dueCell(inv.dueDate)}</td>
-          <td>${tag(st.label, st.cls)}
+          <td class="small nowrap" data-label="Due">${isCn(inv) || !inv.dueDate ? '—' : dueCell(inv.dueDate)}</td>
+          <td data-label="Status">${tag(st.label, st.cls)}
             ${paymentsFor(inv)}</td>
           <td class="n nowrap">
             <button class="btn ghost sm" type="button" onclick="finInvoices.view('${esc(inv.id)}')">View PDF</button>
@@ -112,8 +112,8 @@ export function renderInvoices() {
             <button class="btn ghost sm" type="button" onclick="finInvoices.upload('${esc(inv.id)}')">Upload my own</button>
           </td></tr>`;
     }).join(''),
-    `<tr><td colspan="4">Total raised</td><td class="n">${fmt(total)}</td><td colspan="3"></td></tr>
-       <tr><td colspan="4">Still to collect</td><td class="n">${fmt(unpaid)}</td><td colspan="3"></td></tr>`)}
+    `<tr><td colspan="4" data-label="Total raised">Total raised</td><td class="n">${fmt(total)}</td><td colspan="3"></td></tr>
+       <tr><td colspan="4" data-label="Still to collect">Still to collect</td><td class="n">${fmt(unpaid)}</td><td colspan="3"></td></tr>`, { stack: true })}
 
     <input type="file" id="invUpload" accept="application/pdf" hidden>`;
 }

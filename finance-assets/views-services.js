@@ -86,15 +86,15 @@ function monthByMonth(sub) {
   return `
     <details class="journal" style="margin-top:0">
       <summary>${esc(sub.name)}${sub.plan ? ' (' + esc(sub.plan) + ')' : ''} — expected vs billed vs paid, month by month</summary>
-      <div class="tbl-wrap"><table>
+      <div class="tbl-wrap"><table class="stack">
         <thead><tr><th>Month</th><th class="n">Expected</th><th class="n">Billed</th><th class="n">Variance</th><th>Why</th><th>Status</th></tr></thead>
         <tbody>${rows.slice().reverse().map(m => `<tr>
-          <td class="nowrap">${esc(mlabel(m.month))}</td>
-          <td class="n">${fmt(m.expected)}</td>
-          <td class="n">${m.rec && !m.rec.skipped ? fmt(m.actual) : '<span class="faint">—</span>'}</td>
-          <td class="n">${m.rec && !m.rec.skipped ? varianceCell(m.variance) : '<span class="faint">—</span>'}</td>
-          <td class="small">${esc(REASONS[m.rec?.reason] || '')}${m.rec?.note ? (REASONS[m.rec?.reason] ? ' — ' : '') + esc(m.rec.note) : ''}</td>
-          <td class="small nowrap">${monthCell(m, sub)}</td></tr>`).join('')}</tbody>
+          <td class="lead">${esc(mlabel(m.month))}</td>
+          <td class="n" data-label="Expected">${fmt(m.expected)}</td>
+          <td class="n" data-label="Billed">${m.rec && !m.rec.skipped ? fmt(m.actual) : '<span class="faint">—</span>'}</td>
+          <td class="n" data-label="Variance">${m.rec && !m.rec.skipped ? varianceCell(m.variance) : '<span class="faint">—</span>'}</td>
+          <td class="small" data-label="Why">${esc(REASONS[m.rec?.reason] || '')}${m.rec?.note ? (REASONS[m.rec?.reason] ? ' — ' : '') + esc(m.rec.note) : ''}</td>
+          <td class="small" data-label="Status">${monthCell(m, sub)}</td></tr>`).join('')}</tbody>
       </table></div>
       ${planHistory(sub)}
       ${unpaidBills.length ? `<p class="small neg" style="margin:10px 0 0">${unpaidBills.length} unpaid bill${unpaidBills.length === 1 ? '' : 's'} on this service — ${fmt(unpaidBills.reduce((a, b) => a + billOutstanding(b), 0))}. Pay from the Owed tab.</p>` : ''}
@@ -152,21 +152,21 @@ export function renderServices() {
       const thisM = serviceMonths(sub).find(m => m.month === month) || { status: sub.payMode === 'upfront' ? 'pending' : 'due', month };
       const billing = sub.payMode === 'upfront' ? 'Upfront' : sub.billing === 'invoice' ? 'Invoiced monthly' : 'Auto-charged';
       return `<tr>
-          <td><b>${esc(sub.name)}</b>${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}${soon ? tag('renews soon', 'warn') : ''}
+          <td class="lead">${esc(sub.name)}${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}${soon ? tag('renews soon', 'warn') : ''}
             ${sub.vendor ? `<br><span class="small faint">${esc(sub.vendor)}</span>` : ''}</td>
-          <td class="small">${esc(sub.use || '—')}</td>
-          <td class="n">${fmt(sub.payMode === 'upfront' ? sub.monthly : expectedFor(sub, month))}
+          <td class="small" data-label="What for">${esc(sub.use || '—')}</td>
+          <td class="n" data-label="Expected / mo">${fmt(sub.payMode === 'upfront' ? sub.monthly : expectedFor(sub, month))}
             ${next ? `<br><span class="small muted nowrap">→ ${fmt(next.amount)} from ${esc(mlabel(next.from))}</span>` : ''}</td>
-          <td class="small">${billing}</td>
-          <td class="small nowrap">${esc(mlabel(sub.start))}${sub.end ? ' → ' + esc(mlabel(sub.end)) : ' → ongoing'}</td>
-          <td class="small nowrap">${monthCell(thisM, sub)}</td>
-          <td class="n nowrap">
+          <td class="small" data-label="Billing">${billing}</td>
+          <td class="small nowrap" data-label="Period">${esc(mlabel(sub.start))}${sub.end ? ' → ' + esc(mlabel(sub.end)) : ' → ongoing'}</td>
+          <td class="small" data-label="${esc(mlabel(month))}">${monthCell(thisM, sub)}</td>
+          <td class="n">
             ${sub.payMode === 'monthly' ? recordBtn(sub, month, 'Record a month') : ''}
             <button class="btn ghost sm" type="button" onclick="fin.record('subchange',{sub:'${esc(sub.id)}'})">Change plan</button>
             <button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}'})">Cancel</button>
           </td></tr>`;
     }).join(''),
-    `<tr><td colspan="2">Expected this month</td><td class="n">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`)
+    `<tr><td colspan="2" data-label="Expected this month">Expected this month</td><td class="n">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`, { stack: true })
       : empty('No active services.')}
 
     ${active.some(x => x.payMode === 'monthly') ? `

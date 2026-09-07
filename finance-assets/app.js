@@ -954,22 +954,22 @@ function txns() {
     </div>
 
     ${rows.length ? table(
-    `<th>#</th><th>Date</th><th>Description</th><th class="n">Profit</th><th class="n">Cash</th><th></th>`,
+    `<th>Description</th><th>#</th><th>Date</th><th class="n">Profit</th><th class="n">Cash</th><th></th>`,
     rows.map(t => {
       const pe = profitEffect(t), ce = cashEffect(t);
       return `<tr class="click" onclick="fin.openTxn('${t.id}')">
-          <td class="eno nowrap">${entryNo(t)}</td>
-          <td class="nowrap">${esc(t.date)}</td>
-          <td>${esc(t.desc)}
+          <td class="lead">${esc(t.desc)}
             ${t.auto ? tag('auto', 'auto') : ''}
             ${t.reversalOf ? tag('reversal', 'rev') : ''}
             ${t.reversedBy ? tag('reversed', 'rev') : ''}
             ${(t.attachments || []).length ? tag('📎 ' + t.attachments.length) : ''}</td>
-          <td class="n">${pe ? signed(pe) : '—'}</td>
-          <td class="n">${ce ? signed(ce) : '—'}</td>
+          <td class="eno nowrap" data-label="Entry">${entryNo(t)}</td>
+          <td class="nowrap" data-label="Date">${esc(t.date)}</td>
+          <td class="n" data-label="Profit">${pe ? signed(pe) : '—'}</td>
+          <td class="n" data-label="Cash">${ce ? signed(ce) : '—'}</td>
           <td class="n">${t.reversedBy ? '' : `<button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.reverse('${t.id}')">Reverse</button>`}</td>
         </tr>`;
-    }).join(''))
+    }).join(''), '', { stack: true })
       : empty('Nothing matches those filters.')}`;
 }
 

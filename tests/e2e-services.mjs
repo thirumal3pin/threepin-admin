@@ -236,6 +236,62 @@ try {
   txt = await mainText();
   check('Services now shows November as not recorded', /Nov 2026[\s\S]{0,120}(missing|upcoming)/.test(txt), txt.match(/Nov 2026[\s\S]{0,120}/)?.[0]);
 
+  // ═══════ 8b. Reading a table on a phone ═══════
+  section('Tables are readable at 390px');
+  await page.evaluate(() => window.fin.go('txns'));
+  await page.waitForTimeout(600);
+  const tbl = await page.evaluate(() => {
+    const t = document.querySelector('#main table');
+    if (!t) return { none: true };
+    const wrap = t.closest('.tbl-wrap');
+    const head = getComputedStyle(t.querySelector('thead'));
+    const firstCell = t.querySelector('tbody td.lead');
+    const labelled = [...t.querySelectorAll('tbody td[data-label]')];
+    const shown = labelled.map(td => getComputedStyle(td, '::before').content).filter(c => c && c !== 'none' && c !== '""');
+    const row = t.querySelector('tbody tr');
+    return {
+      stacks: t.classList.contains('stack'),
+      headHidden: head.position === 'absolute' || head.clipPath !== 'none' || head.clip !== 'auto',
+      leadIsBlock: firstCell ? getComputedStyle(firstCell).display === 'block' : false,
+      labelCount: labelled.length,
+      labelsRendered: shown.length,
+      overflows: wrap ? wrap.scrollWidth > wrap.clientWidth + 1 : false,
+      banded: row ? getComputedStyle(t.querySelectorAll('tbody tr')[1] || row).backgroundColor : '',
+    };
+  });
+  check('The transactions table stacks instead of scrolling sideways', tbl.stacks && !tbl.overflows, JSON.stringify(tbl));
+  check('Column headings are repeated beside each value', tbl.labelCount > 0 && tbl.labelsRendered === tbl.labelCount, JSON.stringify(tbl));
+  check('The description leads each row as its title', tbl.leadIsBlock, JSON.stringify(tbl));
+  const flush = await page.evaluate(() => {
+    const lead = document.querySelector('#main table tbody td.lead');
+    const lbl = document.querySelector('#main table tbody td[data-label]');
+    const r = document.createRange(); r.selectNodeContents(lead);
+    return { title: Math.round(r.getBoundingClientRect().left), label: Math.round(lbl.getBoundingClientRect().left) };
+  });
+  check('The title lines up with the values under it', Math.abs(flush.title - flush.label) <= 1, JSON.stringify(flush));
+  await page.screenshot({ path: `${SHOTS}m-txns-stacked.png`, fullPage: true });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(() => window.fin.go('txns'));
+  await page.waitForTimeout(500);
+  const wide = await page.evaluate(() => {
+    const t = document.querySelector('#main table');
+    const th = t.querySelector('thead th');
+    const rows = t.querySelectorAll('tbody tr');
+    const cell = t.querySelector('tbody td + td');
+    return {
+      headerSticky: getComputedStyle(th).position === 'sticky',
+      headerShaded: getComputedStyle(th).backgroundColor,
+      columnRule: getComputedStyle(cell).borderLeftWidth,
+      banded: rows.length > 1 ? getComputedStyle(rows[1]).backgroundColor !== getComputedStyle(rows[0]).backgroundColor : true,
+    };
+  });
+  check('On a wide screen the header is shaded and stays put', wide.headerSticky && wide.headerShaded !== 'rgba(0, 0, 0, 0)', JSON.stringify(wide));
+  check('Columns are separated by a rule', wide.columnRule !== '0px', JSON.stringify(wide));
+  check('Rows are banded so one can be tracked across', wide.banded, JSON.stringify(wide));
+  await page.screenshot({ path: `${SHOTS}d-txns-table.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+
   // ═══════ 9. Guide ═══════
   section('Guide');
   await page.evaluate(() => { window.fin.go('guide'); window.finGuide.setTab('scenarios'); });

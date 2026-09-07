@@ -31,6 +31,8 @@
   --card: #FFFFFF;
   --card-2: #F5F2ED;
   --line: #E7E1D7;
+  /* The band on every other row — barely there on its own, decisive across a wide table. */
+  --band: #FAF8F4;
   --line-2: #D3CABC;
   --ink: #17150F;
   --ink-2: #5A5348;
@@ -94,6 +96,8 @@ h1 {
   margin: 0 0 var(--s2);
 }
 h2 {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s5);
   font-family: var(--serif);
   font-weight: 400;
   font-size: 1.4rem;
@@ -367,16 +371,35 @@ details.journal[open] summary::before { transform: rotate(90deg); }
 
 /* ═══════ TABLES ═══════ */
 
-.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* A table has to answer two questions at a glance: which row am I on, and which column is
+   this. Hairlines alone answer neither once a table is wider than the screen. So: banded
+   rows to track across, a ruled and shaded header that stays put while the body scrolls,
+   faint column rules, and a shadow at the edge that admits there is more to the right. */
+.tbl-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  background:
+    linear-gradient(to right, var(--card) 30%, rgba(255, 255, 255, 0)) left / 24px 100% no-repeat,
+    linear-gradient(to left, var(--card) 30%, rgba(255, 255, 255, 0)) right / 24px 100% no-repeat,
+    radial-gradient(farthest-side at 0 50%, rgba(23, 21, 15, .10), transparent) left / 12px 100% no-repeat,
+    radial-gradient(farthest-side at 100% 50%, rgba(23, 21, 15, .10), transparent) right / 12px 100% no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
 table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
-th { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+th {
+  text-align: left; padding: 11px 14px; white-space: nowrap;
+  background: var(--card-2); border-bottom: 2px solid var(--line-2);
+  position: sticky; top: 0; z-index: 2;
+}
 th.n { text-align: right; }
 td { padding: 13px 14px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
 td.n { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+/* A faint rule between columns, so a figure cannot drift into its neighbour's column. */
+th + th, td + td { border-left: 1px solid var(--line); }
+tbody tr:nth-child(even) { background: var(--band); }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr.click { cursor: pointer; transition: background .12s; }
-tbody tr.click:hover { background: var(--card-2); }
-tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 0; background: var(--card-2); }
+tbody tr.click:hover, tbody tr.click:focus-within { background: var(--brand-soft); }
+tfoot td { font-weight: 600; border-top: 2px solid var(--line-2); border-bottom: 0; background: var(--card-2); }
 .card.pad0 table thead th:first-child, .card.pad0 table td:first-child { padding-left: 18px; }
 .card.pad0 table thead th:last-child, .card.pad0 table td:last-child { padding-right: 18px; }
 
@@ -576,3 +599,47 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--ink-3); border-bottom: 
 .guide-scenario[class*="dir-"], .guide-action { border-left: 4px solid var(--dir, var(--line-2)); }
 .guide-faq { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 14px; margin-bottom: 8px; }
 .guide-faq summary { font-weight: 600; color: var(--ink); font-size: 14.5px; }
+
+
+/* ═══════ A TABLE THAT STACKS ═══════
+
+   Below 640px a wide table stops being a grid and becomes one block per row: each cell on
+   its own line with its column heading beside it. Nothing scrolls sideways, and no value is
+   ever separated from the heading that explains it. */
+@media (max-width: 640px) {
+  table.stack { font-size: 14px; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table.stack tbody tr {
+    display: block; padding: var(--s3) var(--s4);
+    border-bottom: 1px solid var(--line-2);
+  }
+  table.stack tbody tr:nth-child(even) { background: var(--band); }
+  table.stack tbody tr:last-child { border-bottom: 0; }
+  table.stack tbody td {
+    display: flex; gap: var(--s3); align-items: baseline; justify-content: space-between;
+    padding: 3px 0; border: 0; text-align: left; white-space: normal;
+  }
+  table.stack tbody td::before {
+    content: attr(data-label);
+    flex: none; font-size: 11px; font-weight: 600; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  table.stack tbody td:not([data-label])::before { content: none; }
+  /* The first cell is the row's name, so it leads rather than sitting in a label pair. */
+  table.stack tbody td.lead {
+    display: block; font-size: 15px; font-weight: 600; color: var(--ink);
+    padding-bottom: var(--s2); margin-bottom: var(--s2); border-bottom: 1px solid var(--line);
+  }
+  table.stack tbody td.lead::before { content: none; }
+  /* The card's edge padding belongs to the row now, so the cells inside it start flush —
+     otherwise the first cell sits 18px in and nothing lines up under it. */
+  .card.pad0 table.stack tbody td:first-child,
+  .card.pad0 table.stack tbody td:last-child,
+  .card.pad0 table.stack tfoot td:first-child,
+  .card.pad0 table.stack tfoot td:last-child { padding-left: 0; padding-right: 0; }
+  table.stack tbody td.n { justify-content: space-between; }
+  table.stack tbody td .btn.sm { margin: 4px 6px 0 0; }
+  table.stack tfoot td { display: flex; justify-content: space-between; border: 0; }
+  table.stack tfoot td::before { content: attr(data-label); font-weight: 600; }
+  .tbl-wrap { background: none; }
+}
