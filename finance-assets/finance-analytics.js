@@ -184,6 +184,45 @@ export function byParty(txns, kind) {
     .sort((a, b) => b.amount - a.amount).slice(0, 10);
 }
 
+// Spend by vendor taken from the bills themselves. A bill names one party and carries one
+// amount, so this cannot misattribute the way a two-party journal entry can.
+export function vendorSpend(state, from, to) {
+  const map = {};
+  for (const b of (state.bills || [])) {
+    if (b.status === 'void') continue;
+    if (from && b.date < from) continue;
+    if (to && b.date > to) continue;
+    map[b.partyId] = (map[b.partyId] || 0) + num(b.net ?? b.total);
+  }
+  const total = Object.values(map).reduce((a, x) => a + x, 0);
+  return Object.entries(map)
+    .map(([id, amount]) => ({
+      id, name: state.parties.find(p => p.id === id)?.name || id,
+      amount: r2(amount), share: total ? r2(amount / total * 100) : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+// What every service was expected to cost each month against what it was actually billed,
+// and why the two differ — the only question worth asking about tool spend.
+export function serviceVariance(state, months) {
+  const rows = [], byReason = {};
+  for (const sub of state.subs) {
+    if (sub.payMode !== 'monthly') continue;
+    for (const [month, c] of Object.entries(sub.charges || {})) {
+      if (!c || c.reversed || c.skipped) continue;
+      if (months && !months.includes(month)) continue;
+      const variance = num(c.variance);
+      rows.push({ month, service: sub.name, expected: num(c.expected), actual: num(c.actual), variance, reason: c.reason || null, note: c.note || '' });
+      if (Math.abs(variance) > 0.5) {
+        const k = c.reason || 'other';
+        byReason[k] = r2((byReason[k] || 0) + variance);
+      }
+    }
+  }
+  return { rows: rows.sort((a, b) => a.month.localeCompare(b.month)), byReason };
+}
+
 // ═══════ KPIs ═══════
 
 export function kpis(txns, prevTxns) {
@@ -217,8 +256,18 @@ export function dealFunnel(state, f = {}) {
           if (l.deal === d.id && a?.type === 'expense') costs += num(l.dr) - num(l.cr);
           if (l.deal === d.id && l.acc === '1100') outstanding += num(l.dr) - num(l.cr);
           if (l.deal === d.id && l.acc === '2100') tokens += num(l.cr) - num(l.dr);
-          if (CASH.includes(l.acc)) received += num(l.dr) - num(l.cr);
         }
+        // Bank and cash lines are never tagged with a deal, so the entry's cash movement is
+        // attributed as a whole: all of it when this is the only deal on the entry, and
+        // split by the deal-tagged amounts when a payment covered several at once.
+        const cashMove = t.lines.reduce((x, l) => CASH.includes(l.acc) ? x + num(l.dr) - num(l.cr) : x, 0);
+        if (!cashMove) continue;
+        const tagged = [...new Set(t.lines.filter(l => l.deal).map(l => l.deal))];
+        if (tagged.length === 1) { received += cashMove; continue; }
+        const weight = l => Math.abs(num(l.dr) - num(l.cr));
+        const mine = t.lines.filter(l => l.deal === d.id).reduce((x, l) => x + weight(l), 0);
+        const all = t.lines.filter(l => l.deal).reduce((x, l) => x + weight(l), 0);
+        if (all) received += cashMove * mine / all;
       }
       return {
         id: d.id, name: d.nickname, status: d.status,
@@ -234,15 +283,40 @@ export function dealFunnel(state, f = {}) {
 // long the business waits to be paid.
 export function collectionDays(state) {
   const spans = [];
-  for (const inv of state.txns.filter(t => t.event === 'invoice')) {
-    for (const l of inv.lines) {
-      if (l.acc !== '1100' || !num(l.dr)) continue;
-      const doc = (state.invoices || []).find(i => i.txnId === inv.id);
-      const pay = state.txns.find(t => t.event === 'dealpay' && t.date >= inv.date && (
-        (doc && (t.allocations || []).some(a => a.id === doc.id)) ||
-        t.lines.some(x => x.acc === '1100' && x.party === l.party && x.deal === l.deal && num(x.cr))));
-      if (pay) spans.push(Math.round((new Date(pay.date) - new Date(inv.date)) / 86400000));
-    }
+  for (const inv of (state.invoices || [])) {
+    if (inv.kind === 'creditnote' || inv.status === 'void') continue;
+    // Every payment applied to this invoice, whatever event recorded it. The wait is
+    // measured to the payment that finally cleared it, weighted by what each one settled.
+    const pays = state.txns
+      .filter(t => (t.allocations || []).some(a => a.coll === 'invoices' && a.id === inv.id && !a.writtenOff))
+      .map(t => ({ date: t.date, amt: (t.allocations || []).filter(a => a.id === inv.id).reduce((x, a) => x + num(a.amt), 0) }))
+      .filter(p => p.amt > 0.005);
+    if (!pays.length) continue;
+    const from = inv.date;
+    const weight = pays.reduce((a, p) => a + p.amt, 0);
+    const days = pays.reduce((a, p) => a + p.amt * Math.round((new Date(p.date) - new Date(from)) / 86400000), 0) / (weight || 1);
+    spans.push({ days, settled: inv.status === 'paid' });
+  }
+  if (!spans.length) return { avg: null, count: 0, settled: 0 };
+  return {
+    avg: Math.round(spans.reduce((a, b) => a + b.days, 0) / spans.length),
+    count: spans.length,
+    settled: spans.filter(x => x.settled).length,
+  };
+}
+
+// The same figure the other way: how long the business takes to pay its own bills.
+export function paymentDays(state) {
+  const spans = [];
+  for (const b of (state.bills || [])) {
+    if (b.status === 'void') continue;
+    const pays = state.txns
+      .filter(t => (t.allocations || []).some(a => a.coll === 'bills' && a.id === b.id))
+      .map(t => ({ date: t.date, amt: (t.allocations || []).filter(a => a.id === b.id).reduce((x, a) => x + num(a.amt), 0) }))
+      .filter(p => p.amt > 0.005);
+    if (!pays.length) continue;
+    const weight = pays.reduce((a, p) => a + p.amt, 0);
+    spans.push(pays.reduce((a, p) => a + p.amt * Math.round((new Date(p.date) - new Date(b.date)) / 86400000), 0) / (weight || 1));
   }
   if (!spans.length) return { avg: null, count: 0 };
   return { avg: Math.round(spans.reduce((a, b) => a + b, 0) / spans.length), count: spans.length };

@@ -6,8 +6,9 @@
 
 import {
   fmt, esc, num, today, getState, bal, pname, dname, deal,
+  invoiceOutstanding,
 } from './finance-core.js';
-import { empty, note, tag, table, toast, modal, closeModal } from './ui.js';
+import { empty, note, tag, table, toast, modal, closeModal, dueCell } from './ui.js';
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
 import * as SY from './finance-sync.js';
 
@@ -16,6 +17,13 @@ import * as SY from './finance-sync.js';
 // whatever the client still owes on that deal.
 function statusOf(inv) {
   if (inv.kind === 'creditnote') return { key: 'cn', label: 'Credit note', cls: 'rev' };
+  if (inv.status === 'void') return { key: 'void', label: 'Reversed', cls: 'rev' };
+  // An invoice raised before payments were tracked has no figure of its own. Guessing from
+  // the party balance would give two invoices on one deal the same answer, so it says so.
+  if (inv.paid === undefined) {
+    const sameDeal = getState().invoices.filter(i => i.paid === undefined && i.partyId === inv.partyId && i.dealId === inv.dealId);
+    if (sameDeal.length > 1) return { key: 'unknown', label: 'Before tracking', cls: '' };
+  }
   const outstanding = inv.paid !== undefined
     ? num(inv.total) - num(inv.paid)
     : inv.dealId
@@ -24,6 +32,22 @@ function statusOf(inv) {
   if (outstanding <= 0.5) return { key: 'paid', label: 'Paid', cls: 'ok' };
   if (outstanding < num(inv.total) - 0.5) return { key: 'part', label: 'Part paid', cls: 'warn' };
   return { key: 'unpaid', label: 'Unpaid', cls: '' };
+}
+
+// Every payment applied to this invoice, so "part paid" can be opened up rather than
+// simply asserted.
+function paymentsFor(inv) {
+  const pays = getState().txns
+    .filter(t => (t.allocations || []).some(a => a.coll === 'invoices' && a.id === inv.id))
+    .map(t => ({ t, amt: (t.allocations || []).filter(a => a.id === inv.id).reduce((x, a) => x + num(a.amt), 0) }))
+    .filter(p => Math.abs(p.amt) > 0.005);
+  if (!pays.length) return '';
+  return `<details class="journal" style="margin-top:6px">
+    <summary class="small">${pays.length} payment${pays.length === 1 ? '' : 's'}</summary>
+    ${pays.map(p => `<div class="docrow"><span class="small">${esc(p.t.date)}</span>
+      <span class="n">${fmt(p.amt)}</span>
+      <span><button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.openTxn('${esc(p.t.id)}')">Entry</button></span></div>`).join('')}
+  </details>`;
 }
 
 function modelFor(inv) {
@@ -51,7 +75,11 @@ export function renderInvoices() {
   const rows = [...s.invoices].sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.invoiceNo).localeCompare(String(a.invoiceNo)));
   const isCn = i => i.kind === 'creditnote';
   const total = rows.filter(i => !isCn(i)).reduce((a, i) => a + num(i.total), 0) - rows.filter(isCn).reduce((a, i) => a + num(i.total), 0);
-  const unpaid = rows.filter(i => !isCn(i) && statusOf(i).key !== 'paid').reduce((a, i) => a + num(i.total), 0);
+  // What is still to come in is what each invoice has left on it, not its face value — a
+  // part-paid invoice is not still owed in full.
+  const unpaid = rows
+    .filter(i => !isCn(i) && !['paid', 'void'].includes(statusOf(i).key))
+    .reduce((a, i) => a + (i.paid !== undefined ? invoiceOutstanding(i) : num(i.total)), 0);
 
   return `
     <h1>Invoices</h1>
@@ -62,7 +90,7 @@ export function renderInvoices() {
        generate until then will be incomplete.`) : ''}
 
     ${table(
-    `<th>Number</th><th>Date</th><th>Client</th><th>Deal</th><th class="n">Total</th><th>Status</th><th></th>`,
+    `<th>Number</th><th>Date</th><th>Client</th><th>Deal</th><th class="n">Total</th><th>Due</th><th>Status</th><th></th>`,
     rows.map(inv => {
       const st = statusOf(inv);
       return `<tr>
@@ -73,16 +101,19 @@ export function renderInvoices() {
           <td>${esc(pname(inv.partyId))}</td>
           <td class="small">${inv.dealId ? esc(dname(inv.dealId)) : esc(inv.desc || '—')}</td>
           <td class="n">${fmt(inv.total)}
+            ${inv.paid > 0.005 && st.key !== 'paid' ? `<br><span class="small neg">${fmt(invoiceOutstanding(inv))} left</span>` : ''}
             <br><span class="small faint">${inv.igst ? 'IGST' : 'CGST+SGST'}</span></td>
-          <td>${tag(st.label, st.cls)}</td>
+          <td class="small nowrap">${isCn(inv) || !inv.dueDate ? '—' : dueCell(inv.dueDate)}</td>
+          <td>${tag(st.label, st.cls)}
+            ${paymentsFor(inv)}</td>
           <td class="n nowrap">
             <button class="btn ghost sm" type="button" onclick="finInvoices.view('${esc(inv.id)}')">View PDF</button>
             <button class="btn ghost sm" type="button" onclick="finInvoices.share('${esc(inv.id)}')">Share</button>
             <button class="btn ghost sm" type="button" onclick="finInvoices.upload('${esc(inv.id)}')">Upload my own</button>
           </td></tr>`;
     }).join(''),
-    `<tr><td colspan="4">Total raised</td><td class="n">${fmt(total)}</td><td colspan="2"></td></tr>
-       <tr><td colspan="4">Still unpaid</td><td class="n">${fmt(unpaid)}</td><td colspan="2"></td></tr>`)}
+    `<tr><td colspan="4">Total raised</td><td class="n">${fmt(total)}</td><td colspan="3"></td></tr>
+       <tr><td colspan="4">Still to collect</td><td class="n">${fmt(unpaid)}</td><td colspan="3"></td></tr>`)}
 
     <input type="file" id="invUpload" accept="application/pdf" hidden>`;
 }

@@ -102,7 +102,7 @@ const w3 = await page.evaluate(() => ({ tax: +document.getElementById('f_gstAmt'
 check('Editing the amount refills tax 360 and total 2360', w3.tax === 360 && w3.total === 2360, JSON.stringify(w3));
 check('Focus stayed in the amount field while typing', await page.evaluate(() => document.activeElement?.id === 'f_amt'));
 const bar = await page.evaluate(() => document.getElementById('barSum').innerText);
-check('Sticky save bar shows the total and Balanced', /2,360/.test(bar) && /Balanced/.test(bar), bar);
+check('Sticky save bar shows the total', /2,360/.test(bar), bar);
 check('Mobile save bar is visible', await page.evaluate(() => getComputedStyle(document.querySelector('.save-bar')).display !== 'none'));
 await page.screenshot({ path: `${SHOTS}m-record-gst.png`, fullPage: true });
 

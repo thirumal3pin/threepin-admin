@@ -926,6 +926,8 @@ function waterfallChart() {
 
 const FAQ = [
   ['Basics', [
+    ['I made a profit but the bank went down. Where did the money go?',
+      'Reports → <b>Profit is not cash</b> answers exactly this. It starts from the profit for the month and walks through every real movement — money clients still owe, bills you have not paid, assets bought, loan repaid, tax collected — and ends at the cash that actually moved. If anything is left unexplained the app shows it rather than hiding it.'],
     ['A client paid me. Why has my profit not gone up?',
       'Because it already did, on the day the deal registered and you raised the invoice. That is when you earned the money. The payment is just the cash arriving afterwards, matched to that invoice. If receiving it increased profit too, you would be counting the same brokerage twice. <span class="small faint">Accrual basis — income is recognised when earned, not when received.</span>'],
     ['My bank balance is healthy but the app says I made a loss. Which is right?',
@@ -980,6 +982,12 @@ const FAQ = [
       'Because for brokerage the place of supply is where the <b>property</b> is, not where the client lives (IGST Act s.12(3)(a)). A Chennai flat sold to a Bengaluru buyer is a Tamil Nadu supply. IGST only arises when the property itself is in another state — set that on the deal. For a consultancy service the opposite holds: it follows the client (s.12(2)).'],
   ]],
   ['GST', [
+    ['My landlord is not registered for GST. Do I owe anything?',
+      'Yes. Renting commercial premises from someone who is not registered puts the GST on you (Notification 09/2024-CT(R)). On <b>Expense paid now</b> or <b>Bill received</b>, answer <b>No</b> to "Did the vendor charge you GST?" and enter 18%. The app books it as money you owe the government and, at the same time, as credit you claim back — so it costs you nothing, but leaving it out is a real liability. The same applies to an advocate, a goods transporter, and anything bought from outside India.'],
+    ['What is the self-invoice number on some entries?',
+      'When you pay the GST yourself, the law asks you to raise your own invoice for the supply (s.31(3)(f) with Rule 47A). The app numbers one automatically in its own series and keeps it on the entry. For a purchase from abroad it also records the currency and the exchange rate you used (Rule 34).'],
+    ['A bill has been sitting unpaid for months. Does that affect my GST?',
+      'After 180 days from the bill date, the credit you claimed on it has to be added back with interest (Rule 37). The GST tab lists exactly which bills those are and how much to add back, so you can pay them first or hand the list to your CA. Pay the bill and you claim the credit again.'],
     ['Where do I see what GST to pay this month?',
       'The <b>GST tab</b>. Pick the month and it shows the liability per head, the credit available, the set-off in the order the rules allow (IGST credit first, then CGST against CGST and SGST against SGST — never across; Rule 88A), and the cash due. Reverse-charge tax is always cash. <b>Pay GST</b> opens the payment already filled in.'],
     ['I entered GST on a purchase. Why is it marked "at risk" / a warning?',
@@ -1024,7 +1032,10 @@ const GLOSSARY = [
   ['Prepaid', 'Something paid for ahead of using it — an annual plan. An asset until each month\'s slice is released. Account 1200.'],
   ['Receivable / payable', 'What clients owe you (1100) and what you owe vendors (2000). Both are lists of documents on Owed.'],
   ['Reconcile', 'Proving the books match the bank statement, line by line.'],
-  ['Reverse charge (RCM)', 'GST paid by the buyer instead of the seller — advocates, goods transport, and vendors abroad. Paid in cash with the return and claimed back as credit. Account 2205.'],
+  ['Reverse charge (RCM)', 'GST paid by the buyer instead of the seller — advocates, goods transport, an unregistered landlord, and vendors abroad. Paid in cash with the return and claimed back as credit. Account 2205.'],
+  ['Self-invoice', 'The invoice you raise to yourself for a reverse-charge purchase, because the vendor did not raise one. Numbered automatically.'],
+  ['Rule 37', 'The rule that takes back GST credit on a bill left unpaid for 180 days. Pay the bill and you claim it again.'],
+  ['Ageing', 'How long an invoice or a bill has been outstanding, counted from the day it fell due.'],
   ['Reversal', 'The mirror-image entry that cancels a wrong one. Nothing is ever deleted.'],
   ['Run-rate', 'What your services are expected to cost per month, plan changes included.'],
   ['TDS', 'Tax deducted at source — withheld from a payment and deposited with the government on the payee\'s behalf. Off by default; switch on in Settings.'],

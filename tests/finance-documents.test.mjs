@@ -14,10 +14,12 @@
 
 import {
   getState, num, bal, pl, today, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
-  expectedFor, serviceMonths, missingServiceMonths, nextPlanChange,
+  expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
+  agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
 import { EV, validateEvent, fieldsFor } from '../finance-assets/finance-events.js';
+import { collectionDays, paymentDays, vendorSpend, serviceVariance } from '../finance-assets/finance-analytics.js';
 import { check, eq, near, section, refuses, report, fresh, save, reverse, runMonthEnd, byName, party } from './_harness.mjs';
 
 console.log('3 PIN Realty — documents, allocation and services');
@@ -271,10 +273,10 @@ eq('Ganesh is owed again', bal('2000', { party: ganesh }), 4720 + 2000);
 
 section('Every action refuses what it should');
 refuses('A deal needs a nickname', () => save('newdeal', { date: '2026-11-01', nickname: '', seller: { __new: true, name: 'X' } }), 'nickname');
-refuses('A deal needs a party', () => save('newdeal', { date: '2026-11-01', nickname: 'Nobody' }), 'at least one party');
+refuses('A deal needs a party', () => save('newdeal', { date: '2026-11-01', nickname: 'Nobody' }), 'seller or a buyer');
 refuses('An expense needs a description', () => save('expense', { date: '2026-11-01', desc: '', acc: '5100', amt: 10, gst: 'no', via: '1000' }), 'what it was for');
 refuses('An expense needs an amount', () => save('expense', { date: '2026-11-01', desc: 'x', acc: '5100', amt: 0, gst: 'no', via: '1000' }), 'above zero');
-refuses('GST total must agree', () => save('expense', { date: '2026-11-01', desc: 'x', acc: '5100', amt: 100, gst: 'yes', gstRate: 18, gstAmt: 18, total: 200, via: '1000' }, { raw: true }), 'must equal the total');
+refuses('GST total must agree', () => save('expense', { date: '2026-11-01', desc: 'x', acc: '5100', amt: 100, gst: 'yes', gstRate: 18, gstAmt: 18, total: 200, via: '1000' }, { raw: true }), 'does not equal the total');
 refuses('A GSTIN must look like one', () => save('expense', { date: '2026-11-01', desc: 'x', acc: '5100', amt: 100, gst: 'yes', gstRate: 18, gstAmt: 18, total: 118, vgstin: 'ABC', via: '1000' }), '15 characters');
 refuses('A date before the books start is refused', () => save('expense', { date: '2026-01-01', desc: 'x', acc: '5100', amt: 10, gst: 'no', via: '1000' }), 'before the books start');
 refuses('A date a year ahead is refused', () => save('expense', { date: '2028-01-01', desc: 'x', acc: '5100', amt: 10, gst: 'no', via: '1000' }), 'check the year');
@@ -290,7 +292,7 @@ refuses('A write-off needs a reason', () => save('writeoff', { date: '2026-11-01
 refuses('A write-off cannot exceed what is owed', () => save('writeoff', { date: '2026-11-01', deal: dealL, from: 'seller', amt: 5000, why: 'x' }), 'only owe');
 refuses('A loan needs a lender', () => save('bankloan', { date: '2026-11-01', purpose: 'x', amt: 100000, rate: 12, n: 24, fee: 0 }), 'lender');
 refuses('A loan tenure must be sane', () => save('bankloan', { date: '2026-11-01', lender: { __new: true, name: 'HDFC' }, purpose: 'x', amt: 100000, rate: 12, n: 0, fee: 0 }), 'tenure');
-refuses('Salary deductions cannot exceed gross', () => save('salary', { date: '2026-11-01', emp: { __new: true, name: 'Priya' }, kind: '5010', gross: 1000, tds: 0, pf: 2000 }), 'exceed the gross');
+refuses('Salary deductions cannot exceed gross', () => save('salary', { date: '2026-11-01', emp: { __new: true, name: 'Priya' }, kind: '5010', gross: 1000, tds: 0, pf: 2000 }), 'more than the salary');
 refuses('A token needs a deal', () => save('token', { date: '2026-11-01', from: 'buyer', amt: 100, via: '1000' }), 'deal');
 refuses('Statutory: paying more TDS than owed is refused', () => save('statutory', { date: '2026-11-01', kind: 'tds', amt: 5000, late: 0 }), 'only');
 
@@ -326,6 +328,57 @@ check('Balance sheet balances', balanceSheet().balanced);
   check('Open invoices never exceed the ledger balance for any client', badInv.length === 0, JSON.stringify(badInv));
   const statuses = s.bills.filter(b => b.status !== 'void').every(b => b.status === (billOutstanding(b) <= 0.005 ? 'paid' : num(b.paid) > 0.005 ? 'part' : 'open'));
   check('Every bill status agrees with its numbers', statuses);
+}
+
+section('Reporting reads the plan in force and each due date');
+{
+  // A rise dated for the future must not move today's run-rate.
+  const zoho2 = byName(s.subs, 'Zoho CRM');
+  const nowM = ym(today());
+  eq('Run-rate today ignores a change dated ahead', serviceRunRate(nowM).monthly - serviceRunRate(nowM).monthly, 0);
+  check('Run-rate uses expectedFor, not the latest plan entered',
+    Math.abs(serviceRunRate('2026-12').monthly - serviceRunRate('2027-01').monthly) > 0.5
+    || expectedFor(zoho2, '2026-12') !== expectedFor(zoho2, '2027-01'),
+    JSON.stringify([serviceRunRate('2026-12').monthly, serviceRunRate('2027-01').monthly]));
+
+  // Ageing runs per document, from the day it fell due.
+  const aged = agedReceivables('2026-12-31');
+  check('Receivable ageing has a bucket for what has no invoice', 'no document' in aged, JSON.stringify(aged));
+  eq('Ageing still reconciles to the ledger',
+    Object.values(aged).reduce((a, b) => a + b, 0), bal('1100', { upto: '2026-12-31' }));
+  const agedP = agedPayables('2026-12-31');
+  eq('Payables ageing reconciles to the ledger',
+    Object.values(agedP).reduce((a, b) => a + b, 0), bal('2000', { upto: '2026-12-31' }));
+
+  // Rule 37: a bill left unpaid 180 days costs back the credit claimed on it.
+  save('bill', {
+    date: '2026-09-02', vendor: { __new: true, name: 'Slow Supplies', type: 'vendor' }, desc: 'Signage',
+    acc: '5100', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800,
+    gstType: 'intra', vgstin: '33AAASS1111A1Z5', vinv: 'SS-1', rcm: 'no', tds: 'none', tdsrate: 0,
+  });
+  check('A bill under 180 days old is not flagged', !rule37Rows('2026-11').some(r => r.vendor === 'Slow Supplies'));
+  const flagged = rule37Rows('2027-04').find(r => r.vendor === 'Slow Supplies');
+  check('Past 180 days it is flagged with the credit to give back', flagged && near(flagged.reverse, 1800), JSON.stringify(flagged));
+
+  // The bridge has to explain every rupee of the month's cash movement.
+  for (const m of ['2026-09', '2026-10', '2026-11']) {
+    const b = cashProfitBridge(m);
+    check(`Cash-to-profit bridge ties for ${m}`, Math.abs(b.residual) < 1, JSON.stringify({ residual: b.residual, cashMoved: b.cashMoved, explained: b.explained }));
+  }
+
+  // Days to collect and to pay, measured off the documents.
+  const st = getState();
+  const dso = collectionDays(st), dpo = paymentDays(st);
+  check('Days to collect is measured from matched payments', dso.count > 0 && dso.avg >= 0, JSON.stringify(dso));
+  check('Days to pay is measured the same way', dpo.count > 0 && dpo.avg >= 0, JSON.stringify(dpo));
+
+  // Vendor spend comes from the bills, so a two-party entry cannot misattribute it.
+  const spend = vendorSpend(st);
+  check('Vendor spend adds up to the bills raised', spend.length > 0 && Math.abs(spend.reduce((a, x) => a + x.share, 0) - 100) < 0.5, JSON.stringify(spend.slice(0, 3)));
+
+  // Variance by reason is what says whether tool spend drifts on price or on usage.
+  const sv = serviceVariance(st);
+  check('Service variance groups by the reason given', sv.rows.length > 0 && Object.keys(sv.byReason).length > 0, JSON.stringify(sv.byReason));
 }
 
 report();

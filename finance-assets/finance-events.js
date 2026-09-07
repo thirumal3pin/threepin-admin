@@ -21,7 +21,7 @@ import {
   A, EXP, PAY_VIA, TDS_SECTIONS, num, today, ym, addMonths, mlabel, fmt, esc,
   getState, deal, pname, partySides, sideParty, bal, partyBalances,
   schedule, prepaidLeft, splitGst, fyOf,
-  gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal,
+  gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal, STATES,
   GST_OUTPUT, GST_INPUT, GST_RCM,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   expectedFor, currentPlan, addDays, lastDayOfMonth,
@@ -96,7 +96,7 @@ function gstChecks(v) {
   const out = [];
   if (!(num(v.gstRate) > 0)) out.push(err('gstRate', 'GST % must be above zero'));
   else if (!GST_RATES.includes(num(v.gstRate))) out.push(err('gstRate', 'GST in India is 0.25, 1.5, 3, 5, 12, 18 or 28% — check the rate'));
-  if (Math.abs(num(v.amt) + num(v.gstAmt) - num(v.total)) > 0.02) out.push(err('total', 'Amount + GST must equal the total'));
+  if (Math.abs(num(v.amt) + num(v.gstAmt) - num(v.total)) > 0.02) out.push(err('total', 'Amount plus GST does not equal the total — check one of the three'));
   if (v.vgstin && !/^[0-9]{2}[A-Z0-9]{10}[A-Z0-9]{3}$/i.test(String(v.vgstin).replace(/\s/g, ''))) out.push(err('vgstin', 'A GSTIN is 15 characters — 2 digits, then 10 of the PAN, then 3'));
   return out;
 }
@@ -134,7 +134,7 @@ export function gstFields(amtLabel, o = {}) {
         def: 'intra', show: on,
       }),
       F('vgstin', 'Vendor GSTIN', 'text', { show: on, hint: 'From the vendor\'s tax invoice. Without it the credit cannot be claimed.' }),
-      F('vinv', 'Vendor invoice no.', 'text', { show: on }),
+      F('vinv', 'Bill number', 'text', { show: o.refAlways ? base : on, hint: o.refAlways ? 'From the vendor\'s bill, so you can find it again.' : '' }),
     );
   }
   return fields;
@@ -260,9 +260,9 @@ EV.newdeal = {
     F('date', 'Date', 'date', { def: today() }),
     F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK' }),
     F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name' }),
-    F('propertyState', 'State the property is in', 'text', {
-      def: S().settings.state || 'Tamil Nadu',
-      hint: 'Decides CGST+SGST or IGST on the invoice. For brokerage the place of supply is where the property is, not where the client lives.',
+    F('propertyState', 'State the property is in', 'select', {
+      opts: STATES.map(x => [x, x]), def: S().settings.state || 'Tamil Nadu',
+      hint: 'Decides CGST+SGST or IGST on the invoice. The tax follows the property, not where the client lives.',
     }),
     F('seller', 'Seller', 'party', { partyType: 'client' }),
     F('buyer', 'Buyer', 'party', { partyType: 'client', hint: 'Leave blank until you have one' }),
@@ -272,7 +272,7 @@ EV.newdeal = {
   check: v => [
     ...dateChecks(v),
     ...(String(v.nickname || '').trim() ? [] : [err('nickname', 'Give the deal a nickname you will recognise')]),
-    ...(pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add at least one party — a seller or a buyer')]),
+    ...(pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add a seller or a buyer — at least one')]),
     ...(num(v.expSeller) < 0 || num(v.expBuyer) < 0 ? [err('expSeller', 'Expected brokerage cannot be negative')] : []),
   ],
   build: v => {
@@ -306,13 +306,13 @@ EV.newdeal = {
 
 EV.token = {
   title: 'Token / advance received', group: 'Money in', dir: 'in',
-  when: 'Money received <b>before</b> registration is not income. It is held for the client and shows against this deal until it is adjusted on the invoice, refunded or forfeited.',
+  when: '<b>Only before the deal registers.</b> If it has already registered, use "Deal closed — brokerage earned" instead. Money received before registration is not income. It is held for the client and shows against this deal until it is adjusted on the invoice, refunded or forfeited.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealOpts() }),
-    F('from', 'From', 'select', { opts: partySides(v.deal) }),
+    F('from', 'Who paid', 'select', { opts: partySides(v.deal) }),
     F('amt', 'Amount', 'number', { required: true }),
-    F('via', 'Received into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+    F('via', 'Money in to', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
   ],
   check: v => [
     ...dateChecks(v),
@@ -356,9 +356,9 @@ EV.dealcost = {
       ['5110', 'Photography & video'], ['5120', 'Professional fees'], ['5180', 'Miscellaneous']],
       def: '5045', show: x => x.bear === 'self',
     }),
-    F('how', 'Paid', 'select', {
+    F('how', 'Money out from', 'select', {
       opts: [['1000', 'Now — Bank / UPI'], ['1010', 'Now — Petty cash'],
-      ['2300', 'Now — Credit card'], ['bill', 'Bill received, pay vendor later']],
+      ['2300', 'Now — Credit card'], ['bill', 'Bill received — pay later']],
       def: '1000',
     }),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor', show: x => x.how === 'bill' }),
@@ -369,7 +369,7 @@ EV.dealcost = {
     ...dateChecks(v),
     ...(deal(v.deal) ? [] : [err('deal', 'Pick the deal this cost belongs to')]),
     ...posAmt(v), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
-    ...(v.bear !== 'self' && deal(v.deal) && !sideParty(deal(v.deal), v.bear) ? [err('bear', `This deal has no ${v.bear} to recover from`)] : []),
+    ...(v.bear !== 'self' && deal(v.deal) && !sideParty(deal(v.deal), v.bear) ? [err('bear', `No ${v.bear} on this deal yet — add them on the Deals tab, or let the company bear it`)] : []),
     ...(v.how === 'bill' ? partyReq(v, 'vendor', 'Name the vendor you owe') : []),
     ...(v.how === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('how', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
   ],
@@ -429,7 +429,7 @@ EV.invoice = {
       hint: x => { const d = deal(x.deal); return d ? 'Expected: ' + fmt(x.from === 'buyer' ? d.expBuyer : d.expSeller) : ''; },
     }),
     F('tds', 'TDS % the client deducts', 'number', { def: 0, show: () => tdsOn() }),
-    F('adv', 'Adjust token held', 'number', {
+    F('adv', 'Token to knock off this bill', 'number', {
       def: 0,
       hint: x => {
         const d = deal(x.deal); const p = d && sideParty(d, x.from);
@@ -464,10 +464,10 @@ EV.invoice = {
     return [
       ...dateChecks(v),
       ...(d ? [] : [err('deal', 'Pick the deal that registered')]),
-      ...(d && !p ? [err('from', 'This deal has no such party')] : []),
+      ...(d && !p ? [err('from', 'This deal has no such client yet — add them on the Deals tab')] : []),
       ...posAmt(v, 'amt', 'Enter the brokerage'), ...gstChecks(v),
       ...(num(v.adv) > held + 0.005 ? [err('adv', `Only ${fmt(held)} is held from this client`)] : []),
-      ...(num(v.adv) < 0 ? [err('adv', 'Cannot be negative')] : []),
+      ...(num(v.adv) < 0 ? [err('adv', 'Enter zero or more')] : []),
       ...(tdsOn() && num(v.tds) > 10 ? [err('tds', 'TDS on brokerage is normally 2% (194H) — check the rate')] : []),
     ];
   },
@@ -538,7 +538,7 @@ EV.invoice = {
 
 EV.dealpay = {
   title: 'Client pays what they owe', group: 'Money in', dir: 'in',
-  when: 'Money arriving against what a client owes you — an invoice, or costs you recovered on their behalf. The payment is <b>allocated to the open invoices</b>, oldest first, so each one shows paid, part-paid or open. Cash goes up, what they owe goes down. <b>Profit does not change</b> — the income was counted when the invoice was raised.',
+  when: 'Money arriving against what a client owes you — an invoice, or costs you recovered on their behalf. The payment is <b>matched to their open invoices</b>, oldest first, so each one shows paid, part-paid or open. Cash goes up, what they owe goes down. <b>Profit does not change</b> — the income was counted when the invoice was raised.',
   fields: v => {
     const p = v.party || null;
     return [
@@ -548,10 +548,11 @@ EV.dealpay = {
         hint: 'Only clients who owe something are listed.',
       }),
       F('amt', 'Amount received', 'number', { required: true, hint: p ? `Owes ${fmt(bal('1100', { party: p }))} in total` : '' }),
-      F('via', 'Into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+      F('via', 'Money in to', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+      F('ref', 'Reference', 'text', { hint: 'UPI reference or cheque number — it is what matches this to the bank statement later.' }),
       F('alloc', 'Applied to', 'alloc', { source: 'invoices', partyKey: 'party', show: x => !!x.party }),
-      F('over', 'If they paid more than they owe', 'select', {
-        opts: [['hold', 'Hold the extra as an advance for them'], ['stop', 'Do not allow — I will correct the amount']],
+      F('over', 'If they paid extra', 'select', {
+        opts: [['hold', 'Keep the extra for them'], ['stop', 'Stop me — I will fix the amount']],
         def: 'hold', show: x => num(x.amt) > bal('1100', { party: x.party }) + 0.005,
       }),
     ];
@@ -759,7 +760,7 @@ EV.writeoff = {
 };
 
 EV.absorb = {
-  title: 'Recoverable cost not recovered — absorb it', group: 'Corrections', dir: 'fix',
+  title: 'Client will not repay a cost you paid', group: 'Corrections', dir: 'fix',
   when: 'You paid something for the client and they will not pay it back. Moves it from "recoverable" to your own deal expense.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
@@ -814,7 +815,7 @@ EV.subnew = {
     F('payMode', 'How it is paid', 'select', {
       opts: [['monthly', 'Charged every month'], ['upfront', 'Paid upfront for a term']], def: 'monthly',
     }),
-    F('billing', 'Each month it is', 'select', {
+    F('billing', 'How does it reach you each month', 'select', {
       opts: [['auto', 'Auto-charged to a card / bank'], ['invoice', 'Invoiced, and I pay it']], def: 'auto',
       show: x => x.payMode !== 'upfront',
     }),
@@ -825,7 +826,7 @@ EV.subnew = {
       gstShow: x => x.payMode === 'upfront' && x.rcm !== 'yes',
     }),
     F('months', 'Term (months)', 'number', { def: 12, show: x => x.payMode === 'upfront' }),
-    F('via', 'Charged to', 'select', { opts: PAY_VIA, def: '1000' }),
+    F('via', 'Money out from', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
   onchange: gstSync,
   check: v => [
@@ -905,19 +906,19 @@ EV.confirmcharge = {
       F('result', 'What happened', 'select', {
         opts: [
           ['paid', 'Charged and paid — auto-debit, UPI, card'],
-          ['invoice', 'Invoice received — I will pay it later'],
+          ['invoice', 'Bill received — I will pay it later'],
           ['skipped', 'Not charged this month'],
         ], def: s?.billing === 'invoice' ? 'invoice' : 'paid',
       }),
-      F('via', 'Paid from', 'select', { opts: PAY_VIA, def: s?.via || '1000', show: x => x.result === 'paid' }),
+      F('via', 'Money out from', 'select', { opts: PAY_VIA, def: s?.via || '1000', show: x => x.result === 'paid' }),
       F('dueDate', 'Due on', 'date', { show: x => x.result === 'invoice', hint: 'Leave blank for 30 days' }),
       ...gstFields('Actual amount (before GST)', {
         kind: 'input', show: x => x.result !== 'skipped', gstShow: x => x.rcm !== 'yes',
         hint: () => expected ? `Expected ${fmt(expected)} this month` : '',
       }),
       ...rcmFields(x => x.result !== 'skipped', { def: 'import' }),
-      F('reason', 'Why it differs from what you expected', 'select', { opts: VARIANCE_REASONS, def: 'usage', show: differs }),
-      F('note', 'Note', 'text', { show: differs, hint: 'One line, e.g. "upgraded to Max on the 14th"' }),
+      F('reason', 'Why it differs from what you expected', 'select', { opts: VARIANCE_REASONS, def: 'usage', show: x => differs(x) || x.result === 'skipped' }),
+      F('note', 'Note', 'text', { show: x => differs(x) || x.result === 'skipped', hint: 'One line, e.g. "upgraded to Max on the 14th"' }),
       F('newPlan', 'Does the expected amount change from here?', 'select', {
         opts: [['no', 'No — same plan continues'], ['yes', 'Yes — new plan or price from a given month']], def: 'no',
         show: x => x.result !== 'skipped',
@@ -977,7 +978,7 @@ EV.confirmcharge = {
       ? { history, monthly: num(v.newAmount), plan: v.newPlanName || s.plan || '' } : {};
 
     if (v.result === 'skipped') {
-      updates.push({ coll: 'subscriptions', id: s.id, data: { [`charges.${month}`]: { actual: 0, expected, skipped: true }, ...planPatch } });
+      updates.push({ coll: 'subscriptions', id: s.id, data: { [`charges.${month}`]: { actual: 0, expected, skipped: true, reason: v.reason || null, note: v.note || '' }, ...planPatch } });
       return {
         desc: '', lines: [],
         effects: [`${esc(label)} marked not charged for ${mlabel(month)}. Nothing is posted; the run-rate is unchanged.`, ...eff],
@@ -1050,7 +1051,7 @@ EV.subchange = {
   fields: v => {
     const s = S().subs.find(x => x.id === v.sub);
     return [
-      F('from', 'Effective from', 'month', { def: addMonths(ym(today()), 1) }),
+      F('from', 'From which month', 'month', { def: addMonths(ym(today()), 1) }),
       F('sub', 'Service', 'select', { opts: S().subs.filter(x => x.status === 'active').map(x => [x.id, `${x.name}${x.plan ? ' (' + x.plan + ')' : ''}`]) }),
       F('plan', 'New plan name', 'text', { hint: 'e.g. Max' }),
       F('payMode', 'New payment', 'select', {
@@ -1153,11 +1154,11 @@ EV.subcancel = {
   fields: v => {
     const s = S().subs.find(x => x.id === v.sub);
     return [
-      F('from', 'Effective from', 'month', { def: ym(today()) }),
+      F('from', 'From which month', 'month', { def: ym(today()) }),
       F('sub', 'Service', 'select', {
         opts: S().subs.filter(x => ['active', 'paused'].includes(x.status)).map(x => [x.id, `${x.name} (${x.status})`]),
       }),
-      F('action', 'Action', 'select', {
+      F('action', 'What do you want to do', 'select', {
         opts: x => S().subs.find(y => y.id === x.sub)?.status === 'paused'
           ? [['resume', 'Resume'], ['cancel', 'Cancel']]
           : [['cancel', 'Cancel'], ['pause', 'Pause']],
@@ -1233,15 +1234,16 @@ EV.subcancel = {
 
 EV.expense = {
   title: 'Expense paid now', group: 'Money out', dir: 'out',
-  when: 'Rent, EB, fuel, a print job — used and paid in the same moment. Profit goes down by the amount. If it belongs to one particular deal, use "Cost for a deal" instead so it counts against that deal. If you will pay later, use "Bill received".',
+  when: 'Rent, EB, fuel, a print job — used and paid in the same moment. <b>If it is a subscription, record it on the Services tab instead</b>, so the month shows against what you expected. Profit goes down by the amount. If it belongs to one particular deal, use "Cost for a deal" instead so it counts against that deal. If you will pay later, use "Bill received".',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('desc', 'What', 'text', { required: true }),
     F('acc', 'Category', 'select', { opts: EXP.map(a => [a.code, a.name]) }),
+    F('note', 'Note', 'text', { hint: 'Anything you will want to remember — a reference, who asked for it.' }),
     F('vendor', 'Vendor (optional)', 'party', { partyType: 'vendor', hint: 'Naming them puts this purchase in the GST register against their invoice.' }),
     ...rcmFields(() => true),
-    ...gstFields('Amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes' }),
-    F('via', 'Paid via', 'select', { opts: PAY_VIA, def: '1000' }),
+    ...gstFields('Amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes', refAlways: true }),
+    F('via', 'Money out from', 'select', { opts: PAY_VIA, def: '1000' }),
   ],
   onchange: gstSync,
   check: v => [
@@ -1250,7 +1252,7 @@ EV.expense = {
     ...(v.acc ? [] : [err('acc', 'Pick a category')]),
     ...posAmt(v), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(v.via === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))} — top it up first with "Move money"`)] : []),
-    ...(v.gst === 'yes' && !pidOf(v.vendor) && !BLOCKED_ITC.has(v.acc) ? [warn('vendor', 'Without a vendor and their GSTIN this credit shows as ineligible in the ITC register')] : []),
+    ...(v.gst === 'yes' && !pidOf(v.vendor) && !BLOCKED_ITC.has(v.acc) ? [warn('vendor', 'Add the vendor and their GSTIN, or you cannot claim this GST back')] : []),
   ],
   build: v => {
     const amt = num(v.amt);
@@ -1286,9 +1288,10 @@ EV.bill = {
     F('vendor', 'Vendor', 'party', { partyType: 'vendor' }),
     F('desc', 'What for', 'text', { required: true }),
     F('acc', 'Category', 'select', { opts: EXP.map(a => [a.code, a.name]) }),
+    F('note', 'Note', 'text', { hint: 'Optional — anything you will want to remember.' }),
     F('dueDate', 'Due on', 'date', { hint: 'Leave blank for 30 days from the bill date' }),
     ...rcmFields(() => true),
-    ...gstFields('Bill amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes' }),
+    ...gstFields('Bill amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes', refAlways: true }),
     F('tds', 'TDS section', 'select', { opts: TDS_SECTIONS.map(t => [t[0], t[1]]), show: () => tdsOn() }),
     F('tdsrate', 'TDS %', 'number', {
       def: 0, show: () => tdsOn(),
@@ -1314,7 +1317,7 @@ EV.bill = {
     ...posAmt(v, 'amt', 'Enter the bill amount'),
     ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(v.dueDate && v.dueDate < v.date ? [err('dueDate', 'Due date is before the bill date')] : []),
-    ...(tdsOn() && num(v.tdsrate) > 30 ? [err('tdsrate', 'Check the TDS rate')] : []),
+    ...(tdsOn() && num(v.tdsrate) > 30 ? [err('tdsrate', 'TDS is usually 1, 2 or 10% — check the rate')] : []),
   ],
   build: v => {
     const amt = num(v.amt);
@@ -1355,7 +1358,7 @@ EV.bill = {
 
 EV.paybill = {
   title: 'Pay a bill', group: 'Money out', dir: 'out',
-  when: 'Pays what you owe a vendor. The payment is <b>allocated to their open bills</b>, oldest first — you can change the split. Pay less and the bill stays part-paid; pay more and the extra is held as an advance to them. The cost was counted when the bill came in, so <b>profit does not change now</b>.',
+  when: 'Pays what you owe a vendor. The payment is <b>matched to their open bills</b>, oldest first — you can change the split. Pay less and the bill stays part-paid; pay more and the extra is held as an advance to them. The cost was counted when the bill came in, so <b>profit does not change now</b>.',
   fields: v => {
     const pid = v.party || null;
     const adv = pid ? vendorAdvance(pid) : 0;
@@ -1365,14 +1368,15 @@ EV.paybill = {
         opts: vendorsOwed().map(([id, b]) => [id, `${pname(id)} — you owe ${fmt(b)}`]),
         hint: 'Only vendors you owe are listed. A bill has to be recorded first — with "Bill received", a deal cost, or a service month.',
       }),
-      F('useAdvance', `Use the ${fmt(adv)} advance already with this vendor first`, 'select', {
+      F('useAdvance', `Use the ${fmt(adv)} you already paid ahead?`, 'select', {
         opts: [['yes', 'Yes'], ['no', 'No']], def: 'yes', show: () => adv > 0.5,
       }),
       F('amt', 'Amount paid now', 'number', { required: true, hint: pid ? `Total owed ${fmt(bal('2000', { party: pid }))}` : '' }),
-      F('via', 'Paid via', 'select', { opts: PAY_VIA, def: '1000' }),
+      F('via', 'Money out from', 'select', { opts: PAY_VIA, def: '1000' }),
+      F('ref', 'Reference', 'text', { hint: 'UPI reference or cheque number, so this matches the bank statement.' }),
       F('alloc', 'Applied to these bills', 'alloc', { source: 'bills', partyKey: 'party', show: x => !!x.party }),
-      F('over', 'If this is more than the bills', 'select', {
-        opts: [['advance', 'Hold the extra as an advance to this vendor'], ['stop', 'Do not allow — I will correct the amount']],
+      F('over', 'If you are paying extra', 'select', {
+        opts: [['advance', 'Keep the extra with the vendor for next time'], ['stop', 'Stop me — I will fix the amount']],
         def: 'advance', show: x => x.party && num(x.amt) + (x.useAdvance !== 'no' ? vendorAdvance(x.party) : 0) > bal('2000', { party: x.party }) + 0.005,
       }),
     ];
@@ -1446,16 +1450,16 @@ EV.salary = {
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('emp', 'Employee', 'party', { partyType: 'employee' }),
-    F('kind', 'Kind', 'select', { opts: [['5010', 'Salary'], ['5020', 'Bonus / incentive']], def: '5010' }),
-    F('gross', 'Gross', 'number', { required: true }),
+    F('kind', 'Salary or bonus', 'select', { opts: [['5010', 'Salary'], ['5020', 'Bonus / incentive']], def: '5010' }),
+    F('gross', 'Salary before deductions', 'number', { required: true }),
     F('tds', 'TDS', 'number', { def: 0, show: () => tdsOn() }),
     F('pf', 'PF / ESI', 'number', { def: 0 }),
-    F('via', 'Paid via', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+    F('via', 'Money out from', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
   ],
   check: v => [
     ...dateChecks(v), ...partyReq(v, 'emp', 'Name the employee'),
     ...posAmt(v, 'gross', 'Enter the gross amount'),
-    ...(num(v.tds) + num(v.pf) > num(v.gross) ? [err('pf', 'Deductions cannot exceed the gross')] : []),
+    ...(num(v.tds) + num(v.pf) > num(v.gross) ? [err('pf', 'TDS and PF together are more than the salary — check them')] : []),
     ...(v.via === '1010' && num(v.gross) - num(v.tds) - num(v.pf) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
   ],
   build: v => {
@@ -1491,8 +1495,8 @@ EV.asset = {
       kind: 'input', gstShow: x => x.rcm !== 'yes',
       hint: () => `Anything under ${fmt(S().settings.capitalisationThreshold)} is normally a straight expense, not an asset`,
     }),
-    F('life', 'Useful life (months)', 'number', { def: 36 }),
-    F('how', 'Paid', 'select', { opts: [['1000', 'Now — Bank / UPI'], ['2300', 'Now — Credit card'], ['1010', 'Now — Petty cash'], ['bill', 'On credit — pay the vendor later']], def: '1000' }),
+    F('life', 'How many months will you use it', 'number', { def: 36 }),
+    F('how', 'Money out from', 'select', { opts: [['1000', 'Now — Bank / UPI'], ['2300', 'Now — Credit card'], ['1010', 'Now — Petty cash'], ['bill', 'Bill received — pay later']], def: '1000' }),
     F('dueDate', 'Due on', 'date', { show: x => x.how === 'bill', hint: 'Leave blank for 30 days' }),
   ],
   onchange: gstSync,
@@ -1547,7 +1551,7 @@ EV.asset = {
 
 EV.assetdispose = {
   title: 'Sell or scrap an asset', group: 'Corrections', dir: 'fix',
-  when: 'Removes the asset and the depreciation built up against it. Anything you get above the written-down value is a gain; below it, a loss.',
+  when: 'Removes the asset and the depreciation built up against it. Sell it for more than the value left in the books and that is a gain; less, a loss.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('assetId', 'Asset', 'select', {
@@ -1557,9 +1561,9 @@ EV.assetdispose = {
       }),
     }),
     F('proceeds', 'Amount received', 'number', { def: 0, hint: 'Zero if scrapped' }),
-    F('via', 'Received into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000', show: x => num(x.proceeds) > 0 }),
+    F('via', 'Money in to', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000', show: x => num(x.proceeds) > 0 }),
   ],
-  check: v => [...dateChecks(v), ...(S().assets.find(a => a.id === v.assetId) ? [] : [err('assetId', 'Pick the asset')]), ...(num(v.proceeds) < 0 ? [err('proceeds', 'Cannot be negative')] : [])],
+  check: v => [...dateChecks(v), ...(S().assets.find(a => a.id === v.assetId) ? [] : [err('assetId', 'Pick the asset')]), ...(num(v.proceeds) < 0 ? [err('proceeds', 'Enter zero or more')] : [])],
   build: v => {
     const a = S().assets.find(x => x.id === v.assetId);
     if (!a) return need('Pick an asset.');
@@ -1674,9 +1678,9 @@ EV.otherinc = {
       def: '4020',
     }),
     ...gstFields('Amount (before GST)', { kind: 'output' }),
-    F('sac', 'SAC code on the invoice', 'text', {
+    F('sac', 'Service code for the invoice (SAC)', 'text', {
       def: S().settings.sacCodes?.consultancy || '998311', show: x => x.gst === 'yes',
-      hint: '998311 is management consulting; 997221 is brokerage.',
+      hint: '998311 is consulting; 997221 is brokerage. Your CA can confirm which fits.',
     }),
     F('via', 'Received', 'select', {
       opts: [['1000', 'Now — Bank / UPI'], ['1010', 'Now — Petty cash'], ['later', 'Not yet — the client will pay later']],
@@ -1739,10 +1743,10 @@ EV.funding = {
   when: '<b>Never income.</b> Share capital is ownership; a director loan is repayable. Either way your profit does not change.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
-    F('kind', 'Kind', 'select', { opts: [['3000', 'Share capital'], ['2450', "Director's loan"]], def: '3000' }),
+    F('kind', 'What kind of money', 'select', { opts: [['3000', 'Share capital'], ['2450', "Director's loan"]], def: '3000' }),
     F('who', 'From', 'text', { required: true }),
     F('amt', 'Amount', 'number', { required: true }),
-    F('via', 'Into', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
+    F('via', 'Money in to', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000' }),
   ],
   check: v => [...dateChecks(v), ...(String(v.who || '').trim() ? [] : [err('who', 'Who put the money in?')]), ...posAmt(v)],
   build: v => {
@@ -1774,7 +1778,7 @@ EV.bankloan = {
   ],
   check: v => [
     ...dateChecks(v), ...partyReq(v, 'lender', 'Name the lender'), ...posAmt(v, 'amt', 'Enter the loan amount'),
-    ...(num(v.rate) < 0 || num(v.rate) > 60 ? [err('rate', 'Check the interest rate')] : []),
+    ...(num(v.rate) < 0 || num(v.rate) > 60 ? [err('rate', 'Interest is normally 8–24% a year — check the rate')] : []),
     ...(num(v.n) >= 1 && num(v.n) <= 360 ? [] : [err('n', 'Tenure must be 1–360 months')]),
     ...(num(v.fee) >= num(v.amt) ? [err('fee', 'The fee cannot exceed the loan')] : []),
   ],
@@ -1819,10 +1823,10 @@ EV.emi = {
     F('loan', 'Loan', 'select', {
       opts: S().loans.filter(l => l.status === 'active').map(l => [l.id, `${l.lender} — ${l.purpose || 'loan'}`]),
     }),
-    F('via', 'Paid from', 'select', { opts: [['1000', 'Bank / UPI'], ['2300', 'Credit card']], def: '1000' }),
+    F('via', 'Money out from', 'select', { opts: [['1000', 'Bank / UPI'], ['2300', 'Credit card']], def: '1000' }),
     F('extra', 'Late fee / penalty', 'number', { def: 0 }),
   ],
-  check: v => [...dateChecks(v), ...(S().loans.find(l => l.id === v.loan && l.status === 'active') ? [] : [err('loan', 'Pick an active loan')]), ...(num(v.extra) < 0 ? [err('extra', 'Cannot be negative')] : [])],
+  check: v => [...dateChecks(v), ...(S().loans.find(l => l.id === v.loan && l.status === 'active') ? [] : [err('loan', 'Pick an active loan')]), ...(num(v.extra) < 0 ? [err('extra', 'Enter zero or more')] : [])],
   build: v => {
     const l = S().loans.find(x => x.id === v.loan);
     if (!l) return need('No active loan.');
@@ -1904,7 +1908,7 @@ EV.transfer = {
   when: 'Bank to petty cash, paying the card bill, reimbursing the director, UPI wallet top-ups. <b>Never an expense</b> — the money is still yours (or still owed).',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
-    F('kind', 'Move', 'select', {
+    F('kind', 'What are you moving', 'select', {
       opts: [
         ['1000>1010', 'Bank / UPI → petty cash box'],
         ['1010>1000', 'Petty cash box → bank'],
@@ -1941,7 +1945,7 @@ EV.statutory = {
     const isGst = (v.kind || 'gst') === 'gst';
     return [
       F('date', 'Paid on', 'date', { def: today() }),
-      F('kind', 'Which', 'select', { opts: [['gst', 'GST — monthly return'], ['tds', 'TDS'], ['pf', 'PF / ESI']], def: 'gst' }),
+      F('kind', 'What are you paying', 'select', { opts: [['gst', 'GST — monthly return'], ['tds', 'TDS'], ['pf', 'PF / ESI']], def: 'gst' }),
       F('month', 'For the month', 'month', { def: addMonths(ym(today()), -1), show: () => isGst }),
       F('cgst', 'CGST paid in cash', 'number', { def: 0, show: () => isGst, hint: x => gstPayHint(x) }),
       F('sgst', 'SGST paid in cash', 'number', { def: 0, show: () => isGst }),
@@ -2130,7 +2134,7 @@ export const CHOOSER = [
     { key: 'expense', label: 'Expense paid now', sub: 'Used and paid together. Profit goes down.' },
     { key: 'bill', label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.' },
     { key: 'paybill', label: 'Pay a bill', sub: 'Matched to the bills it settles. Profit unchanged.' },
-    { key: 'confirmcharge', label: "Service — record this month's bill", sub: 'What a subscription actually billed. Variance and plan changes recorded.' },
+    { key: 'confirmcharge', label: "Service — record this month's bill", sub: 'Records the real amount, even if it differs.' },
     { key: 'dealcost', label: 'Cost for a deal', sub: 'EC, patta, legal — mapped to one deal.' },
     { key: 'salary', label: 'Salary / bonus', sub: 'Gross is the cost. Profit goes down.' },
     { key: 'asset', label: 'Buy an asset', sub: 'Cash out now, cost spread monthly.' },

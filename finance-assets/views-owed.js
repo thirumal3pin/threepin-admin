@@ -11,9 +11,9 @@
 
 import {
   fmt, esc, num, today, getState, bal, partyBalances, pname, deal, agedReceivables,
-  openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, mlabel,
+  openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, mlabel, agedPayables,
 } from './finance-core.js';
-import { stat, empty, note, tag, table, daysAgo, daysBetween } from './ui.js';
+import { stat, empty, note, tag, table, daysAgo, daysBetween, dueCell } from './ui.js';
 
 // Which deal and which side of it a party sits on, so a button can pre-fill the Record form.
 // A client can appear on several deals; the one with an outstanding balance is the one meant.
@@ -45,15 +45,6 @@ const sortedBalances = code => Object.entries(partyBalances(code))
 
 const totalRow = (label, amount, span = 1) =>
   `<tr><td colspan="${span}">${esc(label)}</td><td class="n">${fmt(amount)}</td><td></td></tr>`;
-
-// Due-date colouring: overdue is red, due within a week is amber.
-function dueCell(dueDate) {
-  if (!dueDate) return '<span class="faint">—</span>';
-  const d = daysBetween(today(), dueDate);
-  if (d < 0) return `<span class="neg">${esc(dueDate)}</span> ${tag(`${-d}d overdue`, 'rev')}`;
-  if (d <= 7) return `<span class="warn-ink">${esc(dueDate)}</span> ${tag(d === 0 ? 'today' : `in ${d}d`, 'warn')}`;
-  return `<span class="small">${esc(dueDate)}</span>`;
-}
 
 export function renderOwed() {
   const s = getState();
@@ -102,8 +93,9 @@ function sectionReceivable(rows) {
       ${stat('0–30 days', fmt(buckets['0-30']))}
       ${stat('31–60 days', fmt(buckets['31-60']), { cls: buckets['31-60'] > 0.5 ? 'neg' : '' })}
       ${stat('61–90 days', fmt(buckets['61-90']), { cls: buckets['61-90'] > 0.5 ? 'neg' : '' })}
-      ${stat('Over 90 days', fmt(buckets['90+']), { cls: buckets['90+'] > 0.5 ? 'neg' : '', sub: buckets['90+'] > 0.5 ? 'Consider writing off' : '' })}
+      ${stat('Over 90 days', fmt(buckets['90+']), { cls: buckets['90+'] > 0.5 ? 'neg' : '', sub: buckets['90+'] > 0.5 ? 'Chase, or write it off' : '' })}
     </div>
+    ${buckets['no document'] > 0.5 ? `<p class="small faint">${fmt(buckets['no document'])} of this has no invoice behind it — recovered costs, or balances from before invoices were tracked — so it is not aged.</p>` : ''}
     <p class="small muted">Oldest first — that is the order worth chasing in. Each client's open invoices are listed under them.</p>
     ${table(
     `<th>Client</th><th class="n">Owes</th><th class="n">Waiting</th><th></th>`,
@@ -143,12 +135,20 @@ function sectionPayable(rows) {
   const allOpen = openBills(null);
   const overdue = allOpen.filter(b => b.dueDate && b.dueDate < today());
   const soon = allOpen.filter(b => b.dueDate && b.dueDate >= today() && daysBetween(today(), b.dueDate) <= 7);
+  const aged = agedPayables(today());
   return `
     <h2>You owe vendors</h2>
     <div class="grid g3">
       ${stat('Open bills', String(allOpen.length))}
       ${stat('Overdue', fmt(overdue.reduce((a, b) => a + billOutstanding(b), 0)), { cls: overdue.length ? 'neg' : '', sub: overdue.length ? `${overdue.length} bill${overdue.length === 1 ? '' : 's'}` : 'None' })}
       ${stat('Due within 7 days', fmt(soon.reduce((a, b) => a + billOutstanding(b), 0)), { sub: soon.length ? `${soon.length} bill${soon.length === 1 ? '' : 's'}` : 'None' })}
+    </div>
+    <p class="small muted">How long you have been holding on to what you owe:</p>
+    <div class="grid g3">
+      ${stat('0–30 days', fmt(aged['0-30']))}
+      ${stat('31–60 days', fmt(aged['31-60']), { cls: aged['31-60'] > 0.5 ? 'neg' : '' })}
+      ${stat('61–90 days', fmt(aged['61-90']), { cls: aged['61-90'] > 0.5 ? 'neg' : '' })}
+      ${stat('Over 90 days', fmt(aged['90+']), { cls: aged['90+'] > 0.5 ? 'neg' : '', sub: aged['90+'] > 0.5 ? 'GST credit is at risk after 180 days' : '' })}
     </div>
     ${table(
     `<th>Vendor</th><th class="n">You owe</th><th></th>`,
@@ -162,7 +162,10 @@ function sectionPayable(rows) {
           ${bills.length ? `<div class="doclist">${bills.map(b => `
             <div class="docrow"><span class="small">${esc(b.desc)}</span> <span class="small faint">${esc(b.date)}${b.billNo ? ' · ' + esc(b.billNo) : ''}</span>
               <span class="n">${fmt(billOutstanding(b))}${b.status === 'part' ? ` <span class="small faint">of ${fmt(b.net ?? b.total)}</span>` : ''}</span>
-              <span>${dueCell(b.dueDate)}</span></div>`).join('')}</div>` : ''}
+              <span>${dueCell(b.dueDate)}
+                ${b.txnId ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(b.txnId)}')">Entry</button>` : ''}
+                ${b.serviceId ? `<button class="btn ghost sm" type="button" onclick="fin.go('services')">Service</button>` : ''}
+              </span></div>`).join('')}</div>` : ''}
           ${undocumented > 0.5 ? `<div class="small faint" style="margin-top:4px">${fmt(undocumented)} owed from entries before bills were tracked</div>` : ''}
           ${adv > 0.5 ? `<div class="small pos" style="margin-top:4px">${fmt(adv)} advance already with them — used first when you pay</div>` : ''}</td>
         <td class="n">${fmt(amt)}</td>

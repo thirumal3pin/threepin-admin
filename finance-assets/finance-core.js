@@ -84,6 +84,17 @@ export const A = Object.fromEntries(ACCOUNTS.map(a => [a.code, a]));
 export const EXP = ACCOUNTS.filter(
   a => a.type === 'expense' && !['5150', '5190', '5200', '5210', '5220'].includes(a.code));
 
+// Typing a state by hand silently flips CGST+SGST to IGST on an invoice, so it is chosen.
+export const STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chandigarh', 'Chhattisgarh',
+  'Dadra & Nagar Haveli and Daman & Diu', 'Delhi', 'Goa', 'Gujarat', 'Haryana',
+  'Himachal Pradesh', 'Jammu & Kashmir', 'Jharkhand', 'Karnataka', 'Kerala', 'Ladakh',
+  'Lakshadweep', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram',
+  'Nagaland', 'Odisha', 'Puducherry', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
+  'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman & Nicobar Islands', 'Other Territory',
+];
+
 export const PAY_VIA = [['1000', 'Bank / UPI'], ['2300', 'Credit card'], ['1010', 'Petty cash']];
 
 export const TDS_SECTIONS = [

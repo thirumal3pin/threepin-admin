@@ -7,7 +7,7 @@
 
 import {
   fmt, esc, num, ym, addMonths, mlabel, today, getState,
-  gstComputation, gstr1Rows, itcRegister,
+  gstComputation, gstr1Rows, itcRegister, rule37Rows,
 } from './finance-core.js';
 import { stat, empty, note, tag, table, downloadCsv, monthOptions } from './ui.js';
 
@@ -23,6 +23,7 @@ export function renderGst() {
   const g = gstComputation(month);
   const outward = gstr1Rows(month);
   const inward = itcRegister(month);
+  const stale = rule37Rows(month);
   const eligible = inward.filter(r => r.eligible).reduce((a, r) => a + r.tax, 0);
   const atRisk = inward.filter(r => !r.eligible && !r.blocked && !r.rcm);
   const used = g.setoff.util.reduce((a, u) => a + u.amt, 0);
@@ -88,6 +89,21 @@ export function renderGst() {
       `<tr><td colspan="4">Eligible credit</td><td></td><td colspan="3" class="n">${fmt(eligible)}</td><td></td></tr>`)
       : empty('No purchases with GST this month.')}
     <div class="actions"><button class="btn sm" type="button" onclick="finGst.csvItc()">Download ITC register CSV</button></div>
+
+    ${stale.length ? `
+      <h2>Credit to give back — bills unpaid 180 days <span class="muted">(${stale.length})</span></h2>
+      ${note('A credit you claimed on a bill you have not paid within 180 days of its date has to be added back to the liability for this month, with interest (s.16(2) second proviso with Rule 37). Pay the bill and you claim it again. Show this list to your CA before filing.', 'warn')}
+      ${table(
+      `<th>Bill</th><th>Vendor</th><th>Date</th><th class="n">Still unpaid</th><th class="n">Days</th><th class="n">Credit to reverse</th>`,
+      stale.map(r => `<tr>
+          <td>${esc(r.desc)}</td>
+          <td>${esc(r.vendor)}</td>
+          <td class="small nowrap">${esc(r.date)}</td>
+          <td class="n">${fmt(r.outstanding)}</td>
+          <td class="n">${r.days}</td>
+          <td class="n neg">${fmt(r.reverse)}</td>
+        </tr>`).join(''),
+      `<tr><td colspan="5">Total to add back</td><td class="n neg">${fmt(stale.reduce((a, r) => a + r.reverse, 0))}</td></tr>`)}` : ''}
 
     <h2>Outward register — GSTR-1 <span class="muted">(${outward.length})</span></h2>
     ${outward.length ? table(

@@ -425,7 +425,7 @@ function record() {
         </div>
 
         <div class="save-bar">
-          <div class="sum" id="barSum">Fill in the form</div>
+          <div class="sum" id="barSum">Fill in the form to see what it does</div>
           <button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button>
         </div>
       </div>
@@ -448,7 +448,7 @@ function record() {
     </div>`;
 }
 
-const DIR_LABEL = { in: 'Money in', out: 'Money out', move: 'Move money', fix: 'Correction', setup: 'Set up' };
+const DIR_LABEL = { in: 'Money in', out: 'Money out', move: 'Move money', fix: 'Corrections', setup: 'Set up' };
 const dirBadge = key => `<span class="dirtag dir-${dirOf(key)}">${DIR_LABEL[dirOf(key)] || ''}</span>`;
 
 function mountRecord() {
@@ -783,7 +783,7 @@ function updatePreview() {
         ${balanced ? 'Balanced ✓' : 'Does not balance'}</td>
         <td class="n">${fmt(dr)}</td><td class="n">${fmt(cr)}</td></tr></tfoot>
     </table></div>`
-    : '<p class="small faint">This action does not move money — nothing is posted to the ledger.</p>';
+    : '<p class="small faint">This does not move any money — it only sets something up.</p>';
 
   const canSave = !out.incomplete && !blocking.length && (balanced || createsOnly) && (lines.length || createsOnly) && !saving;
   document.querySelectorAll('.js-save').forEach(b => { b.disabled = !canSave; });
@@ -793,8 +793,8 @@ function updatePreview() {
     const files = pendingFiles.length ? ` · ${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'}` : '';
     bar.innerHTML = blocking.length ? `<span class="neg">${esc(blocking[0].msg)}</span>`
       : out.incomplete ? esc(out.effects?.[0] || 'Fill in the form')
-        : lines.length ? `<b class="${dirOf(evKey) === 'in' ? 'pos' : dirOf(evKey) === 'out' ? 'neg' : ''}">${fmt(dr)}</b> · ${balanced ? 'Balanced ✓' : 'Does not balance'}${files}`
-          : 'Ready — nothing posts to the ledger' + files;
+        : lines.length ? `<b class="${dirOf(evKey) === 'in' ? 'pos' : dirOf(evKey) === 'out' ? 'neg' : ''}">${fmt(dr)}</b>${balanced ? '' : ' · does not balance'}${files}`
+          : 'Ready — this does not move money' + files;
   }
 }
 

@@ -136,7 +136,7 @@ try {
   await page.fill('#f_note', 'Upgraded to Max on the 14th');
   await page.selectOption('#f_rcm', 'yes');
   await page.waitForSelector('#f_rcmRate');
-  check('Reverse charge defaults: 18% IGST', await page.evaluate(() => +document.getElementById('f_rcmRate').value === 18 && document.getElementById('f_rcmType').value === 'inter'));
+  check('Reverse charge defaults to 18% on a vendor abroad', await page.evaluate(() => +document.getElementById('f_rcmRate').value === 18 && document.getElementById('f_rcmType').value === 'import'));
   await page.selectOption('#f_newPlan', 'yes');
   await page.waitForSelector('#f_newAmount');
   await page.fill('#f_newAmount', '10000');

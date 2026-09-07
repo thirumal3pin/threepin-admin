@@ -7,6 +7,7 @@
 import {
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
   pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
+  cashProfitBridge,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -36,7 +37,7 @@ const KIND_OF = {
   subnew: 'Expense', subchange: 'Expense', subcancel: 'Expense',
   funding: 'Funding', bankloan: 'Funding',
   emi: 'Repayment', statutory: 'Repayment',
-  token: 'Advance', dealpay: 'Advance',
+  token: 'Advance', dealpay: 'Collections',
   asset: 'Asset', assetdispose: 'Asset',
   transfer: 'Transfer', card2emi: 'Transfer',
 };
@@ -47,6 +48,26 @@ const cashMoved = t => t.lines.reduce(
   (s, l) => ['1000', '1010'].includes(l.acc) ? s + num(l.dr) - num(l.cr) : s, 0);
 
 // ═══════ REPORTS ═══════
+
+// "I made a profit and the bank went down" — every step here is a real movement that
+// explains part of the gap. The residual is what none of them explain and should be nil.
+function bridgeBlock(month) {
+  const b = cashProfitBridge(month);
+  if (!b.steps.length) return '';
+  return `
+    <h2>Profit is not cash</h2>
+    <div class="card">
+      <p class="small muted" style="margin:0 0 10px">What happened to the money, starting from the month's profit.</p>
+      <div class="tbl-wrap"><table>
+        <tbody>${b.steps.map((x, i) => `<tr>
+          <td>${i === 0 ? '<b>' + esc(x.label) + '</b>' : esc(x.label)}</td>
+          <td class="n">${signed(x.amt)}</td></tr>`).join('')}
+          <tr><td><b>Cash actually moved</b></td><td class="n"><b>${signed(b.cashMoved)}</b></td></tr>
+          ${Math.abs(b.residual) > 1 ? `<tr><td class="neg">Not explained — tell your CA</td><td class="n neg">${signed(b.residual)}</td></tr>` : ''}
+        </tbody>
+      </table></div>
+    </div>`;
+}
 
 export function renderReports() {
   const s = st();
@@ -85,6 +106,8 @@ export function renderReports() {
       ${stat('Profit', signed(p.profit), { raw: true, hero: true, sub: periodLabel })}
       ${stat('Margin', p.ti ? Math.round((p.profit / p.ti) * 100) + '%' : '—')}
     </div>
+
+    ${repMode === 'month' ? bridgeBlock(repMonth) : ''}
 
     ${(() => { const t = taxProvision(p.profit); return `
     <h2>After tax</h2>

@@ -9,7 +9,7 @@ import {
   prepaidLeft, serviceRunRate, pname,
   expectedFor, nextPlanChange, serviceMonths, missingServiceMonths, openBills, billOutstanding,
 } from './finance-core.js';
-import { stat, signed, empty, note, tag, table, daysBetween } from './ui.js';
+import { stat, signed, empty, note, tag, table, daysBetween, dueCell } from './ui.js';
 
 // ═══════ SERVICES ═══════
 //
@@ -33,14 +33,33 @@ const REASONS = {
 const recordBtn = (sub, month, label = 'Record') =>
   `<button class="btn ghost sm" type="button" onclick="fin.record('confirmcharge',{sub:'${esc(sub.id)}',month:'${esc(month)}'})">${label}</button>`;
 
+// The bill a month produced, and the entry that settled it — so the month grid leads
+// somewhere instead of dead-ending on the word "unpaid".
+const billOf = m => m.billId ? getState().bills.find(b => b.id === m.billId) : null;
+const settlingTxn = m => m.billId
+  ? getState().txns.find(t => (t.allocations || []).some(a => a.coll === 'bills' && a.id === m.billId))
+  : null;
+
 function monthCell(m, sub) {
   switch (m.status) {
-    case 'released': return '<span class="pos">released</span>';
-    case 'pending': return '<span class="faint">auto at month-end</span>';
+    case 'released': return '<span class="pos">counted</span>';
+    case 'pending': return '<span class="faint">counts at month-end</span>';
     case 'skipped': return '<span class="faint">not charged</span>';
-    case 'billed': return `<span class="neg">${fmt(m.actual)} — unpaid</span>`;
-    case 'recorded': return `<span class="pos">${fmt(m.actual)} paid</span>`;
-    case 'due': return `<span class="faint">not yet</span> ${recordBtn(sub, m.month)}`;
+    case 'paused': return '<span class="faint">paused</span>';
+    case 'billed': {
+      const b = billOf(m);
+      return `<span class="neg">${fmt(m.actual)} — not paid yet</span>
+        ${b ? `<br>${dueCell(b.dueDate)}
+          <button class="btn ghost sm out" type="button" onclick="fin.record('paybill',{party:'${esc(b.partyId)}'})">Pay</button>` : ''}`;
+    }
+    case 'recorded': {
+      const t = settlingTxn(m);
+      const b = billOf(m);
+      return `<span class="pos">${fmt(m.actual)} paid</span>
+        ${t ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(t.id)}')">Payment</button>`
+          : b?.txnId ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(b.txnId)}')">Entry</button>` : ''}`;
+    }
+    case 'due': return `<span class="faint">not recorded yet</span> ${recordBtn(sub, m.month)}`;
     case 'upcoming': return `<span class="faint">upcoming</span> ${recordBtn(sub, m.month, 'Record early')}`;
     default: return `${tag('missing', 'warn')} ${recordBtn(sub, m.month)}`;
   }
@@ -161,7 +180,7 @@ export function renderServices() {
         `<th>Service</th><th class="n">Was per month</th><th>Since</th><th></th>`,
         paused.map(sub => `<tr>
             <td>${esc(sub.name)}</td>
-            <td class="n">${fmt(expectedFor(sub, month))}</td>
+            <td class="n">${fmt(expectedFor(sub, sub.end || month))}</td>
             <td class="small">${sub.end ? esc(mlabel(sub.end)) : '—'}</td>
             <td class="n"><button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}',action:'resume'})">Resume</button></td>
           </tr>`).join(''))}` : ''}
@@ -172,7 +191,7 @@ export function renderServices() {
         `<th>Service</th><th class="n">Was per month</th><th>Status</th><th>Ended</th>`,
         past.map(sub => `<tr>
             <td>${esc(sub.name)}${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}</td>
-            <td class="n">${fmt(sub.monthly)}</td>
+            <td class="n">${fmt(expectedFor(sub, sub.end || month))}<br><span class="small faint">when it stopped</span></td>
             <td class="small">${esc(sub.status)}</td>
             <td class="small">${sub.end ? esc(mlabel(sub.end)) : '—'}</td>
           </tr>`).join(''))}` : ''}`;
@@ -212,7 +231,7 @@ function loanCard(l) {
   const totalInterest = l.schedule.reduce((a, x) => a + x.int, 0);
   const interestPaid = l.schedule.filter(x => paid.includes(x.n)).reduce((a, x) => a + x.int, 0);
   const next = l.schedule.find(x => !paid.includes(x.n));
-  const progress = Math.round((paid.length / l.n) * 100);
+  const progress = num(l.n) ? Math.round((paid.length / num(l.n)) * 100) : 0;
 
   return `
     <div class="card">

@@ -236,6 +236,15 @@ export function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
 
+// A due date, coloured by how close it is: overdue in red, this week in amber.
+export function dueCell(dueDate) {
+  if (!dueDate) return '<span class="faint">—</span>';
+  const d = daysBetween(today(), dueDate);
+  if (d < 0) return `<span class="neg">${esc(dueDate)}</span> ${tag(`${-d}d overdue`, 'rev')}`;
+  if (d <= 7) return `<span class="warn-ink">${esc(dueDate)}</span> ${tag(d === 0 ? 'today' : `in ${d}d`, 'warn')}`;
+  return `<span class="small">${esc(dueDate)}</span>`;
+}
+
 export function daysAgo(dateStr) {
   return daysBetween(dateStr, today());
 }
