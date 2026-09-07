@@ -97,7 +97,7 @@ export function renderBudget() {
           aria-label="Budget for ${esc(r.name)}" onchange="finMoney.setBudget('${esc(r.code)}', this.value)">
         ${r.typed && r.why[0] === 'budget' ? '' : ''}</td>
       <td class="n" data-label="Actual">${r.actual ? fmt(r.actual) : '<span class="faint">—</span>'}</td>
-      <td class="n ${diffCls(r, r.variance)}" data-label="Difference">${r.planned || r.actual ? signed(r.variance) : '—'}</td>
+      <td class="n" data-label="Difference"><span class="${diffCls(r, r.variance)}">${r.planned || r.actual ? (r.variance > 0 ? '+' : r.variance < 0 ? '−' : '') + fmt(Math.abs(r.variance)) : '—'}</span></td>
       <td class="small" data-label="Where from">${r.typed ? 'Typed' + (r.why.length > 1 ? ' — overrides ' + esc(r.why.slice(1).join(', ')) : '') : esc(r.why.join(', ')) || '<span class="faint">actuals only</span>'}</td>
     </tr>`).join('');
 
