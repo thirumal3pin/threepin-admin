@@ -10,7 +10,8 @@
 // for is DecompressionStream, which Node has had since 18 — that is what lets parseWorkbook()
 // read .xlsx without a bundler or an xlsx library, neither of which this static site has.
 
-import { A, num, bal } from './finance-core.js';
+import {
+  openBills, openInvoices, billOutstanding, invoiceOutstanding, expectedFor, pname, fmt, A, num, bal } from './finance-core.js';
 
 // ═══════ DELIMITED TEXT (CSV / TSV) ═══════
 //
@@ -761,4 +762,146 @@ export function reconcileSummary(rows, txns, account, closingBalance, asOf) {
     // been accounted for. A tie with unmatched lines left over is two errors cancelling out.
     reconciled: Math.abs(difference) < 1 && unmatchedCount === 0,
   };
+}
+
+
+// ═══════ WHAT A STATEMENT LINE PROBABLY IS ═══════
+//
+// The owner records most things as they happen and uses the statement to prove it — and to
+// catch what was missed. For a line with no entry behind it, the job is to say what it most
+// likely was and open the right form already filled in, so creating the missing entry is one
+// look and one tap. Nothing is posted here: every suggestion still goes through the form.
+
+const NARRATION = {
+  upi: /\bUPI\b|VPA|@(ok|ybl|paytm|axl|ibl|hdfc|icici|sbi)/i,
+  netbanking: /\b(NEFT|IMPS|RTGS|NB|NET ?BANK|INB|TRF|TRANSFER)\b/i,
+  cash: /\b(ATM|CASH|CSH|CWDL|WDL)\b/i,
+  cheque: /\b(CHQ|CHEQUE|CLG|CLEARING)\b/i,
+  debit: /\b(POS|DEBIT CARD|VISA|MASTERCARD|RUPAY|ECOM)\b/i,
+};
+export function inferMethod(desc) {
+  const d = String(desc || '');
+  for (const [m, re] of Object.entries(NARRATION)) if (re.test(d)) return m;
+  return 'netbanking';
+}
+
+const words = d => String(d || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length > 2 && !/^\d+$/.test(w));
+const nearAmt = (a, b, tol = 1) => Math.abs(num(a) - num(b)) <= tol;
+const mentions = (desc, name) => {
+  const ws = new Set(words(desc));
+  return words(name).some(w => ws.has(w));
+};
+
+// Learned from what the owner chose last time for a line like this. A rule is the first
+// three meaningful words of the narration → the event and category they picked.
+export const ruleKey = desc => words(desc).slice(0, 3).join(' ');
+export function learnedRule(desc, rules) {
+  const key = ruleKey(desc);
+  if (!key) return null;
+  return (rules || []).find(r => r.key === key) || null;
+}
+
+export function suggestEntry(row, state, account, rules) {
+  const isOut = num(row.debit) > 0;
+  const amount = num(row.debit) || num(row.credit);
+  const month = String(row.date || '').slice(0, 7);
+  const method = inferMethod(row.desc);
+  const base = { date: row.date, amt: amount, desc: row.desc, ...(account === '1000' ? { method } : {}) };
+
+  // 0. The owner has told us before.
+  const rule = learnedRule(row.desc, rules);
+  if (rule) return { event: rule.event, preset: { ...base, ...(rule.preset || {}) }, why: 'You recorded a line like this as ' + rule.label, confidence: 'learned' };
+
+  if (account === '1000') {
+    // 1. Cash drawn at the ATM is the box being topped up, not a spend.
+    if (isOut && NARRATION.cash.test(row.desc)) {
+      return { event: 'transfer', preset: { date: row.date, kind: '1000>1010', amt: amount, method: 'cash' }, why: 'Cash withdrawn — topping up petty cash', confidence: 'high' };
+    }
+    // 2. Paying the card bill moves money between your own pockets.
+    if (isOut && (/CREDIT ?CARD|CC ?PAYMENT|CARD ?PAYMENT|CRDCARD/i.test(row.desc) || nearAmt(amount, bal('2300', { upto: row.date }), 1))) {
+      return { event: 'transfer', preset: { date: row.date, kind: '1000>2300', amt: amount, method }, why: 'Looks like the credit-card bill', confidence: 'high' };
+    }
+  }
+  // 3. An open bill for exactly this amount, or a vendor named in the narration.
+  if (isOut) {
+    const bills = openBills(null).filter(b => b.date <= row.date);
+    const hit = bills.find(b => nearAmt(billOutstanding(b), amount) && mentions(row.desc, b.vendorName))
+      || bills.find(b => nearAmt(billOutstanding(b), amount))
+      || bills.find(b => mentions(row.desc, b.vendorName));
+    if (hit) return { event: 'paybill', preset: { date: row.date, party: hit.partyId, amt: amount, via: account, method }, why: `Open bill — ${hit.vendorName}: ${hit.desc}`, confidence: nearAmt(billOutstanding(hit), amount) ? 'high' : 'medium' };
+  }
+  // 4. A recurring cost expected at this amount this month.
+  if (isOut) {
+    const subs = (state.subs || []).filter(sb => sb.status === 'active' && sb.payMode === 'monthly' && !(sb.charges || {})[month]?.actual);
+    const hit = subs.find(sb => nearAmt(expectedFor(sb, month), amount, 2) && (mentions(row.desc, sb.name) || mentions(row.desc, sb.vendor)))
+      || subs.find(sb => mentions(row.desc, sb.name) || mentions(row.desc, sb.vendor))
+      || subs.find(sb => nearAmt(expectedFor(sb, month), amount, 2));
+    if (hit) {
+      if (hit.kind === 'salary') return { event: 'salary', preset: { date: row.date, emp: hit.vendorId || '', month, gross: amount, sub: hit.id, via: account, method }, why: `Recurring — ${hit.name}`, confidence: 'medium' };
+      return { event: 'confirmcharge', preset: { sub: hit.id, month, date: row.date, result: 'paid', via: account, amt: amount, method }, why: `Recurring — ${hit.name}, expected ${fmt(expectedFor(hit, month))}`, confidence: nearAmt(expectedFor(hit, month), amount, 2) ? 'high' : 'medium' };
+    }
+  }
+  // 5. A loan instalment.
+  if (isOut) {
+    for (const l of (state.loans || []).filter(x => x.status === 'active')) {
+      const nxt = (l.schedule || []).find(x => !(l.paid || []).includes(x.n));
+      if (nxt && (nearAmt(nxt.emi, amount, 5) || mentions(row.desc, l.lender))) {
+        return { event: 'emi', preset: { date: row.date, loan: l.id, via: account, method }, why: `EMI ${nxt.n}/${l.n} — ${l.lender}`, confidence: nearAmt(nxt.emi, amount, 5) ? 'high' : 'medium' };
+      }
+    }
+  }
+  // 6. A client paying an open invoice.
+  if (!isOut) {
+    const invs = openInvoices(null).filter(i => i.date <= row.date);
+    const hit = invs.find(i => nearAmt(invoiceOutstanding(i), amount) && mentions(row.desc, pname(i.partyId)))
+      || invs.find(i => nearAmt(invoiceOutstanding(i), amount))
+      || invs.find(i => mentions(row.desc, pname(i.partyId)));
+    if (hit) return { event: 'dealpay', preset: { date: row.date, party: hit.partyId, amt: amount, via: account, method, ref: row.ref || '' }, why: `Open invoice ${hit.invoiceNo} — ${pname(hit.partyId)}`, confidence: nearAmt(invoiceOutstanding(hit), amount) ? 'high' : 'medium' };
+    // A client on an open deal, but no invoice yet: money ahead of registration is a token.
+    const client = (state.parties || []).find(p => p.type === 'client' && mentions(row.desc, p.name));
+    const dealOf = client && (state.deals || []).find(d => d.status === 'open' && (d.buyer?.partyId === client.id || d.seller?.partyId === client.id));
+    if (dealOf) return { event: 'token', preset: { date: row.date, deal: dealOf.id, from: dealOf.buyer?.partyId === client.id ? 'buyer' : 'seller', amt: amount, via: account, method }, why: `${client.name} is on an open deal — a token?`, confidence: 'medium' };
+  }
+  // 7. Someone you pay, named in the narration.
+  if (isOut) {
+    const vendor = (state.parties || []).find(p => p.type === 'vendor' && mentions(row.desc, p.name));
+    if (vendor) return { event: 'expense', preset: { ...base, vendor: vendor.id, via: account }, why: `Paid to ${vendor.name}`, confidence: 'low' };
+    const emp = (state.parties || []).find(p => p.type === 'employee' && mentions(row.desc, p.name));
+    if (emp) return { event: 'salary', preset: { date: row.date, emp: emp.id, month, gross: amount, via: account, method }, why: `Salary — ${emp.name}?`, confidence: 'medium' };
+  }
+  // 8. Nothing recognisable: a plain expense or income, with the account and method filled.
+  if (account === '2300') {
+    return isOut
+      ? { event: 'expense', preset: { date: row.date, amt: amount, desc: row.desc, via: '2300' }, why: 'A card spend', confidence: 'low' }
+      : { event: 'vendorrefund', preset: { date: row.date, amt: amount, desc: row.desc, how: '2300' }, why: 'A refund back onto the card', confidence: 'low' };
+  }
+  return isOut
+    ? { event: 'expense', preset: { ...base, via: '1000' }, why: 'Money out — an expense?', confidence: 'low' }
+    : { event: 'otherinc', preset: { date: row.date, amt: amount, desc: row.desc, via: '1000', method }, why: 'Money in — other income?', confidence: 'low' };
+}
+
+// Two kinds of duplicate: the same line twice on the statement, and a line whose amount
+// matches an entry another line has already claimed (the bank showed one payment twice, or
+// the books have it twice). Neither is decided here — they are flagged for the owner.
+export function flagDuplicates(rows, txns, account) {
+  const sign = accountSign(account);
+  const claimed = new Map();
+  for (const r of rows) if (r.matchedTxnId) claimed.set(r.matchedTxnId, r.id);
+  const seen = new Map();
+  for (const r of rows) {
+    r.dup = null;
+    const key = `${r.date}|${num(r.debit)}|${num(r.credit)}|${String(r.desc || '').trim().toLowerCase()}`;
+    if (seen.has(key)) r.dup = { kind: 'row', of: seen.get(key) };
+    else seen.set(key, r.id);
+    if (r.status !== 'unmatched' || r.dup) continue;
+    const target = sign > 0 ? num(r.credit) - num(r.debit) : num(r.debit) - num(r.credit);
+    const rd = dayNum(r.date);
+    for (const t of txns || []) {
+      const mv = txnMovement(t, account, sign);
+      if (mv === null || Math.abs(mv - target) > TOL) continue;
+      if (Math.abs(dayNum(t.date) - rd) > 7) continue;
+      if (claimed.has(t.id)) { r.dup = { kind: 'entry', txnId: t.id, rowId: claimed.get(t.id), no: t.no, desc: t.desc }; break; }
+    }
+  }
+  return rows;
 }

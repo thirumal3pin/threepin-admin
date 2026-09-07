@@ -66,6 +66,7 @@ export const ACCOUNTS = [
   ['5140', 'Bank & card charges', 'expense'],
   ['5150', 'Interest & finance cost', 'expense'],
   ['5160', 'Rates, taxes & filing fees', 'expense'],
+  ['5165', 'Penalties & late-payment charges', 'expense'],
   ['5075', 'Club & membership fees', 'expense'],
   ['5170', 'Insurance', 'expense'],
   ['5185', 'Gifts & client hospitality', 'expense'],
@@ -77,12 +78,15 @@ export const ACCOUNTS = [
 ].map(([code, name, type]) => ({ code, name, type }));
 
 export const A = Object.fromEntries(ACCOUNTS.map(a => [a.code, a]));
+// Costs the income-tax computation adds back. Kept as data so the tax provision and the
+// year-end pack can show them without anyone remembering which codes they were.
+export const DISALLOWED = new Set(['5165', '5190']);
 
 // Categories a user may pick on a plain expense or bill. Excludes the accounts the engine
 // reaches on its own (write-offs, depreciation, cancellation loss, interest, disposal loss).
 // 5040 IS pickable: the Realtor Club event is gone, but referral fees are a normal cost.
 export const EXP = ACCOUNTS.filter(
-  a => a.type === 'expense' && !['5150', '5190', '5200', '5210', '5220'].includes(a.code));
+  a => a.type === 'expense' && !['5150', '5165', '5190', '5200', '5210', '5220'].includes(a.code));
 
 // Typing a state by hand silently flips CGST+SGST to IGST on an invoice, so it is chosen.
 export const STATES = [
@@ -95,7 +99,30 @@ export const STATES = [
   'Andaman & Nicobar Islands', 'Other Territory',
 ];
 
-export const PAY_VIA = [['1000', 'Bank / UPI'], ['2300', 'Credit card'], ['1010', 'Petty cash']];
+export const PAY_VIA = [['1000', 'Bank (1000)'], ['2300', 'Credit card (2300)'], ['1010', 'Petty cash (1010)']];
+
+// How the money moved through the bank account. Not an account: UPI, a debit card and
+// NetBanking all draw on the same balance. Kept on the entry so a statement line can be
+// matched by it and the owner can see how something was paid.
+export const PAY_METHODS = [
+  ['upi', 'UPI'], ['debit', 'Debit card'], ['netbanking', 'NetBanking / NEFT'],
+  ['cheque', 'Cheque'], ['cash', 'Cash at the counter'],
+];
+export const methodLabel = m => PAY_METHODS.find(x => x[0] === m)?.[1] || '';
+
+// What a recurring commitment is for. Each kind has the expense account its months post to;
+// a service is only one kind of thing a business pays for every month.
+export const RECURRING_KINDS = [
+  ['service', 'Service / subscription', '5080'],
+  ['rent', 'Rent', '5000'],
+  ['salary', 'Salary / retainer', '5010'],
+  ['utility', 'Electricity / internet / phone', '5070'],
+  ['insurance', 'Insurance', '5170'],
+  ['marketing', 'Advertising / listings', '5090'],
+  ['other', 'Other recurring cost', '5180'],
+];
+export const recurringAcc = sub => sub?.acc || RECURRING_KINDS.find(k => k[0] === (sub?.kind || 'service'))?.[2] || '5080';
+export const recurringKindLabel = sub => RECURRING_KINDS.find(k => k[0] === (sub?.kind || 'service'))?.[1] || 'Service / subscription';
 
 export const TDS_SECTIONS = [
   ['none', 'No TDS', 0],
@@ -555,6 +582,7 @@ export function normalise(lines) {
       if (num(l.cr)) o.cr = Math.round(num(l.cr) * 100) / 100;
       if (l.party) o.party = l.party;
       if (l.deal) o.deal = l.deal;
+      if (l.method) o.method = l.method;
       return o;
     });
   const dr = out.reduce((s, l) => s + num(l.dr), 0);
@@ -828,14 +856,39 @@ export function rule37Rows(month) {
 // ═══════ TDS THRESHOLDS ═══════
 
 // Total billed by one vendor this financial year — the figure the s.194 thresholds test.
-export function tdsFyTotal(partyId, fy) {
+export function tdsFyTotal(partyId, fy, section) {
   let s = 0;
   for (const t of S.txns) {
-    if (t.event !== 'bill' || t.fy !== fy) continue;
-    if (!t.lines.some(l => l.acc === '2000' && l.party === partyId)) continue;
-    s += num(t.meta?.amt);
+    if (t.fy !== fy || t.reversedBy || t.reversalOf) continue;
+    const m = t.meta || {};
+    // The payee is whoever the entry names: a payable line, or the vendor on the form.
+    const payee = t.lines.find(l => l.acc === '2000' && l.party)?.party || m.vendor || null;
+    if (payee !== partyId) continue;
+    if (!['bill', 'expense', 'confirmcharge', 'dealcost'].includes(t.event)) continue;
+    if (section && m.tds && m.tds !== 'none' && m.tds !== section) continue;
+    s += num(m.amt);
   }
-  return s;
+  return r2(s);
+}
+
+// What has been withheld and what has been deposited, by section — the two sides of 26Q.
+export function tdsRegister(fy) {
+  const withheld = {}, deposited = {};
+  for (const t of S.txns) {
+    if (t.fy !== fy || t.reversedBy || t.reversalOf) continue;
+    const m = t.meta || {};
+    const cr = t.lines.filter(l => l.acc === '2250').reduce((a, l) => a + num(l.cr), 0);
+    const dr = t.lines.filter(l => l.acc === '2250').reduce((a, l) => a + num(l.dr), 0);
+    if (cr > 0.005) {
+      const sec = m.tds && m.tds !== 'none' ? m.tds : (t.event === 'salary' ? '192' : t.event === 'emi' ? '194A' : 'other');
+      (withheld[sec] = withheld[sec] || []).push({ txn: t, amt: r2(cr), party: t.lines.find(l => l.party)?.party || m.vendor || m.emp || null, month: ym(t.date) });
+    }
+    if (dr > 0.005 && t.event === 'statutory') {
+      const sec = m.tdsSection || 'other';
+      (deposited[sec] = deposited[sec] || []).push({ txn: t, amt: r2(dr), month: m.tdsMonth || ym(t.date), challan: m.challan || '', bsr: m.bsr || '' });
+    }
+  }
+  return { withheld, deposited };
 }
 
 // ═══════ COMPLIANCE CALENDAR ═══════
@@ -1027,6 +1080,150 @@ export function taxProvision(profit, rate) {
   return { pbt, rate: r, tax, pat: r2(pbt - tax) };
 }
 
+
+// ═══════ SCOPE — WITH, WITHOUT OR ONLY PETTY CASH ═══════
+//
+// "What went through the box?" is a question about entries, not accounts, so the scope is a
+// filter on entries: an entry is petty-cash if any of its lines touches 1010. Lists, the P&L,
+// category and cash-flow reports and every export honour it. The trial balance and balance
+// sheet do not — a bank-to-box top-up touches both accounts, and a statement that ignored it
+// would misstate the bank.
+
+export const PETTY = '1010';
+const SCOPES = ['with', 'without', 'only'];
+let SCOPE = 'with';
+
+export function setScope(mode) { SCOPE = SCOPES.includes(mode) ? mode : 'with'; return SCOPE; }
+export const scopeMode = () => SCOPE;
+export const scopeLabel = m => ({ with: 'All money', without: 'Without petty cash', only: 'Petty cash only' })[m || SCOPE];
+export const touchesPetty = t => (t.lines || []).some(l => l.acc === PETTY);
+export function inScope(t, mode = SCOPE) {
+  if (mode === 'only') return touchesPetty(t);
+  if (mode === 'without') return !touchesPetty(t);
+  return true;
+}
+export const scopedTxns = (txns, mode = SCOPE) => (txns || S.txns).filter(t => inScope(t, mode));
+
+// Run fn with the books narrowed to the scope. Synchronous on purpose — nothing may await
+// in between, or another render could see the narrowed set.
+export function scoped(fn, mode = SCOPE) {
+  if (mode === 'with') return fn();
+  const all = S.txns;
+  S.txns = all.filter(t => inScope(t, mode));
+  try { return fn(); } finally { S.txns = all; }
+}
+
+// The box's own story: what went in, what went out, and what it paid for.
+export function pettyActivity(f = {}) {
+  const rows = [];
+  for (const t of S.txns) {
+    if (f.month && ym(t.date) !== f.month) continue;
+    if (f.upto && t.date > f.upto) continue;
+    const l = t.lines.find(x => x.acc === PETTY);
+    if (!l) continue;
+    const dr = num(l.dr), cr = num(l.cr);
+    const other = t.lines.filter(x => x.acc !== PETTY);
+    const kind = dr > 0
+      ? (other.some(x => x.acc === '1000') ? 'topup' : 'in')
+      : (other.some(x => x.acc === '1000') ? 'sweep' : 'spend');
+    rows.push({ t, kind, in: dr, out: cr, what: other.map(x => A[x.acc]?.name || x.acc).join(', ') });
+  }
+  const sum = k => r2(rows.filter(r => r.kind === k).reduce((a, r) => a + (r.in || r.out), 0));
+  return {
+    rows: rows.sort((a, b) => b.t.date.localeCompare(a.t.date) || num(b.t.no) - num(a.t.no)),
+    topups: sum('topup'), received: sum('in'), spent: sum('spend'), swept: sum('sweep'),
+    balance: bal(PETTY, f.upto ? { upto: f.upto } : {}),
+  };
+}
+
+// ═══════ BUDGET AND PROJECTIONS ═══════
+//
+// An estimate is never an entry. What the owner expects lives in three places that already
+// exist — a recurring commitment's dated history, a loan's schedule, a deal's expected
+// brokerage and close month — plus budget lines typed per account for anything else. All of
+// it is read here and set against the actual P&L for the month. A typed budget for an
+// account is the owner's number and wins over the automatic projection for that account.
+
+export function budgetFor(month, code) { return num(S.settings.budgets?.[month]?.[code]); }
+export function budgetLines(month) { return { ...(S.settings.budgets?.[month] || {}) }; }
+
+export function projection(month) {
+  const m = month || ym(today());
+  const income = {}, expense = {}, why = {};
+  const add = (map, code, amt, note) => {
+    if (!(num(amt) > 0.005)) return;
+    map[code] = r2((map[code] || 0) + num(amt));
+    (why[code] = why[code] || []).push(note);
+  };
+
+  for (const sub of S.subs) {
+    if (sub.status !== 'active') continue;
+    if (sub.start && sub.start > m) continue;
+    if (sub.end && sub.end < m) continue;
+    if (sub.payMode === 'upfront') add(expense, '5080', sub.monthly, `${sub.name} (prepaid slice)`);
+    else add(expense, recurringAcc(sub), expectedFor(sub, m), sub.name);
+  }
+  let principal = 0;
+  for (const l of S.loans) {
+    if (l.status !== 'active') continue;
+    for (const x of l.schedule || []) {
+      if (x.month !== m || (l.paid || []).includes(x.n)) continue;
+      add(expense, '5150', x.int, `${l.lender} EMI interest`);
+      principal = r2(principal + num(x.prin));
+    }
+  }
+  for (const a of S.assets) {
+    if (a.status !== 'in use' || (a.start && a.start > m)) continue;
+    if ((a.depreciated || []).length >= num(a.life)) continue;
+    add(expense, '5200', a.monthly, `${a.name} depreciation`);
+  }
+  for (const d of S.deals) {
+    if (d.status !== 'open' || d.expMonth !== m) continue;
+    add(income, '4000', d.expSeller, `${d.nickname} (seller side)`);
+    add(income, '4010', d.expBuyer, `${d.nickname} (buyer side)`);
+  }
+  // The owner's own numbers override what the app worked out for that account.
+  const typed = budgetLines(m);
+  for (const [code, amt] of Object.entries(typed)) {
+    const type = A[code]?.type;
+    if (type === 'income') { income[code] = num(amt); why[code] = ['budget']; }
+    else if (type === 'expense') { expense[code] = num(amt); why[code] = ['budget']; }
+  }
+
+  const actual = pl(m);
+  const ti = r2(Object.values(income).reduce((a, b) => a + b, 0));
+  const te = r2(Object.values(expense).reduce((a, b) => a + b, 0));
+  const rows = [];
+  for (const code of new Set([...Object.keys(income), ...Object.keys(expense), ...Object.keys(actual.inc), ...Object.keys(actual.exp)])) {
+    const a = A[code];
+    if (!a) continue;
+    const isInc = a.type === 'income';
+    const planned = isInc ? num(income[code]) : num(expense[code]);
+    const done = isInc ? num(actual.inc[code]) : num(actual.exp[code]);
+    rows.push({ code, name: a.name, type: a.type, planned: r2(planned), actual: r2(done), variance: r2(done - planned), why: why[code] || [], typed: typed[code] !== undefined });
+  }
+  rows.sort((x, y) => x.type.localeCompare(y.type) || x.code.localeCompare(y.code));
+  return {
+    month: m, rows, principal,
+    planned: { income: ti, expense: te, profit: r2(ti - te) },
+    actual: { income: r2(actual.ti), expense: r2(actual.te), profit: r2(actual.profit) },
+  };
+}
+
+// ═══════ REBUILDING A LOAN SCHEDULE ═══════
+//
+// After extra principal is paid the old schedule overstates every later month's interest.
+// The instalments already paid are kept as they were; the ones still to come are rebuilt on
+// the new balance at the same rate over the same remaining months — a lower EMI, same end.
+
+export function regenerateSchedule(loan, newBalance, paidNos) {
+  const paid = new Set(paidNos || loan.paid || []);
+  const kept = (loan.schedule || []).filter(x => paid.has(x.n));
+  const remaining = (loan.schedule || []).filter(x => !paid.has(x.n));
+  if (!remaining.length || newBalance <= 0.5) return kept.map(x => ({ ...x }));
+  const fresh = schedule(newBalance, num(loan.rate), remaining.length, remaining[0].month);
+  return [...kept.map(x => ({ ...x })), ...fresh.map((x, i) => ({ ...x, n: remaining[i].n, rebuilt: true }))];
+}
 
 // ═══════ DOCUMENTS — BILLS, INVOICES, ALLOCATION ═══════
 //

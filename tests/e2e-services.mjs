@@ -204,12 +204,23 @@ try {
   await page.fill('#f_a1', '999999');
   await page.waitForTimeout(200);
   check('Petty cash beyond the box is refused', /petty cash only holds/i.test(await errText('a1')), await errText('a1'));
-  check('Second voucher row appears once the first has a figure', await page.$('#f_c1') !== null && await page.$('#f_a2') !== null);
+  check('The second voucher waits until it is named', await page.$('#f_a2') === null);
+  await page.fill('#f_d2', 'Courier');
+  await page.waitForSelector('#f_a2', { timeout: 4000 });
+  check('Naming a second voucher reveals its amount', true);
 
   // ═══════ 7. Direction cues on the chooser ═══════
   section('Direction cues');
   await page.evaluate(() => window.fin.pick(null));
   await page.waitForSelector('#chooser');
+  const tiles = await page.evaluate(() => ({ tiles: document.querySelectorAll('.dir-tiles .tile').length, chips: document.querySelectorAll('.dir-chips .chip').length }));
+  check('Money in / Money out are the first choice', tiles.tiles === 2 && tiles.chips >= 3, JSON.stringify(tiles));
+  await page.click('.dir-tiles .tile.dir-out');
+  await page.waitForTimeout(300);
+  const onlyOut = await page.evaluate(() => [...document.querySelectorAll('#chooser button:not([hidden])')].every(b => b.dataset.dir === 'out'));
+  check('Choosing Money out hides everything else', onlyOut);
+  await page.click('.dir-chips .chip:last-child');
+  await page.waitForTimeout(300);
   const cues = await page.evaluate(() => {
     const c = sel => { const b = document.querySelector(sel); return b ? getComputedStyle(b).borderLeftColor : ''; };
     return { inN: document.querySelectorAll('#chooser button.dir-in').length, outN: document.querySelectorAll('#chooser button.dir-out').length, inC: c('#chooser button.dir-in'), outC: c('#chooser button.dir-out') };
@@ -291,6 +302,30 @@ try {
   check('Rows are banded so one can be tracked across', wide.banded, JSON.stringify(wide));
   await page.screenshot({ path: `${SHOTS}d-txns-table.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+
+  // 8c. Petty cash scope and the new screens
+  section('Petty cash scope');
+  await page.evaluate(() => window.fin.setScope('only'));
+  await page.evaluate(() => window.fin.go('txns'));
+  await page.waitForTimeout(500);
+  const scopedTxt = await mainText();
+  check('The switch is loud: a banner says the view is filtered', /Petty cash only/.test(scopedTxt) && !!(await page.$('.scope-banner')));
+  check('Only entries through the box remain', !/E2E Claude \(Pro\) — Sept 2026/.test(scopedTxt));
+  await page.evaluate(() => window.fin.setScope('without'));
+  await page.waitForTimeout(400);
+  check('Without: the bank-paid months are back', /E2E Claude \(Pro\) — Sept 2026/.test(await mainText()));
+  await page.evaluate(() => window.fin.go('books'));
+  await page.waitForTimeout(500);
+  check('Books says the statements ignore the switch', /always show everything/.test(await mainText()));
+  await page.evaluate(() => window.fin.setScope('with'));
+  await page.evaluate(() => window.fin.go('petty'));
+  await page.waitForTimeout(500);
+  check('Petty cash page renders its four numbers', /In the box now/.test(await mainText()) && /Last top-up/.test(await mainText()));
+  await page.evaluate(() => window.fin.go('budget'));
+  await page.waitForTimeout(500);
+  const bud = await mainText();
+  check('Budget shows expected against actual from the recurring cost', /E2E Claude/.test(bud) && /Expected income/.test(bud), bud.slice(0, 200));
+  await page.screenshot({ path: `${SHOTS}m-budget.png`, fullPage: true });
 
   // ═══════ 9. Guide ═══════
   section('Guide');

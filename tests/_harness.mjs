@@ -205,7 +205,13 @@ export function save(evKey, values, opts = {}) {
     const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
     cur.paid = paid;
     cur.status = docStatus(r2(total - paid), total);
-    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date, ...(a.writtenOff ? { writtenOff: true } : {}) }];
+    if (a.creditNote) cur.credited = r2(num(cur.credited) + num(a.amt));
+    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date, ...(a.writtenOff ? { writtenOff: true } : {}), ...(a.creditNote ? { creditNote: true } : {}) }];
+  }
+  if (out.creditNote && txnId) {
+    const n = num(s.settings.nextCreditNoteNo) || 1;
+    s.invoices.push({ kind: 'creditnote', ...out.creditNote, id: nid('I'), invoiceNo: (s.settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0'), txnId, status: 'issued' });
+    s.settings.nextCreditNoteNo = n + 1;
   }
 
   if (out.selfInvoice && txnId) {
@@ -238,6 +244,9 @@ export function reverse(txnId) {
   const settled = s.bills.find(b => b.txnId === txnId && b.status !== 'void'
     && (b.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005);
   if (settled) throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
+  const invPaid = s.invoices.find(i => i.txnId === txnId && i.kind !== 'creditnote'
+    && (i.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005);
+  if (invPaid) throw new Error(`${invPaid.invoiceNo} has a payment against it. Reverse the payment first, or reduce the invoice with a credit note instead.`);
   const rid = nid('TX');
   const lines = normalise(reversalLines(t.lines));
   s.txns.push({

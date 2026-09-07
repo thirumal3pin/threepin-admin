@@ -53,6 +53,12 @@
     <div class="brand"><img src="logo.jpg" alt="3 PIN Realty" width="30" height="30">3 PIN Realty <span class="small">Finance</span></div>
     <div class="spacer"></div>
     <span class="who" id="whoami"></span>
+    <div class="cur-tog scope-tog" id="scopeTog" role="group" aria-label="Petty cash scope" title="Show all money, leave the cash box out, or show only what went through it. Lasts for this tab.">
+      <span class="lbl">Petty cash</span>
+      <button type="button" data-scope="with" class="on" aria-pressed="true" onclick="fin.setScope('with')">All</button>
+      <button type="button" data-scope="without" aria-pressed="false" onclick="fin.setScope('without')">Without</button>
+      <button type="button" data-scope="only" aria-pressed="false" onclick="fin.setScope('only')">Only</button>
+    </div>
     <div class="cur-tog" id="curTog" role="group" aria-label="Display currency">
       <button type="button" data-cur="INR" class="on" aria-pressed="true" onclick="fin.setCurrency('INR')">INR</button>
       <button type="button" data-cur="USD" aria-pressed="false" onclick="fin.setCurrency('USD')">USD</button>

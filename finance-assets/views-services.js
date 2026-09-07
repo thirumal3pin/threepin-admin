@@ -8,6 +8,7 @@ import {
   fmt, esc, num, today, ym, addMonths, mlabel, getState, bal,
   prepaidLeft, serviceRunRate, pname,
   expectedFor, nextPlanChange, serviceMonths, missingServiceMonths, openBills, billOutstanding,
+  recurringAcc, recurringKindLabel, A,
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, daysBetween, dueCell } from './ui.js';
 
@@ -30,8 +31,9 @@ const REASONS = {
   discount: 'Discount / credit', fx: 'Exchange rate moved', other: 'Other',
 };
 
-const recordBtn = (sub, month, label = 'Record') =>
-  `<button class="btn ghost sm" type="button" onclick="fin.record('confirmcharge',{sub:'${esc(sub.id)}',month:'${esc(month)}'})">${label}</button>`;
+const recordBtn = (sub, month, label = 'Record this month') => sub.kind === 'salary'
+  ? `<button class="btn ghost sm" type="button" onclick="fin.record('salary',{emp:'${esc(sub.vendorId || '')}',month:'${esc(month)}',gross:${num(expectedFor(sub, month))},sub:'${esc(sub.id)}'})">${label}</button>`
+  : `<button class="btn ghost sm" type="button" onclick="fin.record('confirmcharge',{sub:'${esc(sub.id)}',month:'${esc(month)}'})">${label}</button>`;
 
 // The bill a month produced, and the entry that settled it — so the month grid leads
 // somewhere instead of dead-ending on the word "unpaid".
@@ -60,7 +62,7 @@ function monthCell(m, sub) {
           : b?.txnId ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(b.txnId)}')">Entry</button>` : ''}`;
     }
     case 'due': return `<span class="faint">not recorded yet</span> ${recordBtn(sub, m.month)}`;
-    case 'upcoming': return `<span class="faint">upcoming</span> ${recordBtn(sub, m.month, 'Record early')}`;
+    case 'upcoming': return `<span class="faint">upcoming</span> ${recordBtn(sub, m.month, 'Record now')}`;
     default: return `${tag('missing', 'warn')} ${recordBtn(sub, m.month)}`;
   }
 }
@@ -110,9 +112,9 @@ export function renderServices() {
   const past = s.subs.filter(x => !['active', 'paused'].includes(x.status));
 
   if (!s.subs.length) {
-    return `<h1>Services</h1>
-      ${empty('<b>No services yet.</b><br>Add your subscriptions — CRM, ads, phone, software — and this page tells you what they really cost you every month, what you expected, and why the two differ.',
-      '<button class="btn primary" type="button" onclick="fin.record(\'subnew\')">Add a service</button>')}`;
+    return `<h1>Recurring</h1>
+      ${empty('<b>Nothing recurring yet.</b><br>Rent, subscriptions, retainers, insurance — add each once with what you expect it to cost, and every month you record what it actually was. The books stay honest, and the Budget tab fills itself in.',
+      '<button class="btn primary" type="button" onclick="fin.record(\'subnew\')">Add a recurring cost</button>')}`;
   }
 
   // The run-rate is what is EXPECTED this month, plan changes included — not the number
@@ -126,8 +128,9 @@ export function renderServices() {
   const unpaid = svcBills.reduce((a, b) => a + billOutstanding(b), 0);
 
   return `
-    <h1>Services</h1>
-    <p class="lead">What your tools cost each month — expected, actually billed, and paid — whether you pay monthly or once a year.</p>
+    <h1>Recurring</h1>
+    <p class="lead">Everything you pay for month after month — rent, subscriptions, retainers — with what you expected,
+    what was actually billed, and what is paid. Nothing here is an entry until a month is recorded.</p>
 
     <div class="grid g3">
       ${stat('Expected this month', fmt(expectedNow), { sub: Math.abs(expectedNext - expectedNow) > 0.5 ? `${fmt(expectedNext)} from ${mlabel(nextMonth)}` : 'Same next month' })}
@@ -140,7 +143,8 @@ export function renderServices() {
     ${dueNow.length && !missing.length ? note(`${dueNow.length} service${dueNow.length === 1 ? '' : 's'} still to record for ${esc(mlabel(month))}.`, 'info') : ''}
 
     <div class="actions">
-      <button class="btn primary" type="button" onclick="fin.record('subnew')">Add a service</button>
+      <button class="btn primary" type="button" onclick="fin.record('subnew')">Add a recurring cost</button>
+      ${dueNow.length ? `<button class="btn out" type="button" onclick="finRecurring.recordDue()">Record ${esc(mlabel(month))} — ${dueNow.length} due</button>` : ''}
     </div>
 
     ${active.length ? table(
@@ -153,7 +157,7 @@ export function renderServices() {
       const billing = sub.payMode === 'upfront' ? 'Upfront' : sub.billing === 'invoice' ? 'Invoiced monthly' : 'Auto-charged';
       return `<tr>
           <td class="lead">${esc(sub.name)}${sub.plan ? ` <span class="small muted">${esc(sub.plan)}</span>` : ''}${soon ? tag('renews soon', 'warn') : ''}
-            ${sub.vendor ? `<br><span class="small faint">${esc(sub.vendor)}</span>` : ''}</td>
+            <br><span class="small faint">${esc(recurringKindLabel(sub))} · posts to ${esc(A[recurringAcc(sub)]?.name || '')} <span class="code">${esc(recurringAcc(sub))}</span>${sub.vendor ? ' · ' + esc(sub.vendor) : ''}</span></td>
           <td class="small" data-label="What for">${esc(sub.use || '—')}</td>
           <td class="n" data-label="Expected / mo">${fmt(sub.payMode === 'upfront' ? sub.monthly : expectedFor(sub, month))}
             ${next ? `<br><span class="small muted nowrap">→ ${fmt(next.amount)} from ${esc(mlabel(next.from))}</span>` : ''}</td>
@@ -161,9 +165,9 @@ export function renderServices() {
           <td class="small nowrap" data-label="Period">${esc(mlabel(sub.start))}${sub.end ? ' → ' + esc(mlabel(sub.end)) : ' → ongoing'}</td>
           <td class="small" data-label="${esc(mlabel(month))}">${monthCell(thisM, sub)}</td>
           <td class="n">
-            ${sub.payMode === 'monthly' ? recordBtn(sub, month, 'Record a month') : ''}
-            <button class="btn ghost sm" type="button" onclick="fin.record('subchange',{sub:'${esc(sub.id)}'})">Change plan</button>
-            <button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}'})">Cancel</button>
+            ${sub.payMode === 'monthly' ? recordBtn(sub, month, 'Record this month') : ''}
+            <button class="btn ghost sm" type="button" onclick="fin.record('subchange',{sub:'${esc(sub.id)}'})">Change amount</button>
+            <button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}'})">Stop or pause</button>
           </td></tr>`;
     }).join(''),
     `<tr><td colspan="2" data-label="Expected this month">Expected this month</td><td class="n">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`, { stack: true })
@@ -171,7 +175,7 @@ export function renderServices() {
 
     ${active.some(x => x.payMode === 'monthly') ? `
       <h2>Month by month</h2>
-      <p class="small muted">Every month a service has run: what you expected, what the vendor billed, whether it is paid, and why it differs. A missing month is a cost the books do not yet know about.</p>
+      <p class="small muted">Every month a recurring cost has run: what you expected, what the vendor billed, whether it is paid, and why it differs. A missing month is a cost the books do not yet know about.</p>
       ${active.filter(x => x.payMode === 'monthly').map(monthByMonth).join('')}` : ''}
 
     ${paused.length ? `
@@ -330,4 +334,25 @@ export function renderAssets() {
             <td class="n">${fmt(a.cost)}</td>
             <td class="small">${esc(a.disposedOn || '—')}</td>
           </tr>`).join(''))}` : ''}`;
+}
+
+
+// ═══════ ACTIONS ═══════
+
+if (typeof window !== 'undefined') {
+  window.finRecurring = {
+    // Month-end in one place: every recurring cost due this month, opened one after another
+    // with the expected figures already filled in. Each one is still its own entry, saved
+    // through the same form, so nothing is posted blind.
+    recordDue() {
+      const s = getState();
+      const month = ym(today());
+      const due = missingServiceMonths(month).filter(m => m.status === 'due' || m.status === 'missing');
+      if (!due.length) return;
+      const first = due[0];
+      if (first.sub.kind === 'salary') window.fin.record('salary', { emp: first.sub.vendorId || '', month: first.month, gross: expectedFor(first.sub, first.month), sub: first.sub.id });
+      else window.fin.record('confirmcharge', { sub: first.sub.id, month: first.month });
+      if (due.length > 1) window.fin.toast(`${due.length} to record — this page brings you back to the next one after each save`);
+    },
+  };
 }

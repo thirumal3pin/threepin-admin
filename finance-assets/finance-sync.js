@@ -277,8 +277,9 @@ export async function save(evKey, values, opts = {}) {
       tx.update(ref(a.coll, a.id), {
         paid,
         status: docStatus(outstanding, total),
+        ...(a.creditNote ? { credited: Math.round((num(cur.credited) + num(a.amt)) * 100) / 100 } : {}),
         allocations: [...(cur.allocations || []),
-          { txnId, amt: a.amt, date: v.date || today(), ...(a.writtenOff ? { writtenOff: true } : {}) }],
+          { txnId, amt: a.amt, date: v.date || today(), ...(a.writtenOff ? { writtenOff: true } : {}), ...(a.creditNote ? { creditNote: true } : {}) }],
       });
     }
 
@@ -300,6 +301,20 @@ export async function save(evKey, values, opts = {}) {
       patch.nextInvoiceNo = n + 1;
     }
 
+    // A partial credit note takes the next number in the credit-note series and is stored
+    // against the invoice it reduces. The invoice stays live — only what it is worth changes.
+    let creditNoteNo = null;
+    if (out.creditNote && txnId) {
+      const n = num(settings.nextCreditNoteNo) || 1;
+      creditNoteNo = (settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0');
+      tx.set(doc(col('invoices')), {
+        kind: 'creditnote', ...out.creditNote, invoiceNo: creditNoteNo, txnId, status: 'issued',
+        desc: 'Credit note — ' + (out.creditNote.reason || ''),
+        createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
+      });
+      patch.nextCreditNoteNo = n + 1;
+    }
+
     let selfInvoiceNo = null;
     if (out.selfInvoice && txnId) {
       const n = num(settings.nextSelfInvoiceNo) || 1;
@@ -310,7 +325,7 @@ export async function save(evKey, values, opts = {}) {
 
     if (Object.keys(patch).length) tx.set(root(), patch, { merge: true });
     return {
-      txnId, no, invoiceId, invoiceNo, selfInvoiceNo, desc: out.desc,
+      txnId, no, invoiceId, invoiceNo, selfInvoiceNo, creditNoteNo, desc: out.desc,
       total: lines.reduce((a, l) => a + num(l.dr), 0),
     };
   }).then(
@@ -390,6 +405,11 @@ export async function reverse(txnId) {
   // Reversing an invoiced entry has to issue a credit note against the original — GST does
   // not allow an invoice to simply disappear.
   const inv = getState().invoices.find(i => i.txnId === txnId && i.kind !== 'creditnote');
+  // The same rule as bills: an invoice with a payment still standing against it would go
+  // negative if its entry were reversed underneath that payment.
+  if (inv && (inv.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005) {
+    throw new Error(`${inv.invoiceNo} has a payment against it. Reverse the payment first, or reduce the invoice with a credit note instead.`);
+  }
   // A reversed payment gives its allocations back to the bills it settled; a reversed bill
   // is voided so it stops showing as owed.
   const allocs = t.allocations || [];

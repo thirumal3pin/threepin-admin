@@ -67,7 +67,7 @@ check('Bottom tab bar visible at phone width', await page.evaluate(() => getComp
 
 // ── every view at phone width ───────────────────────────────────────────────────
 section('Every view renders at 390px with no horizontal scroll');
-const VIEWS = ['overview', 'record', 'txns', 'deals', 'gst', 'analytics', 'owed', 'services', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
+const VIEWS = ['overview', 'record', 'txns', 'deals', 'gst', 'analytics', 'owed', 'services', 'budget', 'petty', 'loans', 'assets', 'invoices', 'bank', 'reports', 'books', 'profile', 'settings', 'guide'];
 for (const v of VIEWS) {
   await page.evaluate(k => window.fin.go(k), v);
   await page.waitForTimeout(350);
@@ -86,6 +86,7 @@ for (const v of VIEWS) {
 section('Record → Expense: GST widget');
 await page.evaluate(() => window.fin.record('expense'));
 await page.waitForSelector('#f_desc');
+check('Posting strip explains where the money lands', await page.evaluate(() => !!document.getElementById('pvPosting')));
 await page.fill('#f_desc', 'E2E rent with GST');
 await page.selectOption('#f_acc', '5000');
 await page.fill('#f_amt', '1000');
@@ -99,6 +100,8 @@ const w2 = await page.evaluate(() => ({ amt: +document.getElementById('f_amt').v
 check('Editing the total backs the amount out to 847.46', w2.amt === 847.46 && w2.tax === 152.54, JSON.stringify(w2));
 await page.fill('#f_amt', '2000');
 const w3 = await page.evaluate(() => ({ tax: +document.getElementById('f_gstAmt').value, total: +document.getElementById('f_total').value }));
+const strip = await page.evaluate(() => document.getElementById('pvPosting')?.innerText || '');
+check('Posting strip names both accounts with their codes and the profit effect', /1000/.test(strip) && /5000/.test(strip) && /2,000/.test(strip), strip.replace(/\s+/g, ' ').slice(0, 160));
 check('Editing the amount refills tax 360 and total 2360', w3.tax === 360 && w3.total === 2360, JSON.stringify(w3));
 check('Focus stayed in the amount field while typing', await page.evaluate(() => document.activeElement?.id === 'f_amt'));
 const bar = await page.evaluate(() => document.getElementById('barSum').innerText);

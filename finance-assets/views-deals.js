@@ -8,6 +8,7 @@ import {
   A, fmt, esc, num, today, getState, bal, pl, pname, dealFigures,
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, modal } from './ui.js';
+import { renderInvoices, mountInvoices } from './views-invoices.js';
 import * as SY from './finance-sync.js';
 
 const STATUS = { open: ['Open', ''], registered: ['Registered', 'ok'], cancelled: ['Cancelled', 'rev'] };
@@ -31,7 +32,18 @@ function figures(d) {
   };
 }
 
+let dealsTab = 'pipeline';
+
 export function renderDeals() {
+  const tabs = `<div class="seg" role="tablist" style="margin-bottom:14px">
+    <button type="button" role="tab" class="${dealsTab === 'pipeline' ? 'on' : ''}" aria-selected="${dealsTab === 'pipeline'}" onclick="finDeals.tab('pipeline')">Deals</button>
+    <button type="button" role="tab" class="${dealsTab === 'invoices' ? 'on' : ''}" aria-selected="${dealsTab === 'invoices'}" onclick="finDeals.tab('invoices')">Invoices</button>
+  </div>`;
+  if (dealsTab === 'invoices') return tabs + renderInvoices();
+  return tabs + renderPipeline();
+}
+
+function renderPipeline() {
   const s = getState();
   if (!s.deals.length) {
     return `<h1>Deals</h1>
@@ -157,6 +169,7 @@ function drawer(id) {
 
 if (typeof window !== 'undefined') {
   window.finDeals = {
+    tab(t) { dealsTab = t; window.fin.repaint(); if (t === 'invoices') mountInvoices(); },
     open: drawer,
     async save(id) {
       const v = k => document.getElementById(k).value;

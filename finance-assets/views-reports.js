@@ -7,7 +7,7 @@
 import {
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
   pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
-  cashProfitBridge,
+  cashProfitBridge, scopeMode, scopeLabel, scoped,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -252,6 +252,9 @@ export function renderBooks() {
 }
 
 function trialBalanceSection() {
+  return scoped(() => trialBalanceFull(), 'with');
+}
+function trialBalanceFull() {
   const tb = trialBalance();
   return `
     <h2>Trial balance
@@ -268,6 +271,9 @@ function trialBalanceSection() {
 }
 
 function balanceSheetSection() {
+  return scoped(() => balanceSheetFull(), 'with');
+}
+function balanceSheetFull() {
   const bs = balanceSheet(bsDate);
   const section = (label, rows, total) => `
     <tr><td colspan="2"><b>${esc(label)}</b></td></tr>
@@ -348,8 +354,11 @@ function journalSection() {
 
 // ═══════ EXPORTS ═══════
 
+const scopeSuffix = () => scopeMode() === 'with' ? '' : '-' + scopeMode() + '-petty-cash';
+const scopeRow = () => scopeMode() === 'with' ? [] : [[`Petty-cash scope: ${scopeLabel()}`]];
+
 function journalCsvRows() {
-  const rows = [['Txn', 'Date', 'Description', 'Account code', 'Account name', 'Debit', 'Credit', 'Party', 'Event']];
+  const rows = [...scopeRow(), ['Txn', 'Date', 'Description', 'Account code', 'Account name', 'Debit', 'Credit', 'Party', 'Event']];
   for (const t of journalRows()) {
     for (const l of t.lines) {
       rows.push([t.id, t.date, t.desc, l.acc, A[l.acc]?.name || '',
@@ -362,7 +371,7 @@ function journalCsvRows() {
 // Tally imports match on ledger NAMES, not codes, so the account name is what has to be in
 // the Ledger Name column — a code there imports as an unrecognised ledger.
 function tallyCsvRows() {
-  const rows = [['Date', 'Voucher Type', 'Voucher No', 'Ledger Name', 'Debit', 'Credit', 'Narration']];
+  const rows = [...scopeRow(), ['Date', 'Voucher Type', 'Voucher No', 'Ledger Name', 'Debit', 'Credit', 'Narration']];
   for (const t of journalRows()) {
     for (const l of t.lines) {
       rows.push([t.date, 'Journal', t.id, A[l.acc]?.name || l.acc,
@@ -387,25 +396,27 @@ if (typeof window !== 'undefined') {
     setBsDate: v => { bsDate = v; window.fin.repaint(); },
     setRange: (which, v) => { if (which === 'from') jFrom = v; else jTo = v; window.fin.repaint(); },
 
-    csvCategory(slug) {
+    csvCategory(slug) { return scoped(() => this._csvCategory(slug)); },
+    _csvCategory(slug) {
       const p = repMode === 'month' ? pl(repMonth) : pl(null, null, repFy);
       const label = repMode === 'month' ? repMonth : repFy;
       if (slug === 'cashflow') {
-        downloadCsv(`3pin-cashflow-${label}.csv`,
+        downloadCsv(`3pin-cashflow-${label}${scopeSuffix()}.csv`,
           [['Type', 'In', 'Out', 'Net'], ...cashFlowRows().map(r => [r.kind, r.in, r.out, r.in - r.out])]);
         return;
       }
       const map = slug === 'income' ? p.inc : p.exp;
-      downloadCsv(`3pin-${slug}-${label}.csv`,
+      downloadCsv(`3pin-${slug}-${label}${scopeSuffix()}.csv`,
         [['Code', 'Category', 'Amount'],
         ...Object.entries(map).map(([c, v]) => [c, A[c]?.name || c, v])]);
     },
 
-    csvJournal: () => downloadCsv(`3pin-journal-${jFrom}-to-${jTo}.csv`, journalCsvRows()),
-    csvTally: () => downloadCsv(`3pin-tally-${jFrom}-to-${jTo}.csv`, tallyCsvRows()),
-    csvLedger() {
+    csvJournal: () => scoped(() => downloadCsv(`3pin-journal-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, journalCsvRows())),
+    csvTally: () => scoped(() => downloadCsv(`3pin-tally-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, tallyCsvRows())),
+    csvLedger() { return scoped(() => this._csvLedger()); },
+    _csvLedger() {
       const rows = ledger(ledgerAcc, { party: ledgerParty || undefined });
-      downloadCsv(`3pin-ledger-${ledgerAcc}.csv`,
+      downloadCsv(`3pin-ledger-${ledgerAcc}${scopeSuffix()}.csv`,
         [['Date', 'Description', 'Debit', 'Credit', 'Balance', 'Party'],
         ...rows.map(r => [r.date, r.desc, r.dr || '', r.cr || '', r.balance, r.party ? pname(r.party) : ''])]);
     },

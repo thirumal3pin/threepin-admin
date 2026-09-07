@@ -56,6 +56,8 @@ function sampleState() {
   });
   s.txns = [
     T('T0', '2026-09-01', 'funding', 'Share capital — Swaminathan', [{ acc: '1000', dr: 300000 }, { acc: '3000', cr: 300000 }]),
+    T('T0a', '2026-09-04', 'asset', 'Asset — Sony A7 camera', [{ acc: '1300', dr: 80000 }, { acc: '2300', cr: 80000 }]),
+    T('T0b', '2026-09-20', 'card2emi', 'Card → EMI: Sony A7 camera', [{ acc: '2300', dr: 80000 }, { acc: '2400', cr: 80000, party: 'P4' }]),
     T('T1', '2026-09-10', 'token', 'Token — Rajan (Mr. Karthik)', [{ acc: '1000', dr: 50000 }, { acc: '2100', cr: 50000, party: 'P1', deal: 'D1' }]),
     T('T2', '2026-09-12', 'bill', 'Title opinion — Balaji & Co', [{ acc: '5120', dr: 10000 }, { acc: '2000', cr: 10000, party: 'P2' }]),
     T('T3', '2026-09-15', 'transfer', 'Transfer: Bank → Petty cash', [{ acc: '1010', dr: 8000 }, { acc: '1000', cr: 8000 }]),
@@ -341,7 +343,7 @@ const SCENARIOS = [
     group: 'Move money — never a cost', id: 'emi',
     situation: 'The first EMI on the camera loan.',
     event: 'emi',
-    values: { date: '2026-10-05', loan: 'L1', via: '1000', extra: 0 },
+    values: () => { const v = { date: '2026-10-05', loan: 'L1', via: '1000', charges: 0, extra: 0, prepay: 0, tds: 0 }; EV.emi.onchange('loan', v); return v; },
     point: 'Most of it returns borrowed money. <b>Only the interest is a cost.</b>',
   },
   {
@@ -438,13 +440,15 @@ function startItems() {
       ['Record', '<b>The only place anything is entered.</b> Pick what happened; the bookkeeping is worked out for you and shown before you save.'],
       ['Transactions', 'Everything recorded, newest first. Tap a row to see both sides of the entry, its attachments, and to reverse it.'],
       ['Owed', 'The weekly worklist: who to chase and who to pay — bill by bill, invoice by invoice, with due dates.'],
-      ['Services', 'Every subscription, month by month: what you expected, what was billed, what is paid, why they differ.'],
-      ['Deals', 'The pipeline and each deal\'s money — tokens, brokerage, costs, net.'],
+      ['Deals & invoices', 'The pipeline and each deal\'s money — tokens, brokerage, costs, net — and every invoice raised.'],
+      ['Recurring', 'Rent, subscriptions, retainers, insurance — every monthly commitment: what you expected, what was billed, what is paid, why they differ.'],
+      ['Budget', 'Next month set against last month. Expectations come from Recurring, Loans, Assets and Deals, plus anything you type. Nothing here is an entry.'],
+      ['Petty cash', 'The cash box: what went in, what went out, what it paid for, what should be in the drawer.'],
       ['Loans', 'Each loan with its principal and interest kept apart, and the next EMI ready to record.'],
       ['Assets', 'What you own and how much value is left in it.'],
       ['Invoices', 'Tax invoices and credit notes, numbered automatically. Download or share the PDF.'],
       ['GST', 'The month\'s liability, credit, set-off and cash due — GSTR-3B the way the rules do it — plus the ITC and GSTR-1 registers.'],
-      ['Bank', 'Import the statement and prove your books match reality.'],
+      ['Bank & card statements', 'Import the statement. What you already recorded is matched; what you missed is suggested, one tap to create; duplicates are flagged.'],
       ['Reports / Analytics', 'Profit and loss, trends, where the money went — with filters.'],
       ['Books', 'The accountant\'s view: trial balance, balance sheet, ledgers. The CSV here is what you send your CA.'],
       ['Profile / Settings', 'Who the company is, and how the engine behaves.'],
@@ -488,11 +492,11 @@ function sopItems() {
       'Money in or out, a bill received, a token taken — open <b>Record</b> and enter it. Attach a photo of the bill to the entry itself, so the evidence and the number never get separated. The form checks every field and shows you the double entry before you save.', 'Under a minute per entry.')}`),
     item('Every week', `<h2>Every week</h2>
       ${step(2, 'Empty the petty cash box', 'Record → <b>Petty cash vouchers</b>. Up to three at once. Then check the box balance on Overview matches the notes in the drawer.')}
-      ${step(3, 'Record each service\'s month', 'Services tab → <b>Record a month</b> on anything showing "not yet". Enter the real amount from the card or bank statement; if it differs from what you expected, say why. If the plan is changing, set the new expected amount there and then. Months you skip show as <b>missing</b> until they are recorded or marked not charged.')}
+      ${step(3, 'Record each recurring cost for the month', 'Recurring tab → <b>Record this month</b> (or <b>Record all due</b> at month-end). Paid, or not paid yet — put it on Owed. Enter the real amount; if it differs from what you expected, say why. If the price is changing, set the new expected amount there and then. Salaries open the salary form, because they carry TDS and PF rather than GST.')}
       ${step(4, 'Work the Owed list, both ways', 'Chase the oldest receivable first — overdue invoices are flagged with their due date. Then pay what is due; the payment is matched to the bills it settles, and you can change the split.')}`),
     item('Every month', `<h2>Every month</h2>
       ${step(5, 'Import the bank and card statements', 'Bank tab → pick the account → upload the CSV. The first import asks you to confirm the columns; after that it is one tap.')}
-      ${step(6, 'Clear everything unmatched', 'On the statement but not in your books means you forgot to record it — tap <b>Create entry</b>. In your books but not on the statement means it never went through (reverse it) or lands next month (leave it).')}
+      ${step(6, 'Clear everything unmatched', 'On the statement but not in your books means you forgot to record it. Each line says what it most likely was — an open bill, a recurring cost, an EMI, a client paying an invoice — and the first button opens that form filled in. Save it and the line is matched. A line that looks like an entry another line already claimed is flagged as a possible duplicate. In your books but not on the statement means it never went through (reverse it) or lands next month (leave it).')}
       ${step(7, 'Run month-end', 'Only once the month shows <b>Reconciled ✓</b>. This posts depreciation and releases the monthly slice of anything paid upfront. Running it twice is harmless — the second run posts nothing.')}
       ${step(8, 'GST by the 20th, TDS by the 7th', 'GST tab → check the month → <b>Pay GST</b> opens the payment with the set-off already worked out. Reverse-charge tax is paid in cash. Then Books → <b>Download journal CSV</b> for your CA.', 'Check current due dates with your CA — they move.')}`),
     item('Once a year', `<h2>Once a year</h2>${step(9, 'Close the financial year',
@@ -926,6 +930,16 @@ function waterfallChart() {
 
 const FAQ = [
   ['Basics', [
+    ['Where do I see what an entry does to my accounts before I save it?',
+      'The Record screen shows a <b>posting strip</b> under the preview: which account the money comes <b>from</b>, which it goes <b>to</b>, each with its code and what kind of account it is, and the effect on profit. Every category in a form shows its account code too — "5000 · Rent". The full debit and credit table is underneath for anyone who wants it.'],
+    ['What is the difference between the payment method and the account?',
+      'UPI, a debit card and NetBanking all draw on the same bank account (1000). A credit card is its own account (2300) because it is money you owe. Petty cash is its own (1010) because it is notes in a drawer. The method is recorded on the entry so a statement line can be matched by it — it is never a category and never an account.'],
+    ['What does the Petty cash switch at the top do?',
+      '<b>All</b> shows every entry. <b>Without</b> leaves out anything that went through the cash box. <b>Only</b> shows just the box. It changes Transactions, Reports, Analytics and every CSV they export — the file name says which — but never the trial balance or balance sheet, which always show everything. It lasts for this tab only, so it cannot be left on by accident.'],
+    ['How do estimates and budgets work? Do they post anything?',
+      'No. An estimate is never an entry. The Budget tab reads what the books already expect — each recurring cost\'s amount for the month, loan interest from the schedule, depreciation, deals with an expected close month — and anything you type for an account. When the real thing is recorded, the same page shows expected against actual. Recording the actual is what "closes" the estimate: for a recurring cost that is <b>Record this month</b>; for a deal it is <b>Deal closed</b>.'],
+    ['Rent is due at month-end but I pay on the 5th. Is that one entry or two?',
+      'Two, and the app keeps them apart. At month-end, Recurring → <b>Record this month</b> → <b>Not paid yet — put it on Owed</b>: the cost is booked now (Dr Rent / Cr Payable) and the landlord appears on Owed. On the 5th, <b>Pay a bill</b> from Owed: the money leaves the bank and is matched to that bill. Nothing is counted twice.'],
     ['I made a profit but the bank went down. Where did the money go?',
       'Reports → <b>Profit is not cash</b> answers exactly this. It starts from the profit for the month and walks through every real movement — money clients still owe, bills you have not paid, assets bought, loan repaid, tax collected — and ends at the cash that actually moved. If anything is left unexplained the app shows it rather than hiding it.'],
     ['A client paid me. Why has my profit not gone up?',
@@ -960,6 +974,8 @@ const FAQ = [
       'Transactions → Reverse the entry. The bill behind it is voided, the month is unmarked, and you can record it again correctly.'],
   ]],
   ['Money out', [
+    ['An EMI has principal, interest and some charges. Do I record three things?',
+      'One entry. <b>Pay an EMI</b> shows principal and interest from the schedule — change them to what the lender\'s statement says — plus the lender\'s charges and any penalty. Principal reduces the loan; interest and charges are costs; a penalty is a cost the tax return disallows, so it sits in its own account (5165). Pay extra principal and the remaining schedule is rebuilt on the new balance.'],
     ['I bought a laptop. Why is it not an expense?',
       'It will still be working in two years, so charging the whole cost to one month would make that month look far worse than it was and every later month better. Instead it becomes an asset and a slice of it becomes a cost each month at month-end. Anything under your capitalisation threshold in Settings is just an expense — the form will say so.'],
     ['I paid a ₹15,000 EMI. Why did my costs only go up by about ₹900?',
@@ -972,6 +988,8 @@ const FAQ = [
       '<b>Director paid a cost personally</b>. The cost is recorded now and the company owes you; reimburse yourself later with Move money. GST on it is still input credit if the invoice is in the company\'s name.'],
   ]],
   ['Deals and tokens', [
+    ['The brokerage was renegotiated after I invoiced. How do I reduce the invoice?',
+      '<b>Reduce an invoice — credit note</b>. Pick the invoice, enter how much less, and why. Income and the GST on it come down, a numbered credit note is issued against the invoice, and what the client owes drops. If they had already paid, the difference is held for them or refunded. After 30 November of the following year the GST can no longer be reduced — the note is then commercial, base only.'],
     ['When does a token become my money?',
       'When the deal registers and you record <b>Deal closed</b> — it comes off what the client owes you. Or if they walk away and agree you keep it, in which case use <b>Settle a token</b> → Keep, and it becomes income under Forfeited advances, less GST.'],
     ['A client paid half the invoice.',
@@ -1019,6 +1037,9 @@ const FAQ = [
 
 const GLOSSARY = [
   ['Accrual', 'Recording a cost or income when it happens, not when the cash moves. A bill dated the 28th is a cost of that month even if paid in the next.'],
+  ['Budget / projection', 'What you expect a month to look like. Never an entry — read from Recurring, Loans, Assets, Deals and anything you type, then set against what actually happened.'],
+  ['Payment method', 'How money moved through the bank — UPI, debit card, NetBanking, cheque. Recorded on the entry; never an account.'],
+  ['Recurring cost', 'Something you pay every month — rent, a subscription, a retainer. Added once with what you expect; each month you record what it actually was.'],
   ['Advance (to a vendor)', 'Money you paid a vendor beyond their bills. Yours until a bill uses it. Account 1550.'],
   ['Allocation', 'Matching a payment to the specific bills or invoices it settles. What makes "part-paid" and "which bill is still open" possible.'],
   ['Bill', 'A vendor\'s demand for payment — a document with a number, a date, a due date, GST and what has been paid on it. Created by "Bill received", a deal cost on credit, an asset on credit, or a service month.'],

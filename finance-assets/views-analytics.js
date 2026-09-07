@@ -46,6 +46,7 @@ export function renderAnalytics() {
     return `<h1>Analytics</h1>${empty('<b>Nothing to analyse yet.</b><br>Record a few weeks of activity and this page fills in.')}`;
   }
 
+  // app.js renders this inside the petty-cash scope, so s.txns is already the slice.
   const txns = filterTxns(s.txns, F);
   const prev = filterTxns(s.txns, previousRange(F));
   const k = kpis(txns, prev);

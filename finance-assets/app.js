@@ -12,7 +12,7 @@ import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
-  setDisplayCurrency, displayCurrency,
+  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -23,6 +23,7 @@ import {
 
 import { renderOwed } from './views-owed.js';
 import { renderServices, renderLoans, renderAssets } from './views-services.js';
+import { renderPetty, renderBudget } from './views-money.js';
 import { renderInvoices, mountInvoices } from './views-invoices.js';
 import { renderBank, mountBank } from './views-bank.js';
 import { renderReports, renderBooks } from './views-reports.js';
@@ -39,27 +40,35 @@ import { renderAnalytics } from './views-analytics.js';
 // Grouped the way the work is done. The side nav on a desktop is text only — a considered
 // interface does not need a glyph beside every word — and the groups carry the structure.
 // The phone tab bar keeps icons, because at that size they are the label.
+// Grouped by what each thing IS. View keys never change, so every bookmark and every
+// fin.go() in the views keeps working; only where a thing sits in the menu moves.
 const NAV = [
   ['overview', 'Overview', 'fa-solid fa-gauge-high', 'Daily'],
   ['record', 'Record', 'fa-solid fa-plus', 'Daily'],
   ['txns', 'Transactions', 'fa-solid fa-list', 'Daily'],
-  ['deals', 'Deals', 'fa-regular fa-handshake', 'Daily'],
   ['owed', 'Owed', 'fa-solid fa-right-left', 'Daily'],
-  ['services', 'Services', 'fa-solid fa-rotate', 'Running'],
-  ['loans', 'Loans', 'fa-solid fa-percent', 'Running'],
-  ['assets', 'Assets', 'fa-regular fa-square', 'Running'],
-  ['invoices', 'Invoices', 'fa-regular fa-file-lines', 'Running'],
-  ['bank', 'Bank', 'fa-solid fa-building-columns', 'Running'],
-  ['gst', 'GST', 'fa-solid fa-stamp', 'Insight'],
-  ['analytics', 'Analytics', 'fa-solid fa-chart-column', 'Insight'],
-  ['reports', 'Reports', 'fa-regular fa-chart-bar', 'Insight'],
-  ['books', 'Books', 'fa-solid fa-book', 'Insight'],
+  ['deals', 'Deals & invoices', 'fa-regular fa-handshake', 'Business'],
+  ['services', 'Recurring', 'fa-solid fa-rotate', 'Business'],
+  ['budget', 'Budget', 'fa-regular fa-calendar', 'Business'],
+  ['bank', 'Bank & card statements', 'fa-solid fa-building-columns', 'Money'],
+  ['petty', 'Petty cash', 'fa-solid fa-coins', 'Money'],
+  ['loans', 'Loans', 'fa-solid fa-percent', 'Money'],
+  ['assets', 'Assets', 'fa-regular fa-square', 'Money'],
+  ['gst', 'GST', 'fa-solid fa-stamp', 'Tax & reports'],
+  ['reports', 'Reports', 'fa-regular fa-chart-bar', 'Tax & reports'],
+  ['analytics', 'Analytics', 'fa-solid fa-chart-column', 'Tax & reports'],
+  ['books', 'Books', 'fa-solid fa-book', 'Tax & reports'],
   ['profile', 'Profile', 'fa-regular fa-id-badge', 'Setup'],
   ['settings', 'Settings', 'fa-solid fa-sliders', 'Setup'],
   ['guide', 'Guide', 'fa-regular fa-circle-question', 'Setup'],
 ];
+// Invoices live inside Deals now; the old route still lands somewhere sensible.
+const ALIASES = { invoices: 'deals' };
 
-const BOTTOM = ['overview', 'txns', 'record', 'deals', 'more'];
+const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
+
+// Which screens the petty-cash scope changes. Everything else always shows all money.
+const SCOPED_VIEWS = new Set(['txns', 'reports', 'books', 'analytics']);
 
 let view = 'overview';
 let ready = false;
@@ -87,6 +96,9 @@ window.onFinanceAuthChange = (user, tenantId) => {
       let saved = null;
       try { saved = localStorage.getItem('fin.cur'); } catch { }
       if (saved === 'USD') window.fin.setCurrency('USD'); else paintCurrency();
+      let sc = null;
+      try { sc = sessionStorage.getItem('fin.scope'); } catch { }
+      setScope(sc || 'with'); paintScope();
     }
   } else {
     ready = false;
@@ -156,6 +168,31 @@ async function usdRate() {
   return hit || { rate: FX_FALLBACK, at: null, day: today() };
 }
 
+// The scope is a filter on entries — with, without, or only those that touch the cash box.
+// It is deliberately NOT persisted: a filter silently left on is how a CA ends up with a
+// P&L that is missing the cash expenses. It lasts for this tab, and every affected page
+// says so in a banner while it is on.
+function paintScope() {
+  const mode = scopeMode();
+  document.querySelectorAll('#scopeTog button').forEach(b => {
+    const on = b.dataset.scope === mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  const tog = document.getElementById('scopeTog');
+  if (tog) tog.classList.toggle('active', mode !== 'with');
+}
+
+function scopeBanner() {
+  const mode = scopeMode();
+  if (mode === 'with' || !SCOPED_VIEWS.has(view)) return '';
+  return `<div class="scope-banner" role="status">
+    <b>${esc(scopeLabel(mode))}</b> — ${mode === 'only' ? 'showing only entries that went through the cash box.' : 'entries through the cash box are left out.'}
+    ${view === 'books' ? 'The trial balance and balance sheet always show everything.' : ''}
+    <button type="button" class="btn ghost sm" onclick="fin.setScope('with')">Show all money</button>
+  </div>`;
+}
+
 function paintCurrency() {
   const c = displayCurrency();
   document.querySelectorAll('#curTog button').forEach(b => {
@@ -183,7 +220,7 @@ window.addEventListener('hashchange', routeFromHash);
 
 function routeFromHash() {
   const h = location.hash.replace(/^#/, '');
-  view = NAV.some(([k]) => k === h) ? h : 'overview';
+  view = NAV.some(([k]) => k === h) ? h : (ALIASES[h] || 'overview');
   repaint();
 }
 
@@ -235,12 +272,14 @@ function repaint() {
     overview, record, txns,
     owed: renderOwed,
     services: renderServices, loans: renderLoans, assets: renderAssets,
-    invoices: renderInvoices, bank: renderBank,
+    invoices: renderInvoices, bank: renderBank, petty: renderPetty, budget: renderBudget,
     reports: renderReports, books: renderBooks,
     profile: renderProfile, settings: renderSettings, guide: renderGuide, opening: renderOpening,
     deals: renderDeals, gst: renderGst, analytics: renderAnalytics,
   };
-  main.innerHTML = (views[view] || overview)();
+  // Views that honour the scope render inside it, so every figure they show agrees.
+  const render = views[view] || overview;
+  main.innerHTML = scopeBanner() + (SCOPED_VIEWS.has(view) ? scoped(render) : render());
 
   // Views that need real event listeners rather than inline handlers wire up here.
   ({
@@ -317,8 +356,8 @@ function overview() {
 
     <h2>Services</h2>
     <div class="grid g3">
-      ${stat('Run rate', fmt(svc.monthly) + '/mo')}
-      ${stat('Annual commitment', fmt(svc.annual))}
+      ${stat('Recurring costs', fmt(svc.monthly) + '/mo', { sub: 'Expected vs actual on the Budget tab' })}
+      ${stat('Petty cash in the box', fmt(bal('1010')), { cls: bal('1010') < -0.5 ? 'neg' : '' })}
       ${stat('Prepaid', fmt(svc.prepaidUnused), { sub: 'Sitting with vendors' })}
       ${stat('Active', String(svc.active.length), { sub: 'Services running' })}
     </div>
@@ -367,6 +406,7 @@ function overview() {
 
 let evKey = null;
 let evLabel = null;
+let dirPick = 'all';
 let evPreset = {};
 let vals = {};
 let pendingFiles = [];
@@ -379,19 +419,31 @@ function record() {
   if (!evKey) {
     return `
       <h1>Record what happened</h1>
-      <p class="lead">Pick the thing that actually happened. The bookkeeping underneath is worked out for you,
-      and you will see exactly what it does before anything is saved.</p>
+      <p class="lead">First: did money come in, or go out? Then pick what it was. The bookkeeping is worked out
+      for you and shown before anything is saved.</p>
+      <div class="dir-tiles" role="tablist">
+        <button type="button" role="tab" class="tile dir-in ${dirPick === 'in' ? 'on' : ''}" aria-selected="${dirPick === 'in'}" onclick="fin.pickDir('in')">
+          <i class="fa-solid fa-arrow-down" aria-hidden="true"></i><b>Money in</b><span>Brokerage, payments received, tokens, capital, loans</span></button>
+        <button type="button" role="tab" class="tile dir-out ${dirPick === 'out' ? 'on' : ''}" aria-selected="${dirPick === 'out'}" onclick="fin.pickDir('out')">
+          <i class="fa-solid fa-arrow-up" aria-hidden="true"></i><b>Money out</b><span>Expenses, bills, recurring costs, salaries, assets</span></button>
+      </div>
+      <div class="dir-chips">
+        <button type="button" class="chip dir-move ${dirPick === 'move' ? 'on' : ''}" onclick="fin.pickDir('move')">Move money</button>
+        <button type="button" class="chip dir-setup ${dirPick === 'setup' ? 'on' : ''}" onclick="fin.pickDir('setup')">Set up</button>
+        <button type="button" class="chip dir-fix ${dirPick === 'fix' ? 'on' : ''}" onclick="fin.pickDir('fix')">Fix something</button>
+        <button type="button" class="chip ${dirPick === 'all' ? 'on' : ''}" onclick="fin.pickDir('all')">Everything</button>
+      </div>
       <div class="field" style="max-width:420px">
-        <input type="search" id="actFind" placeholder="Find an action — rent, token, EMI…" aria-label="Find an action"
+        <input type="search" id="actFind" placeholder="Or find it — rent, token, EMI…" aria-label="Find an action"
           oninput="fin.findAction(this.value)" autocomplete="off">
       </div>
       <div id="chooser">
       ${CHOOSER.map(([group, items], gi) => `
-        <div class="chooser-group">
+        <div class="chooser-group" data-group="${esc(group)}">
           <div class="eh">${esc(group)}</div>
           <div class="chooser-grid">
             ${items.filter(it => EV[it.key]).map((it, ii) =>
-        `<button type="button" class="dir-${dirOf(it.key)}" onclick="fin.pickAt(${gi},${ii})">
+        `<button type="button" class="dir-${dirOf(it.key)}" data-dir="${dirOf(it.key)}" onclick="fin.pickAt(${gi},${ii})">
                 <b>${esc(it.label || EV[it.key].title)}</b>
                 ${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ''}
               </button>`).join('')}
@@ -436,6 +488,7 @@ function record() {
           <div id="pvDup"></div>
           <h3>What saving this does</h3>
           <ul class="effects" id="pvEffects"></ul>
+          <div id="pvPosting"></div>
           <details class="journal">
             <summary>Show the double entry this creates</summary>
             <div id="pvJournal"></div>
@@ -453,7 +506,7 @@ const dirBadge = key => `<span class="dirtag dir-${dirOf(key)}">${DIR_LABEL[dirO
 
 function mountRecord() {
   if (result) { mountResult(); return; }
-  if (!evKey) return;
+  if (!evKey) { window.fin.findAction(''); return; }
   buildForm();
   document.querySelectorAll('.js-attach').forEach(input => {
     input.addEventListener('change', e => {
@@ -738,6 +791,29 @@ function mountDealPicker(f) {
   });
 }
 
+// Where the money lands, said plainly, with the account code where an accountant can see it:
+// "₹5,000 out of Bank (1000) → Rent (5000) · profit −₹5,000". The full debit/credit table
+// stays available underneath for anyone who wants it.
+const TYPE_WORD = { asset: 'what you own', liability: 'what you owe', equity: 'your capital', income: 'income', expense: 'a cost' };
+function postingStrip(lines, out) {
+  if (!lines.length) return '';
+  const name = a => `${esc(A[a]?.name || a)} <span class="code">${esc(a)}</span>`;
+  const froms = lines.filter(l => num(l.cr) > 0).map(l => ({ acc: l.acc, amt: num(l.cr), method: l.method }));
+  const tos = lines.filter(l => num(l.dr) > 0).map(l => ({ acc: l.acc, amt: num(l.dr) }));
+  const pe = lines.reduce((sum, l) => {
+    const a = A[l.acc]; if (!a) return sum;
+    if (a.type === 'income') return sum + num(l.cr) - num(l.dr);
+    if (a.type === 'expense') return sum - num(l.dr) + num(l.cr);
+    return sum;
+  }, 0);
+  const side = list => list.map(x => `<span class="post-acc">${fmt(x.amt)} ${name(x.acc)}<span class="small faint"> · ${TYPE_WORD[A[x.acc]?.type] || ''}${x.method ? ' · ' + esc(methodLabel(x.method)) : ''}</span></span>`).join('');
+  return `<div class="posting">
+    <div class="post-row"><span class="post-lbl">From</span>${side(froms)}</div>
+    <div class="post-row"><span class="post-lbl">To</span>${side(tos)}</div>
+    <div class="post-row"><span class="post-lbl">Profit</span><span class="${pe > 0.5 ? 'pos' : pe < -0.5 ? 'neg' : 'faint'}">${Math.abs(pe) > 0.5 ? (pe > 0 ? '+' : '−') + fmt(Math.abs(pe)) : 'unchanged'}</span></div>
+  </div>`;
+}
+
 // The preview is a genuine dry run: it calls the same build() that Save will call, so what is
 // shown is exactly what will be posted. It creates nothing.
 function updatePreview() {
@@ -770,6 +846,9 @@ function updatePreview() {
       Math.abs(num(t.totals?.dr) - dr) < 0.5 && Date.now() - num(t.createdAt) < 86400000) : null;
     dupEl.innerHTML = twin ? note(`<b>Looks like a duplicate.</b> Entry ${entryNo(twin)} — ${esc(twin.desc)}, ${fmt(twin.totals.dr)} — was saved ${Math.max(1, Math.round((Date.now() - twin.createdAt) / 60000))} min ago. Save only if it really happened twice.`) : '';
   }
+
+  const stripEl = document.getElementById('pvPosting');
+  if (stripEl) stripEl.innerHTML = postingStrip(lines, out);
 
   journalEl.innerHTML = lines.length ? `
     <div class="tbl-wrap"><table>
@@ -964,7 +1043,7 @@ function txns() {
             ${t.reversedBy ? tag('reversed', 'rev') : ''}
             ${(t.attachments || []).length ? tag('📎 ' + t.attachments.length) : ''}</td>
           <td class="eno nowrap" data-label="Entry">${entryNo(t)}</td>
-          <td class="nowrap" data-label="Date">${esc(t.date)}</td>
+          <td class="nowrap" data-label="Date">${esc(t.date)}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? `<br><span class="small faint">${esc(methodLabel(m))}</span>` : ''; })()}</td>
           <td class="n" data-label="Profit">${pe ? signed(pe) : '—'}</td>
           <td class="n" data-label="Cash">${ce ? signed(ce) : '—'}</td>
           <td class="n">${t.reversedBy ? '' : `<button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.reverse('${t.id}')">Reverse</button>`}</td>
@@ -996,6 +1075,8 @@ function openTxn(id) {
     body: `
       <p class="small muted" style="margin:0 0 10px">
         <span class="eno">${entryNo(t)}</span> · ${esc(t.date)} · ${esc(EV[t.event]?.title || t.event)}
+        ${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? ' · ' + esc(methodLabel(m)) : ''; })()}
+        ${t.meta?.ref ? ' · ref ' + esc(t.meta.ref) : ''}${t.selfInvoiceNo ? ' · self-invoice ' + esc(t.selfInvoiceNo) : ''}
         · by ${esc(t.createdBy || '—')}
         ${t.reversedBy ? ' · <b>reversed</b>' : ''}${t.reversalOf ? ' · this is a reversal' : ''}</p>
       <div class="tbl-wrap"><table>
@@ -1092,7 +1173,8 @@ window.fin = {
     document.querySelectorAll('#chooser .chooser-group').forEach(g => {
       let any = false;
       g.querySelectorAll('button').forEach(b => {
-        const hit = !needle || b.textContent.toLowerCase().includes(needle);
+        const dirOk = needle || dirPick === 'all' || b.dataset.dir === dirPick;
+        const hit = dirOk && (!needle || b.textContent.toLowerCase().includes(needle));
         b.hidden = !hit;
         if (hit) any = true;
       });
@@ -1101,6 +1183,17 @@ window.fin = {
     });
     const none = document.getElementById('actNone');
     if (none) none.hidden = shown > 0;
+  },
+  pickDir(d) {
+    dirPick = d;
+    repaint();
+    window.fin.findAction(document.getElementById('actFind')?.value || '');
+  },
+  setScope(mode) {
+    setScope(mode);
+    try { sessionStorage.setItem('fin.scope', mode); } catch { }
+    paintScope();
+    repaint();
   },
 
   pick(k) {
@@ -1161,6 +1254,8 @@ window.fin = {
       const r = await SY.save(key, vals);
       // From here the entry is committed. Whatever happens to the files next must never be
       // presented as "not saved".
+      // A save that began on a statement line goes back to match that line.
+      if (window.finBank?.onSaved) window.finBank.onSaved(r.txnId, key, snapshotVals);
       result = {
         kind: 'ok', key, label, preset, ...r,
         uploads: files.map(f => ({

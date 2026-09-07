@@ -12,11 +12,13 @@ import {
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, toast, confirmDialog } from './ui.js';
 import * as B from './finance-bank.js';
+import { EV } from './finance-events.js';
 import * as SY from './finance-sync.js';
 
 // Wizard state. Deliberately module-level and reset on leaving: a half-finished import is
 // never worth restoring, and stale parsed rows would be dangerous to reconcile against.
 let stage = 'list';
+let pendingRow = null;
 let account = '1000';
 let parsed = null;
 let mapping = null;
@@ -231,19 +233,28 @@ function renderReconcile() {
 
     <h2>On the statement but not in your books <span class="muted">(${unmatched.length})</span></h2>
     ${unmatched.length ? `
-      <p class="small muted">These are the ones to act on. Each is either something you forgot to record, or something that is not yours.</p>
+      <p class="small muted">These are the ones to act on — usually something you forgot to record. Each line says what it most likely was; the first button opens that form already filled in, and the entry is matched to this line when you save.</p>
       ${table(
-      `<th>Date</th><th>Description</th><th class="n">Out</th><th class="n">In</th><th></th>`,
-      unmatched.map(r => `<tr>
-          <td class="nowrap small">${esc(r.date)}</td>
-          <td class="small">${esc(r.desc)}</td>
-          <td class="n">${r.debit ? fmt(r.debit) : ''}</td>
-          <td class="n">${r.credit ? fmt(r.credit) : ''}</td>
-          <td class="n nowrap">
-            <button class="btn ghost sm" type="button" onclick="finBank.create('${esc(r.id)}')">Create entry</button>
+      `<th>Description</th><th>Date</th><th class="n">Out</th><th class="n">In</th><th></th>`,
+      unmatched.map(r => {
+        const sg = B.suggestEntry(r, st(), account, st().settings.narrationRules || []);
+        const dup = r.dup ? (r.dup.kind === 'row'
+          ? tag('same line twice on the statement', 'warn')
+          : tag(`looks like entry #${String(r.dup.no || '').padStart(4, '0')} again`, 'warn')) : '';
+        return `<tr>
+          <td class="lead">${esc(r.desc)} ${dup}
+            <br><span class="small ${sg.confidence === 'high' || sg.confidence === 'learned' ? 'pos' : 'muted'}">
+              ${sg.confidence === 'learned' ? '↺ ' : sg.confidence === 'high' ? '✓ ' : '? '}${esc(sg.why)}</span></td>
+          <td class="nowrap small" data-label="Date">${esc(r.date)}<br><span class="faint">${esc(B.inferMethod(r.desc) === 'netbanking' ? 'transfer' : B.inferMethod(r.desc).toUpperCase())}</span></td>
+          <td class="n" data-label="Out">${r.debit ? fmt(r.debit) : ''}</td>
+          <td class="n" data-label="In">${r.credit ? fmt(r.credit) : ''}</td>
+          <td class="n">
+            <button class="btn sm ${r.debit ? 'out' : 'in'}" type="button" onclick="finBank.create('${esc(r.id)}')">${esc(EV[sg.event]?.title || 'Create entry')}</button>
+            <button class="btn ghost sm" type="button" onclick="finBank.create('${esc(r.id)}', true)">Something else</button>
             <button class="btn ghost sm" type="button" onclick="finBank.matchTo('${esc(r.id)}')">Match to…</button>
             <button class="btn ghost sm" type="button" onclick="finBank.ignore('${esc(r.id)}')">Ignore</button>
-          </td></tr>`).join(''))}`
+          </td></tr>`;
+      }).join(''), '', { stack: true })}`
       : `<div class="card"><p class="pos" style="margin:0">Every statement line is accounted for.</p></div>`}
 
     <h2>In your books but not on the statement <span class="muted">(${orphans.length})</span></h2>
@@ -291,7 +302,7 @@ if (typeof window !== 'undefined') {
       rows = B.buildRows(parsed, mapping);
       if (!rows.length) { toast('No rows parsed — check the date column'); return; }
       const res = B.autoMatch(rows, st().txns, account);
-      rows = res.rows;
+      rows = B.flagDuplicates(res.rows, st().txns, account);
       // The last balance on the statement is almost always the closing balance, so offer it
       // rather than making the user retype it — they can still correct it.
       closingBalance = rows.filter(r => r.balance).slice(-1)[0]?.balance || 0;
@@ -309,18 +320,41 @@ if (typeof window !== 'undefined') {
 
     // Opens the Record screen with the date and amount already filled from the statement line,
     // so the only thing left to decide is what the payment actually was.
-    create(rowId) {
+    // Opens the Record screen with the most likely form already filled in. When it is
+    // saved, the new entry is matched to this line and the choice is remembered for next
+    // time a line like it turns up.
+    create(rowId, plain) {
       const r = rows.find(x => x.id === rowId);
       if (!r) return;
-      const isOut = r.debit > 0;
-      const amount = r.debit || r.credit;
-      if (account === '2300') {
-        window.fin.record(isOut ? 'expense' : 'vendorrefund',
-          { date: r.date, amt: amount, via: '2300', how: '2300', desc: r.desc });
-      } else {
-        window.fin.record(isOut ? 'expense' : 'otherinc',
-          { date: r.date, amt: amount, via: '1000', desc: r.desc });
+      pendingRow = rowId;
+      const sg = B.suggestEntry(r, st(), account, st().settings.narrationRules || []);
+      if (plain || !sg) {
+        const isOut = r.debit > 0, amount = r.debit || r.credit;
+        window.fin.record(isOut ? 'expense' : (account === '2300' ? 'vendorrefund' : 'otherinc'),
+          { date: r.date, amt: amount, desc: r.desc, via: account, how: account, method: B.inferMethod(r.desc) });
+        return;
       }
+      window.fin.record(sg.event, sg.preset);
+    },
+
+    // Called by the Record screen after a save that started from a statement line.
+    async onSaved(txnId, evKey, vals) {
+      if (!pendingRow) return;
+      const r = rows.find(x => x.id === pendingRow);
+      pendingRow = null;
+      if (!r) return;
+      r.matchedTxnId = txnId; r.status = 'matched'; r.confidence = 'manual';
+      // Remember the choice against the first words of the narration.
+      const key = B.ruleKey(r.desc);
+      if (key && evKey) {
+        const preset = {};
+        for (const k of ['acc', 'vendor', 'party', 'sub', 'loan', 'kind', 'emp']) if (vals?.[k] && typeof vals[k] === 'string') preset[k] = vals[k];
+        const rules = (st().settings.narrationRules || []).filter(x => x.key !== key);
+        rules.unshift({ key, event: evKey, preset, label: EV[evKey]?.title || evKey });
+        SY.saveSettings({ narrationRules: rules.slice(0, 200) }).catch(() => { });
+      }
+      stage = 'reconcile';
+      window.fin.go('bank');
     },
 
     matchTo(rowId) {

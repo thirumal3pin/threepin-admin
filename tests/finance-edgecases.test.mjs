@@ -396,7 +396,7 @@ section('A three-month loan paid to zero, one instalment late');
   check('One instalment marked paid, loan still active', loan.paid.length === 1 && loan.status === 'active');
 
   save('emi', { date: '2026-11-05', loan: loan.id, via: '1000', extra: 500 });
-  eq('A late fee is a bank charge, not interest', bal('5140'), 500);
+  eq('A penalty sits in its own disallowed account, not with bank charges or interest', bal('5165'), 500);
 
   save('emi', { date: '2026-12-05', loan: loan.id, via: '1000', extra: 0 });
   eq('The loan is repaid to the rupee', bal('2400', { party: hdfc }), 0);
@@ -415,7 +415,7 @@ section('A three-month loan paid to zero, one instalment late');
   eq('The debt simply moved to the loan head', bal('2400', { party: cardLoan.partyId }), cardOut);
   eq('The conversion fee is a finance cost', bal('5150') - fin0, 3000 + totalInt + 200);
   check('A four-instalment card loan now exists', cardLoan.n === 4 && cardLoan.schedule.length === 4 && cardLoan.status === 'active');
-  eq('Converting a card balance is not a cost in itself', bal('5140'), 500);
+  eq('Converting a card balance is not a cost in itself', bal('5165'), 500);
 }
 
 // ═══════ 9. AN ASSET BOUGHT ON CREDIT, DEPRECIATED, THEN SOLD AT A GAIN ═══════
