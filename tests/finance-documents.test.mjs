@@ -442,6 +442,19 @@ section('Paying less than the bill says');
   const cl2 = party('Seller T');
   save('dealpay', { date: '2026-09-13', party: cl2, amt: 19950, short: 50, shortWhy: 'charges', via: '1000' });
   eq('Charges their bank took are bank charges, not a discount', bal('5140'), 50);
+
+  // The owner's own case: the bill was paid short BEFORE the discount field existed, so
+  // 500 is still open. Closing it is a payment of nothing with 500 let off — no cash line.
+  save('bill', { date: '2026-09-14', vendor: { __new: true, name: 'Office Landlord', type: 'vendor' }, desc: 'Rent — Aug', acc: '5000', amt: 18000, rcm: 'no', tds: 'none', tdsrate: 0 });
+  const ll = party('Office Landlord');
+  save('paybill', { date: '2026-09-15', party: ll, amt: 17500, via: '1000', useAdvance: 'no', over: 'advance' });
+  eq('After a plain short payment 500 is still owed', bal('2000', { party: ll }), 500);
+  const bankBefore = bal('1000');
+  save('paybill', { date: '2026-09-16', party: ll, amt: 0, short: 500, via: '1000', useAdvance: 'no' });
+  eq('Letting off the rest with no money closes the bill', bal('2000', { party: ll }), 0);
+  eq('…no cash moved', bal('1000'), bankBefore);
+  check('…and the bill document is paid', openBills(ll).length === 0);
+  eq('…the 500 joined discounts received', bal('4060'), 500 + 500);
   eq('…and that invoice is settled too', bal('1100', { party: cl2 }), 0);
 }
 

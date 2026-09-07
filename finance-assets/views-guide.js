@@ -950,6 +950,8 @@ const FAQ = [
       'Because it is an entry: the cost is real the day the bill arrives, and profit for that month goes down by it. What has not happened yet is the money moving. Switch Transactions to <b>Money moved</b> to see only cash, or <b>Not paid yet</b> to see only bills and invoices waiting to settle. Reports → <b>Money in and out</b> is the cash book: opening, every movement, closing.'],
     ['The bill was ₹18,000, they gave me ₹500 off, I paid ₹17,500. How do I record that?',
       '<b>Pay a bill</b> → amount paid 17,500 → <b>Amount the vendor let you off</b> 500. The bill closes in full, ₹17,500 leaves the bank, and the ₹500 is booked as a discount received. The GST you claimed on the original stands — the vendor did not issue a credit note. If they did, use <b>Vendor refunded you / credit note</b> instead, which also gives back the GST.'],
+    ['I already paid the 17,500 as a normal payment and Owed still shows 500 on that bill.',
+      '<b>Pay a bill</b> again for that vendor: amount paid <b>0</b>, <b>Amount the vendor let you off</b> 500. No money moves; the bill closes and the 500 is booked as a discount received.'],
     ['A client paid ₹500 less than the invoice.',
       '<b>Client pays what they owe</b> → amount received → <b>Amount you let them off</b> 500, and say whether it was a discount you allowed or charges their bank deducted. The invoice closes in full. For a renegotiated brokerage use <b>Reduce an invoice — credit note</b>, which reduces the GST too.'],
     ['What is the difference between an expense and a bill?',
