@@ -131,7 +131,9 @@ export function gstFields(amtLabel, o = {}) {
   const fields = [
     F('amt', amtLabel, 'number', { hint: o.hint, show: o.show, required: true }),
     F('gst', o.kind === 'output' ? 'Charge GST on this?' : 'GST on this?', 'select', {
-      opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no', show: gstVisible,
+      opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no',
+      // Purchase forms ask this as one three-way question (rcm); this toggle then stays hidden.
+      show: v => gstVisible(v) && (o.kind === 'output' || v.rcm === undefined),
     }),
     F('gstRate', 'GST %', 'number', { def: gstRate(), show: on }),
     F('gstAmt', 'GST amount', 'number', { def: 0, show: on }),
@@ -156,6 +158,8 @@ export function gstFields(amtLabel, o = {}) {
 }
 
 export function gstSync(k, v) {
+  // The three-way GST answer on purchase forms drives the two flags the engine works with.
+  if (k === 'rcm') { v.gst = v.rcm === 'charged' ? 'yes' : 'no'; k = 'gst'; }
   if (!['amt', 'gst', 'gstRate', 'gstAmt', 'total'].includes(k)) return;
   if (v.gst !== 'yes') { v.gstAmt = 0; v.total = r2(v.amt); return; }
   const rate = num(v.gstRate);
@@ -191,9 +195,12 @@ function inputTax(acc, gi, v = {}) {
 // advocate's fee works, and how a subscription from a FOREIGN vendor (an import of services —
 // Anthropic, Google, Meta billed from abroad) works: the vendor charges no Indian GST, and the
 // recipient pays IGST under reverse charge and claims it back.
+// The value 'yes' means reverse charge and 'charged' means the vendor put GST on the bill —
+// the names are historical, the meaning is: no GST at all / GST I can claim / GST I must pay.
 const RCM_OPTS = [
-  ['no', 'Yes, GST was on the bill'],
-  ['yes', 'No — I have to pay the GST myself'],
+  ['no', 'No GST — not charged, or not applicable'],
+  ['charged', 'Yes — GST is on the bill, I can claim it'],
+  ['yes', 'No, but I must pay it myself — reverse charge'],
 ];
 // Common reverse-charge rates, so a typo cannot quietly overstate a credit.
 const RCM_RATES = [5, 12, 18, 28];
@@ -201,9 +208,12 @@ function rcmFields(showFn, o = {}) {
   const home = S().settings.state || 'Tamil Nadu';
   const on = x => showFn(x) && x.rcm === 'yes';
   return [
-    F('rcm', 'Did the vendor charge you GST?', 'select', {
-      opts: RCM_OPTS, def: 'no', show: showFn,
-      hint: 'An advocate, a goods transporter, a landlord who is not registered, or any vendor billing from outside India charges you no GST. You pay it to the government with the month\'s return and claim the same amount back as credit — it costs you nothing, but leaving it out is a real liability.',
+    F('rcm', 'GST on this?', 'select', {
+      opts: RCM_OPTS, def: o.gstDef || 'no', show: showFn,
+      hint: x => x.rcm === 'yes'
+        ? 'An advocate, a goods transporter, a landlord who is not registered, or any vendor abroad charges you no GST — you pay it with the return and claim the same amount back. It costs nothing, but leaving it out is a real liability.'
+        : x.rcm === 'charged' ? 'Enter the GST from the bill. The vendor\'s GSTIN and bill number are what make it claimable.'
+          : 'Most small purchases, anything from an unregistered shop, salaries, interest, government fees.',
     }),
     F('rcmRate', 'GST % you must pay', 'number', { def: gstRate(), show: on, hint: 'Advocate and rent 18%, goods transport 5%.' }),
     F('rcmType', 'Where is the vendor', 'select', {
@@ -565,6 +575,14 @@ EV.dealpay = {
         hint: 'Only clients who owe something are listed.',
       }),
       F('amt', 'Amount received', 'number', { required: true, hint: p ? `Owes ${fmt(bal('1100', { party: p }))} in total` : '' }),
+      F('short', 'Amount you let them off', 'number', {
+        def: 0, show: x => !!x.party,
+        hint: 'A discount you agreed, a rounding-off, or charges their bank deducted. The invoice closes in full.',
+      }),
+      F('shortWhy', 'Because', 'select', {
+        opts: [['discount', 'A discount or rounding I allowed'], ['charges', 'Bank charges deducted on their side']],
+        def: 'discount', show: x => num(x.short) > 0,
+      }),
       F('via', 'Received into', 'select', { opts: [['1000', 'Bank (1000)'], ['1010', 'Petty cash (1010)']], def: '1000' }),
       methodField(),
       F('ref', 'Reference', 'text', { hint: 'UPI reference or cheque number — it is what matches this to the bank statement later.' }),
@@ -577,20 +595,24 @@ EV.dealpay = {
   },
   onchange: (k, v) => {
     if (k === 'party') { v.amt = r2(bal('1100', { party: v.party })); v.alloc = null; }
-    if (k === 'amt' || k === 'party') v.alloc = autoAllocInvoices(v);
+    if (k === 'amt' || k === 'party' || k === 'short') v.alloc = autoAllocInvoices(v);
   },
   check: v => {
     const owed = v.party ? bal('1100', { party: v.party }) : 0;
+    const short = num(v.short);
+    const applied = num(v.amt) + short;
     const allocSum = (v.alloc || []).reduce((a, r) => a + num(r.amt), 0);
     return [
       ...dateChecks(v),
       ...(v.party ? [] : [err('party', 'Pick who is paying')]),
       ...(v.party && owed <= 0.5 ? [err('party', 'They owe nothing right now — money received ahead of a deal is a token; record it as one')] : []),
       ...posAmt(v, 'amt', 'Enter what was received'),
+      ...(short < 0 ? [err('short', 'Enter zero or more')] : []),
+      ...(short > 0 && short > owed - num(v.amt) + 0.005 ? [err('short', `You can only let them off what is left — ${fmt(Math.max(0, owed - num(v.amt)))}`)] : []),
       ...(num(v.amt) > owed + 0.005 && v.over === 'stop' ? [err('amt', `They only owe ${fmt(owed)} — reduce the amount, or hold the extra as an advance`)] : []),
-      ...(allocSum > num(v.amt) + 0.005 ? [err('alloc', 'You have split more than you received — lower one of the amounts')] : []),
+      ...(allocSum > applied + 0.005 ? [err('alloc', 'You have split more than you received — lower one of the amounts')] : []),
       ...(openInvoices(v.party).length
-        && allocSum + 0.005 < Math.min(num(v.amt), owed, openInvoices(v.party).reduce((a, i) => a + invoiceOutstanding(i), 0))
+        && allocSum + 0.005 < Math.min(applied, owed, openInvoices(v.party).reduce((a, i) => a + invoiceOutstanding(i), 0))
         && v.over !== 'hold'
         ? [err('alloc', 'Apply the whole payment to their invoices, or choose to hold the rest for them')] : []),
     ];
@@ -601,10 +623,14 @@ EV.dealpay = {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount received.');
     const owed = bal('1100', { party: pid });
-    const applied = Math.min(amt, owed);
-    const extra = r2(amt - applied);
+    // What you let them off closes the invoice as well; it is a cost — a discount allowed, or
+    // charges their bank took — and the GST on the invoice stands.
+    const short = r2(Math.min(Math.max(0, num(v.short)), Math.max(0, owed - amt)));
+    const applied = Math.min(amt + short, owed);
+    const extra = r2(amt - Math.max(0, applied - short));
     const rows = (v.alloc || []).filter(r => num(r.amt) > 0);
     const lines = [cashLine(v, { acc: v.via || '1000', dr: amt })];
+    if (short > 0.005) lines.push({ acc: v.shortWhy === 'charges' ? '5140' : '5225', dr: short, party: pid });
     // One receivable line per allocated invoice keeps the deal tags right on the ledger.
     let tagged = 0;
     for (const r of rows) {
@@ -624,7 +650,8 @@ EV.dealpay = {
       lines.push({ acc: '2100', cr: extra, party: pid, ...(tag ? { deal: tag } : {}) });
     }
 
-    const eff = [`Cash in ${fmt(amt)}. What ${esc(pname(pid))} owes drops by ${fmt(applied)}. Profit unchanged.`];
+    const eff = [`Cash in ${fmt(amt)}. What ${esc(pname(pid))} owes drops by ${fmt(applied)}.${short ? '' : ' Profit unchanged.'}`];
+    if (short) eff.push(`${fmt(short)} you let them off — ${v.shortWhy === 'charges' ? 'booked as bank charges' : 'booked as a discount allowed'}; the invoice still closes in full.`);
     rows.forEach(r => { const inv = S().invoices.find(i => i.id === r.id); if (inv) eff.push(`${fmt(r.amt)} applied to invoice ${esc(inv.invoiceNo)}${num(r.amt) + 0.005 < invoiceOutstanding(inv) ? ' (part)' : ' — now paid'}.`); });
     if (extra > 0.005) eff.push(`${fmt(extra)} more than they owed — held as an advance for them, not income.`);
 
@@ -639,7 +666,7 @@ EV.dealpay = {
 function autoAllocInvoices(v) {
   if (!v.party) return [];
   const docs = openInvoices(v.party);
-  return allocate(num(v.amt), docs, invoiceOutstanding).rows;
+  return allocate(num(v.amt) + Math.max(0, num(v.short)), docs, invoiceOutstanding).rows;
 }
 
 EV.settle = {
@@ -1428,6 +1455,10 @@ EV.paybill = {
         opts: [['yes', 'Yes'], ['no', 'No']], def: 'yes', show: () => adv > 0.5,
       }),
       F('amt', 'Amount paid now', 'number', { required: true, hint: pid ? `Total owed ${fmt(bal('2000', { party: pid }))}` : '' }),
+      F('short', 'Amount the vendor let you off', 'number', {
+        def: 0, hint: 'A discount for paying, a rounding-off, a part they agreed to drop. The bill closes in full; this part is a small income.',
+        show: x => !!x.party,
+      }),
       F('via', 'Paid from', 'select', { opts: PAY_VIA, def: '1000' }),
       methodField(),
       F('ref', 'Reference', 'text', { hint: 'UPI reference or cheque number, so this matches the bank statement.' }),
@@ -1440,20 +1471,24 @@ EV.paybill = {
   },
   onchange: (k, v) => {
     if (k === 'party') { v.amt = r2(Math.max(0, bal('2000', { party: v.party }) - vendorAdvance(v.party))); v.alloc = null; }
-    if (k === 'amt' || k === 'party' || k === 'useAdvance') v.alloc = autoAllocBills(v);
+    if (k === 'amt' || k === 'party' || k === 'useAdvance' || k === 'short') v.alloc = autoAllocBills(v);
   },
   check: v => {
     const owed = v.party ? bal('2000', { party: v.party }) : 0;
     const advUsed = v.party && v.useAdvance !== 'no' ? Math.min(vendorAdvance(v.party), owed) : 0;
+    const short = num(v.short);
+    const paying = num(v.amt) + advUsed + short;
     const allocSum = (v.alloc || []).reduce((a, r) => a + num(r.amt), 0);
     return [
       ...dateChecks(v),
       ...(v.party ? [] : [err('party', 'Pick the vendor')]),
-      ...(num(v.amt) > 0 || advUsed > 0 ? [] : [err('amt', 'Enter what you paid')]),
+      ...(num(v.amt) > 0 || advUsed > 0 || short > 0 ? [] : [err('amt', 'Enter what you paid')]),
+      ...(short < 0 ? [err('short', 'Enter zero or more')] : []),
+      ...(short > 0 && short > owed - num(v.amt) - advUsed + 0.005 ? [err('short', `They can only let you off what is left — ${fmt(Math.max(0, owed - num(v.amt) - advUsed))}`)] : []),
       ...(num(v.amt) + advUsed > owed + 0.005 && v.over === 'stop' ? [err('amt', `You only owe ${fmt(owed)} — reduce the amount, or hold the extra as an advance`)] : []),
-      ...(allocSum > num(v.amt) + advUsed + 0.005 ? [err('alloc', 'You have split more than you are paying — lower one of the amounts')] : []),
+      ...(allocSum > paying + 0.005 ? [err('alloc', 'You have split more than you are paying — lower one of the amounts')] : []),
       ...(openBills(v.party).length
-        && allocSum + 0.005 < Math.min(num(v.amt) + advUsed, owed, openBills(v.party).reduce((a, b) => a + billOutstanding(b), 0))
+        && allocSum + 0.005 < Math.min(paying, owed, openBills(v.party).reduce((a, b) => a + billOutstanding(b), 0))
         && v.over !== 'advance'
         ? [err('alloc', 'Apply the whole payment to their bills, or choose to hold the rest as an advance')] : []),
       ...(v.via === '1010' && num(v.amt) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
@@ -1466,19 +1501,24 @@ EV.paybill = {
     const advAvail = v.useAdvance !== 'no' ? vendorAdvance(pid) : 0;
     const cash = num(v.amt);
     const advUsed = r2(Math.min(advAvail, owed));
-    if (cash <= 0 && advUsed <= 0) return need('Enter the amount.');
-    const settle = r2(Math.min(cash + advUsed, owed));
-    const extra = r2(cash + advUsed - settle);
+    // What the vendor let you off closes the bill too; it is income, not a cost reduction —
+    // the GST already claimed on the bill stands, so the cost is left where it was.
+    const short = r2(Math.min(Math.max(0, num(v.short)), Math.max(0, owed - cash - advUsed)));
+    if (cash <= 0 && advUsed <= 0 && short <= 0) return need('Enter the amount.');
+    const settle = r2(Math.min(cash + advUsed + short, owed));
+    const extra = r2(cash + advUsed - Math.max(0, settle - short));
     const rows = (v.alloc || []).filter(r => num(r.amt) > 0);
 
     const lines = [];
     if (settle > 0.005) lines.push({ acc: '2000', dr: settle, party: pid });
     if (advUsed > 0.005) lines.push({ acc: '1550', cr: advUsed, party: pid });
+    if (short > 0.005) lines.push({ acc: '4060', cr: short, party: pid });
     if (extra > 0.005) lines.push({ acc: '1550', dr: extra, party: pid });
     if (cash > 0.005) lines.push(cashLine(v, { acc: v.via || '1000', cr: cash }));
 
     const eff = [];
     if (cash) eff.push(`${fmt(cash)} leaves ${A[v.via || '1000'].name}.`);
+    if (short) eff.push(`${fmt(short)} the vendor let you off — the bill still closes in full, and that part is booked as a discount received.`);
     if (advUsed) eff.push(`${fmt(advUsed)} of the advance already with ${esc(pname(pid))} is used up first.`);
     eff.push(`What you owe ${esc(pname(pid))} drops by ${fmt(settle)}. Profit unchanged — the cost was counted when the bill came in.`);
     rows.forEach(r => { const b = S().bills.find(x => x.id === r.id); if (b) eff.push(`${fmt(r.amt)} applied to ${esc(b.desc)}${num(r.amt) + 0.005 < billOutstanding(b) ? ' (part-paid)' : ' — now paid'}.`); });
@@ -1498,7 +1538,7 @@ function vendorsOwed() {
 function autoAllocBills(v) {
   if (!v.party) return [];
   const advUsed = v.useAdvance !== 'no' ? Math.min(vendorAdvance(v.party), bal('2000', { party: v.party })) : 0;
-  return allocate(num(v.amt) + advUsed, openBills(v.party), billOutstanding).rows;
+  return allocate(num(v.amt) + advUsed + Math.max(0, num(v.short)), openBills(v.party), billOutstanding).rows;
 }
 
 EV.salary = {

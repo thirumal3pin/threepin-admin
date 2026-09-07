@@ -128,6 +128,7 @@ try {
   await page.waitForSelector('#f_dueDate');
   await page.fill('#f_dueDate', '2026-11-28');
   check('Reason field hidden while the amount matches', await page.$('#f_reason') === null);
+  check('The GST question offers no-GST, charged, and reverse charge', await page.evaluate(() => [...document.querySelectorAll('#f_rcm option')].map(o => o.value).join() === 'no,charged,yes'));
   await page.fill('#f_amt', '4320');
   await page.waitForSelector('#f_reason', { timeout: 5000 });
   check('Typing a different amount reveals the reason field', true);
@@ -251,6 +252,11 @@ try {
   section('Tables are readable at 390px');
   await page.evaluate(() => window.fin.go('txns'));
   await page.waitForTimeout(600);
+  check('Transactions can show only money that moved', await page.evaluate(() => { const b = [...document.querySelectorAll('#main .seg button')].find(x => /Money moved/.test(x.textContent)); if (!b) return false; b.click(); return true; }));
+  await page.waitForTimeout(400);
+  check('Every row shown then moved money', await page.evaluate(() => [...document.querySelectorAll('#main table tbody tr')].every(r => !/not yet paid/i.test(r.innerText))));
+  await page.evaluate(() => window.fin.filterMoved('all'));
+  await page.waitForTimeout(400);
   const tbl = await page.evaluate(() => {
     const t = document.querySelector('#main table');
     if (!t) return { none: true };

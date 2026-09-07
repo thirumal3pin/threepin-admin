@@ -15,7 +15,7 @@
 import {
   getState, num, bal, pl, today, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
-  agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym,
+  agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
 import { EV, validateEvent, fieldsFor } from '../finance-assets/finance-events.js';
@@ -379,6 +379,95 @@ section('Reporting reads the plan in force and each due date');
   // Variance by reason is what says whether tool spend drifts on price or on usage.
   const sv = serviceVariance(st);
   check('Service variance groups by the reason given', sv.rows.length > 0 && Object.keys(sv.byReason).length > 0, JSON.stringify(sv.byReason));
+}
+
+section('GST on a purchase is one question with three answers');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 200000 });
+  // No GST at all: a small purchase from an unregistered shop.
+  save('expense', { date: '2026-09-02', desc: 'Tea and snacks', acc: '5030', amt: 300, rcm: 'no', via: '1000' });
+  eq('No GST: nothing claimed, nothing owed', bal('1400') + bal('1401') + bal('1402') + bal('2205'), 0);
+  eq('…the whole amount is the cost', bal('5030'), 300);
+  // Charged on the bill: the vendor is registered, and we claim it.
+  save('expense', { date: '2026-09-03', desc: 'Printer toner', acc: '5100', amt: 2000, rcm: 'charged', gstRate: 18, gstAmt: 360, total: 2360, gstType: 'intra', vgstin: '33AAAAA0000A1Z5', vinv: 'T-1', via: '1000', vendor: { __new: true, name: 'Toner Co', type: 'vendor' } });
+  eq('Charged: the GST is input credit', bal('1400') + bal('1401'), 360);
+  eq('…and the cost is the bare amount', bal('5100'), 2000);
+  eq('…and the bank paid the total', bal('1000'), 200000 - 300 - 2360);
+  // Reverse charge: an advocate paid on the spot.
+  save('expense', { date: '2026-09-04', desc: 'Sale deed opinion', acc: '5120', amt: 10000, rcm: 'yes', rcmRate: 18, rcmType: 'intra', via: '1000', vendor: { __new: true, name: 'Adv. Kumar', type: 'vendor' } });
+  eq('Reverse charge: the advocate got the bare fee', bal('1000'), 200000 - 300 - 2360 - 10000);
+  eq('…the GST is owed to the government by you', bal('2205'), 1800);
+  eq('…and claimed back as credit at the same time', bal('1400') + bal('1401'), 360 + 1800);
+  // The same answer on a bill received later.
+  save('bill', { date: '2026-09-05', vendor: { __new: true, name: 'Reg Vendor', type: 'vendor' }, desc: 'Signage', acc: '5100', amt: 5000, rcm: 'charged', gstRate: 18, gstAmt: 900, total: 5900, gstType: 'intra', vgstin: '33BBBBB0000B1Z5', vinv: 'S-9', tds: 'none', tdsrate: 0 });
+  eq('A charged bill is owed with its GST', bal('2000', { party: party('Reg Vendor') }), 5900);
+  // The form hides the old yes/no on purchase forms and derives it.
+  const f = fieldsFor('expense', { rcm: 'charged', gst: 'yes' });
+  check('Purchase forms show one GST question, not two', f.some(x => x.k === 'rcm') && !f.some(x => x.k === 'gst'), JSON.stringify(f.map(x => x.k)));
+  const fi = fieldsFor('otherinc', { via: '1000' });
+  check('Income forms keep the simple yes/no', fi.some(x => x.k === 'gst') && !fi.some(x => x.k === 'rcm'));
+}
+
+section('Paying less than the bill says');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 100000 });
+  save('bill', { date: '2026-09-02', vendor: { __new: true, name: 'Discount Vendor', type: 'vendor' }, desc: 'Banners', acc: '5100', amt: 18000, rcm: 'no', tds: 'none', tdsrate: 0 });
+  const dv = party('Discount Vendor');
+  const bill = openBills(dv)[0];
+  refuses('You cannot be let off more than is left',
+    () => save('paybill', { date: '2026-09-10', party: dv, amt: 17500, short: 600, via: '1000', useAdvance: 'no' }), 'let you off');
+  save('paybill', { date: '2026-09-10', party: dv, amt: 17500, short: 500, via: '1000', useAdvance: 'no' });
+  eq('The bill closes in full', bal('2000', { party: dv }), 0);
+  check('…and the document says paid', bill.status === 'paid' && near(bill.paid, 18000), JSON.stringify(bill));
+  eq('Only 17,500 left the bank', bal('1000'), 100000 - 17500);
+  eq('The 500 is a discount received', bal('4060'), 500);
+  eq('The original cost stands', bal('5100'), 18000);
+  check('Trial balance still balances', trialBalance().balanced);
+
+  // The client side: a discount you allowed, and charges their bank deducted.
+  save('newdeal', { date: '2026-09-03', nickname: 'Short-pay deal', seller: { __new: true, name: 'Seller S', type: 'client' }, expSeller: 50000 });
+  const d = byName(g.deals, 'Short-pay deal').id;
+  save('invoice', { date: '2026-09-05', deal: d, from: 'seller', amt: 50000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
+  const cl = party('Seller S');
+  const inv = openInvoices(cl)[0];
+  save('dealpay', { date: '2026-09-12', party: cl, amt: 49200, short: 800, shortWhy: 'discount', via: '1000' });
+  eq('The invoice closes in full', bal('1100', { party: cl }), 0);
+  check('…and the document says paid', inv.status === 'paid', inv.status);
+  eq('The discount allowed is a cost', bal('5225'), 800);
+  save('newdeal', { date: '2026-09-03', nickname: 'Bank-charge deal', seller: { __new: true, name: 'Seller T', type: 'client' }, expSeller: 20000 });
+  const d2 = byName(g.deals, 'Bank-charge deal').id;
+  save('invoice', { date: '2026-09-06', deal: d2, from: 'seller', amt: 20000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
+  const cl2 = party('Seller T');
+  save('dealpay', { date: '2026-09-13', party: cl2, amt: 19950, short: 50, shortWhy: 'charges', via: '1000' });
+  eq('Charges their bank took are bank charges, not a discount', bal('5140'), 50);
+  eq('…and that invoice is settled too', bal('1100', { party: cl2 }), 0);
+}
+
+section('The books versus the money');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 50000 });
+  save('transfer', { date: '2026-09-02', kind: '1000>1010', amt: 5000 });
+  save('bill', { date: '2026-09-03', vendor: { __new: true, name: 'Later Vendor', type: 'vendor' }, desc: 'Flyers', acc: '5100', amt: 3000, rcm: 'no', tds: 'none', tdsrate: 0 });
+  save('petty', { date: '2026-09-04', d1: 'Auto', a1: 200, c1: '5050', a2: 0, a3: 0 });
+  save('expense', { date: '2026-09-05', desc: 'Ads', acc: '5090', amt: 1000, rcm: 'no', via: '2300' });
+  check('A bill received does not move money', !movesMoney(g.txns.find(t => t.desc.startsWith('Flyers'))));
+  check('A petty spend does', movesMoney(g.txns.find(t => t.event === 'petty')));
+  check('A card spend counts as money moved', movesMoney(g.txns.find(t => t.desc === 'Ads')));
+  const cb = cashBook('2026-09-01', '2026-09-30');
+  eq('Cash book opens at zero', cb.opening, 0);
+  eq('Money in is the capital', cb.in, 50000 + 5000);
+  eq('Money out is the top-up and the auto', cb.out, 5000 + 200);
+  eq('Closing equals what bank and box hold', cb.closing, bal('1000') + bal('1010'));
+  check('The bill is not in the cash book', !cb.rows.some(r => r.t.desc.startsWith('Flyers')));
+  const card = cashBook('2026-09-01', '2026-09-30', ['1000', '1010', '2300']);
+  eq('Including the card adds the ad spend to money out', card.out, 5000 + 200 + 1000);
+  const bank = cashBook('2026-09-01', '2026-09-30', ['1000']);
+  eq('The bank alone: capital in, top-up out', bank.closing, 45000);
+  const paid = save('paybill', { date: '2026-09-08', party: party('Later Vendor'), amt: 3000, via: '1000', useAdvance: 'no' });
+  check('Paying the bill moves money', movesMoney(g.txns.find(t => t.id === paid)));
 }
 
 section('A bill blocks a reversal only while a payment still stands against it');

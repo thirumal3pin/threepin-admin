@@ -7,7 +7,7 @@
 import {
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
   pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
-  cashProfitBridge, scopeMode, scopeLabel, scoped,
+  cashProfitBridge, scopeMode, scopeLabel, scoped, cashBook, lastDayOfMonth,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -126,6 +126,7 @@ export function renderReports() {
 
     ${categoryTable('Income by category', p.inc, p.ti, 'income')}
     ${categoryTable('Expenses by category', p.exp, p.te, 'expenses')}
+    ${cashBookSection()}
     ${cashFlowTable()}`;
 }
 
@@ -184,6 +185,55 @@ function categoryTable(title, map, total, slug) {
       </tr>`).join(''),
     `<tr><td>Total</td><td class="n">${fmt(total)}</td><td class="n">100%</td></tr>`)}`;
 }
+
+// The money statement the owner asked for: opening, every movement, closing — bank and box,
+// with the card optionally. Closing equals the ledger by construction.
+let cbPockets = 'cash';
+function cashBookSection() {
+  const s = st();
+  const from = repMode === 'month' ? repMonth + '-01' : fyStart(repFy, s.settings.fyStartMonth);
+  const to = repMode === 'month' ? lastDayOfMonth(repMonth) : fyEnd(repFy, s.settings.fyStartMonth);
+  const accs = cbPockets === 'all' ? ['1000', '1010', '2300'] : cbPockets === 'bank' ? ['1000'] : cbPockets === 'box' ? ['1010'] : ['1000', '1010'];
+  const b = cashBook(from, to, accs);
+  return `
+    <h2>Money in and out</h2>
+    <p class="small muted">Only money that actually moved. Bills received and invoices raised are not here until they are paid.</p>
+    <div class="actions" style="align-items:center">
+      ${seg([['cash', 'Bank + box'], ['bank', 'Bank'], ['box', 'Petty cash'], ['all', 'Incl. card']], cbPockets, 'finReports.setPockets')}
+      <div class="spacer"></div>
+      <button class="btn sm" type="button" onclick="finReports.csvCashBook()">Download CSV</button>
+    </div>
+    <div class="grid g3">
+      ${stat('Opening', fmt(b.opening))}
+      ${stat('Money in', fmt(b.in), { cls: 'pos' })}
+      ${stat('Money out', fmt(b.out), { cls: b.out > 0.5 ? 'neg' : '' })}
+      ${stat('Closing', fmt(b.closing), { hero: true })}
+    </div>
+    ${b.rows.length ? table(
+      `<th>What</th><th>Date</th><th class="n">In</th><th class="n">Out</th><th class="n">Balance</th>`,
+      b.rows.map(r => `<tr class="click" onclick="fin.openTxn('${esc(r.t.id)}')">
+        <td class="lead">${esc(r.t.desc)}${r.pocket ? `<br><span class="small faint">${esc(r.pocket)}</span>` : ''}</td>
+        <td class="nowrap small" data-label="Date">${esc(r.t.date)}</td>
+        <td class="n" data-label="In">${r.in ? fmt(r.in) : '—'}</td>
+        <td class="n" data-label="Out">${r.out ? fmt(r.out) : '—'}</td>
+        <td class="n" data-label="Balance">${fmt(r.after)}</td></tr>`).join(''),
+      `<tr><td colspan="2" data-label="Totals">Totals</td><td class="n">${fmt(b.in)}</td><td class="n">${fmt(b.out)}</td><td class="n">${fmt(b.closing)}</td></tr>`,
+      { stack: true })
+      : empty('No money moved in this period.')}`;
+}
+function cashBookCsvRows() {
+  const s = st();
+  const from = repMode === 'month' ? repMonth + '-01' : fyStart(repFy, s.settings.fyStartMonth);
+  const to = repMode === 'month' ? lastDayOfMonth(repMonth) : fyEnd(repFy, s.settings.fyStartMonth);
+  const accs = cbPockets === 'all' ? ['1000', '1010', '2300'] : cbPockets === 'bank' ? ['1000'] : cbPockets === 'box' ? ['1010'] : ['1000', '1010'];
+  const b = cashBook(from, to, accs);
+  return [...scopeRow(), ['Date', 'Entry', 'Description', 'Pocket', 'In', 'Out', 'Balance'],
+    ['', '', 'Opening', '', '', '', b.opening],
+    ...b.rows.map(r => [r.t.date, r.t.no || '', r.t.desc, r.pocket, r.in || '', r.out || '', r.after]),
+    ['', '', 'Closing', '', b.in, b.out, b.closing]];
+}
+const fyStart = (fy, m) => `${fy.slice(0, 4)}-${String(m || 4).padStart(2, '0')}-01`;
+const fyEnd = (fy, m) => lastDayOfMonth(addMonths(fyStart(fy, m).slice(0, 7), 11));
 
 function cashFlowRows() {
   const s = st();
@@ -411,6 +461,8 @@ if (typeof window !== 'undefined') {
         ...Object.entries(map).map(([c, v]) => [c, A[c]?.name || c, v])]);
     },
 
+    setPockets(p) { cbPockets = p; window.fin.repaint(); },
+    csvCashBook: () => scoped(() => downloadCsv(`3pin-cash-book-${repMode === 'month' ? repMonth : repFy}${scopeSuffix()}.csv`, cashBookCsvRows())),
     csvJournal: () => scoped(() => downloadCsv(`3pin-journal-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, journalCsvRows())),
     csvTally: () => scoped(() => downloadCsv(`3pin-tally-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, tallyCsvRows())),
     csvLedger() { return scoped(() => this._csvLedger()); },

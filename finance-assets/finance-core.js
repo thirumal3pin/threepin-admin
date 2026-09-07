@@ -47,6 +47,7 @@ export const ACCOUNTS = [
   ['4030', 'Forfeited advances', 'income'],
   ['4040', 'Other income', 'income'],
   ['4050', 'Bad debts recovered', 'income'],
+  ['4060', 'Discounts received', 'income'],
 
   ['5000', 'Rent', 'expense'],
   ['5010', 'Salaries', 'expense'],
@@ -75,6 +76,7 @@ export const ACCOUNTS = [
   ['5200', 'Depreciation', 'expense'],
   ['5210', 'Subscription cancellation loss', 'expense'],
   ['5220', 'Loss on disposal of assets', 'expense'],
+  ['5225', 'Discounts allowed & short receipts', 'expense'],
 ].map(([code, name, type]) => ({ code, name, type }));
 
 export const A = Object.fromEntries(ACCOUNTS.map(a => [a.code, a]));
@@ -86,7 +88,7 @@ export const DISALLOWED = new Set(['5165', '5190']);
 // reaches on its own (write-offs, depreciation, cancellation loss, interest, disposal loss).
 // 5040 IS pickable: the Realtor Club event is gone, but referral fees are a normal cost.
 export const EXP = ACCOUNTS.filter(
-  a => a.type === 'expense' && !['5150', '5165', '5190', '5200', '5210', '5220'].includes(a.code));
+  a => a.type === 'expense' && !['5150', '5165', '5190', '5200', '5210', '5220', '5225'].includes(a.code));
 
 // Typing a state by hand silently flips CGST+SGST to IGST on an invoice, so it is chosen.
 export const STATES = [
@@ -1080,6 +1082,47 @@ export function taxProvision(profit, rate) {
   return { pbt, rate: r, tax, pat: r2(pbt - tax) };
 }
 
+
+// ═══════ MONEY THAT ACTUALLY MOVED ═══════
+//
+// A bill received is a real cost and a real entry, but no money has moved. The owner needs
+// to see both: the books (every entry) and the cash (only what left or arrived). These are
+// the pockets money moves through, and the tests that tell the two views apart.
+
+export const MONEY_ACCS = ['1000', '1010', '2300'];
+export const movesMoney = t => (t.lines || []).some(l => MONEY_ACCS.includes(l.acc) && (num(l.dr) || num(l.cr)));
+export function moneyMoved(t, accs = MONEY_ACCS) {
+  let inn = 0, out = 0;
+  for (const l of t.lines || []) {
+    if (!accs.includes(l.acc)) continue;
+    inn += num(l.dr); out += num(l.cr);
+  }
+  return { in: r2(inn), out: r2(out), net: r2(inn - out) };
+}
+
+// The cash book: opening, every movement in date order with a running balance, closing —
+// for the bank and the box together, or any set of pockets. Closing always equals what the
+// ledger says those accounts hold, because it is computed from the same entries.
+export function cashBook(from, to, accs = ['1000', '1010']) {
+  const f = from || S.settings.booksStartDate || '2000-01-01';
+  const t = to || today();
+  const before = addDays(f, -1);
+  const opening = r2(accs.reduce((a, c) => a + bal(c, { upto: before }), 0));
+  let running = opening;
+  const rows = [];
+  const inRange = [...S.txns].filter(x => x.date >= f && x.date <= t)
+    .sort((a, b) => a.date.localeCompare(b.date) || num(a.no) - num(b.no));
+  for (const x of inRange) {
+    const m = moneyMoved(x, accs);
+    if (!m.in && !m.out) continue;
+    running = r2(running + m.net);
+    rows.push({ t: x, in: m.in, out: m.out, after: running,
+      pocket: accs.length > 1 ? [...new Set(x.lines.filter(l => accs.includes(l.acc)).map(l => A[l.acc]?.name || l.acc))].join(' + ') : '' });
+  }
+  const totalIn = r2(rows.reduce((a, r) => a + r.in, 0));
+  const totalOut = r2(rows.reduce((a, r) => a + r.out, 0));
+  return { from: f, to: t, accs, opening, rows, in: totalIn, out: totalOut, closing: r2(opening + totalIn - totalOut) };
+}
 
 // ═══════ SCOPE — WITH, WITHOUT OR ONLY PETTY CASH ═══════
 //

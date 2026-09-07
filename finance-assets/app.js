@@ -12,13 +12,13 @@ import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
-  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel,
+  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
 import {
   toast, modal, closeModal, confirmDialog, stat, signed, empty, note, tag,
-  table, picker, downloadCsv, monthOptions,
+  table, picker, downloadCsv, monthOptions, seg,
 } from './ui.js';
 
 import { renderOwed } from './views-owed.js';
@@ -973,7 +973,7 @@ async function runUploads() {
 
 // ═══════ TRANSACTIONS ═══════
 
-let txnFilters = { month: '', event: '', party: '', q: '', channel: '', min: '', max: '', hideReversed: false };
+let txnFilters = { month: '', event: '', party: '', q: '', channel: '', min: '', max: '', hideReversed: false, moved: 'all' };
 
 function txns() {
   const s = getState();
@@ -995,6 +995,7 @@ function txns() {
     .filter(t => txnFilters.min === '' || num(t.totals?.dr) >= num(txnFilters.min))
     .filter(t => txnFilters.max === '' || num(t.totals?.dr) <= num(txnFilters.max))
     .filter(t => !txnFilters.hideReversed || !(t.reversedBy || t.reversalOf))
+    .filter(t => txnFilters.moved === 'all' || (txnFilters.moved === 'cash' ? movesMoney(t) : !movesMoney(t)))
     .sort((a, b) => b.date.localeCompare(a.date) || num(b.no) - num(a.no) || String(b.createdAt).localeCompare(String(a.createdAt)));
 
   const profitEffect = t => t.lines.reduce((sum, l) => {
@@ -1005,12 +1006,15 @@ function txns() {
     return sum;
   }, 0);
 
-  const cashEffect = t => t.lines.reduce((sum, l) =>
-    ['1000', '1010'].includes(l.acc) ? sum + num(l.dr) - num(l.cr) : sum, 0);
+  const moved = rows.reduce((a, t) => { const m = moneyMoved(t); a.in += m.in; a.out += m.out; return a; }, { in: 0, out: 0 });
 
   return `
     <h1>Transactions</h1>
     <p class="lead">${rows.length} of ${s.txns.length} entries. Tap any row for the full journal and its attachments.</p>
+    <div class="actions" style="align-items:center;gap:14px">
+      ${seg([['all', 'Every entry'], ['cash', 'Money moved'], ['accrual', 'Not paid yet']], txnFilters.moved, 'fin.filterMoved')}
+      ${txnFilters.moved !== 'accrual' ? `<span class="small muted">In <b class="pos">${fmt(moved.in)}</b> · Out <b class="neg">${fmt(moved.out)}</b></span>` : '<span class="small muted">Bills received and invoices raised — the cost or income is real, the money has not moved yet.</span>'}
+    </div>
     <div class="filters">
       <select onchange="fin.filter('month',this.value)" aria-label="Filter by month">
         <option value="">All months</option>
@@ -1039,9 +1043,9 @@ function txns() {
     </div>
 
     ${rows.length ? table(
-    `<th>Description</th><th>#</th><th>Date</th><th class="n">Profit</th><th class="n">Cash</th><th></th>`,
+    `<th>Description</th><th>#</th><th>Date</th><th class="n">Profit</th><th class="n">Money in</th><th class="n">Money out</th><th></th>`,
     rows.map(t => {
-      const pe = profitEffect(t), ce = cashEffect(t);
+      const pe = profitEffect(t), mm = moneyMoved(t);
       return `<tr class="click" onclick="fin.openTxn('${t.id}')">
           <td class="lead">${esc(t.desc)}
             ${t.auto ? tag('auto', 'auto') : ''}
@@ -1051,7 +1055,8 @@ function txns() {
           <td class="eno nowrap" data-label="Entry">${entryNo(t)}</td>
           <td class="nowrap" data-label="Date">${esc(t.date)}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? `<br><span class="small faint">${esc(methodLabel(m))}</span>` : ''; })()}</td>
           <td class="n" data-label="Profit">${pe ? signed(pe) : '—'}</td>
-          <td class="n" data-label="Cash">${ce ? signed(ce) : '—'}</td>
+          <td class="n" data-label="Money in">${mm.in ? `<span class="pos">${fmt(mm.in)}</span>` : '<span class="faint">—</span>'}</td>
+          <td class="n" data-label="Money out">${mm.out ? `<span class="neg">${fmt(mm.out)}</span>` : (movesMoney(t) ? '<span class="faint">—</span>' : tag('not yet paid'))}</td>
           <td class="n">${t.reversedBy ? '' : `<button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.reverse('${t.id}')">Reverse</button>`}</td>
         </tr>`;
     }).join(''), '', { stack: true })
@@ -1237,6 +1242,7 @@ window.fin = {
     repaint();
   },
 
+  filterMoved(v) { txnFilters.moved = v; repaint(); },
   filter(k, v) {
     txnFilters[k] = v;
     const main = document.getElementById('main');
