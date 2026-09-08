@@ -753,6 +753,60 @@ section('The trial balance closes the year, and the check panel finds real probl
   check('Every entry balancing is checked, not just the total', health.checks.find(c => c.key === 'tb').ok);
 }
 
+section('The cash box is an account: spend from it with nothing in it');
+{
+  // The owner's rule, tested on every form that can pay out of the box: money can be put in,
+  // money can be spent through it, and having a balance first is never a condition. An empty
+  // box that goes negative is a top-up nobody has recorded yet, not an entry to refuse.
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 300000 });
+  eq('The box starts empty', bal('1010'), 0);
+
+  const spends = [
+    ['petty', { date: '2026-09-02', d1: 'Tea for a site visit', a1: 300, c1: '5030', a2: 0, a3: 0 }, 300],
+    ['expense', { date: '2026-09-03', desc: 'Auto fare', acc: '5050', amt: 200, rcm: 'no', via: '1010' }, 200],
+    ['salary', { date: '2026-09-04', emp: { __new: true, name: 'Helper', type: 'employee' }, kind: '5010', gross: 2000, tds: 0, pf: 0, via: '1010' }, 2000],
+    ['asset', { date: '2026-09-05', name: 'Desk fan', vendor: { __new: true, name: 'Fan Shop', type: 'vendor' }, amt: 1500, rcm: 'no', life: 36, how: '1010' }, 1500],
+    ['dealcost', { date: '2026-09-06', deal: null, what: 'EC copy', bear: 'self', acc: '5045', amt: 400, rcm: 'no', how: '1010' }, 400],
+  ];
+  let spent = 0;
+  for (const [key, vals, amt] of spends) {
+    if (key === 'dealcost') {
+      save('newdeal', { date: '2026-09-01', nickname: 'Box deal', seller: { __new: true, name: 'Client B', type: 'client' }, expSeller: 10000 });
+      vals.deal = byName(g.deals, 'Box deal').id;
+    }
+    const before = g.txns.length;
+    save(key, vals);
+    spent = r2c(spent + amt);
+    check(`${key}: paid from an empty box without being refused`, g.txns.length === before + 1);
+    eq(`…and the box shows it`, bal('1010'), -spent);
+  }
+
+  check('Every one of them warned first, so nothing was silent',
+    spends.every(([key, vals]) => validateEvent(key, vals).some(x => x.warn && /box/i.test(x.msg))));
+  check('…and none of those warnings blocked anything',
+    spends.every(([key, vals]) => !validateEvent(key, vals).some(x => !x.warn && /box/i.test(x.msg))));
+
+  eq('The box is overdrawn by everything spent through it', bal('1010'), -4400);
+  check('The books still balance', trialBalance().balanced);
+  const health = booksHealth('2026-09-30');
+  const boxCheck = health.checks.find(c => c.key === 'petty');
+  check('The check calls an overdrawn box something to look at, not a failure', boxCheck.level === 'warn', boxCheck.level);
+  check('…and says what it usually means', /top-up/i.test(boxCheck.detail), boxCheck.detail);
+
+  // Putting money in works the same way it does for the bank, and squares the account.
+  save('transfer', { date: '2026-09-30', kind: '1000>1010', amt: 4400 });
+  eq('Recording the top-up brings the box back to nil', bal('1010'), 0);
+  check('…and the check goes quiet', booksHealth('2026-09-30').checks.find(c => c.key === 'petty').ok);
+
+  // Money can also arrive straight into the box without passing through the bank.
+  save('funding', { date: '2026-10-01', kind: '2450', who: { __new: true, name: 'Owner', type: 'director' }, amt: 1000, via: '1010' });
+  eq('Cash put straight into the box counts', bal('1010'), 1000);
+  save('transfer', { date: '2026-10-02', kind: '1010>1000', amt: 3000 });
+  eq('Sweeping more than it holds is allowed too', bal('1010'), -2000);
+  check('The trial balance is unbothered by any of it', trialBalance().balanced);
+}
+
 section('Three months ahead on what is already known');
 {
   const g = fresh();

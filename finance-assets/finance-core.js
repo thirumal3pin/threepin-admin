@@ -1557,12 +1557,15 @@ export function booksHealth(upto) {
     { level: Math.abs(arGap) < 0.5 ? 'ok' : 'warn', amount: arGap, go: 'owed' });
 
   // The box is an account like any other and is allowed to run negative — that is usually a
-  // top-up nobody has recorded yet, so it is worth surfacing without calling it an error.
-  const box = pettyRoom('1900-01-01');
-  add('petty', 'The cash box is not overdrawn', box > -0.5,
-    box > -0.5 ? 'It never goes below zero on any day.'
-      : `At its lowest the box is ${fmt(Math.abs(box))} overdrawn. Usually a top-up from the bank has not been recorded — add it and the balance comes back.`,
-    { level: box > -0.5 ? 'ok' : 'warn', amount: box, go: 'petty' });
+  // top-up nobody has recorded yet. What matters is where it stands now: a dip that has since
+  // been squared is history, exactly as it would be on a bank account.
+  const boxNow = bal('1010', { upto: asOf });
+  const boxLow = pettyRoom('1900-01-01');
+  add('petty', 'The cash box is not overdrawn', boxNow > -0.5,
+    boxNow > -0.5
+      ? (boxLow > -0.5 ? 'It never went below zero.' : `It holds ${fmt(boxNow)} today. It did dip ${fmt(Math.abs(boxLow))} below zero earlier, which is squared now.`)
+      : `The box is ${fmt(Math.abs(boxNow))} overdrawn. Usually a top-up from the bank has not been recorded — add it and the balance comes back.`,
+    { level: boxNow > -0.5 ? 'ok' : 'warn', amount: boxNow, go: 'petty' });
 
   const noDue = openBills(null).filter(b => !b.dueDate).length;
   add('due', 'Every open bill has a due date', noDue === 0,
