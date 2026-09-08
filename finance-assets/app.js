@@ -1164,6 +1164,8 @@ function settlementBlock(t) {
           <td class="n">${fmt(p.amt)}</td></tr>`).join('')}
       </tbody></table></div>`
       : `<div class="small faint" style="margin-top:4px">Nothing has been ${m.coll === 'bills' ? 'paid against this yet' : 'received against this yet'}.</div>`}
+      ${m.outstanding > 0.5 && m.status !== 'void' && m.payments.some(p => !p.reversal) && m.outstanding < m.total * 0.25
+      ? `<p class="small muted" style="margin:6px 0 0">Part-paid, with ${fmt(m.outstanding)} left. If the ${m.coll === 'bills' ? 'vendor let you off' : 'client short-paid'} that, record it as a payment of <b>0</b> with ${fmt(m.outstanding)} in the ${m.coll === 'bills' ? '"amount the vendor let you off"' : 'short'} box — the document closes and the difference is booked properly.</p>` : ''}
       ${m.outstanding > 0.5 && m.status !== 'void' ? `<div class="actions" style="margin:8px 0 0">
         ${m.coll === 'bills'
       ? `<button class="btn sm out" type="button" onclick="fin.closeModal();fin.record('paybill',{party:'${esc(m.doc.partyId)}'})">Pay this</button>

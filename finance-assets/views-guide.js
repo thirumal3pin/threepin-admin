@@ -13,7 +13,7 @@
 // touch real data.
 
 import {
-  A, fmt, esc, num, ym, addMonths, mlabel, today,
+  A, ACCOUNTS, fmt, esc, num, ym, addMonths, mlabel, today,
   getState, setState, blank, defaultSettings, schedule, allocate, openBills, openInvoices,
   billOutstanding, invoiceOutstanding, serviceMonths, expectedFor,
 } from './finance-core.js';
@@ -438,19 +438,23 @@ const GUARDS = [
 
 export function renderGuide() {
   const tabs = [
-    ['start', 'Start here'],
-    ['sop', 'How-to'],
-    ['actions', 'Every action'],
-    ['scenarios', 'Worked examples'],
-    ['charts', 'Pictures'],
-    ['faq', 'FAQ & glossary'],
+    ['start', 'Start here', 'The ideas the app is built on'],
+    ['screens', 'The screens', 'Every page, and what each number means'],
+    ['sop', 'How-to', 'What to do daily, weekly, monthly, yearly'],
+    ['actions', 'Every action', 'Every button, with every field'],
+    ['scenarios', 'Worked examples', 'Real situations, run through the real engine'],
+    ['accounting', 'The accounting', 'Accounts, GST, TDS, statements — with the rule behind each'],
+    ['charts', 'Pictures', 'The ideas that are easier drawn'],
+    ['faq', 'FAQ & glossary', 'Questions, and what the words mean'],
   ];
   const q = query.trim().toLowerCase();
-  const body = q ? searchAll(q) : (({ start: startHere, sop: sopTab, actions: actionsTab, scenarios: scenariosTab, charts: chartsTab, faq: faqTab })[tab] || startHere)();
+  const body = q ? searchAll(q) : (({ start: startHere, screens: screensTab, sop: sopTab, actions: actionsTab, scenarios: scenariosTab, accounting: accountingTab, charts: chartsTab, faq: faqTab })[tab] || startHere)();
+  const here = tabs.find(t => t[0] === tab) || tabs[0];
   return `
     <h1>Guide</h1>
-    <p class="lead">You record what happened; the books keep themselves. This is the manual — for
-    someone who has never kept books, and for the accountant checking them.</p>
+    <p class="lead">You record what happened; the books keep themselves. This is the manual — written twice over
+    in the same words: plain enough for someone who has never kept books, complete enough for the chartered
+    accountant who has to sign them.</p>
 
     <div class="guide-bar">
       <div class="seg" role="tablist">
@@ -458,18 +462,20 @@ export function renderGuide() {
     `<button type="button" role="tab" aria-selected="${tab === k && !q}" class="${tab === k && !q ? 'on' : ''}"
            onclick="finGuide.setTab('${k}')">${esc(l)}</button>`).join('')}
       </div>
-      <input type="search" id="guideFind" value="${esc(query)}" placeholder="Search the guide — token, GST, upgrade, petty cash…"
+      <input type="search" id="guideFind" value="${esc(query)}" placeholder="Search the guide — token, GST, reverse charge, petty cash…"
         aria-label="Search the guide" oninput="finGuide.find(this.value)" autocomplete="off">
     </div>
 
+    ${q ? '' : `<p class="small muted" style="margin:-4px 0 14px"><b>${esc(here[1])}</b> — ${esc(here[2])}. Eight sections in all; the search box looks through every one of them at once.</p>`}
     ${body}`;
 }
 
 // Every tab is a list of items {title, html, text}; search filters across all of them.
 function searchAll(q) {
   const all = [
-    ['Start here', startItems()], ['How-to', sopItems()], ['Every action', actionItems()],
-    ['Worked examples', scenarioItems()], ['FAQ & glossary', faqItems()],
+    ['Start here', startItems()], ['The screens', screenItems()], ['How-to', sopItems()],
+    ['Every action', actionItems()], ['Worked examples', scenarioItems()],
+    ['The accounting', accountingItems()], ['FAQ & glossary', faqItems()],
   ];
   const hits = all.map(([name, items]) => [name, items.filter(it => it.text.includes(q))]).filter(([, items]) => items.length);
   if (!hits.length) return empty(`Nothing in the guide matches "<b>${esc(q)}</b>". Try a different word, or clear the search.`);
@@ -496,11 +502,34 @@ function startItems() {
     item('Colours', `
       <h2>Green in, red out</h2>
       <p>Every action is marked by direction before you read a word of it: <span class="dirtag dir-in">Money in</span> <span class="dirtag dir-out">Money out</span> <span class="dirtag dir-move">Move money</span> <span class="dirtag dir-fix">Correction</span> <span class="dirtag dir-setup">Set up</span>. The same colour runs down the edge of the form and the confirmation, so a red form is always money leaving and a green one always money arriving. Grey moves your own money between pockets — never a cost. Amber corrects something already recorded.</p>`),
+    item('Where to look for what', `
+      <h2>Where to look for what</h2>
+      ${table(`<th style="width:26%">If you want</th><th>Go to</th>`, [
+      ['To learn a screen', '<b>The screens</b> — one card per page: the question it answers, what every number on it means, and what you are expected to do there.'],
+      ['To know what to do today', '<b>How-to</b> — the daily, weekly, monthly and yearly routine, and two tables that answer "which button".'],
+      ['To look up one button', '<b>Every action</b> — every button on Record with every field it can show, read from the app itself so it is never out of date.'],
+      ['To see a real situation worked through', '<b>Worked examples</b> — each one run through the real engine on sample books, showing the actual journal.'],
+      ['To check the accounting', '<b>The accounting</b> — the chart of accounts, when a cost is recognised, GST, TDS, assets, loans, the statements, and what the app refuses to do, each with the rule behind it.'],
+      ['To understand an idea', '<b>Pictures</b> for the ones easier drawn, <b>FAQ & glossary</b> for the rest.'],
+    ].map(([a, b]) => `<tr><td><b>${esc(a)}</b></td><td class="small">${b}</td></tr>`).join(''))}
+      ${note('Searching looks through all eight sections at once, so if you do not know where something lives, type the word.')}`),
+    item('The four states of a cost', `
+      <h2>Four states, one cost, counted once</h2>
+      <p>The single thing worth understanding before anything else. A cost you pay every month passes through four states, and the app keeps them apart so nothing is ever counted twice.</p>
+      <div class="grid g1" style="grid-template-columns:repeat(4,1fr)">
+        <div class="card"><h3>1. A guess</h3><p class="small muted" style="margin:0">The rent will be about 20,000. It shows on <b>This month</b> under "still a guess" and in the Budget. <b>Nothing is posted.</b></p></div>
+        <div class="card"><h3>2. An event</h3><p class="small muted" style="margin:0">The month is over and you used the office. Record it: the cost belongs to that month, and the landlord goes on Owed. No money has moved.</p></div>
+        <div class="card"><h3>3. A document</h3><p class="small muted" style="margin:0">The bill arrives on the 4th, payable on the 15th. Record <b>Bill arrived</b>: the number and due date go on, and any difference goes back into the month you used it.</p></div>
+        <div class="card"><h3>4. Settled</h3><p class="small muted" style="margin:0">You pay on the 15th. Cash leaves and the bill closes. <b>Profit does not move</b> — it was counted in step 2.</p></div>
+      </div>
+      ${note('Worth reading twice: <b>profit moved in step 2, cash moved in step 4.</b> That gap is not an error, it is the whole reason the books are worth keeping. This month shows both at once.')}`),
     item('What each tab is for', `
-      <h2>What each tab is for</h2>
+      <h2>Every page at a glance</h2>
+      <p class="small muted">One line each. The full card for any of them is in <b>The screens</b>.</p>
       ${table(`<th>Tab</th><th>What you do there</th>`, [
       ['Overview', 'Your position at a glance — this month\'s profit, what cash is genuinely free to spend, who owes whom, what is due soon.'],
       ['Record', '<b>The only place anything is entered.</b> Pick what happened; the bookkeeping is worked out for you and shown before you save.'],
+      ['This month', 'One month in five states — paid, invoiced, due, late, still a guess — for money out and money in, and the answer to "can I spend?".'],
       ['Transactions', 'Everything recorded, newest first. Tap a row to see both sides of the entry, its attachments, and to reverse it.'],
       ['Owed', 'The weekly worklist: who to chase and who to pay — bill by bill, invoice by invoice, with due dates.'],
       ['Deals & invoices', 'The pipeline and each deal\'s money — tokens, brokerage, costs, net — and every invoice raised.'],
@@ -513,7 +542,7 @@ function startItems() {
       ['GST', 'The month\'s liability, credit, set-off and cash due — GSTR-3B the way the rules do it — plus the ITC and GSTR-1 registers.'],
       ['Bank & card statements', 'Import the statement. What you already recorded is matched; what you missed is suggested, one tap to create; duplicates are flagged.'],
       ['Reports / Analytics', 'Profit and loss, trends, where the money went — with filters.'],
-      ['Books', 'The accountant\'s view: trial balance, balance sheet, ledgers. The CSV here is what you send your CA.'],
+      ['Books', 'The accountant\'s view: the check, trial balance, profit and loss, balance sheet, ledgers, registers and the journal. The CSVs here are what you send your CA.'],
       ['Profile / Settings', 'Who the company is, and how the engine behaves.'],
     ].map(([a, b]) => `<tr><td style="width:26%"><b>${esc(a)}</b></td><td>${b}</td></tr>`).join(''))}`),
     item('The three things to get right', `
@@ -534,7 +563,300 @@ function startItems() {
 }
 const startHere = () => startItems().map(i => i.html).join('');
 
-// ═══════ 2. HOW-TO (SOP) ═══════
+// ═══════ 2. THE SCREENS — WHAT EVERY PAGE IS FOR ═══════
+//
+// One card per page in the app: the question it answers, what is on it, what to do there, and
+// — folded away for anyone who wants it — which accounts and helpers the figures come from.
+// Written so a first-time user can act on it and an accountant can audit it.
+
+function screen(o) {
+  return item(o.name, `
+    <div class="card guide-screen">
+      <h3 style="margin:0 0 2px">${esc(o.name)} <span class="small faint">${esc(o.group)}</span></h3>
+      <p class="small" style="margin:0 0 10px"><b>${o.asks}</b></p>
+      <p class="small muted" style="margin:0 0 10px">${o.body}</p>
+      ${o.on ? `<div class="tbl-wrap"><table><thead><tr><th>On the page</th><th>What it means</th></tr></thead><tbody>
+        ${o.on.map(([a, b]) => `<tr><td style="width:34%"><b>${esc(a)}</b></td><td class="small">${b}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+      ${o.doThis ? `<p class="small" style="margin:10px 0 0"><b>What to do here:</b> ${o.doThis}</p>` : ''}
+      ${o.behind ? `<details class="journal" style="margin-top:10px"><summary>Where the figures come from</summary>
+        <p class="small muted" style="margin:8px 0 0">${o.behind}</p></details>` : ''}
+      ${o.watch ? note(o.watch, 'warn') : ''}
+    </div>`);
+}
+
+function screenItems() {
+  return [
+    item('How to read this tab', `
+      <h2>Every screen, one card each</h2>
+      <p class="lead">What the page answers, what each number on it means, and what you are expected to do there.
+      The fold at the bottom of each card names the accounts and the workings behind the figures — ignore it,
+      or hand it to your accountant.</p>
+      ${note('<b>Only one screen writes anything: Record.</b> Every other page reads the same entries back in a different shape. If a figure looks wrong, the fix is always an entry, never the page.')}`),
+
+    item('Daily group', '<h2>Daily</h2>'),
+    screen({
+      name: 'Overview', group: 'Daily',
+      asks: 'Where do I stand right now?',
+      body: 'The first screen of the morning. This month earned and spent, what cash is genuinely free, who owes whom, what is coming, and what still has to be closed off.',
+      on: [
+        ['Income · Expenses · Profit', 'This calendar month, on the accrual basis — earned and incurred, whoever has actually paid.'],
+        ['Free to use', 'Bank and box, less what you owe vendors, less client tokens you are holding. The honest answer to "is that mine".'],
+        ['Where the money is', 'Bank, petty cash, credit card owed, loans outstanding.'],
+        ['Who owes whom', 'Clients owe you, you owe vendors, tokens held, GST due after set-off.'],
+        ['Services', 'What the recurring commitments cost a month, what is sitting prepaid with vendors, how many are running.'],
+        ['Compliance dates', 'The next statutory dates that apply to you, nearest first.'],
+        ['Cash needed soon', 'Every bill on its own due date, EMIs, GST and TDS — against the cash you hold.'],
+        ['Month-end', 'Posts depreciation and releases prepaid slices. Safe to run twice.'],
+      ],
+      doThis: 'Read it. Act on <b>Cash needed soon</b> if it is larger than the cash beside it, and run <b>Month-end</b> once a month is reconciled.',
+      behind: 'Profit from pl(month). Free to use from cashPosition(): 1000 + 1010 − 2000 − 2100. GST due nets 2200–2202 and 2205 against 1400–1402. Cash needed soon is upcomingCash(), which reads each open bill on its dueDate, the loan schedules, and the GST and TDS balances.',
+    }),
+    screen({
+      name: 'Record', group: 'Daily',
+      asks: 'Something happened — how do I put it in?',
+      body: 'The only screen that writes to the books. Two tiles split everything by direction, then chips narrow it down. Pick what happened in plain words; the double entry is worked out and shown before you save.',
+      on: [
+        ['Money in / Money out tiles', 'The first choice. Everything else is filtered by it.'],
+        ['The form', 'Only the fields that apply to your answers. A field appears when it becomes relevant and disappears when it stops.'],
+        ['Posting strip', 'From which account, to which account, with codes, and what it does to profit — before you save.'],
+        ['The journal preview', 'Both sides of the entry in full, for anyone who wants to check it.'],
+        ['Red and amber notes', 'Red blocks saving. Amber saves but tells you what an accountant would ask about.'],
+        ['Attach', 'A photo or PDF of the bill, stored with the entry, not in a folder somewhere else.'],
+      ],
+      doThis: 'Record on the same day. Attach the bill. Read the posting strip — if it says something you did not expect, the answer to one of the questions is wrong.',
+      behind: 'Every button is one entry in EV[key] in finance-events.js. build() returns the description, the journal lines, the documents it creates and the plain-English effects. finance-sync.save() writes the entry, its documents, its allocations and any master record in a single Firestore transaction, so a half-saved deal cannot exist.',
+    }),
+    screen({
+      name: 'This month', group: 'Daily',
+      asks: 'Can I spend?',
+      body: 'One month, with every commitment shown at whatever stage it has reached. Money out and money in are shown apart, in five boxes each, then combined. Nothing here is an entry.',
+      on: [
+        ['Yours to use today', 'Bank and box, less client tokens and what the card owes. One definition of cash, used everywhere.'],
+        ['Still to pay', 'Due this month, plus arrears, plus what is still only expected.'],
+        ['Coming in on invoices', 'Documents only. Deals you hope to close are counted separately and never in this figure.'],
+        ['Paid', 'What actually moved through the bank and the box. Card purchases are named separately — they have not taken cash yet.'],
+        ['Invoiced', 'Billed this month and still unsettled.'],
+        ['Due this month / Already late', 'By due date. Late means it fell due before the 1st.'],
+        ['Still a guess', 'A commitment with nothing recorded and no document. It never appears twice: the moment the month is recorded, the guess disappears.'],
+        ['If nothing changes', 'Three months forward on what is already known, splitting what is certain from what is guessed, and naming the month you run short if you do.'],
+      ],
+      doThis: 'Before committing to any spend, read the top card. Commit against the lower figure, not the hopeful one.',
+      behind: 'monthPicture(month) in finance-core.js. Estimates come from live commitments with no charges entry for the month, unpaid loan instalments, undeposited depreciation and typed budget lines — a typed figure replaces the app\'s own estimate for that account, exactly as the Budget page does. outlook(3) walks the same figures forward.',
+      watch: '<b>Invoiced and Due overlap on purpose.</b> A bill dated this month and payable this month is in both, because they answer different questions. Only the last box in each row is a total.',
+    }),
+    screen({
+      name: 'Transactions', group: 'Daily',
+      asks: 'What has been recorded?',
+      body: 'Every entry, newest first, with filters. Tap any row for both sides of the entry, its attachments, the documents it created, and the button to reverse it.',
+      on: [
+        ['Every entry / Money moved / Not paid yet', 'The switch that separates the books from the bank. A bill you have not paid is a real entry but no money moved.'],
+        ['In and Out columns', 'What actually reached or left the bank, the box or the card on that entry.'],
+        ['Method', 'UPI, debit card, NetBanking, cheque or cash — so a statement line can be matched by it.'],
+        ['Reverse', 'Posts the mirror-image entry. Nothing is edited or deleted, ever.'],
+      ],
+      doThis: 'Use it to check a specific entry or to find something you half-remember. For chasing and paying, use Owed instead.',
+      behind: 'movesMoney(t) is true when an entry touches 1000, 1010 or 2300. Reversal is finance-sync.reverse(), which reads the entry\'s documents from the server, refuses while a payment still stands against them, and voids rather than deletes.',
+    }),
+    screen({
+      name: 'Owed', group: 'Daily',
+      asks: 'Who do I chase, and who do I pay?',
+      body: 'The weekly worklist, both directions, document by document — not a single lump per party.',
+      on: [
+        ['Clients owe you', 'Every open invoice with its due date and how late it is.'],
+        ['Ageing tiles', '0–30, 31–60, 61–90, over 90 days. Over 90 on the payables side is where GST credit starts to be at risk.'],
+        ['You owe vendors', 'Every open bill, with Pay, Entry and, where the vendor bill has not arrived, Bill arrived.'],
+        ['Advances with vendors', 'Money already with a vendor. Used first the next time you pay them.'],
+        ['Tokens held', 'Client money you are holding. Not yours until the deal registers.'],
+      ],
+      doThis: 'Chase the oldest receivable first. Pay what is due; the payment is matched to specific bills and you can change the split.',
+      behind: 'agedReceivables() and agedPayables() count from the due date, per document. Anything owed with no document behind it — an opening balance, an entry from before documents were tracked — is shown as its own line rather than hidden.',
+    }),
+
+    item('Business group', '<h2>Business</h2>'),
+    screen({
+      name: 'Deals & invoices', group: 'Business',
+      asks: 'What is each deal worth, and what has been invoiced?',
+      body: 'Two tabs. Deals is the pipeline with each deal\'s money in one place: tokens held, brokerage earned, costs borne, what is left. Invoices is every tax invoice and credit note raised, numbered in sequence.',
+      on: [
+        ['Expected brokerage', 'Seller side and buyer side, and the month you expect it to close. Feeds the projection, never the books.'],
+        ['Token held', 'Money taken before registration, adjusted against the invoice when the deal closes.'],
+        ['Deal costs', 'EC, patta, legal, travel — with who bears them.'],
+        ['Net on the deal', 'Brokerage earned less the costs booked against it.'],
+        ['Invoice status', 'Open, part-paid, settled, or reversed by a credit note, with the outstanding amount, not the face value.'],
+      ],
+      doThis: 'Open a deal when you take it on. Record the token when it arrives. Record <b>Deal closed</b> on the day it registers — that is the day income exists.',
+      behind: 'Deals carry expSeller, expBuyer and expMonth. The invoice document holds base, CGST, SGST, IGST, total, paid, dueDate and its allocations. dealFigures() and dealFunnel() read them back.',
+    }),
+    screen({
+      name: 'Recurring', group: 'Business',
+      asks: 'What do I pay every month, and is this month recorded?',
+      body: 'Every monthly commitment — rent, subscriptions, retainers, salaries, insurance, utilities — as a grid of months. Each cell says what happened: recorded, billed and unpaid, skipped, paused, or missing.',
+      on: [
+        ['Expected a month', 'What the plan says today. Plan changes are kept with the month they start, so old months keep their old expectation.'],
+        ['Record this month', 'Opens the form with the month and the expected amount filled in. Salary lines open the salary form instead, because they carry TDS and PF, not GST.'],
+        ['Billed — not paid yet', 'The month is a cost and the vendor is on Owed. Pay and Bill arrived sit right there.'],
+        ['Variance and reason', 'What was actually billed against what you expected, and why they differ.'],
+        ['Record all due', 'Every month that is due but not recorded, one after another.'],
+      ],
+      doThis: 'At month end, record each commitment. If the vendor has not billed you yet, choose <b>Not paid yet</b> — the cost belongs to the month you used the thing.',
+      behind: 'A commitment is a subscriptions record with a history array; expectedFor(sub, month) reads the plan in force for that month. Each recorded month is stored under charges[month] with the bill it produced. recurringAcc(sub) decides which expense account the month posts to — rent to 5000, software to 5080, and so on.',
+    }),
+    screen({
+      name: 'Budget', group: 'Business',
+      asks: 'What do I expect this month to look like?',
+      body: 'One month, account by account: what the app already expects, what you type over the top, and what actually happened. Nothing on this page is an entry.',
+      on: [
+        ['Expected', 'Empty box means the app\'s own figure, shown as the placeholder. Type one and yours replaces it for that account.'],
+        ['Actual', 'What the books have for that account so far this month.'],
+        ['Difference', 'Coloured by whether it is good news, not by its sign — a cost under budget is green, income under budget is red.'],
+        ['Where from', 'Which commitment, loan, asset or deal produced the expectation.'],
+      ],
+      doThis: 'Set the figures you know the app cannot: a one-off marketing push, a deal you are confident about. Leave the rest empty.',
+      behind: 'projection(month) reads recurring commitments, loan interest, depreciation and deals due to close, then lets a typed figure override the derived one for that account. Typed figures live on the settings document under budgets.month.account — no new collection, no rules change.',
+    }),
+
+    item('Money group', '<h2>Money</h2>'),
+    screen({
+      name: 'Bank & card statements', group: 'Money',
+      asks: 'Do my books agree with the bank?',
+      body: 'Import the statement CSV. Lines that match what you recorded are ticked off. Lines that do not are the ones you forgot — each with a suggestion and one button to create it.',
+      on: [
+        ['Column mapping', 'Asked once per account, then remembered.'],
+        ['Matched', 'The statement line and your entry agree on amount and date.'],
+        ['Not in your books', 'You missed it. The suggestion names the most likely entry — an open bill, a recurring cost, an EMI, a client paying an invoice — and opens that form filled in.'],
+        ['Possible duplicate', 'This line looks like an entry another line has already claimed.'],
+        ['In your books, not on the statement', 'Either it never went through, or it lands next month.'],
+      ],
+      doThis: 'Once a month, before month-end. Clear every unmatched line. Twenty minutes here is what makes the books trustworthy.',
+      behind: 'suggestEntry() works down a list: a rule learned from a past match, an ATM withdrawal as a cash-box top-up, a card payment as a transfer, an open bill, a recurring month, an EMI, an open invoice, a named party, then a plain expense. Saving from a statement line learns the first three words of the narration for next time.',
+    }),
+    screen({
+      name: 'Petty cash', group: 'Money',
+      asks: 'What is in the drawer, and what did it pay for?',
+      body: 'Account 1010 seen from the owner\'s side: top-ups in, vouchers out, what it paid for, and what should physically be there now.',
+      on: [
+        ['In the box now', 'What the books say the drawer holds. Count the notes and compare.'],
+        ['Added from the bank', 'Top-ups, with the date of the last one.'],
+        ['Spent from the box', 'Vouchers, by category.'],
+        ['Sent back to the bank', 'Sweeps.'],
+      ],
+      doThis: 'Empty the box weekly into <b>Petty cash vouchers</b> — up to three at a time — then check the balance against the notes.',
+      behind: 'pettyActivity() builds the running balance. The box can never go below zero on any day: pettyRoom(date) is the lowest it reaches from that date onwards, so a back-dated voucher has to fit every later day too, not just its own.',
+      watch: 'The <b>With / Without / Only</b> switch changes what Transactions, Reports, Analytics and their CSVs show — the file name and the first row of every export say which. It never changes the trial balance, the balance sheet or the Books check, which always show everything.',
+    }),
+    screen({
+      name: 'Loans', group: 'Money',
+      asks: 'What do I still owe, and what is this EMI made of?',
+      body: 'Each loan with its schedule, how much principal is left, and the next instalment ready to record.',
+      on: [
+        ['Outstanding', 'Principal still owed. It is not a cost — only the interest is.'],
+        ['Next EMI', 'Opens the form with principal and interest already split from the schedule.'],
+        ['Lender charges and penalties', 'Charges are a cost (5140); a late-payment penalty is a cost that the tax computation adds back (5165).'],
+        ['Prepayment', 'Pays down principal and rebuilds the rest of the schedule at the same rate and end date.'],
+      ],
+      doThis: 'Record the EMI from here, not as an expense. Recording the whole instalment as a cost overstates your expenses by the principal.',
+      behind: 'One entry: Dr 2400 principal, Dr 5150 interest, Dr 5140 charges, Cr bank, with 194A TDS if it applies. regenerateSchedule() rebuilds the remaining rows after a prepayment rather than leaving a stale schedule.',
+    }),
+    screen({
+      name: 'Assets', group: 'Money',
+      asks: 'What do I own, and how much value is left in it?',
+      body: 'Anything that lasts more than a year, with its cost spread over its useful life.',
+      on: [
+        ['Written-down value', 'Cost less depreciation charged so far.'],
+        ['Monthly depreciation', 'The slice that becomes a cost each month, posted at month-end.'],
+        ['Sell or scrap', 'Removes it and books the profit or loss on disposal.'],
+      ],
+      doThis: 'Buy an asset through <b>Buy an asset</b>, not as an expense. Below the threshold in Settings, record it as an expense instead.',
+      behind: 'Dr 1300 at cost; each month Dr 5200 / Cr 1350. The final month releases whatever is left so the asset closes at exactly its cost. The balance sheet shows 1300 with 1350 beneath it as a deduction.',
+    }),
+
+    item('Tax and reports group', '<h2>Tax & reports</h2>'),
+    screen({
+      name: 'GST', group: 'Tax & reports',
+      asks: 'What do I owe the government this month?',
+      body: 'The month worked out the way the rules do it: tax collected, credit available, set-off in the order Rule 88A requires, and the cash actually payable. Plus the registers behind it.',
+      on: [
+        ['Output tax', 'CGST, SGST and IGST you charged.'],
+        ['Input credit availed', 'What you may set off. Credit waiting for an invoice is not in here.'],
+        ['Reverse charge', 'Tax you owe as the buyer. Always paid in cash, then claimed back as credit.'],
+        ['Cash payable', 'After set-off. This is the number you pay.'],
+        ['ITC register', 'Every purchase with credit, its invoice and the date the claim expires.'],
+        ['GSTR-1 rows', 'Your outward supplies split into B2B, B2CL, B2CS, CDNR and CDNUR.'],
+        ['Rule 37', 'Bills unpaid for 180 days, where credit has to be given back.'],
+      ],
+      doThis: 'Check it before the 20th, then use <b>Pay to government</b>, which opens with the set-off already worked out.',
+      behind: 'gstComputation(month) with gstSetOff() implementing Rule 88A — IGST credit first, and against IGST liability before CGST or SGST. Heads are 2200/2201/2202 payable, 1400/1401/1402 credit, 2205 reverse charge, 1405 credit not yet claimable.',
+    }),
+    screen({
+      name: 'Reports', group: 'Tax & reports',
+      asks: 'How did the month or the year actually go?',
+      body: 'Profit and loss by month or financial year, how this month compares with the last, what it costs to keep the doors open, why profit and cash differ, and the cash book.',
+      on: [
+        ['How this month compares', 'Income, costs and profit against last month and against what was expected, led by the three accounts that moved most.'],
+        ['Keeping the lights on', 'Fixed cost a month, the margin this business actually trades at, and the income needed before the month makes anything.'],
+        ['Profit is not cash', 'Starts at profit and walks through every real movement to the cash that moved. Anything unexplained is shown, not hidden.'],
+        ['Income and expenses by category', 'With a share of the total, and a CSV.'],
+        ['Money in and out', 'The cash book: opening, every movement, closing — with a switch for bank only, bank and box, or including the card.'],
+        ['Cash flow', 'The same money grouped by what it was for.'],
+      ],
+      doThis: 'Read it monthly. Send the CSVs to your CA quarterly.',
+      behind: 'plStatement(), monthCompare(), breakEven() on fixedMonthly(), cashProfitBridge() and cashBook(). The break-even margin comes from the last three months actually traded, not an assumption.',
+    }),
+    screen({
+      name: 'Analytics', group: 'Tax & reports',
+      asks: 'What do the patterns say?',
+      body: 'The same entries with filters and charts: trends by month, quarter or year, where income came from, where money went, who the biggest clients and vendors are, how long clients take to pay, and deal by deal.',
+      on: [
+        ['Filters', 'Date range, deal, party, channel, category, type, amount, free text.'],
+        ['Deltas', 'Compared with the period of the same length just before.'],
+        ['Days to collect', 'Average days from invoice to payment, from the allocations.'],
+      ],
+      doThis: 'Use it to answer a specific question, not as a daily screen.',
+      behind: 'finance-analytics.js. Every chart is drawn from filterTxns() over the same entries — there is no separate analytics store to fall out of step.',
+    }),
+    screen({
+      name: 'Books', group: 'Tax & reports',
+      asks: 'Would an accountant sign this?',
+      body: 'The five statements, over one date range you choose, plus the check that has to pass before anything is filed. This is the tab to hand over.',
+      on: [
+        ['The check', 'Twelve tests that can actually fail — see The accounting tab for each one.'],
+        ['Trial balance', 'Opening, debits, credits and closing for every account. P&L accounts open at nil each financial year.'],
+        ['Profit and loss', 'Revenue, direct costs, gross profit, operating costs, EBITDA, depreciation, finance cost, exceptional items, profit before and after tax.'],
+        ['Balance sheet', 'Grouped as a schedule reads, with fixed assets net of depreciation and profit split between earlier years and this one.'],
+        ['Ledger', 'Any account, with the balance brought forward and a closing total.'],
+        ['Registers', 'Every purchase and every sale in the period, with numbers, due dates and status.'],
+        ['General journal', 'Every entry, both sides.'],
+      ],
+      doThis: 'Run the check before month-end and before filing. Send your CA the journal and the ledger CSVs.',
+      behind: 'booksHealth(), trialBalanceDetail(from, upto), plStatement(), balanceSheetGrouped(). The statements always read the full ledger, whatever the petty-cash switch is set to.',
+    }),
+
+    item('Setup group', '<h2>Set up</h2>'),
+    screen({
+      name: 'Profile', group: 'Set up',
+      asks: 'Who is the company, on paper?',
+      body: 'Legal name, address, GSTIN, PAN, bank details and logo — everything that has to appear on a tax invoice.',
+      doThis: 'Complete it before raising your first invoice. An invoice missing a mandatory field is not a valid tax invoice.',
+      behind: 'Read by finance-invoice.js when an invoice is built; missing mandatory fields are reported rather than silently omitted.',
+    }),
+    screen({
+      name: 'Settings', group: 'Set up',
+      asks: 'How should the engine behave?',
+      body: 'The date the books start, the financial year, your state, the capitalisation threshold, whether TDS is on, TDS thresholds, the income-tax rate for the estimate, and invoice numbering.',
+      on: [
+        ['Books start date', 'Nothing can be dated before it. Set it once.'],
+        ['Capitalisation threshold', 'Below this, a purchase is an expense rather than an asset.'],
+        ['TDS', 'Off by default. Switching it on adds the TDS questions to the forms that need them.'],
+        ['Income-tax rate', 'Used for the estimate on Reports only. 26% is the rate without any election.'],
+      ],
+      doThis: 'Set the books start date and your state before recording anything. Ask your CA about the tax rate.',
+    }),
+  ];
+}
+const screensTab = () => screenItems().map(i => i.html).join('');
+
+// ═══════ 3. HOW-TO (SOP) ═══════
 
 function step(n, title, body, who) {
   return `
@@ -592,7 +914,7 @@ function sopItems() {
 }
 const sopTab = () => sopItems().map(i => i.html).join('');
 
-// ═══════ 3. EVERY ACTION — GENERATED FROM THE ENGINE ═══════
+// ═══════ 4. EVERY ACTION — GENERATED FROM THE ENGINE ═══════
 //
 // For each button on the Record screen: what it is for, its direction, and every field with its
 // hint, read from the live definitions inside the sample books. Fields that only appear for
@@ -656,7 +978,7 @@ function describeFields(key, preset) {
 const safe = fn => { try { return fn(); } catch { return null; } };
 const actionsTab = () => `<p class="lead">Every button on the Record screen, with every field it can show — read from the app itself, so this list is always current.</p>${actionItems().map(i => i.html).join('')}`;
 
-// ═══════ 4. WORKED EXAMPLES ═══════
+// ═══════ 5. WORKED EXAMPLES ═══════
 
 function scenarioItems() {
   const groups = [];
@@ -743,7 +1065,7 @@ function renderGuard(g) {
     </div>`;
 }
 
-// ═══════ 5. PICTURES ═══════
+// ═══════ 6. PICTURES ═══════
 
 function chartsTab() {
   return `
@@ -989,7 +1311,190 @@ function waterfallChart() {
     </svg>`;
 }
 
-// ═══════ 6. FAQ & GLOSSARY ═══════
+// ═══════ 7. THE ACCOUNTING — THE REFERENCE A CA READS ═══════
+//
+// Everything the engine decides, stated once, with the authority behind it. Written for
+// someone who will be asked to sign the accounts: which account each thing posts to, when a
+// cost is recognised, how GST and TDS are handled, what the statements are built from, and
+// what the app refuses to do. Nothing here is opinion — each rule is in the code, and the
+// worked examples run it.
+
+function rule(title, body, cite) {
+  return `<div class="card"><h3 style="margin:0 0 6px">${esc(title)}</h3>
+    <div class="small muted" style="margin:0">${body}</div>
+    ${cite ? `<p class="small faint" style="margin:8px 0 0">${cite}</p>` : ''}</div>`;
+}
+const accTable = (head, rows) => table(head, rows.map(r => `<tr>${r.map((c, i) => `<td class="${i ? 'small' : ''}">${c}</td>`).join('')}</tr>`).join(''));
+
+function accountingItems() {
+  const byType = t => ACCOUNTS.filter(a => a.type === t);
+  const USE = {
+    1000: 'Every bank receipt and payment, whatever the method — UPI, NEFT, cheque, debit card.',
+    1010: 'The cash box. Top-ups in, vouchers out. Never allowed below zero on any day.',
+    1100: 'Raised when an invoice is issued; cleared when the client pays.',
+    1150: 'TDS a client deducted from your bill. Claimed against your own tax, not a cost.',
+    1200: 'Anything paid for before it is used — an annual plan. Released monthly at month-end.',
+    1300: 'Assets at cost. Never touched again except on disposal.',
+    1350: 'Depreciation charged so far. Shown as a deduction from 1300, so the balance sheet reads at written-down value.',
+    1400: 'CGST you paid and may claim.', 1401: 'SGST you paid and may claim.', 1402: 'IGST you paid and may claim.',
+    1405: 'GST on a cost recorded before the vendor bill arrived. NOT claimable and NOT in the return until the invoice is on record.',
+    1500: 'Money advanced to staff, recovered later.',
+    1550: 'Money paid to a vendor beyond their bills. Applied first the next time you pay them.',
+    2000: 'Everything owed to vendors and partners, always with the party on the line.',
+    2100: 'Client tokens and advances. Not income until the deal registers or the client forfeits.',
+    2200: 'CGST charged on your invoices.', 2201: 'SGST charged on your invoices.', 2202: 'IGST charged on your invoices.',
+    2205: 'GST you owe as the buyer under reverse charge. Paid in cash with the return, then claimed as credit.',
+    2250: 'TDS you withheld from a payment, until it is deposited.',
+    2300: 'The credit card. A card purchase is a cost and a debt; cash only moves when the card bill is paid.',
+    2400: 'Loan principal outstanding. Repaying it is not a cost.',
+    2450: 'What the company owes its director — money put in, or costs paid personally.',
+    2550: 'PF, ESI and other statutory deductions held until deposited.',
+    3000: 'Share capital introduced.', 3100: 'The other side of opening balances when the books start.',
+    4000: 'Brokerage earned from the seller.', 4010: 'Brokerage earned from the buyer.',
+    4020: 'Consultancy and advisory fees.', 4030: 'A token kept when a deal falls through.',
+    4040: 'Anything else earned.', 4050: 'A debt written off in an earlier year and later recovered.',
+    4060: 'An amount a vendor let you off when you paid. Income, not a reduction in the cost.',
+    5000: 'Office and premises rent.', 5010: 'Salaries, gross.', 5020: 'Bonus and incentive.',
+    5030: 'Staff welfare and food. GST credit blocked.', 5040: 'Commission and referral fees paid.',
+    5045: 'Costs of a specific deal — EC, patta, legal, documentation.',
+    5050: 'Conveyance and fuel. GST credit blocked.', 5060: 'Electricity.', 5070: 'Internet and phone.',
+    5075: 'Club and membership fees. GST credit blocked.', 5080: 'Software and subscriptions.',
+    5090: 'Advertising and marketing.', 5100: 'Printing and stationery.', 5110: 'Photography and video.',
+    5120: 'Professional fees.', 5130: 'Repairs and maintenance.', 5140: 'Bank and card charges.',
+    5150: 'Interest and finance cost, including the interest half of every EMI.',
+    5160: 'Rates, taxes and filing fees.',
+    5165: 'Penalties and late-payment charges. Added back in the tax computation.',
+    5170: 'Insurance.', 5180: 'Anything that fits nowhere else.',
+    5185: 'Gifts and client hospitality. GST credit blocked.',
+    5190: 'A debt given up as bad. Deductible.',
+    5200: 'Depreciation, posted at month-end.',
+    5210: 'What is lost when a prepaid plan is cancelled early.',
+    5220: 'Loss on selling or scrapping an asset.',
+    5225: 'A discount you allowed a client, or a short receipt you accepted.',
+    5230: 'A cost belonging to an earlier month that could not be posted there. Disclosed separately.',
+  };
+  const acctRows = list => list.map(a => [
+    `<b>${esc(a.code)}</b> ${esc(a.name)}`,
+    USE[a.code] || '',
+  ]);
+
+  return [
+    item('How to read this tab', `
+      <h2>The accounting, in full</h2>
+      <p class="lead">What the engine decides and why, with the rule behind each one. If you are handing these books to
+      a chartered accountant, this is the tab to hand over with them — it says exactly what the app will and will not do.</p>
+      ${note('<b>Every entry is double entry.</b> Nothing saves unless debits equal credits, and no entry is ever edited or deleted — a mistake is corrected by posting its mirror image. The audit trail is the point.')}`),
+
+    item('The chart of accounts', `
+      <h2>The chart of accounts</h2>
+      <p class="small muted">Fixed, not user-editable — that is what lets every report, register and statement be built without anyone mapping anything. What puts money into each account is named beside it.</p>
+      <h3>Assets</h3>${accTable(`<th style="width:32%">Account</th><th>What lands here</th>`, acctRows(byType('asset')))}
+      <h3>Liabilities</h3>${accTable(`<th style="width:32%">Account</th><th>What lands here</th>`, acctRows(byType('liability')))}
+      <h3>Equity</h3>${accTable(`<th style="width:32%">Account</th><th>What lands here</th>`, acctRows(byType('equity')))}
+      <h3>Income</h3>${accTable(`<th style="width:32%">Account</th><th>What lands here</th>`, acctRows(byType('income')))}
+      <h3>Costs</h3>${accTable(`<th style="width:32%">Account</th><th>What lands here</th>`, acctRows(byType('expense')))}`),
+
+    item('When a cost is recognised', `
+      <h2>When a cost or income is recognised</h2>
+      <div class="grid g1">
+        ${rule('Accrual, not cash', 'A cost belongs to the period in which the thing was used, and income to the period in which it was earned. The bank date is a separate fact, kept separately. This is why the profit figure and the bank balance move differently, and why both are shown.', 'AS 1 / Ind AS 1 — accrual is a fundamental accounting assumption.')}
+        ${rule('The month a cost belongs to', 'Rent used in September and invoiced on 4 October is a September cost. The bill form has a <b>which month is this cost for</b> box; the entry is dated the last day of that month while the document keeps its own date and due date. If that month has already been closed with month-end, the entry lands in the current month instead — the app will not silently reopen a closed period.', 'The closed-month case is disclosed as a prior-period item — see below.')}
+        ${rule('Prior-period items', 'When a true-up cannot reach its own month — the month is closed, or releasing GST credit forces the entry onto the invoice date — the difference is posted to <b>5230 Prior-period adjustments</b> and shown on its own line in the profit statement, rather than being buried in this month\'s rent.', 'AS 5, paragraphs 15 to 19 — prior period items are disclosed separately.')}
+        ${rule('Four states, one cost, counted once', 'An estimate is never posted. Recording the month posts the cost and creates the payable. The vendor bill adds identity and a due date to that same payable, and any difference. The payment settles it and touches no expense account. At no point can the same cost be counted twice — recording the month removes the estimate, and the payment is matched to the document rather than posted afresh.')}
+      </div>`),
+
+    item('Documents and settlement', `
+      <h2>Documents, allocation and what "paid" means</h2>
+      <div class="grid g1">
+        ${rule('A document is a record, not a line item', 'Every bill and invoice is stored with its number, date, due date, taxable value, GST, TDS, total, how much has been paid, and every payment against it. Status — open, part-paid, settled, void — is derived from those numbers, never typed.')}
+        ${rule('Allocation', 'A payment names the documents it settles and how much goes to each, oldest first by default and editable. Pay less and the document is part-paid; pay more and the excess is an advance to that vendor (1550) or, on the client side, money held (2100). This is what makes "which bill is still open" answerable at all.')}
+        ${rule('An amount let off', 'A vendor letting you off part of a bill closes it in full: the shortfall is income in <b>4060 Discounts received</b>, and the GST already claimed on the original stands, because no credit note was issued. If the vendor does issue a credit note, use the vendor credit note action instead, which reverses the GST too. On the client side a discount you allow is <b>5225</b>, while a bank charge the client\'s bank deducted is <b>5140</b>.', 'A commercial write-off is not a GST credit note under s.34 unless the vendor issues one.')}
+        ${rule('Reversals', 'A wrong entry is corrected by posting its mirror image; both stay visible. A bill or invoice cannot be reversed while payments against it still net above zero — reverse the payment first. An accrual whose vendor bill has since been attached cannot be reversed before that entry is. Documents are voided, never deleted.')}
+      </div>`),
+
+    item('GST', `
+      <h2>GST</h2>
+      <div class="grid g1">
+        ${rule('One question, three answers', 'Every purchase form asks a single question about GST: <b>no GST at all</b>, <b>GST is on the bill and I can claim it</b>, or <b>no GST on the bill but I must pay it myself</b> (reverse charge). Nothing else has to be worked out by the person recording.')}
+        ${rule('When input credit may be taken', 'Credit needs a tax invoice in your hands and the supply actually received. A month closed on your own figure has neither, so its GST is parked in <b>1405</b>, is not in that month\'s return, and is released to 1400 to 1402 only when the vendor bill is recorded — dated the invoice, which is the month the credit belongs to.', 'CGST Act s.16(2)(a) and (aa); Rule 36(4) on matching with GSTR-2B.')}
+        ${rule('Credit that can never be taken', 'Blocked on staff food and welfare (5030), conveyance and fuel (5050), club and membership fees (5075) and gifts and client hospitality (5185). On those, the GST is added to the cost rather than claimed.', 'CGST Act s.17(5)(a), (b)(i), (b)(ii) and (h).')}
+        ${rule('Reverse charge', 'Advocates, goods transport, an unregistered landlord, and any vendor billing from outside India. The tax is your liability (2205), paid in cash with the return — it cannot be set off against credit — and claimed back as input credit. A self-invoice is numbered automatically on the entry, because the vendor did not raise one.', 'CGST Act s.9(3) and s.9(4); s.31(3)(f) for the self-invoice; Notification 09/2024 for rent from an unregistered landlord.')}
+        ${rule('Place of supply', 'For brokerage on immovable property, where the property is. For a service, where the client is. That decides CGST plus SGST or IGST — the app applies it from the profile state and the property or client state, so it is never a manual choice.', 'IGST Act s.12(3) for immovable property; s.12(2) otherwise.')}
+        ${rule('Set-off order', 'IGST credit is used first, and against IGST liability before CGST or SGST. Only then may CGST and SGST credit be used against their own heads. The GST tab shows the working and the cash finally payable.', 'CGST Act s.49A and s.49B with Rule 88A.')}
+        ${rule('Credit taken back, and credit that expires', 'A bill left unpaid for 180 days appears in the Rule 37 register — the credit has to be reversed and is reclaimed when you pay. Credit on an invoice also expires: the ITC register shows the last date for each one.', 'Rule 37; s.16(4) time limit.')}
+        ${rule('What the registers give you', 'The ITC register is every purchase with credit, its invoice and its expiry. The GSTR-1 rows split your outward supplies into B2B, B2CL, B2CS, CDNR and CDNUR. The purchase and sales registers in Books are the same documents in date order.')}
+      </div>`),
+
+    item('TDS', `
+      <h2>TDS</h2>
+      <div class="grid g1">
+        ${rule('Off until you need it', 'TDS is off by default and switched on in Settings. Once on, the forms that need it ask for the section and the rate, which is filled in from the section and can be corrected.')}
+        ${rule('Withholding', 'The cost is the gross amount; the vendor is owed the gross less the tax withheld; the tax sits in <b>2250 TDS payable</b> until deposited. TDS is computed on the value excluding GST where the GST is shown separately.', 'Circular 23/2017 — TDS on the amount excluding GST where it is separately indicated.')}
+        ${rule('Thresholds', 'The bill form shows how much this vendor has been billed in the financial year so far, so the section threshold can be judged. When a corrected bill pushes a vendor past a threshold with nothing withheld, the app says so rather than deciding for you.', 'Sections 194C, 194J, 194I, 194H and 194A, each with its own limit.')}
+        ${rule('Deposit and return', 'Deposit by the 7th of the following month — except March, which is the 30th of April. The remittance records the month, the section, the challan and the BSR code, and the TDS register shows withheld against deposited by section, which is what a 26Q return is built from.', 'Rule 30(2) with its proviso for March; s.201(1A) interest at 1.5% a month if late.')}
+      </div>`),
+
+    item('Assets, prepaids and loans', `
+      <h2>Assets, prepaid costs and borrowing</h2>
+      <div class="grid g1">
+        ${rule('Capitalisation', 'Anything expected to last beyond a year is an asset at cost (1300), not a cost. The threshold in Settings decides where the line is; below it, record an expense. Depreciation is straight-line over the useful life you set, posted at month-end (5200 against 1350), and the final month releases whatever is left so the asset closes at exactly its cost.', 'Book depreciation. Depreciation under s.32 of the Income-tax Act is computed separately by your CA — the two do not have to agree.')}
+        ${rule('Prepaid costs', 'An annual plan is cash out once and an asset (1200), released a month at a time. The Services tab shows what is still sitting with the vendor.')}
+        ${rule('An EMI is not a cost', 'One entry splits it: principal reduces the loan (2400), interest is the cost (5150), lender charges are 5140, and a late-payment penalty is 5165. Repaying principal never touches profit. A prepayment rebuilds the remaining schedule at the same rate and end date rather than leaving a stale one. Interest paid to a non-banking lender may carry 194A TDS.', 'Only the interest is an allowable cost; the principal is a balance-sheet movement.')}
+      </div>`),
+
+    item('The statements', `
+      <h2>The statements, and what they are built from</h2>
+      <div class="grid g1">
+        ${rule('Trial balance', 'Opening, debits, credits and closing for every account that moved, over the range you choose. Written in the debit-minus-credit convention, so a liability shows as a credit. Income and expense accounts open at nil at each financial year start — they are closed to reserves — so a second year never opens with last year\'s revenue on it.')}
+        ${rule('Profit and loss', 'Revenue, then the direct costs of earning it, gross profit, operating costs, EBITDA, then depreciation, finance cost and exceptional items, profit before tax, the tax estimate and profit after tax. Any account not named in a group still appears, under administration, so nothing can quietly fall out of the statement.', 'Grouped the way Schedule III of the Companies Act reads for a service company.')}
+        ${rule('Balance sheet', 'Fixed assets at cost with accumulated depreciation beneath them, current assets, then owner\'s funds, borrowings and current liabilities, with retained profit split between earlier years and this one. It must balance; if it does not, the app says so rather than hiding the difference.')}
+        ${rule('Cash book and the bridge', 'The cash book is opening, every movement and closing, for the bank, the box, or including the card. The bridge starts at profit and walks through every real movement — receivables, payables, assets bought, loan repaid, tax collected — to the cash that actually moved. Anything unexplained is shown.')}
+        ${rule('Registers and exports', 'Purchase and sales registers for the period, and four CSVs: the journal with both sides of every entry, the trial balance, every ledger with balances brought forward, and a Tally-friendly file. A JSON backup of everything is one button away.')}
+        ${rule('Income tax', 'The estimate on Reports applies the rate in Settings to book profit, and it is only an estimate. It does not add back disallowed items beyond flagging them, does not adjust for the difference between book and s.32 depreciation, and does not compute deferred tax. Your CA does the return.', 'The default 26% is 25% plus cess. The lower s.115BAA rate is an irrevocable election on Form 10-IC.')}
+      </div>`),
+
+    item('The check before you file', `
+      <h2>The check, test by test</h2>
+      <p class="small muted">On the Books tab. Twelve tests that can actually fail — each says what to do about it, and the ones that matter link straight to the page that fixes them.</p>
+      ${accTable(`<th style="width:32%">Test</th><th>What it proves, and what to do</th>`, [
+      ['Every entry balances on its own', 'Looks for an individual entry whose debits and credits disagree — corruption or a hand-edited record. Should never fire.'],
+      ['The balance sheet ties out', 'Assets equal funds, liabilities and profit. A gap means an account is missing from the statement; tell your CA before filing.'],
+      ['Vendor payables agree with the bills', 'The 2000 balance against the sum of open bills. A difference is money owed with no document — an opening balance, or an entry from before documents were tracked.'],
+      ['Client receivables agree with the invoices', 'The same test on 1100.'],
+      ['The cash box never went below zero', 'Tested on every day, not just today, so a back-dated voucher cannot hide a missing top-up.'],
+      ['Every open bill has a due date', 'Without one it cannot appear in what is due this month.'],
+      ['Vendor bills received for what you accrued', 'Months closed on your own figure that still have no vendor bill number. Each one is GST you cannot claim and a due date you do not know.'],
+      ['Every recurring month is recorded', 'A commitment with a month missing means a cost that is not in your profit.'],
+      ['Month-end has been run', 'Depreciation and prepaid releases waiting on a past month.'],
+      ['TDS withheld has been deposited', 'Past its Rule 30(2) date, not merely outstanding — money withheld this month is not a finding.'],
+      ['No vendor bill number is recorded twice', 'The same number twice for one vendor is a duplicate entry, and usually a duplicate payment waiting to happen.'],
+      ['No GST is stuck waiting for an invoice', 'The balance in 1405 — credit you have paid for and cannot claim until the paperwork arrives.'],
+    ])}`),
+
+    item('What the app refuses to do', `
+      <h2>What the app will not let you do</h2>
+      <p class="small muted">Controls are worth more than warnings. These are refusals, not suggestions.</p>
+      ${accTable(`<th style="width:44%">Attempt</th><th>Why it is refused</th>`, [
+      ['Edit or delete a posted entry', 'Books that can be silently changed cannot be relied on by anyone, including a tax officer. Reverse and re-record.'],
+      ['Save an entry that does not balance', 'Every entry is checked before it is written.'],
+      ['Record the same recurring month twice', 'The month is already on the commitment; reverse the first entry if it was wrong.'],
+      ['Spend more petty cash than the box holds — on any day', 'Tested against the lowest the box reaches from that date onward, not just its balance that day.'],
+      ['Reverse a bill or invoice that has been paid', 'Reverse the payment first, or reduce the invoice with a credit note.'],
+      ['Reverse an accrual after its vendor bill was attached', 'The bill-arrived entry has to come off first, or it would point at a voided document.'],
+      ['Let a vendor off more than is left on the bill', 'The shortfall cannot exceed what is outstanding.'],
+      ['Date an entry before the books start', 'Set in Settings, once.'],
+      ['Claim GST on a cost with no invoice behind it', 'Parked in 1405 until the invoice is recorded.'],
+      ['Post to a closed month', 'Month-end has been run; the entry lands in the open month and is disclosed as a prior-period item.'],
+    ])}`),
+
+    item('Who did what, and when', `
+      <h2>The audit trail</h2>
+      <p class="small muted">Every entry records who created it and when, in sequence, with an entry number that cannot be reused — the number is reserved inside the same database transaction that writes the entry, so two people recording at once cannot collide. Attachments are stored against the entry itself rather than in a folder somewhere else. Reversals reference the entry they cancel, and the entry they cancel references them back. Nothing in the ledger is ever updated except to mark it reversed or to add an attachment; the database rules enforce that, not just the app.</p>`),
+  ];
+}
+const accountingTab = () => accountingItems().map(i => i.html).join('');
+
+// ═══════ 8. FAQ & GLOSSARY ═══════
 
 const FAQ = [
   ['Basics', [

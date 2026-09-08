@@ -390,6 +390,16 @@ try {
 
   // ═══════ 9. Guide ═══════
   section('Guide');
+  await page.evaluate(() => { window.fin.go('guide'); window.finGuide.setTab('screens'); });
+  await page.waitForTimeout(600);
+  const scr = await mainText();
+  check('The guide explains every screen', /this month/i.test(scr) && /what to do here/i.test(scr) && /where the figures come from/i.test(scr));
+  await page.evaluate(() => window.finGuide.setTab('accounting'));
+  await page.waitForTimeout(600);
+  const acc = await mainText();
+  check('The guide carries a full accounting reference', /chart of accounts/i.test(acc) && /reverse charge/i.test(acc) && /trial balance/i.test(acc));
+  check('…with the rule behind each decision', /s.16\(2\)/.test(acc) || /16\(2\)/.test(acc));
+  check('…and what the app refuses to do', /will not let you do/i.test(acc));
   await page.evaluate(() => { window.fin.go('guide'); window.finGuide.setTab('scenarios'); });
   await page.waitForTimeout(600);
   txt = await mainText();

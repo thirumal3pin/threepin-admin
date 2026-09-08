@@ -8,7 +8,7 @@
 globalThis.window = { fin: { repaint() {} } };
 const { renderGuide } = await import('../finance-assets/views-guide.js');
 const { CHOOSER, EV } = await import('../finance-assets/finance-events.js');
-const { getState, setState, blank } = await import('../finance-assets/finance-core.js');
+const { getState, setState, blank, ACCOUNTS } = await import('../finance-assets/finance-core.js');
 const { check, section, report } = await import('./_harness.mjs');
 
 console.log('3 PIN Realty — guide');
@@ -20,7 +20,7 @@ const bad = html => {
   return m ? m[0] + ' near "' + html.slice(Math.max(0, m.index - 80), m.index + 40).replace(/\s+/g, ' ') + '"' : '';
 };
 
-for (const t of ['start', 'sop', 'actions', 'scenarios', 'charts', 'faq']) {
+for (const t of ['start', 'screens', 'sop', 'actions', 'scenarios', 'accounting', 'charts', 'faq']) {
   section('Tab: ' + t);
   window.finGuide.setTab(t);
   const html = renderGuide();
@@ -41,6 +41,29 @@ for (const t of ['start', 'sop', 'actions', 'scenarios', 'charts', 'faq']) {
     check('Conditional fields are surfaced ("appears when")', /appears when/.test(html));
   }
   if (t === 'faq') check('Glossary present', /Glossary/.test(html) && /Reverse charge/.test(html));
+  if (t === 'screens') {
+    for (const page of ['Overview', 'Record', 'This month', 'Transactions', 'Owed', 'Deals & invoices',
+      'Recurring', 'Budget', 'Bank & card statements', 'Petty cash', 'Loans', 'Assets', 'GST',
+      'Reports', 'Analytics', 'Books', 'Profile', 'Settings']) {
+      // Page names are escaped in the markup, so an ampersand arrives as &amp;.
+      check(`The screens tab covers ${page}`, html.includes(page.replace(/&/g, '&amp;')));
+    }
+    check('Each screen says what question it answers', (html.match(/Where the figures come from/g) || []).length >= 12);
+    check('…and what to do there', (html.match(/What to do here/g) || []).length >= 12);
+  }
+  if (t === 'accounting') {
+    for (const topic of ['The chart of accounts', 'When a cost or income is recognised', 'Documents, allocation',
+      'GST', 'TDS', 'Assets, prepaid costs and borrowing', 'The statements', 'The check, test by test',
+      'What the app will not let you do', 'The audit trail']) {
+      check(`The accounting tab covers ${topic}`, html.includes(topic));
+    }
+    check('Every account in the chart is listed', ACCOUNTS.every(a => html.includes(a.code)),
+      ACCOUNTS.filter(a => !html.includes(a.code)).map(a => a.code).join(','));
+    check('Every account says what lands in it', !/<td class="small"><\/td>/.test(html));
+    check('The statutory basis is cited, not just asserted',
+      /s\.16\(2\)/.test(html) && /s\.17\(5\)/.test(html) && /Rule 88A/.test(html) && /Rule 30\(2\)/.test(html) && /AS 5/.test(html));
+    check('Blocked credits name the four accounts', ['5030', '5050', '5075', '5185'].every(c => html.includes(c)));
+  }
 }
 
 section('Search');

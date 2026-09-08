@@ -594,8 +594,13 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--line-2); border-bottom:
 
 /* Guide */
 .guide-bar { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; margin-bottom: var(--s5); }
-.guide-bar .seg { margin: 0; }
+/* Eight sections will not sit on one line of a phone. The bar wraps to as many rows as it
+   needs and each tab keeps a full 44px target rather than shrinking to a sliver. */
+.guide-bar .seg { margin: 0; flex-wrap: wrap; height: auto; }
+.guide-bar .seg button { flex: 0 1 auto; min-height: 40px; white-space: nowrap; }
 .guide-bar input { flex: 1 1 240px; max-width: 380px; }
+.guide-screen { border-left: 4px solid var(--line-2); }
+.guide-screen table { margin-top: 4px; }
 .guide-scenario[class*="dir-"], .guide-action { border-left: 4px solid var(--dir, var(--line-2)); }
 .guide-faq { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 14px; margin-bottom: 8px; }
 .guide-faq summary { font-weight: 600; color: var(--ink); font-size: 14.5px; }
