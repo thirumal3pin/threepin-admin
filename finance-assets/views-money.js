@@ -149,126 +149,139 @@ export function renderBudget() {
 let picMonth = ym(today());
 
 const BUCKETS = [
-  ['paid', 'Paid', 'Money that actually left or arrived this month'],
-  ['invoiced', 'Invoiced', 'Documents dated this month, still unsettled'],
-  ['due', 'Due this month', 'Falls due between the 1st and the last'],
-  ['overdue', 'Overdue', 'Was due before this month and is still open'],
-  ['estimated', 'Still an estimate', 'Expected, but no event and no document yet'],
+  ['paid', 'Paid', 'Money that actually moved'],
+  ['invoiced', 'Invoiced', 'Billed this month, still unsettled — the full register is in Books'],
+  ['due', 'Due this month', 'Has to be settled between the 1st and the last'],
+  ['overdue', 'Already late', 'Was due before this month and is still open'],
+  ['estimated', 'Still a guess', 'Expected, with nothing recorded and no document'],
 ];
 
-function bucketRows(b, side) {
+// Dates the way the rest of the app writes them, and no invented date on a guess: an
+// estimate has no due day, and printing the last of the month invites it to be read as one.
+const day = iso => {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d) ? esc(iso) : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+
+function bucketRows(b, key, total) {
   if (!b.rows.length) return empty('Nothing in this group.');
   return table(
     `<th>What</th><th>When</th><th class="n">Amount</th>`,
     b.rows.map(r => `<tr${r.txnId ? ` class="click" onclick="fin.openTxn('${esc(r.txnId)}')"` : ''}>
-      <td class="lead">${esc(r.what)}${r.waiting ? ' <span class="small faint">— waiting for the vendor bill</span>' : ''}${r.noCash ? ' <span class="small faint">— no money moves</span>' : ''}
-        ${r.period && r.period !== picMonth ? `<br><span class="small faint">${esc(mlabel(r.period))} cost</span>` : ''}</td>
-      <td class="small nowrap" data-label="When">${esc(String(r.when || ''))}</td>
+      <td class="lead">${esc(r.what)}${r.waiting ? ' <span class="small faint">— waiting for the vendor bill</span>' : ''}
+        ${r.period && r.period !== picMonth ? `<br><span class="small faint">counted as ${esc(mlabel(r.period))}</span>` : ''}</td>
+      <td class="small nowrap" data-label="When">${key === 'estimated' ? '<span class="faint">sometime this month</span>' : (r.noCash ? '<span class="faint">no money moves</span>' : day(r.when))}</td>
       <td class="n" data-label="Amount">${fmt(r.amt)}</td>
     </tr>`).join(''),
-    `<tr><td colspan="2">Total ${esc(side)}</td><td class="n">${fmt(b.amt)}</td></tr>`,
+    `<tr><td colspan="2">Total</td><td class="n">${fmt(total)}</td></tr>`,
     { stack: true });
 }
 
-function sideBlock(title, s, side, tone) {
+function sideBlock(title, s, side) {
+  const paidSub = side === 'out'
+    ? (s.onCard > 0.5 ? `Out of the bank and the box — another ${fmt(s.onCard)} went on the card` : 'Out of the bank and the box')
+    : 'Everything that arrived — including client tokens and loan money, which are not income';
+  const guessSub = s.estimatedNoCash > 0.5
+    ? `Includes ${fmt(s.estimatedNoCash)} that never moves money — depreciation, and services already paid for`
+    : 'Nothing recorded for it yet';
   return `
     <h2>${esc(title)}</h2>
     <div class="grid g3">
-      ${stat('Paid', fmt(s.paid.amt), { sub: side === 'out' ? 'Left the bank and the box' : 'Reached the bank and the box' })}
-      ${stat('Invoiced', fmt(s.invoiced.amt), { sub: 'Dated this month, unsettled' })}
-      ${stat('Due this month', fmt(s.due.amt), { cls: side === 'out' && s.due.amt > 0.5 ? tone : '' })}
-      ${stat('Overdue', fmt(s.overdue.amt), { cls: s.overdue.amt > 0.5 ? 'neg' : '', sub: s.overdue.amt > 0.5 ? 'Should already have been settled' : 'Nothing behind' })}
-      ${stat('Still an estimate', fmt(s.estimated.amt), { sub: 'No event, no document' })}
-      ${stat(side === 'out' ? 'Still to find' : 'Still to come', fmt(s.committed), { hero: true, sub: 'Due + overdue + estimates' })}
+      ${stat('Paid', fmt(s.paid.amt), { sub: paidSub })}
+      ${stat('Invoiced', fmt(s.invoiced.amt), { sub: 'Billed this month, still unsettled' })}
+      ${stat('Due this month', fmt(s.due.amt), { sub: 'Falls due before the month ends' })}
+      ${stat('Already late', fmt(s.overdue.amt), { cls: s.overdue.amt > 0.5 ? 'neg' : '', sub: s.overdue.amt > 0.5 ? 'Should have been settled before this month' : 'Nothing behind' })}
+      ${stat('Still a guess', fmt(s.estimated.amt), { sub: guessSub })}
+      ${stat(side === 'out' ? 'Still to pay' : 'Still to come in', fmt(side === 'out' ? s.committed : s.documented), {
+    hero: true,
+    sub: side === 'out' ? 'Due, late and guesses — everything still to go out' : 'Invoices only. Deals you hope to close are not counted here',
+  })}
     </div>
-    <p class="small muted">The books count ${fmt(s.booked)} of ${esc(side === 'out' ? 'cost' : 'income')} for this month — what belongs to it, whoever has been paid.</p>
+    <p class="small muted"><b>These boxes overlap on purpose.</b> A bill dated this month and payable this month is under both <b>Invoiced</b> and <b>Due</b>. Only the last box is a total — do not add them up.
+    The books count ${fmt(s.booked)} of ${esc(side === 'out' ? 'cost' : 'income')} for ${esc(mlabel(picMonth))}, whoever has been paid.</p>
     ${BUCKETS.map(([k, label, why]) => `
       <details class="card pad0 bucket">
         <summary><b>${esc(label)}</b> <span class="faint small">${esc(why)}</span> <span class="n">${fmt(s[k].amt)}</span></summary>
-        ${bucketRows(s[k], label.toLowerCase())}
+        ${bucketRows(s[k], k, s[k].amt)}
       </details>`).join('')}`;
 }
 
 // Three months ahead on what is already known. Deliberately short: past three months the
-// estimates outnumber the facts and the number stops being worth acting on.
+// guesses outnumber the facts and the number stops being worth acting on.
 function outlookBlock() {
   const o = outlook(3, ym(today()));
+  const hoped = o.rows.reduce((a, r) => a + r.hoped, 0);
   return `
     <h2>If nothing changes</h2>
-    <p class="small muted">The next three months using only what the books already know — bills with due dates, recurring commitments, loan instalments, deals expected to close. Starting from ${fmt(o.opening)} in the bank and the box today.</p>
+    <p class="small muted">The next three months on what the books already know — bills with due dates, recurring costs, loan instalments.
+    Starting from ${fmt(o.opening)} that is actually yours today. Money coming in counts <b>invoices only</b>${hoped > 0.5 ? `; a further ${fmt(hoped)} of deals you expect to close is deliberately left out` : ''}.</p>
     ${table(
-    `<th>Month</th><th class="n">Out — certain</th><th class="n">Out — estimated</th><th class="n">Expected in</th><th class="n">Left at month end</th>`,
+    `<th>Month</th><th class="n">Out — certain</th><th class="n">Out — guessed</th><th class="n">In — invoiced</th><th class="n">Left at month end</th>`,
     o.rows.map(r => `<tr class="click" onclick="finMoney.goMonth('${esc(r.month)}')">
       <td class="lead">${esc(mlabel(r.month))}</td>
       <td class="n" data-label="Out — certain">${fmt(r.committed)}</td>
-      <td class="n" data-label="Out — estimated">${fmt(r.guessed)}</td>
-      <td class="n" data-label="Expected in">${fmt(r.in)}</td>
+      <td class="n" data-label="Out — guessed">${fmt(r.guessed)}</td>
+      <td class="n" data-label="In — invoiced">${fmt(r.in)}</td>
       <td class="n" data-label="Left at month end"><span class="${r.short ? 'neg' : ''}">${signed(r.closing)}</span></td>
     </tr>`).join(''), '', { stack: true })}
     ${o.firstShort
-    ? note(`On what is known today the money runs out in <b>${esc(mlabel(o.firstShort))}</b>. Bills with due dates will happen; the estimated column may not. Collect earlier, or move what is only an estimate.`, 'warn')
+    ? note(`On what is known today the money runs out in <b>${esc(mlabel(o.firstShort))}</b>. The certain column will happen; the guessed column may not, and deals that close would improve it. Collect earlier, or move something.`, 'warn')
     : note('Nothing known today puts you short in the next three months. Only what has been recorded or committed is counted — a deal you have not entered is not in here.', 'info')}`;
 }
 
 export function renderMonth() {
   const p = monthPicture(picMonth);
   const waiting = awaitingBill();
-  const past = picMonth < ym(today());
-  const cur = picMonth === ym(today());
+  const now = ym(today());
+  const past = picMonth < now;
+  const cur = picMonth === now;
 
   return `
     <h1>This month</h1>
-    <p class="lead">Everything that belongs to ${esc(mlabel(picMonth))}, at whichever stage it has reached —
-    still a guess, recorded as an event, invoiced with a date to pay, or settled. Nothing on this page is an entry.</p>
+    <p class="lead">Everything that belongs to ${esc(mlabel(picMonth))}, at whatever stage it has reached — still a guess,
+    invoiced and waiting, due to be settled, already late, or paid. <b>Nothing here changes your books. This page only reads them.</b></p>
 
     <div class="actions" style="align-items:center">
       <button class="btn ghost sm" type="button" onclick="finMoney.monthShift(-1)" aria-label="Previous month">◀</button>
       <h2 style="margin:0;border:0;padding:0;min-width:170px;text-align:center">${esc(mlabel(picMonth))}</h2>
       <button class="btn ghost sm" type="button" onclick="finMoney.monthShift(1)" aria-label="Next month" ${picMonth >= ym(addMonths(today(), 12)) ? 'disabled' : ''}>▶</button>
-      ${cur ? '' : `<button class="btn ghost sm" type="button" onclick="finMoney.thisMonth()">Back to ${esc(mlabel(ym(today())))}</button>`}
+      ${cur ? '' : `<button class="btn ghost sm" type="button" onclick="finMoney.thisMonth()">Back to ${esc(mlabel(now))}</button>`}
       <div class="spacer"></div>
       <button class="btn" type="button" onclick="fin.go('budget')">Set expectations</button>
       <button class="btn primary" type="button" onclick="fin.go('record')">Record something</button>
     </div>
 
+    ${cur ? `
     <h2>Can I spend?</h2>
     <div class="card">
       <div class="grid g3">
-        ${stat('In the bank and the box', fmt(p.cash.now), { hero: true })}
-        ${stat('Still to pay this month', fmt(p.cash.needed), { cls: p.cash.needed > 0.5 ? 'neg' : '' })}
-        ${stat('Still to come in', fmt(p.cash.expected), { cls: p.cash.expected > 0.5 ? 'pos' : '' })}
-        ${stat('Left if everything lands', signed(p.cash.after), { raw: true, sub: p.cash.after < 0 ? 'Short — collect earlier or delay something' : 'Room to commit' })}
+        ${stat('Yours to use today', fmt(p.cash.now), { hero: true, sub: 'Bank and box, less client tokens and what the card owes' })}
+        ${stat('Still to pay — this month and arrears', fmt(p.cash.needed), { cls: p.cash.needed > 0.5 ? 'neg' : '' })}
+        ${stat('Coming in on invoices', fmt(p.cash.expected), { cls: p.cash.expected > 0.5 ? 'pos' : '', sub: 'Documents only' })}
+        ${stat('Left if the invoices land', signed(p.cash.after), { raw: true, sub: p.cash.after < 0 ? 'Short — collect earlier or delay something' : 'Commit against this one' })}
       </div>
       ${p.cash.after < 0
-      ? note(`Everything known about ${esc(mlabel(picMonth))} leaves you <b>${fmt(Math.abs(p.cash.after))} short</b>. What is still an estimate can move; what is due cannot.`, 'warn')
-      : note(`After what is due and what is expected, <b>${fmt(p.cash.after)}</b> is uncommitted. Estimates can still change when the bill comes.`, 'info')}
-    </div>
-
-    ${waiting.length ? `
-      <h2>Waiting for the vendor bill</h2>
-      ${note(`${waiting.length} month${waiting.length === 1 ? '' : 's'} ${waiting.length === 1 ? 'was' : 'were'} closed on your own figure and ${waiting.length === 1 ? 'has' : 'have'} no vendor bill number yet. When the invoice arrives, record it — the cost stays in the month you used it.`, 'info')}
-      ${table(
-      `<th>What</th><th>Recorded for</th><th class="n">Amount</th><th></th>`,
-      waiting.map(b => `<tr>
-          <td class="lead">${esc(b.vendorName || 'Vendor')} — ${esc(b.desc)}</td>
-          <td class="small" data-label="Recorded for">${esc(mlabel(b.period || b.month || ym(b.date)))}</td>
-          <td class="n" data-label="Amount">${fmt(b.net ?? b.total)}</td>
-          <td class="n"><button class="btn ghost sm out" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button></td>
-        </tr>`).join(''), '', { stack: true })}` : ''}
+      ? note(`What is already known about ${esc(mlabel(picMonth))} leaves you <b>${fmt(Math.abs(p.cash.after))} short</b>. Bills with due dates will happen; what is still a guess may not.${p.cash.expectedAll > p.cash.expected ? ` Deals you expect to close would add ${fmt(p.cash.expectedAll - p.cash.expected)} — they are not counted above because nothing has been invoiced.` : ''}`, 'warn')
+      : note(`<b>${fmt(p.cash.after)} is uncommitted on documents alone.</b>${p.cash.expectedAll > p.cash.expected ? ` If the deals you expect to close do close, it would be ${fmt(p.cash.afterAll)} — but commit against the lower figure.` : ''}`, 'info')}
+      ${p.cash.tokens > 0.5 || p.cash.card > 0.5 ? `<p class="small muted" style="margin:10px 0 0">Already taken off: ${p.cash.tokens > 0.5 ? `${fmt(p.cash.tokens)} of client tokens you are holding` : ''}${p.cash.tokens > 0.5 && p.cash.card > 0.5 ? ' and ' : ''}${p.cash.card > 0.5 ? `${fmt(p.cash.card)} outstanding on the credit card` : ''}. What you owe vendors is not taken off here — it is inside "still to pay".</p>` : ''}
+    </div>` : note(`<b>"Can I spend?" only answers for the month you are in.</b> You are looking at ${esc(mlabel(picMonth))}${past ? ', which is behind you' : ', which has not happened'}. What you will actually have in the bank by then depends on every month in between — the table below walks them in order.`, 'info')}
 
     ${outlookBlock()}
 
-    ${sideBlock('Money out', p.out, 'out', 'neg')}
-    ${sideBlock('Money in', p.in, 'in', 'pos')}
+    ${sideBlock('Money out', p.out, 'out')}
+    ${sideBlock('Money in', p.in, 'in')}
 
     <h2>Together</h2>
     <div class="grid g3">
-      ${stat('Net settled so far', signed(p.net.paid), { raw: true, sub: 'Money in less money out this month' })}
+      ${stat('Net money moved', signed(p.net.paid), { raw: true, sub: 'In less out — includes tokens and loans, which are not income' })}
       ${stat('Net still to settle', signed(p.net.toSettle), { raw: true, sub: 'Invoices to collect less bills to pay' })}
-      ${stat('Net still a guess', signed(p.net.estimated), { raw: true, sub: 'Income estimates less cost estimates' })}
-      ${stat('Profit the books show', signed(p.net.booked), { raw: true, hero: true, sub: 'Earned less incurred, whoever has paid' })}
+      ${stat('Net still a guess', signed(p.net.estimated), { raw: true, sub: 'Income guesses less cost guesses' })}
+      ${picMonth > ym(today())
+      ? stat('Profit the books show', '—', { hero: true, sub: 'Nothing recorded yet — this month has not happened' })
+      : stat('Profit the books show', signed(p.net.booked), { raw: true, hero: true, sub: 'Earned less incurred, whoever has paid' })}
     </div>
-    ${past ? note(`${esc(mlabel(picMonth))} is behind you. Anything still showing as an estimate never became an event — either it did not happen, or the month was never recorded.`, 'info') : ''}
+    ${past ? note(`${esc(mlabel(picMonth))} is behind you, and what is unsettled is shown <b>as it stands today</b>, not as it stood at the end of that month. Anything still a guess never happened, or was never recorded — the Recurring tab shows which months are missing.`, 'info') : ''}
 
     ${note('Profit and cash are different questions. The books count a cost in the month you used the thing; cash counts it on the day it left. This page shows both, side by side, so a decision to spend can be made on the cash line while the profit line stays honest.', 'info')}`;
 }

@@ -340,10 +340,13 @@ try {
   const mth = await mainText();
   check('The page leads with the decision, not the ledger', /can i spend/i.test(mth), mth.replace(/\s+/g, ' ').slice(0, 200));
   check('All five states of a commitment are on the page',
-    /paid/i.test(mth) && /invoiced/i.test(mth) && /due this month/i.test(mth) && /overdue/i.test(mth) && /still an estimate/i.test(mth));
+    /paid/i.test(mth) && /invoiced/i.test(mth) && /due this month/i.test(mth) && /already late/i.test(mth) && /still a guess/i.test(mth));
+  check('The spendable figure is the one with documents behind it', /left if the invoices land/i.test(mth) && /coming in on invoices/i.test(mth), mth.replace(/\s+/g, ' ').slice(0, 300));
+  check('It warns that the buckets overlap', /these boxes overlap on purpose/i.test(mth));
+  check('Three months ahead are shown', /if nothing changes/i.test(mth) && /left at month end/i.test(mth));
   check('Money out and money in are separate, then together',
     /money out/i.test(mth) && /money in/i.test(mth) && /together/i.test(mth));
-  check('It says outright that nothing on it is an entry', /nothing on this page is an entry/i.test(mth));
+  check('It says plainly that it changes nothing', /nothing here changes your books/i.test(mth));
   check('A bucket opens to show what is inside', await page.evaluate(() => {
     const d = document.querySelector('#main details.bucket');
     if (!d) return false;

@@ -16,7 +16,8 @@ import {
   getState, num, bal, pl, today, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
   agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
-  monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth,
+  monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth, projection,
+  DISALLOWED, gstComputation as gstComp,
   outlook,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
@@ -436,6 +437,7 @@ section('An estimate becomes an event, then a bill, then a payment — and stays
   eq('…while October own rent is only an estimate again', oct.out.estimated.amt, 20000);
   eq('…and October is not asked to carry September cost', oct.out.booked, 0);
   eq('Cash to find in October is the bill plus this month rent', oct.cash.needed, 40500);
+  eq('…and no income is assumed, because none is invoiced', oct.cash.expected, 0);
 
   // 5. Paid on the 15th.
   save('paybill', { date: '2026-10-15', party: landlord, amt: 20500, via: '1000', useAdvance: 'no' });
@@ -496,7 +498,22 @@ section('The month, four ways — what is paid, invoiced, due and still a guess'
   eq('The month, clubbed: the books show what November itself cost', p.out.booked, 15000 + 1200);
   eq('…and the net still to settle is what is owed both ways', p.net.toSettle, 0 - (15000 + 4000));
   eq('…while the net estimate is income less costs still guessed', p.net.estimated, 60000 - 2000);
-  check('The cash line answers "can I spend?"', p.cash.after === r2c(p.cash.now + p.in.committed - p.out.committed), JSON.stringify(p.cash));
+  // The answer a spending decision needs is the conservative one: costs counted generously,
+  // income counted only where a document exists. A deal the owner hopes to close is not cash.
+  check('The spendable figure counts only income with a document behind it',
+    p.cash.after === r2c(p.cash.now + p.in.documented - p.out.committed), JSON.stringify(p.cash));
+  eq('…so the 60,000 deal is not in it', p.cash.expected, 0);
+  eq('…it is shown separately as the hopeful figure', p.cash.expectedAll, 60000);
+  eq('Cash in hand is net of client money and the card', p.cash.now, r2c(p.cash.inHand - p.cash.tokens - p.cash.card));
+
+  // A figure the owner types for an account replaces what the app worked out for it — the
+  // same rule the Budget page follows. The internet subscription must not appear twice.
+  g.settings.budgets = { '2026-11': { 5070: 2500 } };
+  const pb = monthPicture('2026-11');
+  eq('A typed figure replaces the estimate for that account, it does not add to it', pb.out.estimated.amt, 2500);
+  check('…and the row says it came from you', pb.out.estimated.rows.some(r => r.kind === 'budget'), JSON.stringify(pb.out.estimated.rows));
+  eq('…which is what Budget shows for the same account', projection('2026-11').rows.find(r => r.code === '5070').planned, 2500);
+  g.settings.budgets = {};
 }
 
 section('GST on a purchase is one question with three answers');
@@ -635,6 +652,97 @@ section('A bill blocks a reversal only while a payment still stands against it')
   check('Reversing it voids the bill in one step', bornPaid.status === 'void', bornPaid.status);
 }
 
+section('GST is not claimed before the invoice that carries it');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 300000 });
+  save('subnew', { date: '2026-09-01', name: 'Cloud hosting', kind: 'service', acc: '5080', vendor: { __new: true, name: 'Host Co', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 10000, via: '1000', start: '2026-09' });
+  const host = byName(g.subs, 'Cloud hosting');
+  const hostP = party('Host Co');
+
+  // The month is closed on the owner's own figure. GST is on it, but no tax invoice exists.
+  save('confirmcharge', { sub: host.id, month: '2026-09', date: '2026-09-30', result: 'invoice',
+    amt: 10000, rcm: 'charged', gstRate: 18, gstAmt: 1800, total: 11800, gstType: 'intra' });
+  eq('The credit is not taken — there is no tax invoice yet', bal('1400') + bal('1401') + bal('1402'), 0);
+  eq('…it is held in its own account', bal('1405'), 1800);
+  eq('…the vendor is owed the full amount all the same', bal('2000', { party: hostP }), 11800);
+  eq('…and September carries the cost', pl('2026-09').te, 10000);
+  const bill = g.bills.find(x => x.serviceId === host.id);
+  eq('The document remembers how much is held', bill.gstParked, 1800);
+  const sepAvail = gstComp('2026-09').availed;
+  eq('September claims nothing in its GST working', sepAvail.cgst + sepAvail.sgst + sepAvail.igst, 0);
+
+  // The invoice arrives on 6 October.
+  save('billarrived', { billId: bill.id, vinv: 'HOST/912', date: '2026-10-06', dueDate: '2026-10-20', amt: 10000, gstAmt: 1800, gstType: 'intra' });
+  eq('Now the credit is taken', bal('1400') + bal('1401'), 1800);
+  eq('…and nothing is left held', bal('1405'), 0);
+  eq('The credit belongs to October, the month of the invoice', g.txns.at(-1).date, '2026-10-06');
+  const octAvail = gstComp('2026-10').availed;
+  eq('…which is where the GST working picks it up', octAvail.cgst + octAvail.sgst + octAvail.igst, 1800);
+  eq('September still owns the cost, unchanged', pl('2026-09').te, 10000);
+  eq('…and October is not given a cost that was not its own', pl('2026-10').te, 0);
+  check('Trial balance holds throughout', trialBalance().balanced);
+  check('The document is complete', bill.billNo === 'HOST/912' && bill.gstParked === 0 && bill.accrued === false, JSON.stringify(bill));
+}
+
+section('A cost that can no longer reach its own month is disclosed, not buried');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 200000 });
+  save('subnew', { date: '2026-09-01', name: 'Office rent', kind: 'rent', acc: '5000', vendor: { __new: true, name: 'Landlord', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 20000, via: '1000', start: '2026-09' });
+  const rent = byName(g.subs, 'Office rent');
+  save('confirmcharge', { sub: rent.id, month: '2026-09', date: '2026-09-30', result: 'invoice', amt: 20000, rcm: 'no' });
+  const bill = g.bills.find(x => x.serviceId === rent.id);
+  g.monthEnds['2026-09'] = { at: Date.now() };
+
+  save('billarrived', { billId: bill.id, vinv: 'R/9', date: '2026-10-04', dueDate: '2026-10-15', amt: 20800, gstAmt: 0 });
+  eq('September keeps what it was closed with', pl('2026-09').te, 20000);
+  eq('…the 800 is shown as a prior-period adjustment', bal('5230'), 800);
+  eq('…in the month it was found', pl('2026-10').te, 800);
+  check('…and the entry does not touch the rent account', !g.txns.at(-1).lines.some(l => l.acc === '5000'), JSON.stringify(g.txns.at(-1).lines));
+  eq('The vendor is owed the corrected amount', bal('2000', { party: party('Landlord') }), 20800);
+  check('Trial balance holds', trialBalance().balanced);
+}
+
+section('Credit blocked by s.17(5), and a bad debt that is not disallowed');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 200000 });
+  save('expense', { date: '2026-09-05', desc: 'Club membership', acc: '5075', amt: 20000, rcm: 'charged', gstRate: 18, gstAmt: 3600, total: 23600, gstType: 'intra', vgstin: '33AAAAA0000A1Z5', vinv: 'C-1', via: '1000', vendor: { __new: true, name: 'City Club', type: 'vendor' } });
+  eq('Club membership: the GST is part of the cost, not a credit', bal('5075'), 23600);
+  eq('…nothing reaches the input heads', bal('1400') + bal('1401') + bal('1402'), 0);
+  save('expense', { date: '2026-09-06', desc: 'Diwali gifts for clients', acc: '5185', amt: 10000, rcm: 'charged', gstRate: 18, gstAmt: 1800, total: 11800, gstType: 'intra', vgstin: '33AAAAA0000A1Z5', vinv: 'G-1', via: '1000', vendor: { __new: true, name: 'Gift Shop', type: 'vendor' } });
+  eq('Gifts: blocked the same way', bal('5185'), 11800);
+  eq('…still nothing claimed', bal('1400') + bal('1401') + bal('1402'), 0);
+  check('A penalty is added back in the tax computation', DISALLOWED.has('5165'));
+  check('A bad debt written off is not — s.36(1)(vii), TRF Ltd', !DISALLOWED.has('5190'));
+}
+
+section('The trial balance closes the year, and the check panel finds real problems');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 200000 });
+  save('expense', { date: '2026-09-10', desc: 'Rent', acc: '5000', amt: 20000, rcm: 'no', via: '1000' });
+  // A new financial year starts on 1 April 2027.
+  const next = trialBalanceDetail('2027-04-01', '2027-04-30');
+  const rentRow = next.rows.find(r => r.acc.code === '5000');
+  check('Last year rent does not open the new year', !rentRow || rentRow.opening === 0, JSON.stringify(rentRow));
+  const bankRow = next.rows.find(r => r.acc.code === '1000');
+  eq('…while the bank carries forward, as it must', bankRow.opening, bal('1000'));
+  const same = trialBalanceDetail('2026-10-01', '2026-10-31');
+  eq('Within the same year the cost is carried into the next month', same.rows.find(r => r.acc.code === '5000').opening, 20000);
+
+  // Two bills with one number is how a vendor gets paid twice.
+  save('bill', { date: '2026-09-12', vendor: { __new: true, name: 'Twice Co', type: 'vendor' }, desc: 'Job A', acc: '5100', amt: 5000, rcm: 'no', vinv: 'TC/7', tds: 'none', tdsrate: 0 });
+  let health = booksHealth('2026-09-30');
+  check('One bill number is fine', health.checks.find(c => c.key === 'dupbills').ok);
+  save('bill', { date: '2026-09-20', vendor: party('Twice Co'), desc: 'Job A again', acc: '5100', amt: 5000, rcm: 'no', vinv: 'TC/7', tds: 'none', tdsrate: 0 });
+  health = booksHealth('2026-09-30');
+  check('The same number twice is caught before it is paid twice', !health.checks.find(c => c.key === 'dupbills').ok);
+  check('…and it is treated as serious, not a note', health.checks.find(c => c.key === 'dupbills').level === 'bad');
+  check('Every entry balancing is checked, not just the total', health.checks.find(c => c.key === 'tb').ok);
+}
+
 section('Three months ahead on what is already known');
 {
   const g = fresh();
@@ -644,7 +752,7 @@ section('Three months ahead on what is already known');
   save('bill', { date: '2026-09-20', vendor: { __new: true, name: 'Printer', type: 'vendor' }, desc: 'Brochures', acc: '5100', amt: 10000, rcm: 'no', dueDate: '2026-10-10', tds: 'none', tdsrate: 0 });
 
   const o = outlook(3, '2026-09');
-  eq('It opens with what is actually in the bank and the box', o.opening, bal('1000') + bal('1010'));
+  eq('It opens with cash that is actually yours', o.opening, r2c(bal('1000') + bal('1010') - bal('2100') - bal('2300')));
   eq('Three months are shown', o.rows.length, 3);
   eq('September expects the rent it has not recorded', o.rows[0].guessed, 20000);
   eq('…and the brochure bill is not due until October', o.rows[0].committed, 0);

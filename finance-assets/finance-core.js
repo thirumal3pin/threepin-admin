@@ -23,6 +23,7 @@ export const ACCOUNTS = [
   ['1400', 'GST input credit — CGST', 'asset'],
   ['1401', 'GST input credit — SGST', 'asset'],
   ['1402', 'GST input credit — IGST', 'asset'],
+  ['1405', 'GST on bills not yet received', 'asset'],
   ['1500', 'Advances to staff', 'asset'],
   ['1550', 'Advances to vendors', 'asset'],
 
@@ -77,18 +78,22 @@ export const ACCOUNTS = [
   ['5210', 'Subscription cancellation loss', 'expense'],
   ['5220', 'Loss on disposal of assets', 'expense'],
   ['5225', 'Discounts allowed & short receipts', 'expense'],
+  ['5230', 'Prior-period adjustments', 'expense'],
 ].map(([code, name, type]) => ({ code, name, type }));
 
 export const A = Object.fromEntries(ACCOUNTS.map(a => [a.code, a]));
 // Costs the income-tax computation adds back. Kept as data so the tax provision and the
 // year-end pack can show them without anyone remembering which codes they were.
-export const DISALLOWED = new Set(['5165', '5190']);
+// Costs the income-tax computation adds back. A bad debt written off is NOT one of them:
+// s.36(1)(vii) with TRF Ltd v. CIT (2010) 323 ITR 397 (SC) — writing it off in the books is
+// enough, the assessee need not prove the debt became irrecoverable.
+export const DISALLOWED = new Set(['5165']);
 
 // Categories a user may pick on a plain expense or bill. Excludes the accounts the engine
 // reaches on its own (write-offs, depreciation, cancellation loss, interest, disposal loss).
 // 5040 IS pickable: the Realtor Club event is gone, but referral fees are a normal cost.
 export const EXP = ACCOUNTS.filter(
-  a => a.type === 'expense' && !['5150', '5165', '5190', '5200', '5210', '5220', '5225'].includes(a.code));
+  a => a.type === 'expense' && !['5150', '5165', '5190', '5200', '5210', '5220', '5225', '5230'].includes(a.code));
 
 // Typing a state by hand silently flips CGST+SGST to IGST on an invoice, so it is chosen.
 export const STATES = [
@@ -244,7 +249,7 @@ export function defaultSettings() {
     invoicePrefix: '3PIN/26-27/', nextInvoiceNo: 1,
     creditNotePrefix: '3PIN/CN/26-27/', nextCreditNoteNo: 1,
     sacCodes: { brokerage: '997221', consultancy: '998311' },
-    incomeTaxRate: 25.168,          // s.115BAA: 22% + 10% surcharge + 4% cess
+    incomeTaxRate: 26,              // 25% + 4% cess. s.115BAA's 25.168% needs Form 10-IC.
     tdsThresholds: { '194H': 20000, '194J': 50000, '194I': 600000, '194C': 100000 },
     capitalisationThreshold: 5000,
     emailDigest: { enabled: true, to: [] },
@@ -1032,10 +1037,16 @@ export function monthPicture(month) {
   const out = { paid: bucket(), invoiced: bucket(), due: bucket(), overdue: bucket(), estimated: bucket() };
   const inn = { paid: bucket(), invoiced: bucket(), due: bucket(), overdue: bucket(), estimated: bucket() };
 
-  // 1. Money that actually moved this month — the same figures as the cash book.
+  // 1. Money that actually moved this month — bank and box only, so "paid" and the cash
+  //    line are the same arithmetic. A card purchase has not taken cash yet; it is counted
+  //    separately and the card balance is shown as what it is, a debt with a date to come.
+  let onCard = 0;
   for (const t of S.txns) {
     if (ym(t.date) !== m) continue;
-    const mv = moneyMoved(t);
+    const mv = moneyMoved(t, ['1000', '1010']);
+    const card = -(t.lines || []).reduce((s2, l) => l.acc === '2300' ? s2 + num(l.dr) - num(l.cr) : s2, 0);
+    // A card purchase raises the card balance without touching bank or box.
+    if (card > 0.005 && Math.abs(mv.net) < 0.005) onCard = r2(onCard + card);
     if (Math.abs(mv.net) < 0.005) continue;
     push(mv.net < 0 ? out.paid : inn.paid, {
       what: t.desc || t.event, amt: Math.abs(mv.net), when: t.date, txnId: t.id, kind: t.event,
@@ -1072,6 +1083,7 @@ export function monthPicture(month) {
 
   // 3. Estimates: a commitment for this month that has not become an event yet. The moment
   //    the month is recorded, the estimate stops being one — it never counts twice.
+  const outEst = [], innEst = [];
   for (const s of S.subs) {
     if (s.status !== 'active') continue;
     if (s.start && s.start > m) continue;
@@ -1080,8 +1092,8 @@ export function monthPicture(month) {
     if (rec && !rec.reversed) continue;
     const amt = s.payMode === 'upfront' ? num(s.monthly) : expectedFor(s, m);
     if (amt <= 0.005) continue;
-    push(out.estimated, {
-      what: s.name, amt, when: last, kind: 'recurring', subId: s.id,
+    outEst.push({
+      what: s.name, amt, when: last, kind: 'recurring', subId: s.id, code: recurringAcc(s),
       noCash: s.payMode === 'upfront', why: recurringKindLabel(s.kind),
     });
   }
@@ -1089,46 +1101,70 @@ export function monthPicture(month) {
     if (l.status !== 'active') continue;
     for (const x of l.schedule || []) {
       if (x.month !== m || (l.paid || []).includes(x.n)) continue;
-      push(out.estimated, { what: `EMI ${x.n}/${l.n} — ${l.lender}`, amt: num(x.emi), when: last, kind: 'emi', loanId: l.id });
+      outEst.push({ what: `EMI ${x.n}/${l.n} — ${l.lender}`, amt: num(x.emi), when: last, kind: 'emi', loanId: l.id, code: '5150' });
     }
   }
   for (const a of S.assets) {
     if (a.status !== 'in use' || (a.start && a.start > m)) continue;
     if ((a.depreciated || []).includes(m) || (a.depreciated || []).length >= num(a.life)) continue;
-    push(out.estimated, { what: `${a.name} — depreciation`, amt: num(a.monthly), when: last, kind: 'depreciation', noCash: true });
-  }
-  const done = pl(m);
-  for (const [code, amount] of Object.entries(budgetLines(m))) {
-    const a = A[code];
-    if (!a) continue;
-    const already = a.type === 'income' ? num(done.inc[code]) : num(done.exp[code]);
-    const left = r2(num(amount) - already);
-    if (left <= 0.005) continue;
-    push(a.type === 'income' ? inn.estimated : out.estimated, {
-      what: `${a.name} — your figure`, amt: left, when: last, kind: 'budget', code,
-    });
+    outEst.push({ what: `${a.name} — depreciation`, amt: num(a.monthly), when: last, kind: 'depreciation', noCash: true, code: '5200' });
   }
   for (const d of S.deals) {
     if (d.status !== 'open' || d.expMonth !== m) continue;
     if (invs.some(i => i.dealId === d.id)) continue;
     const amt = r2(num(d.expSeller) + num(d.expBuyer));
-    if (amt > 0.005) push(inn.estimated, { what: `${d.nickname} — expected to close`, amt, when: last, kind: 'deal', dealId: d.id });
+    if (amt > 0.005) innEst.push({ what: `${d.nickname} — expected to close`, amt, when: last, kind: 'deal', dealId: d.id, code: '4000', soft: true });
   }
+  // A figure the owner typed for an account REPLACES what the app worked out for it — the
+  // same rule the Budget page states and applies. Adding the two would show one internet
+  // subscription twice, on two screens, for the same month.
+  const done = pl(m);
+  for (const [code, amount] of Object.entries(budgetLines(m))) {
+    const a = A[code];
+    if (!a) continue;
+    const bucket = a.type === 'income' ? innEst : outEst;
+    for (let i = bucket.length - 1; i >= 0; i--) if (bucket[i].code === code) bucket.splice(i, 1);
+    const already = a.type === 'income' ? num(done.inc[code]) : num(done.exp[code]);
+    const left = r2(num(amount) - already);
+    if (left <= 0.005) continue;
+    bucket.push({ what: `${a.name} — your figure`, amt: left, when: last, kind: 'budget', code, soft: a.type === 'income' });
+  }
+  for (const r of outEst) push(out.estimated, r);
+  for (const r of innEst) push(inn.estimated, r);
 
-  const sortRows = b => { b.rows.sort((x, y) => String(x.when).localeCompare(String(y.when)) || y.amt - x.amt); return b; };
+  // Biggest first inside a bucket, except money that has already moved, which reads as a
+  // diary. The largest item of the month is the one worth seeing without scrolling.
+  const sortRows = (b, byDate) => {
+    b.rows.sort(byDate
+      ? (x, y) => String(x.when).localeCompare(String(y.when)) || y.amt - x.amt
+      : (x, y) => y.amt - x.amt || String(x.when).localeCompare(String(y.when)));
+    return b;
+  };
   const cashOf = b => r2(b.rows.filter(r => !r.noCash).reduce((s, r) => s + num(r.amt), 0));
   const side = (o, booked) => {
-    for (const k of Object.keys(o)) sortRows(o[k]);
+    for (const k of Object.keys(o)) sortRows(o[k], k === 'paid');
     return {
       ...o, booked: r2(booked),
       settled: o.paid.amt,
       toSettle: r2(o.due.amt + o.overdue.amt),
+      // Documents with a date behind them, and nothing else. On the money-in side this is
+      // the only figure safe to commit against: a deal the owner hopes to close is not cash.
+      documented: r2(cashOf(o.due) + cashOf(o.overdue)),
+      estimatedCash: cashOf(o.estimated),
+      estimatedNoCash: r2(o.estimated.amt - cashOf(o.estimated)),
       committed: r2(cashOf(o.due) + cashOf(o.overdue) + cashOf(o.estimated)),
     };
   };
   const O = side(out, done.te);
   const I = side(inn, done.ti);
-  const cashNow = r2(bal('1000') + bal('1010'));
+  // One definition of cash across the app: what is in the bank and the box, less the client
+  // money sitting in it and what the card already owes. Vendor dues are NOT taken off here —
+  // they are inside `committed` and would otherwise be counted twice.
+  const inHand = r2(bal('1000') + bal('1010'));
+  const tokens = r2(bal('2100'));
+  const card = r2(bal('2300'));
+  const yours = r2(inHand - tokens - card);
+  O.onCard = r2(onCard);
   return {
     month: m, from: first, to: last,
     out: O, in: I,
@@ -1139,7 +1175,14 @@ export function monthPicture(month) {
       estimated: r2(I.estimated.amt - O.estimated.amt),
       committed: r2(I.committed - O.committed),
     },
-    cash: { now: cashNow, after: r2(cashNow + I.committed - O.committed), needed: O.committed, expected: I.committed },
+    cash: {
+      now: yours, inHand, tokens, card, onCard: r2(onCard),
+      needed: O.committed,
+      expected: I.documented, expectedAll: I.committed,
+      after: r2(yours + I.documented - O.committed),
+      afterAll: r2(yours + I.committed - O.committed),
+      current: m === ym(today()),
+    },
   };
 }
 
@@ -1149,17 +1192,21 @@ export function monthPicture(month) {
 // certainty column matters more than the total: a due bill will happen, an estimate may not.
 export function outlook(months = 3, from) {
   const start = from || ym(today());
-  let running = r2(bal('1000') + bal('1010'));
+  // Same cash definition as monthPicture: client tokens and the card balance are not yours.
+  let running = r2(bal('1000') + bal('1010') - bal('2100') - bal('2300'));
   const opening = running;
   const rows = [];
   for (let i = 0, m = start; i < months && i < 24; i++, m = addMonths(m, 1)) {
     const p = monthPicture(m);
-    const out = p.out.committed, inn = p.in.committed;
+    // Money out counts estimates (safe to over-state); money in counts only what has a
+    // document behind it (over-stating income is how a business misses a payment).
+    const out = p.out.committed, inn = p.in.documented;
     const fixed = r2(p.out.due.amt + p.out.overdue.amt);
     running = r2(running + inn - out);
     rows.push({
       month: m, out, in: inn, net: r2(inn - out), closing: running,
       committed: fixed, guessed: r2(out - fixed),
+      hoped: r2(p.in.committed - p.in.documented),
       short: running < -0.5,
     });
   }
@@ -1186,11 +1233,17 @@ export function awaitingBill() {
 // package prints and the one a CA can tie to the ledger without asking questions.
 export function trialBalanceDetail(from, upto) {
   const rows = [];
+  // Income and expense accounts are closed to reserves at each year end, so their opening
+  // figure is what has run through them since THIS financial year began — never the whole
+  // history. Otherwise a second-year trial balance opens with last year's revenue on it.
+  const fyFrom = from ? fyStartDate(fyOf(from, S.settings.fyStartMonth), S.settings.fyStartMonth) : null;
   for (const a of ACCOUNTS) {
     // Raw debit-minus-credit, not the reading convention: a trial balance shows a liability
     // as a credit, and `closing = opening + debits - credits` has to hold line by line.
     const sign = (a.type === 'asset' || a.type === 'expense') ? 1 : -1;
-    const opening = from ? r2(sign * bal(a.code, { upto: prevDay(from) })) : 0;
+    const isPl = a.type === 'income' || a.type === 'expense';
+    const opening = !from ? 0
+      : r2(sign * bal(a.code, { upto: prevDay(from), ...(isPl && fyFrom && fyFrom <= from ? { from: fyFrom } : {}) }));
     let debit = 0, credit = 0;
     for (const t of S.txns) {
       if (from && t.date < from) continue;
@@ -1219,6 +1272,10 @@ export function trialBalanceDetail(from, upto) {
   };
 }
 const prevDay = iso => addDays(iso, -1);
+// The first day of a financial year, from the label fyOf() produces ("2026-27").
+export function fyStartDate(fy, startMonth) {
+  return `${String(fy).slice(0, 4)}-${String(num(startMonth) || 4).padStart(2, '0')}-01`;
+}
 
 // Profit and loss in the order it is read: revenue, what it directly cost, what running the
 // business cost, then the things below the operating line — finance, depreciation, and the
@@ -1230,11 +1287,11 @@ export const PL_GROUPS = [
   { key: 'direct', label: 'Direct costs of earning it', type: 'expense', codes: ['5040', '5045'] },
   { key: 'people', label: 'People', type: 'expense', codes: ['5010', '5020', '5030'] },
   { key: 'place', label: 'Place and running costs', type: 'expense', codes: ['5000', '5060', '5070', '5130', '5170', '5160'] },
-  { key: 'selling', label: 'Selling and marketing', type: 'expense', codes: ['5090', '5110', '5185'] },
+  { key: 'selling', label: 'Selling and marketing', type: 'expense', codes: ['5090', '5110', '5185', '5225'] },
   { key: 'admin', label: 'Administration', type: 'expense', codes: ['5050', '5075', '5080', '5100', '5120', '5140', '5180'] },
   { key: 'finance', label: 'Finance cost', type: 'expense', codes: ['5150'] },
   { key: 'depreciation', label: 'Depreciation', type: 'expense', codes: ['5200'] },
-  { key: 'exceptional', label: 'Exceptional and non-deductible', type: 'expense', codes: ['5165', '5190', '5210', '5220', '5225'] },
+  { key: 'exceptional', label: 'Exceptional and one-off', type: 'expense', codes: ['5165', '5190', '5210', '5220', '5230'] },
 ];
 const PL_HOME = Object.fromEntries(PL_GROUPS.flatMap(g => g.codes.map(c => [c, g.key])));
 
@@ -1274,7 +1331,7 @@ export function plStatement(o = {}) {
 // the profit split into what earlier years left behind and what this year has made.
 export const BS_GROUPS = [
   { key: 'fixed', side: 'assets', label: 'Fixed assets', codes: ['1300', '1350'] },
-  { key: 'current', side: 'assets', label: 'Current assets', codes: ['1000', '1010', '1100', '1150', '1200', '1400', '1401', '1402', '1500', '1550'] },
+  { key: 'current', side: 'assets', label: 'Current assets', codes: ['1000', '1010', '1100', '1150', '1200', '1400', '1401', '1402', '1405', '1500', '1550'] },
   { key: 'funds', side: 'funds', label: "Owner's funds", codes: ['3000', '3100'] },
   { key: 'borrowings', side: 'funds', label: 'Borrowings', codes: ['2400'] },
   { key: 'payables', side: 'funds', label: 'Current liabilities', codes: ['2000', '2100', '2200', '2201', '2202', '2205', '2250', '2300', '2450', '2550'] },
@@ -1329,9 +1386,17 @@ export function booksHealth(upto) {
   const list = [];
   const add = (key, label, ok, detail, o = {}) => list.push({ key, label, ok, detail, level: o.level || (ok ? 'ok' : 'bad'), go: o.go || null, amount: o.amount ?? null });
 
-  const tb = trialBalance(asOf);
-  add('tb', 'The books balance', tb.balanced,
-    tb.balanced ? 'Every entry has equal debits and credits.' : `Debits and credits differ by ${fmt(Math.abs(tb.totalDr - tb.totalCr))}.`);
+  // Not "does the total balance" — that is arithmetic and cannot fail. This looks for an
+  // individual entry whose own two sides disagree, which is what a corrupt or hand-edited
+  // record looks like.
+  const lopsided = S.txns.filter(t => {
+    const d = (t.lines || []).reduce((s2, l) => s2 + num(l.dr), 0);
+    const c2 = (t.lines || []).reduce((s2, l) => s2 + num(l.cr), 0);
+    return Math.abs(d - c2) > HALF_PAISA;
+  });
+  add('tb', 'Every entry balances on its own', lopsided.length === 0,
+    lopsided.length ? `${lopsided.length} entr${lopsided.length === 1 ? 'y has' : 'ies have'} debits and credits that do not agree — entry #${lopsided[0].no || lopsided[0].id} is the first.`
+      : `All ${S.txns.length} entries have equal debits and credits.`, { go: 'txns' });
 
   const bs = balanceSheetGrouped(asOf);
   add('bs', 'The balance sheet ties out', bs.balanced,
@@ -1383,10 +1448,39 @@ export function booksHealth(upto) {
     pend.length ? `${pend.map(mlabel).join(', ')} still ${pend.length === 1 ? 'has' : 'have'} depreciation or prepaid entries waiting.` : 'Depreciation and prepaid slices are up to date.',
     { level: pend.length ? 'warn' : 'ok', go: 'overview' });
 
+  // Rule 30(2): the 7th of the following month, except March, which is the 30th of April.
+  // Money withheld this month and not yet due is not a finding.
   const tds = bal('2250', { upto: asOf });
-  add('tds', 'TDS withheld has been deposited', tds < 0.5,
-    tds < 0.5 ? 'Nothing withheld is sitting with you.' : `${fmt(tds)} withheld is still to be deposited — by the 7th of the month after it was deducted.`,
-    { level: tds > 0.5 ? 'warn' : 'ok', amount: tds, go: 'gst' });
+  const lastM = addMonths(ym(asOf), -1);
+  const dueBy = lastM.endsWith('-03') ? `${lastM.slice(0, 4)}-04-30` : addDays(lastM + '-01', 37).slice(0, 8) + '07';
+  const overdueTds = tds > 0.5 && asOf > dueBy;
+  add('tds', 'TDS withheld has been deposited', !overdueTds,
+    tds < 0.5 ? 'Nothing withheld is sitting with you.'
+      : overdueTds ? `${fmt(tds)} withheld is past its deposit date (${dueBy}) — interest runs at 1.5% a month under s.201(1A).`
+        : `${fmt(tds)} withheld, not yet due. ${lastM.endsWith('-03') ? 'March is deposited by 30 April' : 'Deposit by the 7th'}.`,
+    { level: overdueTds ? 'bad' : 'ok', amount: tds, go: 'gst' });
+
+  // Two vendor bills with the same number are either a duplicate entry or a duplicate
+  // payment waiting to happen. This is the first thing an auditor tests on payables.
+  const seenBills = new Map();
+  const dupes = [];
+  for (const b of (S.bills || [])) {
+    if (!b.billNo || b.status === 'void') continue;
+    const k = `${b.partyId}|${String(b.billNo).trim().toUpperCase()}`;
+    if (seenBills.has(k)) dupes.push(b); else seenBills.set(k, b);
+  }
+  add('dupbills', 'No vendor bill number is recorded twice', dupes.length === 0,
+    dupes.length ? `${dupes.length} bill number${dupes.length === 1 ? ' is' : 's are'} repeated for the same vendor — ${esc(dupes[0].billNo)} is the first. Check before paying either.`
+      : 'Every vendor bill number appears once.',
+    { level: dupes.length ? 'bad' : 'ok', go: 'owed' });
+
+  // GST held back because no tax invoice has arrived. It is not claimable until it does
+  // (s.16(2)(a) and (aa)), and it dies after the s.16(4) date.
+  const parked = bal('1405', { upto: asOf });
+  add('parkedgst', 'No GST is stuck waiting for an invoice', parked < 0.5,
+    parked < 0.5 ? 'Nothing is waiting.'
+      : `${fmt(parked)} of GST cannot be claimed until the vendor's invoice is on record. Use "Bill arrived" as each one comes in.`,
+    { level: parked > 0.5 ? 'warn' : 'ok', amount: parked, go: 'owed' });
 
   const noSelf = S.txns.filter(t => (t.lines || []).some(l => l.acc === '2205' && num(l.cr)) && !t.selfInvoiceNo).length;
   add('selfinv', 'Every reverse-charge entry has a self-invoice', noSelf === 0,
@@ -1505,7 +1599,10 @@ export function cashProfitBridge(month) {
 // lives in Settings so the CA can change it. This is an estimate for the owner, not the
 // computation the return will use — that adds back disallowances and uses tax depreciation.
 export function taxProvision(profit, rate) {
-  const r = num(rate ?? S.settings.incomeTaxRate) || 25.168;
+  // 26% = 25% + 4% cess, the rate for a company with turnover under 400 crore that has NOT
+  // elected s.115BAA. The concessional 25.168% is an irrevocable election made on Form 10-IC
+  // before the return is filed — so it is a setting, never the assumption.
+  const r = num(rate ?? S.settings.incomeTaxRate) || 26;
   const pbt = num(profit);
   const tax = pbt > 0 ? r2(pbt * r / 100) : 0;
   return { pbt, rate: r, tax, pat: r2(pbt - tax) };

@@ -189,7 +189,7 @@ export function renderSettings() {
 
       <h2>Income tax and TDS thresholds</h2>
       <div class="card">
-        ${field('Income-tax rate % (for the estimate on Reports)', 'incomeTaxRate', s.incomeTaxRate, { type: 'number', hint: '25.168 is the s.115BAA rate: 22% + 10% surcharge + 4% cess. Your CA may set a different one.' })}
+        ${field('Income-tax rate % (for the estimate on Reports)', 'incomeTaxRate', s.incomeTaxRate, { type: 'number', hint: '26% is 25% plus 4% cess — the rate without any election. The lower 25.168% under s.115BAA applies only if the company has filed Form 10-IC; ask your CA before setting it.' })}
         <p class="small muted">Annual amount paid to one vendor above which TDS applies. The bill form shows how much you have paid each vendor this year against these.</p>
         <div class="row2">
           ${field('194H commission', 'tdsThresholds.194H', s.tdsThresholds?.['194H'], { type: 'number' })}

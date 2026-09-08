@@ -112,6 +112,25 @@ const partyReq = (v, k, label) => pidOf(v[k]) ? [] : [err(k, label)];
 // A cost belongs to the month it was used. The entry is dated the last day of that month
 // unless the month is already closed, in which case it lands on the document's own date —
 // reopening a closed month behind the owner's back would be worse than a late cost.
+// The bill has grown past the section's yearly limit but nothing was withheld on it. The app
+// cannot know which section applies, so it says so and leaves the decision with the owner.
+function tdsThresholdWarn(b, v) {
+  if (!b || !tdsOn() || num(b.tds) > 0.005 || !b.partyId) return [];
+  const st = S().settings;
+  const fy = fyOf(v.date || today(), st.fyStartMonth);
+  const already = tdsFyTotal(b.partyId, fy);
+  const total = r2(already - num(b.taxable) + num(v.amt));
+  const limits = Object.entries(st.tdsThresholds || {}).filter(([, t]) => num(t) > 0);
+  const hit = limits.filter(([, t]) => total > num(t)).sort((x, y) => num(y[1]) - num(x[1]))[0];
+  if (!hit || already > num(hit[1])) return [];
+  return [warn('amt', `This vendor is now at ${fmt(total)} for FY ${fy}, past the ${esc(hit[0])} limit of ${fmt(num(hit[1]))}. Nothing was withheld on this bill — check with your CA whether TDS applies.`)];
+}
+// Whether a TDS deposit covering this bill's month has already been made, in which case the
+// challan is filed and a downward adjustment belongs in the next one.
+function depositedFor(b) {
+  const m = b.period || b.month || ym(b.date);
+  return S().txns.some(t => t.event === 'statutory' && !t.reversedBy && (t.meta?.tdsMonth === m));
+}
 function postDateFor(period, fallback) {
   const d = fallback || today();
   if (!period || period >= ym(d)) return d;
@@ -213,14 +232,21 @@ const gstOf = v => v.gst === 'yes' ? num(v.gstAmt) : 0;
 // Input credit is blocked by s.17(5) on food and beverages, and on motor-vehicle running
 // costs for a business that does not deal in vehicles. GST paid under these categories cannot
 // be claimed back, so it is added to the cost rather than parked in 1400 as if it were.
-export const BLOCKED_ITC = new Set(['5030', '5050']);
+// s.17(5): credit is blocked on food and beverages and staff welfare (b)(i), club and
+// fitness membership (b)(ii), motor vehicles and their running (a), and goods given away
+// as gifts or free samples (h). Claiming any of it is a demand with interest waiting.
+export const BLOCKED_ITC = new Set(['5030', '5050', '5075', '5185']);
 
 // Where the tax on a purchase goes: the cost line itself when credit is blocked, 1400–1402
 // when it can be claimed.
-function inputTax(acc, gi, v = {}) {
-  if (!gi) return { onCost: 0, credit: 0, lines: [] };
-  if (BLOCKED_ITC.has(acc)) return { onCost: gi, credit: 0, lines: [] };
-  return { onCost: 0, credit: gi, lines: inputTaxLines(gi, (v.gstType || 'intra') !== 'inter') };
+function inputTax(acc, gi, v = {}, o = {}) {
+  if (!gi) return { onCost: 0, credit: 0, lines: [], parked: 0 };
+  if (BLOCKED_ITC.has(acc)) return { onCost: gi, credit: 0, lines: [], parked: 0 };
+  // s.16(2)(a) and (aa): credit needs a tax invoice, and the invoice has to be in GSTR-2B.
+  // A month closed on the owner's own figure has neither yet, so the tax is parked in 1405
+  // and released to the input heads by "Bill arrived", dated the invoice.
+  if (o.parked) return { onCost: 0, credit: 0, parked: gi, lines: [{ acc: '1405', dr: gi }] };
+  return { onCost: 0, credit: gi, parked: 0, lines: inputTaxLines(gi, (v.gstType || 'intra') !== 'inter') };
 }
 
 // Reverse charge on a bill: the tax is a liability to the government paid in cash, and at the
@@ -303,6 +329,7 @@ function billDoc(v, o) {
       paid: r2(o.paid || 0), status: o.status || 'open',
       serviceId: o.serviceId || null, month: o.month || null, dealId: o.dealId || null,
       period: o.period || o.month || ym(v.date || today()),
+      ...(o.gstParked ? { gstParked: r2(o.gstParked) } : {}),
       allocations: [], no: null,
       ...(o.accrued ? { accrued: true } : {}),
     },
@@ -1091,7 +1118,9 @@ EV.confirmcharge = {
     const vendorName = s.vendorId ? s.vendor : (v.vendor ? pnameOf(v.vendor) : s.vendor);
     const rcm = rcmLines(amt, v);
     const gi = v.rcm === 'yes' ? 0 : gstOf(v);
-    const tax = inputTax(acc, gi, v);
+    // No vendor invoice number means no tax invoice yet, so the credit is not available.
+    const parkGst = v.result === 'invoice' && !v.vinv;
+    const tax = inputTax(acc, gi, v, { parked: parkGst });
     const tds = tdsOn() && v.tds && v.tds !== 'none' ? Math.round(amt * num(v.tdsrate) / 100) : 0;
     const total = amt + gi;
     const diff = r2(amt - expected);
@@ -1113,7 +1142,7 @@ EV.confirmcharge = {
       docs.push(billDoc(v, {
         partyId: vendorId, vendorName, desc: `${label} — ${mlabel(month)}`, acc,
         taxable: amt, gst: gi, rcm: rcm.tax, tds, total, net: r2(total - tds), paid: 0, status: 'open', serviceId: s.id, month, dueDate: v.dueDate || null,
-        accrued: !v.vinv, period: month,
+        accrued: !v.vinv, period: month, gstParked: tax.parked,
       }));
     }
     // Store the vendor back on the commitment the first time it is named.
@@ -1142,6 +1171,7 @@ EV.confirmcharge = {
         `Cost ${fmt(amt + tax.onCost)} for ${mlabel(month)} posted to ${A[acc]?.name || acc} — profit goes down by that. ${varianceLine}`,
         tds ? `${fmt(tds)} TDS withheld — deposit it by the 7th of next month.` : '',
         tax.credit ? `${fmt(gi)} GST becomes input credit.` : '',
+        tax.parked ? `${fmt(tax.parked)} GST is held back — it cannot be claimed until the vendor's tax invoice is on record. Record it with "Bill arrived" and the credit is taken in that month.` : '',
         rcm.tax ? `${fmt(rcm.tax)} IGST under reverse charge — paid with the month's return, then claimed back. Not owed to the vendor.` : '',
         v.result === 'paid'
           ? `${fmt(r2(total - tds))} left ${A[v.via || s.via || '1000'].name}. The month's bill is on record as paid.`
@@ -1537,6 +1567,9 @@ EV.billarrived = {
       ...(b && net + 0.005 < num(b.paid) ? [err('amt', `You have already paid ${fmt(num(b.paid))} against this — the bill cannot be less than that`)] : []),
       ...(b && Math.abs(num(v.amt) - oldT) > Math.max(oldT * 0.5, 5000)
         ? [warn('amt', `That is a long way from the ${fmt(oldT)} you recorded — check you picked the right one`)] : []),
+      ...tdsThresholdWarn(b, v),
+      ...(b && newTds < oldTds - 0.005 && depositedFor(b)
+        ? [warn('amt', `TDS on this bill drops by ${fmt(oldTds - newTds)}, but a deposit for that month is already on record. Adjust it in the next challan rather than the last one.`)] : []),
     ];
   },
   build: v => {
@@ -1544,22 +1577,38 @@ EV.billarrived = {
     if (!b) return need('Pick what the bill is for.');
     if (!String(v.vinv || '').trim()) return need('Enter the vendor bill number.');
     const oldT = num(b.taxable), oldG = num(b.gst), oldTds = num(b.tds);
+    const parked = num(b.gstParked);
     const newT = num(v.amt), newG = num(v.gstAmt);
     const newTds = oldT > 0.005 ? Math.round(newT * oldTds / oldT) : oldTds;
     const dT = r2(newT - oldT), dG = r2(newG - oldG), dTds = r2(newTds - oldTds);
     const blocked = BLOCKED_ITC.has(b.acc);
     const period = b.period || b.month || ym(b.date);
-    const postDate = postDateFor(period, v.date);
+    // Releasing input credit is a statutory date, not a preference: it belongs to the month
+    // the tax invoice is dated (s.16(2)). When credit is being released the whole entry takes
+    // that date; otherwise the cost goes back to the month it belongs to.
+    const releasing = parked > 0.005 && !blocked;
+    const postDate = releasing ? (v.date || today()) : postDateFor(period, v.date);
+    // A cost that can no longer reach its own month is a prior-period item, and AS 5 wants it
+    // disclosed as one rather than buried in this month's rent.
+    const inPeriod = ym(postDate) === period;
+    const costAcc = inPeriod ? b.acc : '5230';
 
     const lines = [];
     const put = (acc, amt, party) => {
       if (Math.abs(amt) < 0.005) return;
       lines.push(amt > 0 ? { acc, dr: r2(amt), ...(party ? { party } : {}) } : { acc, cr: r2(-amt), ...(party ? { party } : {}) });
     };
-    put(b.acc, r2(dT + (blocked ? dG : 0)));
-    if (!blocked && Math.abs(dG) > 0.005) {
-      if ((v.gstType || 'intra') === 'inter') put('1402', dG);
-      else { put('1400', r2(dG / 2)); put('1401', r2(dG / 2)); }
+    put(costAcc, r2(dT + (blocked ? dG : 0)));
+    if (!blocked) {
+      if (releasing) {
+        // The held tax comes out of 1405 and the real credit is taken at the invoice amount.
+        put('1405', -parked);
+        if ((v.gstType || 'intra') === 'inter') put('1402', newG);
+        else { put('1400', r2(newG / 2)); put('1401', r2(newG - r2(newG / 2))); }
+      } else if (Math.abs(dG) > 0.005) {
+        if ((v.gstType || 'intra') === 'inter') put('1402', dG);
+        else { put('1400', r2(dG / 2)); put('1401', r2(dG - r2(dG / 2))); }
+      }
     }
     put('2250', -dTds);
     put('2000', -r2(dT + dG - dTds), b.partyId);
@@ -1579,15 +1628,18 @@ EV.billarrived = {
           taxable: r2(newT), gst: r2(newG), tds: r2(newTds),
           total: r2(newT + newG), net,
           status: docStatus(r2(net - num(b.paid)), net),
-          accrued: false, period,
+          accrued: false, period, gstParked: 0,
         },
       }],
       effects: [
         `Bill ${esc(String(v.vinv).trim())} is now on record against ${esc(b.desc)}, dated ${v.date || today()} and payable by ${dueDate}.`,
         changed
-          ? `The bill is ${fmt(Math.abs(r2(dT + dG)))} ${dT + dG > 0 ? 'more' : 'less'} than you recorded. The difference is posted to ${A[b.acc]?.name || b.acc} in ${mlabel(period)} — the month you used it — so ${mlabel(period)}'s profit is now right.`
+          ? (inPeriod
+            ? `The bill is ${fmt(Math.abs(r2(dT + dG)))} ${dT + dG > 0 ? 'more' : 'less'} than you recorded. The difference goes to ${A[b.acc]?.name || b.acc} in ${mlabel(period)} — the month you used it — so ${mlabel(period)}'s profit is now right.`
+            : `The bill is ${fmt(Math.abs(r2(dT + dG)))} ${dT + dG > 0 ? 'more' : 'less'} than you recorded, but ${mlabel(period)} can no longer take it${releasing ? ' (the credit has to sit in the month of the invoice)' : ' (that month is closed)'}. The difference is shown separately as a prior-period adjustment in ${mlabel(ym(postDate))}, which is what an accountant would do rather than quietly reopening a closed month.`)
           : 'The amount matches what you recorded, so nothing changes in the books — this only completes the paperwork.',
-        Math.abs(dG) > 0.005 && !blocked ? `${fmt(Math.abs(dG))} ${dG > 0 ? 'more' : 'less'} GST to claim as input credit.` : '',
+        releasing ? `${fmt(parked)} of GST was held back until this invoice arrived; ${fmt(newG)} is claimed as input credit in ${mlabel(ym(postDate))}. That is the month it belongs to under s.16(2).` : '',
+        !releasing && Math.abs(dG) > 0.005 && !blocked ? `${fmt(Math.abs(dG))} ${dG > 0 ? 'more' : 'less'} GST to claim as input credit.` : '',
         Math.abs(dTds) > 0.005 ? `TDS adjusts by ${fmt(Math.abs(dTds))}.` : '',
         `${fmt(r2(net - num(b.paid)))} is owed and now appears in what is due in ${mlabel(ym(dueDate))}.`,
       ].filter(Boolean),
