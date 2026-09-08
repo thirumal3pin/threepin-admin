@@ -767,3 +767,9 @@ details.bucket[open] > summary { border-bottom: 1px solid var(--line); }
   display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 44px; color: var(--ink-2);
 }
 .sheet-mod-grid button.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+
+
+/* Four steps of one story: stacked on a phone, side by side once there is room. Forcing four
+   columns at 390px is what pushed the guide into horizontal scroll. */
+.grid.four-up { grid-template-columns: 1fr; }
+@media (min-width: 700px) { .grid.four-up { grid-template-columns: repeat(4, 1fr); } }

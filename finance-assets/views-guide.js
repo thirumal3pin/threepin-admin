@@ -516,7 +516,7 @@ function startItems() {
     item('The four states of a cost', `
       <h2>Four states, one cost, counted once</h2>
       <p>The single thing worth understanding before anything else. A cost you pay every month passes through four states, and the app keeps them apart so nothing is ever counted twice.</p>
-      <div class="grid g1" style="grid-template-columns:repeat(4,1fr)">
+      <div class="grid four-up">
         <div class="card"><h3>1. A guess</h3><p class="small muted" style="margin:0">The rent will be about 20,000. It shows on <b>This month</b> under "still a guess" and in the Budget. <b>Nothing is posted.</b></p></div>
         <div class="card"><h3>2. An event</h3><p class="small muted" style="margin:0">The month is over and you used the office. Record it: the cost belongs to that month, and the landlord goes on Owed. No money has moved.</p></div>
         <div class="card"><h3>3. A document</h3><p class="small muted" style="margin:0">The bill arrives on the 4th, payable on the 15th. Record <b>Bill arrived</b>: the number and due date go on, and any difference goes back into the month you used it.</p></div>
