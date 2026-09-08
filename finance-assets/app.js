@@ -13,7 +13,7 @@ import {
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
-  settlementOf,
+  settlementOf, explain, INCOME_ACCS, EXPENSE_ACCS,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -406,9 +406,9 @@ function overview() {
     ${booksNote}
 
     <div class="grid g3">
-      ${stat('Income', fmt(p.ti))}
-      ${stat('Expenses', fmt(p.te))}
-      ${stat('Profit', signed(p.profit), { raw: true, hero: true })}
+      ${stat('Income', fmt(p.ti), { drill: { accs: INCOME_ACCS, month: m, flip: true } })}
+      ${stat('Expenses', fmt(p.te), { drill: { accs: EXPENSE_ACCS, month: m } })}
+      ${stat('Profit', signed(p.profit), { raw: true, hero: true, drill: { profit: true, month: m, note: 'Income counts up, costs count down. Together they make the month.' } })}
       ${stat('Free to use', fmt(cash.free), { sub: 'Cash after vendor dues and client tokens' })}
     </div>
 
@@ -416,17 +416,17 @@ function overview() {
 
     <h2>Where the money is</h2>
     <div class="grid g3">
-      ${stat('Bank', fmt(cash.bank))}
-      ${stat('Petty cash', fmt(cash.petty))}
-      ${stat('Credit card', fmt(cash.card), { cls: cash.card > 0 ? 'neg' : '', sub: 'Owed' })}
-      ${stat('Loans', fmt(cash.loans), { sub: 'Outstanding' })}
+      ${stat('Bank', fmt(cash.bank), { drill: { accs: '1000', note: 'Every movement through the bank since the books began.' } })}
+      ${stat('Petty cash', fmt(cash.petty), { drill: { accs: '1010' } })}
+      ${stat('Credit card', fmt(cash.card), { cls: cash.card > 0 ? 'neg' : '', sub: 'Owed', drill: { accs: '2300', flip: true } })}
+      ${stat('Loans', fmt(cash.loans), { sub: 'Outstanding', drill: { accs: '2400', flip: true } })}
     </div>
 
     <h2>Who owes whom</h2>
     <div class="grid g3">
-      ${stat('Clients owe you', fmt(cash.receivable))}
-      ${stat('You owe vendors', fmt(cash.vendorDues))}
-      ${stat('Tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers' })}
+      ${stat('Clients owe you', fmt(cash.receivable), { drill: { accs: '1100', note: 'Invoices raised, less what has been collected against them.' } })}
+      ${stat('You owe vendors', fmt(cash.vendorDues), { drill: { accs: '2000', flip: true, note: 'Bills received, less what has been paid against them.' } })}
+      ${stat('Tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers', drill: { accs: '2100', flip: true } })}
       ${stat('GST due', fmt(cash.gstDue), { cls: cash.gstDue > 0 ? 'neg' : '', sub: 'Net of input credit' })}
     </div>
     <div class="actions"><button class="btn" type="button" onclick="fin.go('owed')">Open Owed both ways</button></div>
@@ -434,8 +434,8 @@ function overview() {
     <h2>Services</h2>
     <div class="grid g3">
       ${stat('Recurring costs', fmt(svc.monthly) + '/mo', { sub: 'Expected vs actual on the Budget tab' })}
-      ${stat('Petty cash in the box', fmt(bal('1010')), { cls: bal('1010') < -0.5 ? 'neg' : '' })}
-      ${stat('Prepaid', fmt(svc.prepaidUnused), { sub: 'Sitting with vendors' })}
+      ${stat('Petty cash in the box', fmt(bal('1010')), { cls: bal('1010') < -0.5 ? 'neg' : '', drill: { accs: '1010' } })}
+      ${stat('Prepaid', fmt(svc.prepaidUnused), { sub: 'Sitting with vendors', drill: { accs: '1200' } })}
       ${stat('Active', String(svc.active.length), { sub: 'Services running' })}
     </div>
 
@@ -1205,6 +1205,58 @@ function attachmentGrid(t) {
     </div>`).join('')}</div>`;
 }
 
+// ═══════ WHAT IS BEHIND A FIGURE ═══════
+//
+// Any total on any page can be opened. The drawer lists the entries the figure is made of,
+// each one clickable through to the full journal, with the same total at the bottom so it is
+// obvious nothing has been left out. "Show these in Transactions" hands the same filter to the
+// list, so the drill-down is a way in rather than a dead end.
+function explainFigure(json) {
+  let spec;
+  try { spec = typeof json === 'string' ? JSON.parse(json) : json; } catch { return; }
+  const title = spec.title || 'This figure';
+  // Read inside the same petty-cash scope the page was rendered in, or the parts would not
+  // add up to the total that was clicked.
+  const res = SCOPED_VIEWS.has(view) ? scoped(() => explain(spec)) : explain(spec);
+  const when = spec.month ? mlabel(spec.month)
+    : spec.fy ? 'FY ' + spec.fy
+      : spec.from || spec.to ? `${spec.from || 'the start'} to ${spec.to || 'today'}` : 'all time';
+
+  modal({
+    title: `${title} — ${fmt(res.total)}`,
+    body: `
+      <p class="small muted" style="margin:0 0 10px">${res.count} ${res.count === 1 ? 'entry' : 'entries'} · ${esc(when)}${spec.party ? ' · ' + esc(pname(spec.party)) : ''}${spec.moved ? ' · money that actually moved' : ''}.
+      ${spec.note ? esc(spec.note) : 'Tap any row for the full entry.'}</p>
+      ${res.rows.length ? table(
+      `<th>Entry</th><th>Date</th><th class="n">Amount</th>`,
+      res.rows.map(r => `<tr class="click" onclick="fin.closeModal();fin.openTxn('${esc(r.txnId)}')">
+          <td class="lead">${esc(r.desc)}
+            ${r.auto ? tag('auto', 'auto') : ''}${r.reversed ? tag('reversed', 'rev') : ''}${r.reversal ? tag('reversal', 'rev') : ''}
+            ${r.party ? `<br><span class="small faint">${esc(pname(r.party))}</span>` : ''}</td>
+          <td class="nowrap small" data-label="Date">${esc(r.date)}${r.no ? `<br><span class="eno">#${String(r.no).padStart(4, '0')}</span>` : ''}</td>
+          <td class="n" data-label="Amount">${fmt(r.amt)}</td>
+        </tr>`).join(''),
+      `<tr><td colspan="2">Total</td><td class="n">${fmt(res.total)}</td></tr>`, { stack: true })
+      : empty('No entries make up this figure. It comes from a document, a commitment or a schedule rather than from the ledger — the page it sits on says which.')}`,
+    foot: res.rows.length
+      ? `<button class="btn" type="button" onclick="fin.showInTxns('${esc(JSON.stringify(spec))}')">Show these in Transactions</button>`
+      : '',
+  });
+}
+
+// Hand the same filter to the Transactions list, so a drill-down leads somewhere.
+function showInTxns(json) {
+  let spec;
+  try { spec = typeof json === 'string' ? JSON.parse(json) : json; } catch { return; }
+  closeModal();
+  txnFilters.month = spec.month || '';
+  txnFilters.event = spec.event || '';
+  txnFilters.party = spec.party || '';
+  txnFilters.moved = spec.moved ? 'moved' : 'all';
+  txnFilters.q = '';
+  go('txns');
+}
+
 function openTxn(id) {
   const t = getState().txns.find(x => x.id === id);
   if (!t) return;
@@ -1304,6 +1356,7 @@ function startEvent(key, preset = {}, label = null) {
 
 window.fin = {
   go, repaint, toggleModule,
+  explain: explainFigure, showInTxns,
 
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
 

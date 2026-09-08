@@ -164,6 +164,55 @@ check('Drawer link opens the Drive file', await page.evaluate(() => /drive\.goog
 await page.screenshot({ path: `${SHOTS}m-drawer.png`, fullPage: true });
 await page.evaluate(() => window.fin.closeModal());
 
+// ── opening a figure ────────────────────────────────────────────────────────────
+section('Drilling into a figure');
+await page.setViewportSize({ width: 1280, height: 900 });
+await page.evaluate(() => window.fin.go('overview'));
+await page.waitForTimeout(600);
+const tile = await page.evaluate(() => {
+  const t = [...document.querySelectorAll('#main .stat.drill')];
+  return { count: t.length, labels: t.map(x => x.querySelector('.l')?.textContent.trim()) };
+});
+check('Figures on the Overview say they can be opened', tile.count >= 6, JSON.stringify(tile.labels));
+check('The month figures are among them', tile.labels.some(l => /expenses/i.test(l)), tile.labels.join(' | '));
+
+const drill = await page.evaluate(async () => {
+  const t = [...document.querySelectorAll('#main .stat.drill')]
+    .find(x => /expenses/i.test(x.querySelector('.l')?.textContent || ''));
+  const shown = t.querySelector('.v')?.textContent.trim();
+  t.click();
+  await new Promise(r => setTimeout(r, 500));
+  const ov = document.getElementById('ov');
+  const title = ov?.querySelector('h3, .modal-title, header')?.textContent?.trim() || ov?.textContent?.slice(0, 120) || '';
+  const rows = ov ? [...ov.querySelectorAll('tbody tr')].length : 0;
+  const foot = ov ? ov.querySelector('tfoot')?.textContent?.replace(/\s+/g, ' ').trim() : '';
+  return { shown, title, rows, foot, hasBack: /Show these in Transactions/.test(ov?.textContent || '') };
+});
+check('Clicking it opens a list of what is behind it', drill.rows > 0 || /No entries/.test(drill.title), JSON.stringify(drill));
+check('The drawer names the figure and its total', drill.title.includes('Expenses'), drill.title);
+check('…and the total in the drawer is the total on the tile', drill.foot.includes(drill.shown.replace(/^−/, '')), `${drill.foot} vs ${drill.shown}`);
+check('…with a way through to the full list', drill.hasBack);
+await page.screenshot({ path: `${SHOTS}d-drill.png`, fullPage: false });
+await page.evaluate(() => window.fin.closeModal());
+
+await page.evaluate(() => window.fin.go('reports'));
+await page.waitForTimeout(700);
+const repRows = await page.evaluate(async () => {
+  const r = [...document.querySelectorAll('#main tr.click')].find(x => /fin\.explain/.test(x.getAttribute('onclick') || ''));
+  if (!r) return { found: false };
+  r.click();
+  await new Promise(z => setTimeout(z, 500));
+  const ov = document.getElementById('ov');
+  return { found: true, rows: ov ? [...ov.querySelectorAll('tbody tr')].length : 0 };
+});
+check('A category row on Reports opens the same way', repRows.found && repRows.rows >= 0, JSON.stringify(repRows));
+await page.evaluate(() => window.fin.closeModal());
+
+await page.evaluate(() => window.fin.go('analytics'));
+await page.waitForTimeout(700);
+check('Analytics figures can be opened too',
+  await page.evaluate(() => document.querySelectorAll('#main .stat.drill').length >= 3));
+
 // ── the navigation, on both shapes of screen ────────────────────────────────────
 section('All sections sheet at 390px');
 await page.evaluate(() => window.fin.openSheet());

@@ -6,13 +6,13 @@
 // went, deal by deal, and who the largest clients and vendors are. Every figure comes from
 // finance-analytics.js, and every table exports.
 
-import { A, EXP, fmt, esc, num, today, ym, addMonths, getState, displayCurrency } from './finance-core.js';
+import { A, EXP, fmt, esc, num, today, ym, addMonths, getState, displayCurrency, INCOME_ACCS, EXPENSE_ACCS } from './finance-core.js';
 import { EV } from './finance-events.js';
 import {
   CHANNELS, defaultFilters, filterTxns, previousRange, seriesByPeriod, runningCash,
   breakdown, byChannel, byParty, kpis, dealFunnel, collectionDays, measures as measuresOf,
 } from './finance-analytics.js';
-import { stat, signed, empty, note, tag, table, seg, downloadCsv } from './ui.js';
+import { stat, signed, empty, note, tag, table, seg, downloadCsv, drillAttrs } from './ui.js';
 
 let F = defaultFilters();
 
@@ -103,12 +103,12 @@ export function renderAnalytics() {
     </div>
 
     <div class="grid g3">
-      ${kpi('Income', k.income, k.delta.income)}
-      ${kpi('Expenses', k.expense, k.delta.expense, true)}
-      ${kpi('Profit', k.profit, k.delta.profit, false, true)}
+      ${kpi('Income', k.income, k.delta.income, false, false, { accs: INCOME_ACCS, ...rangeSpec(), flip: true })}
+      ${kpi('Expenses', k.expense, k.delta.expense, true, false, { accs: EXPENSE_ACCS, ...rangeSpec() })}
+      ${kpi('Profit', k.profit, k.delta.profit, false, true, { profit: true, ...rangeSpec() })}
       ${stat('Margin', k.margin + '%', { sub: 'Profit as a share of income' })}
-      ${kpi('Cash in', k.cashIn, null)}
-      ${kpi('Cash out', k.cashOut, null, true)}
+      ${kpi('Cash in', k.cashIn, null, false, false, { accs: ['1000', '1010'], side: 'dr', ...rangeSpec(), moved: true })}
+      ${kpi('Cash out', k.cashOut, null, true, false, { accs: ['1000', '1010'], side: 'cr', ...rangeSpec(), moved: true })}
       ${kpi('Net cash', k.net, k.delta.net)}
       ${stat('Days to collect', coll.avg == null ? '—' : coll.avg + ' days', { sub: coll.count ? `over ${coll.count} invoice${coll.count === 1 ? '' : 's'}` : 'No invoice has been paid yet' })}
     </div>
@@ -174,13 +174,16 @@ export function renderAnalytics() {
 }
 
 
-function kpi(label, value, delta, invert = false, hero = false) {
+// The filters on this page, said the way explain() wants them.
+const rangeSpec = () => ({ from: F.from, to: F.to, ...(F.party ? { party: F.party } : {}), ...(F.deal ? { deal: F.deal } : {}), ...(F.event ? { event: F.event } : {}) });
+
+function kpi(label, value, delta, invert = false, hero = false, drill = null) {
   let sub = '';
   if (delta != null) {
     const good = invert ? delta <= 0 : delta >= 0;
     sub = `<span class="${good ? 'pos' : 'neg'}">${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}%</span> vs previous`;
   }
-  return stat(label, hero ? signed(value) : fmt(value), { raw: hero, hero, sub, subRaw: true });
+  return stat(label, hero ? signed(value) : fmt(value), { raw: hero, hero, sub, subRaw: true, ...(drill ? { drill } : {}) });
 }
 
 // ═══════ CHARTS (inline SVG) ═══════

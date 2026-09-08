@@ -794,3 +794,20 @@ details.bucket[open] > summary { border-bottom: 1px solid var(--line); }
 .side .mod-body button:hover { color: var(--ink); }
 .side .mod-body button .ic { color: var(--ink-3); opacity: .85; }
 .side .mod + .mod { margin-top: 2px; border-top: 1px solid var(--line); padding-top: 2px; }
+
+
+/* ═══════ OPENABLE FIGURES ═══════
+   A total you can click says so quietly: the chevron appears on hover or focus, the tile
+   lifts, and the whole card is one 44px target. Nothing moves on the page when it is not
+   being touched, so a wall of stats still reads as a wall of stats. */
+.stat.drill { cursor: pointer; position: relative; transition: border-color .12s, transform .12s; }
+.stat.drill:hover, .stat.drill:focus-visible { border-color: var(--line-2); transform: translateY(-1px); }
+.stat.drill:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.stat .drill-mark {
+  position: absolute; top: 12px; right: 12px; color: var(--ink-3); font-size: 15px; line-height: 1;
+  opacity: 0; transition: opacity .12s;
+}
+.stat.drill:hover .drill-mark, .stat.drill:focus-visible .drill-mark { opacity: 1; }
+tr.click[role="button"]:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.bar.drill { cursor: pointer; }
+.bar.drill:hover i { filter: brightness(1.08); }

@@ -89,12 +89,26 @@ export function confirmDialog({ title, message, confirmLabel = 'Confirm', danger
 
 // ═══════ SMALL BUILDING BLOCKS ═══════
 
-export const stat = (label, value, opts = {}) => `
-  <div class="card stat ${opts.hero ? 'hero' : ''}">
+// A figure with `drill` can be opened: the tile becomes a button that lists the entries the
+// total is made of. Everything else about it is unchanged, so any stat on any page can be made
+// answerable by passing one more option.
+export const stat = (label, value, opts = {}) => {
+  const d = opts.drill ? esc(JSON.stringify({ title: label, ...opts.drill })) : null;
+  return `
+  <div class="card stat ${opts.hero ? 'hero' : ''} ${d ? 'drill' : ''}"
+    ${d ? `role="button" tabindex="0" onclick="fin.explain('${d}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();fin.explain('${d}')}" title="See what makes up this figure"` : ''}>
     <div class="l">${esc(label)}</div>
     <div class="v ${opts.cls || ''}">${opts.raw ? value : esc(value)}</div>
     ${opts.sub ? `<div class="s">${opts.subRaw ? opts.sub : esc(opts.sub)}</div>` : ''}
+    ${d ? '<span class="drill-mark" aria-hidden="true">›</span>' : ''}
   </div>`;
+};
+
+// The same for anything that is not a stat tile: a table row, a bar, a chart segment.
+export const drillAttrs = (title, spec) => {
+  const d = esc(JSON.stringify({ title, ...spec }));
+  return `class="click" role="button" tabindex="0" onclick="fin.explain('${d}')" onkeydown="if(event.key==='Enter'){fin.explain('${d}')}" title="See what makes up this figure"`;
+};
 
 export const money = n => fmt(n);
 

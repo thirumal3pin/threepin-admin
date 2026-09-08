@@ -82,6 +82,9 @@ export const ACCOUNTS = [
 ].map(([code, name, type]) => ({ code, name, type }));
 
 export const A = Object.fromEntries(ACCOUNTS.map(a => [a.code, a]));
+// Every account of a type, for the screens that drill into a total made of all of them.
+export const INCOME_ACCS = ACCOUNTS.filter(a => a.type === 'income').map(a => a.code);
+export const EXPENSE_ACCS = ACCOUNTS.filter(a => a.type === 'expense').map(a => a.code);
 // Costs the income-tax computation adds back. Kept as data so the tax provision and the
 // year-end pack can show them without anyone remembering which codes they were.
 // Costs the income-tax computation adds back. A bad debt written off is NOT one of them:
@@ -1353,6 +1356,75 @@ export function settlementOf(txnId) {
       : made.every(m => m.status === 'void') ? 'void'
         : open <= HALF_PAISA ? 'settled' : made.some(m => m.status === 'part') ? 'part' : 'open',
   };
+}
+
+// ═══════ WHAT IS BEHIND A FIGURE ═══════
+//
+// Every total on every page is the sum of some lines in the ledger. This turns the total back
+// into those lines, so any figure can be opened and read rather than believed. One spec covers
+// every case a screen needs to ask about:
+//
+//   accs    account codes the line must be in ('5000', or ['5000','5010'])
+//   side    'dr' | 'cr' | 'net' (default) — which way the line has to move
+//   from/to date range, or month for a whole month
+//   party, deal, event, method — narrow to one counterparty, deal, kind of entry or channel
+//   moved   true to keep only entries where bank, box or card actually moved
+//
+// The rows come back with the amount that figure took from each entry, so the parts add up to
+// the total that was clicked. Nothing is recomputed a second way — it reads S.txns, inside
+// whatever petty-cash scope the calling view is rendering in.
+export function explain(spec = {}) {
+  const accs = spec.profit ? new Set([...INCOME_ACCS, ...EXPENSE_ACCS])
+    : spec.accs === undefined ? null
+      : new Set((Array.isArray(spec.accs) ? spec.accs : [spec.accs]).map(String));
+  const from = spec.month ? spec.month + '-01' : spec.from || null;
+  const to = spec.month ? lastDayOfMonth(spec.month) : spec.to || null;
+  const side = spec.side || 'net';
+  const rows = [];
+  let total = 0;
+  for (const t of S.txns) {
+    if (from && t.date < from) continue;
+    if (to && t.date > to) continue;
+    if (spec.event && t.event !== spec.event) continue;
+    if (spec.events && !spec.events.includes(t.event)) continue;
+    if (spec.fy && t.fy !== spec.fy) continue;
+    if (spec.moved && !movesMoney(t)) continue;
+    if (spec.includeReversed === false && (t.reversedBy || t.reversalOf)) continue;
+    let amt = 0, hit = false;
+    for (const l of t.lines || []) {
+      if (accs && !accs.has(String(l.acc))) continue;
+      if (spec.party && l.party !== spec.party) continue;
+      if (spec.deal && l.deal !== spec.deal) continue;
+      const dr = num(l.dr), cr = num(l.cr);
+      if (side === 'dr' && !dr) continue;
+      if (side === 'cr' && !cr) continue;
+      hit = true;
+      // Profit is the one figure made of two kinds of line at once: income the credit way
+      // round, costs the debit way round. Asking for it by hand would get the sign wrong.
+      if (spec.profit) {
+        const ty = A[l.acc]?.type;
+        if (ty === 'income') amt += cr - dr;
+        else if (ty === 'expense') amt -= dr - cr;
+        else { hit = false; continue; }
+      } else {
+        amt += side === 'dr' ? dr : side === 'cr' ? cr : dr - cr;
+      }
+    }
+    if (!hit) continue;
+    // A sign convention that reads the way the figure on screen reads: an income or liability
+    // total is a credit balance, and nobody wants to see it as a negative number.
+    const shown = spec.flip ? -amt : amt;
+    if (Math.abs(shown) < 0.005 && !spec.keepZero) continue;
+    rows.push({
+      txnId: t.id, no: t.no ?? null, date: t.date, desc: t.desc || t.event,
+      event: t.event, amt: r2(shown),
+      party: (t.lines.find(l => l.party) || {}).party || null,
+      reversed: !!t.reversedBy, reversal: !!t.reversalOf, auto: !!t.auto,
+    });
+    total = r2(total + shown);
+  }
+  rows.sort((a, b) => b.date.localeCompare(a.date) || Math.abs(b.amt) - Math.abs(a.amt));
+  return { spec, rows, total, count: rows.length };
 }
 
 // Bills sitting on Owed with no vendor bill number against them — a month closed on an

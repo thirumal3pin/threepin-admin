@@ -161,6 +161,15 @@ check('…and what has to be earned to cover it', repHtml.includes('Income neede
 check('The fixed costs are itemised, not just totalled', repHtml.includes('What the fixed cost is made of'));
 check('Profit is still reconciled to cash', /Profit is not cash|profit and cash/i.test(repHtml) || repHtml.includes('Cash flow'));
 
+section('Figures on the reports can be opened');
+const repDrill = renderReports();
+check('The headline figures are clickable', (repDrill.match(/fin\.explain\(/g) || []).length >= 3,
+  String((repDrill.match(/fin\.explain\(/g) || []).length));
+check('Each category row can be opened', /<tr class="click"[^>]*fin\.explain/.test(repDrill));
+check('…and the drill carries the account it is for', /accs&quot;:&quot;5\d{3}/.test(repDrill) || /accs\\":\\"5/.test(repDrill) || /accs&quot;:&quot;\d/.test(repDrill));
+check('The cash-flow rows can be opened too', /fin\.explain[^"]*events/.test(repDrill));
+check('Opening a figure is offered, not forced', /title="See what makes up this figure"/.test(repDrill));
+
 section('Books reads like an accountant expects');
 const booksHtml = renderBooks();
 for (const heading of ['The check', 'Trial balance', 'Profit and loss', 'Balance sheet', 'Ledger', 'Registers', 'General journal']) {

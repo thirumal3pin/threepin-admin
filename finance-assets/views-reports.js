@@ -10,10 +10,10 @@ import {
   cashProfitBridge, scopeMode, scopeLabel, scoped, cashBook, lastDayOfMonth,
   trialBalanceDetail, plStatement, balanceSheetGrouped, booksHealth,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, addDays,
-  monthCompare, breakEven, mlabel as monthName,
+  monthCompare, breakEven, mlabel as monthName, INCOME_ACCS, EXPENSE_ACCS,
 } from './finance-core.js';
 import {
-  stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
+  stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions, drillAttrs,
 } from './ui.js';
 
 // These views own their own picker state. app.js repaints the whole view on any change, which
@@ -104,9 +104,9 @@ export function renderReports() {
     </div>
 
     <div class="grid g3">
-      ${stat('Income', fmt(p.ti), { sub: periodLabel })}
-      ${stat('Expenses', fmt(p.te), { sub: periodLabel })}
-      ${stat('Profit', signed(p.profit), { raw: true, hero: true, sub: periodLabel })}
+      ${stat('Income', fmt(p.ti), { sub: periodLabel, drill: { accs: INCOME_ACCS, ...periodSpec(), flip: true } })}
+      ${stat('Expenses', fmt(p.te), { sub: periodLabel, drill: { accs: EXPENSE_ACCS, ...periodSpec() } })}
+      ${stat('Profit', signed(p.profit), { raw: true, hero: true, sub: periodLabel, drill: { profit: true, ...periodSpec() } })}
       ${stat('Margin', p.ti ? Math.round((p.profit / p.ti) * 100) + '%' : '—')}
     </div>
 
@@ -169,7 +169,7 @@ function compareBlock(month) {
       <summary><b>What moved</b> <span class="faint small">biggest change first</span> <span class="n">${c.rows.length}</span></summary>
       ${table(
       `<th>Account</th><th class="n">This month</th><th class="n">Last month</th><th class="n">Change</th><th class="n">Expected</th>`,
-      c.rows.map(r => `<tr>
+      c.rows.map(r => `<tr ${drillAttrs(r.name + ' — ' + monthName(month), { accs: r.code, month, flip: r.type === 'income' })}>
           <td class="lead">${esc(r.name)} <span class="small faint">${esc(r.code)}</span></td>
           <td class="n" data-label="This month">${fmt(r.now)}</td>
           <td class="n" data-label="Last month">${fmt(r.prev)}</td>
@@ -204,6 +204,9 @@ function breakEvenBlock(month) {
       `<tr><td colspan="2">Total</td><td class="n">${fmt(b.fixed)}</td></tr>`, { stack: true })}
     </details>`;
 }
+
+// Whichever period the page is set to, said the way explain() wants it.
+const periodSpec = () => repMode === 'month' ? { month: repMonth } : { fy: repFy };
 
 // A six-month profit trend, drawn as inline SVG because no chart library is available in this
 // repo and adding one would mean a build step.
@@ -253,7 +256,7 @@ function categoryTable(title, map, total, slug) {
     </div>
     ${table(
     `<th>Category</th><th class="n">Amount</th><th class="n">Share</th>`,
-    rows.map(([code, v]) => `<tr>
+    rows.map(([code, v]) => `<tr ${drillAttrs(A[code]?.name || code, { accs: code, ...periodSpec(), flip: slug === 'income' })}>
         <td>${esc(A[code]?.name || code)}</td>
         <td class="n">${fmt(v)}</td>
         <td class="n">${total ? Math.round((v / total) * 100) : 0}%</td>
@@ -328,6 +331,9 @@ function cashFlowRows() {
   return KIND_ORDER.filter(k => groups[k]).map(k => ({ kind: k, ...groups[k] }));
 }
 
+// Which kinds of entry a cash-flow line is made of, so the row can be opened.
+const eventsOfKind = kind => Object.entries(KIND_OF).filter(([, k]) => k === kind).map(([e]) => e);
+
 function cashFlowTable() {
   const rows = cashFlowRows();
   if (!rows.length) return `<h2>Cash flow</h2>${empty('No money moved in this period.')}`;
@@ -341,7 +347,7 @@ function cashFlowTable() {
     </div>
     ${table(
     `<th>Type</th><th class="n">In</th><th class="n">Out</th><th class="n">Net</th>`,
-    rows.map(r => `<tr>
+    rows.map(r => `<tr ${drillAttrs(r.kind + ' — money moved', { events: eventsOfKind(r.kind), ...periodSpec(), accs: ['1000', '1010'], moved: true })}>
         <td>${esc(r.kind)}</td>
         <td class="n">${r.in ? fmt(r.in) : '—'}</td>
         <td class="n">${r.out ? fmt(r.out) : '—'}</td>

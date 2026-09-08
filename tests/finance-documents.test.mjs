@@ -18,6 +18,7 @@ import {
   agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
   monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth, projection,
   DISALLOWED, gstComputation as gstComp, monthCompare, fixedMonthly, breakEven,
+  explain, INCOME_ACCS, EXPENSE_ACCS,
   outlook,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
@@ -805,6 +806,44 @@ section('The cash box is an account: spend from it with nothing in it');
   save('transfer', { date: '2026-10-02', kind: '1010>1000', amt: 3000 });
   eq('Sweeping more than it holds is allowed too', bal('1010'), -2000);
   check('The trial balance is unbothered by any of it', trialBalance().balanced);
+}
+
+section('Every figure can be opened, and the parts add up to it');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 400000 });
+  save('newdeal', { date: '2026-09-01', nickname: 'Drill deal', seller: { __new: true, name: 'Client D', type: 'client' }, expSeller: 80000 });
+  const dd = byName(g.deals, 'Drill deal').id;
+  save('invoice', { date: '2026-09-10', deal: dd, from: 'seller', amt: 80000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
+  save('expense', { date: '2026-09-11', desc: 'Ads', acc: '5090', amt: 5000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-09-12', desc: 'More ads', acc: '5090', amt: 3000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-09-13', desc: 'Rent', acc: '5000', amt: 20000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-10-02', desc: 'October ads', acc: '5090', amt: 1000, rcm: 'no', via: '1000' });
+
+  const p = pl('2026-09');
+  eq('Income opens to exactly the income figure', explain({ accs: INCOME_ACCS, month: '2026-09', flip: true }).total, p.ti);
+  eq('Costs open to exactly the cost figure', explain({ accs: EXPENSE_ACCS, month: '2026-09' }).total, p.te);
+  eq('Profit opens to exactly the profit figure', explain({ profit: true, month: '2026-09' }).total, p.profit);
+  eq('The bank opens to its balance', explain({ accs: '1000' }).total, bal('1000'));
+  eq('Receivables open to what clients owe', explain({ accs: '1100' }).total, bal('1100'));
+
+  const ads = explain({ accs: '5090', month: '2026-09' });
+  eq('One category opens to that category alone', ads.total, 8000);
+  eq('…listing every entry behind it', ads.count, 2);
+  check('…newest first', ads.rows[0].date === '2026-09-12', ads.rows.map(r => r.date).join());
+  check('…each row leading to its entry', ads.rows.every(r => g.txns.some(x => x.id === r.txnId)));
+  eq('…and the month filter really filters', explain({ accs: '5090', month: '2026-10' }).total, 1000);
+
+  const parts = explain({ accs: EXPENSE_ACCS, month: '2026-09' }).rows.reduce((s2, r) => s2 + r.amt, 0);
+  eq('The rows shown are the whole of the total, never a sample', r2c(parts), p.te);
+
+  // A figure with nothing in the ledger behind it says so rather than showing a wrong number.
+  eq('A month with no entries opens empty', explain({ accs: EXPENSE_ACCS, month: '2026-12' }).count, 0);
+
+  // Narrowing by party and by kind of entry both work, for the analytics filters.
+  const client = party('Client D');
+  eq('It can be narrowed to one party', explain({ accs: '1100', party: client }).total, bal('1100', { party: client }));
+  eq('…and to one kind of entry', explain({ events: ['expense'], accs: EXPENSE_ACCS, month: '2026-09' }).total, 28000);
 }
 
 section('Three months ahead on what is already known');
