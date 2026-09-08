@@ -9,7 +9,7 @@
 
 import {
   fmt, esc, num, today, ym, addMonths, mlabel, getState, bal, A, ACCOUNTS,
-  pettyActivity, projection, budgetLines, PETTY, monthPicture, awaitingBill,
+  pettyActivity, projection, budgetLines, PETTY, monthPicture, awaitingBill, outlook,
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, seg, dueCell } from './ui.js';
 import * as SY from './finance-sync.js';
@@ -189,6 +189,27 @@ function sideBlock(title, s, side, tone) {
       </details>`).join('')}`;
 }
 
+// Three months ahead on what is already known. Deliberately short: past three months the
+// estimates outnumber the facts and the number stops being worth acting on.
+function outlookBlock() {
+  const o = outlook(3, ym(today()));
+  return `
+    <h2>If nothing changes</h2>
+    <p class="small muted">The next three months using only what the books already know — bills with due dates, recurring commitments, loan instalments, deals expected to close. Starting from ${fmt(o.opening)} in the bank and the box today.</p>
+    ${table(
+    `<th>Month</th><th class="n">Out — certain</th><th class="n">Out — estimated</th><th class="n">Expected in</th><th class="n">Left at month end</th>`,
+    o.rows.map(r => `<tr class="click" onclick="finMoney.goMonth('${esc(r.month)}')">
+      <td class="lead">${esc(mlabel(r.month))}</td>
+      <td class="n" data-label="Out — certain">${fmt(r.committed)}</td>
+      <td class="n" data-label="Out — estimated">${fmt(r.guessed)}</td>
+      <td class="n" data-label="Expected in">${fmt(r.in)}</td>
+      <td class="n" data-label="Left at month end"><span class="${r.short ? 'neg' : ''}">${signed(r.closing)}</span></td>
+    </tr>`).join(''), '', { stack: true })}
+    ${o.firstShort
+    ? note(`On what is known today the money runs out in <b>${esc(mlabel(o.firstShort))}</b>. Bills with due dates will happen; the estimated column may not. Collect earlier, or move what is only an estimate.`, 'warn')
+    : note('Nothing known today puts you short in the next three months. Only what has been recorded or committed is counted — a deal you have not entered is not in here.', 'info')}`;
+}
+
 export function renderMonth() {
   const p = monthPicture(picMonth);
   const waiting = awaitingBill();
@@ -235,6 +256,8 @@ export function renderMonth() {
           <td class="n"><button class="btn ghost sm out" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button></td>
         </tr>`).join(''), '', { stack: true })}` : ''}
 
+    ${outlookBlock()}
+
     ${sideBlock('Money out', p.out, 'out', 'neg')}
     ${sideBlock('Money in', p.in, 'in', 'pos')}
 
@@ -257,6 +280,7 @@ if (typeof window !== 'undefined') {
     setPettyMonth(m) { pettyMonth = m; window.fin.repaint(); },
     monthShift(n) { picMonth = addMonths(picMonth, n); window.fin.repaint(); },
     thisMonth() { picMonth = ym(today()); window.fin.repaint(); },
+    goMonth(m) { picMonth = m; window.fin.repaint(); },
     budgetShift(n) { budgetMonth = addMonths(budgetMonth, n); window.fin.repaint(); },
     async setBudget(code, value) {
       const v = String(value).trim();

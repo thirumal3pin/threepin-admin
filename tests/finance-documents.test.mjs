@@ -17,6 +17,7 @@ import {
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
   agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
   monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth,
+  outlook,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
 import { EV, validateEvent, fieldsFor } from '../finance-assets/finance-events.js';
@@ -632,6 +633,28 @@ section('A bill blocks a reversal only while a payment still stands against it')
   check('The bill is born paid, with no allocation behind it', bornPaid.status === 'paid' && (bornPaid.allocations || []).length === 0);
   reverse(paidTxn);
   check('Reversing it voids the bill in one step', bornPaid.status === 'void', bornPaid.status);
+}
+
+section('Three months ahead on what is already known');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 60000 });
+  // A commitment that repeats, and one bill already due next month.
+  save('subnew', { date: '2026-09-01', name: 'Office rent', kind: 'rent', acc: '5000', vendor: { __new: true, name: 'Landlord', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 20000, via: '1000', start: '2026-09' });
+  save('bill', { date: '2026-09-20', vendor: { __new: true, name: 'Printer', type: 'vendor' }, desc: 'Brochures', acc: '5100', amt: 10000, rcm: 'no', dueDate: '2026-10-10', tds: 'none', tdsrate: 0 });
+
+  const o = outlook(3, '2026-09');
+  eq('It opens with what is actually in the bank and the box', o.opening, bal('1000') + bal('1010'));
+  eq('Three months are shown', o.rows.length, 3);
+  eq('September expects the rent it has not recorded', o.rows[0].guessed, 20000);
+  eq('…and the brochure bill is not due until October', o.rows[0].committed, 0);
+  eq('October has the bill as a certainty', o.rows[1].committed, 10000);
+  eq('…and its own rent as an estimate', o.rows[1].guessed, 20000);
+  const first = o.rows[0], second = o.rows[1];
+  eq('Each month closes where the last left off', second.closing, r2c(first.closing + second.in - second.out));
+  check('It says which month runs out first', o.firstShort === '2026-11', String(o.firstShort));
+  check('…and the worst point is never above the opening here', o.worst <= o.opening);
+  eq('The certain and estimated halves add up to what has to go out', r2c(first.committed + first.guessed), first.out);
 }
 
 section('The statements an accountant reads');

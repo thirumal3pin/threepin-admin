@@ -1143,6 +1143,33 @@ export function monthPicture(month) {
   };
 }
 
+// The next few months, if nothing new happens: what is already committed to go out, what is
+// expected in, and where that leaves the bank and the box. Only what is still unsettled
+// counts — money already paid this month is in the opening figure, not counted twice. The
+// certainty column matters more than the total: a due bill will happen, an estimate may not.
+export function outlook(months = 3, from) {
+  const start = from || ym(today());
+  let running = r2(bal('1000') + bal('1010'));
+  const opening = running;
+  const rows = [];
+  for (let i = 0, m = start; i < months && i < 24; i++, m = addMonths(m, 1)) {
+    const p = monthPicture(m);
+    const out = p.out.committed, inn = p.in.committed;
+    const fixed = r2(p.out.due.amt + p.out.overdue.amt);
+    running = r2(running + inn - out);
+    rows.push({
+      month: m, out, in: inn, net: r2(inn - out), closing: running,
+      committed: fixed, guessed: r2(out - fixed),
+      short: running < -0.5,
+    });
+  }
+  return {
+    opening, rows, closing: running,
+    worst: rows.reduce((w, r) => r.closing < w ? r.closing : w, opening),
+    firstShort: rows.find(r => r.short)?.month || null,
+  };
+}
+
 // Bills sitting on Owed with no vendor bill number against them — a month closed on an
 // estimate, waiting for the paperwork. This is the queue "Bill arrived" works through.
 export function awaitingBill() {
