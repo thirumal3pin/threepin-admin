@@ -107,8 +107,6 @@ const posAmt = (v, k = 'amt', label = 'Enter an amount above zero') =>
 
 const partyReq = (v, k, label) => pidOf(v[k]) ? [] : [err(k, label)];
 
-// The box must never go below zero on any day — a spend dated last week has to fit what
-// the box held then AND what every later entry has already taken out of it.
 // A cost belongs to the month it was used. The entry is dated the last day of that month
 // unless the month is already closed, in which case it lands on the document's own date —
 // reopening a closed month behind the owner's back would be worse than a late cost.
@@ -149,13 +147,19 @@ function periodChecks(v, k = 'period') {
   else if (p < ym(v.date || today()) && (S().monthEnds || {})[p]) out.push(warn(k, `${mlabel(p)} is already closed, so this lands in ${mlabel(ym(v.date || today()))} instead`));
   return out;
 }
+// The cash box is an account in its own right, like the bank — not a wallet that has to be
+// filled before it can be used. A spend is recorded when it happens, and if the account ends up
+// overdrawn the books say so rather than refusing the entry: an overdrawn box almost always
+// means a top-up has not been recorded yet, and blocking the spend does not make that top-up
+// appear. So this warns, and never blocks.
 function pettyCheck(k, v, need) {
   const room = pettyRoom(v.date);
   if (num(need) <= room + 0.005) return [];
   const onDay = bal('1010', { upto: v.date || today() });
-  return [err(k, room < onDay - 0.005
-    ? `Petty cash held ${fmt(onDay)} on ${v.date}, but only ${fmt(Math.max(0, room))} of it is free — entries on later days already spent the rest`
-    : `Petty cash only holds ${fmt(Math.max(0, room))} — top it up first with "Move money"`)];
+  const after = r2(onDay - num(need));
+  return [warn(k, room < onDay - 0.005
+    ? `The box held ${fmt(onDay)} on ${v.date}, and later entries have already spent it down to ${fmt(room)}. This will show the box overdrawn — record the top-up that is missing, or carry on if that is right.`
+    : `The box holds ${fmt(onDay)}, so this takes it to ${fmt(after)}. That is fine if a top-up has not been recorded yet; otherwise check the amount.`)];
 }
 function gstChecks(v) {
   if (v.gst !== 'yes') return [];
@@ -184,8 +188,11 @@ export function gstFields(amtLabel, o = {}) {
     F('amt', amtLabel, 'number', { hint: o.hint, show: o.show, required: true }),
     F('gst', o.kind === 'output' ? 'Charge GST on this?' : 'GST on this?', 'select', {
       opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no',
-      // Purchase forms ask this as one three-way question (rcm); this toggle then stays hidden.
-      show: v => gstVisible(v) && (o.kind === 'output' || v.rcm === undefined),
+      // A purchase asks this as one three-way question instead; fieldsFor() drops this field
+      // whenever the form carries that one. It used to be hidden by testing whether `rcm` had
+      // a value yet, which was true only AFTER the first render — so the very first paint of
+      // an expense form showed both questions, and answering the wrong one could not be undone.
+      show: gstVisible,
     }),
     F('gstRate', 'GST %', 'number', { def: gstRate(), show: on }),
     F('gstAmt', 'GST amount', 'number', { def: 0, show: on }),
@@ -210,7 +217,9 @@ export function gstFields(amtLabel, o = {}) {
 }
 
 export function gstSync(k, v) {
-  // The three-way GST answer on purchase forms drives the two flags the engine works with.
+  // The three-way answer drives the flag the engine works with. It is the ONLY GST question on
+  // a purchase form — fieldsFor() drops the old yes/no toggle wherever this one exists — so
+  // answering it again is always enough to change the decision, in either direction.
   if (k === 'rcm') { v.gst = v.rcm === 'charged' ? 'yes' : 'no'; k = 'gst'; }
   if (!['amt', 'gst', 'gstRate', 'gstAmt', 'total'].includes(k)) return;
   if (v.gst !== 'yes') { v.gstAmt = 0; v.total = r2(v.amt); return; }
@@ -2654,7 +2663,11 @@ export function fieldsFor(key, v) {
   const ev = EV[key];
   if (!ev) return [];
   const list = typeof ev.fields === 'function' ? ev.fields(v || {}) : ev.fields;
-  return list.filter(f => typeof f.show !== 'function' || f.show(v || {}));
+  const shown = list.filter(f => typeof f.show !== 'function' || f.show(v || {}));
+  // Two GST questions on one form is one too many: a form that carries the three-way answer
+  // never also shows the old yes/no toggle. Decided from the field LIST, not from whether the
+  // answer has been filled in, so it holds on the first paint as much as the tenth.
+  return list.some(f => f.k === 'rcm') ? shown.filter(f => f.k !== 'gst') : shown;
 }
 
 // Field-level problems for the form, limited to fields that are currently visible.

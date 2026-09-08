@@ -204,7 +204,7 @@ try {
   await page.waitForSelector('#f_a1');
   await page.fill('#f_a1', '999999');
   await page.waitForTimeout(200);
-  check('Petty cash beyond the box is refused', /petty cash only holds/i.test(await errText('a1')), await errText('a1'));
+  check('Petty cash beyond the box warns but does not block', /box/i.test(await errText('a1')) && await page.evaluate(() => !document.querySelector('#err_a1')?.classList.contains('err')), await errText('a1'));
   check('The second voucher waits until it is named', await page.$('#f_a2') === null);
   await page.fill('#f_d2', 'Courier');
   await page.waitForSelector('#f_a2', { timeout: 4000 });

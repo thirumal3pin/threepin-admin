@@ -742,7 +742,7 @@ function screenItems() {
         ['Sent back to the bank', 'Sweeps.'],
       ],
       doThis: 'Empty the box weekly into <b>Petty cash vouchers</b> — up to three at a time — then check the balance against the notes.',
-      behind: 'pettyActivity() builds the running balance. The box can never go below zero on any day: pettyRoom(date) is the lowest it reaches from that date onwards, so a back-dated voucher has to fit every later day too, not just its own.',
+      behind: 'pettyActivity() builds the running balance. The box is an account like the bank, so an entry is never refused for want of a balance; pettyRoom(date) is the lowest the box reaches from that date onwards, and a spend that takes it below zero — on its own day or any later one — is flagged as a warning so a missing top-up gets noticed.',
       watch: 'The <b>With / Without / Only</b> switch changes what Transactions, Reports, Analytics and their CSVs show — the file name and the first row of every export say which. It never changes the trial balance, the balance sheet or the Books check, which always show everything.',
     }),
     screen({
@@ -1330,7 +1330,7 @@ function accountingItems() {
   const byType = t => ACCOUNTS.filter(a => a.type === t);
   const USE = {
     1000: 'Every bank receipt and payment, whatever the method — UPI, NEFT, cheque, debit card.',
-    1010: 'The cash box. Top-ups in, vouchers out. Never allowed below zero on any day.',
+    1010: 'The cash box, an account in its own right. Top-ups in, vouchers out. It may run negative, which normally means a top-up has not been recorded yet.',
     1100: 'Raised when an invoice is issued; cleared when the client pays.',
     1150: 'TDS a client deducted from your bill. Claimed against your own tax, not a cost.',
     1200: 'Anything paid for before it is used — an annual plan. Released monthly at month-end.',
@@ -1461,7 +1461,7 @@ function accountingItems() {
       ['The balance sheet ties out', 'Assets equal funds, liabilities and profit. A gap means an account is missing from the statement; tell your CA before filing.'],
       ['Vendor payables agree with the bills', 'The 2000 balance against the sum of open bills. A difference is money owed with no document — an opening balance, or an entry from before documents were tracked.'],
       ['Client receivables agree with the invoices', 'The same test on 1100.'],
-      ['The cash box never went below zero', 'Tested on every day, not just today, so a back-dated voucher cannot hide a missing top-up.'],
+      ['The cash box is not overdrawn', 'Tested on every day, not just today. A negative box is allowed — it normally means a top-up from the bank has not been recorded yet — so this is a note, not a failure.'],
       ['Every open bill has a due date', 'Without one it cannot appear in what is due this month.'],
       ['Vendor bills received for what you accrued', 'Months closed on your own figure that still have no vendor bill number. Each one is GST you cannot claim and a due date you do not know.'],
       ['Every recurring month is recorded', 'A commitment with a month missing means a cost that is not in your profit.'],
@@ -1478,11 +1478,12 @@ function accountingItems() {
       ['Edit or delete a posted entry', 'Books that can be silently changed cannot be relied on by anyone, including a tax officer. Reverse and re-record.'],
       ['Save an entry that does not balance', 'Every entry is checked before it is written.'],
       ['Record the same recurring month twice', 'The month is already on the commitment; reverse the first entry if it was wrong.'],
-      ['Spend more petty cash than the box holds — on any day', 'Tested against the lowest the box reaches from that date onward, not just its balance that day.'],
+
       ['Reverse a bill or invoice that has been paid', 'Reverse the payment first, or reduce the invoice with a credit note.'],
       ['Reverse an accrual after its vendor bill was attached', 'The bill-arrived entry has to come off first, or it would point at a voided document.'],
       ['Let a vendor off more than is left on the bill', 'The shortfall cannot exceed what is outstanding.'],
       ['Date an entry before the books start', 'Set in Settings, once.'],
+      ['Spend from an empty cash box', '<b>Allowed.</b> The box is an account, not a wallet — it may go negative, and the app warns rather than refusing. Add the missing top-up when you find it.'],
       ['Claim GST on a cost with no invoice behind it', 'Parked in 1405 until the invoice is recorded.'],
       ['Post to a closed month', 'Month-end has been run; the entry lands in the open month and is disclosed as a prior-period item.'],
     ])}`),

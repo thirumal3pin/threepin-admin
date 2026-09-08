@@ -343,13 +343,18 @@ section('The petty cash box — top-up, six vouchers, blocked GST, and a sweep t
   eq('The box is swept back to the bank, to the rupee', mark(), 0);
 
   check('The box was never negative at any point in the month', boxTrail.every(b => b >= -0.005), JSON.stringify(boxTrail));
-  refuses('One rupee more than the box holds is refused',
-    () => save('petty', { date: '2026-09-15', a1: 1, c1: '5030', a2: 0, a3: 0 }), 'petty cash only holds');
-  refuses('…and so is an expense paid from an empty box',
-    () => save('expense', { date: '2026-09-15', desc: 'Stamps', acc: '5100', amt: 50, gst: 'no', via: '1010' }), 'petty cash only holds');
-  refuses('…and sweeping money that is not there',
-    () => save('transfer', { date: '2026-09-15', kind: '1010>1000', amt: 100 }), 'only holds');
-  eq('After all three refusals the box is still exactly zero', bal('1010'), 0);
+  // The box is an account like the bank. Spending from an empty one is allowed — it is what an
+  // unrecorded top-up looks like — and every form says so before it saves.
+  const emptyBox = v => validateEvent('petty', v).some(p => p.warn && /box/i.test(p.msg));
+  check('One rupee more than the box holds is allowed, with a warning',
+    emptyBox({ date: '2026-09-15', d1: 'Tea', a1: 1, c1: '5030', a2: 0, a3: 0 }));
+  check('…and nothing blocks it',
+    !validateEvent('petty', { date: '2026-09-15', d1: 'Tea', a1: 1, c1: '5030', a2: 0, a3: 0 }).some(p => !p.warn));
+  check('…an expense from an empty box warns the same way',
+    validateEvent('expense', { date: '2026-09-15', desc: 'Stamps', acc: '5100', amt: 50, gst: 'no', rcm: 'no', via: '1010' }).some(p => p.warn && /box/i.test(p.msg)));
+  check('…and so does sweeping money that is not there',
+    validateEvent('transfer', { date: '2026-09-15', kind: '1010>1000', amt: 100 }).some(p => p.warn && /box/i.test(p.msg)));
+  eq('Warnings change nothing on their own — the box is still zero', bal('1010'), 0);
 }
 
 // ═══════ 7. THE DIRECTOR'S OWN POCKET ═══════
@@ -369,8 +374,8 @@ section("A director pays a GST cost personally and is reimbursed");
   eq('…out of the bank', bank0 - bal('1000'), 14160);
   eq('A reimbursement is never a second cost', bal('5070'), 12000);
 
-  refuses('Salary from an empty petty cash box is refused',
-    () => save('salary', { date: '2026-09-21', emp: { __new: true, name: 'Priya S', type: 'employee' }, kind: '5010', gross: 15000, tds: 0, pf: 0, via: '1010' }), 'petty cash only holds');
+  check('Salary from an empty petty cash box warns rather than refusing',
+    validateEvent('salary', { date: '2026-09-21', emp: { __new: true, name: 'Priya S', type: 'employee' }, kind: '5010', gross: 15000, tds: 0, pf: 0, via: '1010' }).some(p => p.warn && /box/i.test(p.msg)));
   save('salary', { date: '2026-09-21', emp: { __new: true, name: 'Priya S', type: 'employee' }, kind: '5010', gross: 15000, tds: 1500, pf: 1800, via: '1000' });
   eq('The cost is the gross', bal('5010'), 15000);
   eq('Salary TDS joins the same payable head', bal('2250'), 1500);

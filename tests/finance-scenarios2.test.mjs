@@ -601,11 +601,12 @@ section('G. The box — top-ups, spends, sweeps, cash in, and the guard');
 {
   const g = fresh();
   save('funding', { date: '2026-09-01', kind: '3000', who: OWNER, amt: 50000 });
-  refuses('A spend dated before the box was funded is refused',
-    () => save('petty', { date: '2026-09-05', d1: 'Tea', a1: 100, c1: '5030', a2: 0, a3: 0 }), 'petty cash only holds');
+  // The box is an account, so a spend before it was funded is recorded and shows overdrawn.
+  check('A spend dated before the box was funded warns, and saves',
+    validateEvent('petty', { date: '2026-09-05', d1: 'Tea', a1: 100, c1: '5030', a2: 0, a3: 0 }).some(p => p.warn && /box/i.test(p.msg)));
   save('transfer', { date: '2026-09-10', kind: '1000>1010', amt: 5000, method: 'cash' });
-  refuses('…and so is an expense from the box dated before the top-up',
-    () => save('expense', { date: '2026-09-08', desc: 'Auto', acc: '5050', amt: 100, rcm: 'no', via: '1010' }), 'petty cash only holds');
+  check('…and so does an expense from the box dated before the top-up',
+    validateEvent('expense', { date: '2026-09-08', desc: 'Auto', acc: '5050', amt: 100, rcm: 'no', via: '1010' }).some(p => p.warn && /box/i.test(p.msg)));
   save('petty', { date: '2026-09-12', d1: 'Tea', a1: 200, c1: '5030', d2: 'Courier', a2: 500, c2: '5100', a3: 0 });
   save('funding', { date: '2026-09-15', kind: '2450', who: OWNER, amt: 2000, via: '1010' });
   save('transfer', { date: '2026-09-20', kind: '1010>1000', amt: 1000 });
@@ -625,21 +626,22 @@ section('G. The box — top-ups, spends, sweeps, cash in, and the guard');
   check('The month filter narrows the rows', octOnly.rows.length === 1 && octOnly.spent === 300 && octOnly.topups === 0, JSON.stringify(octOnly));
   eq('…but the balance is the box today', octOnly.balance, bal('1010'));
   eq('Up to a date, the balance is as of that date', pettyActivity({ upto: '2026-09-12' }).balance, 4300);
-  refuses('The box cannot go below zero on the entry date', () => save('petty', { date: '2026-10-04', d1: 'Big', a1: 5001, c1: '5180', a2: 0, a3: 0 }), 'petty cash only holds');
-  refuses('Sweeping more than the box holds is refused', () => save('transfer', { date: '2026-10-04', kind: '1010>1000', amt: 5001 }), 'petty cash only holds');
-  eq('The box is exactly 5,000 today', bal('1010'), 5000);
+  check('Going below zero on the entry date warns', validateEvent('petty', { date: '2026-10-04', d1: 'Big', a1: 5001, c1: '5180', a2: 0, a3: 0 }).some(p => p.warn && /box/i.test(p.msg)));
+  check('Sweeping more than the box holds warns too', validateEvent('transfer', { date: '2026-10-04', kind: '1010>1000', amt: 5001 }).some(p => p.warn && /box/i.test(p.msg)));
+  eq('Neither warning changed anything — the box is exactly 5,000 today', bal('1010'), 5000);
   save('petty', { date: '2026-10-05', d1: 'Everything', a1: 5000, c1: '5180', a2: 0, a3: 0 });
   eq('Spending exactly the balance leaves zero', bal('1010'), 0);
   // A back-dated sweep: on its own date the box held 5,000, but every later day it did not.
-  // BUG: expected refusal — after this entry the box's running balance is -500 on 2026-09-12
-  // (5,000 - 4,800 - 700) and ends at -4,800 on 2026-10-05; actual: accepted, because
-  // EV.transfer.check (and EV.petty.check / EV.expense.check) test bal('1010', {upto: date})
-  // only at the entry's own date, not the minimum running balance from that date onward.
-  refuses('A back-dated sweep that would push the box negative on a later day is refused',
-    () => save('transfer', { date: '2026-09-11', kind: '1010>1000', amt: 4800 }), 'petty cash');
+  // The warning looks forward, not only at the entry's own day, so it fires even though the
+  // balance on 11 September was enough.
+  check('A back-dated sweep that pushes later days negative is warned about',
+    validateEvent('transfer', { date: '2026-09-11', kind: '1010>1000', amt: 4800 }).some(p => p.warn && /later entries/i.test(p.msg)));
+  save('transfer', { date: '2026-09-11', kind: '1010>1000', amt: 4800 });
   const run = cashBook('2026-09-01', '2026-12-31', ['1010']);
-  // BUG: same defect seen from the cash book — the running balance dips below zero.
-  check('The box\'s running balance never goes below zero', !run.rows.some(r => r.after < -0.005), JSON.stringify(run.rows.map(r => [r.t.date, r.after])));
+  check('…and the cash book shows exactly where it went overdrawn', run.rows.some(r => r.after < -0.005), JSON.stringify(run.rows.map(r => [r.t.date, r.after])));
+  eq('The box ends the period overdrawn, in full view', bal('1010'), -4800);
+  save('transfer', { date: '2026-12-31', kind: '1000>1010', amt: 4800 });
+  eq('Recording the top-up that was missing squares it', bal('1010'), 0);
   check('G: trial balance balances', trialBalance().balanced);
 }
 

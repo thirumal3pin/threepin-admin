@@ -190,10 +190,13 @@ const ganesh = party('Ganesh Prints');
 check('Bill carries the due date typed', openBills(ganesh)[0].dueDate === '2026-10-15');
 refuses('A due date before the bill date is refused',
   () => save('bill', { date: '2026-10-01', vendor: ganesh, desc: 'x', acc: '5100', dueDate: '2026-09-01', amt: 10, gst: 'no', rcm: 'no' }), 'before the bill date');
-refuses('Petty cash cannot pay more than the box holds',
-  () => save('paybill', { date: '2026-10-05', party: ganesh, amt: 9500, via: '1010' }), 'petty cash only holds');
-// Box holds 8,000 at the start; the guard above is about the amount typed vs the box.
-check('…because the guard checks the balance', bal('1010') === 8000);
+// The box is an account, not a wallet: paying more than it holds is allowed and simply
+// leaves it overdrawn, which is what an unrecorded top-up looks like.
+check('Paying more than the box holds is allowed, with a warning',
+  validateEvent('paybill', { date: '2026-10-05', party: ganesh, amt: 9500, via: '1010' }).some(p => p.warn && /box/i.test(p.msg)));
+check('…and nothing about it blocks the save',
+  !validateEvent('paybill', { date: '2026-10-05', party: ganesh, amt: 9500, via: '1010' }).some(p => !p.warn && /box/i.test(p.msg)));
+eq('The box is untouched until something is actually recorded', bal('1010'), 8000);
 save('paybill', { date: '2026-10-05', party: ganesh, amt: 9500, via: '1000' });
 eq('Ganesh settled from bank instead', bal('2000', { party: ganesh }), 0);
 
@@ -254,10 +257,17 @@ eq('Card: charged then paid off', bal('2300'), cardW);
 eq('Bank: lunch, top-up, card bill', bal('1000'), bankW - 840 - 2000 - 4720);
 eq('Ads GST is IGST credit (vendor in another state)', bal('1402') - igstW, 720);
 eq('Lunch GST is blocked — it stays in the cost', bal('5030'), 120 + 840);
-refuses('Vouchers beyond the box are refused',
-  () => save('petty', { date: '2026-11-15', a1: 999999, c1: '5030', a2: 0, a3: 0 }), 'petty cash only holds');
-refuses('Moving more than the box holds to the bank is refused',
-  () => save('transfer', { date: '2026-11-15', kind: '1010>1000', amt: 999999 }), 'petty cash only holds');
+{
+  // Spending from an empty box is a real thing that happens; the books show it overdrawn
+  // rather than pretending it did not happen.
+  const boxBefore = bal('1010');
+  save('petty', { date: '2026-11-15', d1: 'Big spend', a1: r2c(boxBefore + 500), c1: '5030', a2: 0, a3: 0 });
+  eq('Spending more than the box holds leaves it overdrawn', bal('1010'), -500);
+  check('…and the form said so before it was saved',
+    validateEvent('petty', { date: '2026-11-15', d1: 'Big spend', a1: 999999, c1: '5030', a2: 0, a3: 0 }).some(p => p.warn && /box/i.test(p.msg)));
+  save('transfer', { date: '2026-11-16', kind: '1000>1010', amt: 500 });
+  eq('Recording the missing top-up brings it back to nil', bal('1010'), 0);
+}
 refuses('Paying the card more than it owes is refused',
   () => save('transfer', { date: '2026-11-15', kind: '1000>2300', amt: 1 }), 'card only has');
 

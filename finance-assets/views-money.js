@@ -22,18 +22,24 @@ const KIND_LABEL = { topup: 'Added from the bank', in: 'Money in', spend: 'Spent
 
 export function renderPetty() {
   const all = pettyActivity();
+  const overdrawn = bal(PETTY) < -0.5;
   const thisM = pettyActivity({ month: pettyMonth });
+  const overdrawnNote = overdrawn
+    ? note(`The box is showing <b>${fmt(Math.abs(bal(PETTY)))} overdrawn</b>. It is an account like the bank, so nothing is blocked — but a box cannot really hold less than nothing, so a top-up from the bank has almost certainly not been recorded. Add it with <b>Move money</b> and the balance comes back.`, 'warn')
+    : '';
   const lastTop = all.rows.find(r => r.kind === 'topup');
   const months = [...new Set(all.rows.map(r => ym(r.t.date)))].sort().reverse();
   if (!months.includes(pettyMonth)) months.unshift(pettyMonth);
 
   return `
     <h1>Petty cash</h1>
-    <p class="lead">The cash box, account 1010. Money goes in from the bank, goes out as small spends,
-    and the balance here should match the notes in the drawer.</p>
+    <p class="lead">The cash box, account 1010 — an account in its own right, like the bank. Money goes in from the bank,
+    goes out as small spends, and the balance here should match the notes in the drawer.</p>
+
+    ${overdrawnNote}
 
     <div class="grid g3">
-      ${stat('In the box now', fmt(all.balance), { hero: true })}
+      ${stat('In the box now', fmt(all.balance), { hero: true, cls: overdrawn ? 'neg' : '', sub: overdrawn ? 'Overdrawn — a top-up is probably unrecorded' : '' })}
       ${stat('Added in ' + mlabel(pettyMonth), fmt(thisM.topups + thisM.received))}
       ${stat('Spent in ' + mlabel(pettyMonth), fmt(thisM.spent + thisM.swept), { cls: thisM.spent > 0.5 ? 'neg' : '' })}
       ${stat('Last top-up', lastTop ? fmt(lastTop.in) : '—', { sub: lastTop ? esc(lastTop.t.date) : 'Never' })}

@@ -1556,10 +1556,13 @@ export function booksHealth(upto) {
       : `${fmt(Math.abs(arGap))} of the ${fmt(arLedger)} receivable has no invoice document.`,
     { level: Math.abs(arGap) < 0.5 ? 'ok' : 'warn', amount: arGap, go: 'owed' });
 
+  // The box is an account like any other and is allowed to run negative — that is usually a
+  // top-up nobody has recorded yet, so it is worth surfacing without calling it an error.
   const box = pettyRoom('1900-01-01');
-  add('petty', 'The cash box never went below zero', box > -0.5,
-    box > -0.5 ? 'Every day the box held cash it had the cash.' : `On its worst day the box is short ${fmt(Math.abs(box))} — an entry is missing or misdated.`,
-    { go: 'petty' });
+  add('petty', 'The cash box is not overdrawn', box > -0.5,
+    box > -0.5 ? 'It never goes below zero on any day.'
+      : `At its lowest the box is ${fmt(Math.abs(box))} overdrawn. Usually a top-up from the bank has not been recorded — add it and the balance comes back.`,
+    { level: box > -0.5 ? 'ok' : 'warn', amount: box, go: 'petty' });
 
   const noDue = openBills(null).filter(b => !b.dueDate).length;
   add('due', 'Every open bill has a due date', noDue === 0,
