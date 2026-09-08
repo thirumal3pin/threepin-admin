@@ -92,16 +92,19 @@ const MODULE_NOTE = {
 const modSlug = g => 'mod-' + String(g).toLowerCase().replace(/[^a-z]+/g, '-');
 let openModules = null;
 
+// Everything is open until the owner closes something. A navigation that hides most of itself
+// on first sight is indistinguishable from one that is broken — the collapse is there to tidy
+// away what you have decided you do not need, not to make you hunt for it.
+const NAV_KEY = 'fin.nav.modules.v2';
 function modulesOpen() {
   if (openModules) return openModules;
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem('fin.nav.modules') || 'null'); } catch { saved = null; }
-  // First visit: Daily open, the rest closed — the shortest honest starting point.
-  openModules = new Set(Array.isArray(saved) ? saved : ['Daily']);
+  try { saved = JSON.parse(localStorage.getItem(NAV_KEY) || 'null'); } catch { saved = null; }
+  openModules = new Set(Array.isArray(saved) ? saved : MODULES);
   return openModules;
 }
 function saveModules() {
-  try { localStorage.setItem('fin.nav.modules', JSON.stringify([...modulesOpen()])); } catch { /* private window */ }
+  try { localStorage.setItem(NAV_KEY, JSON.stringify([...modulesOpen()])); } catch { /* private window */ }
 }
 function toggleModule(g) {
   const open = modulesOpen();
@@ -296,13 +299,13 @@ function repaint() {
     return `
     <section class="mod ${open ? 'open' : ''} ${holdsCurrent ? 'here' : ''}">
       <button type="button" class="mod-h" data-mod="${esc(g)}" aria-expanded="${open}" aria-controls="${modSlug(g)}"
+        title="${esc(MODULE_NOTE[g] || '')} — click to ${open ? 'close' : 'open'}"
         onclick="fin.toggleModule('${esc(g)}')">
         <span class="mod-name">${esc(g)}</span>
         ${!open && holdsCurrent ? '<span class="mod-dot" aria-label="you are here"></span>' : ''}
         <i class="ic fa-solid fa-chevron-down mod-chev" aria-hidden="true"></i>
       </button>
       <div class="mod-body" id="${modSlug(g)}">
-        ${MODULE_NOTE[g] ? `<p class="mod-note">${esc(MODULE_NOTE[g])}</p>` : ''}
         ${items.map(([k, label, ic]) =>
       `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">
              <i class="ic ${esc(ic)}" aria-hidden="true"></i><span>${esc(label)}</span></button>`).join('')}

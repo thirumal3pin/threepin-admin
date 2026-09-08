@@ -164,6 +164,31 @@ check('Drawer link opens the Drive file', await page.evaluate(() => /drive\.goog
 await page.screenshot({ path: `${SHOTS}m-drawer.png`, fullPage: true });
 await page.evaluate(() => window.fin.closeModal());
 
+// ── the navigation, on both shapes of screen ────────────────────────────────────
+section('All sections sheet at 390px');
+await page.evaluate(() => window.fin.openSheet());
+await page.waitForTimeout(500);
+const sheet = await page.evaluate(() => {
+  const inner = document.querySelector('.sheet-inner');
+  const names = [...document.querySelectorAll('.sheet-mod-grid button')].map(b => b.textContent.trim());
+  return {
+    overflows: inner.scrollWidth > inner.clientWidth + 1,
+    pageOverflows: document.documentElement.scrollWidth > window.innerWidth + 1,
+    modules: [...document.querySelectorAll('.sheet-mod-h')].map(h => h.firstChild.textContent.trim()),
+    count: names.length,
+    names,
+    widest: Math.max(...[...document.querySelectorAll('.sheet-mod, .sheet-mod-grid')].map(e => e.scrollWidth)),
+    inner: inner.clientWidth,
+  };
+});
+check('The sheet does not scroll sideways', !sheet.overflows, JSON.stringify({ w: sheet.widest, inner: sheet.inner }));
+check('…and neither does the page behind it', !sheet.pageOverflows);
+check('Every module is in the sheet', sheet.modules.length === 5, sheet.modules.join(' | '));
+check('Every page is reachable from it', sheet.count >= 18, `${sheet.count}: ${sheet.names.join(', ')}`);
+check('Nothing inside is wider than the sheet', sheet.widest <= sheet.inner + 1, `${sheet.widest} vs ${sheet.inner}`);
+await page.screenshot({ path: `${SHOTS}m-sheet.png`, fullPage: false });
+await page.evaluate(() => document.getElementById('moreSheet').classList.remove('open'));
+
 // ── desktop sanity ──────────────────────────────────────────────────────────────
 section('Desktop 1280px');
 await page.setViewportSize({ width: 1280, height: 900 });
@@ -173,6 +198,38 @@ for (const v of ['overview', 'record', 'txns', 'reports']) {
   await page.screenshot({ path: `${SHOTS}d-${v}.png`, fullPage: true });
 }
 check('Side nav shown on desktop', await page.evaluate(() => getComputedStyle(document.getElementById('sidenav')).display !== 'none'));
+const side = await page.evaluate(() => {
+  const mods = [...document.querySelectorAll('#sidenav .mod')];
+  return {
+    count: mods.length,
+    open: mods.filter(m => m.classList.contains('open')).length,
+    links: mods.reduce((n, m) => n + m.querySelectorAll('.mod-body button').length, 0),
+    visibleLinks: mods.reduce((n, m) => n + [...m.querySelectorAll('.mod-body button')].filter(b => b.offsetParent !== null).length, 0),
+    headers: mods.map(m => m.querySelector('.mod-name')?.textContent.trim()),
+    expanded: mods.map(m => m.querySelector('.mod-h')?.getAttribute('aria-expanded')),
+  };
+});
+check('The side nav is five modules', side.count === 5, side.headers.join(' | '));
+check('Every module starts open — a menu that hides itself reads as broken', side.open === 5, JSON.stringify(side.expanded));
+check('Every page is visible in it', side.visibleLinks === side.links && side.links >= 18, `${side.visibleLinks} of ${side.links}`);
+check('Closing a module hides its pages', await page.evaluate(async () => {
+  window.fin.toggleModule('Money');
+  await new Promise(r => setTimeout(r, 250));
+  const mod = [...document.querySelectorAll('#sidenav .mod')].find(m => m.querySelector('.mod-name')?.textContent.trim() === 'Money');
+  const hidden = [...mod.querySelectorAll('.mod-body button')].every(b => b.offsetParent === null);
+  window.fin.toggleModule('Money');
+  return hidden;
+}));
+check('The module holding the current page cannot be left closed', await page.evaluate(async () => {
+  window.fin.go('reports');
+  await new Promise(r => setTimeout(r, 250));
+  window.fin.toggleModule('Tax & reports');
+  await new Promise(r => setTimeout(r, 250));
+  const mod = [...document.querySelectorAll('#sidenav .mod')].find(m => m.querySelector('.mod-name')?.textContent.trim() === 'Tax & reports');
+  const stillOpen = mod.classList.contains('open');
+  window.fin.go('overview');
+  return stillOpen;
+}));
 check('Bottom bar hidden on desktop', await page.evaluate(() => getComputedStyle(document.getElementById('bottomnav')).display === 'none'));
 
 section('Errors');
