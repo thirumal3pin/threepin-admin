@@ -858,13 +858,41 @@ export function rule37Rows(month) {
 // ═══════ TDS THRESHOLDS ═══════
 
 // Total billed by one vendor this financial year — the figure the s.194 thresholds test.
+// Who an entry paid, when no line names them: the bill it produced, or the vendor on the
+// recurring commitment it recorded. A month paid on the spot has neither a payable line nor
+// a vendor on the form.
+export function payeeOf(t) {
+  const bill = (S.bills || []).find(b => b.txnId === t.id);
+  if (bill?.partyId) return bill.partyId;
+  const m = t.meta || {};
+  if (t.event === 'confirmcharge' && m.sub) return S.subs.find(s => s.id === m.sub)?.vendorId || null;
+  return null;
+}
+// The lowest an account will sit at from this date onward, so a back-dated entry has to fit
+// every later day too — not only the balance on its own day. Same-day entries are taken
+// together, since nothing orders them within the day.
+export function roomIn(code, date) {
+  const from = date || today();
+  const sign = (A[code]?.type === 'asset' || A[code]?.type === 'expense') ? 1 : -1;
+  let run = bal(code, { upto: from });
+  let low = run;
+  const later = S.txns.filter(t => t.date > from).sort((a, b) => a.date.localeCompare(b.date));
+  let cur = null;
+  for (const t of later) {
+    if (cur && t.date !== cur) low = Math.min(low, run);
+    cur = t.date;
+    for (const l of t.lines) if (l.acc === code) run += sign * (num(l.dr) - num(l.cr));
+  }
+  return r2(Math.min(low, run));
+}
+export const pettyRoom = date => roomIn('1010', date);
 export function tdsFyTotal(partyId, fy, section) {
   let s = 0;
   for (const t of S.txns) {
     if (t.fy !== fy || t.reversedBy || t.reversalOf) continue;
     const m = t.meta || {};
     // The payee is whoever the entry names: a payable line, or the vendor on the form.
-    const payee = t.lines.find(l => l.acc === '2000' && l.party)?.party || m.vendor || null;
+    const payee = t.lines.find(l => l.acc === '2000' && l.party)?.party || m.vendor || payeeOf(t) || null;
     if (payee !== partyId) continue;
     if (!['bill', 'expense', 'confirmcharge', 'dealcost'].includes(t.event)) continue;
     if (section && m.tds && m.tds !== 'none' && m.tds !== section) continue;
@@ -882,8 +910,10 @@ export function tdsRegister(fy) {
     const cr = t.lines.filter(l => l.acc === '2250').reduce((a, l) => a + num(l.cr), 0);
     const dr = t.lines.filter(l => l.acc === '2250').reduce((a, l) => a + num(l.dr), 0);
     if (cr > 0.005) {
-      const sec = m.tds && m.tds !== 'none' ? m.tds : (t.event === 'salary' ? '192' : t.event === 'emi' ? '194A' : 'other');
-      (withheld[sec] = withheld[sec] || []).push({ txn: t, amt: r2(cr), party: t.lines.find(l => l.party)?.party || m.vendor || m.emp || null, month: ym(t.date) });
+      // On a salary or EMI entry `meta.tds` is the rupee amount, so the section comes from
+      // the event; everywhere else the form named it.
+      const sec = t.event === 'salary' ? '192' : t.event === 'emi' ? '194A' : (m.tds && m.tds !== 'none' ? m.tds : 'other');
+      (withheld[sec] = withheld[sec] || []).push({ txn: t, amt: r2(cr), party: t.lines.find(l => l.party)?.party || m.vendor || m.emp || payeeOf(t) || null, month: ym(t.date) });
     }
     if (dr > 0.005 && t.event === 'statutory') {
       const sec = m.tdsSection || 'other';
@@ -977,6 +1007,378 @@ export function upcomingCash(fromDate) {
 // so it is reported separately rather than dated by guesswork.
 const AGE_BUCKETS = () => ({ '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0, 'no document': 0 });
 const bucketFor = days => days <= 30 ? '0-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '90+';
+
+// ═══════ THE MONTH, FOUR WAYS ═══════
+//
+// The same commitment is looked at four times before it is over: it starts as an estimate,
+// becomes an event when the month is used up, arrives as a bill with a due date, and is
+// finally paid. A month view that shows only one of those is useless for deciding whether
+// there is room to spend. Nothing here posts — it reads the books, the documents and the
+// commitments, and each bucket is also given as rows so the screen can show what is in it.
+//
+// Overlap is deliberate: a bill that arrived this month AND is due this month is in both
+// "invoiced" and "due", because those answer different questions. Only `committed` — what
+// still has to be found in cash — is a sum that must not double count, so it is built from
+// due + overdue + estimates alone, and drops the entries that never move money.
+export function monthPicture(month) {
+  const m = month || ym(today());
+  const first = m + '-01';
+  const last = lastDayOfMonth(m);
+  const bills = (S.bills || []).filter(b => b.paid !== undefined && b.status !== 'void');
+  const invs = (S.invoices || []).filter(i => i.paid !== undefined && i.status !== 'void' && i.kind !== 'creditnote');
+
+  const bucket = () => ({ amt: 0, rows: [] });
+  const push = (b, row) => { b.rows.push(row); b.amt = r2(b.amt + num(row.amt)); };
+  const out = { paid: bucket(), invoiced: bucket(), due: bucket(), overdue: bucket(), estimated: bucket() };
+  const inn = { paid: bucket(), invoiced: bucket(), due: bucket(), overdue: bucket(), estimated: bucket() };
+
+  // 1. Money that actually moved this month — the same figures as the cash book.
+  for (const t of S.txns) {
+    if (ym(t.date) !== m) continue;
+    const mv = moneyMoved(t);
+    if (Math.abs(mv.net) < 0.005) continue;
+    push(mv.net < 0 ? out.paid : inn.paid, {
+      what: t.desc || t.event, amt: Math.abs(mv.net), when: t.date, txnId: t.id, kind: t.event,
+    });
+  }
+
+  // 2. Documents: what has been billed and what falls due.
+  for (const b of bills) {
+    const left = billOutstanding(b);
+    if (left <= HALF_PAISA) continue;
+    const due = b.dueDate || b.date;
+    const row = {
+      what: `${b.vendorName || pname(b.partyId) || 'Vendor'} — ${b.desc}`,
+      amt: left, when: due, docId: b.id, txnId: b.txnId || null,
+      kind: b.accrued ? 'accrued' : 'bill', waiting: !b.billNo,
+      period: b.period || b.month || ym(b.date), date: b.date,
+    };
+    if (ym(b.date) === m) push(out.invoiced, row);
+    if (ym(due) === m) push(out.due, row);
+    else if (due < first) push(out.overdue, row);
+  }
+  for (const i of invs) {
+    const left = invoiceOutstanding(i);
+    if (left <= HALF_PAISA) continue;
+    const due = i.dueDate || i.date;
+    const row = {
+      what: `${pname(i.partyId) || 'Client'} — ${i.invoiceNo || i.desc || 'Invoice'}`,
+      amt: left, when: due, docId: i.id, txnId: i.txnId || null, kind: 'invoice', date: i.date,
+    };
+    if (ym(i.date) === m) push(inn.invoiced, row);
+    if (ym(due) === m) push(inn.due, row);
+    else if (due < first) push(inn.overdue, row);
+  }
+
+  // 3. Estimates: a commitment for this month that has not become an event yet. The moment
+  //    the month is recorded, the estimate stops being one — it never counts twice.
+  for (const s of S.subs) {
+    if (s.status !== 'active') continue;
+    if (s.start && s.start > m) continue;
+    if (s.end && s.end < m) continue;
+    const rec = (s.charges || {})[m];
+    if (rec && !rec.reversed) continue;
+    const amt = s.payMode === 'upfront' ? num(s.monthly) : expectedFor(s, m);
+    if (amt <= 0.005) continue;
+    push(out.estimated, {
+      what: s.name, amt, when: last, kind: 'recurring', subId: s.id,
+      noCash: s.payMode === 'upfront', why: recurringKindLabel(s.kind),
+    });
+  }
+  for (const l of S.loans) {
+    if (l.status !== 'active') continue;
+    for (const x of l.schedule || []) {
+      if (x.month !== m || (l.paid || []).includes(x.n)) continue;
+      push(out.estimated, { what: `EMI ${x.n}/${l.n} — ${l.lender}`, amt: num(x.emi), when: last, kind: 'emi', loanId: l.id });
+    }
+  }
+  for (const a of S.assets) {
+    if (a.status !== 'in use' || (a.start && a.start > m)) continue;
+    if ((a.depreciated || []).includes(m) || (a.depreciated || []).length >= num(a.life)) continue;
+    push(out.estimated, { what: `${a.name} — depreciation`, amt: num(a.monthly), when: last, kind: 'depreciation', noCash: true });
+  }
+  const done = pl(m);
+  for (const [code, amount] of Object.entries(budgetLines(m))) {
+    const a = A[code];
+    if (!a) continue;
+    const already = a.type === 'income' ? num(done.inc[code]) : num(done.exp[code]);
+    const left = r2(num(amount) - already);
+    if (left <= 0.005) continue;
+    push(a.type === 'income' ? inn.estimated : out.estimated, {
+      what: `${a.name} — your figure`, amt: left, when: last, kind: 'budget', code,
+    });
+  }
+  for (const d of S.deals) {
+    if (d.status !== 'open' || d.expMonth !== m) continue;
+    if (invs.some(i => i.dealId === d.id)) continue;
+    const amt = r2(num(d.expSeller) + num(d.expBuyer));
+    if (amt > 0.005) push(inn.estimated, { what: `${d.nickname} — expected to close`, amt, when: last, kind: 'deal', dealId: d.id });
+  }
+
+  const sortRows = b => { b.rows.sort((x, y) => String(x.when).localeCompare(String(y.when)) || y.amt - x.amt); return b; };
+  const cashOf = b => r2(b.rows.filter(r => !r.noCash).reduce((s, r) => s + num(r.amt), 0));
+  const side = (o, booked) => {
+    for (const k of Object.keys(o)) sortRows(o[k]);
+    return {
+      ...o, booked: r2(booked),
+      settled: o.paid.amt,
+      toSettle: r2(o.due.amt + o.overdue.amt),
+      committed: r2(cashOf(o.due) + cashOf(o.overdue) + cashOf(o.estimated)),
+    };
+  };
+  const O = side(out, done.te);
+  const I = side(inn, done.ti);
+  const cashNow = r2(bal('1000') + bal('1010'));
+  return {
+    month: m, from: first, to: last,
+    out: O, in: I,
+    net: {
+      paid: r2(I.paid.amt - O.paid.amt),
+      booked: r2(done.profit),
+      toSettle: r2(I.toSettle - O.toSettle),
+      estimated: r2(I.estimated.amt - O.estimated.amt),
+      committed: r2(I.committed - O.committed),
+    },
+    cash: { now: cashNow, after: r2(cashNow + I.committed - O.committed), needed: O.committed, expected: I.committed },
+  };
+}
+
+// Bills sitting on Owed with no vendor bill number against them — a month closed on an
+// estimate, waiting for the paperwork. This is the queue "Bill arrived" works through.
+export function awaitingBill() {
+  return (S.bills || [])
+    .filter(b => b.paid !== undefined && b.status !== 'void' && billOutstanding(b) > HALF_PAISA)
+    .filter(b => !b.billNo)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+// ═══════ STATEMENTS, THE WAY AN ACCOUNTANT READS THEM ═══════
+
+// A trial balance with movement, not only the closing position: what the account opened at,
+// what went through it in the period, and where it ended. This is the form every accounting
+// package prints and the one a CA can tie to the ledger without asking questions.
+export function trialBalanceDetail(from, upto) {
+  const rows = [];
+  for (const a of ACCOUNTS) {
+    // Raw debit-minus-credit, not the reading convention: a trial balance shows a liability
+    // as a credit, and `closing = opening + debits - credits` has to hold line by line.
+    const sign = (a.type === 'asset' || a.type === 'expense') ? 1 : -1;
+    const opening = from ? r2(sign * bal(a.code, { upto: prevDay(from) })) : 0;
+    let debit = 0, credit = 0;
+    for (const t of S.txns) {
+      if (from && t.date < from) continue;
+      if (upto && t.date > upto) continue;
+      for (const l of t.lines) {
+        if (l.acc !== a.code) continue;
+        debit += num(l.dr); credit += num(l.cr);
+      }
+    }
+    const closing = r2(opening + debit - credit);
+    if (!opening && !debit && !credit) continue;
+    rows.push({ acc: a, opening: r2(opening), debit: r2(debit), credit: r2(credit), closing });
+  }
+  const sum = (k, f) => r2(rows.reduce((s, r) => s + (f(r) ? Math.abs(r[k]) : 0), 0));
+  const totals = {
+    debit: r2(rows.reduce((s, r) => s + r.debit, 0)),
+    credit: r2(rows.reduce((s, r) => s + r.credit, 0)),
+    closingDr: sum('closing', r => r.closing > 0),
+    closingCr: sum('closing', r => r.closing < 0),
+    openingDr: sum('opening', r => r.opening > 0),
+    openingCr: sum('opening', r => r.opening < 0),
+  };
+  return {
+    rows, totals,
+    balanced: Math.abs(totals.debit - totals.credit) < 0.5 && Math.abs(totals.closingDr - totals.closingCr) < 0.5,
+  };
+}
+const prevDay = iso => addDays(iso, -1);
+
+// Profit and loss in the order it is read: revenue, what it directly cost, what running the
+// business cost, then the things below the operating line — finance, depreciation, and the
+// costs the tax computation adds back. Any account not named in a group still appears, under
+// administration, so nothing can quietly fall out of the statement.
+export const PL_GROUPS = [
+  { key: 'revenue', label: 'Revenue from operations', type: 'income', codes: ['4000', '4010', '4020'] },
+  { key: 'otherinc', label: 'Other income', type: 'income', codes: ['4030', '4040', '4050', '4060'] },
+  { key: 'direct', label: 'Direct costs of earning it', type: 'expense', codes: ['5040', '5045'] },
+  { key: 'people', label: 'People', type: 'expense', codes: ['5010', '5020', '5030'] },
+  { key: 'place', label: 'Place and running costs', type: 'expense', codes: ['5000', '5060', '5070', '5130', '5170', '5160'] },
+  { key: 'selling', label: 'Selling and marketing', type: 'expense', codes: ['5090', '5110', '5185'] },
+  { key: 'admin', label: 'Administration', type: 'expense', codes: ['5050', '5075', '5080', '5100', '5120', '5140', '5180'] },
+  { key: 'finance', label: 'Finance cost', type: 'expense', codes: ['5150'] },
+  { key: 'depreciation', label: 'Depreciation', type: 'expense', codes: ['5200'] },
+  { key: 'exceptional', label: 'Exceptional and non-deductible', type: 'expense', codes: ['5165', '5190', '5210', '5220', '5225'] },
+];
+const PL_HOME = Object.fromEntries(PL_GROUPS.flatMap(g => g.codes.map(c => [c, g.key])));
+
+export function plStatement(o = {}) {
+  const p = pl(o.month || null, o.deal || null, o.fy || null);
+  const groups = PL_GROUPS.map(g => ({ ...g, rows: [], total: 0 }));
+  const at = k => groups.find(g => g.key === k);
+  const place = (code, amt, type) => {
+    if (Math.abs(amt) < 0.005) return;
+    const g = at(PL_HOME[code] || (type === 'income' ? 'otherinc' : 'admin'));
+    g.rows.push({ code, name: A[code]?.name || code, amt: r2(amt) });
+    g.total = r2(g.total + amt);
+  };
+  for (const [code, amt] of Object.entries(p.inc)) place(code, amt, 'income');
+  for (const [code, amt] of Object.entries(p.exp)) place(code, amt, 'expense');
+  for (const g of groups) g.rows.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
+
+  const t = k => at(k).total;
+  const revenue = t('revenue'), otherIncome = t('otherinc'), direct = t('direct');
+  const opex = r2(t('people') + t('place') + t('selling') + t('admin'));
+  const grossProfit = r2(revenue - direct);
+  const ebitda = r2(grossProfit + otherIncome - opex);
+  const depreciation = t('depreciation'), finance = t('finance'), exceptional = t('exceptional');
+  const pbt = r2(ebitda - depreciation - finance - exceptional);
+  const prov = taxProvision(pbt);
+  return {
+    groups: groups.filter(g => g.rows.length),
+    revenue, otherIncome, direct, grossProfit, opex, ebitda,
+    depreciation, finance, exceptional, pbt,
+    tax: prov.tax, taxRate: prov.rate, pat: prov.pat,
+    income: r2(p.ti), expense: r2(p.te), profit: r2(p.profit),
+    margin: p.ti ? Math.round((p.profit / p.ti) * 100) : 0,
+  };
+}
+
+// The balance sheet in schedule order, with fixed assets shown at cost less depreciation and
+// the profit split into what earlier years left behind and what this year has made.
+export const BS_GROUPS = [
+  { key: 'fixed', side: 'assets', label: 'Fixed assets', codes: ['1300', '1350'] },
+  { key: 'current', side: 'assets', label: 'Current assets', codes: ['1000', '1010', '1100', '1150', '1200', '1400', '1401', '1402', '1500', '1550'] },
+  { key: 'funds', side: 'funds', label: "Owner's funds", codes: ['3000', '3100'] },
+  { key: 'borrowings', side: 'funds', label: 'Borrowings', codes: ['2400'] },
+  { key: 'payables', side: 'funds', label: 'Current liabilities', codes: ['2000', '2100', '2200', '2201', '2202', '2205', '2250', '2300', '2450', '2550'] },
+];
+
+export function balanceSheetGrouped(upto, fyStart) {
+  const seen = new Set();
+  const groups = BS_GROUPS.map(g => {
+    const rows = [];
+    let total = 0;
+    for (const code of g.codes) {
+      seen.add(code);
+      // bal() already reports a liability or equity credit balance as a positive number,
+      // which is how a balance sheet reads it — nothing is flipped here.
+      const amt = bal(code, { upto });
+      if (Math.abs(amt) < 0.5) continue;
+      rows.push({ code, name: A[code]?.name || code, amt: r2(amt) });
+      total = r2(total + amt);
+    }
+    return { ...g, rows, total };
+  });
+  // Anything the groups do not name still has to appear somewhere.
+  const strays = ACCOUNTS.filter(a => !seen.has(a.code) && ['asset', 'liability', 'equity'].includes(a.type))
+    .map(a => ({ code: a.code, name: a.name, amt: r2(bal(a.code, { upto })), type: a.type }))
+    .filter(r => Math.abs(r.amt) > 0.5);
+  for (const s of strays) {
+    const g = groups.find(x => x.key === (s.type === 'asset' ? 'current' : 'payables'));
+    g.rows.push({ code: s.code, name: s.name, amt: s.amt });
+    g.total = r2(g.total + s.amt);
+  }
+
+  const thisYear = fyStart ? r2(retainedProfit(upto) - retainedProfit(prevDay(fyStart))) : retainedProfit(upto);
+  const earlier = r2(retainedProfit(upto) - thisYear);
+  const assets = groups.filter(g => g.side === 'assets');
+  const funds = groups.filter(g => g.side === 'funds');
+  const totalAssets = r2(assets.reduce((s, g) => s + g.total, 0));
+  const totalFunds = r2(funds.reduce((s, g) => s + g.total, 0) + thisYear + earlier);
+  const diff = r2(totalAssets - totalFunds);
+  return {
+    assets, funds, totalAssets, totalFunds, diff,
+    profitThisYear: thisYear, profitEarlier: earlier,
+    retained: r2(thisYear + earlier),
+    balanced: Math.abs(diff) < 0.5,
+  };
+}
+
+// What an accountant checks before signing anything off: does it balance, do the control
+// accounts agree with the documents behind them, is anything obviously unfinished. Each check
+// says what to do about it, so the page is a worklist rather than a verdict.
+export function booksHealth(upto) {
+  const asOf = upto || today();
+  const list = [];
+  const add = (key, label, ok, detail, o = {}) => list.push({ key, label, ok, detail, level: o.level || (ok ? 'ok' : 'bad'), go: o.go || null, amount: o.amount ?? null });
+
+  const tb = trialBalance(asOf);
+  add('tb', 'The books balance', tb.balanced,
+    tb.balanced ? 'Every entry has equal debits and credits.' : `Debits and credits differ by ${fmt(Math.abs(tb.totalDr - tb.totalCr))}.`);
+
+  const bs = balanceSheetGrouped(asOf);
+  add('bs', 'The balance sheet ties out', bs.balanced,
+    bs.balanced ? 'Assets equal funds and liabilities plus profit.' : `Out by ${fmt(Math.abs(bs.diff))}.`);
+
+  const apLedger = bal('2000', { upto: asOf });
+  const apDocs = r2(openBills(null).reduce((a, b) => a + billOutstanding(b), 0));
+  const apGap = r2(apLedger - apDocs);
+  add('ap', 'Vendor payables agree with the bills behind them', Math.abs(apGap) < 0.5,
+    Math.abs(apGap) < 0.5 ? `${fmt(apDocs)} owed, every rupee on a bill.`
+      : `${fmt(Math.abs(apGap))} of the ${fmt(apLedger)} owed has no bill document — entries made before bills were tracked, or an opening balance.`,
+    { level: Math.abs(apGap) < 0.5 ? 'ok' : 'warn', amount: apGap, go: 'owed' });
+
+  const arLedger = bal('1100', { upto: asOf });
+  const arDocs = r2(openInvoices(null).reduce((a, i) => a + invoiceOutstanding(i), 0));
+  const arGap = r2(arLedger - arDocs);
+  add('ar', 'Client receivables agree with the invoices behind them', Math.abs(arGap) < 0.5,
+    Math.abs(arGap) < 0.5 ? `${fmt(arDocs)} receivable, every rupee on an invoice.`
+      : `${fmt(Math.abs(arGap))} of the ${fmt(arLedger)} receivable has no invoice document.`,
+    { level: Math.abs(arGap) < 0.5 ? 'ok' : 'warn', amount: arGap, go: 'owed' });
+
+  const box = pettyRoom('1900-01-01');
+  add('petty', 'The cash box never went below zero', box > -0.5,
+    box > -0.5 ? 'Every day the box held cash it had the cash.' : `On its worst day the box is short ${fmt(Math.abs(box))} — an entry is missing or misdated.`,
+    { go: 'petty' });
+
+  const noDue = openBills(null).filter(b => !b.dueDate).length;
+  add('due', 'Every open bill has a due date', noDue === 0,
+    noDue ? `${noDue} open bill${noDue === 1 ? ' has' : 's have'} no due date, so they cannot appear in what is due this month.` : 'Everything owed has a date against it.',
+    { level: noDue ? 'warn' : 'ok', go: 'owed' });
+
+  const waiting = awaitingBill();
+  add('waiting', 'Vendor bills received for what you accrued', waiting.length === 0,
+    waiting.length ? `${waiting.length} recorded month${waiting.length === 1 ? '' : 's'} still ${waiting.length === 1 ? 'has' : 'have'} no vendor bill number — record them with "Bill arrived" when the invoice comes.`
+      : 'No month is waiting for its paperwork.',
+    { level: waiting.length ? 'warn' : 'ok', amount: r2(waiting.reduce((a, b) => a + billOutstanding(b), 0)), go: 'owed' });
+
+  const missing = missingServiceMonths ? missingServiceMonths(ym(asOf)) : [];
+  add('recurring', 'Every recurring month is recorded', missing.length === 0,
+    missing.length ? `${missing.length} month${missing.length === 1 ? '' : 's'} of a recurring cost ${missing.length === 1 ? 'is' : 'are'} not recorded yet.` : 'Nothing outstanding on the recurring tab.',
+    { level: missing.length ? 'warn' : 'ok', go: 'services' });
+
+  const closed = Object.keys(S.monthEnds || {});
+  const pend = [];
+  for (let mth = ym(S.txns.map(t => t.date).sort()[0] || asOf), guard = 0; mth < ym(asOf) && guard < 60; mth = addMonths(mth, 1), guard++) {
+    if (!closed.includes(mth) && monthEndEntries(mth).length) pend.push(mth);
+  }
+  add('monthend', 'Month-end has been run on every closed month', pend.length === 0,
+    pend.length ? `${pend.map(mlabel).join(', ')} still ${pend.length === 1 ? 'has' : 'have'} depreciation or prepaid entries waiting.` : 'Depreciation and prepaid slices are up to date.',
+    { level: pend.length ? 'warn' : 'ok', go: 'overview' });
+
+  const tds = bal('2250', { upto: asOf });
+  add('tds', 'TDS withheld has been deposited', tds < 0.5,
+    tds < 0.5 ? 'Nothing withheld is sitting with you.' : `${fmt(tds)} withheld is still to be deposited — by the 7th of the month after it was deducted.`,
+    { level: tds > 0.5 ? 'warn' : 'ok', amount: tds, go: 'gst' });
+
+  const noSelf = S.txns.filter(t => (t.lines || []).some(l => l.acc === '2205' && num(l.cr)) && !t.selfInvoiceNo).length;
+  add('selfinv', 'Every reverse-charge entry has a self-invoice', noSelf === 0,
+    noSelf ? `${noSelf} reverse-charge entr${noSelf === 1 ? 'y has' : 'ies have'} no self-invoice number — s.31(3)(f) requires one.` : 'Self-invoices are numbered on every reverse-charge entry.',
+    { level: noSelf ? 'warn' : 'ok', go: 'gst' });
+
+  const start = S.settings.booksStartDate;
+  const before = start ? S.txns.filter(t => t.date < start).length : 0;
+  add('start', 'Nothing is dated before the books start', before === 0,
+    before ? `${before} entr${before === 1 ? 'y is' : 'ies are'} dated before ${start}.` : start ? `Books start ${start}.` : 'No start date set — set one in Settings so nothing can be back-dated by accident.',
+    { level: before ? 'bad' : start ? 'ok' : 'warn', go: 'settings' });
+
+  const opening = Math.abs(bal('3100', { upto: asOf }));
+  add('opening', 'Opening balances are on record', opening > 0.5,
+    opening > 0.5 ? 'Opening balances were entered.' : 'No opening balances have been posted. Until they are, the bank and what you owe start from zero on day one.',
+    { level: opening > 0.5 ? 'ok' : 'warn', go: 'opening' });
+
+  return { asOf, checks: list, bad: list.filter(c => c.level === 'bad').length, warn: list.filter(c => c.level === 'warn').length };
+}
 
 export function agedReceivables(asOf) {
   const at = asOf || today();

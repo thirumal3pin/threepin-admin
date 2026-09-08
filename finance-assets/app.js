@@ -23,7 +23,7 @@ import {
 
 import { renderOwed } from './views-owed.js';
 import { renderServices, renderLoans, renderAssets } from './views-services.js';
-import { renderPetty, renderBudget } from './views-money.js';
+import { renderPetty, renderBudget, renderMonth } from './views-money.js';
 import { renderInvoices, mountInvoices } from './views-invoices.js';
 import { renderBank, mountBank } from './views-bank.js';
 import { renderReports, renderBooks } from './views-reports.js';
@@ -45,6 +45,7 @@ import { renderAnalytics } from './views-analytics.js';
 const NAV = [
   ['overview', 'Overview', 'fa-solid fa-gauge-high', 'Daily'],
   ['record', 'Record', 'fa-solid fa-plus', 'Daily'],
+  ['month', 'This month', 'fa-regular fa-calendar-check', 'Daily'],
   ['txns', 'Transactions', 'fa-solid fa-list', 'Daily'],
   ['owed', 'Owed', 'fa-solid fa-right-left', 'Daily'],
   ['deals', 'Deals & invoices', 'fa-regular fa-handshake', 'Business'],
@@ -279,7 +280,7 @@ function repaint() {
     owed: renderOwed,
     services: renderServices, loans: renderLoans, assets: renderAssets,
     invoices: renderInvoices, bank: renderBank, petty: renderPetty, budget: renderBudget,
-    reports: renderReports, books: renderBooks,
+    reports: renderReports, books: renderBooks, month: renderMonth,
     profile: renderProfile, settings: renderSettings, guide: renderGuide, opening: renderOpening,
     deals: renderDeals, gst: renderGst, analytics: renderAnalytics,
   };
@@ -342,6 +343,8 @@ function overview() {
       ${stat('Profit', signed(p.profit), { raw: true, hero: true })}
       ${stat('Free to use', fmt(cash.free), { sub: 'Cash after vendor dues and client tokens' })}
     </div>
+
+    <div class="actions"><button class="btn" type="button" onclick="fin.go('month')">Open this month — paid, invoiced, due and still a guess</button></div>
 
     <h2>Where the money is</h2>
     <div class="grid g3">

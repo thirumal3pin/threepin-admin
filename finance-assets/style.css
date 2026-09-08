@@ -697,3 +697,19 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--line-2); border-bottom:
   #scopeTog { display: none; }
   .scope-inline { display: flex; }
 }
+
+
+/* Collapsible groups on This month and the Books registers: the summary is a row in its own
+   right, with the amount pushed to the end, so the page reads as a list of totals until one
+   is opened. */
+details.bucket { margin: 10px 0; }
+details.bucket > summary {
+  cursor: pointer; padding: 12px 14px; display: flex; align-items: baseline; gap: 10px;
+  min-height: 44px; list-style: none;
+}
+details.bucket > summary::-webkit-details-marker { display: none; }
+details.bucket > summary::before { content: '▸'; color: var(--muted); font-size: 12px; }
+details.bucket[open] > summary::before { content: '▾'; }
+details.bucket > summary .n { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+details.bucket > summary:hover { background: var(--hover, rgba(0,0,0,.03)); }
+details.bucket[open] > summary { border-bottom: 1px solid var(--line); }

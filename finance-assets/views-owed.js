@@ -163,9 +163,11 @@ function sectionPayable(rows) {
             <div class="docrow"><span class="small">${esc(b.desc)}</span> <span class="small faint">${esc(b.date)}${b.billNo ? ' · ' + esc(b.billNo) : ''}</span>
               <span class="n">${fmt(billOutstanding(b))}${b.status === 'part' ? ` <span class="small faint">of ${fmt(b.net ?? b.total)}</span>` : ''}</span>
               <span>${dueCell(b.dueDate)}
+                ${!b.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button>` : ''}
                 ${b.txnId ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(b.txnId)}')">Entry</button>` : ''}
                 ${b.serviceId ? `<button class="btn ghost sm" type="button" onclick="fin.go('services')">Service</button>` : ''}
-              </span></div>`).join('')}</div>` : ''}
+              </span>
+              ${!b.billNo ? '<div class="small faint">Recorded on your own figure — no vendor bill number yet.</div>' : ''}</div>`).join('')}</div>` : ''}
           ${undocumented > 0.5 ? `<div class="small faint" style="margin-top:4px">${fmt(undocumented)} owed from entries before bills were tracked</div>` : ''}
           ${adv > 0.5 ? `<div class="small pos" style="margin-top:4px">${fmt(adv)} advance already with them — used first when you pay</div>` : ''}</td>
         <td class="n" data-label="You owe">${fmt(amt)}</td>

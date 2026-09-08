@@ -15,6 +15,9 @@ import { invoiceModel, nextInvoiceNumber } from '../finance-assets/finance-invoi
 import { renderOwed } from '../finance-assets/views-owed.js';
 import { renderServices, renderLoans, renderAssets } from '../finance-assets/views-services.js';
 import { renderReports, renderBooks } from '../finance-assets/views-reports.js';
+// views-money.js pulls in finance-sync.js, which loads Firebase from a CDN URL node cannot
+// resolve. That view is proved in the browser run (tests/e2e-services.mjs) and by the static
+// import scanner in tests/finance-modules.test.mjs.
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -148,6 +151,22 @@ for (const [name, fn] of views) {
   check(`${name} survives empty books`, ok, err?.message);
 }
 setState(s);
+
+section('Books reads like an accountant expects');
+const booksHtml = renderBooks();
+for (const heading of ['The check', 'Trial balance', 'Profit and loss', 'Balance sheet', 'Ledger', 'Registers', 'General journal']) {
+  check(`Books has a ${heading} section`, booksHtml.includes(heading));
+}
+check('The trial balance shows movement, not only the closing position',
+  booksHtml.includes('Opening Dr') && booksHtml.includes('Closing Cr'));
+check('The profit statement works down to profit after tax',
+  booksHtml.includes('Gross profit') && booksHtml.includes('Operating profit (EBITDA)') && booksHtml.includes('Profit after tax'));
+check('The balance sheet is grouped, not a flat list',
+  booksHtml.includes('Fixed assets') && booksHtml.includes('Current liabilities') && booksHtml.includes('Profit kept in the business'));
+check('The ledger opens with a balance brought forward', booksHtml.includes('Opening balance'));
+check('Registers cover purchases and sales', booksHtml.includes('Purchases') && booksHtml.includes('Sales'));
+check('The trial balance says whether it balances', /balanced|does not balance/.test(booksHtml));
+check('There is a ledger export for the CA', booksHtml.includes('All ledgers CSV') && booksHtml.includes('Trial balance CSV'));
 
 section('Owed view shows the right figures');
 const owedHtml = renderOwed();

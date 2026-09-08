@@ -164,13 +164,14 @@ export function save(evKey, values, opts = {}) {
   const updates = out.updates || [];
   if (!lines.length && !docs.length && !updates.length) throw new Error('Nothing to save');
 
+  const postDate = out.postDate || v.date;
   let txnId = null, no = null;
   if (lines.length) {
-    validate({ ...out, date: v.date, lines });
+    validate({ ...out, date: postDate, lines });
     txnId = nid('TX');
     no = ++txnNo;
     s.txns.push({
-      id: txnId, no, date: v.date, event: evKey, desc: out.desc, lines,
+      id: txnId, no, date: postDate, event: evKey, desc: out.desc, lines,
       totals: {
         dr: r2(lines.reduce((a, l) => a + num(l.dr), 0)),
         cr: r2(lines.reduce((a, l) => a + num(l.cr), 0)),
@@ -178,7 +179,7 @@ export function save(evKey, values, opts = {}) {
       meta: Object.fromEntries(Object.entries(v).filter(([k, x]) => x != null && typeof x !== 'object' && !k.startsWith('__') && k !== 'alloc')),
       attachments: [], auto: false,
       allocations: allocations.map(a => ({ coll: a.coll, id: a.id, amt: a.amt })),
-      fy: fyOf(v.date, s.settings.fyStartMonth), createdBy: 'test', createdAt: Date.now(),
+      fy: fyOf(postDate, s.settings.fyStartMonth), createdBy: 'test', createdAt: Date.now(),
     });
   }
 
@@ -206,7 +207,7 @@ export function save(evKey, values, opts = {}) {
     cur.paid = paid;
     cur.status = docStatus(r2(total - paid), total);
     if (a.creditNote) cur.credited = r2(num(cur.credited) + num(a.amt));
-    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: v.date, ...(a.writtenOff ? { writtenOff: true } : {}), ...(a.creditNote ? { creditNote: true } : {}) }];
+    cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: postDate, ...(a.writtenOff ? { writtenOff: true } : {}), ...(a.creditNote ? { creditNote: true } : {}) }];
   }
   if (out.creditNote && txnId) {
     const n = num(s.settings.nextCreditNoteNo) || 1;
@@ -244,6 +245,8 @@ export function reverse(txnId) {
   const settled = s.bills.find(b => b.txnId === txnId && b.status !== 'void'
     && (b.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005);
   if (settled) throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
+  const truedUp = s.bills.find(b => b.txnId === txnId && b.status !== 'void' && b.billNo && b.accrued === false);
+  if (truedUp) throw new Error(`The vendor bill ${truedUp.billNo} was recorded against ${truedUp.desc} with "Bill arrived". Reverse that entry first, then reverse this one.`);
   const invPaid = s.invoices.find(i => i.txnId === txnId && i.kind !== 'creditnote'
     && (i.allocations || []).reduce((a, x) => a + num(x.amt), 0) > 0.005);
   if (invPaid) throw new Error(`${invPaid.invoiceNo} has a payment against it. Reverse the payment first, or reduce the invoice with a credit note instead.`);

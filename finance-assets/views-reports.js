@@ -8,6 +8,8 @@ import {
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
   pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
   cashProfitBridge, scopeMode, scopeLabel, scoped, cashBook, lastDayOfMonth,
+  trialBalanceDetail, plStatement, balanceSheetGrouped, booksHealth,
+  openBills, openInvoices, billOutstanding, invoiceOutstanding, addDays,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -282,75 +284,221 @@ export function renderBooks() {
   if (!s.txns.length) {
     return `<h1>Books</h1>${empty('<b>Nothing in the books yet.</b><br>This is the accountant\'s view — it fills in as you record.')}`;
   }
-  if (!jFrom) jFrom = s.txns.map(t => t.date).sort()[0];
+  if (!jFrom) jFrom = fyStart(fyOf(today(), s.settings.fyStartMonth), s.settings.fyStartMonth);
   if (!jTo) jTo = today();
 
   return `
     <h1>Books</h1>
-    <p class="lead">This is the double-entry view your CA will ask for. The journal CSV below is
-    the file to send them — it has every entry, both sides, with account names.</p>
-    <div class="actions">
-      <button class="btn primary" type="button" onclick="finReports.csvJournal()">Download journal CSV</button>
-      <button class="btn" type="button" onclick="finReports.csvTally()">Tally-friendly CSV</button>
-      <button class="btn" type="button" onclick="finReports.exportAll()">Export everything (JSON)</button>
+    <p class="lead">The five statements a chartered accountant asks for, over one period you choose.
+    Everything below is built from the same entries — change the dates once and all of it moves together.</p>
+
+    <div class="card">
+      <div class="filters">
+        <label class="small muted" for="bkFrom">From</label>
+        <input type="date" id="bkFrom" value="${esc(jFrom)}" onchange="finReports.setRange('from',this.value)" aria-label="Period from">
+        <label class="small muted" for="bkTo">To</label>
+        <input type="date" id="bkTo" value="${esc(jTo)}" onchange="finReports.setRange('to',this.value)" aria-label="Period to">
+        <button class="btn ghost sm" type="button" onclick="finReports.period('fy')">This financial year</button>
+        <button class="btn ghost sm" type="button" onclick="finReports.period('month')">This month</button>
+        <button class="btn ghost sm" type="button" onclick="finReports.period('all')">Everything</button>
+      </div>
+      <div class="actions" style="margin-bottom:0">
+        <button class="btn primary" type="button" onclick="finReports.csvJournal()">Journal CSV</button>
+        <button class="btn" type="button" onclick="finReports.csvTrial()">Trial balance CSV</button>
+        <button class="btn" type="button" onclick="finReports.csvGeneralLedger()">All ledgers CSV</button>
+        <button class="btn" type="button" onclick="finReports.csvTally()">Tally-friendly CSV</button>
+        <button class="btn" type="button" onclick="finReports.exportAll()">Export everything (JSON)</button>
+      </div>
+      <p class="small faint" style="margin:8px 0 0">Send your CA the journal and the ledgers. Both carry account codes, names and both sides of every entry.</p>
     </div>
 
+    ${healthSection()}
     ${trialBalanceSection()}
+    ${plSection()}
     ${balanceSheetSection()}
     ${ledgerSection()}
+    ${registerSection()}
     ${journalSection()}`;
+}
+
+// What an accountant checks before signing anything. Read at full scope on purpose: a
+// petty-cash filter must never be able to make the books look balanced when they are not.
+function healthSection() {
+  const h = scoped(() => booksHealth(jTo), 'with');
+  const icon = c => c.level === 'ok' ? '<span class="pos">✓</span>' : c.level === 'warn' ? '<span class="neg">!</span>' : '<span class="neg">✗</span>';
+  const bad = h.bad, warn = h.warn;
+  return `
+    <h2>The check <span class="small faint">as at ${esc(jTo)}</span>
+      ${bad ? tag(`${bad} to fix`, 'rev') : warn ? tag(`${warn} to look at`, 'warn') : tag('all clear ✓', 'ok')}</h2>
+    <p class="small muted">Twelve things that have to be true before these books can be filed or handed over.</p>
+    ${table(
+    `<th>Check</th><th>What it says</th><th></th>`,
+    h.checks.map(c => `<tr>
+      <td class="lead">${icon(c)} ${esc(c.label)}</td>
+      <td class="small" data-label="What it says">${esc(c.detail)}</td>
+      <td class="n">${c.go && c.level !== 'ok' ? `<button class="btn ghost sm" type="button" onclick="fin.go('${esc(c.go)}')">Open</button>` : ''}</td>
+    </tr>`).join(''), '', { stack: true })}`;
 }
 
 function trialBalanceSection() {
   return scoped(() => trialBalanceFull(), 'with');
 }
+
+// A trial balance with movement: where each account started, what went through it, where it
+// ended. The closing columns are what most people call the trial balance; the movement
+// columns are what makes it tie to the journal.
 function trialBalanceFull() {
-  const tb = trialBalance();
+  const tb = trialBalanceDetail(jFrom, jTo);
+  const cell = (amt, want) => (want === 'dr' ? amt > 0 : amt < 0) ? fmt(Math.abs(amt)) : '';
   return `
     <h2>Trial balance
-      ${tb.balanced ? tag('balanced ✓', 'ok') : tag('does not balance', 'rev')}</h2>
+      ${tb.balanced ? tag('balanced ✓', 'ok') : tag('does not balance', 'rev')}
+      <span class="small faint">${esc(jFrom)} to ${esc(jTo)}</span></h2>
     ${table(
-    `<th>Code</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th>`,
+    `<th>Code</th><th>Account</th><th class="n">Opening Dr</th><th class="n">Opening Cr</th>
+     <th class="n">Debit</th><th class="n">Credit</th><th class="n">Closing Dr</th><th class="n">Closing Cr</th>`,
     tb.rows.map(r => `<tr>
         <td class="small faint">${esc(r.acc.code)}</td>
-        <td>${esc(r.acc.name)}</td>
-        <td class="n">${r.net > 0 ? fmt(r.net) : ''}</td>
-        <td class="n">${r.net < 0 ? fmt(-r.net) : ''}</td>
+        <td class="lead">${esc(r.acc.name)}</td>
+        <td class="n" data-label="Opening Dr">${cell(r.opening, 'dr')}</td>
+        <td class="n" data-label="Opening Cr">${cell(r.opening, 'cr')}</td>
+        <td class="n" data-label="Debit">${r.debit ? fmt(r.debit) : ''}</td>
+        <td class="n" data-label="Credit">${r.credit ? fmt(r.credit) : ''}</td>
+        <td class="n" data-label="Closing Dr">${cell(r.closing, 'dr')}</td>
+        <td class="n" data-label="Closing Cr">${cell(r.closing, 'cr')}</td>
       </tr>`).join(''),
-    `<tr><td colspan="2">Total</td><td class="n">${fmt(tb.totalDr)}</td><td class="n">${fmt(tb.totalCr)}</td></tr>`)}`;
+    `<tr><td colspan="2">Total</td>
+       <td class="n">${fmt(tb.totals.openingDr)}</td><td class="n">${fmt(tb.totals.openingCr)}</td>
+       <td class="n">${fmt(tb.totals.debit)}</td><td class="n">${fmt(tb.totals.credit)}</td>
+       <td class="n">${fmt(tb.totals.closingDr)}</td><td class="n">${fmt(tb.totals.closingCr)}</td></tr>`,
+    { stack: true })}
+    <p class="small faint">Debits and credits for the period are equal by construction — every entry balances before it is written. The closing columns are what a trial balance normally shows.</p>`;
 }
 
+// Profit and loss the way it is read: revenue, what earning it cost, what running the place
+// cost, and then the lines below the operating result.
+function plSection() {
+  return scoped(() => plFull(), 'with');
+}
+function plFull() {
+  const period = plForRange();
+  const line = (label, amt, o = {}) => `<tr class="${o.cls || ''}">
+      <td${o.indent ? ' style="padding-left:22px"' : ''}>${o.bold ? '<b>' + esc(label) + '</b>' : esc(label)}</td>
+      <td class="n">${o.bold ? '<b>' + signed(amt) + '</b>' : signed(amt)}</td></tr>`;
+  const groupRows = g => `
+    <tr><td colspan="2" class="lead"><b>${esc(g.label)}</b></td></tr>
+    ${g.rows.map(r => `<tr><td style="padding-left:22px">${esc(r.name)} <span class="small faint">${esc(r.code)}</span></td><td class="n">${fmt(r.amt)}</td></tr>`).join('')}
+    <tr><td style="padding-left:22px"><i>Total ${esc(g.label.toLowerCase())}</i></td><td class="n"><b>${fmt(g.total)}</b></td></tr>`;
+
+  return `
+    <h2>Profit and loss <span class="small faint">${esc(jFrom)} to ${esc(jTo)}</span></h2>
+    <div class="card">
+      <div class="tbl-wrap"><table>
+        <tbody>
+          ${period.groups.map(groupRows).join('')}
+          <tr><td colspan="2"></td></tr>
+          ${line('Gross profit', period.grossProfit, { bold: true })}
+          ${line('Operating costs', -period.opex, { indent: true })}
+          ${line('Other income', period.otherIncome, { indent: true })}
+          ${line('Operating profit (EBITDA)', period.ebitda, { bold: true })}
+          ${line('Depreciation', -period.depreciation, { indent: true })}
+          ${line('Finance cost', -period.finance, { indent: true })}
+          ${line('Exceptional and non-deductible', -period.exceptional, { indent: true })}
+          ${line('Profit before tax', period.pbt, { bold: true })}
+          ${line(`Estimated tax at ${period.taxRate}%`, -period.tax, { indent: true })}
+          ${line('Profit after tax', period.pat, { bold: true })}
+        </tbody>
+      </table></div>
+    </div>
+    <p class="small faint">Margin ${period.margin}% of ${fmt(period.income)} income. Tax is an estimate at the rate in Settings, not the return.</p>`;
+}
+
+// The statement functions take a month or a financial year; an arbitrary date range is read
+// by summing the months it covers, which is what the range picker gives.
+function plForRange() {
+  const months = [];
+  for (let m = ym(jFrom), guard = 0; m <= ym(jTo) && guard < 240; m = addMonths(m, 1), guard++) months.push(m);
+  if (months.length === 1) return plStatement({ month: months[0] });
+  const parts = months.map(m => plStatement({ month: m }));
+  const groups = [];
+  for (const part of parts) {
+    for (const g of part.groups) {
+      let t = groups.find(x => x.key === g.key);
+      if (!t) { t = { ...g, rows: [], total: 0 }; groups.push(t); }
+      for (const r of g.rows) {
+        const row = t.rows.find(x => x.code === r.code);
+        if (row) row.amt = Math.round((row.amt + r.amt) * 100) / 100;
+        else t.rows.push({ ...r });
+      }
+      t.total = Math.round((t.total + g.total) * 100) / 100;
+    }
+  }
+  const sum = k => Math.round(parts.reduce((a, p) => a + p[k], 0) * 100) / 100;
+  const pbt = Math.round((sum('ebitda') - sum('depreciation') - sum('finance') - sum('exceptional')) * 100) / 100;
+  const prov = taxProvision(pbt);
+  const income = sum('income');
+  return {
+    groups: groups.filter(g => g.rows.length),
+    revenue: sum('revenue'), otherIncome: sum('otherIncome'), direct: sum('direct'),
+    grossProfit: sum('grossProfit'), opex: sum('opex'), ebitda: sum('ebitda'),
+    depreciation: sum('depreciation'), finance: sum('finance'), exceptional: sum('exceptional'),
+    pbt, tax: prov.tax, taxRate: prov.rate, pat: prov.pat,
+    income, expense: sum('expense'), profit: sum('profit'),
+    margin: income ? Math.round((sum('profit') / income) * 100) : 0,
+  };
+}
 function balanceSheetSection() {
   return scoped(() => balanceSheetFull(), 'with');
 }
 function balanceSheetFull() {
-  const bs = balanceSheet(bsDate);
-  const section = (label, rows, total) => `
-    <tr><td colspan="2"><b>${esc(label)}</b></td></tr>
-    ${rows.map(r => `<tr><td style="padding-left:22px">${esc(r.acc.name)}</td><td class="n">${fmt(r.amt)}</td></tr>`).join('')}
-    <tr><td style="padding-left:22px"><i>Total ${esc(label.toLowerCase())}</i></td><td class="n"><b>${fmt(total)}</b></td></tr>`;
+  const s = st();
+  const fy = fyOf(jTo, s.settings.fyStartMonth);
+  const bs = balanceSheetGrouped(jTo, fyStart(fy, s.settings.fyStartMonth));
+  const group = g => `
+    <tr><td colspan="2" class="lead"><b>${esc(g.label)}</b></td></tr>
+    ${g.rows.map(r => `<tr><td style="padding-left:22px">${esc(r.name)} <span class="small faint">${esc(r.code)}</span></td><td class="n">${fmt(r.amt)}</td></tr>`).join('')}
+    ${g.rows.length ? `<tr><td style="padding-left:22px"><i>Total ${esc(g.label.toLowerCase())}</i></td><td class="n"><b>${fmt(g.total)}</b></td></tr>` : '<tr><td style="padding-left:22px" class="faint">Nothing here</td><td class="n">—</td></tr>'}`;
 
   return `
     <h2>Balance sheet
-      ${bs.balanced ? tag('balances ✓', 'ok') : tag('out by ' + fmt(bs.diff), 'rev')}</h2>
-    <div class="actions">
-      <label class="small muted" for="bsDate">As of</label>
-      <input type="date" id="bsDate" value="${esc(bsDate)}" onchange="finReports.setBsDate(this.value)" style="max-width:180px">
+      ${bs.balanced ? tag('balances ✓', 'ok') : tag('out by ' + fmt(bs.diff), 'rev')}
+      <span class="small faint">as at ${esc(jTo)}</span></h2>
+    <div class="grid g1" style="grid-template-columns:1fr 1fr">
+      <div class="card pad0">
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>What the business owns</th><th class="n">Amount</th></tr></thead>
+          <tbody>
+            ${bs.assets.map(group).join('')}
+            <tr><td><b>Total assets</b></td><td class="n"><b>${fmt(bs.totalAssets)}</b></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card pad0">
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Where it came from</th><th class="n">Amount</th></tr></thead>
+          <tbody>
+            ${bs.funds.map(group).join('')}
+            <tr><td colspan="2" class="lead"><b>Profit kept in the business</b></td></tr>
+            <tr><td style="padding-left:22px">Earlier years</td><td class="n">${signed(bs.profitEarlier)}</td></tr>
+            <tr><td style="padding-left:22px">This financial year</td><td class="n">${signed(bs.profitThisYear)}</td></tr>
+            <tr><td><b>Total funds and liabilities</b></td><td class="n"><b>${fmt(bs.totalFunds)}</b></td></tr>
+          </tbody>
+        </table></div>
+      </div>
     </div>
-    ${table(
-    `<th>Account</th><th class="n">Amount</th>`,
-    section('Assets', bs.assets, bs.totalAssets) +
-    section('Liabilities', bs.liabilities, bs.totalLiab) +
-    section('Equity', bs.equity, bs.totalEquity) +
-    `<tr><td>Retained profit</td><td class="n">${signed(bs.retained)}</td></tr>`,
-    `<tr><td>Assets − (liabilities + equity + profit)</td>
-       <td class="n ${bs.balanced ? 'pos' : 'neg'}">${fmt(bs.diff)}</td></tr>`)}`;
+    ${bs.balanced ? '' : note(`The two sides differ by <b>${fmt(bs.diff)}</b>. Every entry balances on its own, so a gap here means an account is missing from the statement — tell your CA before filing anything.`, 'warn')}
+    <p class="small faint">Fixed assets are shown at cost with accumulated depreciation beneath them, as a negative figure.</p>`;
 }
 
 function ledgerSection() {
   const used = ACCOUNTS.filter(a => st().txns.some(t => t.lines.some(l => l.acc === a.code)));
   if (!used.some(a => a.code === ledgerAcc)) ledgerAcc = used[0]?.code || '1000';
-  const rows = ledger(ledgerAcc, { party: ledgerParty || undefined });
+  const rows = ledger(ledgerAcc, { party: ledgerParty || undefined, from: jFrom, upto: jTo });
+  const sign = (A[ledgerAcc].type === 'asset' || A[ledgerAcc].type === 'expense') ? 1 : -1;
+  const opening = Math.round(sign * bal(ledgerAcc, { upto: addDays(jFrom, -1) }) * 100) / 100;
+  const dr = rows.reduce((a, r) => a + num(r.dr), 0);
+  const cr = rows.reduce((a, r) => a + num(r.cr), 0);
+  const closing = Math.round((opening + dr - cr) * 100) / 100;
 
   return `
     <h2>Ledger</h2>
@@ -364,16 +512,75 @@ function ledgerSection() {
       </select>
       <button class="btn sm" type="button" onclick="finReports.csvLedger()">Download CSV</button>
     </div>
-    ${rows.length ? table(
+    ${table(
     `<th>Date</th><th>Description</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th>`,
+    `<tr><td class="nowrap small">${esc(jFrom)}</td><td><i>Opening balance</i></td><td class="n"></td><td class="n"></td><td class="n">${fmt(opening)}</td></tr>` +
     rows.map(r => `<tr class="click" onclick="fin.openTxn('${esc(r.txnId)}')">
         <td class="nowrap small">${esc(r.date)}</td>
-        <td>${esc(r.desc)}${r.party ? `<br><span class="small faint">${esc(pname(r.party))}</span>` : ''}</td>
-        <td class="n">${r.dr ? fmt(r.dr) : ''}</td>
-        <td class="n">${r.cr ? fmt(r.cr) : ''}</td>
-        <td class="n">${fmt(r.balance)}</td>
-      </tr>`).join(''))
-      : empty('Nothing posted to this account.')}`;
+        <td class="lead">${esc(r.desc)}${r.party ? `<br><span class="small faint">${esc(pname(r.party))}</span>` : ''}</td>
+        <td class="n" data-label="Debit">${r.dr ? fmt(r.dr) : ''}</td>
+        <td class="n" data-label="Credit">${r.cr ? fmt(r.cr) : ''}</td>
+        <td class="n" data-label="Balance">${fmt(Math.round((opening + r.balance) * 100) / 100)}</td>
+      </tr>`).join(''),
+    `<tr><td colspan="2">Closing balance</td><td class="n">${fmt(dr)}</td><td class="n">${fmt(cr)}</td><td class="n">${fmt(closing)}</td></tr>`,
+    { stack: true })}
+    <p class="small faint">The running balance starts from what the account held on ${esc(jFrom)}, so it is the real ledger balance, not a total of the rows shown.</p>`;
+}
+
+// Purchase and sales registers — every document raised or received in the period, which is
+// what a GST audit and a CA both ask for by name.
+function registerSection() {
+  const s = st();
+  const bills = (s.bills || []).filter(b => b.paid !== undefined && b.date >= jFrom && b.date <= jTo)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const invs = (s.invoices || []).filter(i => i.paid !== undefined && i.date >= jFrom && i.date <= jTo)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const money = x => x ? fmt(x) : '';
+  const statusTag = d => d.status === 'void' ? tag('reversed', 'rev') : d.status === 'paid' ? tag('settled', 'ok') : d.status === 'part' ? tag('part', 'warn') : tag('open', 'warn');
+
+  return `
+    <h2>Registers <span class="small faint">${esc(jFrom)} to ${esc(jTo)}</span></h2>
+    <details class="card pad0 bucket">
+      <summary><b>Purchases</b> <span class="faint small">every bill received, with its number and due date</span> <span class="n">${bills.length}</span></summary>
+      ${bills.length ? table(
+      `<th>Date</th><th>Vendor</th><th>Bill no</th><th>For</th><th class="n">Taxable</th><th class="n">GST</th><th class="n">Total</th><th>Due</th><th></th>`,
+      bills.map(b => `<tr${b.txnId ? ` class="click" onclick="fin.openTxn('${esc(b.txnId)}')"` : ''}>
+          <td class="nowrap small">${esc(b.date)}</td>
+          <td class="lead">${esc(b.vendorName || pname(b.partyId) || '')}</td>
+          <td class="small">${esc(b.billNo || '')}${!b.billNo ? '<span class="faint">awaited</span>' : ''}</td>
+          <td class="small" data-label="For">${esc(b.desc)}${b.period && b.period !== ym(b.date) ? ` <span class="faint">(${esc(mlabel(b.period))})</span>` : ''}</td>
+          <td class="n" data-label="Taxable">${money(num(b.taxable))}</td>
+          <td class="n" data-label="GST">${money(num(b.gst))}</td>
+          <td class="n" data-label="Total">${money(num(b.total))}</td>
+          <td class="small" data-label="Due">${esc(b.dueDate || '')}</td>
+          <td>${statusTag(b)}</td>
+        </tr>`).join(''),
+      `<tr><td colspan="4">Total purchases</td>
+         <td class="n">${fmt(bills.reduce((a, b) => a + num(b.taxable), 0))}</td>
+         <td class="n">${fmt(bills.reduce((a, b) => a + num(b.gst), 0))}</td>
+         <td class="n">${fmt(bills.reduce((a, b) => a + num(b.total), 0))}</td><td colspan="2"></td></tr>`,
+      { stack: true }) : empty('No bills in this period.')}
+    </details>
+    <details class="card pad0 bucket">
+      <summary><b>Sales</b> <span class="faint small">every invoice and credit note raised</span> <span class="n">${invs.length}</span></summary>
+      ${invs.length ? table(
+      `<th>Date</th><th>Number</th><th>Client</th><th class="n">Base</th><th class="n">GST</th><th class="n">Total</th><th>Due</th><th></th>`,
+      invs.map(i => `<tr${i.txnId ? ` class="click" onclick="fin.openTxn('${esc(i.txnId)}')"` : ''}>
+          <td class="nowrap small">${esc(i.date)}</td>
+          <td class="small">${esc(i.invoiceNo || '')}${i.kind === 'creditnote' ? ' ' + tag('credit note', 'warn') : ''}</td>
+          <td class="lead">${esc(pname(i.partyId) || '')}</td>
+          <td class="n" data-label="Base">${money(num(i.base))}</td>
+          <td class="n" data-label="GST">${money(num(i.cgst) + num(i.sgst) + num(i.igst))}</td>
+          <td class="n" data-label="Total">${money(num(i.total))}</td>
+          <td class="small" data-label="Due">${esc(i.dueDate || '')}</td>
+          <td>${statusTag(i)}</td>
+        </tr>`).join(''),
+      `<tr><td colspan="3">Total sales</td>
+         <td class="n">${fmt(invs.reduce((a, i) => a + num(i.base), 0))}</td>
+         <td class="n">${fmt(invs.reduce((a, i) => a + num(i.cgst) + num(i.sgst) + num(i.igst), 0))}</td>
+         <td class="n">${fmt(invs.reduce((a, i) => a + num(i.total), 0))}</td><td colspan="2"></td></tr>`,
+      { stack: true }) : empty('No invoices in this period.')}
+    </details>`;
 }
 
 function journalRows() {
@@ -385,17 +592,13 @@ function journalRows() {
 function journalSection() {
   const rows = journalRows();
   return `
-    <h2>General journal</h2>
-    <div class="filters">
-      <input type="date" value="${esc(jFrom)}" onchange="finReports.setRange('from',this.value)" aria-label="From date">
-      <input type="date" value="${esc(jTo)}" onchange="finReports.setRange('to',this.value)" aria-label="To date">
-    </div>
+    <h2>General journal <span class="small faint">${rows.length} entries</span></h2>
     ${rows.length ? table(
     `<th>Date</th><th>Entry</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th>`,
     rows.map(t => t.lines.map((l, i) => `<tr class="click" onclick="fin.openTxn('${esc(t.id)}')">
         <td class="nowrap small">${i === 0 ? esc(t.date) : ''}</td>
         <td>${i === 0 ? esc(t.desc) : ''}</td>
-        <td class="small">${esc(A[l.acc]?.name || l.acc)}</td>
+        <td class="small">${esc(A[l.acc]?.code || l.acc)} · ${esc(A[l.acc]?.name || l.acc)}</td>
         <td class="n">${l.dr ? fmt(l.dr) : ''}</td>
         <td class="n">${l.cr ? fmt(l.cr) : ''}</td>
       </tr>`).join('')).join(''))
@@ -445,6 +648,42 @@ if (typeof window !== 'undefined') {
     setLedgerParty: v => { ledgerParty = v; window.fin.repaint(); },
     setBsDate: v => { bsDate = v; window.fin.repaint(); },
     setRange: (which, v) => { if (which === 'from') jFrom = v; else jTo = v; window.fin.repaint(); },
+    period(which) {
+      const s = getState();
+      if (which === 'fy') {
+        const fy = fyOf(today(), s.settings.fyStartMonth);
+        jFrom = fyStart(fy, s.settings.fyStartMonth); jTo = today();
+      } else if (which === 'month') {
+        jFrom = ym(today()) + '-01'; jTo = today();
+      } else {
+        jFrom = s.txns.map(t => t.date).sort()[0] || today(); jTo = today();
+      }
+      window.fin.repaint();
+    },
+    csvTrial() { return scoped(() => this._csvTrial(), 'with'); },
+    _csvTrial() {
+      const tb = trialBalanceDetail(jFrom, jTo);
+      downloadCsv(`3pin-trial-balance-${jFrom}-to-${jTo}.csv`,
+        [['Code', 'Account', 'Opening Dr', 'Opening Cr', 'Debit', 'Credit', 'Closing Dr', 'Closing Cr'],
+        ...tb.rows.map(r => [r.acc.code, r.acc.name,
+          r.opening > 0 ? r.opening : '', r.opening < 0 ? -r.opening : '',
+          r.debit || '', r.credit || '',
+          r.closing > 0 ? r.closing : '', r.closing < 0 ? -r.closing : '']),
+        ['', 'Total', tb.totals.openingDr, tb.totals.openingCr, tb.totals.debit, tb.totals.credit, tb.totals.closingDr, tb.totals.closingCr]]);
+    },
+    csvGeneralLedger() { return scoped(() => this._csvGeneralLedger()); },
+    _csvGeneralLedger() {
+      const rows = [['Code', 'Account', 'Date', 'Entry', 'Description', 'Party', 'Debit', 'Credit', 'Balance']];
+      for (const a of ACCOUNTS) {
+        const ls = ledger(a.code, { from: jFrom, upto: jTo });
+        if (!ls.length) continue;
+        const sign = (a.type === 'asset' || a.type === 'expense') ? 1 : -1;
+        const opening = Math.round(sign * bal(a.code, { upto: addDays(jFrom, -1) }) * 100) / 100;
+        rows.push([a.code, a.name, jFrom, '', 'Opening balance', '', '', '', opening]);
+        for (const r of ls) rows.push([a.code, a.name, r.date, r.txnId, r.desc, r.party ? pname(r.party) : '', r.dr || '', r.cr || '', Math.round((opening + r.balance) * 100) / 100]);
+      }
+      downloadCsv(`3pin-ledgers-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, [...scopeRow(), ...rows]);
+    },
 
     csvCategory(slug) { return scoped(() => this._csvCategory(slug)); },
     _csvCategory(slug) {
@@ -467,7 +706,7 @@ if (typeof window !== 'undefined') {
     csvTally: () => scoped(() => downloadCsv(`3pin-tally-${jFrom}-to-${jTo}${scopeSuffix()}.csv`, tallyCsvRows())),
     csvLedger() { return scoped(() => this._csvLedger()); },
     _csvLedger() {
-      const rows = ledger(ledgerAcc, { party: ledgerParty || undefined });
+      const rows = ledger(ledgerAcc, { party: ledgerParty || undefined, from: jFrom, upto: jTo });
       downloadCsv(`3pin-ledger-${ledgerAcc}${scopeSuffix()}.csv`,
         [['Date', 'Description', 'Debit', 'Credit', 'Balance', 'Party'],
         ...rows.map(r => [r.date, r.desc, r.dr || '', r.cr || '', r.balance, r.party ? pname(r.party) : ''])]);

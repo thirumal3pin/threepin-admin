@@ -215,7 +215,10 @@ export async function save(evKey, values, opts = {}) {
   const updates = out.updates || [];
   const allocations = out.allocations || [];
   if (!lines.length && !docs.length && !updates.length) throw new Error('Nothing to save');
-  if (lines.length) validate({ ...out, date: v.date, lines });
+  // A cost can belong to a month earlier than the paperwork: last month's rent, invoiced on
+  // the 4th. build() says so with postDate, and that — not the bill date — is the ledger date.
+  const postDate = out.postDate || v.date;
+  if (lines.length) validate({ ...out, date: postDate, lines });
 
   // 4. Document ids are reserved before the transaction so an update elsewhere in the same
   //    save can point at a document that does not exist yet — the service month's record
@@ -249,7 +252,7 @@ export async function save(evKey, values, opts = {}) {
       txnId = tref.id;
       no = nos[0];
       tx.set(tref, stamp({
-        ...out, lines, date: v.date, event: evKey,
+        ...out, lines, date: postDate, event: evKey,
         meta: stripForMeta(v),
         attachments: opts.attachments || [],
         allocations: allocations.map(a => ({ coll: a.coll, id: a.id, amt: a.amt })),
@@ -422,6 +425,12 @@ export async function reverse(txnId) {
   const settled = madeBills.find(stillSettled);
   if (settled) {
     throw new Error(`${settled.desc} has already been paid. Reverse the payment first, then reverse this entry.`);
+  }
+  // The vendor's own bill was attached to this accrual afterwards. Undoing the accrual would
+  // leave that entry pointing at a voided document, so it has to come off first.
+  const truedUp = madeBills.find(b => b.billNo && b.accrued === false);
+  if (truedUp) {
+    throw new Error(`The vendor bill ${truedUp.billNo} was recorded against ${truedUp.desc} with "Bill arrived". Reverse that entry first, then reverse this one.`);
   }
   const svcMonth = madeBills.filter(b => b.serviceId && b.month).map(b => ({ subId: b.serviceId, m: b.month }));
 

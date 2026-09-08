@@ -9,9 +9,9 @@
 
 import {
   fmt, esc, num, today, ym, addMonths, mlabel, getState, bal, A, ACCOUNTS,
-  pettyActivity, projection, budgetLines, PETTY,
+  pettyActivity, projection, budgetLines, PETTY, monthPicture, awaitingBill,
 } from './finance-core.js';
-import { stat, signed, empty, note, tag, table, seg } from './ui.js';
+import { stat, signed, empty, note, tag, table, seg, dueCell } from './ui.js';
 import * as SY from './finance-sync.js';
 
 // ═══════ PETTY CASH ═══════
@@ -137,11 +137,126 @@ export function renderBudget() {
     ${note('A typed figure is yours and wins over what the app worked out for that account. Leave a box empty to use the projection the app worked out, shown as the placeholder. Recurring costs are managed on the Recurring tab; deals on the Deals tab.', 'info')}`;
 }
 
+// ═══════ THIS MONTH ═══════
+//
+// The question this page answers is not "what did I spend" but "can I spend". A commitment
+// passes through four states — estimate, event, bill with a due date, payment — and the
+// owner needs all four at once: what has gone, what is coming, what is only a guess, and
+// what that leaves. Money out and money in are shown apart and then together, because a
+// decision to spend depends on both. Nothing here is an entry; every figure is read from
+// the books, the documents and the commitments.
+
+let picMonth = ym(today());
+
+const BUCKETS = [
+  ['paid', 'Paid', 'Money that actually left or arrived this month'],
+  ['invoiced', 'Invoiced', 'Documents dated this month, still unsettled'],
+  ['due', 'Due this month', 'Falls due between the 1st and the last'],
+  ['overdue', 'Overdue', 'Was due before this month and is still open'],
+  ['estimated', 'Still an estimate', 'Expected, but no event and no document yet'],
+];
+
+function bucketRows(b, side) {
+  if (!b.rows.length) return empty('Nothing in this group.');
+  return table(
+    `<th>What</th><th>When</th><th class="n">Amount</th>`,
+    b.rows.map(r => `<tr${r.txnId ? ` class="click" onclick="fin.openTxn('${esc(r.txnId)}')"` : ''}>
+      <td class="lead">${esc(r.what)}${r.waiting ? ' <span class="small faint">— waiting for the vendor bill</span>' : ''}${r.noCash ? ' <span class="small faint">— no money moves</span>' : ''}
+        ${r.period && r.period !== picMonth ? `<br><span class="small faint">${esc(mlabel(r.period))} cost</span>` : ''}</td>
+      <td class="small nowrap" data-label="When">${esc(String(r.when || ''))}</td>
+      <td class="n" data-label="Amount">${fmt(r.amt)}</td>
+    </tr>`).join(''),
+    `<tr><td colspan="2">Total ${esc(side)}</td><td class="n">${fmt(b.amt)}</td></tr>`,
+    { stack: true });
+}
+
+function sideBlock(title, s, side, tone) {
+  return `
+    <h2>${esc(title)}</h2>
+    <div class="grid g3">
+      ${stat('Paid', fmt(s.paid.amt), { sub: side === 'out' ? 'Left the bank and the box' : 'Reached the bank and the box' })}
+      ${stat('Invoiced', fmt(s.invoiced.amt), { sub: 'Dated this month, unsettled' })}
+      ${stat('Due this month', fmt(s.due.amt), { cls: side === 'out' && s.due.amt > 0.5 ? tone : '' })}
+      ${stat('Overdue', fmt(s.overdue.amt), { cls: s.overdue.amt > 0.5 ? 'neg' : '', sub: s.overdue.amt > 0.5 ? 'Should already have been settled' : 'Nothing behind' })}
+      ${stat('Still an estimate', fmt(s.estimated.amt), { sub: 'No event, no document' })}
+      ${stat(side === 'out' ? 'Still to find' : 'Still to come', fmt(s.committed), { hero: true, sub: 'Due + overdue + estimates' })}
+    </div>
+    <p class="small muted">The books count ${fmt(s.booked)} of ${esc(side === 'out' ? 'cost' : 'income')} for this month — what belongs to it, whoever has been paid.</p>
+    ${BUCKETS.map(([k, label, why]) => `
+      <details class="card pad0 bucket">
+        <summary><b>${esc(label)}</b> <span class="faint small">${esc(why)}</span> <span class="n">${fmt(s[k].amt)}</span></summary>
+        ${bucketRows(s[k], label.toLowerCase())}
+      </details>`).join('')}`;
+}
+
+export function renderMonth() {
+  const p = monthPicture(picMonth);
+  const waiting = awaitingBill();
+  const past = picMonth < ym(today());
+  const cur = picMonth === ym(today());
+
+  return `
+    <h1>This month</h1>
+    <p class="lead">Everything that belongs to ${esc(mlabel(picMonth))}, at whichever stage it has reached —
+    still a guess, recorded as an event, invoiced with a date to pay, or settled. Nothing on this page is an entry.</p>
+
+    <div class="actions" style="align-items:center">
+      <button class="btn ghost sm" type="button" onclick="finMoney.monthShift(-1)" aria-label="Previous month">◀</button>
+      <h2 style="margin:0;border:0;padding:0;min-width:170px;text-align:center">${esc(mlabel(picMonth))}</h2>
+      <button class="btn ghost sm" type="button" onclick="finMoney.monthShift(1)" aria-label="Next month" ${picMonth >= ym(addMonths(today(), 12)) ? 'disabled' : ''}>▶</button>
+      ${cur ? '' : `<button class="btn ghost sm" type="button" onclick="finMoney.thisMonth()">Back to ${esc(mlabel(ym(today())))}</button>`}
+      <div class="spacer"></div>
+      <button class="btn" type="button" onclick="fin.go('budget')">Set expectations</button>
+      <button class="btn primary" type="button" onclick="fin.go('record')">Record something</button>
+    </div>
+
+    <h2>Can I spend?</h2>
+    <div class="card">
+      <div class="grid g3">
+        ${stat('In the bank and the box', fmt(p.cash.now), { hero: true })}
+        ${stat('Still to pay this month', fmt(p.cash.needed), { cls: p.cash.needed > 0.5 ? 'neg' : '' })}
+        ${stat('Still to come in', fmt(p.cash.expected), { cls: p.cash.expected > 0.5 ? 'pos' : '' })}
+        ${stat('Left if everything lands', signed(p.cash.after), { raw: true, sub: p.cash.after < 0 ? 'Short — collect earlier or delay something' : 'Room to commit' })}
+      </div>
+      ${p.cash.after < 0
+      ? note(`Everything known about ${esc(mlabel(picMonth))} leaves you <b>${fmt(Math.abs(p.cash.after))} short</b>. What is still an estimate can move; what is due cannot.`, 'warn')
+      : note(`After what is due and what is expected, <b>${fmt(p.cash.after)}</b> is uncommitted. Estimates can still change when the bill comes.`, 'info')}
+    </div>
+
+    ${waiting.length ? `
+      <h2>Waiting for the vendor bill</h2>
+      ${note(`${waiting.length} month${waiting.length === 1 ? '' : 's'} ${waiting.length === 1 ? 'was' : 'were'} closed on your own figure and ${waiting.length === 1 ? 'has' : 'have'} no vendor bill number yet. When the invoice arrives, record it — the cost stays in the month you used it.`, 'info')}
+      ${table(
+      `<th>What</th><th>Recorded for</th><th class="n">Amount</th><th></th>`,
+      waiting.map(b => `<tr>
+          <td class="lead">${esc(b.vendorName || 'Vendor')} — ${esc(b.desc)}</td>
+          <td class="small" data-label="Recorded for">${esc(mlabel(b.period || b.month || ym(b.date)))}</td>
+          <td class="n" data-label="Amount">${fmt(b.net ?? b.total)}</td>
+          <td class="n"><button class="btn ghost sm out" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button></td>
+        </tr>`).join(''), '', { stack: true })}` : ''}
+
+    ${sideBlock('Money out', p.out, 'out', 'neg')}
+    ${sideBlock('Money in', p.in, 'in', 'pos')}
+
+    <h2>Together</h2>
+    <div class="grid g3">
+      ${stat('Net settled so far', signed(p.net.paid), { raw: true, sub: 'Money in less money out this month' })}
+      ${stat('Net still to settle', signed(p.net.toSettle), { raw: true, sub: 'Invoices to collect less bills to pay' })}
+      ${stat('Net still a guess', signed(p.net.estimated), { raw: true, sub: 'Income estimates less cost estimates' })}
+      ${stat('Profit the books show', signed(p.net.booked), { raw: true, hero: true, sub: 'Earned less incurred, whoever has paid' })}
+    </div>
+    ${past ? note(`${esc(mlabel(picMonth))} is behind you. Anything still showing as an estimate never became an event — either it did not happen, or the month was never recorded.`, 'info') : ''}
+
+    ${note('Profit and cash are different questions. The books count a cost in the month you used the thing; cash counts it on the day it left. This page shows both, side by side, so a decision to spend can be made on the cash line while the profit line stays honest.', 'info')}`;
+}
+
 // ═══════ ACTIONS ═══════
 
 if (typeof window !== 'undefined') {
   window.finMoney = {
     setPettyMonth(m) { pettyMonth = m; window.fin.repaint(); },
+    monthShift(n) { picMonth = addMonths(picMonth, n); window.fin.repaint(); },
+    thisMonth() { picMonth = ym(today()); window.fin.repaint(); },
     budgetShift(n) { budgetMonth = addMonths(budgetMonth, n); window.fin.repaint(); },
     async setBudget(code, value) {
       const v = String(value).trim();

@@ -52,6 +52,7 @@ function monthCell(m, sub) {
       const b = billOf(m);
       return `<span class="neg">${fmt(m.actual)} — not paid yet</span>
         ${b ? `<br>${dueCell(b.dueDate)}
+          ${!b.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button>` : ''}
           <button class="btn ghost sm out" type="button" onclick="fin.record('paybill',{party:'${esc(b.partyId)}'})">Pay</button>` : ''}`;
     }
     case 'recorded': {

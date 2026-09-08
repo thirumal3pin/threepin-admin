@@ -333,6 +333,58 @@ try {
   check('Budget shows expected against actual from the recurring cost', /E2E Claude/i.test(bud) && /Expected income/i.test(bud), bud.replace(/\s+/g, ' ').slice(0, 300));
   await page.screenshot({ path: `${SHOTS}m-budget.png`, fullPage: true });
 
+  // ═══════ 8b. This month, and the books an accountant reads ═══════
+  section('This month');
+  await page.evaluate(() => window.fin.go('month'));
+  await page.waitForTimeout(600);
+  const mth = await mainText();
+  check('The page leads with the decision, not the ledger', /can i spend/i.test(mth), mth.replace(/\s+/g, ' ').slice(0, 200));
+  check('All five states of a commitment are on the page',
+    /paid/i.test(mth) && /invoiced/i.test(mth) && /due this month/i.test(mth) && /overdue/i.test(mth) && /still an estimate/i.test(mth));
+  check('Money out and money in are separate, then together',
+    /money out/i.test(mth) && /money in/i.test(mth) && /together/i.test(mth));
+  check('It says outright that nothing on it is an entry', /nothing on this page is an entry/i.test(mth));
+  check('A bucket opens to show what is inside', await page.evaluate(() => {
+    const d = document.querySelector('#main details.bucket');
+    if (!d) return false;
+    d.open = true;
+    return d.querySelector('table, .empty') !== null;
+  }));
+  check('The month can be stepped back and forth', await page.evaluate(() => {
+    const before = document.querySelector('#main h2')?.textContent?.trim();
+    window.finMoney.monthShift(-1);
+    return before !== null;
+  }));
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.finMoney.thisMonth());
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${SHOTS}m-month.png`, fullPage: true });
+
+  section('Books');
+  await page.evaluate(() => window.fin.go('books'));
+  await page.waitForTimeout(700);
+  const bk = await mainText();
+  for (const [label, re] of [['the check', /the check/i], ['trial balance', /trial balance/i],
+    ['profit and loss', /profit and loss/i], ['balance sheet', /balance sheet/i],
+    ['ledger', /ledger/i], ['registers', /registers/i], ['general journal', /general journal/i]]) {
+    check(`Books has ${label}`, re.test(bk));
+  }
+  check('The trial balance shows movement as well as position', /opening dr/i.test(bk) && /closing cr/i.test(bk));
+  check('The profit statement runs to profit after tax', /gross profit/i.test(bk) && /profit after tax/i.test(bk));
+  check('The balance sheet is grouped', /fixed assets/i.test(bk) && /current liabilities/i.test(bk));
+  check('The ledger starts from a balance brought forward', /opening balance/i.test(bk));
+  check('The trial balance states whether it balances', /balanced|does not balance/i.test(bk));
+  check('The period buttons move the whole page', await page.evaluate(() => {
+    const from = document.getElementById('bkFrom')?.value;
+    window.finReports.period('month');
+    return !!from;
+  }));
+  await page.waitForTimeout(400);
+  check('This month narrows the range to the 1st', await page.evaluate(() => /-01$/.test(document.getElementById('bkFrom')?.value || '')));
+  await page.evaluate(() => window.finReports.period('fy'));
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${SHOTS}m-books.png`, fullPage: true });
+
   // ═══════ 9. Guide ═══════
   section('Guide');
   await page.evaluate(() => { window.fin.go('guide'); window.finGuide.setTab('scenarios'); });

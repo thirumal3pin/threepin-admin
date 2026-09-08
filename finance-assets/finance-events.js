@@ -25,7 +25,8 @@ import {
   GST_OUTPUT, GST_INPUT, GST_RCM,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   expectedFor, currentPlan, addDays, lastDayOfMonth,
-  PAY_METHODS, RECURRING_KINDS, recurringAcc, recurringKindLabel, regenerateSchedule,
+  PAY_METHODS, RECURRING_KINDS, recurringAcc, recurringKindLabel, regenerateSchedule, pettyRoom,
+  awaitingBill, docStatus, monthPicture,
 } from './finance-core.js';
 
 // ═══════ FIELD + PARTY HELPERS ═══════
@@ -106,6 +107,37 @@ const posAmt = (v, k = 'amt', label = 'Enter an amount above zero') =>
 
 const partyReq = (v, k, label) => pidOf(v[k]) ? [] : [err(k, label)];
 
+// The box must never go below zero on any day — a spend dated last week has to fit what
+// the box held then AND what every later entry has already taken out of it.
+// A cost belongs to the month it was used. The entry is dated the last day of that month
+// unless the month is already closed, in which case it lands on the document's own date —
+// reopening a closed month behind the owner's back would be worse than a late cost.
+function postDateFor(period, fallback) {
+  const d = fallback || today();
+  if (!period || period >= ym(d)) return d;
+  if ((S().monthEnds || {})[period]) return d;
+  const start = S().settings.booksStartDate;
+  const end = lastDayOfMonth(period);
+  if (start && end < start) return d;
+  return end;
+}
+function periodChecks(v, k = 'period') {
+  const p = v[k];
+  if (!p) return [];
+  const out = [];
+  if (p > ym(v.date || today())) out.push(err(k, 'A cost cannot belong to a month after the bill date'));
+  if (p < addMonths(ym(v.date || today()), -12)) out.push(warn(k, 'More than a year before the bill — check the month'));
+  else if (p < ym(v.date || today()) && (S().monthEnds || {})[p]) out.push(warn(k, `${mlabel(p)} is already closed, so this lands in ${mlabel(ym(v.date || today()))} instead`));
+  return out;
+}
+function pettyCheck(k, v, need) {
+  const room = pettyRoom(v.date);
+  if (num(need) <= room + 0.005) return [];
+  const onDay = bal('1010', { upto: v.date || today() });
+  return [err(k, room < onDay - 0.005
+    ? `Petty cash held ${fmt(onDay)} on ${v.date}, but only ${fmt(Math.max(0, room))} of it is free — entries on later days already spent the rest`
+    : `Petty cash only holds ${fmt(Math.max(0, room))} — top it up first with "Move money"`)];
+}
 function gstChecks(v) {
   if (v.gst !== 'yes') return [];
   const out = [];
@@ -113,6 +145,7 @@ function gstChecks(v) {
   else if (!GST_RATES.includes(num(v.gstRate))) out.push(err('gstRate', 'GST in India is 0.25, 1.5, 3, 5, 12, 18 or 28% — check the rate'));
   if (Math.abs(num(v.amt) + num(v.gstAmt) - num(v.total)) > 0.02) out.push(err('total', 'Amount plus GST does not equal the total — check one of the three'));
   if (v.vgstin && !/^[0-9]{2}[A-Z0-9]{10}[A-Z0-9]{3}$/i.test(String(v.vgstin).replace(/\s/g, ''))) out.push(err('vgstin', 'A GSTIN is 15 characters — 2 digits, then 10 of the PAN, then 3'));
+  else if (!v.vgstin && v.rcm === 'charged' && v.vendor && !BLOCKED_ITC.has(v.acc)) out.push(warn('vgstin', 'Add their GSTIN — without it this credit cannot be claimed in the return'));
   return out;
 }
 
@@ -269,7 +302,9 @@ function billDoc(v, o) {
       total: r2(o.total), net: r2(o.net ?? o.total),
       paid: r2(o.paid || 0), status: o.status || 'open',
       serviceId: o.serviceId || null, month: o.month || null, dealId: o.dealId || null,
+      period: o.period || o.month || ym(v.date || today()),
       allocations: [], no: null,
+      ...(o.accrued ? { accrued: true } : {}),
     },
   };
 }
@@ -398,7 +433,7 @@ EV.dealcost = {
     ...posAmt(v), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(v.bear !== 'self' && deal(v.deal) && !sideParty(deal(v.deal), v.bear) ? [err('bear', `No ${v.bear} on this deal yet — add them on the Deals tab, or let the company bear it`)] : []),
     ...(v.how === 'bill' ? partyReq(v, 'vendor', 'Name the vendor you owe') : []),
-    ...(v.how === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('how', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+    ...(v.how === '1010' ? pettyCheck('how', v, num(v.amt) + gstOf(v)) : []),
   ],
   build: v => {
     const d = deal(v.deal);
@@ -697,7 +732,7 @@ EV.settle = {
       ...(d ? [] : [err('deal', 'Pick the deal holding the token')]),
       ...(num(v.refund) + num(v.keep) > held + 0.005 ? [err('refund', `Only ${fmt(held)} is held`)] : []),
       ...(num(v.refund) <= 0 && num(v.keep) <= 0 && !v.move ? [err('refund', 'Enter a refund, a kept amount, or a deal to move it to')] : []),
-      ...(num(v.refund) > 0 && (v.via || '1000') === '1010' && num(v.refund) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+      ...(num(v.refund) > 0 && (v.via || '1000') === '1010' ? pettyCheck('via', v, num(v.refund)) : []),
     ];
   },
   build: v => {
@@ -888,7 +923,7 @@ EV.subnew = {
     ...partyReq(v, 'vendor', 'Name the vendor — every bill is raised against them'),
     ...posAmt(v),
     ...(v.payMode === 'upfront' ? [...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v), ...(num(v.months) >= 1 ? [] : [err('months', 'Term must be at least one month')])] : []),
-    ...(v.payMode === 'upfront' && v.via === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+    ...(v.payMode === 'upfront' && v.via === '1010' ? pettyCheck('via', v, num(v.amt) + gstOf(v)) : []),
   ],
   build: v => {
     const amt = num(v.amt);
@@ -1009,7 +1044,7 @@ EV.confirmcharge = {
       ...(s && month && month < s.start ? [err('month', `${s.name} only started in ${mlabel(s.start)}`)] : []),
       ...(already && !already.skipped && !already.reversed ? [err('month', `${mlabel(month)} is already recorded for this service (${fmt(already.actual)}). Reverse that entry first if it was wrong.`)] : []),
       ...(v.result === 'skipped' ? [] : [...dateChecks(v), ...posAmt(v, 'amt', 'Enter what was actually billed'), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v)]),
-      ...(v.result === 'paid' && v.via === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+      ...(v.result === 'paid' && v.via === '1010' ? pettyCheck('via', v, num(v.amt) + gstOf(v)) : []),
       ...(v.result === 'invoice' && !s?.vendorId && !pidOf(v.vendor) ? [err('vendor', 'Name who you pay — the amount has to be owed to someone')] : []),
       ...(tdsOn() && v.tds && v.tds !== 'none' && !s?.vendorId && !pidOf(v.vendor) ? [err('vendor', 'TDS is deducted from someone — name them')] : []),
     ];
@@ -1070,6 +1105,7 @@ EV.confirmcharge = {
       docs.push(billDoc(v, {
         partyId: vendorId, vendorName, desc: `${label} — ${mlabel(month)}`, acc,
         taxable: amt, gst: gi, rcm: rcm.tax, tds, total, net: r2(total - tds), paid: r2(total - tds), status: 'paid', serviceId: s.id, month, dueDate: v.date || today(),
+        period: month,
       }));
     } else {
       if (!vendorId) return need('Name who you pay — the amount has to be owed to someone.');
@@ -1077,7 +1113,7 @@ EV.confirmcharge = {
       docs.push(billDoc(v, {
         partyId: vendorId, vendorName, desc: `${label} — ${mlabel(month)}`, acc,
         taxable: amt, gst: gi, rcm: rcm.tax, tds, total, net: r2(total - tds), paid: 0, status: 'open', serviceId: s.id, month, dueDate: v.dueDate || null,
-        accrued: !v.vinv,
+        accrued: !v.vinv, period: month,
       }));
     }
     // Store the vendor back on the commitment the first time it is named.
@@ -1330,7 +1366,7 @@ EV.expense = {
     ...(v.acc ? [] : [err('acc', 'Pick a category')]),
     ...posAmt(v), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(tdsOn() && v.tds && v.tds !== 'none' && !pidOf(v.vendor) ? [err('vendor', 'TDS is deducted from someone — name the vendor')] : []),
-    ...(v.via === '1010' && num(v.amt) + gstOf(v) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))} — top it up first with "Move money"`)] : []),
+    ...(v.via === '1010' ? pettyCheck('via', v, num(v.amt) + gstOf(v)) : []),
     ...(v.gst === 'yes' && !pidOf(v.vendor) && !BLOCKED_ITC.has(v.acc) ? [warn('vendor', 'Add the vendor and their GSTIN, or you cannot claim this GST back')] : []),
   ],
   build: v => {
@@ -1373,6 +1409,10 @@ EV.bill = {
     F('acc', 'Category', 'select', { opts: expOpts(), hint: 'The account this cost is posted to.' }),
     F('note', 'Note', 'text', { hint: 'Optional — anything you will want to remember.' }),
     F('dueDate', 'Due on', 'date', { hint: 'Leave blank for 30 days from the bill date' }),
+    F('period', 'Which month is this cost for?', 'month', {
+      def: ym(v.date || today()),
+      hint: 'Last month\'s rent, billed this month, is last month\'s cost. The bill keeps its own date and due date; only the cost moves.',
+    }),
     ...rcmFields(() => true),
     ...gstFields('Bill amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes', refAlways: true }),
     F('tds', 'TDS section', 'select', { opts: TDS_SECTIONS.map(t => [t[0], t[1]]), show: () => tdsOn() }),
@@ -1400,6 +1440,7 @@ EV.bill = {
     ...posAmt(v, 'amt', 'Enter the bill amount'),
     ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(v.dueDate && v.dueDate < v.date ? [err('dueDate', 'Due date is before the bill date')] : []),
+    ...periodChecks(v),
     ...(tdsOn() && num(v.tdsrate) > 30 ? [err('tdsrate', 'TDS is usually 1, 2 or 10% — check the rate')] : []),
   ],
   build: v => {
@@ -1418,6 +1459,8 @@ EV.bill = {
     const lines = [{ acc: v.acc, dr: amt + tax.onCost }, ...tax.lines, ...rcm.lines];
     if (tds) lines.push({ acc: '2250', cr: tds });
     lines.push({ acc: '2000', cr: owed, party: pid });
+    const period = v.period || ym(v.date || today());
+    const postDate = postDateFor(period, v.date);
 
     return {
       desc: `${v.desc || A[v.acc].name} — ${pnameOf(v.vendor)}`,
@@ -1428,13 +1471,126 @@ EV.bill = {
         tax.onCost ? `${fmt(gi)} GST cannot be claimed on ${A[v.acc].name.toLowerCase()} (blocked credit), so it is part of the cost.` : '',
         rcm.tax ? `${fmt(rcm.tax)} GST under reverse charge — you pay it in cash with the month's return, and it is your input credit. It is not owed to the vendor and not a cost.` : '',
         `You owe ${esc(pnameOf(v.vendor))} ${fmt(owed)}, due ${v.dueDate || 'in 30 days'}. It shows on the Owed tab until you pay it.`,
+        period !== ym(v.date || today())
+          ? (postDate === v.date
+            ? `This is ${mlabel(period)}'s cost, but ${mlabel(period)} is already closed — so it lands in ${mlabel(ym(v.date || today()))} instead, which is what an accountant would do with a late bill.`
+            : `Counted as ${mlabel(period)}'s cost, dated ${postDate} — the month you used it, not the month the bill came.`)
+          : '',
         tds ? `${fmt(tds)} TDS withheld, to deposit by the 7th of next month.` : '',
       ].filter(Boolean),
       docs: [billDoc(v, {
         partyId: pid, vendorName: pnameOf(v.vendor), desc: v.desc || A[v.acc].name, acc: v.acc,
         taxable: amt, gst: gi, rcm: rcm.tax, tds, total, net: owed, dueDate: v.dueDate || null,
+        period,
       })],
+      postDate,
       selfInvoice: selfInvoiceOf(v, amt, rcm.tax, pnameOf(v.vendor)),
+    };
+  },
+};
+
+EV.billarrived = {
+  title: 'Bill arrived for a month already recorded', group: 'Money out', dir: 'out',
+  when: 'You closed a month on your own figure — last month\'s rent, a service you used — and the vendor\'s bill has now come, usually in the first week with a due date later in the month. Put its number, date and due date against what you already recorded, and correct the amount if the bill differs. <b>The cost stays in the month you used it.</b> Only the paperwork, the due date and any difference are added here.',
+  fields: v => {
+    const b = S().bills.find(x => x.id === v.billId);
+    const blocked = b && BLOCKED_ITC.has(b.acc);
+    return [
+      F('billId', 'Which one is the bill for', 'select', {
+        opts: awaitingBill().map(x => [x.id, `${x.vendorName || pname(x.partyId) || 'Vendor'} — ${x.desc} · ${fmt(billOutstanding(x))}`]),
+        hint: 'Only what you recorded without a vendor bill number is listed.',
+      }),
+      F('vinv', 'Vendor bill number', 'text', { required: true, hint: 'What is printed on their invoice.' }),
+      F('date', 'Bill date', 'date', { def: today(), hint: 'The date on the vendor\'s invoice.' }),
+      F('dueDate', 'Pay by', 'date', { hint: 'Leave blank for 30 days from the bill date' }),
+      F('amt', 'Amount on the bill (before GST)', 'number', {
+        hint: () => b ? `You recorded ${fmt(num(b.taxable))}. Change it only if the bill says something else.` : '',
+      }),
+      F('gstAmt', 'GST on the bill', 'number', {
+        def: 0, hint: () => b ? `Recorded with ${fmt(num(b.gst))} GST.${blocked ? ' Credit is blocked on this category, so it stays part of the cost.' : ''}` : '',
+      }),
+      F('gstType', 'GST type', 'select', {
+        opts: [['intra', 'CGST + SGST — vendor in your state'], ['inter', 'IGST — vendor outside your state']], def: 'intra',
+        show: x => num(x.gstAmt) !== num(b?.gst || 0),
+      }),
+      F('note', 'Note', 'text', { hint: 'Anything about the difference you will want to remember.' }),
+    ];
+  },
+  onchange: (k, v) => {
+    if (k === 'billId') {
+      const b = S().bills.find(x => x.id === v.billId);
+      if (b) { v.amt = num(b.taxable); v.gstAmt = num(b.gst); }
+    }
+  },
+  check: v => {
+    const b = S().bills.find(x => x.id === v.billId);
+    const oldTds = b ? num(b.tds) : 0;
+    const oldT = b ? num(b.taxable) : 0;
+    const newTds = b && oldT > 0.005 ? r2(num(v.amt) * oldTds / oldT) : oldTds;
+    const net = r2(num(v.amt) + num(v.gstAmt) - newTds);
+    return [
+      ...dateChecks(v),
+      ...(b ? [] : [err('billId', 'Pick what the bill is for')]),
+      ...(String(v.vinv || '').trim() ? [] : [err('vinv', 'Enter the number printed on their bill')]),
+      ...posAmt(v, 'amt', 'Enter what the bill says'),
+      ...(v.dueDate && v.dueDate < v.date ? [err('dueDate', 'The due date is before the bill date')] : []),
+      ...(b && net + 0.005 < num(b.paid) ? [err('amt', `You have already paid ${fmt(num(b.paid))} against this — the bill cannot be less than that`)] : []),
+      ...(b && Math.abs(num(v.amt) - oldT) > Math.max(oldT * 0.5, 5000)
+        ? [warn('amt', `That is a long way from the ${fmt(oldT)} you recorded — check you picked the right one`)] : []),
+    ];
+  },
+  build: v => {
+    const b = S().bills.find(x => x.id === v.billId);
+    if (!b) return need('Pick what the bill is for.');
+    if (!String(v.vinv || '').trim()) return need('Enter the vendor bill number.');
+    const oldT = num(b.taxable), oldG = num(b.gst), oldTds = num(b.tds);
+    const newT = num(v.amt), newG = num(v.gstAmt);
+    const newTds = oldT > 0.005 ? Math.round(newT * oldTds / oldT) : oldTds;
+    const dT = r2(newT - oldT), dG = r2(newG - oldG), dTds = r2(newTds - oldTds);
+    const blocked = BLOCKED_ITC.has(b.acc);
+    const period = b.period || b.month || ym(b.date);
+    const postDate = postDateFor(period, v.date);
+
+    const lines = [];
+    const put = (acc, amt, party) => {
+      if (Math.abs(amt) < 0.005) return;
+      lines.push(amt > 0 ? { acc, dr: r2(amt), ...(party ? { party } : {}) } : { acc, cr: r2(-amt), ...(party ? { party } : {}) });
+    };
+    put(b.acc, r2(dT + (blocked ? dG : 0)));
+    if (!blocked && Math.abs(dG) > 0.005) {
+      if ((v.gstType || 'intra') === 'inter') put('1402', dG);
+      else { put('1400', r2(dG / 2)); put('1401', r2(dG / 2)); }
+    }
+    put('2250', -dTds);
+    put('2000', -r2(dT + dG - dTds), b.partyId);
+
+    const net = r2(newT + newG - newTds);
+    const dueDate = v.dueDate || addDays(v.date || today(), 30);
+    const changed = Math.abs(dT) > 0.005 || Math.abs(dG) > 0.005;
+    return {
+      desc: changed
+        ? `Bill ${v.vinv} — ${b.desc} (${dT > 0 ? 'more' : 'less'} than recorded)`
+        : `Bill ${v.vinv} received — ${b.desc}`,
+      lines, postDate,
+      updates: [{
+        coll: 'bills', id: b.id,
+        data: {
+          billNo: String(v.vinv).trim(), date: v.date || today(), dueDate,
+          taxable: r2(newT), gst: r2(newG), tds: r2(newTds),
+          total: r2(newT + newG), net,
+          status: docStatus(r2(net - num(b.paid)), net),
+          accrued: false, period,
+        },
+      }],
+      effects: [
+        `Bill ${esc(String(v.vinv).trim())} is now on record against ${esc(b.desc)}, dated ${v.date || today()} and payable by ${dueDate}.`,
+        changed
+          ? `The bill is ${fmt(Math.abs(r2(dT + dG)))} ${dT + dG > 0 ? 'more' : 'less'} than you recorded. The difference is posted to ${A[b.acc]?.name || b.acc} in ${mlabel(period)} — the month you used it — so ${mlabel(period)}'s profit is now right.`
+          : 'The amount matches what you recorded, so nothing changes in the books — this only completes the paperwork.',
+        Math.abs(dG) > 0.005 && !blocked ? `${fmt(Math.abs(dG))} ${dG > 0 ? 'more' : 'less'} GST to claim as input credit.` : '',
+        Math.abs(dTds) > 0.005 ? `TDS adjusts by ${fmt(Math.abs(dTds))}.` : '',
+        `${fmt(r2(net - num(b.paid)))} is owed and now appears in what is due in ${mlabel(ym(dueDate))}.`,
+      ].filter(Boolean),
     };
   },
 };
@@ -1491,7 +1647,7 @@ EV.paybill = {
         && allocSum + 0.005 < Math.min(paying, owed, openBills(v.party).reduce((a, b) => a + billOutstanding(b), 0))
         && v.over !== 'advance'
         ? [err('alloc', 'Apply the whole payment to their bills, or choose to hold the rest as an advance')] : []),
-      ...(v.via === '1010' && num(v.amt) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+      ...(v.via === '1010' ? pettyCheck('via', v, num(v.amt)) : []),
     ];
   },
   build: v => {
@@ -1559,7 +1715,7 @@ EV.salary = {
     ...dateChecks(v), ...partyReq(v, 'emp', 'Name the employee'),
     ...posAmt(v, 'gross', 'Enter the gross amount'),
     ...(num(v.tds) + num(v.pf) > num(v.gross) ? [err('pf', 'TDS and PF together are more than the salary — check them')] : []),
-    ...(v.via === '1010' && num(v.gross) - num(v.tds) - num(v.pf) > bal('1010', { upto: v.date }) + 0.005 ? [err('via', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`)] : []),
+    ...(v.via === '1010' ? pettyCheck('via', v, num(v.gross) - num(v.tds) - num(v.pf)) : []),
   ],
   build: v => {
     const g = num(v.gross);
@@ -1615,7 +1771,7 @@ EV.asset = {
     ...(num(v.life) >= 1 ? [] : [err('life', 'Useful life must be at least one month')]),
     ...(num(v.amt) > 0 && num(v.amt) < num(S().settings.capitalisationThreshold) ? [warn('amt', `Below your ${fmt(S().settings.capitalisationThreshold)} threshold — record this as an expense instead, unless it is part of something bigger`)] : []),
     ...(v.how === 'bill' ? partyReq(v, 'vendor', 'Name the vendor you owe') : []),
-    ...(v.how === '1010' && num(v.amt) + gstOf(v) > bal('1010') + 0.005 ? [err('how', `Petty cash only holds ${fmt(bal('1010'))}`)] : []),
+    ...(v.how === '1010' ? pettyCheck('how', v, num(v.amt) + gstOf(v)) : []),
   ],
   build: v => {
     const c = num(v.amt);
@@ -1726,7 +1882,7 @@ EV.petty = {
       ...(num(v.a1) > 0 && !v.c1 ? [err('c1', 'Pick a category')] : []),
       ...(num(v.a2) > 0 && !v.c2 ? [err('c2', 'Pick a category')] : []),
       ...(num(v.a3) > 0 && !v.c3 ? [err('c3', 'Pick a category')] : []),
-      ...(tot > bal('1010', { upto: v.date }) + 0.005 ? [err('a1', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))} — top it up first with "Move money"`)] : []),
+      ...pettyCheck('a1', v, tot),
     ];
   },
   build: v => {
@@ -2079,7 +2235,7 @@ EV.transfer = {
   check: v => {
     const [f, t] = (v.kind || '1000>1010').split('>');
     const out = [...dateChecks(v), ...posAmt(v)];
-    if (f === '1010' && num(v.amt) > bal('1010', { upto: v.date }) + 0.005) out.push(err('amt', `Petty cash only holds ${fmt(bal('1010', { upto: v.date }))}`));
+    if (f === '1010') out.push(...pettyCheck('amt', v, num(v.amt)));
     if (t === '2300' && num(v.amt) > bal('2300') + 0.005) out.push(err('amt', `The card only has ${fmt(bal('2300'))} outstanding — paying more would put it in credit`));
     return out;
   },
@@ -2318,6 +2474,8 @@ EV.creditnote = {
     return [
       ...dateChecks(v),
       ...(inv ? [] : [err('inv', 'Pick the invoice')]),
+      ...(inv?.kind === 'creditnote' ? [err('inv', 'That is a credit note, not an invoice — pick the invoice it reduced')] : []),
+      ...(inv && inv.kind !== 'creditnote' && inv.status === 'void' ? [err('inv', 'That invoice was reversed — there is nothing left to reduce')] : []),
       ...(String(v.why || '').trim() ? [] : [err('why', 'Give the reason — it is printed on the credit note')]),
       ...posAmt(v, 'amt', 'Enter how much to reduce it by'),
       ...(inv && num(v.amt) > num(inv.base) + 0.005 ? [err('amt', `The invoice was only ${fmt(inv.base)} before GST`)] : []),
@@ -2392,6 +2550,7 @@ export const CHOOSER = [
   ['Money out', [
     { key: 'expense', label: 'Expense paid now', sub: 'Used and paid together. Profit goes down.' },
     { key: 'bill', label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.' },
+    { key: 'billarrived', label: 'Bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now. Adds the number and due date, keeps the cost where it was." },
     { key: 'paybill', label: 'Pay a bill', sub: 'Matched to the bills it settles. Profit unchanged.' },
     { key: 'confirmcharge', label: 'Recurring cost — record this month', sub: 'Rent, subscriptions, retainers. Paid, or due to pay later.' },
     { key: 'dealcost', label: 'Cost for a deal', sub: 'EC, patta, legal — mapped to one deal.' },

@@ -16,12 +16,14 @@ import {
   getState, num, bal, pl, today, trialBalance, balanceSheet, partyBalances, gstInputBal, gstComputation,
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
   agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
+  monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
 import { EV, validateEvent, fieldsFor } from '../finance-assets/finance-events.js';
 import { collectionDays, paymentDays, vendorSpend, serviceVariance } from '../finance-assets/finance-analytics.js';
 import { check, eq, near, section, refuses, report, fresh, save, reverse, runMonthEnd, byName, party } from './_harness.mjs';
 
+const r2c = x => Math.round(x * 100) / 100;
 console.log('3 PIN Realty — documents, allocation and services');
 const s = fresh();
 
@@ -381,6 +383,121 @@ section('Reporting reads the plan in force and each due date');
   check('Service variance groups by the reason given', sv.rows.length > 0 && Object.keys(sv.byReason).length > 0, JSON.stringify(sv.byReason));
 }
 
+section('An estimate becomes an event, then a bill, then a payment — and stays in its own month');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 500000 });
+  save('subnew', { date: '2026-09-01', name: 'Office rent', kind: 'rent', acc: '5000', vendor: { __new: true, name: 'Landlord', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 20000, via: '1000', start: '2026-09' });
+  const rent = byName(g.subs, 'Office rent');
+  const landlord = party('Landlord');
+
+  // 1. Start of the month: an estimate, and only an estimate.
+  const sep = monthPicture('2026-09');
+  eq('September starts as an estimate of 20,000', sep.out.estimated.amt, 20000);
+  eq('…which is not in the books', sep.out.booked, 0);
+  eq('…and nothing is invoiced yet', sep.out.invoiced.amt, 0);
+  check('The estimate says where it came from', sep.out.estimated.rows[0].kind === 'recurring');
+  eq('Nothing has been paid', sep.out.paid.amt, 0);
+
+  // 2. End of the month: the estimate becomes an event. No money moves.
+  save('confirmcharge', { sub: rent.id, month: '2026-09', date: '2026-09-30', result: 'invoice', amt: 20000, rcm: 'no' });
+  const bill = g.bills.find(b => b.serviceId === rent.id);
+  check('The month is recorded as a bill you owe', bill.status === 'open' && near(billOutstanding(bill), 20000), JSON.stringify(bill));
+  check('…flagged as accrued, because no vendor bill has come', bill.accrued === true);
+  check('…and the month it belongs to is on the document', bill.period === '2026-09', bill.period);
+  eq('September now carries the cost', pl('2026-09').te, 20000);
+  const sep2 = monthPicture('2026-09');
+  eq('The estimate is gone — it became an event', sep2.out.estimated.amt, 0);
+  eq('…and is not counted twice', sep2.out.booked, 20000);
+  eq('No money moved in September', sep2.out.paid.amt, 0);
+  check('It is waiting for the vendor bill', awaitingBill().length === 1 && awaitingBill()[0].id === bill.id);
+
+  // 3. The bill turns up on 4 October, due on the 15th, and is 500 more than expected.
+  save('billarrived', { billId: bill.id, vinv: 'RENT/SEP', date: '2026-10-04', dueDate: '2026-10-15', amt: 20500, gstAmt: 0 });
+  check('The vendor bill number is on the record', bill.billNo === 'RENT/SEP' && bill.dueDate === '2026-10-15', JSON.stringify(bill));
+  check('…and it is no longer waiting', bill.accrued === false && awaitingBill().length === 0);
+  eq('The extra 500 lands in September, the month the office was used', pl('2026-09').te, 20500);
+  eq('October carries none of the rent', pl('2026-10').te, 0);
+  eq('The whole 20,500 is owed', bal('2000', { party: landlord }), 20500);
+  const trueUp = g.txns.at(-1);
+  eq('The true-up entry is dated the end of September', trueUp.date, '2026-09-30');
+  check('Trial balance holds', trialBalance().balanced);
+
+  // The accrual cannot be pulled out from under the vendor bill.
+  refuses('An accrual with the vendor bill against it cannot be reversed first',
+    () => reverse(g.txns.find(x => x.event === 'confirmcharge').id), 'Bill arrived');
+
+  // 4. October: September's rent is a bill dated the 4th and due on the 15th, while
+  //    October's own rent is back at the start of the cycle as an estimate.
+  const oct = monthPicture('2026-10');
+  eq('September rent is invoiced in October, to pay in October', oct.out.invoiced.amt, 20500);
+  eq('…and due this month', oct.out.due.amt, 20500);
+  eq('…while October own rent is only an estimate again', oct.out.estimated.amt, 20000);
+  eq('…and October is not asked to carry September cost', oct.out.booked, 0);
+  eq('Cash to find in October is the bill plus this month rent', oct.cash.needed, 40500);
+
+  // 5. Paid on the 15th.
+  save('paybill', { date: '2026-10-15', party: landlord, amt: 20500, via: '1000', useAdvance: 'no' });
+  const oct2 = monthPicture('2026-10');
+  eq('October shows it paid', oct2.out.paid.amt, 20500);
+  eq('…nothing is left due', oct2.out.due.amt, 0);
+  eq('…and only October own rent is still to come', oct2.out.committed, 20000);
+  check('The bill is closed', bill.status === 'paid');
+  eq('The landlord is square', bal('2000', { party: landlord }), 0);
+  eq('September still owns the cost', pl('2026-09').te, 20500);
+}
+
+section('A bill for last month, recorded this month');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 200000 });
+  save('bill', { date: '2026-10-04', period: '2026-09', vendor: { __new: true, name: 'Printer', type: 'vendor' }, desc: 'September flyers', acc: '5100', amt: 6000, rcm: 'no', dueDate: '2026-10-20', tds: 'none', tdsrate: 0 });
+  eq('The cost belongs to September', pl('2026-09').te, 6000);
+  eq('…not to October', pl('2026-10').te, 0);
+  const b = g.bills.at(-1);
+  check('The document keeps its own date and due date', b.date === '2026-10-04' && b.dueDate === '2026-10-20', JSON.stringify(b));
+  eq('The entry is dated the last day of the month it belongs to', g.txns.at(-1).date, '2026-09-30');
+  eq('October is the month it has to be paid', monthPicture('2026-10').out.due.amt, 6000);
+  check('A cost cannot belong to a month after the bill',
+    validateEvent('bill', { date: '2026-10-04', period: '2026-11', vendor: 'x', desc: 'y', acc: '5100', amt: 100, rcm: 'no' }).some(p => p.k === 'period' && !p.warn));
+
+  // A closed month is not reopened behind the owner's back.
+  g.monthEnds['2026-09'] = { at: Date.now() };
+  save('bill', { date: '2026-10-05', period: '2026-09', vendor: { __new: true, name: 'Courier', type: 'vendor' }, desc: 'September courier', acc: '5180', amt: 900, rcm: 'no', tds: 'none', tdsrate: 0 });
+  eq('September is closed, so the late bill lands in October', pl('2026-10').te, 900);
+  check('…and the form says so before you save',
+    validateEvent('bill', { date: '2026-10-05', period: '2026-09', vendor: 'x', desc: 'y', acc: '5180', amt: 900, rcm: 'no' }).some(p => p.k === 'period' && p.warn));
+}
+
+section('The month, four ways — what is paid, invoiced, due and still a guess');
+{
+  const g = fresh();
+  save('funding', { date: '2026-11-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 400000 });
+  // An estimate that has not happened.
+  save('subnew', { date: '2026-11-01', name: 'Internet', kind: 'utility', acc: '5070', vendor: { __new: true, name: 'ISP', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 2000, via: '1000', start: '2026-11' });
+  // A bill that arrived this month and is due this month.
+  save('bill', { date: '2026-11-03', vendor: { __new: true, name: 'Signboard Co', type: 'vendor' }, desc: 'Signage', acc: '5090', amt: 15000, rcm: 'no', dueDate: '2026-11-25', tds: 'none', tdsrate: 0 });
+  // A bill that arrived last month and went overdue.
+  save('bill', { date: '2026-10-10', vendor: { __new: true, name: 'Old Vendor', type: 'vendor' }, desc: 'October work', acc: '5100', amt: 4000, rcm: 'no', dueDate: '2026-10-31', tds: 'none', tdsrate: 0 });
+  // Something paid on the spot.
+  save('expense', { date: '2026-11-05', desc: 'Fuel', acc: '5050', amt: 1200, rcm: 'no', via: '1000' });
+  // Income expected, invoiced and collected.
+  save('newdeal', { date: '2026-11-01', nickname: 'Nov deal', seller: { __new: true, name: 'Client N', type: 'client' }, expSeller: 60000, expMonth: '2026-11' });
+  const p = monthPicture('2026-11');
+  eq('Paid this month', p.out.paid.amt, 1200);
+  eq('Invoiced this month, to pay later', p.out.invoiced.amt, 15000);
+  eq('Due this month', p.out.due.amt, 15000);
+  eq('Overdue from before', p.out.overdue.amt, 4000);
+  eq('Still only an estimate', p.out.estimated.amt, 2000);
+  eq('Cash still to find this month', p.out.committed, 15000 + 4000 + 2000);
+  eq('Income still an estimate', p.in.estimated.amt, 60000);
+  eq('The only money in was the owner putting capital in', p.in.paid.amt, 400000);
+  eq('The month, clubbed: the books show what November itself cost', p.out.booked, 15000 + 1200);
+  eq('…and the net still to settle is what is owed both ways', p.net.toSettle, 0 - (15000 + 4000));
+  eq('…while the net estimate is income less costs still guessed', p.net.estimated, 60000 - 2000);
+  check('The cash line answers "can I spend?"', p.cash.after === r2c(p.cash.now + p.in.committed - p.out.committed), JSON.stringify(p.cash));
+}
+
 section('GST on a purchase is one question with three answers');
 {
   const g = fresh();
@@ -515,6 +632,51 @@ section('A bill blocks a reversal only while a payment still stands against it')
   check('The bill is born paid, with no allocation behind it', bornPaid.status === 'paid' && (bornPaid.allocations || []).length === 0);
   reverse(paidTxn);
   check('Reversing it voids the bill in one step', bornPaid.status === 'void', bornPaid.status);
+}
+
+section('The statements an accountant reads');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 500000 });
+  save('newdeal', { date: '2026-09-02', nickname: 'September deal', seller: { __new: true, name: 'Client A', type: 'client' }, expSeller: 100000 });
+  const d = byName(g.deals, 'September deal').id;
+  save('invoice', { date: '2026-09-10', deal: d, from: 'seller', amt: 100000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
+  save('dealcost', { date: '2026-09-12', deal: d, what: 'EC and patta', bear: 'self', acc: '5045', amt: 8000, rcm: 'no', how: '1000' });
+  save('expense', { date: '2026-09-15', desc: 'Office rent', acc: '5000', amt: 20000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-09-16', desc: 'Ads', acc: '5090', amt: 5000, rcm: 'no', via: '1000' });
+
+  const st = plStatement({ month: '2026-09' });
+  eq('Revenue is the brokerage', st.revenue, 100000);
+  eq('Direct costs are what earning it cost', st.direct, 8000);
+  eq('Gross profit is the difference', st.grossProfit, 92000);
+  eq('Running costs sit below it', st.opex, 25000);
+  eq('EBITDA follows', st.ebitda, 67000);
+  eq('…and with no interest or depreciation, that is profit before tax', st.pbt, 67000);
+  check('Tax is provided at the settings rate', st.tax > 0 && near(st.pat, st.pbt - st.tax), JSON.stringify({ tax: st.tax, pat: st.pat }));
+  check('Every account that moved appears in a group',
+    st.groups.flatMap(x => x.rows).length === Object.keys(pl('2026-09').inc).length + Object.keys(pl('2026-09').exp).length);
+
+  const tb = trialBalanceDetail('2026-09-01', '2026-09-30');
+  check('The trial balance balances on movement', tb.balanced, JSON.stringify(tb.totals));
+  eq('Debits equal credits for the period', tb.totals.debit, tb.totals.credit);
+  const bank = tb.rows.find(r => r.acc.code === '1000');
+  eq('The bank opened at nothing', bank.opening, 0);
+  eq('…and closed where the ledger says', bank.closing, bal('1000'));
+  const may = trialBalanceDetail('2026-10-01', '2026-10-31');
+  eq('October opens where September closed', may.rows.find(r => r.acc.code === '1000').opening, bal('1000'));
+
+  const bs = balanceSheetGrouped('2026-09-30', '2026-04-01');
+  check('The balance sheet balances', bs.balanced, JSON.stringify({ a: bs.totalAssets, f: bs.totalFunds, diff: bs.diff }));
+  eq('This year owns the whole profit', bs.profitThisYear, 67000);
+  eq('…and no earlier year carries any', bs.profitEarlier, 0);
+  check('Receivables sit in current assets', bs.assets.find(x => x.key === 'current').rows.some(r => r.code === '1100'));
+  check('Liabilities read as positive figures', bs.funds.every(gp => gp.rows.every(r => r.amt >= 0)), JSON.stringify(bs.funds));
+
+  const health = booksHealth('2026-09-30');
+  check('The health check says the books balance', health.checks.find(c => c.key === 'tb').ok);
+  check('…and the receivables control agrees with the invoice', health.checks.find(c => c.key === 'ar').ok);
+  check('…and it notices there are no opening balances', !health.checks.find(c => c.key === 'opening').ok);
+  check('Every check says what to do about it', health.checks.every(c => c.label && c.detail));
 }
 
 report();

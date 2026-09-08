@@ -129,7 +129,70 @@ const dirTag = key => `<span class="dirtag dir-${dirOf(key)}">${DIR_LABEL[dirOf(
 // function, evaluated inside the sample books, for anything that has to be worked out from
 // them (an allocation across open bills).
 
+// The rent story the "A cost from guess to settled" examples run on: a landlord, a monthly
+// commitment, then the same commitment at each later stage. Each example prepares only as
+// much of it as it needs, so every card can be read on its own.
+function rentSample(s) {
+  s.parties.push({ id: 'P9', name: 'K. Raman (landlord)', type: 'vendor' });
+  s.subs.push({
+    id: 'S3', name: 'Office rent', kind: 'rent', acc: '5000', vendor: 'K. Raman (landlord)', vendorId: 'P9',
+    use: 'The office', payMode: 'monthly', billing: 'invoice', amount: 20000, monthly: 20000, via: '1000',
+    start: '2026-09', end: null, months: 1, history: [{ from: '2026-09', amount: 20000, plan: '' }],
+    amortized: [], charges: {}, status: 'active',
+  });
+}
+function rentAccrued(s) {
+  rentSample(s);
+  s.subs.find(x => x.id === 'S3').charges['2026-11'] = { actual: 20000, expected: 20000, variance: 0, paid: false, billId: 'B5', date: '2026-11-30' };
+  s.bills.push({
+    id: 'B5', partyId: 'P9', vendorName: 'K. Raman (landlord)', billNo: '', date: '2026-11-30', dueDate: null,
+    desc: 'Office rent — Nov 2026', acc: '5000', taxable: 20000, gst: 0, rcm: 0, tds: 0, total: 20000, net: 20000,
+    paid: 0, status: 'open', serviceId: 'S3', month: '2026-11', period: '2026-11', accrued: true,
+    txnId: 'T10', allocations: [], no: 8,
+  });
+  s.txns.push({
+    id: 'T10', date: '2026-11-30', event: 'confirmcharge', desc: 'Office rent — Nov 2026',
+    lines: [{ acc: '5000', dr: 20000 }, { acc: '2000', cr: 20000, party: 'P9' }],
+    totals: { dr: 20000, cr: 20000 }, meta: {}, attachments: [], auto: false, fy: '2026-27', createdBy: 'sample', createdAt: 0,
+  });
+}
+function rentTrued(s) {
+  rentAccrued(s);
+  const b = s.bills.find(x => x.id === 'B5');
+  Object.assign(b, { billNo: 'RENT/NOV', date: '2026-12-04', dueDate: '2026-12-15', taxable: 20500, total: 20500, net: 20500, accrued: false });
+  s.txns.push({
+    id: 'T11', date: '2026-11-30', event: 'billarrived', desc: 'Bill RENT/NOV — Office rent — Nov 2026 (more than recorded)',
+    lines: [{ acc: '5000', dr: 500 }, { acc: '2000', cr: 500, party: 'P9' }],
+    totals: { dr: 500, cr: 500 }, meta: { billId: 'B5' }, attachments: [], auto: false, fy: '2026-27', createdBy: 'sample', createdAt: 0,
+  });
+}
+
 const SCENARIOS = [
+  // ── One cost through all four of its states
+  {
+    group: 'A cost from guess to settled', id: 'lc-event', button: 'Recurring — record this month',
+    situation: 'The office rent is about 20,000 a month. All month it sits on This month as an estimate, in no account anywhere. Now November is over and you used the office; the landlord has sent nothing yet.',
+    event: 'confirmcharge',
+    prepare: s => rentSample(s),
+    values: { sub: 'S3', month: '2026-11', date: '2026-11-30', result: 'invoice', amt: 20000, rcm: 'no' },
+    point: 'The estimate becomes an <b>event</b>. November carries the cost and the landlord appears on Owed — and still no money has moved. The bill is marked <b>awaited</b> because it has no vendor bill number yet. An estimate is never posted; recording the month is what replaces it, so nothing is ever counted twice. <span class="small faint">(Dr 5000 Rent / Cr 2000 Payable.)</span>',
+  },
+  {
+    group: 'A cost from guess to settled', id: 'lc-billarrived', button: 'Bill arrived for a month already recorded',
+    situation: 'On 4 December the landlord\u2019s bill turns up. It says 20,500, payable by the 15th.',
+    event: 'billarrived',
+    prepare: s => rentAccrued(s),
+    values: { billId: 'B5', vinv: 'RENT/NOV', date: '2026-12-04', dueDate: '2026-12-15', amt: 20500, gstAmt: 0 },
+    point: 'The number and the due date go onto the record you already made. The extra 500 is posted <b>back into November</b> — the month the office was used — so November\u2019s profit is right and December is not made to carry it. December now shows the whole 20,500 under <b>Due this month</b>.',
+  },
+  {
+    group: 'A cost from guess to settled', id: 'lc-paid', button: 'Pay a bill',
+    situation: 'You pay it on the 15th, out of the bank.',
+    event: 'paybill',
+    prepare: s => rentTrued(s),
+    values: () => ({ date: '2026-12-15', party: 'P9', amt: 20500, via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
+    point: 'The money leaves and is matched to that bill, which closes. <b>Profit does not move</b> — it was counted in November. On This month the amount shifts from <b>Due</b> to <b>Paid</b>, and the cash book shows it on the 15th. Four screens, four states, one cost, counted once.',
+  },
   // ── Deals
   {
     group: 'Deals — from token to cash', id: 'token',
@@ -940,12 +1003,22 @@ const FAQ = [
       'No. An estimate is never an entry. The Budget tab reads what the books already expect — each recurring cost\'s amount for the month, loan interest from the schedule, depreciation, deals with an expected close month — and anything you type for an account. When the real thing is recorded, the same page shows expected against actual. Recording the actual is what "closes" the estimate: for a recurring cost that is <b>Record this month</b>; for a deal it is <b>Deal closed</b>.'],
     ['Rent is due at month-end but I pay on the 5th. Is that one entry or two?',
       'Two, and the app keeps them apart. At month-end, Recurring → <b>Record this month</b> → <b>Not paid yet — put it on Owed</b>: the cost is booked now (Dr Rent / Cr Payable) and the landlord appears on Owed. On the 5th, <b>Pay a bill</b> from Owed: the money leaves the bank and is matched to that bill. Nothing is counted twice.'],
+    ['The rent bill for last month only arrives on the 4th. Which month does the cost belong to?',
+      'The month you used the office — not the month the paperwork came. That is the whole point of accrual accounting and it is what the <b>Which month is this cost for?</b> box on the bill form is for. Set it to last month: the entry is dated the last day of that month, while the bill keeps its own date and its own due date. Last month\'s profit is then right, and the payment still shows up in this month\'s cash.'],
+    ['I closed the month on my own figure. Now the vendor bill has come. What do I record?',
+      '<b>Bill arrived for a month already recorded</b>. Pick what it is for, type the vendor\'s bill number, its date and the date you have to pay by, and the real amount. If the bill differs from your figure, the difference is posted back into the month you used it, so that month\'s profit is corrected rather than this month\'s. Nothing is entered twice. The same button sits on the Owed tab and on the Recurring month, next to anything still marked "awaited".'],
+    ['Where do I see what is paid, what is invoiced, what is due and what is still a guess?',
+      '<b>This month</b>, in the Daily group. Money out and money in are each shown in five buckets — paid, invoiced, due this month, overdue, still an estimate — then combined at the bottom. The top of the page answers the practical question: what is in the bank, what still has to go out, what is expected in, and what that leaves. Every bucket opens to show exactly what is in it.'],
+    ['An estimate changed once the bill came. Does the old figure stay anywhere?',
+      'It does, and that is deliberate. The commitment keeps what was expected for the month, the recorded event keeps what was actually charged, and the Budget and Recurring tabs both show the two side by side with the difference and the reason. An estimate is never posted to the books, so changing it never touches the accounts — but the trail of what you expected and what happened is kept.'],
     ['I made a profit but the bank went down. Where did the money go?',
       'Reports → <b>Profit is not cash</b> answers exactly this. It starts from the profit for the month and walks through every real movement — money clients still owe, bills you have not paid, assets bought, loan repaid, tax collected — and ends at the cash that actually moved. If anything is left unexplained the app shows it rather than hiding it.'],
     ['A client paid me. Why has my profit not gone up?',
       'Because it already did, on the day the deal registered and you raised the invoice. That is when you earned the money. The payment is just the cash arriving afterwards, matched to that invoice. If receiving it increased profit too, you would be counting the same brokerage twice. <span class="small faint">Accrual basis — income is recognised when earned, not when received.</span>'],
     ['My bank balance is healthy but the app says I made a loss. Which is right?',
       'Both. Cash includes money that is not yours — client tokens you are holding, GST you owe the government, bills you have not paid yet. That is what <b>"free to use"</b> on the Overview is for: it strips those out. A loss with cash in the bank usually means you are holding other people\'s money.'],
+    ['What can I hand my CA at the end of the year?',
+      'Books gives all of it over one date range you choose: the <b>check</b> (twelve things that have to be true before anything is filed), the <b>trial balance</b> with opening, movement and closing for every account, the <b>profit and loss</b> down to profit after tax, the <b>balance sheet</b> grouped the way a schedule reads, every <b>ledger</b> with its balance brought forward, the <b>purchase and sales registers</b>, and the <b>general journal</b>. Four CSVs come off the same page — journal, trial balance, all ledgers, and a Tally-friendly file.'],
     ['Why does a bill I have not paid show up in Transactions?',
       'Because it is an entry: the cost is real the day the bill arrives, and profit for that month goes down by it. What has not happened yet is the money moving. Switch Transactions to <b>Money moved</b> to see only cash, or <b>Not paid yet</b> to see only bills and invoices waiting to settle. Reports → <b>Money in and out</b> is the cash book: opening, every movement, closing.'],
     ['The bill was ₹18,000, they gave me ₹500 off, I paid ₹17,500. How do I record that?',
