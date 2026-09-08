@@ -10,6 +10,7 @@ import {
   cashProfitBridge, scopeMode, scopeLabel, scoped, cashBook, lastDayOfMonth,
   trialBalanceDetail, plStatement, balanceSheetGrouped, booksHealth,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, addDays,
+  monthCompare, breakEven, mlabel as monthName,
 } from './finance-core.js';
 import {
   stat, signed, empty, note, tag, table, seg, downloadCsv, downloadJson, monthOptions,
@@ -109,6 +110,8 @@ export function renderReports() {
       ${stat('Margin', p.ti ? Math.round((p.profit / p.ti) * 100) + '%' : '—')}
     </div>
 
+    ${repMode === 'month' ? compareBlock(repMonth) : ''}
+    ${repMode === 'month' ? breakEvenBlock(repMonth) : ''}
     ${repMode === 'month' ? bridgeBlock(repMonth) : ''}
 
     ${(() => { const t = taxProvision(p.profit); return `
@@ -130,6 +133,76 @@ export function renderReports() {
     ${categoryTable('Expenses by category', p.exp, p.te, 'expenses')}
     ${cashBookSection()}
     ${cashFlowTable()}`;
+}
+
+// Three columns and three sentences. An owner reads the sentences; an analyst reads the
+// columns. Both want the same thing first — what moved, and by how much.
+function compareBlock(month) {
+  const c = monthCompare(month);
+  const arrow = r => r.change > 0 ? '▲' : '▼';
+  const cls = r => Math.abs(r.change) < 0.5 ? '' : (r.worse ? 'neg' : 'pos');
+  const line = (label, k, invert) => {
+    const d = c[k];
+    const chg = Math.round((d.now - d.prev) * 100) / 100;
+    const vs = Math.round((d.now - d.planned) * 100) / 100;
+    const bad = invert ? chg > 0 : chg < 0;
+    return `<tr>
+      <td class="lead">${esc(label)}</td>
+      <td class="n" data-label="This month">${fmt(d.now)}</td>
+      <td class="n" data-label="Last month">${fmt(d.prev)}</td>
+      <td class="n" data-label="Change"><span class="${Math.abs(chg) < 0.5 ? '' : bad ? 'neg' : 'pos'}">${chg > 0 ? '+' : chg < 0 ? '−' : ''}${fmt(Math.abs(chg))}</span></td>
+      <td class="n" data-label="Expected">${d.planned ? fmt(d.planned) : '<span class="faint">—</span>'}</td>
+      <td class="n" data-label="Against expected">${d.planned ? `${vs > 0 ? '+' : vs < 0 ? '−' : ''}${fmt(Math.abs(vs))}` : '<span class="faint">—</span>'}</td>
+    </tr>`;
+  };
+
+  return `
+    <h2>How ${esc(monthName(month))} compares</h2>
+    ${c.movers.length ? `<p class="lead">${c.movers.map(r =>
+    `<b>${esc(r.name)}</b> ${r.change > 0 ? 'up' : 'down'} ${fmt(Math.abs(r.change))}`).join(', ')} against ${esc(monthName(c.prev))}.</p>` : ''}
+    ${table(
+    `<th>&nbsp;</th><th class="n">This month</th><th class="n">Last month</th><th class="n">Change</th><th class="n">Expected</th><th class="n">Against expected</th>`,
+    line('Income', 'income', false) + line('Costs', 'expense', true) + line('Profit', 'profit', false),
+    '', { stack: true })}
+    ${c.movers.length ? `
+    <details class="card pad0 bucket">
+      <summary><b>What moved</b> <span class="faint small">biggest change first</span> <span class="n">${c.rows.length}</span></summary>
+      ${table(
+      `<th>Account</th><th class="n">This month</th><th class="n">Last month</th><th class="n">Change</th><th class="n">Expected</th>`,
+      c.rows.map(r => `<tr>
+          <td class="lead">${esc(r.name)} <span class="small faint">${esc(r.code)}</span></td>
+          <td class="n" data-label="This month">${fmt(r.now)}</td>
+          <td class="n" data-label="Last month">${fmt(r.prev)}</td>
+          <td class="n" data-label="Change"><span class="${cls(r)}">${Math.abs(r.change) < 0.5 ? '—' : `${arrow(r)} ${fmt(Math.abs(r.change))}`}</span></td>
+          <td class="n" data-label="Expected">${r.planned ? fmt(r.planned) : '<span class="faint">—</span>'}</td>
+        </tr>`).join(''), '', { stack: true })}
+    </details>` : ''}`;
+}
+
+// What has to be earned before the business is standing still. The margin is this business's
+// own, taken from the last three months it traded — not a figure anyone typed in.
+function breakEvenBlock(month) {
+  const b = breakEven(month);
+  if (!b.fixed) return '';
+  return `
+    <h2>Keeping the lights on</h2>
+    <div class="grid g3">
+      ${stat('Fixed cost a month', fmt(b.fixed), { sub: b.fixedCash < b.fixed ? `${fmt(b.fixedCash)} of it actually leaves the bank` : 'All of it leaves the bank' })}
+      ${stat('Margin on what you sell', b.basedOn ? b.marginPct + '%' : '—', { sub: b.basedOn ? `From the last ${b.basedOn} month${b.basedOn === 1 ? '' : 's'} you traded` : 'Not enough history yet' })}
+      ${stat('Income needed to break even', b.need ? fmt(b.need) : '—', { hero: true, sub: 'Before the month makes anything' })}
+      ${stat(b.covered ? 'Past break-even by' : 'Short of break-even by', fmt(Math.abs(b.gap)), { cls: b.covered ? 'pos' : 'neg', sub: `${fmt(b.actual)} earned so far` })}
+    </div>
+    <details class="card pad0 bucket">
+      <summary><b>What the fixed cost is made of</b> <span class="faint small">commitments that arrive whether or not a deal closes</span> <span class="n">${fmt(b.fixed)}</span></summary>
+      ${table(
+      `<th>What</th><th>Kind</th><th class="n">A month</th>`,
+      b.items.map(i => `<tr>
+          <td class="lead">${esc(i.what)}${i.noCash ? ' <span class="small faint">— no money moves</span>' : ''}</td>
+          <td class="small" data-label="Kind">${esc(i.kind)}</td>
+          <td class="n" data-label="A month">${fmt(i.amt)}</td>
+        </tr>`).join(''),
+      `<tr><td colspan="2">Total</td><td class="n">${fmt(b.fixed)}</td></tr>`, { stack: true })}
+    </details>`;
 }
 
 // A six-month profit trend, drawn as inline SVG because no chart library is available in this

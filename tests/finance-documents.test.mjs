@@ -17,7 +17,7 @@ import {
   expectedFor, serviceMonths, missingServiceMonths, nextPlanChange, serviceRunRate,
   agedReceivables, agedPayables, rule37Rows, cashProfitBridge, ym, movesMoney, cashBook,
   monthPicture, awaitingBill, plStatement, trialBalanceDetail, balanceSheetGrouped, booksHealth, projection,
-  DISALLOWED, gstComputation as gstComp,
+  DISALLOWED, gstComputation as gstComp, monthCompare, fixedMonthly, breakEven,
   outlook,
   openInvoices, openBills, invoiceOutstanding, billOutstanding, vendorAdvance, GST_RCM,
 } from '../finance-assets/finance-core.js';
@@ -763,6 +763,42 @@ section('Three months ahead on what is already known');
   check('It says which month runs out first', o.firstShort === '2026-11', String(o.firstShort));
   check('…and the worst point is never above the opening here', o.worst <= o.opening);
   eq('The certain and estimated halves add up to what has to go out', r2c(first.committed + first.guessed), first.out);
+}
+
+section('This month against last month, and what it costs to stand still');
+{
+  const g = fresh();
+  save('funding', { date: '2026-09-01', kind: '3000', who: { __new: true, name: 'Owner', type: 'director' }, amt: 500000 });
+  save('newdeal', { date: '2026-09-01', nickname: 'Sept deal', seller: { __new: true, name: 'Client S', type: 'client' }, expSeller: 100000 });
+  const d1 = byName(g.deals, 'Sept deal').id;
+  save('invoice', { date: '2026-09-20', deal: d1, from: 'seller', amt: 100000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
+  save('expense', { date: '2026-09-10', desc: 'Ads', acc: '5090', amt: 10000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-10-10', desc: 'Ads', acc: '5090', amt: 25000, rcm: 'no', via: '1000' });
+  save('expense', { date: '2026-10-11', desc: 'Rent', acc: '5000', amt: 20000, rcm: 'no', via: '1000' });
+
+  const c = monthCompare('2026-10');
+  eq('It compares with the month before', c.prev, '2026-09');
+  eq('Income fell to nothing', c.income.now, 0);
+  eq('…from a hundred thousand', c.income.prev, 100000);
+  eq('Costs rose', c.expense.now, 45000);
+  check('The biggest mover is named first', c.movers[0].code === '4000' || c.movers[0].code === '5000', JSON.stringify(c.movers.map(x => [x.code, x.change])));
+  const ads = c.rows.find(r => r.code === '5090');
+  eq('Advertising is up by 15,000', ads.change, 15000);
+  check('…and a cost going up is flagged as the bad direction', ads.worse === true);
+  const inc = c.rows.find(r => r.code === '4000');
+  check('Income falling is flagged the same way', inc.worse === true, JSON.stringify(inc));
+
+  // Fixed costs: a commitment, a loan and an asset all arrive whether or not a deal closes.
+  save('subnew', { date: '2026-10-01', name: 'Office rent', kind: 'rent', acc: '5000', vendor: { __new: true, name: 'Landlord', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 20000, via: '1000', start: '2026-10' });
+  const f = fixedMonthly('2026-11');
+  eq('The recurring commitment is the fixed cost', f.total, 20000);
+  check('…and it is named, not just totalled', f.items[0].what === 'Office rent', JSON.stringify(f.items));
+
+  const be = breakEven('2026-11');
+  eq('Break-even starts from the fixed cost', be.fixed, 20000);
+  check('Margin comes from the months actually traded', be.basedOn >= 1, String(be.basedOn));
+  check('…and the income needed is the fixed cost over that margin', near(be.need, r2c(be.fixed / be.margin)), JSON.stringify({ need: be.need, margin: be.margin }));
+  check('November has earned nothing yet, so it is short', !be.covered && be.gap > 0);
 }
 
 section('The statements an accountant reads');

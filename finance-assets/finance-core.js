@@ -1217,6 +1217,97 @@ export function outlook(months = 3, from) {
   };
 }
 
+// This month against last month and against what was expected, and — the part anyone
+// actually acts on — the handful of accounts that moved the most. A table of forty rows
+// hides the three that matter.
+export function monthCompare(month) {
+  const m = month || ym(today());
+  const prev = addMonths(m, -1);
+  const now = pl(m), was = pl(prev);
+  const plan = projection(m);
+  const planOf = code => plan.rows.find(r => r.code === code)?.planned || 0;
+  const rows = [];
+  for (const code of new Set([...Object.keys(now.inc), ...Object.keys(now.exp), ...Object.keys(was.inc), ...Object.keys(was.exp), ...plan.rows.map(r => r.code)])) {
+    const a = A[code];
+    if (!a) continue;
+    const isInc = a.type === 'income';
+    const nowAmt = r2(isInc ? num(now.inc[code]) : num(now.exp[code]));
+    const wasAmt = r2(isInc ? num(was.inc[code]) : num(was.exp[code]));
+    const planned = r2(planOf(code));
+    if (!nowAmt && !wasAmt && !planned) continue;
+    rows.push({
+      code, name: a.name, type: a.type, now: nowAmt, prev: wasAmt, planned,
+      change: r2(nowAmt - wasAmt), vsPlan: r2(nowAmt - planned),
+      // A cost going up and income going down are both bad news; the sign alone does not say.
+      worse: a.type === 'income' ? nowAmt < wasAmt : nowAmt > wasAmt,
+    });
+  }
+  rows.sort((x, y) => Math.abs(y.change) - Math.abs(x.change));
+  return {
+    month: m, prev, rows,
+    movers: rows.filter(r => Math.abs(r.change) > 0.5).slice(0, 3),
+    income: { now: r2(now.ti), prev: r2(was.ti), planned: plan.planned.income },
+    expense: { now: r2(now.te), prev: r2(was.te), planned: plan.planned.expense },
+    profit: { now: r2(now.profit), prev: r2(was.profit), planned: plan.planned.profit },
+  };
+}
+
+// What it costs to open the doors: the commitments that arrive whether or not a deal closes.
+// Everything here is already in the books as a commitment, a schedule or an asset — none of
+// it is typed in twice.
+export function fixedMonthly(month) {
+  const m = month || ym(today());
+  const items = [];
+  for (const s of S.subs) {
+    if (s.status !== 'active') continue;
+    if (s.start && s.start > m) continue;
+    if (s.end && s.end < m) continue;
+    const amt = s.payMode === 'upfront' ? num(s.monthly) : expectedFor(s, m);
+    if (amt > 0.005) items.push({ what: s.name, amt: r2(amt), kind: recurringKindLabel(s.kind) || 'Recurring' });
+  }
+  for (const l of S.loans) {
+    if (l.status !== 'active') continue;
+    const due = (l.schedule || []).find(x => x.month === m) || (l.schedule || []).find(x => !(l.paid || []).includes(x.n));
+    if (due) items.push({ what: `EMI — ${l.lender}`, amt: r2(num(due.emi)), kind: 'Loan' });
+  }
+  for (const a of S.assets) {
+    if (a.status !== 'in use' || (a.start && a.start > m)) continue;
+    if ((a.depreciated || []).length >= num(a.life)) continue;
+    items.push({ what: `${a.name} — depreciation`, amt: r2(num(a.monthly)), kind: 'Depreciation', noCash: true });
+  }
+  items.sort((x, y) => y.amt - x.amt);
+  const total = r2(items.reduce((s2, i) => s2 + i.amt, 0));
+  const cash = r2(items.filter(i => !i.noCash).reduce((s2, i) => s2 + i.amt, 0));
+  return { month: m, items, total, cash };
+}
+
+// How much has to be earned in a month before the business is standing still. Margin comes
+// from the last three completed months, so it reflects how this business actually trades
+// rather than an assumption typed into a box.
+export function breakEven(month) {
+  const m = month || ym(today());
+  const fixed = fixedMonthly(m);
+  const DIRECT = PL_GROUPS.find(g => g.key === 'direct').codes;
+  let income = 0, direct = 0;
+  const months = [];
+  for (let i = 1; i <= 3; i++) months.push(addMonths(m, -i));
+  for (const x of months) {
+    const p = pl(x);
+    income = r2(income + p.ti);
+    for (const code of DIRECT) direct = r2(direct + num(p.exp[code]));
+  }
+  const margin = income > 0.005 ? r2((income - direct) / income) : 1;
+  const need = margin > 0.005 ? r2(fixed.total / margin) : 0;
+  const actual = pl(m).ti;
+  return {
+    month: m, fixed: fixed.total, fixedCash: fixed.cash, items: fixed.items,
+    margin, marginPct: Math.round(margin * 100),
+    need, actual: r2(actual), gap: r2(need - actual),
+    covered: actual >= need - 0.5,
+    basedOn: months.filter(x => pl(x).ti > 0.005).length,
+  };
+}
+
 // Bills sitting on Owed with no vendor bill number against them — a month closed on an
 // estimate, waiting for the paperwork. This is the queue "Bill arrived" works through.
 export function awaitingBill() {

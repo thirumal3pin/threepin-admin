@@ -152,6 +152,15 @@ for (const [name, fn] of views) {
 }
 setState(s);
 
+section('Reports answers the questions an owner and an analyst ask');
+const repHtml = renderReports();
+check('It compares the month with the one before', /How .* compares/i.test(repHtml));
+check('…with a change column against what was expected', repHtml.includes('Against expected'));
+check('It says what it costs to stand still', repHtml.includes('Keeping the lights on'));
+check('…and what has to be earned to cover it', repHtml.includes('Income needed to break even'));
+check('The fixed costs are itemised, not just totalled', repHtml.includes('What the fixed cost is made of'));
+check('Profit is still reconciled to cash', /Profit is not cash|profit and cash/i.test(repHtml) || repHtml.includes('Cash flow'));
+
 section('Books reads like an accountant expects');
 const booksHtml = renderBooks();
 for (const heading of ['The check', 'Trial balance', 'Profit and loss', 'Balance sheet', 'Ledger', 'Registers', 'General journal']) {
