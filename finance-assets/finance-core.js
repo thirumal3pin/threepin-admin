@@ -1308,6 +1308,53 @@ export function breakEven(month) {
   };
 }
 
+// An entry is not the whole story: a bill is one entry and the payment that closes it is
+// another. This ties them together both ways — the documents this entry created and what is
+// still open on them, and the documents this entry settled — so a row in the list can say
+// "settled" instead of repeating "not yet paid" for ever.
+export function settlementOf(txnId) {
+  const byId = id => S.txns.find(t => t.id === id) || null;
+  const made = [];
+  for (const [coll, list] of [['bills', S.bills || []], ['invoices', S.invoices || []]]) {
+    for (const d of list) {
+      if (d.txnId !== txnId || d.paid === undefined) continue;
+      const total = coll === 'bills' ? num(d.net ?? d.total) : num(d.total);
+      const left = coll === 'bills' ? billOutstanding(d) : invoiceOutstanding(d);
+      made.push({
+        coll, doc: d, total: r2(total), outstanding: r2(left),
+        status: d.status === 'void' ? 'void' : docStatus(left, total),
+        who: coll === 'bills' ? (d.vendorName || pname(d.partyId)) : pname(d.partyId),
+        payments: (d.allocations || []).map(a => {
+          const t = byId(a.txnId);
+          return { txnId: a.txnId, no: t?.no ?? null, date: a.date || t?.date || '', amt: r2(num(a.amt)), desc: t?.desc || '', writtenOff: !!a.writtenOff, creditNote: !!a.creditNote, reversal: !!a.reversal };
+        }),
+      });
+    }
+  }
+  const settled = [];
+  for (const a of (byId(txnId)?.allocations || [])) {
+    const list = a.coll === 'bills' ? (S.bills || []) : (S.invoices || []);
+    const d = list.find(x => x.id === a.id);
+    if (!d) continue;
+    const total = a.coll === 'bills' ? num(d.net ?? d.total) : num(d.total);
+    const left = a.coll === 'bills' ? billOutstanding(d) : invoiceOutstanding(d);
+    settled.push({
+      coll: a.coll, doc: d, amt: r2(num(a.amt)), total: r2(total), outstanding: r2(left),
+      status: d.status === 'void' ? 'void' : docStatus(left, total),
+      who: a.coll === 'bills' ? (d.vendorName || pname(d.partyId)) : pname(d.partyId),
+      madeBy: d.txnId || null, madeNo: byId(d.txnId)?.no ?? null,
+    });
+  }
+  const open = r2(made.reduce((s2, m) => s2 + (m.status === 'void' ? 0 : m.outstanding), 0));
+  return {
+    made, settled, open,
+    // What the entry means today, in one word, for the list.
+    state: !made.length ? null
+      : made.every(m => m.status === 'void') ? 'void'
+        : open <= HALF_PAISA ? 'settled' : made.some(m => m.status === 'part') ? 'part' : 'open',
+  };
+}
+
 // Bills sitting on Owed with no vendor bill number against them — a month closed on an
 // estimate, waiting for the paperwork. This is the queue "Bill arrived" works through.
 export function awaitingBill() {

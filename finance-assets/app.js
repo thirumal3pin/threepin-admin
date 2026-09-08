@@ -13,6 +13,7 @@ import {
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
+  settlementOf,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -69,7 +70,49 @@ const ALIASES = { invoices: 'deals' };
 const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
 
 // Which screens the petty-cash scope changes. Everything else always shows all money.
-const SCOPED_VIEWS = new Set(['txns', 'reports', 'books', 'analytics']);
+// Everything that reads entries back honours the petty-cash switch, the dashboard included —
+// the owner asked for one filter across the app. The statements inside Books are the only
+// exception and they force full scope themselves.
+const SCOPED_VIEWS = new Set(['overview', 'month', 'txns', 'reports', 'books', 'analytics']);
+
+// ═══════ NAVIGATION MODULES ═══════
+//
+// The side nav is five modules, not eighteen links. A module you can close is a module you
+// can stop thinking about, which is the whole point on a screen this dense. Two rules keep it
+// from ever hiding where you are: the module holding the current page is always open, and the
+// choice is remembered between visits rather than resetting to a designer's idea of tidy.
+const MODULES = [...new Set(NAV.map(n => n[3]))];
+const MODULE_NOTE = {
+  'Daily': 'What you touch most days',
+  'Business': 'Deals, commitments and what you expect',
+  'Money': 'Where the cash actually is',
+  'Tax & reports': 'What you file and what you read',
+  'Set up': 'Company details and how the app behaves',
+};
+const modSlug = g => 'mod-' + String(g).toLowerCase().replace(/[^a-z]+/g, '-');
+let openModules = null;
+
+function modulesOpen() {
+  if (openModules) return openModules;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('fin.nav.modules') || 'null'); } catch { saved = null; }
+  // First visit: Daily open, the rest closed — the shortest honest starting point.
+  openModules = new Set(Array.isArray(saved) ? saved : ['Daily']);
+  return openModules;
+}
+function saveModules() {
+  try { localStorage.setItem('fin.nav.modules', JSON.stringify([...modulesOpen()])); } catch { /* private window */ }
+}
+function toggleModule(g) {
+  const open = modulesOpen();
+  if (open.has(g)) open.delete(g); else open.add(g);
+  saveModules();
+  repaint();
+  // Focus stays where it was pressed, so the keyboard does not jump to the top.
+  const el = document.querySelector(`[data-mod="${CSS.escape(g)}"]`);
+  if (el) el.focus();
+}
+const moduleOf = key => (NAV.find(n => n[0] === key) || [])[3] || null;
 
 let view = 'overview';
 let ready = false;
@@ -245,11 +288,27 @@ function go(next) {
 function repaint() {
   const s = getState();
 
-  const groups = [...new Set(NAV.map(n => n[3]))];
-  document.getElementById('sidenav').innerHTML = groups.map(g => `
-    <div class="eh">${esc(g)}</div>
-    ${NAV.filter(n => n[3] === g).map(([k, label]) =>
-      `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">${esc(label)}</button>`).join('')}`).join('');
+  const here = moduleOf(view);
+  document.getElementById('sidenav').innerHTML = MODULES.map(g => {
+    const items = NAV.filter(n => n[3] === g);
+    const holdsCurrent = g === here;
+    const open = holdsCurrent || modulesOpen().has(g);
+    return `
+    <section class="mod ${open ? 'open' : ''} ${holdsCurrent ? 'here' : ''}">
+      <button type="button" class="mod-h" data-mod="${esc(g)}" aria-expanded="${open}" aria-controls="${modSlug(g)}"
+        onclick="fin.toggleModule('${esc(g)}')">
+        <span class="mod-name">${esc(g)}</span>
+        ${!open && holdsCurrent ? '<span class="mod-dot" aria-label="you are here"></span>' : ''}
+        <i class="ic fa-solid fa-chevron-down mod-chev" aria-hidden="true"></i>
+      </button>
+      <div class="mod-body" id="${modSlug(g)}">
+        ${MODULE_NOTE[g] ? `<p class="mod-note">${esc(MODULE_NOTE[g])}</p>` : ''}
+        ${items.map(([k, label, ic]) =>
+      `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">
+             <i class="ic ${esc(ic)}" aria-hidden="true"></i><span>${esc(label)}</span></button>`).join('')}
+      </div>
+    </section>`;
+  }).join('');
 
   document.getElementById('bottomnav').innerHTML = BOTTOM.map(k => {
     if (k === 'more') {
@@ -263,9 +322,15 @@ function repaint() {
               <i class="ic ${ic}" aria-hidden="true"></i>${esc(label)}</button>`;
   }).join('');
 
-  document.getElementById('sheetGrid').innerHTML = NAV.map(([k, label, ic]) =>
+  document.getElementById('sheetGrid').innerHTML = MODULES.map(g => `
+    <div class="sheet-mod">
+      <div class="sheet-mod-h">${esc(g)}${MODULE_NOTE[g] ? `<span>${esc(MODULE_NOTE[g])}</span>` : ''}</div>
+      <div class="sheet-mod-grid">
+        ${NAV.filter(n => n[3] === g).map(([k, label, ic]) =>
     `<button type="button" class="${view === k ? 'on' : ''}" onclick="fin.go('${k}')">
-       <i class="${ic}" aria-hidden="true" style="font-size:16px"></i>${esc(label)}</button>`).join('');
+             <i class="${esc(ic)}" aria-hidden="true" style="font-size:16px"></i>${esc(label)}</button>`).join('')}
+      </div>
+    </div>`).join('');
 
   const main = document.getElementById('main');
 
@@ -1059,11 +1124,65 @@ function txns() {
           <td class="nowrap" data-label="Date">${esc(t.date)}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? `<br><span class="small faint">${esc(methodLabel(m))}</span>` : ''; })()}</td>
           <td class="n" data-label="Profit">${pe ? signed(pe) : '—'}</td>
           <td class="n" data-label="Money in">${mm.in ? `<span class="pos">${fmt(mm.in)}</span>` : '<span class="faint">—</span>'}</td>
-          <td class="n" data-label="Money out">${mm.out ? `<span class="neg">${fmt(mm.out)}</span>` : (movesMoney(t) ? '<span class="faint">—</span>' : tag('not yet paid'))}</td>
+          <td class="n" data-label="Money out">${mm.out ? `<span class="neg">${fmt(mm.out)}</span>` : (movesMoney(t) ? '<span class="faint">—</span>' : docChip(t))}</td>
           <td class="n">${t.reversedBy ? '' : `<button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.reverse('${t.id}')">Reverse</button>`}</td>
         </tr>`;
     }).join(''), '', { stack: true })
       : empty('Nothing matches those filters.')}`;
+}
+
+// A bill entry moves no money, and saying "not yet paid" about it for ever is how an owner
+// comes to believe a settled bill is still open. The chip reports the document's state now.
+function docChip(t) {
+  const s = settlementOf(t.id);
+  if (!s.state) return '<span class="faint">—</span>';
+  if (s.state === 'void') return tag('reversed', 'rev');
+  if (s.state === 'settled') return tag('settled ✓', 'ok');
+  return `<span class="tag warn">${fmt(s.open)} left</span>`;
+}
+
+// The two questions a row cannot answer on its own: what is still open on what this entry
+// raised, and which entry settled it.
+function settlementBlock(t) {
+  const s = settlementOf(t.id);
+  if (!s.made.length && !s.settled.length) return '';
+  const line = (label, right) => `<tr><td>${label}</td><td class="n">${right}</td></tr>`;
+  const docLink = d => d.doc.billNo || d.doc.invoiceNo
+    ? `${esc(d.doc.desc || '')} <span class="small faint">${esc(d.doc.billNo || d.doc.invoiceNo)}</span>`
+    : esc(d.doc.desc || '');
+
+  const made = s.made.map(m => `
+    <div class="docrow" style="display:block">
+      <div><b>${esc(m.who || 'Party')}</b> — ${docLink(m)}
+        ${m.status === 'void' ? tag('reversed', 'rev') : m.outstanding <= 0.5 ? tag('settled ✓', 'ok') : tag(fmt(m.outstanding) + ' still open', 'warn')}</div>
+      <div class="small muted">${fmt(m.total)} ${m.coll === 'bills' ? 'owed' : 'invoiced'}${m.doc.dueDate ? ', due ' + esc(m.doc.dueDate) : ''}${m.doc.period && m.doc.period !== ym(m.doc.date) ? `, counted as ${esc(mlabel(m.doc.period))}` : ''}</div>
+      ${m.payments.length ? `<div class="tbl-wrap" style="margin-top:6px"><table><tbody>
+        ${m.payments.map(p => `<tr class="click" onclick="fin.openTxn('${esc(p.txnId)}')">
+          <td class="small">${p.reversal ? 'Reversed' : p.writtenOff ? 'Written off' : p.creditNote ? 'Credit note' : 'Paid'}
+            ${p.no ? `<span class="eno">#${String(p.no).padStart(4, '0')}</span>` : ''}
+            <span class="faint">${esc(p.date || '')}</span></td>
+          <td class="n">${fmt(p.amt)}</td></tr>`).join('')}
+      </tbody></table></div>`
+      : `<div class="small faint" style="margin-top:4px">Nothing has been ${m.coll === 'bills' ? 'paid against this yet' : 'received against this yet'}.</div>`}
+      ${m.outstanding > 0.5 && m.status !== 'void' ? `<div class="actions" style="margin:8px 0 0">
+        ${m.coll === 'bills'
+      ? `<button class="btn sm out" type="button" onclick="fin.closeModal();fin.record('paybill',{party:'${esc(m.doc.partyId)}'})">Pay this</button>
+             ${!m.doc.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billarrived',{billId:'${esc(m.doc.id)}'})">Bill arrived</button>` : ''}`
+      : `<button class="btn sm in" type="button" onclick="fin.closeModal();fin.record('dealpay',{party:'${esc(m.doc.partyId)}'})">Record payment</button>`}
+      </div>` : ''}
+    </div>`).join('');
+
+  const settled = s.settled.map(x => `
+    <div class="docrow" style="display:block">
+      <div><b>${esc(x.who || 'Party')}</b> — ${docLink(x)} <span class="small">${fmt(x.amt)} of ${fmt(x.total)}</span></div>
+      <div class="small muted">${x.outstanding <= 0.5 ? 'Closed in full.' : `${fmt(x.outstanding)} still open on it.`}
+        ${x.madeNo ? `Raised by <a href="#" onclick="event.preventDefault();fin.openTxn('${esc(x.madeBy)}')">#${String(x.madeNo).padStart(4, '0')}</a>.` : ''}</div>
+    </div>`).join('');
+
+  return `
+    <h3 style="margin-top:16px">Where this stands</h3>
+    ${s.made.length ? `<p class="small muted" style="margin:0 0 6px">This entry raised ${s.made.length === 1 ? 'a document' : 'documents'}. No money moved on this entry — the payment is its own entry.</p>${made}` : ''}
+    ${s.settled.length ? `<p class="small muted" style="margin:${s.made.length ? '12px' : '0'} 0 6px">This entry settled:</p>${settled}` : ''}`;
 }
 
 function attachmentGrid(t) {
@@ -1103,6 +1222,8 @@ function openTxn(id) {
           <td class="n">${l.cr ? fmt(l.cr) : ''}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td>Total</td><td class="n">${fmt(t.totals?.dr)}</td><td class="n">${fmt(t.totals?.cr)}</td></tr></tfoot>
       </table></div>
+
+      ${settlementBlock(t)}
 
       <h3 style="margin-top:16px">Attachments</h3>
       <div id="drawerAtts">${attachmentGrid(t)}</div>
@@ -1177,7 +1298,7 @@ function startEvent(key, preset = {}, label = null) {
 }
 
 window.fin = {
-  go, repaint,
+  go, repaint, toggleModule,
 
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
 
