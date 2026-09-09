@@ -16,6 +16,20 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
 const BASE = process.argv[2] || 'https://admin.threepin.in';
+
+// This suite signs in as the real account and posts real entries into the real books. It used
+// to default to production, which is how a fortnight of iterating on it turned into thousands
+// of reads and hundreds of writes against the live ledger. Pointing it at production is still
+// allowed — it is the only place some of this can be checked — but it now has to be asked for
+// out loud, so it cannot happen again merely because someone ran the file with no arguments.
+const SCRIPT = 'tests/' + import.meta.url.split('/').pop();
+if (/admin\.threepin\.in/.test(BASE) && !process.env.E2E_ALLOW_LIVE) {
+  console.error('\n  Refusing to run against production.\n');
+  console.error('  This writes to the live ledger and reads the whole book to do it.\n');
+  console.error(`  Against production anyway:  E2E_ALLOW_LIVE=1 node ${SCRIPT}`);
+  console.error(`  Against a local server:      node ${SCRIPT} http://localhost:5173\n`);
+  process.exit(2);
+}
 const SHOTS = process.env.SHOTS || 'C:/Users/3PINRE~1/AppData/Local/Temp/claude/c--Users-3Pin-Realty-Downloads-Thirumal/4259cdc1-a7b1-4f0d-bfe2-0730f72ae471/scratchpad/e2e/';
 const TENANT = 't_3pinrealty';
 const EMAIL = '3pinrentals@gmail.com';

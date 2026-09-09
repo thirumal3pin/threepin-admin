@@ -362,5 +362,41 @@ service cloud.firestore {
       allow read, create, update: if ownsTenantDoc(tid);
       allow delete: if ownsTenantDoc(tid) && resource.data.hasTxns != true;
     }
+
+    // ---------------------------------------------------------------------
+    // The change log. One entry per document touched, appended in the SAME
+    // commit as the change itself: {at, coll, docId, op}.
+    //
+    // This is how a device that has been away catches up without re-reading
+    // the ledger. It holds a cursor into this log and asks for the entries
+    // after it — "what happened while I was gone" — instead of "send me
+    // everything and I will work out what is new". A page opened when nothing
+    // has happened therefore costs one read, and a ledger of any size costs
+    // the same one read.
+    //
+    // It is a SEPARATE collection, and that is the whole point of it. The
+    // obvious alternative is to stamp an updatedAt on each document and query
+    // for stamps newer than the cursor — but every document above that a
+    // client may not freely rewrite would then need its rule widened to admit
+    // that stamp, and the txns rule in particular exists to hold a posted
+    // entry to exactly two mutable fields. Sync is not a good enough reason to
+    // make an accounting invariant more permissive. Nothing above this line
+    // changed to make the log work, and nothing above this line has to change
+    // again when the sync engine does.
+    //
+    // Append-only, enforced rather than assumed:
+    //   · create is open to the tenant, because every write appends here
+    //   · update is shut — an entry is a record of something that happened,
+    //     and the past does not get edited
+    //   · delete is shut to CLIENTS, so a device cannot erase the evidence of
+    //     a change others have not collected yet. The nightly cron prunes
+    //     entries older than the retention window through the Admin SDK,
+    //     which bypasses these rules; a client whose cursor is older than
+    //     that window reads the books afresh instead.
+    // ---------------------------------------------------------------------
+    match /finance/{tid}/_changes/{entryId} {
+      allow read, create: if ownsTenantDoc(tid);
+      allow update, delete: if false;
+    }
   }
 }

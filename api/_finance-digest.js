@@ -16,7 +16,9 @@
 // (Firebase-auth'd), and ?force=weekly|monthly|renewals on POST runs one
 // report on demand regardless of the day.
 
+import { Timestamp } from 'firebase-admin/firestore';
 import { getDb, verifyCrmUser, sendEmail } from './_bot-shared.js';
+import { loadBooks } from './_finance-snapshot.js';
 import {
   A, setState, blank, num, esc, bal, pl, cashPosition, partyBalances,
   fmt, ym, addMonths, mlabel, prepaidLeft, serviceRunRate,
@@ -78,11 +80,20 @@ const SUBCOLLECTIONS = ['txns', 'parties', 'deals', 'subscriptions', 'loans', 'a
 
 async function loadFinanceState(db) {
   const root = db.doc(FINANCE_ROOT);
-  const [settingsSnap, ...snaps] = await Promise.all([
+
+  // The book comes from the compacted snapshot plus whatever changed since it was built,
+  // not from re-reading every collection. Reading them whole cost one Firestore read per
+  // document in the ledger, every night, growing for ever — and once the browser stopped
+  // doing that (see SYNC ENGINE in finance-assets/finance-sync.js) this cron was by a wide
+  // margin the most expensive thing left in the project. loadBooks() falls back to exactly
+  // the full read this replaced if the snapshot is missing or unreadable, so the digest
+  // cannot be taken down by its own cache.
+  const [settingsSnap, books] = await Promise.all([
     root.get(),
-    ...SUBCOLLECTIONS.map(c => root.collection(c).get()),
+    loadBooks(db, TENANT_ID, SUBCOLLECTIONS, Timestamp),
   ]);
-  const docsOf = name => snaps[SUBCOLLECTIONS.indexOf(name)].docs.map(d => ({ id: d.id, ...d.data() }));
+  console.log(`finance digest: books loaded in ${books.reads} reads${books.cold ? ' (cold — snapshot rebuilt)' : ''}`);
+  const docsOf = name => books.byColl[name] || [];
 
   const base = blank();
   const settings = { ...base.settings, ...(settingsSnap.exists ? settingsSnap.data() : {}) };

@@ -281,7 +281,41 @@ function dangerSection(s) {
     <div class="actions">
       <button class="btn" type="button" onclick="finAdmin.addAccount()">Add a category</button>
       <button class="btn" type="button" onclick="fin.sync.seedFinance().then(()=>fin.toast('Chart checked'))">Re-check seed</button>
+    </div>
+
+    <h2>Offline copy</h2>
+    <p class="small muted">This device keeps its own copy of the books so the page opens instantly
+    and only asks Firestore for what has changed since last time. The copy checks itself against
+    the server once a day and re-reads anything that disagrees — but if a figure ever looks wrong,
+    check it now rather than wondering.</p>
+    <div class="actions">
+      <button class="btn" type="button" onclick="finAdmin.verifyCache()">Check against the server</button>
+      <button class="btn" type="button" onclick="finAdmin.rebuildCache()">Re-read everything</button>
     </div>`;
+}
+
+// Compares what this device holds against Firestore's own count of each collection and
+// re-reads any that disagree. Costs about a dozen reads — count() is an aggregation, billed
+// per thousand documents rather than per document.
+export async function verifyCache() {
+  toast('Checking…');
+  try {
+    const repaired = await SY.verifyNow();
+    if (repaired === null) toast('This browser keeps no offline copy — nothing to check');
+    else if (repaired.length) toast(`Repaired: ${repaired.join(', ')}`);
+    else toast('Everything on this device matches the server');
+  } catch (e) {
+    toast(e.message || 'Could not check');
+  }
+}
+
+// The escape hatch: throw the local copy away and read the books again from scratch. Costs a
+// full read, which is what every page load used to cost, so it is a button and not automatic.
+export async function rebuildCache() {
+  const ok = await confirmDialog(
+    'Re-read the whole ledger from Firestore? Nothing is lost — this only rebuilds this device\'s copy.');
+  if (!ok) return;
+  await SY.resetCache();
 }
 
 export function mountSettings() { /* Inputs are read on save. */ }
@@ -457,6 +491,9 @@ function updateOpeningSummary() {
 
 if (typeof window !== 'undefined') {
   window.finAdmin = {
+    verifyCache,
+    rebuildCache,
+
     async saveProfile() {
       try {
         await SY.saveSettings(collect('profileForm'));
