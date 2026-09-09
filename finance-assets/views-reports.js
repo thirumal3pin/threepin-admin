@@ -5,6 +5,7 @@
 // wants. All of it is derived by finance-core.js; nothing is recomputed here.
 
 import {
+  isUndone,
   ACCOUNTS, A, fmt, esc, num, today, ym, addMonths, mlabel, fyOf,
   pl, bal, ledger, trialBalance, balanceSheet, getState, pname, dname, taxProvision,
   cashProfitBridge, scopeMode, scopeLabel, scoped, cashBook, lastDayOfMonth,
@@ -189,7 +190,7 @@ function breakEvenBlock(month) {
     <div class="grid g3">
       ${stat('Fixed cost a month', fmt(b.fixed), { sub: b.fixedCash < b.fixed ? `${fmt(b.fixedCash)} of it actually leaves the bank` : 'All of it leaves the bank' })}
       ${stat('Margin on what you sell', b.basedOn ? b.marginPct + '%' : '—', { sub: b.basedOn ? `From the last ${b.basedOn} month${b.basedOn === 1 ? '' : 's'} you traded` : 'Not enough history yet' })}
-      ${stat('Income needed to break even', b.need ? fmt(b.need) : '—', { hero: true, sub: 'Before the month makes anything' })}
+      ${stat('Income needed to break even', b.need ? fmt(b.need) : '—', { key: true, sub: 'Before the month makes anything' })}
       ${stat(b.covered ? 'Past break-even by' : 'Short of break-even by', fmt(Math.abs(b.gap)), { cls: b.covered ? 'pos' : 'neg', sub: `${fmt(b.actual)} earned so far` })}
     </div>
     <details class="card pad0 bucket">
@@ -285,7 +286,7 @@ function cashBookSection() {
       ${stat('Opening', fmt(b.opening))}
       ${stat('Money in', fmt(b.in), { cls: 'pos' })}
       ${stat('Money out', fmt(b.out), { cls: b.out > 0.5 ? 'neg' : '' })}
-      ${stat('Closing', fmt(b.closing), { hero: true })}
+      ${stat('Closing', fmt(b.closing), { key: true })}
     </div>
     ${b.rows.length ? table(
       `<th>What</th><th>Date</th><th class="n">In</th><th class="n">Out</th><th class="n">Balance</th>`,
@@ -295,7 +296,7 @@ function cashBookSection() {
         <td class="n" data-label="In">${r.in ? fmt(r.in) : '—'}</td>
         <td class="n" data-label="Out">${r.out ? fmt(r.out) : '—'}</td>
         <td class="n" data-label="Balance">${fmt(r.after)}</td></tr>`).join(''),
-      `<tr><td colspan="2" data-label="Totals">Totals</td><td class="n">${fmt(b.in)}</td><td class="n">${fmt(b.out)}</td><td class="n">${fmt(b.closing)}</td></tr>`,
+      `<tr><td colspan="2">Totals</td><td class="n" data-label="In">${fmt(b.in)}</td><td class="n" data-label="Out">${fmt(b.out)}</td><td class="n" data-label="Closing">${fmt(b.closing)}</td></tr>`,
       { stack: true })
       : empty('No money moved in this period.')}`;
 }
@@ -542,7 +543,7 @@ function balanceSheetFull() {
     <h2>Balance sheet
       ${bs.balanced ? tag('balances ✓', 'ok') : tag('out by ' + fmt(bs.diff), 'rev')}
       <span class="small faint">as at ${esc(jTo)}</span></h2>
-    <div class="grid g1" style="grid-template-columns:1fr 1fr">
+    <div class="grid two-up">
       <div class="card pad0">
         <div class="tbl-wrap"><table>
           <thead><tr><th>What the business owns</th><th class="n">Amount</th></tr></thead>
@@ -662,6 +663,8 @@ function registerSection() {
     </details>`;
 }
 
+const pairNo = id => { const x = st().txns.find(t => t.id === id); return x?.no ? '#' + String(x.no).padStart(4, '0') : '—'; };
+
 function journalRows() {
   return st().txns
     .filter(t => t.date >= jFrom && t.date <= jTo)
@@ -674,9 +677,9 @@ function journalSection() {
     <h2>General journal <span class="small faint">${rows.length} entries</span></h2>
     ${rows.length ? table(
     `<th>Date</th><th>Entry</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th>`,
-    rows.map(t => t.lines.map((l, i) => `<tr class="click" onclick="fin.openTxn('${esc(t.id)}')">
+    rows.map(t => t.lines.map((l, i) => `<tr class="click${isUndone(t) ? ' undone' : ''}" onclick="fin.openTxn('${esc(t.id)}')">
         <td class="nowrap small">${i === 0 ? esc(t.date) : ''}</td>
-        <td>${i === 0 ? esc(t.desc) : ''}</td>
+        <td>${i === 0 ? esc(t.desc) + (t.reversedBy ? ` <span class="tag rev">reversed by ${esc(pairNo(t.reversedBy))}</span>` : t.reversalOf ? ` <span class="tag rev">reversal of ${esc(pairNo(t.reversalOf))}</span>` : '') : ''}</td>
         <td class="small">${esc(A[l.acc]?.code || l.acc)} · ${esc(A[l.acc]?.name || l.acc)}</td>
         <td class="n">${l.dr ? fmt(l.dr) : ''}</td>
         <td class="n">${l.cr ? fmt(l.cr) : ''}</td>
@@ -690,11 +693,12 @@ const scopeSuffix = () => scopeMode() === 'with' ? '' : '-' + scopeMode() + '-pe
 const scopeRow = () => scopeMode() === 'with' ? [] : [[`Petty-cash scope: ${scopeLabel()}`]];
 
 function journalCsvRows() {
-  const rows = [...scopeRow(), ['Txn', 'Date', 'Description', 'Account code', 'Account name', 'Debit', 'Credit', 'Party', 'Event']];
+  const rows = [...scopeRow(), ['Txn', 'Date', 'Description', 'Account code', 'Account name', 'Debit', 'Credit', 'Party', 'Event', 'Reversal']];
   for (const t of journalRows()) {
+    const rev = t.reversedBy ? 'reversed by ' + pairNo(t.reversedBy) : t.reversalOf ? 'reversal of ' + pairNo(t.reversalOf) : '';
     for (const l of t.lines) {
       rows.push([t.id, t.date, t.desc, l.acc, A[l.acc]?.name || '',
-        num(l.dr) || '', num(l.cr) || '', l.party ? pname(l.party) : '', t.event]);
+        num(l.dr) || '', num(l.cr) || '', l.party ? pname(l.party) : '', t.event, rev]);
     }
   }
   return rows;

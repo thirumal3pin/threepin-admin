@@ -202,18 +202,18 @@ const SCENARIOS = [
     point: 'It is <b>not income</b>. The deal has not happened. It is held for the client and your profit does not move. <span class="small faint">(Cr 2100 Client advances held.)</span>',
   },
   {
-    group: 'Deals — from token to cash', id: 'invoice', button: 'Deal closed — brokerage from the buyer',
-    situation: 'The deal registers. Brokerage is ₹1,00,000 plus GST, the token comes off, the rest is owed.',
+    group: 'Deals — from token to cash', id: 'invoice', button: 'Invoice the buyer',
+    situation: 'The deal registered and the buyer\'s fee is due. Brokerage is ₹1,00,000 plus GST, the token comes off, the rest is owed.',
     event: 'invoice',
     values: { date: '2026-10-06', deal: 'D1', from: 'buyer', amt: 100000, gst: 'yes', gstRate: 18, gstAmt: 18000, total: 118000, tds: 0, adv: 50000, recv: 'later', dueDate: '2026-11-05' },
-    point: '<b>This is the moment income exists.</b> Profit rises by the brokerage; the GST is the government\'s; a numbered invoice with a due date is created and the balance shows on Owed until it is paid. <span class="small faint">(Cr 4010 income, Cr 2200/2201 GST payable, Dr 2100 token, Dr 1100 receivable.)</span>',
+    point: '<b>This is the moment income exists</b> — because the fee is due, not because the deal changed status; mark registration separately with "Deal registered". Profit rises by the brokerage; the GST is the government\'s; a numbered invoice with a due date is created and the balance shows on Owed until it is paid. <span class="small faint">(Cr 4010 income, Cr 2200/2201 GST payable, Dr 2100 token, Dr 1100 receivable.)</span>',
   },
   {
     group: 'Deals — from token to cash', id: 'dealpay',
     situation: 'Prakash Builders pays the ₹23,600 market-study invoice, three weeks later.',
     event: 'dealpay',
     values: () => ({ date: '2026-10-27', party: 'P7', amt: 23600, via: '1000', alloc: allocate(23600, openInvoices('P7'), invoiceOutstanding).rows }),
-    point: 'Cash in, receivable down, <b>profit unchanged</b> — it was counted at registration. The payment is <b>allocated to the invoice</b>, which is now marked paid. Pay half and the invoice shows part-paid; pay more and the extra is held for the client. <span class="small faint">(Dr 1000, Cr 1100; allocation recorded on the invoice.)</span>',
+    point: 'Cash in, receivable down, <b>profit unchanged</b> — it was counted when the invoice was raised. The payment is <b>allocated to the invoice</b>, which is now marked paid. Pay half and the invoice shows part-paid; pay more and the extra is held for the client. <span class="small faint">(Dr 1000, Cr 1100; allocation recorded on the invoice.)</span>',
   },
   {
     group: 'Deals — from token to cash', id: 'settle-refund',
@@ -500,8 +500,8 @@ function startItems() {
       </div>
       <p class="small muted">The difference between layers is where the answers live. <i>Expected vs billed</i> is the variance on the Services tab. <i>Billed vs paid</i> is the Owed tab. <i>Cash vs profit</i> is the Overview.</p>`),
     item('Colours', `
-      <h2>Green in, red out</h2>
-      <p>Every action is marked by direction before you read a word of it: <span class="dirtag dir-in">Money in</span> <span class="dirtag dir-out">Money out</span> <span class="dirtag dir-move">Move money</span> <span class="dirtag dir-fix">Correction</span> <span class="dirtag dir-setup">Set up</span>. The same colour runs down the edge of the form and the confirmation, so a red form is always money leaving and a green one always money arriving. Grey moves your own money between pockets — never a cost. Amber corrects something already recorded.</p>`),
+      <h2>Green in, rust out</h2>
+      <p>Every action is marked by direction before you read a word of it: <span class="dirtag dir-in">Money in</span> <span class="dirtag dir-out">Money out</span> <span class="dirtag dir-move">Move money</span> <span class="dirtag dir-fix">Correction</span> <span class="dirtag dir-setup">Set up</span>. The same colour sits in the tag beside the form's title, on the save bar and on the confirmation, so a rust-tagged form is always money leaving and a green one always money arriving. Grey moves your own money between pockets — never a cost. Amber corrects something already recorded.</p>`),
     item('Where to look for what', `
       <h2>Where to look for what</h2>
       ${table(`<th style="width:26%">If you want</th><th>Go to</th>`, [
@@ -615,9 +615,14 @@ function screenItems() {
     screen({
       name: 'Record', group: 'Daily',
       asks: 'Something happened — how do I put it in?',
-      body: 'The only screen that writes to the books. Two tiles split everything by direction, then chips narrow it down. Pick what happened in plain words; the double entry is worked out and shown before you save.',
+      body: 'The only screen that writes to the books. Type what happened, or tap it under Your usual — the four to six things you record most. Six groups answer "what is this about?": a client or deal, a vendor or purchase, staff or government, your own money, a recurring cost you are setting up, or something to adjust. The everyday actions of each group are laid out; rarer ones sit under "more". The colour on each button still tells you which way money moves. Pick what happened in plain words; the double entry is worked out and shown before you save.',
       on: [
-        ['Money in / Money out tiles', 'The first choice. Everything else is filtered by it.'],
+        ['Search', 'Type a word — rent, EMI, token — and the matching actions appear. Enter opens the first.'],
+        ['Your usual', 'What you have recorded most in the last month. Fills itself.'],
+        ['Group chips', 'Show only one group. All shows the everyday actions from every group.'],
+        ['The amount', 'The first box on every form, big enough to read across a desk.'],
+        ['More details', 'The fold under the main fields: category, bill number, GST, note. Open it when the bill has those.'],
+        ['Preview (phone)', 'The button beside Save opens what saving will do, with its own Save.'],
         ['The form', 'Only the fields that apply to your answers. A field appears when it becomes relevant and disappears when it stops.'],
         ['Posting strip', 'From which account, to which account, with codes, and what it does to profit — before you save.'],
         ['The journal preview', 'Both sides of the entry in full, for anyone who wants to check it.'],
@@ -680,12 +685,12 @@ function screenItems() {
       body: 'Two tabs. Deals is the pipeline with each deal\'s money in one place: tokens held, brokerage earned, costs borne, what is left. Invoices is every tax invoice and credit note raised, numbered in sequence.',
       on: [
         ['Expected brokerage', 'Seller side and buyer side, and the month you expect it to close. Feeds the projection, never the books.'],
-        ['Token held', 'Money taken before registration, adjusted against the invoice when the deal closes.'],
+        ['Token held', 'Money taken before an invoice exists; adjusted against the invoice, refunded, or kept.'],
         ['Deal costs', 'EC, patta, legal, travel — with who bears them.'],
         ['Net on the deal', 'Brokerage earned less the costs booked against it.'],
         ['Invoice status', 'Open, part-paid, settled, or reversed by a credit note, with the outstanding amount, not the face value.'],
       ],
-      doThis: 'Open a deal when you take it on. Record the token when it arrives. Record <b>Deal closed</b> on the day it registers — that is the day income exists.',
+      doThis: 'Open a deal when you take it on. Record the token when it arrives. Mark it registered on the day the deed is signed. Invoice each side when its fee is due — usually that same day. Record each payment as it comes; the deal shows Settled when nothing is owed and nothing is held.',
       behind: 'Deals carry expSeller, expBuyer and expMonth. The invoice document holds base, CGST, SGST, IGST, total, paid, dueDate and its allocations. dealFigures() and dealFunnel() read them back.',
     }),
     screen({
@@ -874,7 +879,7 @@ function step(n, title, body, who) {
 function sopItems() {
   return [
     item('Every day', `<h2>Every day</h2>${step(1, 'Record what happened, as it happens',
-      'Money in or out, a bill received, a token taken — open <b>Record</b> and enter it. Attach a photo of the bill to the entry itself, so the evidence and the number never get separated. The form checks every field and shows you the double entry before you save.', 'Under a minute per entry.')}`),
+      'A payment, a bill received, a token taken — open <b>Record</b>, type a word or tap it under Your usual, and enter the amount first. Attach a photo of the bill to the entry itself, so the evidence and the number never get separated. The form checks every field; on a phone the Preview button beside Save shows the double entry before you save.', 'Under a minute per entry.')}`),
     item('Every week', `<h2>Every week</h2>
       ${step(2, 'Empty the petty cash box', 'Record → <b>Petty cash vouchers</b>. Up to three at once. Then check the box balance on Overview matches the notes in the drawer.')}
       ${step(3, 'Record each recurring cost for the month', 'Recurring tab → <b>Record this month</b> (or <b>Record all due</b> at month-end). Paid, or not paid yet — put it on Owed. Enter the real amount; if it differs from what you expected, say why. If the price is changing, set the new expected amount there and then. Salaries open the salary form, because they carry TDS and PF rather than GST.')}
@@ -887,28 +892,30 @@ function sopItems() {
     item('Once a year', `<h2>Once a year</h2>${step(9, 'Close the financial year',
       'Reports → switch to <b>By financial year</b> and download the P&L. Books → export the year\'s journal and the JSON backup. Hand both to your CA with the bank statements. Ask them about the items listed under "What to confirm with your CA" in the FAQ.')}
       ${note('<b>If you only do one thing:</b> reconcile monthly. Everything else can be caught up later from bills and statements. Books that have never been checked against a bank statement cannot be caught up — you have no way of knowing what is missing.')}`),
-    item('Which button', `<h2>Which button? — money out</h2>
+    item('Which button', `<h2>Which button? — expenses, bills and your own money</h2>
       ${table(`<th>What happened</th><th>Use</th>`, [
-      ['Paid on the spot — rent, fuel, a print job', '<b>Expense paid now</b>'],
-      ['Got a bill, will pay later', '<b>Bill received — pay later</b>, then <b>Pay a bill</b> when you do'],
-      ['A subscription was charged or invoiced this month', '<b>Service — record this month\'s bill</b>'],
-      ['Spent on one particular deal (EC, patta, lawyer)', '<b>Cost for a deal</b> — choose who bears it'],
+      ['Paid on the spot — rent, fuel, a print job', '<b>Expense — paid now</b>'],
+      ['Got a bill, will pay later', '<b>Bill received — pay later</b>, then <b>Pay a vendor bill</b> when you do'],
+      ['A subscription was charged or invoiced this month', '<b>Record this month\'s recurring cost</b>'],
+      ['Spent on one particular deal (EC, patta, lawyer)', '<b>Cost on a deal</b> — choose who bears it'],
       ['Bought something that lasts over a year', '<b>Buy an asset</b>'],
-      ['Small cash from the box', '<b>Petty cash vouchers</b>'],
-      ['Paid from your own pocket for the company', '<b>Director paid a cost personally</b>'],
-      ['Paid the card bill / moved cash to the box', '<b>Move money</b> — not a cost'],
+      ['Small cash from the box', '<b>Petty cash spends</b>'],
+      ['Paid from your own pocket for the company', '<b>Paid personally by the director</b>'],
+      ['Paid staff', '<b>Salary / bonus</b> — under Salaries & taxes'],
+      ['Paid GST, TDS or PF', '<b>Pay GST / TDS / PF to government</b> — under Salaries & taxes; not a cost'],
+      ['Paid the card bill / moved cash to the box', '<b>Transfer</b> — under Bank, cards & loans; not a cost'],
       ['Paid an EMI', '<b>Pay an EMI</b> — only the interest is a cost'],
-      ['Paid GST, TDS or PF', '<b>Pay to government</b> — not a cost'],
-      ['Vendor refunded you or sent a credit note', '<b>Vendor refunded you / credit note</b>'],
+      ['Vendor refunded you or sent a credit note', '<b>Vendor refund / credit note received</b>'],
     ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join(''))}
-      <h2>Which button? — money in</h2>
+      <h2>Which button? — deals and clients</h2>
       ${table(`<th>What happened</th><th>Use</th>`, [
-      ['A client gave a token or advance before registration', '<b>Token / advance received</b> — not income'],
-      ['The deal registered', '<b>Deal closed — brokerage earned</b> — this is the income; the invoice is raised'],
-      ['A client paid what they owe', '<b>Client pays what they owe</b> — matched to their invoices'],
+      ['A client gave a token or advance before you invoiced them', '<b>Token / advance received</b> — not income'],
+      ['The sale deed registered', '<b>Deal registered</b> — the date; no money, no income yet'],
+      ['A side\'s brokerage is due', '<b>Invoice the buyer / seller</b> — this is the income; the invoice is raised'],
+      ['A client paid what they owe', '<b>Client payment received</b> — matched to their invoices'],
       ['Consultancy, a referral fee, interest', '<b>Other income</b> — invoice optional'],
-      ['Capital or a director\'s loan came in', '<b>Capital / director loan received</b> — never income'],
-      ['A bank or NBFC loan came in', '<b>Bank / NBFC loan</b> — creates the EMI schedule'],
+      ['Capital or a director\'s loan came in', '<b>Capital / director loan received</b> — under Bank, cards & loans; never income'],
+      ['A bank or NBFC loan came in', '<b>New bank / NBFC loan</b> — creates the EMI schedule'],
     ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join(''))}`),
   ];
 }
@@ -922,10 +929,15 @@ const sopTab = () => sopItems().map(i => i.html).join('');
 
 function actionItems() {
   const out = [];
+  // A button listed in two groups (dealcost) is documented once, under the first.
+  const seen = new Set();
   for (const [group, items] of CHOOSER) {
     for (const it of items) {
       const ev = EV[it.key];
       if (!ev) continue;
+      const sig = it.key + '|' + JSON.stringify(it.preset || {});
+      if (seen.has(sig)) continue;
+      seen.add(sig);
       const fields = withSample(() => describeFields(it.key, it.preset || {}));
       const html = `
         <div class="card guide-action">
@@ -1269,7 +1281,7 @@ function tokenFlowChart() {
       ${arrow(344, 118, 396, 168)}
 
       ${box(400, 16, 206, 50, '#FFFFFF', '#E7E1D7', 'Refunded', 'Cash out · profit untouched')}
-      ${box(400, 80, 206, 50, '#FFFFFF', '#E7E1D7', 'Adjusted on the invoice', 'Becomes income at registration')}
+      ${box(400, 80, 206, 50, '#FFFFFF', '#E7E1D7', 'Adjusted on the invoice', 'Becomes income when invoiced')}
       ${box(400, 144, 206, 50, '#FDF1E3', '#F9C88A', 'Forfeited', 'Income now, less GST')}
     </svg>`;
 }
@@ -1522,7 +1534,7 @@ const FAQ = [
     ['I made a profit but the bank went down. Where did the money go?',
       'Reports → <b>Profit is not cash</b> answers exactly this. It starts from the profit for the month and walks through every real movement — money clients still owe, bills you have not paid, assets bought, loan repaid, tax collected — and ends at the cash that actually moved. If anything is left unexplained the app shows it rather than hiding it.'],
     ['A client paid me. Why has my profit not gone up?',
-      'Because it already did, on the day the deal registered and you raised the invoice. That is when you earned the money. The payment is just the cash arriving afterwards, matched to that invoice. If receiving it increased profit too, you would be counting the same brokerage twice. <span class="small faint">Accrual basis — income is recognised when earned, not when received.</span>'],
+      'Because it already did, on the day you raised the invoice — which should be the day the fee fell due, normally registration. That is when you earned the money. The payment is just the cash arriving afterwards, matched to that invoice. If receiving it increased profit too, you would be counting the same brokerage twice. <span class="small faint">Accrual basis — income is recognised when earned, not when received.</span>'],
     ['My bank balance is healthy but the app says I made a loss. Which is right?',
       'Both. Cash includes money that is not yours — client tokens you are holding, GST you owe the government, bills you have not paid yet. That is what <b>"free to use"</b> on the Overview is for: it strips those out. A loss with cash in the bank usually means you are holding other people\'s money.'],
     ['What can I hand my CA at the end of the year?',

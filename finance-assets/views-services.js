@@ -171,7 +171,7 @@ export function renderServices() {
             <button class="btn ghost sm" type="button" onclick="fin.record('subcancel',{sub:'${esc(sub.id)}'})">Stop or pause</button>
           </td></tr>`;
     }).join(''),
-    `<tr><td colspan="2" data-label="Expected this month">Expected this month</td><td class="n">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`, { stack: true })
+    `<tr><td colspan="2">Expected this month</td><td class="n" data-label="Expected / mo">${fmt(expectedNow)}</td><td colspan="4"></td></tr>`, { stack: true })
       : empty('No active services.')}
 
     ${active.some(x => x.payMode === 'monthly') ? `
@@ -313,16 +313,16 @@ export function renderAssets() {
     ${inUse.length ? table(
     `<th>Item</th><th>Bought</th><th class="n">Cost</th><th class="n">Per month</th><th class="n">Written down</th><th class="n">Value left</th><th></th>`,
     inUse.map(a => `<tr>
-        <td><b>${esc(a.name)}</b><br><span class="small faint">${(a.depreciated || []).length} of ${a.life} months</span></td>
-        <td class="nowrap small">${esc(a.date)}</td>
-        <td class="n">${fmt(a.cost)}</td>
-        <td class="n">${fmt(a.monthly)}</td>
-        <td class="n">${fmt(written(a))}</td>
-        <td class="n">${fmt(num(a.cost) - written(a))}</td>
+        <td class="lead"><b>${esc(a.name)}</b><br><span class="small faint">${(a.depreciated || []).length} of ${a.life} months</span></td>
+        <td class="nowrap small" data-label="Bought">${esc(a.date)}</td>
+        <td class="n" data-label="Cost">${fmt(a.cost)}</td>
+        <td class="n" data-label="Per month">${fmt(a.monthly)}</td>
+        <td class="n" data-label="Written down">${fmt(written(a))}</td>
+        <td class="n" data-label="Value left">${fmt(num(a.cost) - written(a))}</td>
         <td class="n"><button class="btn ghost sm" type="button" onclick="fin.record('assetdispose',{assetId:'${esc(a.id)}'})">Sell / scrap</button></td>
       </tr>`).join(''),
-    `<tr><td colspan="2">Totals</td><td class="n">${fmt(totals.cost)}</td><td class="n">${fmt(totals.monthly)}</td>
-       <td class="n">${fmt(totals.written)}</td><td class="n">${fmt(totals.left)}</td><td></td></tr>`)
+    `<tr><td colspan="2">Totals</td><td class="n" data-label="Cost">${fmt(totals.cost)}</td><td class="n" data-label="Per month">${fmt(totals.monthly)}</td>
+       <td class="n" data-label="Written down">${fmt(totals.written)}</td><td class="n" data-label="Value left">${fmt(totals.left)}</td><td></td></tr>`, { stack: true })
       : empty('Nothing in use.')}
 
     ${gone.length ? `

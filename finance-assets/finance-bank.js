@@ -11,6 +11,7 @@
 // read .xlsx without a bundler or an xlsx library, neither of which this static site has.
 
 import {
+  isUndone,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, expectedFor, pname, fmt, A, num, bal } from './finance-core.js';
 
 // ═══════ DELIMITED TEXT (CSV / TSV) ═══════
@@ -663,6 +664,8 @@ export function autoMatch(rows, txns, account) {
   // account to a net zero (an internal correction) can never correspond to a statement line.
   const cands = [];
   (txns || []).forEach((t, i) => {
+    // A reversed duplicate must never win a statement line from the real entry.
+    if (isUndone(t)) return;
     const movement = txnMovement(t, account, sign);
     if (movement === null || Math.abs(movement) < 0.005) return;
     cands.push({ key: t.id ?? ('#' + i), txn: t, movement, day: dayNum(t.date) });
@@ -731,6 +734,7 @@ export function bookEntriesWithoutStatement(txns, rows, account, from, upto) {
     if (from && d < from) continue;
     if (upto && d > upto) continue;
     if (claimed.has(t.id)) continue;
+    if (isUndone(t)) continue;                 // a void pair is not two entries the bank missed
     const movement = txnMovement(t, account, sign);
     if (movement === null || Math.abs(movement) < 0.005) continue;
     out.push({ ...t, movement });
@@ -749,7 +753,7 @@ export function bookEntriesWithoutStatement(txns, rows, account, from, upto) {
 // outstanding on the card — which is how a card statement prints its closing balance too.
 export function reconcileSummary(rows, txns, account, closingBalance, asOf) {
   const statementClosing = num(closingBalance);
-  const bookBalance = bal(account, { upto: asOf });
+  const bookBalance = bal(account, { upto: asOf, skipUndone: true });
   const difference = statementClosing - bookBalance;
   const unmatchedCount = (rows || []).filter(r => r.status !== 'matched').length;
   return {
@@ -859,7 +863,7 @@ export function suggestEntry(row, state, account, rules) {
     if (hit) return { event: 'dealpay', preset: { date: row.date, party: hit.partyId, amt: amount, via: account, method, ref: row.ref || '' }, why: `Open invoice ${hit.invoiceNo} — ${pname(hit.partyId)}`, confidence: nearAmt(invoiceOutstanding(hit), amount) ? 'high' : 'medium' };
     // A client on an open deal, but no invoice yet: money ahead of registration is a token.
     const client = (state.parties || []).find(p => p.type === 'client' && mentions(row.desc, p.name));
-    const dealOf = client && (state.deals || []).find(d => d.status === 'open' && (d.buyer?.partyId === client.id || d.seller?.partyId === client.id));
+    const dealOf = client && (state.deals || []).find(d => d.status !== 'cancelled' && (d.buyer?.partyId === client.id || d.seller?.partyId === client.id));
     if (dealOf) return { event: 'token', preset: { date: row.date, deal: dealOf.id, from: dealOf.buyer?.partyId === client.id ? 'buyer' : 'seller', amt: amount, via: account, method }, why: `${client.name} is on an open deal — a token?`, confidence: 'medium' };
   }
   // 7. Someone you pay, named in the narration.
@@ -897,6 +901,7 @@ export function flagDuplicates(rows, txns, account) {
     const target = sign > 0 ? num(r.credit) - num(r.debit) : num(r.debit) - num(r.credit);
     const rd = dayNum(r.date);
     for (const t of txns || []) {
+      if (isUndone(t)) continue;
       const mv = txnMovement(t, account, sign);
       if (mv === null || Math.abs(mv - target) > TOL) continue;
       if (Math.abs(dayNum(t.date) - rd) > 7) continue;

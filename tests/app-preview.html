@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Finance — preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Instrument+Serif&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="../finance-assets/style.css">
+</head>
+<body>
+<!-- The real finance page's shell, verbatim, with four months of a plausible brokerage's
+     books built by posting real events through the test harness — no login, no Firestore.
+     Serve the repo root (python -m http.server 5199) and open /tests/app-preview.html, or
+     run tests/app-preview.mjs to screenshot every screen at desktop and phone width. -->
+
+<div class="login" id="loginScreen"></div>
+
+<div id="appRoot" style="display:none">
+  <header class="top">
+    <div class="brand"><img src="../logo.jpg" alt="3 PIN Realty" width="30" height="30">3 PIN Realty <span class="small">Finance</span></div>
+    <div class="spacer"></div>
+    <span class="who" id="whoami"></span>
+    <div class="cur-tog scope-tog" id="scopeTog" role="group" aria-label="Petty cash scope">
+      <span class="lbl">Petty cash</span>
+      <button type="button" data-scope="with" class="on" aria-pressed="true" onclick="fin.setScope('with')">All</button>
+      <button type="button" data-scope="without" aria-pressed="false" onclick="fin.setScope('without')">Without</button>
+      <button type="button" data-scope="only" aria-pressed="false" onclick="fin.setScope('only')">Only</button>
+    </div>
+    <div class="cur-tog" id="curTog" role="group" aria-label="Display currency">
+      <button type="button" data-cur="INR" class="on" aria-pressed="true" onclick="fin.setCurrency('INR')">INR</button>
+      <button type="button" data-cur="USD" aria-pressed="false" onclick="fin.setCurrency('USD')">USD</button>
+    </div>
+    <button class="btn ghost sm" type="button">Sign out</button>
+  </header>
+  <div class="shell">
+    <nav class="side" id="sidenav" aria-label="Sections"></nav>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <nav class="bottom" id="bottomnav" aria-label="Sections"></nav>
+  <div class="sheet" id="moreSheet" onclick="if(event.target===this) financeCloseSheet()">
+    <div class="sheet-inner" role="dialog" aria-modal="true" aria-label="More sections">
+      <div class="sheet-head"><h3>All sections</h3><button class="btn ghost sm" type="button" aria-label="Close" onclick="financeCloseSheet()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div class="sheet-grid" id="sheetGrid"></div>
+      <button class="btn ghost block sheet-signout" type="button" onclick="financeLogout()">Sign out</button>
+    </div>
+  </div>
+
+  <!-- The phone's preview of what saving will do: the Record screen's preview card is moved in
+       here on open and back on close, so there is exactly one preview to keep right. -->
+  <div class="sheet pv-sheet" id="pvSheet" onclick="if(event.target===this) fin.closePreview()">
+    <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pvTitle">
+      <div class="sheet-head"><h3 id="pvTitle" tabindex="-1">What saving this does</h3><button class="btn ghost sm" type="button" aria-label="Close" onclick="fin.closePreview()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="pvHost"></div>
+      <div class="sheet-foot"><button class="btn" type="button" onclick="fin.closePreview()">Back</button><div class="spacer"></div><button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button></div>
+    </div>
+  </div>
+</div>
+<div class="ov" id="ov" onclick="if(event.target===this) financeCloseModal()"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module">
+import { getState, partyBalances } from '../finance-assets/finance-core.js';
+import { fresh, save, reverse, runMonthEnd, byName, party } from './_harness.mjs';
+
+window.__seedErrors = [];
+const post = (k, v) => { try { return save(k, v); } catch (e) { window.__seedErrors.push(k + ': ' + e.message); return null; } };
+
+// app.js pulls in finance-sync.js, whose Firebase auth listener fires with no user and resets
+// the state to blank. The books are therefore built AFTER that has happened, not before.
+await import('../finance-assets/app.js');
+await new Promise(r => setTimeout(r, 900));
+
+fresh({ booksStartDate: '2026-06-01', state: 'Tamil Nadu' });
+
+post('funding', { date: '2026-06-01', kind: '3000', who: 'Thirumal', amt: 600000 });
+post('bankloan', { date: '2026-06-05', lender: { __new: true, name: 'Bajaj Finance', type: 'lender' }, purpose: 'Working capital', amt: 300000, rate: 14, n: 24, fee: 0 });
+post('transfer', { date: '2026-06-02', kind: '1000>1010', amt: 8000 });
+post('asset', { date: '2026-06-15', vendor: { __new: true, name: 'Croma', type: 'vendor' }, name: 'Laptop', amt: 72000, gst: 'no', life: 36, how: 'bill' });
+
+post('newdeal', { date: '2026-06-03', nickname: 'Karthik — Nungambakkam 2BHK', buyer: { __new: true, name: 'Karthik', phone: '98400 11111' }, seller: { __new: true, name: 'Mrs. Meenakshi' }, expBuyer: 100000, expSeller: 100000 });
+post('newdeal', { date: '2026-06-10', nickname: 'Lakshmi — Velachery villa', seller: { __new: true, name: 'Lakshmi', phone: '98400 22222' }, expSeller: 250000 });
+post('newdeal', { date: '2026-07-01', nickname: 'Suresh — Adyar flat', buyer: { __new: true, name: 'Suresh' }, expBuyer: 80000 });
+post('newdeal', { date: '2026-08-15', nickname: 'Anand — OMR plot', buyer: { __new: true, name: 'Anand' }, seller: { __new: true, name: 'Ravi Builders' }, expBuyer: 120000, expSeller: 60000 });
+const D1 = byName(getState().deals, 'Karthik — Nungambakkam 2BHK')?.id;
+const D2 = byName(getState().deals, 'Lakshmi — Velachery villa')?.id;
+const D4 = byName(getState().deals, 'Anand — OMR plot')?.id;
+
+post('token', { date: '2026-06-22', deal: D1, from: 'buyer', amt: 50000, via: '1000' });
+post('token', { date: '2026-08-20', deal: D4, from: 'buyer', amt: 25000, via: '1000' });
+
+post('subnew', { date: '2026-06-01', name: 'Office rent', kind: 'rent', acc: '5000', vendor: { __new: true, name: 'Landlord', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 35000, via: '1000', start: '2026-06' });
+post('subnew', { date: '2026-06-01', name: 'CRM software', kind: 'rent', acc: '5080', vendor: { __new: true, name: 'Zoho', type: 'vendor' }, payMode: 'monthly', billing: 'invoice', amt: 2400, via: '1000', start: '2026-06' });
+const rent = byName(getState().subs, 'Office rent');
+const crm = byName(getState().subs, 'CRM software');
+for (const m of ['2026-06', '2026-07', '2026-08', '2026-09']) {
+  if (rent) post('confirmcharge', { sub: rent.id, month: m, date: m + '-05', result: 'paid', via: '1000', amt: 35000, gst: 'no', rcm: 'no' });
+  if (crm && m < '2026-09') post('confirmcharge', { sub: crm.id, month: m, date: m + '-03', result: 'paid', via: '1000', amt: 2400, gst: 'no', rcm: 'no' });
+}
+
+for (const m of ['2026-06', '2026-07', '2026-08']) {
+  post('salary', { date: m + '-28', emp: { __new: true, name: 'Priya' }, kind: '5010', gross: 25000, tds: 0, pf: 0 });
+}
+post('expense', { date: '2026-06-20', desc: 'Meta ads — June', acc: '5090', amt: 12000, rcm: 'charged', gstRate: 18, gstAmt: 2160, total: 14160, gstType: 'inter', vgstin: '29AABCM1234A1Z5', vinv: 'META-0620', via: '2300', vendor: { __new: true, name: 'Meta', type: 'vendor' } });
+post('expense', { date: '2026-07-25', desc: 'Meta ads — July', acc: '5090', amt: 9000, rcm: 'charged', gstRate: 18, gstAmt: 1620, total: 10620, gstType: 'inter', vgstin: '29AABCM1234A1Z5', vinv: 'META-0725', via: '2300', vendor: { __new: true, name: 'Meta', type: 'vendor' } });
+post('transfer', { date: '2026-07-30', kind: '1000>2300', amt: 24780 });
+post('expense', { date: '2026-09-06', desc: 'Coffee — client meeting', acc: '5030', amt: 684, rcm: 'no', via: '1010' });
+post('petty', { date: '2026-09-08', a1: 120, c1: '5030', d1: 'Tea for clients', a2: 300, c2: '5100', d2: 'Courier', a3: 0 });
+
+post('bill', { date: '2026-08-12', vendor: { __new: true, name: 'Balaji & Co', type: 'vendor' }, desc: 'Title opinion — Lakshmi', acc: '5120', amt: 15000, rcm: 'charged', gstRate: 18, gstAmt: 2700, total: 17700, gstType: 'intra', vgstin: '33AAAAB0000A1Z5', vinv: 'BC-118' });
+post('paybill', { date: '2026-09-01', party: party('Balaji & Co'), amt: 10000, via: '1000' });
+post('dealcost', { date: '2026-08-14', deal: D2, what: 'EC & patta', amt: 8000, gst: 'no', bear: 'self', how: '1010' });
+
+post('register', { date: '2026-07-09', deal: D1, note: 'Doc 4412/2026' });
+post('register', { date: '2026-08-19', deal: D2 });
+post('invoice', { date: '2026-07-10', deal: D1, from: 'buyer', amt: 100000, gst: 'yes', gstRate: 18, gstAmt: 18000, total: 118000, tds: 0, adv: 50000, recv: 'later', dueDate: '2026-08-09' });
+post('dealpay', { date: '2026-07-18', party: party('Karthik'), amt: 68000, via: '1000' });
+post('invoice', { date: '2026-08-20', deal: D2, from: 'seller', amt: 250000, gst: 'yes', gstRate: 18, gstAmt: 45000, total: 295000, tds: 0, adv: 0, recv: 'later', dueDate: '2026-09-19' });
+post('dealpay', { date: '2026-09-02', party: party('Lakshmi'), amt: 150000, via: '1000' });
+post('otherinc', { date: '2026-09-08', party: { __new: true, name: 'Prakash Builders', type: 'client' }, desc: 'Valuation report', acc: '4020', amt: 10000, gst: 'yes', gstRate: 18, gstAmt: 1800, total: 11800, via: '1000' });
+
+const loan = getState().loans[0];
+if (loan) for (const d of ['2026-07-05', '2026-08-05', '2026-09-05']) post('emi', { date: d, loan: loan.id, via: '1000', extra: 0 });
+post('statutory', { date: '2026-08-20', kind: 'gst', amt: 15000, late: 0 });
+
+// A mistake and its reversal — the owner's point about the Transactions page.
+const wrong = post('expense', { date: '2026-09-03', desc: 'Parking — entered twice by mistake', acc: '5180', amt: 500, rcm: 'no', via: '1000' });
+if (wrong) { try { reverse(wrong); } catch (e) { window.__seedErrors.push('reverse: ' + e.message); } }
+
+for (const m of ['2026-06', '2026-07', '2026-08']) { try { runMonthEnd(m); } catch (e) { window.__seedErrors.push('monthEnd ' + m + ': ' + e.message); } }
+
+getState().settingsExists = true;
+window.__st = getState;
+window.__bal = partyBalances;
+window.onFinanceAuthChange({ email: 'preview@3pin' }, 't_preview');
+window.financeLogout = () => {};
+window.__ready = true;
+</script>
+</body>
+</html>

@@ -95,7 +95,9 @@ eq('Token converted, none left held', bal('2100', { deal: deal1 }), 0);
 eq('GST collected is owed, not income', gstOutputBal(), 18000);
 eq('…split evenly into CGST and SGST for a Tamil Nadu property', bal('2200'), 9000);
 eq('Client owes the balance', bal('1100'), 118000 - 50000);
-check('Deal is marked registered', s.deals.find(d => d.id === deal1).status === 'registered');
+check('Invoicing does not change the deal\'s status', s.deals.find(d => d.id === deal1).status === 'open');
+save('register', { date: '2026-10-06', deal: deal1 });
+check('Deal registered marks it registered', s.deals.find(d => d.id === deal1).status === 'registered');
 
 const karthik = party('Mr. Karthik');
 const inv1 = s.invoices.find(i => i.partyId === karthik);

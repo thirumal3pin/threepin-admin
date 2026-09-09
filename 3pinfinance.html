@@ -76,8 +76,19 @@
   <!-- The "More" sheet carries the tabs that do not fit across the bottom bar on a phone. -->
   <div class="sheet" id="moreSheet" onclick="if(event.target===this) financeCloseSheet()">
     <div class="sheet-inner" role="dialog" aria-modal="true" aria-label="More sections">
-      <h3>All sections</h3>
+      <div class="sheet-head"><h3>All sections</h3><button class="btn ghost sm" type="button" aria-label="Close" onclick="financeCloseSheet()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <div class="sheet-grid" id="sheetGrid"></div>
+      <button class="btn ghost block sheet-signout" type="button" onclick="financeLogout()">Sign out</button>
+    </div>
+  </div>
+
+  <!-- The phone's preview of what saving will do: the Record screen's preview card is moved in
+       here on open and back on close, so there is exactly one preview to keep right. -->
+  <div class="sheet pv-sheet" id="pvSheet" onclick="if(event.target===this) fin.closePreview()">
+    <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pvTitle">
+      <div class="sheet-head"><h3 id="pvTitle" tabindex="-1">What saving this does</h3><button class="btn ghost sm" type="button" aria-label="Close" onclick="fin.closePreview()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="pvHost"></div>
+      <div class="sheet-foot"><button class="btn" type="button" onclick="fin.closePreview()">Back</button><div class="spacer"></div><button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button></div>
     </div>
   </div>
 </div>

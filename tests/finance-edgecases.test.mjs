@@ -260,7 +260,7 @@ section('A deal billed to the seller and the buyer, with a token from each');
   eq('…and no IGST', bal('2202', { deal: dealO }), 0);
   eq('Total income on the deal is exactly the two sides', bal('4000', { deal: dealO }) + bal('4010', { deal: dealO }), 500000);
   check('Exactly one brokerage entry per side', s.txns.filter(t => t.event === 'invoice' && t.meta.deal === dealO).length === 2);
-  check('The deal is marked registered', byName(s.deals, 'Anitha & Farook — OMR villa').status === 'registered');
+  check('Invoicing both sides leaves the status alone', byName(s.deals, 'Anitha & Farook — OMR villa').status === 'open');
   check('Both invoices are on record against the deal', s.invoices.filter(i => i.dealId === dealO).length === 2);
 }
 

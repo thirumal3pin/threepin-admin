@@ -76,7 +76,7 @@ export function renderPetty() {
           <td class="n" data-label="Out">${r.out ? fmt(r.out) : '—'}</td>
           <td class="n" data-label="Box after">${fmt(r.after)}</td>
         </tr>`).join(''),
-        `<tr><td colspan="2" data-label="Totals">Totals</td><td class="n">${fmt(rows.reduce((a, r) => a + r.in, 0))}</td><td class="n">${fmt(rows.reduce((a, r) => a + r.out, 0))}</td><td></td></tr>`,
+        `<tr><td colspan="2">Totals</td><td class="n" data-label="In">${fmt(rows.reduce((a, r) => a + r.in, 0))}</td><td class="n" data-label="Out">${fmt(rows.reduce((a, r) => a + r.out, 0))}</td><td></td></tr>`,
         { stack: true });
     })()}
 
@@ -200,7 +200,7 @@ function sideBlock(title, s, side) {
       ${stat('Already late', fmt(s.overdue.amt), { cls: s.overdue.amt > 0.5 ? 'neg' : '', sub: s.overdue.amt > 0.5 ? 'Should have been settled before this month' : 'Nothing behind' })}
       ${stat('Still a guess', fmt(s.estimated.amt), { sub: guessSub })}
       ${stat(side === 'out' ? 'Still to pay' : 'Still to come in', fmt(side === 'out' ? s.committed : s.documented), {
-    hero: true,
+    key: true,
     sub: side === 'out' ? 'Due, late and guesses — everything still to go out' : 'Invoices only. Deals you hope to close are not counted here',
   })}
     </div>
@@ -284,8 +284,8 @@ export function renderMonth() {
       ${stat('Net still to settle', signed(p.net.toSettle), { raw: true, sub: 'Invoices to collect less bills to pay' })}
       ${stat('Net still a guess', signed(p.net.estimated), { raw: true, sub: 'Income guesses less cost guesses' })}
       ${picMonth > ym(today())
-      ? stat('Profit the books show', '—', { hero: true, sub: 'Nothing recorded yet — this month has not happened' })
-      : stat('Profit the books show', signed(p.net.booked), { raw: true, hero: true, sub: 'Earned less incurred, whoever has paid' })}
+      ? stat('Profit the books show', '—', { key: true, sub: 'Nothing recorded yet — this month has not happened' })
+      : stat('Profit the books show', signed(p.net.booked), { raw: true, key: true, sub: 'Earned less incurred, whoever has paid' })}
     </div>
     ${past ? note(`${esc(mlabel(picMonth))} is behind you, and what is unsettled is shown <b>as it stands today</b>, not as it stood at the end of that month. Anything still a guess never happened, or was never recorded — the Recurring tab shows which months are missing.`, 'info') : ''}
 

@@ -9,6 +9,7 @@
 // view modules never need to import app.js back (which would be a cycle).
 
 import {
+  isUndone,
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
@@ -106,11 +107,13 @@ function modulesOpen() {
 function saveModules() {
   try { localStorage.setItem(NAV_KEY, JSON.stringify([...modulesOpen()])); } catch { /* private window */ }
 }
+let justOpened = null;
 function toggleModule(g) {
   const open = modulesOpen();
-  if (open.has(g)) open.delete(g); else open.add(g);
+  if (open.has(g)) open.delete(g); else { open.add(g); justOpened = g; }
   saveModules();
   repaint();
+  justOpened = null;
   // Focus stays where it was pressed, so the keyboard does not jump to the top.
   const el = document.querySelector(`[data-mod="${CSS.escape(g)}"]`);
   if (el) el.focus();
@@ -266,7 +269,7 @@ window.financeCloseModal = closeModal;
 window.financeCloseSheet = () => document.getElementById('moreSheet').classList.remove('open');
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); window.financeCloseSheet(); }
+  if (e.key === 'Escape') { closeModal(); window.financeCloseSheet(); window.fin?.closePreview?.(); }
 });
 
 window.addEventListener('hashchange', routeFromHash);
@@ -297,7 +300,7 @@ function repaint() {
     const holdsCurrent = g === here;
     const open = holdsCurrent || modulesOpen().has(g);
     return `
-    <section class="mod ${open ? 'open' : ''} ${holdsCurrent ? 'here' : ''}">
+    <section class="mod ${open ? 'open' : ''} ${holdsCurrent ? 'here' : ''} ${justOpened === g ? 'just-opened' : ''}">
       <button type="button" class="mod-h" data-mod="${esc(g)}" aria-expanded="${open}" aria-controls="${modSlug(g)}"
         title="${esc(MODULE_NOTE[g] || '')} — click to ${open ? 'close' : 'open'}"
         onclick="fin.toggleModule('${esc(g)}')">
@@ -412,9 +415,7 @@ function overview() {
       ${stat('Free to use', fmt(cash.free), { sub: 'Cash after vendor dues and client tokens' })}
     </div>
 
-    <div class="actions"><button class="btn" type="button" onclick="fin.go('month')">Open this month — paid, invoiced, due and still a guess</button></div>
-
-    <h2>Where the money is</h2>
+    <h2 class="h2row">Where the money is <a class="more" href="#month">This month — paid, invoiced, due ›</a></h2>
     <div class="grid g3">
       ${stat('Bank', fmt(cash.bank), { drill: { accs: '1000', note: 'Every movement through the bank since the books began.' } })}
       ${stat('Petty cash', fmt(cash.petty), { drill: { accs: '1010' } })}
@@ -429,18 +430,15 @@ function overview() {
       ${stat('Tokens held', fmt(cash.tokens), { sub: 'Not yours until the deal registers', drill: { accs: '2100', flip: true } })}
       ${stat('GST due', fmt(cash.gstDue), { cls: cash.gstDue > 0 ? 'neg' : '', sub: 'Net of input credit' })}
     </div>
-    <div class="actions"><button class="btn" type="button" onclick="fin.go('owed')">Open Owed both ways</button></div>
-
-    <h2>Services</h2>
+    <h2 class="h2row">Services <a class="more" href="#owed">Owed, both ways ›</a></h2>
     <div class="grid g3">
       ${stat('Recurring costs', fmt(svc.monthly) + '/mo', { sub: 'Expected vs actual on the Budget tab' })}
-      ${stat('Petty cash in the box', fmt(bal('1010')), { cls: bal('1010') < -0.5 ? 'neg' : '', drill: { accs: '1010' } })}
       ${stat('Prepaid', fmt(svc.prepaidUnused), { sub: 'Sitting with vendors', drill: { accs: '1200' } })}
       ${stat('Active', String(svc.active.length), { sub: 'Services running' })}
     </div>
 
     <h2>Coming up</h2>
-    <div class="grid g1" style="grid-template-columns:1fr 1fr">
+    <div class="grid two-up">
       <div class="card">
         <h3>Compliance dates</h3>
         <ul class="checklist">
@@ -466,7 +464,7 @@ function overview() {
       slice of anything you paid for upfront. Running it twice is harmless: the second run posts nothing.</p>
       <div class="actions" style="margin-bottom:0">
         <input type="month" id="meMonth" value="${prev}" style="max-width:180px" aria-label="Month to close">
-        <button class="btn primary" type="button" onclick="fin.monthEnd()">Run month-end</button>
+        <button class="btn" type="button" onclick="fin.monthEnd()">Run month-end</button>
       </div>
       ${done.length
       ? `<p class="small muted" style="margin-top:12px">Completed: ${done.map(x => `${esc(mlabel(x))}${s.monthEnds[x].reconciled ? ' ✓' : ''}`).join(' · ')}</p>`
@@ -476,103 +474,240 @@ function overview() {
 
 // ═══════ RECORD ═══════
 //
-// One screen for everything that happens. The chooser picks the event; the form fills it; the
-// preview is a live dry run of what saving will do — the only thing standing between the
-// user and a wrong entry. Save stays disabled until the journal balances, is disabled again
-// the instant it is pressed, and is replaced by an unmistakable result panel afterwards.
+// One screen for everything that happens. It opens on a search box and "your usual" — the
+// handful of things this owner records most — with each group's everyday actions laid out
+// beneath and the rare ones folded away by name. The form leads with the amount, keeps the
+// detail questions one fold down, and stays quiet until it is touched. The preview is a live
+// dry run of what saving will do — the only thing standing between the user and a wrong
+// entry — beside the form on a desk and one tap from Save on a phone. Save stays disabled
+// until the journal balances, is disabled again the instant it is pressed, and is replaced by
+// an unmistakable result panel afterwards.
+//
+// The old first question — "money in, or money out?" — is gone. A third of what gets recorded
+// moves no cash at all, and several things that do point the wrong way for what the owner
+// means. The groups now answer "what is this about?", which is the question every accounting
+// package asks first; direction survives as the colour on each card.
 
-let evKey = null;
-let evLabel = null;
-let dirPick = 'all';
+let evKey = null, evLabel = null, evId = null;
+let groupPick = '';           // '' = every group
+let findQ = '';
 let evPreset = {};
 let vals = {};
 let pendingFiles = [];
 let saving = false;
 let result = null;
+let saveErr = null;           // a failed save keeps the form and says so above the bar
+let touched = new Set();      // fields the user has been to — errors show only where earned
+let moreOpen = false;
+let rebuilding = false;
+
+// ── the chooser's data ──
+// CHOOSER is plain data: groups of items with a tier — how often the owner reaches for it.
+// An item's id is its key plus its preset, so the two invoice buttons are two things to the
+// usage history. A key listed in two groups is one thing.
+const TIER_ORDER = { daily: 0, weekly: 1, monthly: 2, rarely: 3, rare: 3 };
+const GROUPS = CHOOSER.map(([label, items]) => {
+  const g = { id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), label, items: [] };
+  g.items = items.filter(it => EV[it.key]).map(it => ({
+    tier: 'weekly', ...it,
+    id: it.key + (it.preset ? ':' + Object.values(it.preset).join('-') : ''),
+    label: it.label || EV[it.key].title,
+    dir: dirOf(it.key), group: g,
+  }));
+  g.dir = g.items[0]?.dir || 'setup';
+  return g;
+});
+const ITEMS = GROUPS.flatMap(g => g.items);
+const itemById = id => ITEMS.find(it => it.id === id) || null;
+const folded = it => (TIER_ORDER[it.tier] ?? 1) >= 2;
+const dedupe = list => { const seen = new Set(); return list.filter(it => !seen.has(it.id) && seen.add(it.id)); };
+// Zero feature loss is checked, not hoped for.
+{
+  const listed = new Set(ITEMS.map(it => it.key));
+  const missing = Object.keys(EV).filter(k => !listed.has(k));
+  if (missing.length) console.error('Record: events with no button —', missing.join(', '));
+}
+
+// ── your usual ──
+// This device's own history: what was recorded, how often, how recently. Six buttons on a
+// desk, four on a phone. Before there is any history it is the daily tier.
+const USE_KEY = 'fin.rec.usage.v1';
+function usage() { try { return JSON.parse(localStorage.getItem(USE_KEY) || '{}'); } catch { return {}; } }
+function noteUse(id) {
+  if (!id) return;
+  const u = usage(), r = u[id] || { n: 0, last: 0 };
+  r.n += 1; r.last = Date.now(); u[id] = r;
+  try { localStorage.setItem(USE_KEY, JSON.stringify(u)); } catch { /* private window */ }
+}
+function usual(n) {
+  const u = usage(), now = Date.now();
+  // Frequency decays over a month; anything saved today gets a bump, so the second coffee of
+  // the day is first.
+  const score = it => { const r = u[it.id]; if (!r) return 0; const d = (now - r.last) / 864e5; return r.n * Math.exp(-d / 30) + (d < 1 ? 2 : 0); };
+  const all = dedupe(ITEMS);
+  const ranked = all.filter(it => u[it.id]).sort((a, b) => score(b) - score(a)).slice(0, n);
+  const fill = all.filter(it => it.tier === 'daily' && !ranked.includes(it));
+  return [...ranked, ...fill].slice(0, n);
+}
+
+// ── search ──
+const words = q => String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+function matchScore(it, ws) {
+  const hay = [it.label, it.sub, EV[it.key].title, it.group.label, ...(it.kw || [])].join(' ').toLowerCase();
+  if (!ws.every(w => hay.includes(w))) return 0;
+  const label = it.label.toLowerCase();
+  if (label.startsWith(ws[0])) return 4;
+  if (label.split(/\W+/).some(t => t.startsWith(ws[0]))) return 3;
+  // A keyword is what the owner actually types — "rent" for the recurring cost, "EB" for an
+  // expense — and outranks a word that merely happens to appear in a sub-line.
+  if ((it.kw || []).some(k => k.startsWith(ws[0]) || ws.every(w => k.includes(w)))) return 2;
+  return 1;
+}
+function searchItems(q) {
+  const ws = words(q);
+  if (!ws.length) return null;
+  return dedupe(ITEMS.map(it => [it, matchScore(it, ws)]).filter(([, sc]) => sc > 0)
+    .sort((a, b) => b[1] - a[1] || (TIER_ORDER[a[0].tier] ?? 1) - (TIER_ORDER[b[0].tier] ?? 1)).map(([it]) => it));
+}
+const reEsc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function hl(text, ws) {
+  let h = esc(text);
+  for (const w of ws || []) h = h.replace(new RegExp('(' + reEsc(esc(w)) + ')', 'ig'), '<mark>$1</mark>');
+  return h;
+}
+
+function actCard(it, { compact = false, ws = null, showGroup = false } = {}) {
+  return `<button type="button" class="act${compact ? ' compact' : ''} dir-${it.dir}" data-id="${esc(it.id)}" data-tier="${esc(it.tier)}" onclick="fin.pickId('${esc(it.id)}')">
+      <b>${hl(it.label, ws)}</b>${it.sub && !compact ? `<span class="sub">${hl(it.sub, ws)}</span>` : ''}${showGroup ? `<span class="grp">${esc(it.group.label)}</span>` : ''}</button>`;
+}
+
+// The list under the search box: search results as one flat list, or the groups with their
+// everyday actions open and the rest folded behind a row that names what is hidden.
+function chooserBody() {
+  const ws = words(findQ);
+  if (ws.length) {
+    const hits = searchItems(findQ);
+    return hits.length
+      ? `<div class="rec-list rec-hits">${hits.map(it => actCard(it, { ws, showGroup: true })).join('')}</div>`
+      : empty(`Nothing called "<b>${esc(findQ.trim())}</b>". Try a plainer word — rent, salary, token — or pick a group above.`,
+        `<button class="btn" type="button" onclick="fin.findAction('', true)">Clear search</button>`);
+  }
+  const groups = groupPick ? GROUPS.filter(g => g.id === groupPick) : GROUPS;
+  return groups.map(g => {
+    // A group whose every action is monthly or rare has nothing to fold behind: show it all.
+    let open = groupPick ? g.items : g.items.filter(it => !folded(it));
+    let fold = groupPick ? [] : g.items.filter(folded);
+    if (!open.length) { open = g.items; fold = []; }
+    return `<section class="rec-group dir-${g.dir}" data-g="${esc(g.id)}">
+      <div class="eh">${esc(g.label)} <span class="cnt">${g.items.length}</span></div>
+      <div class="rec-list">
+        ${open.map(it => actCard(it)).join('')}
+        ${fold.length ? `<button type="button" class="btn ghost rec-more" aria-expanded="false" onclick="fin.moreIn(this)">${fold.length} more — ${esc(fold.slice(0, 3).map(it => it.label.toLowerCase()).join(', '))}${fold.length > 3 ? '…' : ''}</button>
+        <div class="rec-fold" hidden>${fold.map(it => actCard(it)).join('')}</div>` : ''}
+      </div>
+    </section>`;
+  }).join('');
+}
+
+function chooser() {
+  const n = new Set(ITEMS.map(it => it.id)).size;
+  const usualItems = (!findQ.trim() && !groupPick) ? usual(window.innerWidth >= 1100 ? 6 : 4) : [];
+  return `
+    <div class="rec-head">
+      <h1>Record what happened</h1>
+      <div class="rec-find">
+        <input type="search" id="actFind" placeholder="What happened? rent, token, EMI…" aria-label="Find what to record"
+          autocomplete="off" enterkeyhint="search" value="${esc(findQ)}" oninput="fin.findAction(this.value)" onkeydown="fin.findKey(event)">
+        <button type="button" class="clr" id="actClear" aria-label="Clear search" ${findQ ? '' : 'hidden'} onclick="fin.findAction('', true)"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+    </div>
+    <div class="rec-groups" role="group" aria-label="Show only" id="recGroups">
+      <button type="button" class="chip" aria-pressed="${!groupPick}" data-g="" onclick="fin.pickGroup('')">All <span class="cnt">${n}</span></button>
+      ${GROUPS.map(g => `<button type="button" class="chip dir-${g.dir}" aria-pressed="${groupPick === g.id}" data-g="${esc(g.id)}" onclick="fin.pickGroup('${esc(g.id)}')"><span class="dot"></span>${esc(g.label)} <span class="cnt">${g.items.length}</span></button>`).join('')}
+    </div>
+    <p class="sr-only" id="actCount" aria-live="polite"></p>
+    <section class="rec-usual" id="recUsual" ${usualItems.length ? '' : 'hidden'}>
+      <div class="eh">Your usual</div>
+      <div class="rec-usual-grid">${usualItems.map(it => actCard(it, { compact: true })).join('')}</div>
+    </section>
+    <div id="chooser">${chooserBody()}</div>`;
+}
+
+// Redraws the list without touching the search box, so typing never loses focus.
+function redrawChooser() {
+  const el = document.getElementById('chooser');
+  if (!el) return;
+  el.innerHTML = chooserBody();
+  const usualEl = document.getElementById('recUsual');
+  if (usualEl) usualEl.hidden = !!(findQ.trim() || groupPick) || !usualEl.querySelector('.act');
+  const clr = document.getElementById('actClear');
+  if (clr) clr.hidden = !findQ;
+  document.querySelectorAll('#recGroups .chip').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.g || '') === groupPick)));
+  const count = document.getElementById('actCount');
+  if (count) { const hits = findQ.trim() ? searchItems(findQ) : null; count.textContent = hits ? `${hits.length} match${hits.length === 1 ? '' : 'es'}` : ''; }
+}
+
+const ABOUT_KEY = 'fin.rec.about';
+function aboutOpen() { try { return localStorage.getItem(ABOUT_KEY) !== 'closed'; } catch { return true; } }
+
+function saveErrBlock() {
+  return `<div class="result err" role="alert">
+    <h3>Not saved</h3>
+    <p style="margin:6px 0 0">${esc(saveErr)}</p>
+    <p class="small muted" style="margin:6px 0 0">Nothing was written — your entries are still here.</p>
+    <div class="actions"><button class="btn primary" type="button" onclick="fin.retrySave()">Try again</button></div>
+  </div>`;
+}
 
 function record() {
   if (result) return resultPanel();
-
-  if (!evKey) {
-    return `
-      <h1>Record what happened</h1>
-      <p class="lead">First: did money come in, or go out? Then pick what it was. The bookkeeping is worked out
-      for you and shown before anything is saved.</p>
-      <div class="dir-tiles" role="tablist">
-        <button type="button" role="tab" class="tile dir-in ${dirPick === 'in' ? 'on' : ''}" aria-selected="${dirPick === 'in'}" onclick="fin.pickDir('in')">
-          <i class="fa-solid fa-arrow-down" aria-hidden="true"></i><b>Money in</b><span>Brokerage, payments received, tokens, capital, loans</span></button>
-        <button type="button" role="tab" class="tile dir-out ${dirPick === 'out' ? 'on' : ''}" aria-selected="${dirPick === 'out'}" onclick="fin.pickDir('out')">
-          <i class="fa-solid fa-arrow-up" aria-hidden="true"></i><b>Money out</b><span>Expenses, bills, recurring costs, salaries, assets</span></button>
-      </div>
-      <div class="dir-chips">
-        <button type="button" class="chip dir-move ${dirPick === 'move' ? 'on' : ''}" onclick="fin.pickDir('move')">Move money</button>
-        <button type="button" class="chip dir-setup ${dirPick === 'setup' ? 'on' : ''}" onclick="fin.pickDir('setup')">Set up</button>
-        <button type="button" class="chip dir-fix ${dirPick === 'fix' ? 'on' : ''}" onclick="fin.pickDir('fix')">Fix something</button>
-        <button type="button" class="chip ${dirPick === 'all' ? 'on' : ''}" onclick="fin.pickDir('all')">Everything</button>
-      </div>
-      <div class="field" style="max-width:420px">
-        <input type="search" id="actFind" placeholder="Or find it — rent, token, EMI…" aria-label="Find an action"
-          oninput="fin.findAction(this.value)" autocomplete="off">
-      </div>
-      <div id="chooser">
-      ${CHOOSER.map(([group, items], gi) => `
-        <div class="chooser-group" data-group="${esc(group)}">
-          <div class="eh">${esc(group)}</div>
-          <div class="chooser-grid">
-            ${items.filter(it => EV[it.key]).map((it, ii) =>
-        `<button type="button" class="dir-${dirOf(it.key)}" data-dir="${dirOf(it.key)}" onclick="fin.pickAt(${gi},${ii})">
-                <b>${esc(it.label || EV[it.key].title)}</b>
-                ${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ''}
-              </button>`).join('')}
-          </div>
-        </div>`).join('')}
-      </div>
-      <p id="actNone" class="small faint" hidden>Nothing matches — try another word, or clear the box.</p>`;
-  }
+  if (!evKey) return chooser();
 
   const ev = EV[evKey];
   return `
-    <div class="actions">
-      <button class="btn ghost sm" type="button" onclick="fin.pick(null)">← All actions</button>
+    <div class="rec-bar">
+      <button class="btn ghost sm" type="button" onclick="fin.pick(null)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> All actions</button>
+      ${dirBadge(evKey)}
     </div>
-    <h1>${esc(evLabel || ev.title)} ${dirBadge(evKey)}</h1>
+    <h1 class="rec-title">${esc(evLabel || ev.title)}</h1>
     <div class="record-split dir-${dirOf(evKey)}">
       <div class="form-col">
         <form id="evForm" autocomplete="off" onsubmit="return false" novalidate></form>
         <div id="formProblems"></div>
-
-        <div class="card" style="margin-top:4px">
-          <h3>Attach the bill or receipt</h3>
-          <div class="actions" style="margin-bottom:0">
-            <label class="btn" style="cursor:pointer">📷 Take photo
+        <div class="field attach">
+          <label>Bill photo <span class="faint">(optional)</span></label>
+          <div class="row">
+            <label class="btn"><i class="fa-solid fa-camera" aria-hidden="true"></i> Add photo
               <input type="file" class="js-attach" accept="image/*" capture="environment" hidden></label>
-            <label class="btn" style="cursor:pointer">Choose file
+            <label class="btn ghost">File
               <input type="file" class="js-attach" accept="image/*,application/pdf" multiple hidden></label>
+            <ul class="stage" id="stageList"></ul>
           </div>
-          <ul class="stage" id="stageList"></ul>
-          <p class="small faint" style="margin:8px 0 0">Photos are shrunk before upload, so a bill from your phone camera is fine. Add as many as you like.</p>
+          <div class="hint">Photos are shrunk before upload, so a phone photo of a bill is fine.</div>
         </div>
-
+        <div id="pvDup" class="dup"></div>
+        <div id="saveErr">${saveErr ? saveErrBlock() : ''}</div>
         <div class="save-bar">
-          <div class="sum" id="barSum">Fill in the form to see what it does</div>
+          <div class="sum" id="barSum"><span class="todo">Enter the amount</span></div>
+          <button type="button" class="btn ghost sm pv-open" aria-haspopup="dialog" onclick="fin.openPreview()">Preview</button>
           <button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button>
         </div>
       </div>
 
-      <div class="preview">
+      <div class="preview" id="preview">
         <div class="card">
-          <div class="when">${ev.when}</div>
-          <div id="pvDup"></div>
           <h3>What saving this does</h3>
+          <p class="pv-empty small faint" id="pvEmpty">Enter the amount to see what this does.</p>
           <ul class="effects" id="pvEffects"></ul>
           <div id="pvPosting"></div>
-          <details class="journal">
+          <details class="journal" id="pvJournalWrap">
             <summary>Show the double entry this creates</summary>
             <div id="pvJournal"></div>
           </details>
-        </div>
-        <div class="actions desk-only">
-          <button class="btn primary js-save" type="button" onclick="fin.save()" disabled>Save</button>
+          <details class="journal about" id="pvAbout" ${aboutOpen() ? 'open' : ''}>
+            <summary>About this action</summary>
+            <div class="when">${ev.when}</div>
+          </details>
         </div>
       </div>
     </div>`;
@@ -583,7 +718,12 @@ const dirBadge = key => `<span class="dirtag dir-${dirOf(key)}">${DIR_LABEL[dirO
 
 function mountRecord() {
   if (result) { mountResult(); return; }
-  if (!evKey) { window.fin.findAction(''); return; }
+  if (!evKey) {
+    redrawChooser();
+    // Auto-focus only on a desk: on a phone it would raise the keyboard over the list.
+    if (window.innerWidth >= 860) document.getElementById('actFind')?.focus({ preventScroll: true });
+    return;
+  }
   buildForm();
   document.querySelectorAll('.js-attach').forEach(input => {
     input.addEventListener('change', e => {
@@ -592,6 +732,9 @@ function mountRecord() {
       drawStage();
       updatePreview();
     });
+  });
+  document.getElementById('pvAbout')?.addEventListener('toggle', e => {
+    try { localStorage.setItem(ABOUT_KEY, e.target.open ? 'open' : 'closed'); } catch { /* private window */ }
   });
   drawStage();
 }
@@ -613,40 +756,99 @@ function drawStage() {
   });
 }
 
+// Which fields sit above the fold for each event. Everything else — category, bill number,
+// GST, note — waits under "More details", which names what it holds so nothing feels removed.
+// An event not listed here shows its first four fields. A field the form arrived with already
+// filled (a preset from Owed or a statement line) is always shown, whatever this says; so is
+// anything required, and any field the event marks tier:'core'.
+const CORE = {
+  expense: ['amt', 'desc', 'via', 'date'],
+  dealpay: ['party', 'amt', 'tds', 'alloc', 'via', 'date'],
+  paybill: ['party', 'amt', 'alloc', 'via', 'date'],
+  bill: ['vendor', 'desc', 'amt', 'dueDate', 'date'],
+  billarrived: ['sub', 'month', 'amt', 'date'],
+  confirmcharge: ['sub', 'month', 'result', 'amt', 'via', 'date'],
+  invoice: ['deal', 'from', 'amt', 'gst', 'gstRate', 'adv', 'recv', 'date'],
+  token: ['deal', 'from', 'amt', 'via', 'date'],
+  dealcost: ['deal', 'what', 'amt', 'bear', 'how', 'date'],
+  petty: ['date', 'a1', 'c1', 'd1', 'a2', 'c2', 'd2', 'a3', 'c3', 'd3'],
+  salary: ['emp', 'gross', 'kind', 'date'],
+  emi: ['loan', 'date', 'via'],
+  transfer: ['kind', 'amt', 'date'],
+  statutory: ['kind', 'amt', 'date'],
+  otherinc: ['party', 'desc', 'amt', 'via', 'date'],
+  newdeal: ['nickname', 'seller', 'buyer', 'expSeller', 'expBuyer', 'date'],
+  register: ['deal', 'date', 'note'],
+  settle: ['deal', 'from', 'apply', 'refund', 'keep', 'date'],
+  funding: ['kind', 'who', 'amt', 'date'],
+  director: ['desc', 'amt', 'acc', 'date'],
+};
+// The one figure the owner knows for certain when he opens the screen. It goes first and big.
+const AMOUNT_KEYS = new Set(['amt', 'gross']);
+
+const fmtIN = v => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) && String(v).trim() !== '' ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : String(v ?? ''); };
+const rawIN = v => String(v ?? '').replace(/,/g, '');
+
+// Core first (amount leading), the rest in the engine's order inside the fold.
+function splitFields(fields) {
+  const wanted = CORE[evKey];
+  const isCore = f => f.tier === 'core' || f.required || evPreset[f.k] !== undefined || f.type === 'alloc'
+    || (wanted ? wanted.includes(f.k) : false);
+  let core = fields.filter(f => f.tier !== 'detail' && isCore(f));
+  if (!wanted) core = [...new Set([...fields.slice(0, 4), ...core])];
+  const order = f => AMOUNT_KEYS.has(f.k) ? -1 : (wanted ? (wanted.indexOf(f.k) === -1 ? 99 : wanted.indexOf(f.k)) : fields.indexOf(f));
+  core.sort((a, b) => order(a) - order(b) || fields.indexOf(a) - fields.indexOf(b));
+  const detail = fields.filter(f => !core.includes(f));
+  return { core, detail };
+}
+
+function renderField(f) {
+  const id = 'f_' + f.k;
+  const hint = typeof f.hint === 'function' ? f.hint(vals) : f.hint;
+  const hintHtml = hint ? `<div class="hint">${hint}</div>` : '';
+  const label = `<label for="${id}">${esc(f.label)}</label>`;
+  const errSlot = `<div class="ferr" id="err_${f.k}" hidden></div>`;
+  if (f.type === 'party' || f.type === 'property' || f.type === 'deal') {
+    return `<div class="field" data-field="${f.k}">${label}<div id="pick_${f.k}"></div>${hintHtml}${errSlot}</div>`;
+  }
+  if (f.type === 'alloc') {
+    return `<div class="field" data-field="${f.k}">${label}<div id="alloc_${f.k}"></div>${hintHtml}${errSlot}</div>`;
+  }
+  if (f.type === 'select') {
+    const opts = typeof f.opts === 'function' ? f.opts(vals) : (f.opts || []);
+    const cur = vals[f.k] ?? f.def ?? (opts[0] ? opts[0][0] : '');
+    return `<div class="field" data-field="${f.k}">${label}
+      <select id="${id}" data-k="${f.k}">
+        ${opts.length ? '' : '<option value="">— nothing available —</option>'}
+        ${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+      </select>${hintHtml}${errSlot}</div>`;
+  }
+  const val = vals[f.k] ?? f.def ?? '';
+  if (f.type === 'number' && AMOUNT_KEYS.has(f.k)) {
+    return `<div class="field amt" data-field="${f.k}">${label}
+      <input type="text" inputmode="decimal" enterkeyhint="next" id="${id}" data-k="${f.k}" data-money="1" value="${esc(fmtIN(val))}" ${f.required ? 'required' : ''}><span class="cur" aria-hidden="true">₹</span>
+      ${hintHtml}${errSlot}</div>`;
+  }
+  const type = f.type === 'number' ? 'number' : f.type;
+  return `<div class="field" data-field="${f.k}">${label}
+    <input type="${type}" id="${id}" data-k="${f.k}" value="${esc(val)}"
+      ${f.type === 'number' ? 'inputmode="decimal" step="0.01" min="0"' : ''} ${f.required ? 'required' : ''}>
+    ${hintHtml}${errSlot}</div>`;
+}
+
 function buildForm() {
   const form = document.getElementById('evForm');
   if (!form) return;
   const fields = fieldsFor(evKey, vals);
 
-  form.innerHTML = fields.map(f => {
-    const id = 'f_' + f.k;
-    const hint = typeof f.hint === 'function' ? f.hint(vals) : f.hint;
-    const hintHtml = hint ? `<div class="hint">${hint}</div>` : '';
-    const label = `<label for="${id}">${esc(f.label)}</label>`;
-
-    const errSlot = `<div class="ferr" id="err_${f.k}" hidden></div>`;
-    if (f.type === 'party' || f.type === 'property' || f.type === 'deal') {
-      return `<div class="field" data-field="${f.k}">${label}<div id="pick_${f.k}"></div>${hintHtml}${errSlot}</div>`;
-    }
-    if (f.type === 'alloc') {
-      return `<div class="field" data-field="${f.k}">${label}<div id="alloc_${f.k}"></div>${hintHtml}${errSlot}</div>`;
-    }
-    if (f.type === 'select') {
-      const opts = typeof f.opts === 'function' ? f.opts(vals) : (f.opts || []);
-      const cur = vals[f.k] ?? f.def ?? (opts[0] ? opts[0][0] : '');
-      return `<div class="field" data-field="${f.k}">${label}
-        <select id="${id}" data-k="${f.k}">
-          ${opts.length ? '' : '<option value="">— nothing available —</option>'}
-          ${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}
-        </select>${hintHtml}${errSlot}</div>`;
-    }
-    const val = vals[f.k] ?? f.def ?? '';
-    const type = f.type === 'number' ? 'number' : f.type;
-    return `<div class="field" data-field="${f.k}">${label}
-      <input type="${type}" id="${id}" data-k="${f.k}" value="${esc(val)}"
-        ${f.type === 'number' ? 'inputmode="decimal" step="0.01" min="0"' : ''} ${f.required ? 'required' : ''}>
-      ${hintHtml}${errSlot}</div>`;
-  }).join('');
+  const { core, detail } = splitFields(fields);
+  const names = detail.map(f => f.label.toLowerCase()).slice(0, 4).join(', ') + (detail.length > 4 ? '…' : '');
+  form.innerHTML = core.map(renderField).join('') + (detail.length ? `
+    <details class="more" id="moreDetails" ${moreOpen ? 'open' : ''}>
+      <summary><span class="lbl">More details</span><span class="n">(${detail.length}) — ${esc(names)}</span><span class="flag" id="moreFlag"></span></summary>
+      <div class="body">${detail.map(renderField).join('')}</div>
+    </details>` : '');
+  document.getElementById('moreDetails')?.addEventListener('toggle', e => { moreOpen = e.target.open; });
 
   // Seed any defaults that have not been typed yet, so the preview reflects the visible form.
   // A field that only just appeared (the GST rate, once GST is switched on) gets its default
@@ -671,6 +873,15 @@ function buildForm() {
     for (const k of seeded) EV[evKey].onchange(k, vals);
     syncInputs(null);
   }
+  // A default can reveal a field — GST switched on shows the GST rate. Rebuild once so it is
+  // on the form from the first paint, not after the next keystroke; without this the form
+  // could say "GST % must be above zero" with no GST % box anywhere to type into.
+  const nowKeys = fieldsFor(evKey, vals).map(f => f.k).join('|');
+  if (nowKeys !== fields.map(f => f.k).join('|') && !rebuilding) {
+    rebuilding = true;
+    try { buildForm(); } finally { rebuilding = false; }
+    return;
+  }
 
   // Text and number fields never rebuild the form, so typing never loses focus: the event's
   // onchange runs (that is where the GST maths lives) and any OTHER input whose value it
@@ -683,8 +894,14 @@ function buildForm() {
   const visibleKeys = () => fieldsFor(evKey, vals).map(f => f.k).join('|');
   let shown = visibleKeys();
   form.querySelectorAll('input[data-k]').forEach(el => {
+    // The amount shows Indian grouping when it is not being edited, and never stores it.
+    if (el.dataset.money) {
+      el.addEventListener('focus', () => { el.value = rawIN(el.value); });
+      el.addEventListener('blur', () => { el.value = fmtIN(el.value); });
+    }
+    el.addEventListener('blur', () => { if (String(el.value).trim() !== '' || touched.has(el.dataset.k)) { touched.add(el.dataset.k); updatePreview(); } });
     el.oninput = () => {
-      vals[el.dataset.k] = el.value;
+      vals[el.dataset.k] = el.dataset.money ? rawIN(el.value) : el.value;
       EV[evKey].onchange?.(el.dataset.k, vals);
       syncInputs(el);
       const now = visibleKeys();
@@ -702,6 +919,7 @@ function buildForm() {
   });
   form.querySelectorAll('select[data-k]').forEach(el => {
     el.onchange = () => {
+      touched.add(el.dataset.k);
       vals[el.dataset.k] = el.value;
       EV[evKey].onchange?.(el.dataset.k, vals);
       buildForm();
@@ -787,17 +1005,28 @@ function paintProblems(problems) {
   document.querySelectorAll('#evForm .ferr').forEach(el => { el.hidden = true; el.textContent = ''; el.className = 'ferr'; });
   document.querySelectorAll('#evForm .field').forEach(el => el.classList.remove('has-err', 'has-warn'));
   const general = [];
+  let inFold = 0;
   for (const p of problems) {
     const slot = p.k ? document.getElementById('err_' + p.k) : null;
     if (!slot) { general.push(p); continue; }
     if (slot.textContent) continue;
+    const foldedAway = !!slot.closest('details.more');
+    // An error is shown under a field only once the user has been to it — a fresh form is not
+    // wrong, it is empty. The save bar says what is still needed. Warnings are advice, and
+    // show at once.
+    if (!p.warn) {
+      if (foldedAway) inFold++;
+      if (!touched.has(p.k)) continue;
+    }
     slot.textContent = p.msg;
     slot.hidden = false;
     slot.classList.add(p.warn ? 'warn' : 'err');
     slot.closest('.field')?.classList.add(p.warn ? 'has-warn' : 'has-err');
   }
   const gen = document.getElementById('formProblems');
-  if (gen) gen.innerHTML = general.map(p => `<div class="ferr ${p.warn ? 'warn' : 'err'}" style="margin-bottom:10px">${esc(p.msg)}</div>`).join('');
+  if (gen) gen.innerHTML = general.filter(p => p.warn || touched.size).map(p => `<div class="ferr ${p.warn ? 'warn' : 'err'}" style="margin-bottom:10px">${esc(p.msg)}</div>`).join('');
+  const flag = document.getElementById('moreFlag');
+  if (flag) flag.textContent = inFold ? `${inFold} to fill` : '';
 }
 
 function syncInputs(except) {
@@ -805,7 +1034,8 @@ function syncInputs(except) {
     if (el === except) return;
     const want = vals[el.dataset.k];
     if (want === undefined || want === null) return;
-    if (String(el.value) !== String(want)) el.value = want;
+    const shown = el.dataset.money && document.activeElement !== el ? fmtIN(want) : String(want);
+    if (String(el.value) !== shown) el.value = shown;
   });
 }
 
@@ -904,29 +1134,35 @@ function updatePreview() {
 
   const problems = validateEvent(evKey, vals);
   const blocking = problems.filter(p => !p.warn);
+  const warned = problems.some(p => p.warn);
   paintProblems(problems);
 
   const lines = (out.lines || []).filter(l => num(l.dr) || num(l.cr));
-  const dr = lines.reduce((s, l) => s + num(l.dr), 0);
-  const cr = lines.reduce((s, l) => s + num(l.cr), 0);
+  const dr = lines.reduce((sum, l) => sum + num(l.dr), 0);
+  const cr = lines.reduce((sum, l) => sum + num(l.cr), 0);
   const balanced = Math.abs(dr - cr) < 0.5;
   const createsOnly = !lines.length && ((out.docs || []).length || (out.updates || []).length);
+  const nothingYet = !!out.incomplete && !lines.length;
 
-  effectsEl.innerHTML = (out.effects || []).map(e => `<li>${e}</li>`).join('');
+  // Nothing typed yet: one quiet line, not an arrow pointing at "enter the amount".
+  const emptyEl = document.getElementById('pvEmpty');
+  if (emptyEl) emptyEl.hidden = !nothingYet;
+  effectsEl.hidden = nothingYet;
+  effectsEl.innerHTML = nothingYet ? '' : (out.effects || []).map(e => `<li>${e}</li>`).join('');
 
   // The same event, the same total, the same date, saved in the last day — almost always the
   // second press of a button rather than the same thing happening twice.
+  const twin = lines.length ? getState().txns.find(t =>
+    t.event === evKey && !t.reversedBy && t.date === (vals.date || today()) &&
+    Math.abs(num(t.totals?.dr) - dr) < 0.5 && Date.now() - num(t.createdAt) < 86400000) : null;
   const dupEl = document.getElementById('pvDup');
-  if (dupEl) {
-    const twin = lines.length ? getState().txns.find(t =>
-      t.event === evKey && !t.reversedBy && t.date === (vals.date || today()) &&
-      Math.abs(num(t.totals?.dr) - dr) < 0.5 && Date.now() - num(t.createdAt) < 86400000) : null;
-    dupEl.innerHTML = twin ? note(`<b>Looks like a duplicate.</b> Entry ${entryNo(twin)} — ${esc(twin.desc)}, ${fmt(twin.totals.dr)} — was saved ${Math.max(1, Math.round((Date.now() - twin.createdAt) / 60000))} min ago. Save only if it really happened twice.`) : '';
-  }
+  if (dupEl) dupEl.innerHTML = twin ? note(`<b>Looks like a duplicate.</b> Entry ${entryNo(twin)} — ${esc(twin.desc)}, ${fmt(twin.totals.dr)} — was saved ${Math.max(1, Math.round((Date.now() - twin.createdAt) / 60000))} min ago. Save only if it really happened twice.`) : '';
 
   const stripEl = document.getElementById('pvPosting');
-  if (stripEl) stripEl.innerHTML = postingStrip(lines, out);
+  if (stripEl) stripEl.innerHTML = nothingYet ? '' : postingStrip(lines, out);
 
+  const jw = document.getElementById('pvJournalWrap');
+  if (jw) jw.hidden = nothingYet;
   journalEl.innerHTML = lines.length ? `
     <div class="tbl-wrap"><table>
       <thead><tr><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead>
@@ -942,15 +1178,32 @@ function updatePreview() {
     : '<p class="small faint">This does not move any money — it only sets something up.</p>';
 
   const canSave = !out.incomplete && !blocking.length && (balanced || createsOnly) && (lines.length || createsOnly) && !saving;
-  document.querySelectorAll('.js-save').forEach(b => { b.disabled = !canSave; });
+  document.querySelectorAll('.js-save').forEach(b => { b.disabled = !canSave; if (!saving) b.textContent = twin ? 'Save anyway' : 'Save'; });
 
   const bar = document.getElementById('barSum');
   if (bar) {
-    const files = pendingFiles.length ? ` · ${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'}` : '';
-    bar.innerHTML = blocking.length ? `<span class="neg">${esc(blocking[0].msg)}</span>`
-      : out.incomplete ? esc(out.effects?.[0] || 'Fill in the form')
-        : lines.length ? `<b class="${dirOf(evKey) === 'in' ? 'pos' : dirOf(evKey) === 'out' ? 'neg' : ''}">${fmt(dr)}</b>${balanced ? '' : ' · does not balance'}${files}`
-          : 'Ready — this does not move money' + files;
+    const files = pendingFiles.length ? ` · ${pendingFiles.length} ${pendingFiles.length === 1 ? 'photo' : 'files'}` : '';
+    const chips = (warned ? '<span class="chip">check</span>' : '') + (twin ? '<span class="chip">possible duplicate</span>' : '');
+    const fields = fieldsFor(evKey, vals);
+    const nameOf = k => fields.find(f => f.k === k)?.label?.toLowerCase() || k;
+    if (saving) {
+      bar.innerHTML = '<span class="todo">Saving…</span>';
+    } else if (blocking.length) {
+      // Neutral until the user has been to the field; the bar names what is still needed.
+      const shown = blocking.filter(p => touched.has(p.k));
+      bar.innerHTML = shown.length ? `<span class="neg">${esc(shown[0].msg)}</span>`
+        : blocking.length === 1 ? `<span class="todo">${esc(blocking[0].msg)}</span>`
+          : `<span class="todo">${blocking.length} to fill — ${esc([...new Set(blocking.map(p => nameOf(p.k)))].slice(0, 3).join(', '))}</span>`;
+    } else if (out.incomplete) {
+      bar.innerHTML = `<span class="todo">${esc(String(out.effects?.[0] || 'Fill in the form').replace(/<[^>]+>/g, ''))}</span>`;
+    } else if (lines.length) {
+      const to = lines.find(l => num(l.dr) > 0);
+      const from = lines.find(l => num(l.cr) > 0);
+      const where = to ? ` → ${A[to.acc]?.name || to.acc}${from ? ' · from ' + (A[from.acc]?.name || from.acc) : ''}` : '';
+      bar.innerHTML = `<b>${fmt(dr)}</b>${esc((out.desc || '').slice(0, 48))}${esc(where)}${chips}${files}`;
+    } else {
+      bar.innerHTML = `<b>Ready</b>${esc(String(out.effects?.[0] || 'Nothing posts').replace(/<[^>]+>/g, '').slice(0, 80))}${chips}${files}`;
+    }
   }
 }
 
@@ -965,7 +1218,7 @@ function resultPanel() {
   const r = result;
   if (r.kind === 'err') {
     return `
-      <div class="result err">
+      <div class="result err" role="alert">
         <h3>Not saved</h3>
         <p style="margin:6px 0 0">${esc(r.message)}</p>
         <p class="small muted" style="margin:6px 0 0">Nothing was written. Your entries are still in the form.</p>
@@ -980,21 +1233,26 @@ function resultPanel() {
   const uploads = r.uploads || [];
   const failed = uploads.filter(u => u.status === 'err').length;
   const busy = uploads.some(u => u.status === 'busy' || u.status === 'pending');
+  // "Record another expense" — the daily loop is one tap, and it says what it repeats.
+  const noun = String(title).split(/ — | \/ | \(/)[0].toLowerCase().split(' ').slice(0, 3).join(' ');
+  // A stale undo is a trap: after half an hour on this panel it is gone; View entry stays.
+  const stale = Date.now() - num(r.savedAt) > 30 * 60 * 1000;
 
   return `
-    <div class="result ${failed ? 'warn' : 'ok'} dir-${dirOf(r.key)}">
-      <h3>${failed ? 'Saved — but a file did not upload' : 'Saved ✓'} ${dirBadge(r.key)}</h3>
-      ${r.no ? `<div class="eno">Entry ${entryNo(r)}${r.invoiceNo ? ` · Invoice ${esc(r.invoiceNo)}` : ''}</div>` : ''}
+    <div class="result ${failed ? 'warn' : 'ok'} dir-${dirOf(r.key)}" role="status">
+      <h3><svg class="tick" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        ${failed ? 'Saved — but a file did not upload' : 'Saved'} ${dirBadge(r.key)}</h3>
       ${r.total ? `<div class="big">${fmt(r.total)}</div>` : ''}
       <div>${esc(r.desc || title)}</div>
+      ${r.no ? `<div class="eno" style="margin-top:4px">Entry ${entryNo(r)}${r.invoiceNo ? ` · Invoice ${esc(r.invoiceNo)}` : ''}</div>` : ''}
 
       ${uploads.length ? `<ul class="stage" id="uplList">${uploads.map(uploadRow).join('')}</ul>` : ''}
 
       <div class="actions">
-        <button class="btn primary" type="button" onclick="fin.again()">Record another</button>
+        <button class="btn primary" type="button" id="againBtn" onclick="fin.again()">Record another ${esc(noun)}</button>
         <button class="btn" type="button" onclick="fin.pick(null)">Something else</button>
-        ${r.txnId ? `<button class="btn" type="button" onclick="fin.openTxn('${r.txnId}')">View entry</button>` : ''}
-        ${r.txnId && !busy ? `<button class="btn ghost" type="button" onclick="fin.reverse('${r.txnId}')">Undo</button>` : ''}
+        ${r.txnId ? `<button class="btn ghost" type="button" onclick="fin.openTxn('${r.txnId}')">View entry</button>` : ''}
+        ${r.txnId && !busy && !stale ? `<button class="btn ghost" type="button" onclick="fin.reverse('${r.txnId}')">Undo</button>` : ''}
       </div>
     </div>`;
 }
@@ -1013,6 +1271,7 @@ function uploadRow(u, i) {
 function mountResult() {
   const r = result;
   if (r?.kind === 'ok' && (r.uploads || []).some(u => u.status === 'pending')) runUploads();
+  document.getElementById('againBtn')?.focus({ preventScroll: true });
 }
 
 function refreshUploads() {
@@ -1046,6 +1305,8 @@ async function runUploads() {
 
 let txnFilters = { month: '', event: '', party: '', q: '', channel: '', min: '', max: '', hideReversed: false, moved: 'all' };
 
+const undone = isUndone;
+
 function txns() {
   const s = getState();
   if (!s.txns.length) {
@@ -1065,8 +1326,10 @@ function txns() {
     .filter(t => !txnFilters.channel || t.lines.some(l => l.acc === txnFilters.channel))
     .filter(t => txnFilters.min === '' || num(t.totals?.dr) >= num(txnFilters.min))
     .filter(t => txnFilters.max === '' || num(t.totals?.dr) <= num(txnFilters.max))
-    .filter(t => !txnFilters.hideReversed || !(t.reversedBy || t.reversalOf))
-    .filter(t => txnFilters.moved === 'all' || (txnFilters.moved === 'cash' ? movesMoney(t) : !movesMoney(t)))
+    .filter(t => !txnFilters.hideReversed || !undone(t))
+    // A reversed entry and its reversal are history, not money: the bank never moved for
+    // either. "Every entry" keeps them on the record; the two money views leave them out.
+    .filter(t => txnFilters.moved === 'all' || (!undone(t) && (txnFilters.moved === 'cash' ? movesMoney(t) : !movesMoney(t))))
     .sort((a, b) => b.date.localeCompare(a.date) || num(b.no) - num(a.no) || String(b.createdAt).localeCompare(String(a.createdAt)));
 
   const profitEffect = t => t.lines.reduce((sum, l) => {
@@ -1077,7 +1340,10 @@ function txns() {
     return sum;
   }, 0);
 
-  const moved = rows.reduce((a, t) => { const m = moneyMoved(t); a.in += m.in; a.out += m.out; return a; }, { in: 0, out: 0 });
+  // The In / Out figures count real movements only. A mistaken ₹5,000 payment that was
+  // reversed used to show as ₹5,000 out AND ₹5,000 in — two movements that never happened.
+  const moved = rows.filter(t => !undone(t))
+    .reduce((a, t) => { const m = moneyMoved(t); a.in += m.in; a.out += m.out; return a; }, { in: 0, out: 0 });
 
   return `
     <h1>Transactions</h1>
@@ -1093,14 +1359,19 @@ function txns() {
       </select>
       <select onchange="fin.filter('event',this.value)" aria-label="Filter by type">
         <option value="">All types</option>
-        ${events.map(e => `<option value="${esc(e)}" ${txnFilters.event === e ? 'selected' : ''}>${esc(EV[e]?.title || e)}</option>`).join('')}
+        ${events.map(e => `<option value="${esc(e)}" ${txnFilters.event === e ? 'selected' : ''}>${esc(EV[e]?.title || (e === 'reverse' ? 'Reversal' : e))}</option>`).join('')}
       </select>
+      <input type="search" placeholder="Search description" value="${esc(txnFilters.q)}"
+        oninput="fin.filter('q',this.value)" aria-label="Search descriptions">
+    </div>
+    ${(() => { const on = ['party', 'channel', 'min', 'max', 'hideReversed'].filter(k => txnFilters[k] !== '' && txnFilters[k] !== false).length; return `
+    <details class="more filters-more" ${on ? 'open' : ''}>
+      <summary><span class="lbl">More filters</span><span class="n">${on ? on + ' on' : 'party, channel, amount'}</span></summary>
+      <div class="body filters">`; })()}
       <select onchange="fin.filter('party',this.value)" aria-label="Filter by party">
         <option value="">All parties</option>
         ${s.parties.map(p => `<option value="${p.id}" ${txnFilters.party === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
       </select>
-      <input type="search" placeholder="Search description" value="${esc(txnFilters.q)}"
-        oninput="fin.filter('q',this.value)" aria-label="Search descriptions">
       <select onchange="fin.filter('channel',this.value)" aria-label="Paid through">
         <option value="">Any channel</option>
         <option value="1000" ${txnFilters.channel === '1000' ? 'selected' : ''}>Bank / UPI</option>
@@ -1110,27 +1381,35 @@ function txns() {
       <input type="number" placeholder="Min ₹" value="${esc(txnFilters.min)}" onchange="fin.filter('min',this.value)" aria-label="Minimum amount">
       <input type="number" placeholder="Max ₹" value="${esc(txnFilters.max)}" onchange="fin.filter('max',this.value)" aria-label="Maximum amount">
       <label class="small" style="display:flex;align-items:center;gap:6px;min-height:44px">
-        <input type="checkbox" ${txnFilters.hideReversed ? 'checked' : ''} onchange="fin.filter('hideReversed',this.checked)" style="width:auto;min-height:0"> hide reversed</label>
-    </div>
+        <input type="checkbox" ${txnFilters.hideReversed ? 'checked' : ''} onchange="fin.filter('hideReversed',this.checked)" style="width:auto;min-height:0"> Hide undone entries</label>
+      </div>
+    </details>
 
     ${rows.length ? table(
-    `<th>Description</th><th>#</th><th>Date</th><th class="n">Profit</th><th class="n">Money in</th><th class="n">Money out</th><th></th>`,
+    `<th>Description</th><th class="desk">#</th><th class="desk">Date</th><th class="n desk">Profit</th><th class="n desk">Money in</th><th class="n desk">Money out</th><th class="phone"></th><th class="phone"></th>`,
     rows.map(t => {
-      const pe = profitEffect(t), mm = moneyMoved(t);
-      return `<tr class="click" onclick="fin.openTxn('${t.id}')">
+      const pe = profitEffect(t), mm = moneyMoved(t), gone = undone(t);
+      const partner = gone ? s.txns.find(x => x.id === (t.reversedBy || t.reversalOf)) : null;
+      // An undone pair stays on the list — the record of a mistake is part of the books. The
+      // ORIGINAL keeps its figures, struck through: that is what the owner got wrong. The
+      // reversal carries nothing but the link back, so it shows dashes.
+      const struck = n => n ? `<s class="faint">${fmt(Math.abs(n))}</s>` : '<span class="faint">—</span>';
+      const dash = '<span class="faint">—</span>';
+      return `<tr class="click${gone ? ' undone' : ''}" onclick="fin.openTxn('${t.id}')">
           <td class="lead">${esc(t.desc)}
             ${t.auto ? tag('auto', 'auto') : ''}
-            ${t.reversalOf ? tag('reversal', 'rev') : ''}
-            ${t.reversedBy ? tag('reversed', 'rev') : ''}
+            ${t.reversalOf ? tag('reversal of ' + entryNo(partner), 'rev') : ''}
+            ${t.reversedBy ? tag('reversed by ' + entryNo(partner), 'rev') : ''}
             ${(t.attachments || []).length ? tag('📎 ' + t.attachments.length) : ''}</td>
-          <td class="eno nowrap" data-label="Entry">${entryNo(t)}</td>
-          <td class="nowrap" data-label="Date">${esc(t.date)}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? `<br><span class="small faint">${esc(methodLabel(m))}</span>` : ''; })()}</td>
-          <td class="n" data-label="Profit">${pe ? signed(pe) : '—'}</td>
-          <td class="n" data-label="Money in">${mm.in ? `<span class="pos">${fmt(mm.in)}</span>` : '<span class="faint">—</span>'}</td>
-          <td class="n" data-label="Money out">${mm.out ? `<span class="neg">${fmt(mm.out)}</span>` : (movesMoney(t) ? '<span class="faint">—</span>' : docChip(t))}</td>
-          <td class="n">${t.reversedBy ? '' : `<button class="btn ghost sm" type="button" onclick="event.stopPropagation();fin.reverse('${t.id}')">Reverse</button>`}</td>
+          <td class="eno nowrap desk">${entryNo(t)}</td>
+          <td class="nowrap desk">${esc(t.date)}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? `<br><span class="small faint">${esc(methodLabel(m))}</span>` : ''; })()}</td>
+          <td class="n desk">${t.reversalOf ? dash : t.reversedBy ? struck(pe) : (pe ? signed(pe) : '—')}</td>
+          <td class="n desk">${t.reversalOf ? dash : t.reversedBy ? struck(mm.in) : mm.in ? fmt(mm.in) : dash}</td>
+          <td class="n desk">${t.reversalOf ? dash : t.reversedBy ? struck(mm.out) : mm.out ? fmt(mm.out) : (movesMoney(t) ? dash : docChip(t))}</td>
+          <td class="amt phone">${gone ? '<span class="faint">—</span>' : mm.in && !mm.out ? `<span class="pos">+${fmt(mm.in)}</span>` : mm.out && !mm.in ? `<span>−${fmt(mm.out)}</span>` : mm.in || mm.out ? `<span class="muted">${fmt(Math.max(mm.in, mm.out))}</span>` : (pe ? signed(pe) : docChip(t))}</td>
+          <td class="meta phone">${entryNo(t)} · ${esc(t.date.slice(5))}${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? ' · ' + esc(methodLabel(m)) : ''; })()}</td>
         </tr>`;
-    }).join(''), '', { stack: true })
+    }).join(''), '', { cls: 'ledger' })
       : empty('Nothing matches those filters.')}`;
 }
 
@@ -1260,6 +1539,7 @@ function showInTxns(json) {
 function openTxn(id) {
   const t = getState().txns.find(x => x.id === id);
   if (!t) return;
+  const partner = getState().txns.find(x => x.id === (t.reversedBy || t.reversalOf));
   modal({
     title: t.desc || 'Transaction',
     body: `
@@ -1268,7 +1548,7 @@ function openTxn(id) {
         ${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? ' · ' + esc(methodLabel(m)) : ''; })()}
         ${t.meta?.ref ? ' · ref ' + esc(t.meta.ref) : ''}${t.selfInvoiceNo ? ' · self-invoice ' + esc(t.selfInvoiceNo) : ''}
         · by ${esc(t.createdBy || '—')}
-        ${t.reversedBy ? ' · <b>reversed</b>' : ''}${t.reversalOf ? ' · this is a reversal' : ''}</p>
+        ${t.reversedBy ? ` · <b>reversed by ${entryNo(partner)}</b>` : ''}${t.reversalOf ? ` · reversal of ${entryNo(partner)}` : ''}</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead>
         <tbody>${t.lines.map(l => `<tr>
@@ -1285,14 +1565,15 @@ function openTxn(id) {
       <h3 style="margin-top:16px">Attachments</h3>
       <div id="drawerAtts">${attachmentGrid(t)}</div>
       <div class="actions" style="margin-top:10px">
-        <label class="btn sm" style="cursor:pointer">📷 Add photo
+        <label class="btn sm" style="cursor:pointer"><i class="fa-solid fa-camera" aria-hidden="true"></i> Add photo
           <input type="file" class="js-late" accept="image/*" capture="environment" hidden></label>
         <label class="btn sm" style="cursor:pointer">Add file
           <input type="file" class="js-late" accept="image/*,application/pdf" multiple hidden></label>
       </div>
       <p class="small faint" style="margin:8px 0 0">Ref ${esc(t.id)}</p>`,
-    foot: t.reversedBy ? '<span class="small muted">Already reversed.</span>'
-      : `<button class="btn danger" type="button" onclick="fin.reverse('${t.id}')">Reverse this entry</button>`,
+    foot: t.reversalOf ? `<button class="btn" type="button" onclick="fin.openTxn('${esc(t.reversalOf)}')">This is the reversal of ${entryNo(partner)} — open it</button>`
+      : t.reversedBy ? `<span class="small muted">Reversed by ${entryNo(partner)}.</span> <button class="btn sm" type="button" onclick="fin.openTxn('${esc(t.reversedBy)}')">Open it</button>`
+        : `<button class="btn danger" type="button" onclick="fin.reverse('${t.id}')">Reverse this entry</button>`,
   });
   wireDrawer(t);
 }
@@ -1342,13 +1623,17 @@ function wireDrawer(t) {
 
 // ═══════ ACTIONS EXPOSED TO INLINE HANDLERS ═══════
 
-function startEvent(key, preset = {}, label = null) {
+function startEvent(key, preset = {}, label = null, id = null) {
   evKey = key;
   evLabel = label;
+  evId = id || ITEMS.find(it => it.key === key && !it.preset)?.id || key;
   evPreset = { ...preset };
   vals = { ...preset };
   pendingFiles = [];
   result = null;
+  saveErr = null;
+  touched = new Set();
+  moreOpen = false;
   if (EV[key]?.onchange) for (const k of Object.keys(preset)) EV[key].onchange(k, vals);
   // A preset picks the party; the amount default lands during buildForm's seeding, so the
   // amount onchange runs again then. Nothing else to do here.
@@ -1360,27 +1645,43 @@ window.fin = {
 
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
 
-  findAction(q) {
-    const needle = String(q || '').trim().toLowerCase();
-    let shown = 0;
-    document.querySelectorAll('#chooser .chooser-group').forEach(g => {
-      let any = false;
-      g.querySelectorAll('button').forEach(b => {
-        const dirOk = needle || dirPick === 'all' || b.dataset.dir === dirPick;
-        const hit = dirOk && (!needle || b.textContent.toLowerCase().includes(needle));
-        b.hidden = !hit;
-        if (hit) any = true;
-      });
-      g.hidden = !any;
-      if (any) shown++;
-    });
-    const none = document.getElementById('actNone');
-    if (none) none.hidden = shown > 0;
+  findAction(q, refocus) {
+    findQ = String(q || '');
+    if (refocus) { const inp = document.getElementById('actFind'); if (inp) { inp.value = ''; inp.focus(); } }
+    redrawChooser();
   },
-  pickDir(d) {
-    dirPick = d;
-    repaint();
-    window.fin.findAction(document.getElementById('actFind')?.value || '');
+  findKey(e) {
+    if (e.key === 'Enter') { const hits = searchItems(findQ); if (hits && hits[0]) { e.preventDefault(); window.fin.pickId(hits[0].id); } }
+    if (e.key === 'Escape') { e.preventDefault(); window.fin.findAction('', true); }
+  },
+  pickGroup(g) {
+    groupPick = g || '';
+    redrawChooser();
+    const chip = document.querySelector(`#recGroups .chip[data-g="${CSS.escape(groupPick)}"]`);
+    chip?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  },
+  moreIn(btn) {
+    const fold = btn.nextElementSibling;
+    const open = btn.getAttribute('aria-expanded') !== 'true';
+    btn.setAttribute('aria-expanded', String(open));
+    if (fold) fold.hidden = !open;
+  },
+  // The phone's preview: the same card, moved into a sheet one tap from Save, with its own
+  // Save so "check, then save" is a single gesture.
+  openPreview() {
+    const sheet = document.getElementById('pvSheet'), host = document.getElementById('pvHost'), pv = document.getElementById('preview');
+    if (!sheet || !host || !pv) return;
+    host.appendChild(pv);
+    sheet.classList.add('open');
+    sheet.querySelector('h3')?.focus({ preventScroll: true });
+  },
+  closePreview() {
+    const sheet = document.getElementById('pvSheet');
+    const pv = document.getElementById('pvHost')?.querySelector('#preview');
+    if (!sheet || !sheet.classList.contains('open')) return;
+    sheet.classList.remove('open');
+    if (pv) document.querySelector('.record-split')?.appendChild(pv);
+    document.querySelector('.save-bar .pv-open')?.focus({ preventScroll: true });
   },
   setScope(mode) {
     setScope(mode);
@@ -1390,15 +1691,16 @@ window.fin = {
   },
 
   pick(k) {
+    window.fin.closePreview();
     if (k) startEvent(k);
-    else { evKey = null; evLabel = null; evPreset = {}; vals = {}; pendingFiles = []; result = null; }
+    else { evKey = null; evLabel = null; evId = null; evPreset = {}; vals = {}; pendingFiles = []; result = null; saveErr = null; touched = new Set(); }
     repaint();
   },
 
-  pickAt(gi, ii) {
-    const it = CHOOSER[gi][1].filter(x => EV[x.key])[ii];
+  pickId(id) {
+    const it = itemById(id);
     if (!it) return;
-    startEvent(it.key, it.preset || {}, it.label || null);
+    startEvent(it.key, it.preset || {}, it.label || null, it.id);
     repaint();
   },
 
@@ -1412,7 +1714,7 @@ window.fin = {
   // "Record another" keeps the same event and the pre-filled fields it started with.
   again() {
     const r = result;
-    startEvent(r.key, r.preset || {}, r.label || null);
+    startEvent(r.key, r.preset || {}, r.label || null, r.id || null);
     repaint();
   },
 
@@ -1421,7 +1723,15 @@ window.fin = {
     vals = { ...(r.vals || {}) };
     pendingFiles = r.files || [];
     result = null;
+    saveErr = null;
     repaint();
+  },
+
+  retrySave() {
+    saveErr = null;
+    const el = document.getElementById('saveErr');
+    if (el) el.innerHTML = '';
+    updatePreview();
   },
 
   filterMoved(v) { txnFilters.moved = v; repaint(); },
@@ -1438,9 +1748,13 @@ window.fin = {
   async save() {
     if (saving) return;
     saving = true;
-    document.querySelectorAll('.js-save').forEach(b => { b.disabled = true; b.textContent = 'Saving…'; });
+    saveErr = null;
+    document.getElementById('evForm')?.setAttribute('aria-busy', 'true');
+    document.querySelectorAll('.js-save').forEach(b => { b.disabled = true; b.setAttribute('aria-busy', 'true'); });
+    const barEl = document.getElementById('barSum');
+    if (barEl) barEl.innerHTML = '<span class="todo">Saving…</span>';
 
-    const key = evKey, label = evLabel, preset = { ...evPreset };
+    const key = evKey, label = evLabel, preset = { ...evPreset }, id = evId;
     const snapshotVals = { ...vals };
     const files = [...pendingFiles];
 
@@ -1450,8 +1764,9 @@ window.fin = {
       // presented as "not saved".
       // A save that began on a statement line goes back to match that line.
       if (window.finBank?.onSaved) window.finBank.onSaved(r.txnId, key, snapshotVals);
+      noteUse(id);
       result = {
-        kind: 'ok', key, label, preset, ...r,
+        kind: 'ok', key, label, preset, id, savedAt: Date.now(), ...r,
         uploads: files.map(f => ({
           file: f, status: 'pending',
           preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
@@ -1459,13 +1774,19 @@ window.fin = {
       };
       vals = {};
       pendingFiles = [];
+      touched = new Set();
     } catch (e) {
-      result = { kind: 'err', key, label, preset, message: e.message || 'Could not save', vals: snapshotVals, files };
+      // The form stays exactly as it was, with the reason above the bar. Nobody loses their
+      // place, or their figures, to a dropped connection.
+      saveErr = e.message || 'Could not save';
+      result = null;
     } finally {
       saving = false;
     }
+    window.fin.closePreview();
     repaint();
-    window.scrollTo(0, 0);
+    if (result) window.scrollTo(0, 0);
+    else document.getElementById('saveErr')?.scrollIntoView({ block: 'center' });
   },
 
   async retryUpload(i) {
@@ -1478,9 +1799,13 @@ window.fin = {
 
   async reverse(id, silent) {
     if (!silent) {
+      const t0 = getState().txns.find(x => x.id === id);
+      const closed = t0 && getState().monthEnds[ym(t0.date)];
       const ok = await confirmDialog({
         title: 'Reverse this entry?',
-        message: 'A matching opposite entry is posted so the two cancel out. <b>Both stay on the record</b> — nothing is deleted, which is what keeps the books auditable.',
+        message: 'A matching opposite entry is posted so the two cancel out. <b>Both stay on the record</b> — nothing is deleted, which is what keeps the books auditable. '
+          + (closed ? `<b>${esc(mlabel(ym(t0.date)))} is closed</b>, so the correction is dated today: that month's figures stand and this month carries the fix.`
+            : 'It is dated on the original\'s day, so the mistake leaves that month entirely.'),
         confirmLabel: 'Reverse it',
         danger: true,
       });

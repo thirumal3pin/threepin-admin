@@ -875,6 +875,13 @@ export async function reverse(txnId) {
   }
   const svcMonth = madeBills.filter(b => b.serviceId && b.month).map(b => ({ subId: b.serviceId, m: b.month }));
 
+  // Dated on the original's day while that month is still open, so a mistake corrected
+  // inside a month leaves the month entirely — the P&L, the cash book and the statement all
+  // agree it never happened. Once a month is closed its figures stand: the correction is
+  // dated today and the current month carries it, which is how every accounting package
+  // treats a closing date.
+  const when = getState().monthEnds[ym(t.date)] ? today() : t.date;
+
   return runTransaction(db, async tx => {
     const { settings, nos, patch } = await reserveNumbers(tx, 1);
     const allocSnaps = [];
@@ -882,7 +889,7 @@ export async function reverse(txnId) {
 
     const rref = doc(col('txns'));
     tx.set(rref, stamp({
-      date: today(),
+      date: when,
       event: 'reverse',
       desc: 'Reversal — ' + t.desc,
       lines: reversalLines(t.lines),
@@ -900,7 +907,7 @@ export async function reverse(txnId) {
       const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
       tx.update(ref(a.coll, a.id), {
         paid, status: docStatus(total - paid, total),
-        allocations: [...(cur.allocations || []), { txnId: rref.id, amt: -num(a.amt), date: today(), reversal: true }],
+        allocations: [...(cur.allocations || []), { txnId: rref.id, amt: -num(a.amt), date: when, reversal: true }],
       });
       logChange(tx, a.coll, a.id);
     }

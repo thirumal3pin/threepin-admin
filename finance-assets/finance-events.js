@@ -351,7 +351,7 @@ export const EV = {};
 
 EV.newdeal = {
   title: 'Add a deal', group: 'Deals', dir: 'setup',
-  when: 'Sets a deal up so income and costs can be mapped to it. The expected brokerage is an <b>estimate</b> for your pipeline — <b>nothing here counts as income</b>. Income is recorded when the deal registers, with "Deal closed — brokerage earned". A deal can be added without linking a property.',
+  when: 'Sets a deal up so income and costs can be mapped to it. The expected brokerage is an <b>estimate</b> for your pipeline — <b>nothing here counts as income</b>. Mark the deal registered when the sale deed is signed; invoice each side when its fee is due — normally that same day. Income is recorded by the invoice. A deal can be added without linking a property.',
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK' }),
@@ -401,9 +401,45 @@ EV.newdeal = {
   },
 };
 
+// Registration is a fact about the DEAL; an invoice is a document about one party's fee. They
+// used to be one action, which meant billing the buyer in September "registered" the deal
+// and billing the seller in November registered it again — and a deal could not be marked
+// registered at all without inventing an invoice. Now the milestone posts nothing and each
+// side is invoiced when its fee falls due.
+EV.register = {
+  title: 'Deal registered', group: 'Deals', dir: 'setup',
+  when: 'The sale deed has been signed and registered. This records the milestone and the date — <b>nothing posts to the books</b>. Raise each side\'s invoice when its brokerage is due, which for most deals is this same day; income is counted by the invoice, not by this.',
+  fields: () => [
+    F('date', 'Registration date', 'date', { def: today() }),
+    F('deal', 'Deal', 'deal', { opts: S().deals.filter(d => d.status === 'open').map(d => [d.id, dealLabel(d)]) }),
+    F('note', 'Document number', 'text', { hint: 'Optional — the registered deed number, for your own reference.' }),
+  ],
+  check: v => [
+    ...dateChecks(v),
+    ...(deal(v.deal) ? [] : [err('deal', 'Pick the deal that registered')]),
+    ...(deal(v.deal) && deal(v.deal).status !== 'open' ? [err('deal', 'This deal is already ' + deal(v.deal).status)] : []),
+  ],
+  build: v => {
+    const d = deal(v.deal);
+    if (!d) return need('Pick the deal that registered.');
+    if (d.status !== 'open') return need('This deal is already ' + d.status + '.');
+    const unbilled = ['seller', 'buyer'].filter(side => d[side]?.partyId && !S().invoices.some(i => i.dealId === d.id && i.partyId === d[side].partyId && i.kind !== 'creditnote' && i.status !== 'void'));
+    return {
+      desc: '', lines: [],
+      effects: [
+        `"<b>${esc(dealLabel(d))}</b>" marked registered on ${esc(v.date || today())}. Nothing posts.`,
+        unbilled.length
+          ? `Still to invoice: ${unbilled.map(side => `the ${side} (${esc(pname(d[side].partyId))})`).join(' and ')} — raise each when its fee is due; income is counted then.`
+          : 'Both sides are already invoiced.',
+      ],
+      updates: [{ coll: 'deals', id: d.id, data: { status: 'registered', registeredOn: v.date || today(), ...(String(v.note || '').trim() ? { deedNo: String(v.note).trim() } : {}) } }],
+    };
+  },
+};
+
 EV.token = {
-  title: 'Token / advance received', group: 'Money in', dir: 'in',
-  when: '<b>Only before the deal registers.</b> If it has already registered, use "Deal closed — brokerage earned" instead. Money received before registration is not income. It is held for the client and shows against this deal until it is adjusted on the invoice, refunded or forfeited.',
+  title: 'Token / advance received', group: 'Deals', dir: 'in',
+  when: 'Money a client hands over before you have invoiced them. <b>Not income</b>: it is held for the client on this deal and comes off their invoice, is refunded, or is kept if they back out. Once an invoice exists for this client on this deal, record money as "Client payment received" instead, so it is matched to the invoice. Ask your CA whether your tokens are refundable deposits (no GST until adjusted) or non-refundable advances (GST is due in the month received).',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealOpts() }),
@@ -417,6 +453,8 @@ EV.token = {
     ...dateChecks(v),
     ...(deal(v.deal) ? [] : [err('deal', 'Pick the deal this token is for')]),
     ...(deal(v.deal) && !sideParty(deal(v.deal), v.from) ? [err('from', 'This deal has no such party yet — add them on the Deals tab')] : []),
+    ...((() => { const d = deal(v.deal); const p = d && sideParty(d, v.from); return p && openInvoices(p, v.deal).length
+      ? [err('from', `${pname(p)} has an open invoice on this deal — record this as "Client payment received" so it is matched to the invoice`)] : []; })()),
     ...posAmt(v),
   ],
   build: v => {
@@ -424,6 +462,7 @@ EV.token = {
     if (!d) return need('Pick a deal.');
     const pid = sideParty(d, v.from);
     if (!pid) return need('This deal has no ' + (v.from || 'party') + ' yet.');
+    if (openInvoices(pid, d.id).length) return need(pname(pid) + ' has an open invoice on this deal — use "Client payment received".');
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount received.');
     return {
@@ -516,10 +555,10 @@ EV.dealcost = {
 };
 
 EV.invoice = {
-  title: 'Deal closed — brokerage earned', group: 'Money in', dir: 'in',
-  when: 'The deal has registered. <b>This is the moment income exists</b> — profit goes up by the brokerage. Any token held from this client comes off what they owe, GST is added on top, and an invoice is numbered for you. Do this once per side you are billing.',
+  title: 'Raise a brokerage invoice', group: 'Deals', dir: 'in',
+  when: 'Raise this when a side\'s brokerage falls due under your agreement — for most deals, the day the sale deed registers; for a staged fee, on each milestone. <b>This is when income exists</b> and when the GST becomes payable, whether or not the client has paid. Any token held from this client comes off the bill and an invoice is numbered for you. One invoice per side, or more if the fee is staged. Raising it does not change the deal\'s status — use "Deal registered" for that.',
   fields: v => [
-    F('date', 'Registration date', 'date', { def: today() }),
+    F('date', 'Invoice date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealOpts() }),
     F('from', 'Who is paying you', 'select', { opts: partySides(v.deal) }),
     ...gstFields('Brokerage (before GST)', {
@@ -561,7 +600,8 @@ EV.invoice = {
     const held = p ? bal('2100', { party: p, deal: v.deal }) : 0;
     return [
       ...dateChecks(v),
-      ...(d ? [] : [err('deal', 'Pick the deal that registered')]),
+      ...(d ? [] : [err('deal', 'Pick the deal')]),
+      ...(d && d.status === 'open' ? [warn('deal', 'This deal is not marked registered yet. A tax invoice counts the brokerage as income now and makes the GST payable this month whether or not the client pays — raise it only if this amount is already due under your agreement. If it is not due yet, record a token instead.')] : []),
       ...(d && !p ? [err('from', 'This deal has no such client yet — add them on the Deals tab')] : []),
       ...posAmt(v, 'amt', 'Enter the brokerage'), ...gstChecks(v),
       ...(num(v.adv) > held + 0.005 ? [err('adv', `Only ${fmt(held)} is held from this client`)] : []),
@@ -623,7 +663,6 @@ EV.invoice = {
     return {
       desc: `Brokerage — ${dealLabel(d)} (${pname(pid)})`,
       lines, effects: eff,
-      updates: [{ coll: 'deals', id: d.id, data: { status: 'registered' } }],
       invoice: {
         kind: 'brokerage', partyId: pid, dealId: d.id, base, gstRate: rate, placeOfSupply,
         cgst: gstSplit.cgst, sgst: gstSplit.sgst, igst: gstSplit.igst,
@@ -646,6 +685,10 @@ EV.dealpay = {
         hint: 'Only clients who owe something are listed.',
       }),
       F('amt', 'Amount received', 'number', { required: true, hint: p ? `Owes ${fmt(bal('1100', { party: p }))} in total` : '' }),
+      F('tds', 'TDS the client deducted', 'number', {
+        def: 0, show: x => !!x.party && tdsOn(),
+        hint: 'Deducted under 194H before paying you (2% of the brokerage). It settles that much of the invoice and is claimed at year-end.',
+      }),
       F('short', 'Amount you let them off', 'number', {
         def: 0, show: x => !!x.party,
         hint: 'A discount you agreed, a rounding-off, or charges their bank deducted. The invoice closes in full.',
@@ -666,12 +709,13 @@ EV.dealpay = {
   },
   onchange: (k, v) => {
     if (k === 'party') { v.amt = r2(bal('1100', { party: v.party })); v.alloc = null; }
-    if (k === 'amt' || k === 'party' || k === 'short') v.alloc = autoAllocInvoices(v);
+    if (k === 'amt' || k === 'party' || k === 'short' || k === 'tds') v.alloc = autoAllocInvoices(v);
   },
   check: v => {
     const owed = v.party ? bal('1100', { party: v.party }) : 0;
     const short = num(v.short);
-    const applied = num(v.amt) + short;
+    const tds = Math.max(0, num(v.tds));
+    const applied = num(v.amt) + short + tds;
     const allocSum = (v.alloc || []).reduce((a, r) => a + num(r.amt), 0);
     return [
       ...dateChecks(v),
@@ -679,7 +723,9 @@ EV.dealpay = {
       ...(v.party && owed <= 0.5 ? [err('party', 'They owe nothing right now — money received ahead of a deal is a token; record it as one')] : []),
       ...posAmt(v, 'amt', 'Enter what was received'),
       ...(short < 0 ? [err('short', 'Enter zero or more')] : []),
-      ...(short > 0 && short > owed - num(v.amt) + 0.005 ? [err('short', `You can only let them off what is left — ${fmt(Math.max(0, owed - num(v.amt)))}`)] : []),
+      ...(num(v.tds) < 0 ? [err('tds', 'Enter zero or more')] : []),
+      ...(tds > 0 && tds > owed - num(v.amt) + 0.005 ? [err('tds', `TDS cannot exceed what is left — ${fmt(Math.max(0, owed - num(v.amt)))}`)] : []),
+      ...(short > 0 && short > owed - num(v.amt) - tds + 0.005 ? [err('short', `You can only let them off what is left — ${fmt(Math.max(0, owed - num(v.amt) - tds))}`)] : []),
       ...(num(v.amt) > owed + 0.005 && v.over === 'stop' ? [err('amt', `They only owe ${fmt(owed)} — reduce the amount, or hold the extra as an advance`)] : []),
       ...(allocSum > applied + 0.005 ? [err('alloc', 'You have split more than you received — lower one of the amounts')] : []),
       ...(openInvoices(v.party).length
@@ -694,13 +740,17 @@ EV.dealpay = {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount received.');
     const owed = bal('1100', { party: pid });
+    // TDS the client withheld settles that much of the invoice too — it is money you will
+    // recover from the government at year-end, sitting in 1150 against this client.
+    const tds = r2(Math.min(Math.max(0, num(v.tds)), Math.max(0, owed - amt)));
     // What you let them off closes the invoice as well; it is a cost — a discount allowed, or
     // charges their bank took — and the GST on the invoice stands.
-    const short = r2(Math.min(Math.max(0, num(v.short)), Math.max(0, owed - amt)));
-    const applied = Math.min(amt + short, owed);
-    const extra = r2(amt - Math.max(0, applied - short));
+    const short = r2(Math.min(Math.max(0, num(v.short)), Math.max(0, owed - amt - tds)));
+    const applied = Math.min(amt + tds + short, owed);
+    const extra = r2(amt - Math.max(0, applied - short - tds));
     const rows = (v.alloc || []).filter(r => num(r.amt) > 0);
     const lines = [cashLine(v, { acc: v.via || '1000', dr: amt })];
+    if (tds > 0.005) lines.push({ acc: '1150', dr: tds, party: pid });
     if (short > 0.005) lines.push({ acc: v.shortWhy === 'charges' ? '5140' : '5225', dr: short, party: pid });
     // One receivable line per allocated invoice keeps the deal tags right on the ledger.
     let tagged = 0;
@@ -722,6 +772,7 @@ EV.dealpay = {
     }
 
     const eff = [`Cash in ${fmt(amt)}. What ${esc(pname(pid))} owes drops by ${fmt(applied)}.${short ? '' : ' Profit unchanged.'}`];
+    if (tds > 0.005) eff.push(`${fmt(tds)} TDS withheld by the client — settles that much of the invoice; claim it at year-end.`);
     if (short) eff.push(`${fmt(short)} you let them off — ${v.shortWhy === 'charges' ? 'booked as bank charges' : 'booked as a discount allowed'}; the invoice still closes in full.`);
     rows.forEach(r => { const inv = S().invoices.find(i => i.id === r.id); if (inv) eff.push(`${fmt(r.amt)} applied to invoice ${esc(inv.invoiceNo)}${num(r.amt) + 0.005 < invoiceOutstanding(inv) ? ' (part)' : ' — now paid'}.`); });
     if (extra > 0.005) eff.push(`${fmt(extra)} more than they owed — held as an advance for them, not income.`);
@@ -737,18 +788,23 @@ EV.dealpay = {
 function autoAllocInvoices(v) {
   if (!v.party) return [];
   const docs = openInvoices(v.party);
-  return allocate(num(v.amt) + Math.max(0, num(v.short)), docs, invoiceOutstanding).rows;
+  return allocate(num(v.amt) + Math.max(0, num(v.short)) + Math.max(0, num(v.tds)), docs, invoiceOutstanding).rows;
 }
 
 EV.settle = {
-  title: 'Settle a token — refund / keep / hold', group: 'Corrections', dir: 'fix',
-  when: 'Deal fell through, or the client changed plans. Split the held token the way it actually went: <b>refund</b> (no profit effect), <b>keep</b> (becomes income now), or leave it held for a future deal.',
+  title: 'Settle a token — refund / keep / apply', group: 'Deals', dir: 'fix',
+  when: 'What happens to a token you are holding. <b>Apply</b> it to the client\'s open invoice on this deal (what they owe drops, no cash moves), <b>refund</b> it (no profit effect), <b>keep</b> it because the client backed out (becomes income now), or move it to another of their deals.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: dealsWith('2100', x => x > 0.5) }),
     F('from', 'Client', 'select', {
       opts: partySides(v.deal),
       hint: x => { const d = deal(x.deal); const p = d && sideParty(d, x.from); return p ? 'Held: ' + fmt(bal('2100', { party: p, deal: x.deal })) : ''; },
+    }),
+    F('apply', 'Apply to their open invoice', 'number', {
+      def: 0,
+      show: x => { const d = deal(x.deal); const p = d && sideParty(d, x.from); return !!(p && openInvoices(p, x.deal).length); },
+      hint: x => { const d = deal(x.deal); const p = d && sideParty(d, x.from); const inv = p && openInvoices(p, x.deal)[0]; return inv ? `${inv.invoiceNo} has ${fmt(invoiceOutstanding(inv))} open` : ''; },
     }),
     F('refund', 'Refund to client', 'number', { def: 0 }),
     F('via', 'Refund from', 'select', { opts: [['1000', 'Bank / UPI'], ['1010', 'Petty cash']], def: '1000', show: x => num(x.refund) > 0 }),
@@ -766,8 +822,10 @@ EV.settle = {
     return [
       ...dateChecks(v),
       ...(d ? [] : [err('deal', 'Pick the deal holding the token')]),
-      ...(num(v.refund) + num(v.keep) > held + 0.005 ? [err('refund', `Only ${fmt(held)} is held`)] : []),
-      ...(num(v.refund) <= 0 && num(v.keep) <= 0 && !v.move ? [err('refund', 'Enter a refund, a kept amount, or a deal to move it to')] : []),
+      ...(num(v.refund) + num(v.keep) + num(v.apply) > held + 0.005 ? [err('refund', `Only ${fmt(held)} is held`)] : []),
+      ...((() => { const inv = p && openInvoices(p, v.deal)[0]; return inv && num(v.apply) > invoiceOutstanding(inv) + 0.005 ? [err('apply', `Only ${fmt(invoiceOutstanding(inv))} is open on ${inv.invoiceNo}`)] : []; })()),
+      ...(num(v.apply) < 0 ? [err('apply', 'Enter zero or more')] : []),
+      ...(num(v.refund) <= 0 && num(v.keep) <= 0 && num(v.apply) <= 0 && !v.move ? [err('refund', 'Enter an amount to apply, refund or keep, or a deal to move it to')] : []),
       ...(num(v.refund) > 0 && (v.via || '1000') === '1010' ? pettyCheck('via', v, num(v.refund)) : []),
     ];
   },
@@ -777,10 +835,20 @@ EV.settle = {
     const pid = sideParty(d, v.from);
     if (!pid) return need('Pick the client.');
     const held = bal('2100', { party: pid, deal: d.id });
-    const ref = Math.min(num(v.refund), held);
-    const keep = Math.min(num(v.keep), held - ref);
-    const rest = held - ref - keep;
-    const lines = [], eff = [];
+    const lines = [], eff = [], allocations = [];
+
+    // Applied first: this is the normal end of a token once the invoice exists, and until now
+    // there was no way back from money held (2100) to the invoice it was meant for.
+    const inv = openInvoices(pid, d.id)[0];
+    const apply = inv ? r2(Math.min(Math.max(0, num(v.apply)), held, invoiceOutstanding(inv))) : 0;
+    if (apply > 0.005) {
+      lines.push({ acc: '2100', dr: apply, party: pid, deal: d.id }, { acc: '1100', cr: apply, party: pid, deal: d.id });
+      allocations.push({ coll: 'invoices', id: inv.id, amt: apply });
+      eff.push(`${fmt(apply)} applied to invoice ${esc(inv.invoiceNo)} — what ${esc(pname(pid))} owes drops by that. No cash moves, profit unchanged.`);
+    }
+    const ref = Math.min(num(v.refund), held - apply);
+    const keep = Math.min(num(v.keep), held - apply - ref);
+    const rest = held - apply - ref - keep;
 
     if (ref) {
       lines.push({ acc: '2100', dr: ref, party: pid, deal: d.id }, { acc: v.via || '1000', cr: ref });
@@ -804,7 +872,7 @@ EV.settle = {
         eff.push(`${fmt(rest)} stays held on this deal.`);
       }
     }
-    if (!lines.length) return need('Enter a refund or keep amount.');
+    if (!lines.length) return need('Enter an amount to apply, refund or keep.');
 
     const updates = [];
     if (v.drop === 'yes') updates.push({ coll: 'deals', id: d.id, data: { status: 'cancelled' } });
@@ -818,7 +886,7 @@ EV.settle = {
     const split = gstHeads(keepTax, isIntra(pos));
     return {
       desc: `Token settled — ${dealLabel(d)} (${pname(pid)})`,
-      lines, effects: eff, updates,
+      lines, effects: eff, updates, allocations,
       invoice: keepTax > 0.5 ? {
         kind: 'forfeit', partyId: pid, dealId: d.id, base: keepBase, gstRate: num(v.gst),
         cgst: split.cgst, sgst: split.sgst, igst: split.igst, total: r2(keep),
@@ -2598,47 +2666,62 @@ EV.creditnote = {
 // carries a one-line answer to the question people actually ask: "does this change my profit?"
 // `dir` colours the button: green for money in, red for money out, grey for moving your own
 // money around, amber for corrections, and plain for set-up.
+// What the Record screen offers, in the order it offers it. Six groups answer "what is this
+// about?" — a client or deal, a vendor or purchase, staff or government, your own money, a
+// recurring cost being set up, or something to adjust — which is the question Zoho, Tally and
+// QuickBooks all ask first. The old first question, "money in or money out?", failed because a
+// third of these move no cash at all and several that do point the wrong way for what the
+// owner means: an EMI is money out but mostly not a cost, a token is money in but not earned.
+//
+// `tier` is how often the owner reaches for it — daily / weekly / monthly / rarely — and drives
+// prominence on the screen; the rarely-used ones sit behind a disclosure and stay searchable.
+// Direction colour is kept on every button as the SECOND cue. `dealcost` is listed twice on
+// purpose: the owner looks for it under the deal, the accountant under purchases.
 export const CHOOSER = [
-  ['Money in', [
-    { key: 'invoice', label: 'Deal closed — brokerage from the buyer', preset: { from: 'buyer' }, sub: 'Income. Profit goes up. Invoice is generated.' },
-    { key: 'invoice', label: 'Deal closed — brokerage from the seller', preset: { from: 'seller' }, sub: 'Income. Profit goes up. Invoice is generated.' },
-    { key: 'dealpay', label: 'Client pays what they owe', sub: 'Cash in, matched to their invoices. Profit unchanged.' },
-    { key: 'token', label: 'Token / advance received', sub: 'Held for the client. Not income yet.' },
-    { key: 'otherinc', label: 'Other income', sub: 'Consultancy, referral fee, interest. Profit goes up.' },
-    { key: 'funding', label: 'Capital or director loan received', sub: 'Never income. Profit unchanged.' },
-    { key: 'bankloan', label: 'Bank / NBFC loan received', sub: 'Not income. Creates the EMI schedule.' },
+  ['Deals & clients', [
+    { key: 'dealpay', kw: ['upi', 'received', 'neft', 'cheque', 'client paid', 'collection'], label: 'Client payment received', sub: 'Matched to their invoices. Profit unchanged.', tier: 'daily' },
+    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet.', tier: 'daily' },
+    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.', tier: 'daily' },
+    { key: 'newdeal', kw: ['pipeline', 'listing', 'new deal', 'client'], label: 'Add a deal', sub: 'Opens it in the pipeline. Nothing posts.', tier: 'weekly' },
+    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the buyer', preset: { from: 'buyer' }, sub: 'Brokerage falls due. Income now; GST payable.', tier: 'weekly' },
+    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the seller', preset: { from: 'seller' }, sub: 'Brokerage falls due. Income now; GST payable.', tier: 'weekly' },
+    { key: 'otherinc', kw: ['consultancy', 'referral', 'interest', 'valuation', 'fee'], label: 'Other income', sub: 'Consultancy, referral fee, interest — invoice or receipt.', tier: 'weekly' },
+    { key: 'register', kw: ['registration', 'deed', 'sale deed', 'closed'], label: 'Deal registered', sub: 'The milestone and its date. Nothing posts.', tier: 'monthly' },
+    { key: 'settle', kw: ['refund', 'forfeit', 'token back'], label: 'Settle a token', sub: 'Apply to the invoice, refund, or keep.', tier: 'rarely' },
+    { key: 'creditnote', kw: ['reduce', 'discount', 'renegotiated'], label: 'Credit note — reduce an invoice', sub: 'Renegotiated brokerage. Income and GST come down.', tier: 'rarely' },
   ]],
-  ['Money out', [
-    { key: 'expense', label: 'Expense paid now', sub: 'Used and paid together. Profit goes down.' },
-    { key: 'bill', label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.' },
-    { key: 'billarrived', label: 'Bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now. Adds the number and due date, keeps the cost where it was." },
-    { key: 'paybill', label: 'Pay a bill', sub: 'Matched to the bills it settles. Profit unchanged.' },
-    { key: 'confirmcharge', label: 'Recurring cost — record this month', sub: 'Rent, subscriptions, retainers. Paid, or due to pay later.' },
-    { key: 'dealcost', label: 'Cost for a deal', sub: 'EC, patta, legal — mapped to one deal.' },
-    { key: 'salary', label: 'Salary / bonus', sub: 'Gross is the cost. Profit goes down.' },
-    { key: 'asset', label: 'Buy an asset', sub: 'Cash out now, cost spread monthly.' },
-    { key: 'petty', label: 'Petty cash vouchers', sub: 'Up to three spends from the box.' },
-    { key: 'director', label: 'Director paid a cost personally', sub: 'Cost now; company owes the director.' },
+  ['Expenses & bills', [
+    { key: 'expense', kw: ['rent', 'eb', 'electricity', 'fuel', 'print', 'coffee', 'tea', 'paid', 'purchase', 'shop'], label: 'Expense — paid now', sub: 'Used and paid together.', tier: 'daily' },
+    { key: 'petty', kw: ['voucher', 'box', 'cash', 'small'], label: 'Petty cash spends', sub: 'Up to three spends from the box.', tier: 'daily' },
+    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.', tier: 'daily' },
+    { key: 'bill', kw: ['invoice received', 'vendor bill', 'due', 'credit'], label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.', tier: 'weekly' },
+    { key: 'paybill', kw: ['vendor', 'settle', 'paid bill', 'clear'], label: 'Pay a vendor bill', sub: 'Matched to the bills it settles.', tier: 'weekly' },
+    { key: 'billarrived', kw: ['bill number', 'invoice number', 'last month'], label: 'Vendor bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now.", tier: 'weekly' },
+    { key: 'director', kw: ['own pocket', 'personal', 'reimburse'], label: 'Paid personally by the director', sub: 'Cost now; the company owes the director.', tier: 'weekly' },
+    { key: 'confirmcharge', kw: ['rent', 'subscription', 'retainer', 'saas', 'monthly', 'service', 'zoho', 'meta'], label: "Record this month's recurring cost", sub: 'Rent, subscriptions, retainers — paid, or due later.', tier: 'monthly' },
+    { key: 'asset', kw: ['laptop', 'furniture', 'vehicle', 'depreciation', 'equipment'], label: 'Buy an asset (lasts over a year)', sub: 'Cash out now; the cost is spread monthly.', tier: 'rarely' },
+    { key: 'vendorrefund', kw: ['refund', 'returned', 'credit'], label: 'Vendor refund / credit note received', sub: 'Reduces the cost and its GST credit, or returns an advance.', tier: 'rarely' },
   ]],
-  ['Set up', [
-    { key: 'newdeal', label: 'Add a deal', sub: 'Estimates only. Nothing counts as income until it closes.' },
-    { key: 'subnew', label: 'Add a recurring cost', sub: 'Rent, a subscription, a retainer. Sets what you expect each month; nothing posts yet.' },
-    { key: 'subchange', label: 'Change what a recurring cost will be', sub: 'New expected amount from a month.' },
-    { key: 'subcancel', label: 'Stop, pause or resume a recurring cost', sub: 'Unused prepaid leaves the books.' },
+  ['Salaries & taxes', [
+    { key: 'salary', kw: ['payroll', 'staff', 'bonus', 'wages', 'employee'], label: 'Salary / bonus', sub: 'Gross is the cost.', tier: 'monthly' },
+    { key: 'statutory', kw: ['gst', 'tds', 'pf', 'tax', 'government', 'challan', 'return'], label: 'Pay GST / TDS / PF to government', sub: 'Remitting what you held. Not a cost.', tier: 'monthly' },
   ]],
-  ['Move money', [
-    { key: 'emi', label: 'Pay an EMI', sub: 'Only the interest is a cost.' },
-    { key: 'card2emi', label: 'Convert a card purchase to EMI', sub: 'Restructures the debt.' },
-    { key: 'transfer', label: 'Move money between your own pockets', sub: 'Bank, petty cash, card bill, director. Never a cost.' },
-    { key: 'statutory', label: 'Pay GST / TDS / PF to government', sub: 'Remitting what you held. Not a cost.' },
+  ['Bank, cards & loans', [
+    { key: 'transfer', kw: ['card bill', 'petty cash', 'top up', 'bank to', 'contra', 'withdraw', 'deposit cash'], label: 'Transfer — bank, cash box, card bill, director', sub: 'Your own money moving. Never a cost.', tier: 'daily' },
+    { key: 'emi', kw: ['loan', 'instalment', 'installment', 'repayment'], label: 'Pay an EMI', sub: 'Only the interest is a cost.', tier: 'monthly' },
+    { key: 'funding', kw: ['capital', 'director', 'investment', 'infusion'], label: 'Capital / director loan received', sub: 'Financing, never income.', tier: 'rarely' },
+    { key: 'bankloan', kw: ['loan', 'nbfc', 'borrow'], label: 'New bank / NBFC loan', sub: 'Creates the EMI schedule.', tier: 'rarely' },
+    { key: 'card2emi', kw: ['credit card', 'convert'], label: 'Convert a card purchase to EMI', sub: 'Restructures the debt.', tier: 'rarely' },
   ]],
-  ['Corrections', [
-    { key: 'settle', label: 'Settle a token — refund / keep', sub: 'Refund: no profit change. Keep: becomes income.' },
-    { key: 'writeoff', label: 'Write off what a client will never pay', sub: 'Books the loss.' },
-    { key: 'absorb', label: 'Absorb a cost the client will not repay', sub: 'Recoverable becomes your expense.' },
-    { key: 'vendorrefund', label: 'Vendor refunded you / credit note', sub: 'Reduces the original cost and its GST credit, or returns an advance.' },
-    { key: 'creditnote', label: 'Reduce an invoice — credit note', sub: 'Renegotiated brokerage. Income and GST come down; a numbered note is issued.' },
-    { key: 'assetdispose', label: 'Sell or scrap an asset', sub: 'Gain or loss is worked out.' },
+  ['Recurring costs (set up)', [
+    { key: 'subnew', kw: ['subscription', 'rent', 'retainer', 'set up'], label: 'Add a recurring cost', sub: 'Rent, a subscription, a retainer. Sets what you expect; nothing posts.', tier: 'rarely' },
+    { key: 'subchange', kw: ['price change', 'upgrade', 'plan'], label: 'Change what a recurring cost will be', sub: 'New expected amount from a month.', tier: 'rarely' },
+    { key: 'subcancel', kw: ['cancel', 'pause', 'stop'], label: 'Stop, pause or resume a recurring cost', sub: 'Unused prepaid leaves the books.', tier: 'rarely' },
+  ]],
+  ['Adjustments & write-offs', [
+    { key: 'writeoff', kw: ['bad debt', 'will not pay', 'lost'], label: 'Write off a client balance', sub: 'Books the loss.', tier: 'rarely' },
+    { key: 'absorb', kw: ['recoverable', 'not repay'], label: 'Absorb a cost the client will not repay', sub: 'Recoverable becomes your expense.', tier: 'rarely' },
+    { key: 'assetdispose', kw: ['sell', 'scrap', 'dispose'], label: 'Sell or scrap an asset', sub: 'Gain or loss is worked out.', tier: 'rarely' },
   ]],
 ];
 

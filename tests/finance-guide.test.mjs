@@ -35,7 +35,8 @@ for (const t of ['start', 'screens', 'sop', 'actions', 'scenarios', 'accounting'
     check('The Claude upgrade example shows the new expectation', /expected charge becomes <b>₹10,000<\/b>/.test(html));
   }
   if (t === 'actions') {
-    const n = CHOOSER.reduce((a, [, items]) => a + items.filter(i => EV[i.key]).length, 0);
+    // Distinct buttons: a key listed in two groups (dealcost) is documented once.
+    const n = new Set(CHOOSER.flatMap(([, items]) => items.filter(i => EV[i.key]).map(i => i.key + '|' + JSON.stringify(i.preset || {})))).size;
     const cards = (html.match(/guide-action/g) || []).length;
     check(`One reference card per Record button (${n})`, cards === n, String(cards));
     check('Conditional fields are surfaced ("appears when")', /appears when/.test(html));

@@ -9,6 +9,8 @@
 // Shared by every test file so there is exactly one mirror to keep honest.
 
 import {
+  today,
+  ym,
   getState, setState, blank, defaultSettings, normalise, validate, reversalLines,
   fyOf, num, fmt, monthEndEntries, docStatus,
 } from '../finance-assets/finance-core.js';
@@ -252,8 +254,10 @@ export function reverse(txnId) {
   if (invPaid) throw new Error(`${invPaid.invoiceNo} has a payment against it. Reverse the payment first, or reduce the invoice with a credit note instead.`);
   const rid = nid('TX');
   const lines = normalise(reversalLines(t.lines));
+  // Same rule as finance-sync.js: on the original's day unless that month is closed.
+  const when = s.monthEnds[ym(t.date)] ? today() : t.date;
   s.txns.push({
-    id: rid, no: ++txnNo, date: t.date, event: 'reverse', desc: 'Reversal — ' + t.desc, lines,
+    id: rid, no: ++txnNo, date: when, event: 'reverse', desc: 'Reversal — ' + t.desc, lines,
     totals: {
       dr: lines.reduce((a, l) => a + num(l.dr), 0),
       cr: lines.reduce((a, l) => a + num(l.cr), 0),
@@ -272,7 +276,7 @@ export function reverse(txnId) {
     const total = a.coll === 'bills' ? num(cur.net ?? cur.total) : num(cur.total);
     cur.paid = paid;
     cur.status = docStatus(total - paid, total);
-    cur.allocations = [...(cur.allocations || []), { txnId: rid, amt: -num(a.amt), date: t.date, reversal: true }];
+    cur.allocations = [...(cur.allocations || []), { txnId: rid, amt: -num(a.amt), date: when, reversal: true }];
   }
   const madeBills = s.bills.filter(b => b.txnId === txnId && b.status !== 'void');
   for (const b of madeBills) { b.status = 'void'; b.voidedBy = rid; }

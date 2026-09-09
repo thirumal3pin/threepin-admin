@@ -44,7 +44,7 @@ const sortedBalances = code => Object.entries(partyBalances(code))
   .sort((a, b) => b[1] - a[1]);
 
 const totalRow = (label, amount, span = 1) =>
-  `<tr><td colspan="${span}" data-label="${esc(label)}">${esc(label)}</td><td class="n">${fmt(amount)}</td><td></td></tr>`;
+  `<tr><td colspan="${span}">${esc(label)}</td><td class="n" data-label="Amount">${fmt(amount)}</td><td></td></tr>`;
 
 export function renderOwed() {
   const s = getState();
@@ -198,7 +198,7 @@ function sectionTokens(rows) {
   if (!rows.length) return '';
   return `
     <h2>Client tokens held</h2>
-    ${note('This money is <b>not yours yet</b>. It becomes income only when the deal registers, or when the client agrees you may keep it.', 'info')}
+    ${note('This money is <b>not yours yet</b>. It becomes income only when it is adjusted against an invoice, or when the client agrees you may keep it.', 'info')}
     ${table(
     `<th>Client</th><th class="n">Held</th><th></th>`,
     rows.map(([id, amt]) => {

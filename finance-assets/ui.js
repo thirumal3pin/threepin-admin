@@ -45,7 +45,7 @@ export function modal({ title, body, foot, onClose }) {
   onCloseModal = onClose || null;
   const ov = document.getElementById('ov');
   ov.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title || 'Dialog')}">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title || 'Dialog')}" tabindex="-1">
       <div class="modal-head">
         <h3>${esc(title || '')}</h3>
         <div class="spacer"></div>
@@ -56,8 +56,9 @@ export function modal({ title, body, foot, onClose }) {
     </div>`;
   ov.classList.add('show');
   ov.querySelector('[data-close]').onclick = closeModal;
-  const focusable = ov.querySelector('input,select,textarea,button:not([data-close])');
-  (focusable || ov.querySelector('[data-close]')).focus();
+  // Focus the dialog itself, not whichever button happens to come first — a drawer should
+  // open on its title, with no ring painted on a random control.
+  ov.querySelector('.modal').focus({ preventScroll: true });
 }
 
 export function closeModal() {
@@ -95,7 +96,7 @@ export function confirmDialog({ title, message, confirmLabel = 'Confirm', danger
 export const stat = (label, value, opts = {}) => {
   const d = opts.drill ? esc(JSON.stringify({ title: label, ...opts.drill })) : null;
   return `
-  <div class="card stat ${opts.hero ? 'hero' : ''} ${d ? 'drill' : ''}"
+  <div class="card stat ${opts.hero ? 'hero' : opts.key ? 'key' : ''} ${d ? 'drill' : ''}"
     ${d ? `role="button" tabindex="0" onclick="fin.explain('${d}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();fin.explain('${d}')}" title="See what makes up this figure"` : ''}>
     <div class="l">${esc(label)}</div>
     <div class="v ${opts.cls || ''}">${opts.raw ? value : esc(value)}</div>
@@ -130,7 +131,7 @@ export const tag = (text, kind = '') => `<span class="tag ${kind}">${esc(text)}<
 // reader has to scroll sideways and then remember the heading of. Cells opt in by carrying
 // data-label; a cell without one still shows, just without its heading repeated.
 export const table = (head, rows, foot = '', o = {}) => `
-  <div class="card pad0"><div class="tbl-wrap"><table class="${o.stack ? 'stack' : ''}">
+  <div class="card pad0"><div class="tbl-wrap"><table class="${o.stack ? 'stack' : ''}${o.cls ? ' ' + o.cls : ''}">
     <thead><tr>${head}</tr></thead>
     <tbody>${rows}</tbody>
     ${foot ? `<tfoot>${foot}</tfoot>` : ''}

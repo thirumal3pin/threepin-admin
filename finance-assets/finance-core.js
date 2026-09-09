@@ -321,9 +321,25 @@ export function sideParty(d, side) {
 // credit-positive. Reversed transactions are NOT filtered out: a reversal posts its own
 // mirror-image entry, so the pair already nets to zero wherever it is counted.
 
+// A reversed entry and the reversal that undid it. Together they moved nothing.
+export const isUndone = t => !!(t && (t.reversedBy || t.reversalOf));
+
+// Has this side of a deal been invoiced — a brokerage invoice for that party on that deal,
+// not voided, not a credit note? Once it has, the side's estimate leaves every projection:
+// the real figure is on the invoice.
+export function sideInvoiced(d, side) {
+  const pid = d?.[side]?.partyId;
+  if (!pid) return false;
+  return S.invoices.some(i => i.dealId === d.id && i.partyId === pid && i.kind !== 'creditnote' && i.status !== 'void');
+}
+
 export function bal(code, f = {}) {
   let s = 0;
   for (const t of S.txns) {
+    // The pair nets to zero whenever both halves are inside the range asked for. skipUndone
+    // is for the cash book's opening and the reconciliation's book balance, where a pair
+    // straddling the cut-off date would otherwise leave a movement that never happened.
+    if (f.skipUndone && isUndone(t)) continue;
     if (f.upto && t.date > f.upto) continue;
     if (f.from && t.date < f.from) continue;
     if (f.month && ym(t.date) !== f.month) continue;
@@ -1045,7 +1061,7 @@ export function monthPicture(month) {
   //    separately and the card balance is shown as what it is, a debt with a date to come.
   let onCard = 0;
   for (const t of S.txns) {
-    if (ym(t.date) !== m) continue;
+    if (ym(t.date) !== m || isUndone(t)) continue;
     const mv = moneyMoved(t, ['1000', '1010']);
     const card = -(t.lines || []).reduce((s2, l) => l.acc === '2300' ? s2 + num(l.dr) - num(l.cr) : s2, 0);
     // A card purchase raises the card balance without touching bank or box.
@@ -1112,10 +1128,11 @@ export function monthPicture(month) {
     if ((a.depreciated || []).includes(m) || (a.depreciated || []).length >= num(a.life)) continue;
     outEst.push({ what: `${a.name} — depreciation`, amt: num(a.monthly), when: last, kind: 'depreciation', noCash: true, code: '5200' });
   }
+  // Per side: a deal that has registered but whose seller is not yet invoiced is the surest
+  // expectation there is, and the buyer having been billed says nothing about the seller.
   for (const d of S.deals) {
-    if (d.status !== 'open' || d.expMonth !== m) continue;
-    if (invs.some(i => i.dealId === d.id)) continue;
-    const amt = r2(num(d.expSeller) + num(d.expBuyer));
+    if (d.status === 'cancelled' || d.expMonth !== m) continue;
+    const amt = r2((sideInvoiced(d, 'seller') ? 0 : num(d.expSeller)) + (sideInvoiced(d, 'buyer') ? 0 : num(d.expBuyer)));
     if (amt > 0.005) innEst.push({ what: `${d.nickname} — expected to close`, amt, when: last, kind: 'deal', dealId: d.id, code: '4000', soft: true });
   }
   // A figure the owner typed for an account REPLACES what the app worked out for it — the
@@ -1388,8 +1405,10 @@ export function explain(spec = {}) {
     if (spec.event && t.event !== spec.event) continue;
     if (spec.events && !spec.events.includes(t.event)) continue;
     if (spec.fy && t.fy !== spec.fy) continue;
-    if (spec.moved && !movesMoney(t)) continue;
-    if (spec.includeReversed === false && (t.reversedBy || t.reversalOf)) continue;
+    // A cash drill-down ties to totals that leave void pairs out, so it leaves them out too.
+    // A profit or ledger drill-down keeps them: there the parts net to the total shown.
+    if (spec.moved && (!movesMoney(t) || isUndone(t))) continue;
+    if (spec.includeReversed === false && isUndone(t)) continue;
     let amt = 0, hit = false;
     for (const l of t.lines || []) {
       if (accs && !accs.has(String(l.acc))) continue;
@@ -1849,12 +1868,14 @@ export function cashBook(from, to, accs = ['1000', '1010']) {
   const f = from || S.settings.booksStartDate || '2000-01-01';
   const t = to || today();
   const before = addDays(f, -1);
-  const opening = r2(accs.reduce((a, c) => a + bal(c, { upto: before }), 0));
+  const opening = r2(accs.reduce((a, c) => a + bal(c, { upto: before, skipUndone: true }), 0));
   let running = opening;
   const rows = [];
   const inRange = [...S.txns].filter(x => x.date >= f && x.date <= t)
     .sort((a, b) => a.date.localeCompare(b.date) || num(a.no) - num(b.no));
   for (const x of inRange) {
+    // A mistake and its reversal are not two movements through the bank; they are none.
+    if (isUndone(x)) continue;
     const m = moneyMoved(x, accs);
     if (!m.in && !m.out) continue;
     running = r2(running + m.net);
@@ -1904,6 +1925,7 @@ export function pettyActivity(f = {}) {
   for (const t of S.txns) {
     if (f.month && ym(t.date) !== f.month) continue;
     if (f.upto && t.date > f.upto) continue;
+    if (isUndone(t)) continue;
     const l = t.lines.find(x => x.acc === PETTY);
     if (!l) continue;
     const dr = num(l.dr), cr = num(l.cr);
@@ -1963,9 +1985,9 @@ export function projection(month) {
     add(expense, '5200', a.monthly, `${a.name} depreciation`);
   }
   for (const d of S.deals) {
-    if (d.status !== 'open' || d.expMonth !== m) continue;
-    add(income, '4000', d.expSeller, `${d.nickname} (seller side)`);
-    add(income, '4010', d.expBuyer, `${d.nickname} (buyer side)`);
+    if (d.status === 'cancelled' || d.expMonth !== m) continue;
+    if (!sideInvoiced(d, 'seller')) add(income, '4000', d.expSeller, `${d.nickname} (seller side)`);
+    if (!sideInvoiced(d, 'buyer')) add(income, '4010', d.expBuyer, `${d.nickname} (buyer side)`);
   }
   // The owner's own numbers override what the app worked out for that account.
   const typed = budgetLines(m);
