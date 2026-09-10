@@ -221,7 +221,7 @@ section('B. Short-pays — vendor side and client side');
   check('Oldest closes fully first…', near(b1.paid, 10000) && txnOf(twoBills).allocations[0].id === b1.id && near(txnOf(twoBills).allocations[0].amt, 10000));
   check('…the newer one absorbs the let-off (its allocation is still the full 6,000)', near(b2.paid, 6000) && txnOf(twoBills).allocations.length === 2, JSON.stringify(txnOf(twoBills).allocations));
   eq('Only 15,500 left the bank', bal('1000'), 200000 - 15500);
-  eq('The 500 is discounts received', bal('4060'), 500);
+  eq('The 500 comes off the cost of the boards and flex', bal('5100'), 16000 - 500);
   eq('Nothing owed', bal('2000', { party: tv }), 0);
 
   // The vendor holds an advance; the next bill is settled with cash + advance + a let-off.
@@ -235,14 +235,14 @@ section('B. Short-pays — vendor side and client side');
   check('Cash + advance + let-off close the bill', vinyl.status === 'paid' && near(vinyl.paid, 5000), JSON.stringify(vinyl));
   eq('The advance is used up', vendorAdvance(tv), 0);
   eq('Only 3,800 cash', bankB - bal('1000'), 3800);
-  eq('Discounts received now 700', bal('4060'), 700);
+  eq('Printing cost is net of the 700 let off', bal('5100'), 25000 - 700);
 
   // The vendor waives a whole small bill: nothing moves, the bill still closes.
   save('bill', { date: '2026-09-17', vendor: tv, desc: 'Sample', acc: '5100', amt: 300, rcm: 'no' });
   const sample = openBills(tv)[0];
   const waived = save('paybill', { date: '2026-09-18', party: tv, amt: 0, short: 300, via: '1000' });
   check('A fully waived bill closes with no money moving', sample.status === 'paid' && !movesMoney(txnOf(waived)), JSON.stringify(sample));
-  eq('…and the waiver is income', bal('4060'), 1000);
+  eq('…and a waived bill leaves no cost behind', bal('5100'), 25300 - 1000);
 
   // Over-pay AND let off is contradictory: refused on both sides.
   save('bill', { date: '2026-09-19', vendor: tv, desc: 'Poster', acc: '5100', amt: 2000, rcm: 'no' });
@@ -771,28 +771,28 @@ section('I. Edge cases — zero amounts, dates, opening balances, references, un
   save('bill', { date: '2026-09-08', vendor: zv, desc: 'Banner', acc: '5100', amt: 10000, rcm: 'no' });
   const banner = openBills(zv)[0];
   const shortPay = save('paybill', { date: '2026-09-09', party: zv, amt: 9500, short: 500, via: '1000' });
-  check('Short-paid and closed', banner.status === 'paid' && bal('4060') === 500);
+  check('Short-paid and closed, the cost net of the 500', banner.status === 'paid' && near(bal('5100'), 10500), String(bal('5100')));
   reverse(shortPay);
   check('Reversal reopens the bill in full', banner.status === 'open' && near(banner.paid, 0) && near(billOutstanding(banner), 10000), JSON.stringify(banner));
-  eq('The discount income is gone', bal('4060'), 0);
+  eq('The cost is back in full', bal('5100'), 11000);
   eq('The vendor is owed the full bill again', bal('2000', { party: zv }), 10000);
   check('The reversal is on the bill\'s history', banner.allocations.some(a => a.reversal));
 
   // Double-dip: a discount taken at payment, then the vendor's credit note for the same amount.
   save('paybill', { date: '2026-09-10', party: zv, amt: 9500, short: 500, via: '1000' });
-  eq('Discount received once', bal('4060'), 500);
+  eq('The cost is net of the 500, once', bal('5100'), 10500);
   refuses('A credit note for the same 500 against a closed bill is refused — nothing is owed',
     () => save('vendorrefund', { date: '2026-09-11', vendor: zv, desc: 'Banner discount note', what: 'cost', acc: '5100', amt: 500, rcm: 'no', how: 'credit' }), 'only owe');
-  eq('So the cost stands', bal('5100'), 1000 + 10000);
+  eq('So the cost stays net of the 500', bal('5100'), 10500);
   // PRODUCT GAP (not asserted as a bug): once the vendor has another open bill, the same
-  // credit note is accepted and applied to that bill — the 500 is then counted twice, once
-  // as discount income and once as a cost reduction. The engine cannot know the note refers
-  // to a discount already taken; the owner has to reverse the discount instead.
+  // credit note is accepted and applied to that bill — the 500 then comes off the cost twice,
+  // once as the discount and once as the note. The engine cannot know the note refers to a
+  // discount already taken; the owner has to reverse the discount instead.
   save('bill', { date: '2026-09-12', vendor: zv, desc: 'Stand', acc: '5100', amt: 3000, rcm: 'no' });
   save('vendorrefund', { date: '2026-09-13', vendor: zv, desc: 'Banner discount note', what: 'cost', acc: '5100', amt: 500, rcm: 'no', how: 'credit' });
   eq('The note now lands on the newer bill', bal('2000', { party: zv }), 2500);
   // Printing booked so far: 1,000 + 10,000 + 3,000 = 14,000 before the note.
-  eq('…and the books count the 500 twice (income 500 + cost down 500) — a known gap', bal('4060') + (14000 - bal('5100')), 1000);
+  eq('…and the books take the 500 off twice (discount and note) — a known gap', 14000 - bal('5100'), 1000);
 
   // An advance returned as money is not a cost change.
   save('paybill', { date: '2026-09-14', party: zv, amt: 3000, via: '1000', over: 'advance' });

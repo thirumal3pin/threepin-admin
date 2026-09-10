@@ -212,7 +212,7 @@ const SCENARIOS = [
     event: 'paybill',
     prepare: s => rentTrued(s),
     values: () => ({ date: '2026-12-15', party: 'P9', amt: 20000, short: 500, shortWhy: 'discount', via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
-    point: 'Put the ₹500 in <b>Amount not being paid</b> and say why. The bank shows ₹20,000 out and nothing more; the bill still closes in full; the ₹500 is a <b>discount received</b>, not a cut in the rent. Had this bill carried GST, the credit on the ₹500 would come back in the same entry — you never paid it, so it cannot stand. <span class="small faint">(Dr 2000 20,500; Cr 1000 20,000; Cr 4060 500.)</span>',
+    point: 'Put the ₹500 in <b>Amount not being paid</b> and say why. The bank shows ₹20,000 out and nothing more; the bill still closes in full; the ₹500 comes off the rent — the rent simply cost ₹20,000. It is not income: nothing came in. Had this bill carried GST, the credit on the ₹500 would come back in the same entry — you never paid it, so it cannot stand. <span class="small faint">(Dr 2000 20,500; Cr 1000 20,000; Cr 5000 500.)</span>',
   },
   {
     group: 'A cost from guess to settled', id: 'lc-discount-later', button: 'Close what is left on a bill',
@@ -220,7 +220,7 @@ const SCENARIOS = [
     event: 'billclose',
     prepare: s => rentPartPaid(s),
     values: { date: '2026-12-22', party: 'P9', bill: 'B5', amt: 500, why: 'discount' },
-    point: '<b>No money moves.</b> The ₹500 leaves what you owe, the bill closes, and it never appears as money out. <b>Say why</b>, because the four answers are four different entries: a waiver is income and the GST credit on it comes back (Rule 37); a <b>credit note</b> reduces the original cost and reverses the same credit (s.34(2)); <b>TDS</b> is owed to the government by the 7th and touches no credit at all; a <b>write-off</b> is income under s.41(1). The button is on the bill\'s row on Owed and in the entry\'s drawer. <span class="small faint">(Dr 2000 500; Cr 4060 500 — plus the credit back if the bill had GST.)</span>',
+    point: '<b>No money moves.</b> The ₹500 leaves what you owe, the bill closes, and it never appears as money out. <b>Say why</b>: a waiver, a <b>credit note</b> and a <b>write-off</b> all come off the original cost — a bill let off is a smaller bill, not income — and the GST credit on that part comes back (Rule 37; s.34(2) for the note); <b>TDS</b> is owed to the government by the 7th and touches no credit at all. The button is on the bill\'s row on Owed and in the entry\'s drawer. <span class="small faint">(Dr 2000 500; Cr 5000 500 — plus the credit back if the bill had GST.)</span>',
   },
   // ── Deals
   {
@@ -1395,7 +1395,7 @@ function accountingItems() {
     4000: 'Brokerage earned from the seller.', 4010: 'Brokerage earned from the buyer.',
     4020: 'Consultancy and advisory fees.', 4030: 'A token kept when a deal falls through.',
     4040: 'Anything else earned.', 4050: 'A debt written off in an earlier year and later recovered.',
-    4060: 'An amount a vendor let you off when you paid. Income, not a reduction in the cost.',
+    4060: 'Not posted to by the Record screen: an amount a vendor lets you off comes off the cost of that bill instead. Kept for books carried in the other way.',
     5000: 'Office and premises rent.', 5010: 'Salaries, gross.', 5020: 'Bonus and incentive.',
     5030: 'Staff welfare and food. GST credit blocked.', 5040: 'Commission and referral fees paid.',
     5045: 'Costs of a specific deal — EC, patta, legal, documentation.',
@@ -1412,7 +1412,7 @@ function accountingItems() {
     5200: 'Depreciation, posted at month-end.',
     5210: 'What is lost when a prepaid plan is cancelled early.',
     5220: 'Loss on selling or scrapping an asset.',
-    5225: 'A discount you allowed a client, or a short receipt you accepted.',
+    5225: 'Not posted to by the Record screen: a discount you allow a client comes off the brokerage income instead. Kept for books carried in the other way.',
     5230: 'A cost belonging to an earlier month that could not be posted there. Disclosed separately.',
   };
   const acctRows = list => list.map(a => [
@@ -1450,7 +1450,7 @@ function accountingItems() {
       <div class="grid g1">
         ${rule('A document is a record, not a line item', 'Every bill and invoice is stored with its number, date, due date, taxable value, GST, TDS, total, how much has been paid, and every payment against it. Status — open, part-paid, settled, void — is derived from those numbers, never typed.')}
         ${rule('Allocation', 'A payment names the documents it settles and how much goes to each, oldest first by default and editable. Pay less and the document is part-paid; pay more and the excess is an advance to that vendor (1550) or, on the client side, money held (2100). This is what makes "which bill is still open" answerable at all.')}
-        ${rule('An amount let off', 'A vendor letting you off part of a bill closes it in full: the shortfall is income in <b>4060 Discounts received</b>, and the GST already claimed on the original stands, because no credit note was issued. If the vendor does issue a credit note, use the vendor credit note action instead, which reverses the GST too. On the client side a discount you allow is <b>5225</b>, while a bank charge the client\'s bank deducted is <b>5140</b>.', 'A commercial write-off is not a GST credit note under s.34 unless the vendor issues one.')}
+        ${rule('An amount let off', 'A vendor letting you off part of a bill closes it in full, and the shortfall comes off the head the bill was booked to: rent that cost 17,500 is rent of 17,500, not rent of 18,000 and 500 earned. Income is what comes in. The GST credit on the part never paid goes back (Rule 37; s.34(2) if they sent a credit note); TDS you withheld is owed onward instead. On the client side a discount you allow comes off the brokerage income the invoice was raised on, while a bank charge the client\'s bank deducted is a cost, <b>5140</b>.', 'Both treatments give the same profit. These books show the net, which is what actually happened.')}
         ${rule('Reversals', 'A wrong entry is corrected by posting its mirror image; both stay visible. A bill or invoice cannot be reversed while payments against it still net above zero — reverse the payment first. An accrual whose vendor bill has since been attached cannot be reversed before that entry is. Documents are voided, never deleted.')}
       </div>`),
 
@@ -1572,11 +1572,11 @@ const FAQ = [
     ['Why does a bill I have not paid show up in Transactions?',
       'Because it is an entry: the cost is real the day the bill arrives, and profit for that month goes down by it. What has not happened yet is the money moving. Switch Transactions to <b>Money moved</b> to see only cash, or <b>Not paid yet</b> to see only bills and invoices waiting to settle. Reports → <b>Money in and out</b> is the cash book: opening, every movement, closing.'],
     ['The bill was ₹18,000, they gave me ₹500 off, I paid ₹17,500. How do I record that?',
-      '<b>Pay a bill</b> → amount paid 17,500 → <b>Amount the vendor let you off</b> 500. The bill closes in full, ₹17,500 leaves the bank, and the ₹500 is booked as a discount received. The GST you claimed on the original stands — the vendor did not issue a credit note. If they did, use <b>Vendor refunded you / credit note</b> instead, which also gives back the GST.'],
+      '<b>Pay a bill</b> → amount paid 17,500 → <b>Amount not being paid</b> 500, and say it was a discount. The bill closes in full, ₹17,500 leaves the bank, and the ₹500 comes off the rent — the rent cost ₹17,500, and nothing is booked as income. If the bill carried GST, the credit on the ₹500 goes back in the same entry, because you never paid that part; if the landlord sends a credit note, choose that instead so the return matches.'],
     ['I already paid the 17,500 as a normal payment and Owed still shows 500 on that bill.',
-      '<b>Pay a bill</b> again for that vendor: amount paid <b>0</b>, <b>Amount the vendor let you off</b> 500. No money moves; the bill closes and the 500 is booked as a discount received.'],
+      '<b>Close what is left on a bill</b> — on the bill\'s row on Owed, or in the entry\'s drawer: ₹500, discount. No money moves; the bill closes and the ₹500 comes off the rent.'],
     ['A client paid ₹500 less than the invoice.',
-      '<b>Client pays what they owe</b> → amount received → <b>Amount you let them off</b> 500, and say whether it was a discount you allowed or charges their bank deducted. The invoice closes in full. For a renegotiated brokerage use <b>Reduce an invoice — credit note</b>, which reduces the GST too.'],
+      '<b>Client pays what they owe</b> → amount received → <b>Discount you gave them</b> 500, and say whether it was a discount you allowed — it comes off your brokerage income, the fee was that much less — or charges their bank deducted, which are a cost. The invoice closes in full. For a renegotiated brokerage use <b>Reduce an invoice — credit note</b>, which reduces the GST too.'],
     ['What is the difference between an expense and a bill?',
       'Timing. An <b>expense</b> is used and paid in the same moment. A <b>bill</b> is a cost you have incurred but not yet paid — it goes on Owed with a due date, and the payment is a separate entry matched to it. Both hit profit on the day of the cost; only the cash timing differs.'],
     ['What does "allocated" mean on a payment?',

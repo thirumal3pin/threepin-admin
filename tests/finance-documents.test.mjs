@@ -568,8 +568,8 @@ section('Paying less than the bill says');
   eq('The bill closes in full', bal('2000', { party: dv }), 0);
   check('…and the document says paid', bill.status === 'paid' && near(bill.paid, 18000), JSON.stringify(bill));
   eq('Only 17,500 left the bank', bal('1000'), 100000 - 17500);
-  eq('The 500 is a discount received', bal('4060'), 500);
-  eq('The original cost stands', bal('5100'), 18000);
+  eq('The 500 comes off the cost of the banners', bal('5100'), 17500);
+  eq('Nothing is booked as income', bal('4060'), 0);
   check('Trial balance still balances', trialBalance().balanced);
 
   // The client side: a discount you allowed, and charges their bank deducted.
@@ -581,7 +581,8 @@ section('Paying less than the bill says');
   save('dealpay', { date: '2026-09-12', party: cl, amt: 49200, short: 800, shortWhy: 'discount', via: '1000' });
   eq('The invoice closes in full', bal('1100', { party: cl }), 0);
   check('…and the document says paid', inv.status === 'paid', inv.status);
-  eq('The discount allowed is a cost', bal('5225'), 800);
+  eq('The discount allowed comes off the brokerage — income is what came in', bal('4000'), 50000 - 800);
+  eq('…and is not a cost', bal('5225'), 0);
   save('newdeal', { date: '2026-09-03', nickname: 'Bank-charge deal', seller: { __new: true, name: 'Seller T', type: 'client' }, expSeller: 20000 });
   const d2 = byName(g.deals, 'Bank-charge deal').id;
   save('invoice', { date: '2026-09-06', deal: d2, from: 'seller', amt: 20000, gst: 'no', tds: 0, adv: 0, recv: 'later' });
@@ -600,7 +601,7 @@ section('Paying less than the bill says');
   eq('Letting off the rest with no money closes the bill', bal('2000', { party: ll }), 0);
   eq('…no cash moved', bal('1000'), bankBefore);
   check('…and the bill document is paid', openBills(ll).length === 0);
-  eq('…the 500 joined discounts received', bal('4060'), 500 + 500);
+  eq('…the 500 came off the rent', bal('5000'), 18000 - 500);
   eq('…and that invoice is settled too', bal('1100', { party: cl2 }), 0);
 }
 

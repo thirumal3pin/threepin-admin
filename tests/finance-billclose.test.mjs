@@ -1,11 +1,13 @@
 // ═══════ WHEN PART OF A BILL WILL NEVER BE PAID ═══════
 //
 // The rent was 18,000. The landlord took 17,500 and the 500 was never paid. That gap is not
-// always a discount — it can be a waiver, a GST credit note, TDS withheld, or a write-off —
-// and the four post four different entries. Whichever it is, one thing must not be quietly
-// skipped: if input credit was claimed on that bill, the credit on the part you never paid
-// has to come back. Rule 37 for a waiver or a write-off; s.34(2) for a credit note; nothing
-// at all for TDS, because the supply WAS paid for in full, part of it to the government.
+// always a discount — it can be a waiver, a GST credit note, TDS withheld, or a write-off.
+// Whichever it is, it is NOT income: the rent simply cost 17,500 (the owner's rule — income is
+// what comes in, and nothing came in), so it comes off the head the bill was booked to. And
+// one thing must not be quietly skipped: if input credit was claimed on that bill, the credit
+// on the part you never paid has to come back. Rule 37 for a waiver or a write-off; s.34(2)
+// for a credit note; nothing at all for TDS, because the supply WAS paid for in full, part of
+// it to the government.
 //
 //   node tests/finance-billclose.test.mjs
 
@@ -41,8 +43,8 @@ section('The plain case — 18,000 billed, 17,500 paid, 500 waived at the same m
   const id = save('paybill', { date: '2026-09-10', party: landlord(), amt: 17500, short: 500, shortWhy: 'discount', via: '1000' });
   eq('Bank went down by what was actually paid', bal('1000'), 100000 - 17500);
   eq('Nothing is still owed', bal('2000', { party: landlord() }), 0);
-  eq('The 500 is a discount received', bal('4060'), 500);
-  eq('Rent stays at the billed 18,000', bal('5000'), 18000);
+  eq('The rent cost 17,500 — the 500 comes off the rent', bal('5000'), 17500);
+  eq('Nothing is booked as income', bal('4060'), 0);
   eq('Money out is 17,500 — the 500 never left the bank', moneyMoved(txn(id)).out, 17500);
   check('The bill is closed', bill().status === 'paid' && billOutstanding(bill()) < 0.01);
   check('The entry says it was a discount', /discount/i.test(txn(id).desc), txn(id).desc);
@@ -55,11 +57,12 @@ section('The same gap, a week later — the 500 was still showing as owed');
   check('After the part-payment 500 is open', bill().status === 'part' && Math.abs(billOutstanding(bill()) - 500) < 0.01);
   const id = save('billclose', { date: '2026-09-17', party: landlord(), bill: bill().id, amt: 500, why: 'discount' });
   eq('Nothing is owed any more', bal('2000', { party: landlord() }), 0);
-  eq('The 500 is a discount received', bal('4060'), 500);
+  eq('The rent cost 17,500', bal('5000'), 17500);
+  eq('Nothing is booked as income', bal('4060'), 0);
   eq('The bank did not move', bal('1000'), 100000 - 17500);
   check('The entry moves no money at all', moneyMoved(txn(id)).in === 0 && moneyMoved(txn(id)).out === 0);
-  check('Payable → Discounts received, 500 each side',
-    txn(id).lines.some(l => l.acc === '2000' && l.dr === 500) && txn(id).lines.some(l => l.acc === '4060' && l.cr === 500), JSON.stringify(txn(id).lines));
+  check('Payable → Rent, 500 each side',
+    txn(id).lines.some(l => l.acc === '2000' && l.dr === 500) && txn(id).lines.some(l => l.acc === '5000' && l.cr === 500), JSON.stringify(txn(id).lines));
 }
 
 section('The gap is not always a discount — TDS withheld');
@@ -93,15 +96,15 @@ section('…and not always income — a GST credit note reduces the cost');
   check('It says credit note', /credit note/i.test(t.desc), t.desc);
 }
 
-section('A waiver on a GST bill — income, and the credit still comes back (Rule 37)');
+section('A waiver on a GST bill — a smaller rent, and the credit still comes back (Rule 37)');
 {
   gstBill();
   save('paybill', { date: '2026-09-10', party: landlord(), amt: 20740, via: '1000' });
   save('billclose', { date: '2026-09-17', party: landlord(), bill: bill().id, amt: 500, why: 'discount' });
   eq('CGST credit given back', 1620 - bal('1400'), 38.13, 0.05);
   eq('SGST credit given back', 1620 - bal('1401'), 38.13, 0.05);
-  eq('The value is income', bal('4060'), 423.74, 0.05);
-  eq('The rent cost is untouched — a waiver is not a cheaper rent', bal('5000'), 18000);
+  eq('The value comes off the rent', 18000 - bal('5000'), 423.74, 0.05);
+  eq('Nothing is booked as income — a waiver IS a cheaper rent', bal('4060'), 0);
 }
 
 section('TDS on a GST bill leaves the credit alone');
