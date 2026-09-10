@@ -164,7 +164,7 @@ function sectionPayable(rows) {
               <span class="n">${fmt(billOutstanding(b))}${b.status === 'part' ? ` <span class="small faint">of ${fmt(b.net ?? b.total)}</span>` : ''}</span>
               <span>${dueCell(b.dueDate)}
                 ${!b.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.record('billarrived',{billId:'${esc(b.id)}'})">Bill arrived</button>` : ''}
-                <button class="btn ghost sm" type="button" onclick="fin.record('billdiscount',{party:'${esc(id)}',bill:'${esc(b.id)}'})" title="The vendor let you off what is left — no money moves">Discount</button>
+                <button class="btn ghost sm" type="button" onclick="fin.record('billclose',{party:'${esc(id)}',bill:'${esc(b.id)}'})" title="Discount, TDS, credit note or written off — no money moves">Close</button>
                 ${b.txnId ? `<button class="btn ghost sm" type="button" onclick="fin.openTxn('${esc(b.txnId)}')">Entry</button>` : ''}
                 ${b.serviceId ? `<button class="btn ghost sm" type="button" onclick="fin.go('services')">Service</button>` : ''}
               </span>

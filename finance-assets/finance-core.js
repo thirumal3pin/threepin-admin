@@ -861,6 +861,33 @@ export function itcRegister(month) {
 // anything — it lists what the return has to carry, because only the CA can decide the
 // interest period.
 
+// The input credit a bill actually took, head by head, read back from the entries that
+// created and trued it up — never re-derived from a rate. Netting across those entries is
+// what makes it right in every shape the app can produce: an accrual parks the tax in 1405
+// and "Bill arrived" releases it to 1400/1401, so the pair nets to the credit really held;
+// blocked ITC was capitalised into the cost and never appears here at all, which is correct,
+// because reducing the cost already gives it back.
+//
+// `share` is the fraction of the bill being given up. Rule 37 (and s.34(2) for a credit note)
+// both work on exactly that proportion.
+export function billTaxBack(bill, share = 1) {
+  if (!bill) return [];
+  const CODES = ['1400', '1401', '1402', '1405'];
+  const net = {};
+  for (const t of S.txns || []) {
+    if (t.reversedBy || t.reversalOf) continue;
+    const mine = t.id === bill.txnId || t.meta?.billId === bill.id;
+    if (!mine) continue;
+    for (const l of t.lines || []) {
+      if (!CODES.includes(l.acc)) continue;
+      net[l.acc] = r2((net[l.acc] || 0) + num(l.dr) - num(l.cr));
+    }
+  }
+  return CODES.filter(c => (net[c] || 0) > HALF_PAISA)
+    .map(c => ({ acc: c, amt: r2(net[c] * share) }))
+    .filter(x => x.amt > HALF_PAISA);
+}
+
 export function rule37Rows(month) {
   const at = lastDayOfMonth(month || ym(today()));
   const cutoff = addDays(at, -180);

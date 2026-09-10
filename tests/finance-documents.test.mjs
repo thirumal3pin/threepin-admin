@@ -563,7 +563,7 @@ section('Paying less than the bill says');
   const dv = party('Discount Vendor');
   const bill = openBills(dv)[0];
   refuses('You cannot be let off more than is left',
-    () => save('paybill', { date: '2026-09-10', party: dv, amt: 17500, short: 600, via: '1000', useAdvance: 'no' }), 'let you off');
+    () => save('paybill', { date: '2026-09-10', party: dv, amt: 17500, short: 600, via: '1000', useAdvance: 'no' }), 'left to close');
   save('paybill', { date: '2026-09-10', party: dv, amt: 17500, short: 500, via: '1000', useAdvance: 'no' });
   eq('The bill closes in full', bal('2000', { party: dv }), 0);
   check('…and the document says paid', bill.status === 'paid' && near(bill.paid, 18000), JSON.stringify(bill));

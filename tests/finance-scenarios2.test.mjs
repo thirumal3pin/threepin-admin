@@ -215,7 +215,7 @@ section('B. Short-pays — vendor side and client side');
   save('bill', { date: '2026-09-03', vendor: tv, desc: 'Flex', acc: '5100', amt: 6000, rcm: 'no' });
   const [b1, b2] = openBills(tv);
   refuses('Let off more than what is left across both bills — refused',
-    () => save('paybill', { date: '2026-09-10', party: tv, amt: 15500, short: 501, via: '1000' }), 'let you off');
+    () => save('paybill', { date: '2026-09-10', party: tv, amt: 15500, short: 501, via: '1000' }), 'left to close');
   const twoBills = save('paybill', { date: '2026-09-10', party: tv, amt: 15500, short: 500, via: '1000' });
   check('Two bills, one payment, a little let off: both close', b1.status === 'paid' && b2.status === 'paid', JSON.stringify([b1.status, b2.status]));
   check('Oldest closes fully first…', near(b1.paid, 10000) && txnOf(twoBills).allocations[0].id === b1.id && near(txnOf(twoBills).allocations[0].amt, 10000));
@@ -247,7 +247,7 @@ section('B. Short-pays — vendor side and client side');
   // Over-pay AND let off is contradictory: refused on both sides.
   save('bill', { date: '2026-09-19', vendor: tv, desc: 'Poster', acc: '5100', amt: 2000, rcm: 'no' });
   refuses('Paying a vendor more than owed while also being "let off" is refused',
-    () => save('paybill', { date: '2026-09-20', party: tv, amt: 2500, short: 100, via: '1000', over: 'advance' }), 'let you off');
+    () => save('paybill', { date: '2026-09-20', party: tv, amt: 2500, short: 100, via: '1000', over: 'advance' }), 'left to close');
   save('newdeal', { date: '2026-09-03', nickname: 'Short deal', seller: { __new: true, name: 'Client S', type: 'client' }, expSeller: 60000 });
   const dS = byName(g.deals, 'Short deal').id;
   save('invoice', { date: '2026-09-05', deal: dS, from: 'seller', amt: 10000, gst: 'no', tds: 0, adv: 0, recv: 'later' });

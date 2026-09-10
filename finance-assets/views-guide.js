@@ -211,16 +211,16 @@ const SCENARIOS = [
     situation: 'The landlord takes ₹20,000 and lets the ₹500 go. Same moment, one entry.',
     event: 'paybill',
     prepare: s => rentTrued(s),
-    values: () => ({ date: '2026-12-15', party: 'P9', amt: 20000, short: 500, via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
-    point: 'Put the ₹500 in <b>Discount they gave you</b>. The bank shows ₹20,000 out and nothing more; the bill still closes in full; the ₹500 is a <b>discount received</b> — a small income, not a cut in the rent, because the GST claimed on the bill stands. Nothing is left showing as owed. <span class="small faint">(Dr 2000 20,500; Cr 1000 20,000; Cr 4060 500.)</span>',
+    values: () => ({ date: '2026-12-15', party: 'P9', amt: 20000, short: 500, shortWhy: 'discount', via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
+    point: 'Put the ₹500 in <b>Amount not being paid</b> and say why. The bank shows ₹20,000 out and nothing more; the bill still closes in full; the ₹500 is a <b>discount received</b>, not a cut in the rent. Had this bill carried GST, the credit on the ₹500 would come back in the same entry — you never paid it, so it cannot stand. <span class="small faint">(Dr 2000 20,500; Cr 1000 20,000; Cr 4060 500.)</span>',
   },
   {
-    group: 'A cost from guess to settled', id: 'lc-discount-later', button: 'Discount on a bill',
+    group: 'A cost from guess to settled', id: 'lc-discount-later', button: 'Close what is left on a bill',
     situation: 'You paid ₹20,000 last week; the ₹500 has been sitting on Owed since. Today the landlord says forget it.',
-    event: 'billdiscount',
+    event: 'billclose',
     prepare: s => rentPartPaid(s),
-    values: { date: '2026-12-22', party: 'P9', bill: 'B5', amt: 500 },
-    point: '<b>No money moves.</b> The ₹500 goes from what you owe to discounts received, the bill closes, and it never appears as money out. The same button is on the bill\'s row on Owed and in the entry\'s drawer — "Close ₹500 as a discount". <span class="small faint">(Dr 2000 500; Cr 4060 500.)</span>',
+    values: { date: '2026-12-22', party: 'P9', bill: 'B5', amt: 500, why: 'discount' },
+    point: '<b>No money moves.</b> The ₹500 leaves what you owe, the bill closes, and it never appears as money out. <b>Say why</b>, because the four answers are four different entries: a waiver is income and the GST credit on it comes back (Rule 37); a <b>credit note</b> reduces the original cost and reverses the same credit (s.34(2)); <b>TDS</b> is owed to the government by the 7th and touches no credit at all; a <b>write-off</b> is income under s.41(1). The button is on the bill\'s row on Owed and in the entry\'s drawer. <span class="small faint">(Dr 2000 500; Cr 4060 500 — plus the credit back if the bill had GST.)</span>',
   },
   // ── Deals
   {
@@ -925,7 +925,7 @@ function sopItems() {
       ${table(`<th>What happened</th><th>Use</th>`, [
       ['Paid on the spot — rent, fuel, a print job', '<b>Expense — paid now</b>'],
       ['Got a bill, will pay later', '<b>Bill received — pay later</b>, then <b>Pay a vendor bill</b> when you do'],
-      ['The vendor gave a discount — while paying, or on what was left', '<b>Pay a vendor bill</b> with "Discount they gave you"; or afterwards, <b>Discount on a bill</b> — no money moves, the bill closes'],
+      ['Part of a bill will never be paid — discount, TDS, credit note, written off', '<b>Pay a vendor bill</b> with "Amount not being paid"; or afterwards, <b>Close what is left on a bill</b>. Say which it is — each posts differently, and the GST credit follows'],
       ['A subscription was charged or invoiced this month', '<b>Record this month\'s recurring cost</b>'],
       ['Spent on one particular deal (EC, patta, lawyer)', '<b>Cost on a deal</b> — choose who bears it'],
       ['Bought something that lasts over a year', '<b>Buy an asset</b>'],

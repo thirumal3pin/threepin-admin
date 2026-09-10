@@ -23,7 +23,7 @@ import {
   schedule, prepaidLeft, splitGst, fyOf,
   gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal, STATES,
   GST_OUTPUT, GST_INPUT, GST_RCM,
-  openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
+  openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance, billTaxBack,
   expectedFor, currentPlan, addDays, lastDayOfMonth,
   PAY_METHODS, RECURRING_KINDS, recurringAcc, recurringKindLabel, regenerateSchedule, pettyRoom,
   awaitingBill, docStatus, monthPicture,
@@ -1740,9 +1740,14 @@ EV.paybill = {
         opts: [['yes', 'Yes'], ['no', 'No']], def: 'yes', show: () => adv > 0.5,
       }),
       F('amt', 'Amount paid now', 'number', { required: true, hint: pid ? `Total owed ${fmt(bal('2000', { party: pid }))}` : '' }),
-      F('short', 'Discount they gave you', 'number', {
-        def: 0, hint: 'A discount for paying, a rounding-off, a part they agreed to drop. The bill still closes in full; this part is booked as a discount received and never leaves the bank.',
+      F('short', 'Amount not being paid', 'number', {
+        def: 0, hint: 'A discount they agreed, TDS you are withholding, a part being written off. The bill still closes in full and this part never leaves the bank — say below what it is, because the four answers post four different entries.',
         show: x => !!x.party,
+      }),
+      F('shortWhy', 'Because', 'select', { opts: WHY_UNPAID, def: 'discount', show: x => num(x.short) > 0 }),
+      F('shortTds', 'Under which section', 'select', {
+        opts: TDS_SECTIONS.filter(t => t[0] !== 'none').map(t => [t[0], t[1]]), def: '194I',
+        show: x => num(x.short) > 0 && x.shortWhy === 'tds', hint: 'Deposit it by the 7th of next month.',
       }),
       F('via', 'Paid from', 'select', { opts: PAY_VIA, def: '1000' }),
       methodField(),
@@ -1756,7 +1761,7 @@ EV.paybill = {
   },
   onchange: (k, v) => {
     if (k === 'party') { v.amt = r2(Math.max(0, bal('2000', { party: v.party }) - vendorAdvance(v.party))); v.alloc = null; }
-    if (k === 'amt' || k === 'party' || k === 'useAdvance' || k === 'short') v.alloc = autoAllocBills(v);
+    if (k === 'amt' || k === 'party' || k === 'useAdvance' || k === 'short' || k === 'shortWhy') v.alloc = autoAllocBills(v);
   },
   check: v => {
     const owed = v.party ? bal('2000', { party: v.party }) : 0;
@@ -1769,7 +1774,7 @@ EV.paybill = {
       ...(v.party ? [] : [err('party', 'Pick the vendor')]),
       ...(num(v.amt) > 0 || advUsed > 0 || short > 0 ? [] : [err('amt', 'Enter what you paid')]),
       ...(short < 0 ? [err('short', 'Enter zero or more')] : []),
-      ...(short > 0 && short > owed - num(v.amt) - advUsed + 0.005 ? [err('short', `They can only let you off what is left — ${fmt(Math.max(0, owed - num(v.amt) - advUsed))}`)] : []),
+      ...(short > 0 && short > owed - num(v.amt) - advUsed + 0.005 ? [err('short', `Only ${fmt(Math.max(0, owed - num(v.amt) - advUsed))} is left to close`)] : []),
       ...(num(v.amt) + advUsed > owed + 0.005 && v.over === 'stop' ? [err('amt', `You only owe ${fmt(owed)} — reduce the amount, or hold the extra as an advance`)] : []),
       ...(allocSum > paying + 0.005 ? [err('alloc', 'You have split more than you are paying — lower one of the amounts')] : []),
       ...(openBills(v.party).length
@@ -1797,36 +1802,98 @@ EV.paybill = {
     const lines = [];
     if (settle > 0.005) lines.push({ acc: '2000', dr: settle, party: pid });
     if (advUsed > 0.005) lines.push({ acc: '1550', cr: advUsed, party: pid });
-    if (short > 0.005) lines.push({ acc: '4060', cr: short, party: pid });
+    // The part not being paid gets the same treatment as closing it on its own: the reason
+    // decides where the value goes, and unless it is TDS the credit on that slice comes back.
+    // Spread across the bills this payment settles, in proportion to what each is getting, so
+    // the credit given back is each bill's own — CGST/SGST or IGST, at its own rate.
+    const shortWhy = v.shortWhy || 'discount';
+    let shortTax = 0;
+    if (short > 0.005) {
+      if (shortWhy === 'tds') {
+        lines.push({ acc: '2250', cr: short, party: pid });
+      } else {
+        const allocTotal = rows.reduce((a, r) => a + num(r.amt), 0);
+        const backs = [];
+        for (const r of rows) {
+          const b = S().bills.find(x => x.id === r.id);
+          const netB = num(b?.net ?? b?.total) || 0;
+          if (!b || !netB) continue;
+          const mine = allocTotal > 0.005 ? r2(short * (num(r.amt) / allocTotal)) : 0;
+          if (mine <= 0.005) continue;
+          for (const x of billTaxBack(b, mine / netB)) backs.push(x);
+        }
+        const byAcc = {};
+        for (const x of backs) byAcc[x.acc] = r2((byAcc[x.acc] || 0) + x.amt);
+        for (const [acc, amt2] of Object.entries(byAcc)) { if (amt2 > 0.005) { lines.push({ acc, cr: amt2 }); shortTax = r2(shortTax + amt2); } }
+        const value = r2(short - shortTax);
+        const one = rows.length === 1 ? S().bills.find(x => x.id === rows[0].id) : null;
+        if (value > 0.005) lines.push({ acc: whyAccount(shortWhy, one), cr: value, ...(shortWhy === 'creditnote' ? {} : { party: pid }) });
+      }
+    }
     if (extra > 0.005) lines.push({ acc: '1550', dr: extra, party: pid });
     if (cash > 0.005) lines.push(cashLine(v, { acc: v.via || '1000', cr: cash }));
 
     const eff = [];
     if (cash) eff.push(`${fmt(cash)} leaves ${A[v.via || '1000'].name}.`);
-    if (short) eff.push(`${fmt(short)} the vendor let you off — the bill still closes in full, and that part is booked as a discount received.`);
+    if (short) {
+      eff.push(shortWhy === 'tds'
+        ? `${fmt(short)} withheld as TDS under ${esc(v.shortTds || '194I')} — owed to the government by the 7th of next month. The bill still closes in full.`
+        : `${fmt(short)} not paid — ${esc(whyWord(shortWhy))}. The bill still closes in full and this never leaves the bank.`);
+      if (shortTax > 0.005) eff.push(`${fmt(shortTax)} of input credit is given back on that part — ${shortWhy === 'creditnote' ? 'a credit note reduces the vendor\'s tax only if you reverse the same amount (s.34(2))' : 'you never paid it, so the credit cannot stand (Rule 37)'}.`);
+    }
     if (advUsed) eff.push(`${fmt(advUsed)} of the advance already with ${esc(pname(pid))} is used up first.`);
     eff.push(`What you owe ${esc(pname(pid))} drops by ${fmt(settle)}. Profit unchanged — the cost was counted when the bill came in.`);
     rows.forEach(r => { const b = S().bills.find(x => x.id === r.id); if (b) eff.push(`${fmt(r.amt)} applied to ${esc(b.desc)}${num(r.amt) + 0.005 < billOutstanding(b) ? ' (part-paid)' : ' — now paid'}.`); });
     if (extra > 0.005) eff.push(`${fmt(extra)} more than the bills — held as an advance to this vendor, to use against their next bill.`);
 
     return {
-      desc: cash > 0.005 && short > 0.005 ? `Paid ${pname(pid)} (${fmt(short)} discount)`
-        : short > 0.005 ? `Discount from ${pname(pid)}` : `Paid ${pname(pid)}`,
+      desc: short > 0.005
+        ? `Paid ${pname(pid)}${cash > 0.005 ? '' : ' — nothing in cash'} (${fmt(short)} ${shortWhy === 'tds' ? 'TDS' : shortWhy === 'creditnote' ? 'credit note' : shortWhy === 'writeoff' ? 'written back' : 'discount'})`
+        : `Paid ${pname(pid)}`,
       lines, effects: eff,
       allocations: rows.map(r => ({ coll: 'bills', id: r.id, amt: num(r.amt) })),
     };
   },
 };
 
-// The vendor let you off what was left on a bill — after a part-payment, or instead of one.
+// Why part of a bill will never be paid. The four answers post four different entries, and
+// the difference is not cosmetic:
+//
+//   discount    the vendor waived it and sent no GST document. The value is a gain (4060) —
+//               but you never paid it, so the input credit on that slice cannot stand:
+//               Rule 37 requires it back. Both halves are posted here rather than left for
+//               the 180-day report to catch.
+//   creditnote  the vendor issued a s.34 credit note. The COST comes down (not income), and
+//               s.34(2) allows their liability to drop only if you reverse the same credit.
+//   tds         you withheld it to deposit on their behalf. The value of supply is treated as
+//               paid to that extent, so the credit stands and nothing is reversed — but the
+//               money is now owed to the government, by the 7th.
+//   writeoff    it will never be paid and nobody agreed anything. Income under s.41(1), and
+//               the credit goes back for the same reason as a discount.
+//
+// A bill with no GST, or one whose tax was blocked and capitalised into the cost, simply has
+// nothing to give back — billTaxBack() returns nothing and the whole amount lands on one line.
+const WHY_UNPAID = [
+  ['discount', 'A discount or waiver they agreed — no credit note'],
+  ['creditnote', 'They sent a GST credit note for it'],
+  ['tds', 'TDS I deducted and will deposit'],
+  ['writeoff', 'Written off — it will never be paid'],
+];
+// Where the value (the amount less the credit given back) is posted.
+const whyAccount = (why, bill) => why === 'creditnote' ? (bill?.acc || '5180')
+  : why === 'writeoff' ? '4040' : '4060';
+const whyWord = why => ({ discount: 'a discount received', creditnote: 'a reduction of the original cost',
+  tds: 'TDS payable to the government', writeoff: 'written back as income' })[why] || 'a discount received';
+
+// What the vendor was never paid on a bill — after a part-payment, or instead of one.
 // The rent was 18,000; you paid 17,500; a week later the 500 is still showing as owed. No
 // money moves: the bill closes and the 500 is income (4060 Discounts received), because the
 // GST already claimed on the bill stands and the cost stays where it was counted. When the
 // discount is given at the moment of paying, "Pay a vendor bill" carries the same box; this
 // is for the remainder that outlived the payment.
-EV.billdiscount = {
-  title: 'Discount on a bill', group: 'Bills', dir: 'fix',
-  when: 'The vendor agreed to drop what was left on a bill — a discount for paying, a rounding-off, a part they waived. <b>No money moves.</b> The bill closes and the amount is booked as a discount received, so it never appears as money out; the GST already claimed on the bill stands. If the discount came while you were paying, use "Pay a vendor bill" and its "Discount they gave you" box instead — one entry.',
+EV.billclose = {
+  title: 'Close what is left on a bill', group: 'Bills', dir: 'fix',
+  when: 'Part of a bill is never going to be paid — the vendor waived it, they sent a credit note, you withheld TDS, or it is being written off. <b>No money moves.</b> Say which it is: the four answers post four different entries, and if GST was claimed on the bill, the credit on the part you never paid is given back where the law requires it. If you simply have not paid yet, do nothing — leave the bill open and it stays on Owed.',
   fields: v => [
     F('date', 'Date', 'date', { def: today() }),
     F('party', 'Vendor', 'select', {
@@ -1837,11 +1904,16 @@ EV.billdiscount = {
       opts: x => openBills(x.party).map(b => [b.id, `${b.desc} — ${fmt(billOutstanding(b))} left`]),
       show: x => !!x.party,
     }),
-    F('amt', 'Discount', 'number', {
+    F('amt', 'Amount to close', 'number', {
       required: true,
       hint: x => { const b = S().bills.find(y => y.id === x.bill); return b ? `${fmt(billOutstanding(b))} is still open on this bill` : ''; },
     }),
-    F('note', 'Why', 'text', { hint: 'Optional — "agreed on the phone", "rounded off".' }),
+    F('why', 'Why it will not be paid', 'select', { opts: WHY_UNPAID, def: 'discount' }),
+    F('tdsSection', 'Under which section', 'select', {
+      opts: TDS_SECTIONS.filter(t => t[0] !== 'none').map(t => [t[0], t[1]]), def: '194I',
+      show: x => x.why === 'tds', hint: 'Deposit it by the 7th of next month — the Books check watches this.',
+    }),
+    F('note', 'Note', 'text', { hint: 'Optional — "agreed on the phone", "rounded off".' }),
   ],
   onchange: (k, v) => {
     if (k === 'party') { const first = openBills(v.party)[0]; v.bill = first ? first.id : null; v.amt = first ? billOutstanding(first) : 0; }
@@ -1853,25 +1925,54 @@ EV.billdiscount = {
       ...dateChecks(v),
       ...(v.party ? [] : [err('party', 'Pick the vendor')]),
       ...(b ? [] : [err('bill', 'Pick the bill')]),
-      ...posAmt(v, 'amt', 'Enter the discount'),
+      ...posAmt(v, 'amt', 'Enter the amount'),
       ...(b && num(v.amt) > billOutstanding(b) + 0.005 ? [err('amt', `Only ${fmt(billOutstanding(b))} is left on this bill`)] : []),
+      ...(v.why === 'creditnote' && b && !b.billNo ? [warn('why', 'This bill has no vendor bill number yet, so there is nothing for a credit note to refer to. Record "Bill arrived" first, or pick another reason.')] : []),
     ];
   },
   build: v => {
     if (!v.party) return need('Pick the vendor.');
     const b = S().bills.find(y => y.id === v.bill);
     if (!b) return need('Pick the bill.');
-    const amt = r2(Math.min(num(v.amt), billOutstanding(b)));
-    if (amt <= 0) return need('Enter the discount.');
-    const left = r2(billOutstanding(b) - amt);
+    const open = billOutstanding(b);
+    const amt = r2(Math.min(num(v.amt), open));
+    if (amt <= 0) return need('Enter the amount.');
+    const why = v.why || 'discount';
+    const net = num(b.net ?? b.total) || 0;
+
+    const lines = [{ acc: '2000', dr: amt, party: v.party }];
+    const eff = [`What you owe ${esc(pname(v.party))} drops by ${fmt(amt)}. <b>No money moves.</b>`];
+
+    if (why === 'tds') {
+      // Withholding is not a discount: the supply was paid for in full, part of it to the
+      // government. The credit stands, and the money is owed onward.
+      lines.push({ acc: '2250', cr: amt, party: v.party });
+      eff.push(`${fmt(amt)} becomes <b>TDS payable</b> under ${esc(v.tdsSection || '194I')} — deposit it by the 7th of next month.`);
+      eff.push('The cost and any GST credit on this bill are untouched — TDS is withheld from the value, not from the tax.');
+    } else {
+      const back = net > 0 ? billTaxBack(b, amt / net) : [];
+      const tax = r2(back.reduce((a, x) => a + x.amt, 0));
+      const value = r2(amt - tax);
+      for (const x of back) lines.push({ acc: x.acc, cr: x.amt });
+      if (value > 0.005) lines.push({ acc: whyAccount(why, b), cr: value, ...(why === 'creditnote' ? {} : { party: v.party }) });
+      eff.push(why === 'creditnote'
+        ? `${fmt(value)} comes off <b>${esc(A[b.acc || '5180']?.name || 'the original cost')}</b> — a reduction of the cost, not income.`
+        : `${fmt(value)} is ${whyWord(why)} — a small income this month.`);
+      if (tax > 0.005) {
+        eff.push(why === 'creditnote'
+          ? `${fmt(tax)} of input credit is given back — a credit note lets the vendor reduce their tax only if you reverse the same amount (s.34(2)).`
+          : `${fmt(tax)} of input credit is given back — you never paid that part of the bill, so the credit cannot stand (Rule 37).`);
+      } else if (num(b.gst) > 0.005) {
+        eff.push('No credit to give back on this one — the GST on this bill was blocked and already sits in the cost.');
+      }
+    }
+
+    const left = r2(open - amt);
+    eff.push(left > 0.005 ? `${esc(b.desc)} still has ${fmt(left)} open.` : `${esc(b.desc)} is now closed.`);
+
     return {
-      desc: `Discount from ${pname(v.party)} — ${b.desc}`,
-      lines: [{ acc: '2000', dr: amt, party: v.party }, { acc: '4060', cr: amt, party: v.party }],
-      effects: [
-        `What you owe ${esc(pname(v.party))} drops by ${fmt(amt)}. <b>No money moves.</b>`,
-        `${fmt(amt)} is booked as a discount received — a small income this month. The cost and the GST on the bill stay as they were.`,
-        left > 0.005 ? `${esc(b.desc)} still has ${fmt(left)} open.` : `${esc(b.desc)} is now closed.`,
-      ],
+      desc: `${why === 'tds' ? 'TDS withheld' : why === 'creditnote' ? 'Credit note' : why === 'writeoff' ? 'Written back' : 'Discount'} — ${b.desc} (${pname(v.party)})`,
+      lines, effects: eff,
       allocations: [{ coll: 'bills', id: b.id, amt }],
     };
   },
@@ -2758,7 +2859,7 @@ export const CHOOSER = [
     { key: 'bill', kw: ['invoice received', 'vendor bill', 'due', 'credit'], label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.' },
     { key: 'billarrived', kw: ['bill number', 'invoice number', 'last month'], label: 'Vendor bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now." },
     { key: 'paybill', kw: ['vendor', 'settle', 'paid bill', 'clear'], label: 'Pay a vendor bill', sub: 'Matched to the bills it settles. Has a box for a discount they gave you.' },
-    { key: 'billdiscount', kw: ['discount', 'let off', 'waived', 'concession', 'rounding'], label: 'Discount on a bill', sub: 'The vendor dropped what was left. No money moves; the bill closes.' },
+    { key: 'billclose', kw: ['discount', 'let off', 'waived', 'concession', 'rounding', 'tds', 'write off', 'short'], label: 'Close what is left on a bill', sub: 'Discount, TDS, credit note or written off. No money moves.' },
     { key: 'vendorrefund', kw: ['refund', 'returned', 'credit'], label: 'Vendor refund / credit note received', sub: 'Reduces the cost and its GST credit, or returns an advance.' },
   ]],
   ['Invoices', [
