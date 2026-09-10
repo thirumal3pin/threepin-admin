@@ -38,16 +38,31 @@ const META = 'meta';
 let dbPromise = null;
 let unavailable = false;
 
+// How long the browser gets to open the database before the page goes on without it. iOS
+// Safari has been known to leave the first open() hanging for good after the page comes back
+// from the background, and a page waiting on it would never paint. Past this the cache is
+// treated as unavailable for the session: everything still works, from the network.
+const OPEN_TIMEOUT_MS = 4000;
+
 function open() {
   if (unavailable) return Promise.resolve(null);
   if (dbPromise) return dbPromise;
   dbPromise = new Promise(resolve => {
+    let settled = false;
+    let timer = null;
+    const settle = db => {
+      if (settled) { if (db) db.close(); return; }   // the open that came too late
+      settled = true;
+      clearTimeout(timer);
+      resolve(db);
+    };
+    const giveUp = () => { unavailable = true; settle(null); };
+    timer = setTimeout(giveUp, OPEN_TIMEOUT_MS);
     let req;
     try {
       req = indexedDB.open(DB_NAME, DB_VERSION);
     } catch {
-      unavailable = true;
-      return resolve(null);
+      return giveUp();
     }
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -61,10 +76,10 @@ function open() {
       // A second tab running a newer build will bump the version; let go of the handle
       // rather than block it, and fall back to reading from the network until reload.
       db.onversionchange = () => { db.close(); dbPromise = null; unavailable = true; };
-      resolve(db);
+      settle(db);
     };
-    req.onerror = () => { unavailable = true; resolve(null); };
-    req.onblocked = () => { unavailable = true; resolve(null); };
+    req.onerror = giveUp;
+    req.onblocked = giveUp;
   });
   return dbPromise;
 }
@@ -160,9 +175,9 @@ export async function loadAll(tenant) {
   }
 }
 
-// The sync cursor: which pointer version each collection was last seen at, and the newest
-// updatedAt already held for it. Kept in its own store so a corrupt document row can never
-// make the cursor unreadable — losing the cursor means re-reading the ledger once.
+// The sync cursor: how far into the change log this device has applied, and how many rows
+// of each collection it held at that moment. Kept in its own store so a corrupt document row
+// can never make the cursor unreadable — losing the cursor means re-reading the ledger once.
 export async function loadCursor(tenant) {
   const db = await open();
   if (!db) return null;
@@ -186,10 +201,14 @@ export async function loadCursor(tenant) {
 // transaction, and stored on the cursor. That count is what lets the next visit prove the
 // documents on disk still match the cursor describing them — see loadAll's caller. Counting
 // anywhere else would be a count of a different moment.
+//
+// Resolves to the cursor's row counts as written — every collection it knew plus every one
+// this delta touched — or null if the disk refused the write, in which case nothing changed.
 export async function applyDelta(tenant, { upserts = {}, removals = {}, cursor }) {
   const db = await open();
-  if (!db) return false;
+  if (!db) return null;
   try {
+    const n = { ...((cursor && cursor.n) || {}) };
     await run(db, [DOCS, META], 'readwrite', tx => {
       const docs = tx.objectStore(DOCS);
       const touched = new Set();
@@ -206,7 +225,6 @@ export async function applyDelta(tenant, { upserts = {}, removals = {}, cursor }
         for (const id of ids) docs.delete(scope + '/' + id);
       }
       if (!cursor) return;
-      const n = { ...(cursor.n || {}) };
       let left = touched.size;
       if (!left) return tx.objectStore(META).put({ k: 'cursor/' + tenant, cursor });
       // Every count is requested before the cursor is written, and IndexedDB runs requests
@@ -219,34 +237,69 @@ export async function applyDelta(tenant, { upserts = {}, removals = {}, cursor }
         };
       }
     });
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+// Replaces a collection wholesale. Used by the repair path after an integrity check finds the
+// local count and the server count disagree — what is on disk is not trusted, so it is
+// removed rather than merged into.
+export async function replaceCollection(tenant, coll, docs) {
+  const db = await open();
+  if (!db) return false;
+  try {
+    await run(db, [DOCS], 'readwrite', tx => replaceIn(tx.objectStore(DOCS), tenant, coll, docs));
     return true;
   } catch {
     return false;
   }
 }
 
-// Replaces a collection wholesale. Used by the cold bootstrap and by the repair path after
-// an integrity check finds the local count and the server count disagree — in both cases
-// what is on disk is not trusted, so it is removed rather than merged into.
-export async function replaceCollection(tenant, coll, docs) {
+// The whole books and the cursor describing them, in ONE transaction. This is the cold
+// bootstrap's write: afterwards the disk holds either everything or — if the browser was
+// closed halfway — nothing, and never a cursor standing over a store that is half filled.
+export async function replaceAll(tenant, byColl, cursor) {
   const db = await open();
   if (!db) return false;
   try {
-    await run(db, [DOCS], 'readwrite', tx => {
+    await run(db, [DOCS, META], 'readwrite', tx => {
       const store = tx.objectStore(DOCS);
-      const scope = tenant + '/' + coll;
-      store.index('scope').openKeyCursor(IDBKeyRange.only(scope)).onsuccess = e => {
-        const cur = e.target.result;
-        if (!cur) return;
-        store.delete(cur.primaryKey);
-        cur.continue();
-      };
-      for (const d of docs) store.put({ k: scope + '/' + d.id, scope, doc: packTimestamps(d) });
+      for (const [coll, docs] of Object.entries(byColl)) replaceIn(store, tenant, coll, docs);
+      tx.objectStore(META).put({ k: 'cursor/' + tenant, cursor });
     });
     return true;
   } catch {
     return false;
   }
+}
+
+// Every existing row of the collection goes, then every new one comes in — in that order,
+// and the order is the point. A key cursor that deleted as it walked would be walking an
+// index the puts were changing underneath it: a cursor sees rows written in its own
+// transaction, so it would carry on and delete the very rows it had just been handed. The
+// keys are read first as one list, and both the deletes and the puts are queued from that.
+function replaceIn(store, tenant, coll, docs) {
+  const scope = tenant + '/' + coll;
+  const keys = store.index('scope').getAllKeys(IDBKeyRange.only(scope));
+  keys.onsuccess = () => {
+    for (const k of keys.result) store.delete(k);
+    for (const d of docs) store.put({ k: scope + '/' + d.id, scope, doc: packTimestamps(d) });
+  };
+}
+
+// Does what the disk holds match what the cursor says it holds? The row count of every
+// collection, recorded in the same transaction as the cursor, against the rows actually read
+// back. Strict on purpose: a collection the cursor has no count for is not vouched for. The
+// one answer this must never give is "yes" about a store the browser has quietly emptied.
+export function agrees(byColl, n, colls) {
+  if (!byColl || !n) return false;
+  for (const c of colls) {
+    if (typeof n[c] !== 'number') return false;
+    if ((byColl[c] || []).length !== n[c]) return false;
+  }
+  return true;
 }
 
 export async function saveCursor(tenant, cursor) {

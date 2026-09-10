@@ -17,7 +17,7 @@
 //
 //   node tests/finance-delta.test.mjs
 
-import { collapseLog } from '../finance-assets/finance-cache.js';
+import { collapseLog, agrees } from '../finance-assets/finance-cache.js';
 
 let passed = 0, failed = 0;
 const fail = [];
@@ -327,6 +327,24 @@ if (broke) {
     if (missing.length) console.log(`    ${k} missing on client: ${missing.join(', ')}`);
     if (extra.length) console.log(`    ${k} stale on client:   ${extra.join(', ')}`);
   }
+}
+
+section('Trusting what is on disk');
+
+{
+  // The decision that stands between a cache and the screen: is what came back from
+  // IndexedDB the whole books, or a store the browser emptied behind the cursor's back? A
+  // wrong "yes" here once put a single entry on screen in place of the entire ledger.
+  const rows = k => Array.from({ length: k }, (_, i) => ({ id: 'd' + i }));
+  const C2 = ['txns', 'bills'];
+  check('Counts that match are trusted', agrees({ txns: rows(3), bills: rows(1) }, { txns: 3, bills: 1 }, C2));
+  check('A collection with no rows is empty, not missing', agrees({ txns: rows(3) }, { txns: 3, bills: 0 }, C2));
+  check('One row short is a store that was emptied, not a smaller ledger', !agrees({ txns: rows(2), bills: rows(1) }, { txns: 3, bills: 1 }, C2));
+  check('One row extra is just as wrong', !agrees({ txns: rows(4), bills: rows(1) }, { txns: 3, bills: 1 }, C2));
+  check('A collection the cursor never counted is not vouched for', !agrees({ txns: rows(3), bills: rows(1) }, { txns: 3 }, C2));
+  check('No cache at all is never trusted', !agrees(null, { txns: 0, bills: 0 }, C2));
+  check('No cursor at all is never trusted', !agrees({ txns: rows(1) }, null, C2));
+  check('A count that is not a number is not a count', !agrees({ txns: rows(1) }, { txns: '1', bills: 0 }, C2));
 }
 
 section('What it costs');

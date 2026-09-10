@@ -68,6 +68,9 @@ const post = (k, v) => { try { return save(k, v); } catch (e) { window.__seedErr
 
 // app.js pulls in finance-sync.js, whose Firebase auth listener fires with no user and resets
 // the state to blank. The books are therefore built AFTER that has happened, not before.
+window.__financePreview = true;   // no Firebase behind this page: draw the books, not the loading screen
+const bootParam = new URLSearchParams(location.search).get('boot');
+if (bootParam) window.__financeBoot = JSON.parse(bootParam);   // ?boot={"phase":"bootstrapping","done":4,"total":12}
 await import('../finance-assets/app.js');
 await new Promise(r => setTimeout(r, 900));
 

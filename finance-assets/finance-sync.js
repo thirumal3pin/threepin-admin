@@ -31,7 +31,7 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
 import {
   getFirestore, collection, doc, setDoc, onSnapshot,
-  getDoc, getDocs, writeBatch, runTransaction, query, where, limit,
+  getDoc, getDocs, getDocFromServer, getDocsFromServer, writeBatch, runTransaction, query, where, limit,
   orderBy, serverTimestamp, Timestamp, getCountFromServer,
 } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
 import {
@@ -114,11 +114,17 @@ window.financeAuth = {
 onAuthStateChanged(auth, async user => {
   currentUser = user;
   if (user) {
-    // Force a refresh so a claim added moments ago on a freshly provisioned account is seen.
-    const tokenResult = await user.getIdTokenResult(true);
+    setPhase('auth');
+    // The cached token already carries the claim on every visit but the very first, and
+    // reading it touches no network. A refresh is forced only when the claim is missing —
+    // the freshly provisioned account whose claim was added moments ago — rather than on
+    // every open, where it was one more round trip between the user and their books.
+    let tokenResult = await user.getIdTokenResult();
+    if (!tokenResult.claims.tenantId) tokenResult = await user.getIdTokenResult(true);
     currentTenantId = tokenResult.claims.tenantId || null;
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
+      setPhase('error', { error: 'This account has no tenant assigned yet.', fatal: true });
     } else {
       subscribeAll();
     }
@@ -126,8 +132,12 @@ onAuthStateChanged(auth, async user => {
     currentTenantId = null;
     subscribed = false;
     hydrated = false;
+    cacheTrusted = false;
     cursor = { at: null, n: {}, verifiedAt: 0 };
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (unwatchSettings) { unwatchSettings(); unwatchSettings = null; }
+    resetReady();
+    setPhase('signed-out');
     setState(blank());
     // The cached books are deliberately LEFT on disk. They are keyed by tenant, they are
     // useless without a login that Firestore rules still have to honour, and keeping them is
@@ -178,8 +188,16 @@ onAuthStateChanged(auth, async user => {
 // Firestore's own count() against what is held here, and re-reads anything that disagrees.
 
 let cursor = { at: null, n: {}, verifiedAt: 0 };
-let hydrated = false;
+let hydrated = false;      // the in-memory state holds the whole books
+let cacheTrusted = false;  // IndexedDB holds the whole books, and the cursor describes them
 let unsubscribe = null;
+let unwatchSettings = null;
+
+// Stamped on the cursor. A cache written by a build other than the one reading it is checked
+// against the server's own counts on the next open, whatever the daily schedule says. That is
+// how a device that filled its cache under a condition an older build did not guard against —
+// an empty answer taken for empty books — is put right without anyone noticing it was wrong.
+const CACHE_BUILD = 'v2';
 
 // A cursor older than the window the cron prunes to cannot be trusted to have seen every
 // line, so the books are read afresh instead. Checked against the device's own clock, which
@@ -198,11 +216,96 @@ const after = at => {
   return at.seconds > c.seconds || (at.seconds === c.seconds && (at.nanoseconds || 0) > c.nanoseconds);
 };
 
+// ═══════ WHERE THE BOOT IS ═══════
+//
+// The page asks one question before it draws anything: are the books in yet? Until they are
+// it shows a loading screen — never a half-filled ledger, and never the first-run "seed the
+// chart" page, which a slow phone used to reach simply because nothing had arrived, inviting
+// the owner to seed books that already existed. Every writer in this file waits on the same
+// answer, so an entry recorded before the books are in cannot be applied against an empty
+// cache and take the rest of the ledger off the screen — which is exactly what happened.
+//
+//   signed-out → auth → hydrating → ready                  a device holding the books on disk
+//                                 ↘ bootstrapping → ready  a device opening these books for the first time
+//                                                ↘ error   retried with a growing wait; "Try again" cuts it short
+
+let phase = 'signed-out';
+let phaseDetail = null;
+const bootTimes = {};
+let readyResolve = () => { };
+let readyPromise = null;
+function resetReady() { readyPromise = new Promise(r => { readyResolve = r; }); }
+resetReady();
+
+function setPhase(next, detail = null) {
+  phase = next;
+  phaseDetail = detail;
+  notify('phase');
+}
+
+function markReady() {
+  if (phase === 'ready') return;
+  bootTimes.ready = Math.round(performance.now() - (bootTimes.t0 || performance.now()));
+  setPhase('ready');
+  readyResolve();
+}
+
+// What the page reads to decide what to draw.
+export function syncStatus() {
+  return {
+    phase, ...(phaseDetail || {}),
+    times: { ...bootTimes }, hydrated, cacheTrusted, cacheAvailable: CACHE.cacheAvailable(),
+  };
+}
+
+// Resolves once the books are in. Every writer awaits it before touching Firestore.
+export function whenReady() { return readyPromise; }
+
+// A boot that failed retries on its own with a growing wait; this cuts the wait short.
+let wake = null;
+export function retryBoot() { if (wake) wake(); }
+const pause = ms => new Promise(resolve => {
+  const t = setTimeout(() => { wake = null; resolve(); }, ms);
+  wake = () => { clearTimeout(t); wake = null; resolve(); };
+});
+
+// Firestore's error codes, in the words the loading screen shows.
+function describe(e) {
+  const code = String(e?.code || '');
+  if (code.includes('unavailable') || code.includes('deadline')) return 'The server could not be reached. Check the connection.';
+  if (code.includes('permission-denied')) return 'This account is not allowed to read these books.';
+  if (code.includes('unauthenticated')) return 'The sign-in has expired. Sign out and back in.';
+  return e?.message || String(e);
+}
+
 async function subscribeAll() {
   if (subscribed) return;
   subscribed = true;
+  const tenant = currentTenantId;
+  bootTimes.t0 = performance.now();
+
+  setPhase('hydrating');
   await hydrate();
-  await follow();
+  bootTimes.hydrate = Math.round(performance.now() - bootTimes.t0);
+  if (currentTenantId !== tenant) return;       // signed out while the disk was being read
+
+  // A device that has the books paints them now; the network work below is a catch-up the
+  // user need not wait for. A device that does not waits on the loading screen.
+  if (hydrated) markReady();
+
+  let wait = 2000;
+  while (subscribed && currentTenantId === tenant) {
+    try {
+      await follow();
+      return;
+    } catch (e) {
+      if (currentTenantId !== tenant) return;
+      console.error('Finance boot failed, retrying:', e);
+      if (phase !== 'ready') setPhase('error', { error: describe(e), retryIn: wait });
+      await pause(wait);
+      wait = Math.min(wait * 2, 30000);
+    }
+  }
 }
 
 // Paint from disk before the network is touched at all. On a returning visit this is the
@@ -211,7 +314,7 @@ async function hydrate() {
   const tenant = currentTenantId;
   const [byColl, saved] = await Promise.all([CACHE.loadAll(tenant), CACHE.loadCursor(tenant)]);
   if (!byColl || !saved || !saved.at) return;    // no cache, or one with no cursor: start cold
-  cursor = { at: null, n: {}, verifiedAt: 0, ...saved };
+  const c = { at: null, n: {}, verifiedAt: 0, ...saved };
 
   // The cursor and the documents it accounts for are written together, but they can still
   // come apart afterwards: a browser evicting site data under storage pressure clears the
@@ -222,23 +325,32 @@ async function hydrate() {
   //
   // So the row count stored with the cursor is checked against what actually came back. Any
   // disagreement throws the cursor away entirely and reads the books again.
-  for (const c of SYNCED) {
-    const expected = cursor.n?.[c];
-    if (expected === undefined) continue;        // written by a build that did not record it
-    if ((byColl[c] || []).length !== expected) {
-      console.warn(`Finance cache incomplete (${c}: ${(byColl[c] || []).length} of ${expected}) — reading the books again`);
-      cursor = { at: null, n: {}, verifiedAt: 0 };
+  if (!CACHE.agrees(byColl, c.n, SYNCED)) {
+    console.warn('Finance cache does not match its cursor — reading the books again');
+    return;
+  }
+
+  // Too old to trust the log to still hold every line since.
+  if (Date.now() - c.at.seconds * 1000 > RETENTION_MS) {
+    console.warn('Finance cursor older than the log keeps — reading the books again');
+    return;
+  }
+
+  // Written by another build: checked against the server as soon as the page has painted.
+  // And if that build left books with nothing in them, not even that much is taken on
+  // trust — an older bootstrap could take an offline SDK's empty answer for empty books,
+  // and the only way to tell those apart is to ask the server. Reading again costs one
+  // ledger; painting a first-run page over real books costs a great deal more.
+  if (c.build !== CACHE_BUILD) {
+    c.verifiedAt = 0;
+    if (Object.values(c.n).every(k => !k)) {
+      console.warn('Finance cache from an earlier build holds no rows — reading the books again');
       return;
     }
   }
 
-  // Too old to trust the log to still hold every line since.
-  if (cursor.at && Date.now() - cursor.at.seconds * 1000 > RETENTION_MS) {
-    console.warn('Finance cursor older than the log keeps — reading the books again');
-    cursor = { at: null, n: {}, verifiedAt: 0 };
-    return;
-  }
-
+  cursor = c;
+  cacheTrusted = true;
   applyToState(byColl, (byColl[ROOTC] || [])[0] || null);
   hydrated = true;
   notify('cache');
@@ -277,7 +389,8 @@ function applyToState(byColl, settings, { complete = true } = {}) {
 // The settings document is small, singular and read on its own — it is the one thing not
 // worth a log line, because watching it directly costs exactly the same one read.
 function watchSettings() {
-  onSnapshot(root(), snap => {
+  if (unwatchSettings) return;
+  unwatchSettings = onSnapshot(root(), snap => {
     const data = snap.exists() ? snap.data() : null;
     const s = getState();
     s.settings = { ...defaultSettings(), ...(data || {}) };
@@ -295,8 +408,12 @@ function watchSettings() {
 // the books.
 async function follow() {
   if (!hydrated) await bootstrap();
+  markReady();
   watchSettings();
   listen();
+  // The integrity check runs when it is due — daily, or at once for a cache written by an
+  // older build — a moment after the first paint rather than in competition with it.
+  setTimeout(() => { if (hydrated) queueApply([]); }, 1500);
 }
 
 function listen() {
@@ -330,7 +447,14 @@ function listen() {
 // skipped, which would not be.
 async function bootstrap() {
   const tenant = currentTenantId;
-  const head = await getDocs(query(col(LOG), orderBy('at', 'desc'), limit(1)));
+  const t0 = performance.now();
+  const total = COLLECTIONS.length + 2;
+  let done = 0;
+  const step = () => setPhase('bootstrapping', { done: ++done, total });
+  setPhase('bootstrapping', { done, total });
+
+  const head = await getDocsFromServer(query(col(LOG), orderBy('at', 'desc'), limit(1)));
+  step();
   // An empty log starts the cursor at zero, NOT at this device's clock. A clock running a few
   // minutes fast would put the cursor in the future and silently skip every line written
   // before it caught up — and a browser's clock is not the clock that stamps Firestore
@@ -338,20 +462,40 @@ async function bootstrap() {
   // so there is nothing behind the cursor to re-read.
   const at = plain(head.docs[0]?.data()?.at) || { seconds: 0, nanoseconds: 0 };
 
+  // Everything else at once — one round of latency, not one per collection. Every read is
+  // FROM THE SERVER. Plain getDocs() answers from the SDK's own cache once it has decided the
+  // network is down, and on a cache that holds nothing that answer is an empty collection —
+  // indistinguishable from books with nothing in them. Stored, it would have been an empty
+  // ledger the next open believed was current. getDocsFromServer() fails instead, and a
+  // failure is retried from the loading screen.
   const byColl = {};
-  for (const [name] of COLLECTIONS) {
-    const snap = await getDocs(col(name));
+  const reads = COLLECTIONS.map(async ([name]) => {
+    const snap = await getDocsFromServer(col(name));
+    if (snap.metadata.fromCache) throw new Error(name + ' was answered from cache');
     byColl[name] = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-  }
-  const next = { at, n: {}, verifiedAt: Date.now() };
-  for (const [name] of COLLECTIONS) {
-    await CACHE.replaceCollection(tenant, name, byColl[name]);
-    next.n[name] = byColl[name].length;
-  }
-  await CACHE.saveCursor(tenant, next);
-  cursor = next;
-  applyToState(byColl, null, { complete: false });
+    step();
+  });
+  const settings = getDocFromServer(root()).then(snap => {
+    byColl[ROOTC] = snap.exists() ? [{ id: 'settings', ...snap.data() }] : [];
+    step();
+  });
+  await Promise.all([...reads, settings]);
+  if (currentTenantId !== tenant) return;
+
+  const next = { at, n: {}, verifiedAt: Date.now(), build: CACHE_BUILD };
+  for (const [name] of COLLECTIONS) next.n[name] = byColl[name].length;
+
+  // The whole cache in ONE IndexedDB transaction: afterwards the disk holds either the entire
+  // books with the cursor that describes them, or — if the browser was closed halfway —
+  // nothing at all. Never a cursor over a partial store.
+  const stored = await CACHE.replaceAll(tenant, byColl, next);
+  cursor = stored ? next : { ...next, n: {} };
+  cacheTrusted = stored;
+  applyToState(byColl, byColl[ROOTC][0] || null);
   hydrated = true;
+  bootTimes.bootstrap = Math.round(performance.now() - t0);
+  const docs = Object.values(next.n).reduce((sum, k) => sum + k, 0);
+  console.info(`Finance books read in ${bootTimes.bootstrap} ms — ${docs} documents${stored ? ', cached on this device' : ', cache unavailable'}`);
   notify('bootstrap');
 }
 
@@ -401,6 +545,8 @@ async function applyEntries(entries) {
 
   // Every fetch runs before anything is written anywhere, so a failure part-way leaves the
   // cursor and the cache exactly as they were and the retry re-asks for the same entries.
+  // getDoc() is safe here where getDocs() in bootstrap() was not: asked for a document the
+  // SDK's cache does not hold while the network is down, it rejects rather than answering.
   try {
     const got = await Promise.all(fetch.map(e => getDoc(ref(e.coll, e.docId))));
     got.forEach((snap, i) => {
@@ -418,17 +564,28 @@ async function applyEntries(entries) {
   const next = { ...cursor, at: newest || cursor.at };
 
   // Documents and cursor go to disk in ONE IndexedDB transaction, so the cursor can never
-  // claim to have seen rows that were not stored.
-  const stored = await CACHE.applyDelta(tenant, { upserts, removals, cursor: next });
-  cursor = next;
-  if (!stored) cursor.n = {};   // counts are unknown now; the next load re-reads rather than trusts
+  // claim to have seen rows that were not stored. What comes back is the row count of every
+  // collection, taken inside that same transaction.
+  const n = await CACHE.applyDelta(tenant, { upserts, removals, cursor: next });
+  cursor = n ? { ...next, n } : { ...next, n: {} };
+  if (!n) cacheTrusted = false;   // counts are unknown now; the next open re-reads rather than trusts
 
-  // Reload from disk only if the disk took the write. If it did not — quota, private
-  // browsing, a cache that vanished mid-session — reloading would hand back the state from
-  // BEFORE this delta and silently undo it on screen. Merge what was just fetched instead.
-  const fresh = stored ? await CACHE.loadAll(tenant) : null;
-  if (fresh) applyToState(fresh, (fresh[ROOTC] || [])[0] || null);
-  else mergeIntoState(upserts, removals);
+  // The state is rebuilt from disk only when the disk is known to hold the whole books and
+  // still agrees with its own cursor. Anything less — no cache, a write the disk refused, a
+  // store the browser emptied mid-session, a bootstrap that has not finished — and the delta
+  // is merged into what is already in memory instead. Rebuilding from a partial store is how
+  // a single save once replaced the entire ledger on screen with the one entry it named.
+  const fresh = (n && cacheTrusted) ? await CACHE.loadAll(tenant) : null;
+  if (fresh && CACHE.agrees(fresh, cursor.n, SYNCED)) {
+    applyToState(fresh, (fresh[ROOTC] || [])[0] || null);
+  } else {
+    if (fresh) {
+      console.warn('Finance cache no longer matches its cursor — merging in memory; the next open re-reads');
+      cacheTrusted = false;
+      cursor.n = {};
+    }
+    mergeIntoState(upserts, removals);
+  }
   notify('delta');
 }
 
@@ -436,7 +593,7 @@ async function applyEntries(entries) {
 function mergeIntoState(upserts, removals) {
   const s = getState();
   for (const [name, key] of COLLECTIONS) {
-    const add = upserts[name] || [];
+    const add = (upserts[name] || []).map(rehydrate);
     const drop = new Set(removals[name] || []);
     if (!add.length && !drop.size) continue;
     if (name === 'monthEnds') {
@@ -462,9 +619,10 @@ function mergeIntoState(upserts, removals) {
 // A failure here is swallowed on purpose: the write itself committed, and reporting a sync
 // error as a save error would tell the user their entry did not land when it did.
 async function pullNow() {
+  if (!hydrated) return;   // cannot happen past whenReady(); a bootstrap in flight would see the write anyway
   try {
     const from = tsOf(cursor.at) || new Timestamp(0, 0);
-    const snap = await getDocs(query(col(LOG), where('at', '>', from), orderBy('at')));
+    const snap = await getDocsFromServer(query(col(LOG), where('at', '>', from), orderBy('at')));
     const fresh = snap.docs.filter(d => d.data().at && after(d.data().at)).map(d => ({ id: d.id, ...d.data() }));
     if (fresh.length) await queueApply(fresh);
   } catch (e) {
@@ -486,28 +644,34 @@ const VERIFY_EVERY = 24 * 60 * 60 * 1000;
 // The distinction matters: an empty list means "checked, all correct", and saying that when
 // nothing was checked is the one answer this must never give.
 async function maybeVerify(force = false) {
-  if (!hydrated) return null;
+  if (!hydrated || !cacheTrusted) return null;
   if (!force && Date.now() - (cursor.verifiedAt || 0) < VERIFY_EVERY) return null;
   const tenant = currentTenantId;
+
+  // Every count at once, local and remote — one round of latency for the whole ledger.
+  const counts = await Promise.all(COLLECTIONS.map(async ([name]) => {
+    const [local, remote] = await Promise.all([CACHE.countLocal(tenant, name), getCountFromServer(col(name))]);
+    return { name, local, remote: remote.data().count };
+  }));
+  if (counts.some(c => c.local === null)) return null;
+
   const repaired = [];
-  for (const [name] of COLLECTIONS) {
-    const local = await CACHE.countLocal(tenant, name);
-    if (local === null) return null;
-    const remote = (await getCountFromServer(col(name))).data().count;
+  for (const { name, local, remote } of counts) {
     cursor.n = { ...(cursor.n || {}), [name]: local };
     if (remote === local) continue;
-    const snap = await getDocs(col(name));
+    const snap = await getDocsFromServer(col(name));
     const docs = snap.docs.map(d => ({ ...d.data(), id: d.id }));
     await CACHE.replaceCollection(tenant, name, docs);
     cursor.n[name] = docs.length;
     repaired.push(`${name} (${local} → ${remote})`);
   }
   cursor.verifiedAt = Date.now();
+  cursor.build = CACHE_BUILD;
   await CACHE.saveCursor(tenant, cursor);
   if (repaired.length) {
     console.warn('Finance cache repaired:', repaired.join(', '));
     const fresh = await CACHE.loadAll(tenant);
-    if (fresh) applyToState(fresh, (fresh[ROOTC] || [])[0] || null);
+    if (fresh && CACHE.agrees(fresh, cursor.n, SYNCED)) applyToState(fresh, (fresh[ROOTC] || [])[0] || null);
     notify('repair');
   }
   return repaired;
@@ -524,6 +688,7 @@ export async function resetCache() {
   await CACHE.clear(currentTenantId);
   cursor = { at: null, n: {}, verifiedAt: 0 };
   hydrated = false;
+  cacheTrusted = false;
   location.reload();
 }
 
@@ -558,6 +723,7 @@ function logChange(w, coll, docId, op = 'put') {
 // its log entries in a single batch. `apply` is handed the batch and a `log` function, and
 // records each document it touches.
 async function commitWith(apply) {
+  await whenReady();
   const b = writeBatch(db);
   const out = apply(b, (coll, docId, op = 'put') => logChange(b, coll, docId, op));
   await b.commit();
@@ -609,6 +775,7 @@ async function reserveNumbers(tx, count) {
 // a single transaction — so a half-saved deal or subscription can never exist, and the entry
 // number cannot collide with one taken from another phone at the same moment.
 export async function save(evKey, values, opts = {}) {
+  await whenReady();
   const ev = EV[evKey];
   if (!ev) throw new Error('Unknown event ' + evKey);
   const v = { ...values };
@@ -842,6 +1009,7 @@ function stripForMeta(v) {
 // A mistake is corrected by posting the opposite entry, never by editing or deleting the
 // original — both stay on the record, which is what makes the ledger auditable.
 export async function reverse(txnId) {
+  await whenReady();
   const t = getState().txns.find(x => x.id === txnId);
   if (!t) throw new Error('Transaction not found');
   if (t.reversedBy) throw new Error('This entry has already been reversed');
@@ -958,6 +1126,7 @@ export async function reverse(txnId) {
 // posts nothing. The guard flags and the monthEnds record are written with the entries, so
 // the two can never disagree.
 export async function runMonthEnd(month, opts = {}) {
+  await whenReady();
   const s = getState();
   const entries = monthEndEntries(month);
 
@@ -1011,6 +1180,7 @@ export async function markReconciled(month, reconciled) {
 
 // Used to retry an invoice that failed to generate; save() normally does this inline.
 export async function createInvoice(data) {
+  await whenReady();
   const iref = doc(col('invoices'));
   await runTransaction(db, async tx => {
     const snap = await tx.get(root());
@@ -1170,6 +1340,7 @@ export async function removeAttachment(txnId, att) {
 // The settings document IS the pointer's home, so writing it is already a change the one
 // listener sees. There is nothing to bump and nothing to fetch afterwards.
 export async function saveSettings(patch) {
+  await whenReady();
   await setDoc(root(), patch, { merge: true });
 }
 
@@ -1283,6 +1454,7 @@ function chartHash() {
 }
 
 export async function seedFinance() {
+  await whenReady();
   const snap = await getDoc(root());
   const settings = snap.exists() ? snap.data() : null;
   if (!settings) {
@@ -1309,6 +1481,7 @@ export async function seedFinance() {
 // Used once, when the books start. Posts ONE balanced journal against 3100 Opening balance
 // equity, and creates the loan/asset master records the figures imply, all together.
 export async function postOpeningBalances({ date, lines, loans = [], assets = [], subscriptions = [] }) {
+  await whenReady();
   const balanced = normalise(lines);
   const dr = balanced.reduce((a, l) => a + num(l.dr), 0);
   const cr = balanced.reduce((a, l) => a + num(l.cr), 0);

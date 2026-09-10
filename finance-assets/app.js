@@ -158,8 +158,10 @@ window.onFinanceAuthChange = (user, tenantId) => {
 };
 
 // A data change repaints every view except Record, where a snapshot echo mid-typing would
-// throw away the form. The preview there reads live state on its next keystroke anyway.
-window.onFinanceData = () => { if (ready && view !== 'record') repaint(); };
+// throw away the form. The preview there reads live state on its next keystroke anyway. A
+// change of boot phase repaints whatever the view: nothing is mounted on Record until the
+// books are in, so there is no form to lose.
+window.onFinanceData = what => { if (ready && (view !== 'record' || what === 'phase')) repaint(); };
 
 window.financeAttemptLogin = e => {
   e.preventDefault();
@@ -340,7 +342,16 @@ function repaint() {
 
   const main = document.getElementById('main');
 
-  // Before the first snapshot lands there is genuinely nothing to draw.
+  // Nothing is drawn until the books are in. Not the first-run page — a slow phone used to
+  // reach it simply because nothing had arrived yet, and it offered to seed books that already
+  // existed — and not a ledger with one entry in it.
+  const boot = booting();
+  if (boot) {
+    main.innerHTML = loadingScreen(boot);
+    return;
+  }
+
+  // The books are in, and there is genuinely nothing in them.
   if (!s.settingsExists && !s.txns.length && view !== 'settings') {
     main.innerHTML = firstRun();
     return;
@@ -370,6 +381,47 @@ function repaint() {
 
 // The security rules read booksStartDate off the settings document before allowing any
 // transaction, so seeding is genuinely the first thing that has to happen.
+// ═══════ OPENING THE BOOKS ═══════
+
+// Null once the books are in; otherwise where the boot has got to. The preview harness seeds
+// state directly with no Firebase behind it and says so.
+function booting() {
+  if (window.__financeBoot) return window.__financeBoot;   // design review: a phase to draw
+  if (window.__financePreview) return null;
+  const st = SY.syncStatus();
+  return st.phase === 'ready' ? null : st;
+}
+
+// The shapes the overview will take, with nothing in them yet, and one line saying what is
+// happening. A returning device is on this for the time it takes to read its own disk; a new
+// one for the one full read it will ever do; a phone without signal for as long as that lasts,
+// told so, with a way to try again.
+function loadingScreen(st) {
+  const total = st.total || 0, done = st.done || 0;
+  const pct = total ? Math.round(6 + 94 * done / total) : 0;
+  const err = st.phase === 'error';
+  const title = err ? (st.fatal ? 'This account is not set up' : 'Can\u2019t reach the server')
+    : st.phase === 'auth' ? 'Signing you in'
+      : st.phase === 'bootstrapping' ? 'Reading your books' : 'Opening your books';
+  const sub = err ? ''
+    : st.phase === 'bootstrapping' ? `First time on this device \u00b7 ${done} of ${total} read`
+      : st.phase === 'auth' ? 'Checking the account' : 'From this device';
+  const stat = () => `<div class="card stat sk-stat"><span class="sk l"></span><span class="sk v"></span><span class="sk s"></span></div>`;
+  const row = () => `<div class="sk-row"><span class="sk d"></span><span class="sk t"></span><span class="sk a"></span></div>`;
+  return `
+    <div class="boot${err ? ' err' : ''}" role="status" aria-live="polite" aria-busy="${err ? 'false' : 'true'}">
+      <div class="boot-head">
+        <div class="boot-ring" aria-hidden="true"></div>
+        <div><div class="boot-t">${esc(title)}</div>${sub ? `<div class="boot-s">${esc(sub)}</div>` : ''}</div>
+      </div>
+      ${err
+      ? `<div class="boot-err"><span>${esc(st.error || 'Something went wrong.')}${st.retryIn ? ` Trying again in ${Math.round(st.retryIn / 1000)} s.` : ''}</span>${st.fatal ? '' : `<button class="btn sm" type="button" onclick="fin.retryBoot()">Try again now</button>`}</div>`
+      : `<div class="boot-bar${total ? '' : ' idle'}" aria-hidden="true"><i style="width:${pct}%"></i></div>`}
+      <div class="grid two-up" aria-hidden="true">${stat()}${stat()}${stat()}${stat()}</div>
+      <div class="card pad0 sk-rows" aria-hidden="true">${row()}${row()}${row()}${row()}${row()}${row()}</div>
+    </div>`;
+}
+
 function firstRun() {
   return `
     <h1>Set up the finance module</h1>
@@ -767,7 +819,7 @@ const CORE = {
   expense: ['amt', 'desc', 'via', 'date'],
   dealpay: ['party', 'amt', 'tds', 'short', 'alloc', 'via', 'date'],
   paybill: ['party', 'amt', 'short', 'useAdvance', 'alloc', 'via', 'date'],
-  billdiscount: ['party', 'bill', 'amt', 'date'],
+  billclose: ['party', 'bill', 'amt', 'why', 'tdsSection', 'date'],
   bill: ['vendor', 'desc', 'amt', 'dueDate', 'date'],
   billarrived: ['sub', 'month', 'amt', 'date'],
   confirmcharge: ['sub', 'month', 'result', 'amt', 'via', 'date'],
@@ -1454,7 +1506,7 @@ function settlementBlock(t) {
       ${m.outstanding > 0.5 && m.status !== 'void' ? `<div class="actions" style="margin:8px 0 0">
         ${m.coll === 'bills'
       ? `<button class="btn sm out" type="button" onclick="fin.closeModal();fin.record('paybill',{party:'${esc(m.doc.partyId)}'})">Pay this</button>
-             <button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billdiscount',{party:'${esc(m.doc.partyId)}',bill:'${esc(m.doc.id)}'})">Close ${fmt(m.outstanding)} as a discount</button>
+             <button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billclose',{party:'${esc(m.doc.partyId)}',bill:'${esc(m.doc.id)}'})">Close the ${fmt(m.outstanding)}</button>
              ${!m.doc.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billarrived',{billId:'${esc(m.doc.id)}'})">Bill arrived</button>` : ''}`
       : `<button class="btn sm in" type="button" onclick="fin.closeModal();fin.record('dealpay',{party:'${esc(m.doc.partyId)}'})">Record payment</button>`}
       </div>` : ''}
@@ -1647,6 +1699,7 @@ window.fin = {
   go, repaint, toggleModule,
   explain: explainFigure, showInTxns,
 
+  retryBoot: () => SY.retryBoot(),
   openSheet: () => document.getElementById('moreSheet').classList.add('open'),
 
   findAction(q, refocus) {

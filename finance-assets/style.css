@@ -1069,3 +1069,36 @@ table.ledger .phone { display: none; }
 .cat:active { transform: scale(.985); }
 @media (max-width: 859px) { .cat { min-height: 96px; padding: 14px 36px 12px 18px; } .cat b { font-size: 18px; } .cat .sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } }
 .cat-head { margin: 0 0 var(--s3); }
+
+/* ═══════ OPENING THE BOOKS ═══════
+   On screen until the books are in. The same shapes the overview takes, so nothing jumps when
+   the figures arrive; one line of type says what is happening. */
+
+.boot { animation: rise .25s ease both; }
+.boot-head { display: flex; align-items: center; gap: 14px; margin: 2px 0 16px; }
+.boot-ring { width: 34px; height: 34px; border-radius: 50%; flex: none; border: 3px solid var(--line); border-top-color: var(--brand); animation: spin .9s linear infinite; }
+.boot-t { font-family: var(--serif); font-size: 1.4rem; font-weight: 500; letter-spacing: -.01em; color: var(--ink); line-height: 1.15; }
+.boot-s { font-size: 13px; color: var(--ink-2); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.boot-bar { height: 4px; border-radius: 4px; background: var(--card-2); overflow: hidden; margin-bottom: var(--s5); }
+.boot-bar i { display: block; height: 100%; width: 6%; border-radius: 4px; background: var(--brand); transition: width .35s ease; }
+.boot-bar.idle i { width: 28%; animation: bootSlide 1.5s ease-in-out infinite; }
+.boot.err .boot-ring { border-color: var(--bad-soft); border-top-color: var(--bad); animation: none; }
+.boot-err { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--bad-soft); color: var(--bad); border-radius: var(--r); padding: 12px 14px; font-size: 13.5px; margin-bottom: var(--s5); }
+.boot-err .btn { margin-left: auto; }
+
+.sk { position: relative; overflow: hidden; display: block; background: var(--card-2); border-radius: 6px; }
+.sk::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .75), transparent); animation: shimmer 1.6s ease-in-out infinite; }
+.sk-stat .sk.l { width: 42%; height: 11px; margin-bottom: 12px; }
+.sk-stat .sk.v { width: 68%; height: 26px; margin-bottom: 10px; }
+.sk-stat .sk.s { width: 54%; height: 10px; }
+.sk-rows { padding: 4px 0; }
+.sk-row { display: grid; grid-template-columns: 44px 1fr 88px; gap: 14px; align-items: center; padding: 13px var(--s5); border-top: 1px solid var(--line); }
+.sk-row:first-child { border-top: 0; }
+.sk-row .sk.d { height: 10px; }
+.sk-row .sk.t { height: 12px; width: 62%; }
+.sk-row .sk.a { height: 12px; justify-self: end; width: 100%; }
+.sk-row:nth-child(2) .sk.t { width: 48%; }
+.sk-row:nth-child(4) .sk.t { width: 70%; }
+.sk-row:nth-child(5) .sk.t { width: 40%; }
+@keyframes shimmer { to { transform: translateX(100%); } }
+@keyframes bootSlide { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
