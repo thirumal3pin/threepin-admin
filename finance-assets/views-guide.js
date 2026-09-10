@@ -166,6 +166,19 @@ function rentTrued(s) {
     totals: { dr: 500, cr: 500 }, meta: { billId: 'B5' }, attachments: [], auto: false, fy: '2026-27', createdBy: 'sample', createdAt: 0,
   });
 }
+// The rent bill part-paid: 20,000 went out, 500 is still showing as owed. The state the
+// "Discount on a bill" example starts from.
+function rentPartPaid(s) {
+  rentTrued(s);
+  const b = s.bills.find(x => x.id === 'B5');
+  Object.assign(b, { paid: 20000, status: 'part', allocations: [{ txnId: 'T12', amt: 20000, date: '2026-12-15' }] });
+  s.txns.push({
+    id: 'T12', date: '2026-12-15', event: 'paybill', desc: 'Paid K. Raman (landlord)',
+    lines: [{ acc: '2000', dr: 20000, party: 'P9' }, { acc: '1000', cr: 20000 }],
+    totals: { dr: 20000, cr: 20000 }, meta: {}, attachments: [], auto: false, fy: '2026-27', createdBy: 'sample', createdAt: 0,
+    allocations: [{ coll: 'bills', id: 'B5', amt: 20000 }],
+  });
+}
 
 const SCENARIOS = [
   // ── One cost through all four of its states
@@ -192,6 +205,22 @@ const SCENARIOS = [
     prepare: s => rentTrued(s),
     values: () => ({ date: '2026-12-15', party: 'P9', amt: 20500, via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
     point: 'The money leaves and is matched to that bill, which closes. <b>Profit does not move</b> — it was counted in November. On This month the amount shifts from <b>Due</b> to <b>Paid</b>, and the cash book shows it on the 15th. Four screens, four states, one cost, counted once.',
+  },
+  {
+    group: 'A cost from guess to settled', id: 'lc-discount', button: 'Pay a vendor bill',
+    situation: 'The landlord takes ₹20,000 and lets the ₹500 go. Same moment, one entry.',
+    event: 'paybill',
+    prepare: s => rentTrued(s),
+    values: () => ({ date: '2026-12-15', party: 'P9', amt: 20000, short: 500, via: '1000', useAdvance: 'no', alloc: allocate(20500, openBills('P9'), billOutstanding).rows }),
+    point: 'Put the ₹500 in <b>Discount they gave you</b>. The bank shows ₹20,000 out and nothing more; the bill still closes in full; the ₹500 is a <b>discount received</b> — a small income, not a cut in the rent, because the GST claimed on the bill stands. Nothing is left showing as owed. <span class="small faint">(Dr 2000 20,500; Cr 1000 20,000; Cr 4060 500.)</span>',
+  },
+  {
+    group: 'A cost from guess to settled', id: 'lc-discount-later', button: 'Discount on a bill',
+    situation: 'You paid ₹20,000 last week; the ₹500 has been sitting on Owed since. Today the landlord says forget it.',
+    event: 'billdiscount',
+    prepare: s => rentPartPaid(s),
+    values: { date: '2026-12-22', party: 'P9', bill: 'B5', amt: 500 },
+    point: '<b>No money moves.</b> The ₹500 goes from what you owe to discounts received, the bill closes, and it never appears as money out. The same button is on the bill\'s row on Owed and in the entry\'s drawer — "Close ₹500 as a discount". <span class="small faint">(Dr 2000 500; Cr 4060 500.)</span>',
   },
   // ── Deals
   {
@@ -615,11 +644,11 @@ function screenItems() {
     screen({
       name: 'Record', group: 'Daily',
       asks: 'Something happened — how do I put it in?',
-      body: 'The only screen that writes to the books. Type what happened, or tap it under Your usual — the four to six things you record most. Six groups answer "what is this about?": a client or deal, a vendor or purchase, staff or government, your own money, a recurring cost you are setting up, or something to adjust. The everyday actions of each group are laid out; rarer ones sit under "more". The colour on each button still tells you which way money moves. Pick what happened in plain words; the double entry is worked out and shown before you save.',
+      body: 'The only screen that writes to the books. Seven categories first — Money in, Money out, Bills, Invoices, Service costs, Deals, Fix something — then the action inside the one you picked. Or type a word and go straight to it. The colour on each button tells you which way money moves. Pick what happened in plain words; the double entry is worked out and shown before you save.',
       on: [
+        ['Categories', 'The first choice. Tap one to see its actions; "All categories" brings the tiles back.'],
         ['Search', 'Type a word — rent, EMI, token — and the matching actions appear. Enter opens the first.'],
-        ['Your usual', 'What you have recorded most in the last month. Fills itself.'],
-        ['Group chips', 'Show only one group. All shows the everyday actions from every group.'],
+        ['Recent', 'What you have recorded most in the last month. Appears once there is history.'],
         ['The amount', 'The first box on every form, big enough to read across a desk.'],
         ['More details', 'The fold under the main fields: category, bill number, GST, note. Open it when the bill has those.'],
         ['Preview (phone)', 'The button beside Save opens what saving will do, with its own Save.'],
@@ -896,14 +925,15 @@ function sopItems() {
       ${table(`<th>What happened</th><th>Use</th>`, [
       ['Paid on the spot — rent, fuel, a print job', '<b>Expense — paid now</b>'],
       ['Got a bill, will pay later', '<b>Bill received — pay later</b>, then <b>Pay a vendor bill</b> when you do'],
+      ['The vendor gave a discount — while paying, or on what was left', '<b>Pay a vendor bill</b> with "Discount they gave you"; or afterwards, <b>Discount on a bill</b> — no money moves, the bill closes'],
       ['A subscription was charged or invoiced this month', '<b>Record this month\'s recurring cost</b>'],
       ['Spent on one particular deal (EC, patta, lawyer)', '<b>Cost on a deal</b> — choose who bears it'],
       ['Bought something that lasts over a year', '<b>Buy an asset</b>'],
       ['Small cash from the box', '<b>Petty cash spends</b>'],
       ['Paid from your own pocket for the company', '<b>Paid personally by the director</b>'],
-      ['Paid staff', '<b>Salary / bonus</b> — under Salaries & taxes'],
-      ['Paid GST, TDS or PF', '<b>Pay GST / TDS / PF to government</b> — under Salaries & taxes; not a cost'],
-      ['Paid the card bill / moved cash to the box', '<b>Transfer</b> — under Bank, cards & loans; not a cost'],
+      ['Paid staff', '<b>Salary / bonus</b> — under Money out'],
+      ['Paid GST, TDS or PF', '<b>Pay GST / TDS / PF to government</b> — under Money out; not a cost'],
+      ['Paid the card bill / moved cash to the box', '<b>Transfer</b> — under Money out; not a cost'],
       ['Paid an EMI', '<b>Pay an EMI</b> — only the interest is a cost'],
       ['Vendor refunded you or sent a credit note', '<b>Vendor refund / credit note received</b>'],
     ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join(''))}
@@ -914,7 +944,7 @@ function sopItems() {
       ['A side\'s brokerage is due', '<b>Invoice the buyer / seller</b> — this is the income; the invoice is raised'],
       ['A client paid what they owe', '<b>Client payment received</b> — matched to their invoices'],
       ['Consultancy, a referral fee, interest', '<b>Other income</b> — invoice optional'],
-      ['Capital or a director\'s loan came in', '<b>Capital / director loan received</b> — under Bank, cards & loans; never income'],
+      ['Capital or a director\'s loan came in', '<b>Capital / director loan received</b> — under Money in; never income'],
       ['A bank or NBFC loan came in', '<b>New bank / NBFC loan</b> — creates the EMI schedule'],
     ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join(''))}`),
   ];

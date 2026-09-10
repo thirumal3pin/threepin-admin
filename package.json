@@ -7,7 +7,7 @@
   "scripts": {
     "start": "live-server --port=5173 --no-browser",
     "dev": "live-server --port=5173",
-    "test": "node tests/finance-engine.test.mjs && node tests/finance-documents.test.mjs && node tests/finance-edgecases.test.mjs && node tests/finance-guide.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs && node tests/finance-scenarios2.test.mjs && node tests/finance-snapshot.test.mjs && node tests/finance-delta.test.mjs",
+    "test": "node tests/finance-engine.test.mjs && node tests/finance-documents.test.mjs && node tests/finance-edgecases.test.mjs && node tests/finance-guide.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs && node tests/finance-scenarios2.test.mjs && node tests/finance-snapshot.test.mjs && node tests/finance-delta.test.mjs && node tests/finance-discount.test.mjs",
     "test:finance": "node tests/finance-engine.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs"
   },
   "dependencies": {

@@ -40,7 +40,7 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
 
   // Record, in depth: the chooser filtered each way, then three representative forms.
   await go('record');
-  await p.evaluate(() => { window.fin.pick(null); window.fin.pickGroup('deals-clients'); });
+  await p.evaluate(() => { window.fin.pick(null); window.fin.pickGroup('money-out'); });
   await shot('record-group');
   await p.evaluate(() => { window.fin.pickGroup(''); window.fin.findAction('emi'); });
   await shot('record-search');

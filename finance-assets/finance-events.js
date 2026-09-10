@@ -689,7 +689,7 @@ EV.dealpay = {
         def: 0, show: x => !!x.party && tdsOn(),
         hint: 'Deducted under 194H before paying you (2% of the brokerage). It settles that much of the invoice and is claimed at year-end.',
       }),
-      F('short', 'Amount you let them off', 'number', {
+      F('short', 'Discount you gave them', 'number', {
         def: 0, show: x => !!x.party,
         hint: 'A discount you agreed, a rounding-off, or charges their bank deducted. The invoice closes in full.',
       }),
@@ -1740,8 +1740,8 @@ EV.paybill = {
         opts: [['yes', 'Yes'], ['no', 'No']], def: 'yes', show: () => adv > 0.5,
       }),
       F('amt', 'Amount paid now', 'number', { required: true, hint: pid ? `Total owed ${fmt(bal('2000', { party: pid }))}` : '' }),
-      F('short', 'Amount the vendor let you off', 'number', {
-        def: 0, hint: 'A discount for paying, a rounding-off, a part they agreed to drop. The bill closes in full; this part is a small income.',
+      F('short', 'Discount they gave you', 'number', {
+        def: 0, hint: 'A discount for paying, a rounding-off, a part they agreed to drop. The bill still closes in full; this part is booked as a discount received and never leaves the bank.',
         show: x => !!x.party,
       }),
       F('via', 'Paid from', 'select', { opts: PAY_VIA, def: '1000' }),
@@ -1810,9 +1810,69 @@ EV.paybill = {
     if (extra > 0.005) eff.push(`${fmt(extra)} more than the bills — held as an advance to this vendor, to use against their next bill.`);
 
     return {
-      desc: `Paid ${pname(pid)}`,
+      desc: cash > 0.005 && short > 0.005 ? `Paid ${pname(pid)} (${fmt(short)} discount)`
+        : short > 0.005 ? `Discount from ${pname(pid)}` : `Paid ${pname(pid)}`,
       lines, effects: eff,
       allocations: rows.map(r => ({ coll: 'bills', id: r.id, amt: num(r.amt) })),
+    };
+  },
+};
+
+// The vendor let you off what was left on a bill — after a part-payment, or instead of one.
+// The rent was 18,000; you paid 17,500; a week later the 500 is still showing as owed. No
+// money moves: the bill closes and the 500 is income (4060 Discounts received), because the
+// GST already claimed on the bill stands and the cost stays where it was counted. When the
+// discount is given at the moment of paying, "Pay a vendor bill" carries the same box; this
+// is for the remainder that outlived the payment.
+EV.billdiscount = {
+  title: 'Discount on a bill', group: 'Bills', dir: 'fix',
+  when: 'The vendor agreed to drop what was left on a bill — a discount for paying, a rounding-off, a part they waived. <b>No money moves.</b> The bill closes and the amount is booked as a discount received, so it never appears as money out; the GST already claimed on the bill stands. If the discount came while you were paying, use "Pay a vendor bill" and its "Discount they gave you" box instead — one entry.',
+  fields: v => [
+    F('date', 'Date', 'date', { def: today() }),
+    F('party', 'Vendor', 'select', {
+      opts: vendorsOwed().map(([id, b]) => [id, `${pname(id)} — you owe ${fmt(b)}`]),
+      hint: 'Only vendors with something still open are listed.',
+    }),
+    F('bill', 'Bill', 'select', {
+      opts: x => openBills(x.party).map(b => [b.id, `${b.desc} — ${fmt(billOutstanding(b))} left`]),
+      show: x => !!x.party,
+    }),
+    F('amt', 'Discount', 'number', {
+      required: true,
+      hint: x => { const b = S().bills.find(y => y.id === x.bill); return b ? `${fmt(billOutstanding(b))} is still open on this bill` : ''; },
+    }),
+    F('note', 'Why', 'text', { hint: 'Optional — "agreed on the phone", "rounded off".' }),
+  ],
+  onchange: (k, v) => {
+    if (k === 'party') { const first = openBills(v.party)[0]; v.bill = first ? first.id : null; v.amt = first ? billOutstanding(first) : 0; }
+    if (k === 'bill') { const b = S().bills.find(y => y.id === v.bill); v.amt = b ? billOutstanding(b) : 0; }
+  },
+  check: v => {
+    const b = S().bills.find(y => y.id === v.bill);
+    return [
+      ...dateChecks(v),
+      ...(v.party ? [] : [err('party', 'Pick the vendor')]),
+      ...(b ? [] : [err('bill', 'Pick the bill')]),
+      ...posAmt(v, 'amt', 'Enter the discount'),
+      ...(b && num(v.amt) > billOutstanding(b) + 0.005 ? [err('amt', `Only ${fmt(billOutstanding(b))} is left on this bill`)] : []),
+    ];
+  },
+  build: v => {
+    if (!v.party) return need('Pick the vendor.');
+    const b = S().bills.find(y => y.id === v.bill);
+    if (!b) return need('Pick the bill.');
+    const amt = r2(Math.min(num(v.amt), billOutstanding(b)));
+    if (amt <= 0) return need('Enter the discount.');
+    const left = r2(billOutstanding(b) - amt);
+    return {
+      desc: `Discount from ${pname(v.party)} — ${b.desc}`,
+      lines: [{ acc: '2000', dr: amt, party: v.party }, { acc: '4060', cr: amt, party: v.party }],
+      effects: [
+        `What you owe ${esc(pname(v.party))} drops by ${fmt(amt)}. <b>No money moves.</b>`,
+        `${fmt(amt)} is booked as a discount received — a small income this month. The cost and the GST on the bill stay as they were.`,
+        left > 0.005 ? `${esc(b.desc)} still has ${fmt(left)} open.` : `${esc(b.desc)} is now closed.`,
+      ],
+      allocations: [{ coll: 'bills', id: b.id, amt }],
     };
   },
 };
@@ -2666,62 +2726,65 @@ EV.creditnote = {
 // carries a one-line answer to the question people actually ask: "does this change my profit?"
 // `dir` colours the button: green for money in, red for money out, grey for moving your own
 // money around, amber for corrections, and plain for set-up.
-// What the Record screen offers, in the order it offers it. Six groups answer "what is this
-// about?" — a client or deal, a vendor or purchase, staff or government, your own money, a
-// recurring cost being set up, or something to adjust — which is the question Zoho, Tally and
-// QuickBooks all ask first. The old first question, "money in or money out?", failed because a
-// third of these move no cash at all and several that do point the wrong way for what the
-// owner means: an EMI is money out but mostly not a cost, a token is money in but not earned.
+// What the Record screen offers: seven broad categories, in the owner's own words — money in,
+// money out, bills, invoices, service costs, deals, fix something — and the actions inside
+// each. The screen shows the categories first and an action only after one is chosen, which
+// is how the owner asked for it. An action that belongs in two places is listed in both
+// (paying a bill is money out AND the end of a bill; a token is money in AND part of a deal).
 //
-// `tier` is how often the owner reaches for it — daily / weekly / monthly / rarely — and drives
-// prominence on the screen; the rarely-used ones sit behind a disclosure and stay searchable.
-// Direction colour is kept on every button as the SECOND cue. `dealcost` is listed twice on
-// purpose: the owner looks for it under the deal, the accountant under purchases.
+// `kw` are the words the owner actually types into the search box — "rent", "EB", "patta" —
+// so a search finds the action even when the label says it differently.
 export const CHOOSER = [
-  ['Deals & clients', [
-    { key: 'dealpay', kw: ['upi', 'received', 'neft', 'cheque', 'client paid', 'collection'], label: 'Client payment received', sub: 'Matched to their invoices. Profit unchanged.', tier: 'daily' },
-    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet.', tier: 'daily' },
-    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.', tier: 'daily' },
-    { key: 'newdeal', kw: ['pipeline', 'listing', 'new deal', 'client'], label: 'Add a deal', sub: 'Opens it in the pipeline. Nothing posts.', tier: 'weekly' },
-    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the buyer', preset: { from: 'buyer' }, sub: 'Brokerage falls due. Income now; GST payable.', tier: 'weekly' },
-    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the seller', preset: { from: 'seller' }, sub: 'Brokerage falls due. Income now; GST payable.', tier: 'weekly' },
-    { key: 'otherinc', kw: ['consultancy', 'referral', 'interest', 'valuation', 'fee'], label: 'Other income', sub: 'Consultancy, referral fee, interest — invoice or receipt.', tier: 'weekly' },
-    { key: 'register', kw: ['registration', 'deed', 'sale deed', 'closed'], label: 'Deal registered', sub: 'The milestone and its date. Nothing posts.', tier: 'monthly' },
-    { key: 'settle', kw: ['refund', 'forfeit', 'token back'], label: 'Settle a token', sub: 'Apply to the invoice, refund, or keep.', tier: 'rarely' },
-    { key: 'creditnote', kw: ['reduce', 'discount', 'renegotiated'], label: 'Credit note — reduce an invoice', sub: 'Renegotiated brokerage. Income and GST come down.', tier: 'rarely' },
+  ['Money in', [
+    { key: 'dealpay', kw: ['upi', 'received', 'neft', 'cheque', 'client paid', 'collection'], label: 'Client payment received', sub: 'Matched to their invoices. Profit unchanged.' },
+    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet.' },
+    { key: 'otherinc', kw: ['consultancy', 'referral', 'interest', 'valuation', 'fee'], label: 'Other income', sub: 'Consultancy, referral fee, interest — invoice or receipt.' },
+    { key: 'funding', kw: ['capital', 'director', 'investment', 'infusion'], label: 'Capital / director loan received', sub: 'Financing, never income.' },
+    { key: 'bankloan', kw: ['loan', 'nbfc', 'borrow'], label: 'New bank / NBFC loan', sub: 'Creates the EMI schedule.' },
   ]],
-  ['Expenses & bills', [
-    { key: 'expense', kw: ['rent', 'eb', 'electricity', 'fuel', 'print', 'coffee', 'tea', 'paid', 'purchase', 'shop'], label: 'Expense — paid now', sub: 'Used and paid together.', tier: 'daily' },
-    { key: 'petty', kw: ['voucher', 'box', 'cash', 'small'], label: 'Petty cash spends', sub: 'Up to three spends from the box.', tier: 'daily' },
-    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.', tier: 'daily' },
-    { key: 'bill', kw: ['invoice received', 'vendor bill', 'due', 'credit'], label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.', tier: 'weekly' },
-    { key: 'paybill', kw: ['vendor', 'settle', 'paid bill', 'clear'], label: 'Pay a vendor bill', sub: 'Matched to the bills it settles.', tier: 'weekly' },
-    { key: 'billarrived', kw: ['bill number', 'invoice number', 'last month'], label: 'Vendor bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now.", tier: 'weekly' },
-    { key: 'director', kw: ['own pocket', 'personal', 'reimburse'], label: 'Paid personally by the director', sub: 'Cost now; the company owes the director.', tier: 'weekly' },
-    { key: 'confirmcharge', kw: ['rent', 'subscription', 'retainer', 'saas', 'monthly', 'service', 'zoho', 'meta'], label: "Record this month's recurring cost", sub: 'Rent, subscriptions, retainers — paid, or due later.', tier: 'monthly' },
-    { key: 'asset', kw: ['laptop', 'furniture', 'vehicle', 'depreciation', 'equipment'], label: 'Buy an asset (lasts over a year)', sub: 'Cash out now; the cost is spread monthly.', tier: 'rarely' },
-    { key: 'vendorrefund', kw: ['refund', 'returned', 'credit'], label: 'Vendor refund / credit note received', sub: 'Reduces the cost and its GST credit, or returns an advance.', tier: 'rarely' },
+  ['Money out', [
+    { key: 'expense', kw: ['rent', 'eb', 'electricity', 'fuel', 'print', 'coffee', 'tea', 'paid', 'purchase', 'shop'], label: 'Expense — paid now', sub: 'Used and paid together.' },
+    { key: 'petty', kw: ['voucher', 'box', 'cash', 'small'], label: 'Petty cash spends', sub: 'Up to three spends from the box.' },
+    { key: 'paybill', kw: ['vendor', 'settle', 'paid bill', 'clear'], label: 'Pay a vendor bill', sub: 'Matched to the bills it settles.' },
+    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.' },
+    { key: 'salary', kw: ['payroll', 'staff', 'bonus', 'wages', 'employee'], label: 'Salary / bonus', sub: 'Gross is the cost.' },
+    { key: 'statutory', kw: ['gst', 'tds', 'pf', 'tax', 'government', 'challan', 'return'], label: 'Pay GST / TDS / PF to government', sub: 'Remitting what you held. Not a cost.' },
+    { key: 'emi', kw: ['loan', 'instalment', 'installment', 'repayment'], label: 'Pay an EMI', sub: 'Only the interest is a cost.' },
+    { key: 'transfer', kw: ['card bill', 'petty cash', 'top up', 'bank to', 'contra', 'withdraw', 'deposit cash'], label: 'Transfer — bank, cash box, card bill, director', sub: 'Your own money moving. Never a cost.' },
+    { key: 'director', kw: ['own pocket', 'personal', 'reimburse'], label: 'Paid personally by the director', sub: 'Cost now; the company owes the director.' },
+    { key: 'asset', kw: ['laptop', 'furniture', 'vehicle', 'depreciation', 'equipment'], label: 'Buy an asset (lasts over a year)', sub: 'Cash out now; the cost is spread monthly.' },
   ]],
-  ['Salaries & taxes', [
-    { key: 'salary', kw: ['payroll', 'staff', 'bonus', 'wages', 'employee'], label: 'Salary / bonus', sub: 'Gross is the cost.', tier: 'monthly' },
-    { key: 'statutory', kw: ['gst', 'tds', 'pf', 'tax', 'government', 'challan', 'return'], label: 'Pay GST / TDS / PF to government', sub: 'Remitting what you held. Not a cost.', tier: 'monthly' },
+  ['Bills', [
+    { key: 'bill', kw: ['invoice received', 'vendor bill', 'due', 'credit'], label: 'Bill received — pay later', sub: 'Cost now, cash later. Goes on Owed with a due date.' },
+    { key: 'billarrived', kw: ['bill number', 'invoice number', 'last month'], label: 'Vendor bill arrived for a month already recorded', sub: "Last month's rent or service, invoiced now." },
+    { key: 'paybill', kw: ['vendor', 'settle', 'paid bill', 'clear'], label: 'Pay a vendor bill', sub: 'Matched to the bills it settles. Has a box for a discount they gave you.' },
+    { key: 'billdiscount', kw: ['discount', 'let off', 'waived', 'concession', 'rounding'], label: 'Discount on a bill', sub: 'The vendor dropped what was left. No money moves; the bill closes.' },
+    { key: 'vendorrefund', kw: ['refund', 'returned', 'credit'], label: 'Vendor refund / credit note received', sub: 'Reduces the cost and its GST credit, or returns an advance.' },
   ]],
-  ['Bank, cards & loans', [
-    { key: 'transfer', kw: ['card bill', 'petty cash', 'top up', 'bank to', 'contra', 'withdraw', 'deposit cash'], label: 'Transfer — bank, cash box, card bill, director', sub: 'Your own money moving. Never a cost.', tier: 'daily' },
-    { key: 'emi', kw: ['loan', 'instalment', 'installment', 'repayment'], label: 'Pay an EMI', sub: 'Only the interest is a cost.', tier: 'monthly' },
-    { key: 'funding', kw: ['capital', 'director', 'investment', 'infusion'], label: 'Capital / director loan received', sub: 'Financing, never income.', tier: 'rarely' },
-    { key: 'bankloan', kw: ['loan', 'nbfc', 'borrow'], label: 'New bank / NBFC loan', sub: 'Creates the EMI schedule.', tier: 'rarely' },
-    { key: 'card2emi', kw: ['credit card', 'convert'], label: 'Convert a card purchase to EMI', sub: 'Restructures the debt.', tier: 'rarely' },
+  ['Invoices', [
+    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the buyer', preset: { from: 'buyer' }, sub: 'Brokerage falls due. Income now; GST payable.' },
+    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the seller', preset: { from: 'seller' }, sub: 'Brokerage falls due. Income now; GST payable.' },
+    { key: 'otherinc', kw: ['consultancy', 'referral', 'interest', 'valuation', 'fee'], label: 'Invoice for other income', sub: 'Consultancy, referral fee, valuation — a numbered invoice.' },
+    { key: 'creditnote', kw: ['reduce', 'discount', 'renegotiated'], label: 'Credit note — reduce an invoice', sub: 'Renegotiated brokerage. Income and GST come down.' },
   ]],
-  ['Recurring costs (set up)', [
-    { key: 'subnew', kw: ['subscription', 'rent', 'retainer', 'set up'], label: 'Add a recurring cost', sub: 'Rent, a subscription, a retainer. Sets what you expect; nothing posts.', tier: 'rarely' },
-    { key: 'subchange', kw: ['price change', 'upgrade', 'plan'], label: 'Change what a recurring cost will be', sub: 'New expected amount from a month.', tier: 'rarely' },
-    { key: 'subcancel', kw: ['cancel', 'pause', 'stop'], label: 'Stop, pause or resume a recurring cost', sub: 'Unused prepaid leaves the books.', tier: 'rarely' },
+  ['Service costs', [
+    { key: 'confirmcharge', kw: ['rent', 'subscription', 'retainer', 'saas', 'monthly', 'service', 'zoho', 'meta'], label: "Record this month's recurring cost", sub: 'Rent, subscriptions, retainers — paid, or due later.' },
+    { key: 'subnew', kw: ['subscription', 'rent', 'retainer', 'set up'], label: 'Add a recurring cost', sub: 'Rent, a subscription, a retainer. Sets what you expect; nothing posts.' },
+    { key: 'subchange', kw: ['price change', 'upgrade', 'plan'], label: 'Change what a recurring cost will be', sub: 'New expected amount from a month.' },
+    { key: 'subcancel', kw: ['cancel', 'pause', 'stop'], label: 'Stop, pause or resume a recurring cost', sub: 'Unused prepaid leaves the books.' },
   ]],
-  ['Adjustments & write-offs', [
-    { key: 'writeoff', kw: ['bad debt', 'will not pay', 'lost'], label: 'Write off a client balance', sub: 'Books the loss.', tier: 'rarely' },
-    { key: 'absorb', kw: ['recoverable', 'not repay'], label: 'Absorb a cost the client will not repay', sub: 'Recoverable becomes your expense.', tier: 'rarely' },
-    { key: 'assetdispose', kw: ['sell', 'scrap', 'dispose'], label: 'Sell or scrap an asset', sub: 'Gain or loss is worked out.', tier: 'rarely' },
+  ['Deals', [
+    { key: 'newdeal', kw: ['pipeline', 'listing', 'new deal', 'client'], label: 'Add a deal', sub: 'Opens it in the pipeline. Nothing posts.' },
+    { key: 'register', kw: ['registration', 'deed', 'sale deed', 'closed'], label: 'Deal registered', sub: 'The milestone and its date. Nothing posts.' },
+    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet.' },
+    { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.' },
+    { key: 'settle', kw: ['refund', 'forfeit', 'token back'], label: 'Settle a token', sub: 'Apply to the invoice, refund, or keep.' },
+  ]],
+  ['Fix something', [
+    { key: 'writeoff', kw: ['bad debt', 'will not pay', 'lost'], label: 'Write off a client balance', sub: 'Books the loss.' },
+    { key: 'absorb', kw: ['recoverable', 'not repay'], label: 'Absorb a cost the client will not repay', sub: 'Recoverable becomes your expense.' },
+    { key: 'assetdispose', kw: ['sell', 'scrap', 'dispose'], label: 'Sell or scrap an asset', sub: 'Gain or loss is worked out.' },
+    { key: 'card2emi', kw: ['credit card', 'convert'], label: 'Convert a card purchase to EMI', sub: 'Restructures the debt.' },
   ]],
 ];
 

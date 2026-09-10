@@ -502,24 +502,33 @@ let moreOpen = false;
 let rebuilding = false;
 
 // ── the chooser's data ──
-// CHOOSER is plain data: groups of items with a tier — how often the owner reaches for it.
-// An item's id is its key plus its preset, so the two invoice buttons are two things to the
-// usage history. A key listed in two groups is one thing.
-const TIER_ORDER = { daily: 0, weekly: 1, monthly: 2, rarely: 3, rare: 3 };
+// CHOOSER is plain data: seven categories, each with its actions. An item's id is its key plus
+// its preset, so the two invoice buttons are two things to the history. A key listed in two
+// categories is one thing. Each category carries the direction its colour comes from and the
+// one line under its name.
+const GROUP_META = {
+  'Money in': { dir: 'in', hint: 'Client payments, tokens, other income, capital, loans' },
+  'Money out': { dir: 'out', hint: 'Expenses, petty cash, bills paid, salaries, EMIs, taxes, transfers' },
+  'Bills': { dir: 'out', hint: 'Vendor bills to pay later, bills that arrived, vendor refunds' },
+  'Invoices': { dir: 'in', hint: 'Billing a client — brokerage, other income, credit notes' },
+  'Service costs': { dir: 'out', hint: 'Rent, subscriptions, retainers — this month, and setting them up' },
+  'Deals': { dir: 'setup', hint: 'Open a deal, mark it registered, tokens, costs, settling' },
+  'Fix something': { dir: 'fix', hint: 'Write-offs, absorbed costs, asset disposals, card to EMI' },
+};
 const GROUPS = CHOOSER.map(([label, items]) => {
-  const g = { id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), label, items: [] };
+  const meta = GROUP_META[label] || {};
+  const g = { id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), label, hint: meta.hint || '', items: [] };
   g.items = items.filter(it => EV[it.key]).map(it => ({
-    tier: 'weekly', ...it,
+    ...it,
     id: it.key + (it.preset ? ':' + Object.values(it.preset).join('-') : ''),
     label: it.label || EV[it.key].title,
     dir: dirOf(it.key), group: g,
   }));
-  g.dir = g.items[0]?.dir || 'setup';
+  g.dir = meta.dir || g.items[0]?.dir || 'setup';
   return g;
 });
 const ITEMS = GROUPS.flatMap(g => g.items);
 const itemById = id => ITEMS.find(it => it.id === id) || null;
-const folded = it => (TIER_ORDER[it.tier] ?? 1) >= 2;
 const dedupe = list => { const seen = new Set(); return list.filter(it => !seen.has(it.id) && seen.add(it.id)); };
 // Zero feature loss is checked, not hoped for.
 {
@@ -528,9 +537,9 @@ const dedupe = list => { const seen = new Set(); return list.filter(it => !seen.
   if (missing.length) console.error('Record: events with no button —', missing.join(', '));
 }
 
-// ── your usual ──
-// This device's own history: what was recorded, how often, how recently. Six buttons on a
-// desk, four on a phone. Before there is any history it is the daily tier.
+// ── recent ──
+// This device's own history: what was recorded, how often, how recently. Shown as a short row
+// above the categories once there is any — nothing before that.
 const USE_KEY = 'fin.rec.usage.v1';
 function usage() { try { return JSON.parse(localStorage.getItem(USE_KEY) || '{}'); } catch { return {}; } }
 function noteUse(id) {
@@ -539,15 +548,12 @@ function noteUse(id) {
   r.n += 1; r.last = Date.now(); u[id] = r;
   try { localStorage.setItem(USE_KEY, JSON.stringify(u)); } catch { /* private window */ }
 }
-function usual(n) {
+function recent(n) {
   const u = usage(), now = Date.now();
   // Frequency decays over a month; anything saved today gets a bump, so the second coffee of
   // the day is first.
   const score = it => { const r = u[it.id]; if (!r) return 0; const d = (now - r.last) / 864e5; return r.n * Math.exp(-d / 30) + (d < 1 ? 2 : 0); };
-  const all = dedupe(ITEMS);
-  const ranked = all.filter(it => u[it.id]).sort((a, b) => score(b) - score(a)).slice(0, n);
-  const fill = all.filter(it => it.tier === 'daily' && !ranked.includes(it));
-  return [...ranked, ...fill].slice(0, n);
+  return dedupe(ITEMS).filter(it => u[it.id]).sort((a, b) => score(b) - score(a)).slice(0, n);
 }
 
 // ── search ──
@@ -567,7 +573,7 @@ function searchItems(q) {
   const ws = words(q);
   if (!ws.length) return null;
   return dedupe(ITEMS.map(it => [it, matchScore(it, ws)]).filter(([, sc]) => sc > 0)
-    .sort((a, b) => b[1] - a[1] || (TIER_ORDER[a[0].tier] ?? 1) - (TIER_ORDER[b[0].tier] ?? 1)).map(([it]) => it));
+    .sort((a, b) => b[1] - a[1]).map(([it]) => it));
 }
 const reEsc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function hl(text, ws) {
@@ -577,7 +583,7 @@ function hl(text, ws) {
 }
 
 function actCard(it, { compact = false, ws = null, showGroup = false } = {}) {
-  return `<button type="button" class="act${compact ? ' compact' : ''} dir-${it.dir}" data-id="${esc(it.id)}" data-tier="${esc(it.tier)}" onclick="fin.pickId('${esc(it.id)}')">
+  return `<button type="button" class="act${compact ? ' compact' : ''} dir-${it.dir}" data-id="${esc(it.id)}" onclick="fin.pickId('${esc(it.id)}')">
       <b>${hl(it.label, ws)}</b>${it.sub && !compact ? `<span class="sub">${hl(it.sub, ws)}</span>` : ''}${showGroup ? `<span class="grp">${esc(it.group.label)}</span>` : ''}</button>`;
 }
 
@@ -589,46 +595,43 @@ function chooserBody() {
     const hits = searchItems(findQ);
     return hits.length
       ? `<div class="rec-list rec-hits">${hits.map(it => actCard(it, { ws, showGroup: true })).join('')}</div>`
-      : empty(`Nothing called "<b>${esc(findQ.trim())}</b>". Try a plainer word — rent, salary, token — or pick a group above.`,
+      : empty(`Nothing called "<b>${esc(findQ.trim())}</b>". Try a plainer word — rent, salary, token — or pick a category above.`,
         `<button class="btn" type="button" onclick="fin.findAction('', true)">Clear search</button>`);
   }
-  const groups = groupPick ? GROUPS.filter(g => g.id === groupPick) : GROUPS;
-  return groups.map(g => {
-    // A group whose every action is monthly or rare has nothing to fold behind: show it all.
-    let open = groupPick ? g.items : g.items.filter(it => !folded(it));
-    let fold = groupPick ? [] : g.items.filter(folded);
-    if (!open.length) { open = g.items; fold = []; }
-    return `<section class="rec-group dir-${g.dir}" data-g="${esc(g.id)}">
+  // Level one: the seven categories. Level two: the actions inside the one that was chosen.
+  const g = groupPick ? GROUPS.find(x => x.id === groupPick) : null;
+  if (!g) {
+    return `<div class="cat-tiles">${GROUPS.map(x => `
+      <button type="button" class="cat dir-${x.dir}" data-g="${esc(x.id)}" onclick="fin.pickGroup('${esc(x.id)}')">
+        <b>${esc(x.label)}</b><span class="sub">${esc(x.hint)}</span><span class="cnt">${x.items.length}</span></button>`).join('')}
+    </div>`;
+  }
+  return `
+    <div class="cat-head">
+      <button class="btn ghost sm" type="button" onclick="fin.pickGroup('')"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> All categories</button>
+    </div>
+    <section class="rec-group dir-${g.dir}" data-g="${esc(g.id)}">
       <div class="eh">${esc(g.label)} <span class="cnt">${g.items.length}</span></div>
-      <div class="rec-list">
-        ${open.map(it => actCard(it)).join('')}
-        ${fold.length ? `<button type="button" class="btn ghost rec-more" aria-expanded="false" onclick="fin.moreIn(this)">${fold.length} more — ${esc(fold.slice(0, 3).map(it => it.label.toLowerCase()).join(', '))}${fold.length > 3 ? '…' : ''}</button>
-        <div class="rec-fold" hidden>${fold.map(it => actCard(it)).join('')}</div>` : ''}
-      </div>
+      ${g.hint ? `<p class="small muted" style="margin:0 0 var(--s3)">${esc(g.hint)}</p>` : ''}
+      <div class="rec-list">${g.items.map(it => actCard(it)).join('')}</div>
     </section>`;
-  }).join('');
 }
 
 function chooser() {
-  const n = new Set(ITEMS.map(it => it.id)).size;
-  const usualItems = (!findQ.trim() && !groupPick) ? usual(window.innerWidth >= 1100 ? 6 : 4) : [];
+  const recents = (!findQ.trim() && !groupPick) ? recent(window.innerWidth >= 1100 ? 6 : 4) : [];
   return `
     <div class="rec-head">
       <h1>Record what happened</h1>
       <div class="rec-find">
-        <input type="search" id="actFind" placeholder="What happened? rent, token, EMI…" aria-label="Find what to record"
+        <input type="search" id="actFind" placeholder="Or find it — rent, token, EMI…" aria-label="Find what to record"
           autocomplete="off" enterkeyhint="search" value="${esc(findQ)}" oninput="fin.findAction(this.value)" onkeydown="fin.findKey(event)">
         <button type="button" class="clr" id="actClear" aria-label="Clear search" ${findQ ? '' : 'hidden'} onclick="fin.findAction('', true)"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
       </div>
     </div>
-    <div class="rec-groups" role="group" aria-label="Show only" id="recGroups">
-      <button type="button" class="chip" aria-pressed="${!groupPick}" data-g="" onclick="fin.pickGroup('')">All <span class="cnt">${n}</span></button>
-      ${GROUPS.map(g => `<button type="button" class="chip dir-${g.dir}" aria-pressed="${groupPick === g.id}" data-g="${esc(g.id)}" onclick="fin.pickGroup('${esc(g.id)}')"><span class="dot"></span>${esc(g.label)} <span class="cnt">${g.items.length}</span></button>`).join('')}
-    </div>
     <p class="sr-only" id="actCount" aria-live="polite"></p>
-    <section class="rec-usual" id="recUsual" ${usualItems.length ? '' : 'hidden'}>
-      <div class="eh">Your usual</div>
-      <div class="rec-usual-grid">${usualItems.map(it => actCard(it, { compact: true })).join('')}</div>
+    <section class="rec-usual" id="recUsual" ${recents.length ? '' : 'hidden'}>
+      <div class="eh">Recent</div>
+      <div class="rec-usual-grid">${recents.map(it => actCard(it, { compact: true })).join('')}</div>
     </section>
     <div id="chooser">${chooserBody()}</div>`;
 }
@@ -642,7 +645,6 @@ function redrawChooser() {
   if (usualEl) usualEl.hidden = !!(findQ.trim() || groupPick) || !usualEl.querySelector('.act');
   const clr = document.getElementById('actClear');
   if (clr) clr.hidden = !findQ;
-  document.querySelectorAll('#recGroups .chip').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.g || '') === groupPick)));
   const count = document.getElementById('actCount');
   if (count) { const hits = findQ.trim() ? searchItems(findQ) : null; count.textContent = hits ? `${hits.length} match${hits.length === 1 ? '' : 'es'}` : ''; }
 }
@@ -763,8 +765,9 @@ function drawStage() {
 // anything required, and any field the event marks tier:'core'.
 const CORE = {
   expense: ['amt', 'desc', 'via', 'date'],
-  dealpay: ['party', 'amt', 'tds', 'alloc', 'via', 'date'],
-  paybill: ['party', 'amt', 'alloc', 'via', 'date'],
+  dealpay: ['party', 'amt', 'tds', 'short', 'alloc', 'via', 'date'],
+  paybill: ['party', 'amt', 'short', 'useAdvance', 'alloc', 'via', 'date'],
+  billdiscount: ['party', 'bill', 'amt', 'date'],
   bill: ['vendor', 'desc', 'amt', 'dueDate', 'date'],
   billarrived: ['sub', 'month', 'amt', 'date'],
   confirmcharge: ['sub', 'month', 'result', 'amt', 'via', 'date'],
@@ -1446,11 +1449,12 @@ function settlementBlock(t) {
           <td class="n">${fmt(p.amt)}</td></tr>`).join('')}
       </tbody></table></div>`
       : `<div class="small faint" style="margin-top:4px">Nothing has been ${m.coll === 'bills' ? 'paid against this yet' : 'received against this yet'}.</div>`}
-      ${m.outstanding > 0.5 && m.status !== 'void' && m.payments.some(p => !p.reversal) && m.outstanding < m.total * 0.25
-      ? `<p class="small muted" style="margin:6px 0 0">Part-paid, with ${fmt(m.outstanding)} left. If the ${m.coll === 'bills' ? 'vendor let you off' : 'client short-paid'} that, record it as a payment of <b>0</b> with ${fmt(m.outstanding)} in the ${m.coll === 'bills' ? '"amount the vendor let you off"' : 'short'} box — the document closes and the difference is booked properly.</p>` : ''}
+      ${m.outstanding > 0.5 && m.status !== 'void' && m.coll === 'invoices' && m.payments.some(p => !p.reversal) && m.outstanding < m.total * 0.25
+      ? `<p class="small muted" style="margin:6px 0 0">Part-paid, with ${fmt(m.outstanding)} left. If the client short-paid that, record a payment of <b>0</b> with ${fmt(m.outstanding)} in "Discount you gave them" — the invoice closes and the difference is booked properly.</p>` : ''}
       ${m.outstanding > 0.5 && m.status !== 'void' ? `<div class="actions" style="margin:8px 0 0">
         ${m.coll === 'bills'
       ? `<button class="btn sm out" type="button" onclick="fin.closeModal();fin.record('paybill',{party:'${esc(m.doc.partyId)}'})">Pay this</button>
+             <button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billdiscount',{party:'${esc(m.doc.partyId)}',bill:'${esc(m.doc.id)}'})">Close ${fmt(m.outstanding)} as a discount</button>
              ${!m.doc.billNo ? `<button class="btn ghost sm" type="button" onclick="fin.closeModal();fin.record('billarrived',{billId:'${esc(m.doc.id)}'})">Bill arrived</button>` : ''}`
       : `<button class="btn sm in" type="button" onclick="fin.closeModal();fin.record('dealpay',{party:'${esc(m.doc.partyId)}'})">Record payment</button>`}
       </div>` : ''}
@@ -1654,17 +1658,13 @@ window.fin = {
     if (e.key === 'Enter') { const hits = searchItems(findQ); if (hits && hits[0]) { e.preventDefault(); window.fin.pickId(hits[0].id); } }
     if (e.key === 'Escape') { e.preventDefault(); window.fin.findAction('', true); }
   },
+  // Opening a category, or going back to all of them. Opening one scrolls its actions into
+  // view so a tap at the bottom of the tiles on a phone lands on the list, not on nothing.
   pickGroup(g) {
     groupPick = g || '';
     redrawChooser();
-    const chip = document.querySelector(`#recGroups .chip[data-g="${CSS.escape(groupPick)}"]`);
-    chip?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  },
-  moreIn(btn) {
-    const fold = btn.nextElementSibling;
-    const open = btn.getAttribute('aria-expanded') !== 'true';
-    btn.setAttribute('aria-expanded', String(open));
-    if (fold) fold.hidden = !open;
+    if (groupPick) document.getElementById('chooser')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    else window.scrollTo(0, 0);
   },
   // The phone's preview: the same card, moved into a sheet one tap from Save, with its own
   // Save so "check, then save" is a single gesture.

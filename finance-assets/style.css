@@ -1047,3 +1047,25 @@ table.ledger .phone { display: none; }
 /* Transactions: the everyday filters stay out; the rest fold, and a fold with something on opens. */
 .filters-more { margin: 0 0 var(--s3); border-top: 0; }
 .filters-more > .body { padding-bottom: var(--s2); }
+
+
+/* ═══════ RECORD — CATEGORIES FIRST ═══════
+   Seven tiles, then the actions inside the one chosen. The tile is the biggest thing on the
+   screen because it is the first decision; its rule carries the direction colour. */
+.cat-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+@media (min-width: 860px) { .cat-tiles { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 1100px) { .cat-tiles { grid-template-columns: repeat(4, 1fr); } }
+.cat {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  min-height: 108px; padding: 16px 44px 14px 20px; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--card); font: inherit; color: var(--ink); cursor: pointer;
+  transition: border-color var(--d1), background var(--d1), transform var(--d1) var(--ease);
+}
+.cat::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px; border-radius: 0 4px 4px 0; background: var(--dir, var(--line-2)); }
+.cat b { font-family: var(--serif); font-weight: 500; font-size: 20px; letter-spacing: -.01em; line-height: 1.15; }
+.cat .sub { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.cat .cnt { position: absolute; right: 14px; top: 14px; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.cat:hover { border-color: var(--line-2); background: var(--card-2); }
+.cat:active { transform: scale(.985); }
+@media (max-width: 859px) { .cat { min-height: 96px; padding: 14px 36px 12px 18px; } .cat b { font-size: 18px; } .cat .sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } }
+.cat-head { margin: 0 0 var(--s3); }
