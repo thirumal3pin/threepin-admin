@@ -125,6 +125,9 @@ let ready = false;
 
 const entryNo = t => t?.no ? '#' + String(t.no).padStart(4, '0') : '—';
 
+// Event keys that earlier builds posted under, so an old entry still reads as what it was.
+const LEGACY_EVENT = { billdiscount: 'Discount on a bill' };
+
 // ═══════ BOOT ═══════
 
 window.onFinanceAuthChange = (user, tenantId) => {
@@ -1600,7 +1603,7 @@ function openTxn(id) {
     title: t.desc || 'Transaction',
     body: `
       <p class="small muted" style="margin:0 0 10px">
-        <span class="eno">${entryNo(t)}</span> · ${esc(t.date)} · ${esc(EV[t.event]?.title || t.event)}
+        <span class="eno">${entryNo(t)}</span> · ${esc(t.date)} · ${esc(EV[t.event]?.title || LEGACY_EVENT[t.event] || t.event)}
         ${(() => { const m = t.lines.find(l => l.method)?.method || t.meta?.method; return m ? ' · ' + esc(methodLabel(m)) : ''; })()}
         ${t.meta?.ref ? ' · ref ' + esc(t.meta.ref) : ''}${t.selfInvoiceNo ? ' · self-invoice ' + esc(t.selfInvoiceNo) : ''}
         · by ${esc(t.createdBy || '—')}
