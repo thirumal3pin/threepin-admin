@@ -1,11 +1,13 @@
-// One-off correction tool: for when a brochure PDF was already delivered
-// but then needs a fix (typo, wrong figure, etc.) and Cowork regenerated it
-// locally under the corrected folder name. Unlike deliver-brochures.js this
-// does NOT call the admin.threepin.in brochure API (that endpoint always
-// sends a team email as part of finishing an upload) — a correction isn't
-// a new listing, so nobody should get re-notified just because a typo got
-// fixed. This only touches Drive + the two sheets + the dashboard's own
-// Firestore doc, silently.
+// Correction / re-delivery tool: for when a brochure PDF was already
+// delivered but needs to be replaced (typo fix, or a substantive update)
+// and Cowork regenerated it locally under the same property folder.
+//
+// By default this does NOT call the admin.threepin.in brochure API (that
+// endpoint always sends a team email as part of finishing an upload) — a
+// small correction isn't a new listing, so nobody should get re-notified
+// just because a typo got fixed. Pass --notify when the update is
+// substantive enough that the team should be emailed again (a new PDF
+// attached, same as a first-time delivery) — see sendNotification() below.
 //
 // What it does for <propertyId>:
 //   1. Finds the local folder (BROCHURE_FOLDER, matches by name prefix
@@ -15,31 +17,46 @@
 //      Firestore doc as the source of truth for which file that is.
 //   3. Uploads the new PDF into the same Drive photos folder (col C of the
 //      Queue sheet row), makes it public, same as the normal pipeline.
-//   4. Overwrites Queue sheet col F and Inventory sheet col AR with the
-//      new link.
+//   4. Overwrites the Queue sheet's "Brochure Emailed" column and the
+//      Inventory sheet's Brochure_Link column with the new link — both
+//      resolved by header text via ./_pipeline-shared.js, not a hardcoded
+//      letter. (This script used to hardcode Queue col F, which was
+//      Brochure Emailed under the old layout; the "Internal TEAM
+//      Instructions" column inserted at E shifted that to G, so the old
+//      hardcoded write would have silently overwritten Status instead —
+//      the exact bug deliver-brochures.js was already fixed for.)
 //   5. Merges the corrected property JSON (name/location/highlights/etc,
 //      whatever Cowork regenerated) plus the new brochureLink onto the
-//      Firestore doc, so the dashboard reflects the fix everywhere, not
-//      just in the PDF.
+//      Firestore doc via the same shared mapToDashboardProperty() the
+//      normal pipeline uses, so the dashboard reflects the fix everywhere,
+//      not just in the PDF, and Tier-A field ownership is respected the
+//      same way (this used to `{...data}`-spread the raw JSON, which
+//      reintroduced the eight dead alt-schema field names the dashboard
+//      mapping deliberately excludes).
+//   6. With --notify: calls the same admin.threepin.in brochure API
+//      "finish" step deliver-brochures.js uses, which re-fetches the file
+//      from Drive and emails it to the team as an attachment.
 //
 // Usage:
-//   node scripts/replace-brochure.js VLCA002
+//   node scripts/replace-brochure.js VLCA002              # silent correction
+//   node scripts/replace-brochure.js VLCA002 --notify      # also emails the team
 //
-// Requires the same env as deliver-brochures.js (WEBHOOK_SHARED_SECRET not
-// needed here since we never call the brochure API; only Google service
-// account access, defaulted from api/).
+// Requires the same env as deliver-brochures.js. WEBHOOK_SHARED_SECRET is
+// only needed with --notify (the brochure API requires it); plain corrections
+// only need Google service account access, defaulted from api/.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { resolveQueueColumns, findColumnByHeader, columnLetter, mapToDashboardProperty } from './_pipeline-shared.js';
 
 const BROCHURE_FOLDER = '/Users/swaminathannagarajan/Downloads/Product brochure ';
 const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
-const INVENTORY_BROCHURE_LINK_COL = 'AH'; // Brochure_Link — Inventory sheet was revised down to 36 cols (A-AJ); this used to be AR under the old 46-col layout
 const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
+const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
   || path.join(import.meta.dirname, '..', 'api', 'pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json');
@@ -189,34 +206,35 @@ async function sheetsUpdateCell(token, sheetId, a1, value) {
   if (!res.ok) throw new Error(`Sheets write failed (${a1}): ${JSON.stringify(data)}`);
 }
 
-// Mirrors deliver-brochures.js's own mapping so a correction lands on the
-// dashboard the same shape a normal delivery would.
-function mapToDashboardProperty(data) {
-  const type = data.propertyType || data.type || 'Property';
-  const builder = data.builder || 'Individual Owner';
-  let startingPrice;
-  if (data.price) startingPrice = data.price;
-  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = data.startingPrice || 'Price on Request';
-  let status;
-  if (data.readyToMove !== undefined || data.newOrResale !== undefined) {
-    status = (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') ? 'Ready to Move' : 'Under Construction';
-  } else {
-    status = data.status || 'Under Construction';
-  }
-  const possession = data.possessionDate || data.possession || 'Contact for details';
-  const sqftRange = data.builtupArea || data.superBuiltupArea || data.carpetArea || data.sqftRange || '';
-  return {
-    ...data,
-    propertyCode: data.propertyCode || data.propertyId || '',
-    type, builder, startingPrice, status, possession, sqftRange
-  };
+async function sendNotification(propertyId, title, driveFileId) {
+  const secret = process.env.WEBHOOK_SHARED_SECRET;
+  if (!secret) throw new Error('--notify requires WEBHOOK_SHARED_SECRET in the environment.');
+  const res = await fetch(BROCHURE_API, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      property_id: propertyId,
+      property_title: title,
+      drive_file_id: driveFileId,
+      to: 'thirumal@threepin.in,swami@threepin.in,pradeep@threepin.in',
+      subject: `Updated brochure: ${propertyId} — ${title}`,
+      body_text: `${title}. The brochure for this property has been updated — attached is the new version (replaces any earlier copy). Delivered by the 3PIN brochure pipeline.`
+    })
+  }).then(r => r.json());
+  if (!res.success) throw new Error(`notify: ${res.error}`);
+  console.log(`Email sent to the team. drive_file_url: ${res.drive_file_url}`);
 }
 
 async function main() {
-  const propertyId = process.argv[2];
+  const args = process.argv.slice(2);
+  const notify = args.includes('--notify');
+  const propertyId = args.find(a => !a.startsWith('--'));
   if (!propertyId) {
-    console.error('Usage: node scripts/replace-brochure.js <PROPERTY_ID>');
+    console.error('Usage: node scripts/replace-brochure.js <PROPERTY_ID> [--notify]');
+    process.exit(1);
+  }
+  if (notify && !process.env.WEBHOOK_SHARED_SECRET) {
+    console.error('--notify requires WEBHOOK_SHARED_SECRET in the environment. Aborting.');
     process.exit(1);
   }
 
@@ -244,57 +262,66 @@ async function main() {
   }
 
   const sheetsToken = await getAccessToken(true);
-  const queueRows = await sheetsGet(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!A:F`);
-  const queueIdx = queueRows.findIndex(r => String(r[1] || '').split(' - ')[0].trim() === propertyId);
+  // A:Z, not a narrow range — the Queue sheet has already grown past a
+  // hardcoded width once (see deliver-brochures.js).
+  const queueRows = await sheetsGet(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!A:Z`);
+  const queueCols = resolveQueueColumns(queueRows[0] || []);
+  console.log(`Queue columns resolved: ${Object.entries(queueCols)
+    .map(([k, i]) => `${k}=${i === null ? '(absent)' : columnLetter(i)}`).join(' ')}`);
+  const queueIdx = queueRows.findIndex(r => String(r[queueCols.idTitle] || '').split(' - ')[0].trim() === propertyId);
   if (queueIdx === -1) throw new Error(`No Queue sheet row found for ${propertyId}`);
   const queueRow = queueRows[queueIdx];
-  const folderId = extractFolderId(queueRow[2]);
-  if (!folderId) throw new Error(`Queue row col C has no Drive folder link for ${propertyId}`);
+  const folderId = extractFolderId(queueRow[queueCols.photosLink]);
+  if (!folderId) throw new Error(`Queue row's photo-folder column has no Drive folder link for ${propertyId}`);
 
   const pdfBytes = fs.readFileSync(local.pdfPath);
   const newFileId = await uploadPdf(folderId, `${propertyId}_brochure.pdf`, pdfBytes);
   const newUrl = `https://drive.google.com/file/d/${newFileId}/view`;
   console.log(`Uploaded new brochure: ${newUrl}`);
 
-  await sheetsUpdateCell(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!F${queueIdx + 1}`,
+  await sheetsUpdateCell(sheetsToken, QUEUE_SHEET_ID, `${QUEUE_TAB}!${columnLetter(queueCols.emailed)}${queueIdx + 1}`,
     `Yes - ${new Date().toISOString()} - ${newUrl} (corrected)`);
-  console.log(`Queue sheet col F row ${queueIdx + 1} updated.`);
+  console.log(`Queue sheet ${columnLetter(queueCols.emailed)} row ${queueIdx + 1} updated.`);
 
   const invRows = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A:A');
   const invIdx = invRows.findIndex(r => String(r[0] || '').trim() === propertyId);
   if (invIdx !== -1) {
-    // The Sheets API writes to whatever column you name — it won't complain
-    // if the sheet's been reorganized and that column now holds something
-    // else. Confirm the header before writing, so a future column shuffle
-    // fails loudly here instead of silently clobbering the wrong field.
-    const [headerRow] = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}1`);
-    const actualHeader = headerRow && headerRow[0];
-    if (actualHeader !== INVENTORY_BROCHURE_LINK_HEADER) {
+    const [invHeaderRow] = await sheetsGet(sheetsToken, INVENTORY_SHEET_ID, 'Inventory!A1:AZ1');
+    const brochureLinkCol = findColumnByHeader(invHeaderRow, INVENTORY_BROCHURE_LINK_HEADER);
+    if (!brochureLinkCol) {
       throw new Error(
-        `Inventory sheet column ${INVENTORY_BROCHURE_LINK_COL} is now "${actualHeader}", not "${INVENTORY_BROCHURE_LINK_HEADER}" — ` +
-        `the sheet has been reorganized again. Update INVENTORY_BROCHURE_LINK_COL in this file before retrying.`
+        `Inventory sheet has no column with header "${INVENTORY_BROCHURE_LINK_HEADER}" — ` +
+        `the sheet has been reorganized. Refusing to guess a column to write to.`
       );
     }
-    await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${INVENTORY_BROCHURE_LINK_COL}${invIdx + 1}`, newUrl);
-    console.log(`Inventory sheet col ${INVENTORY_BROCHURE_LINK_COL} row ${invIdx + 1} updated.`);
+    await sheetsUpdateCell(sheetsToken, INVENTORY_SHEET_ID, `Inventory!${brochureLinkCol}${invIdx + 1}`, newUrl);
+    console.log(`Inventory sheet col ${brochureLinkCol} row ${invIdx + 1} updated.`);
   } else {
     console.log('No Inventory sheet row found — skipped.');
   }
 
+  const detailsText = queueCols.detailsText === null ? '' : queueRow[queueCols.detailsText];
   const mapped = mapToDashboardProperty({
     ...local.data,
     brochureLink: newUrl,
-    photosLink: queueRow[2] || existing.photosLink || '',
-    detailsText: queueRow[3] || existing.detailsText || ''
-  });
+    photosLink: queueRow[queueCols.photosLink] || existing.photosLink || '',
+    detailsText: detailsText || existing.detailsText || ''
+  }, existing);
   mapped.id = propertyId;
   await docRef.set(mapped, { merge: true });
-  console.log(`Firestore properties/${propertyId} updated (name, location, brochureLink, etc.).`);
+  console.log(`Firestore properties/${propertyId} updated (brochureLink, and any descriptive field still blank).`);
 
   local.data.brochureLink = newUrl;
   fs.writeFileSync(local.jsonPath, JSON.stringify(local.data, null, 2));
 
-  console.log('\nDone. No email was sent — this was a silent correction.');
+  if (notify) {
+    const title = local.data.name
+      || `${local.data.config || ''} ${local.data.propertyType || local.data.type || ''} — ${local.data.location || ''}`.trim();
+    await sendNotification(propertyId, title, newFileId, newUrl);
+    console.log('\nDone. Team was notified by email.');
+  } else {
+    console.log('\nDone. No email was sent — this was a silent correction. Pass --notify to also email the team.');
+  }
 }
 
 main().catch(e => {

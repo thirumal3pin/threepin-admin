@@ -598,14 +598,16 @@ async function deleteNote(id,noteId){
 // deliberately separate from Notes & Events above: that log is a dated
 // history of what happened, this is standing instructions for the team.
 //
-// Two writers reach this list — a person here, and the brochure scheduler
-// importing the Queue sheet's "Internal TEAM Instructions and Notes" column
-// (scripts/deliver-brochures.js). They are kept apart by `source`: an
-// imported entry has source:'queue-sheet' and a fixed document id derived
-// from the row, so a re-delivery updates that one entry and can never
-// duplicate it or touch anything typed here by hand.
+// Three writers reach this list — a person here, the brochure scheduler
+// importing the Queue sheet's "Internal TEAM Instructions and Notes" column,
+// and the same scheduler importing Cowork's own generation-QA notes from the
+// brochure JSON (scripts/deliver-brochures.js). They are kept apart by
+// `source`: an imported entry has a fixed document id derived from its
+// origin, so a re-delivery updates that one entry and can never duplicate it
+// or touch anything typed here by hand.
 const INTERNAL_SOURCES = {
-  'queue-sheet': { label: 'From Queue sheet', cls: 'src-sheet' }
+  'queue-sheet': { label: 'From Queue sheet', cls: 'src-sheet' },
+  'cowork-generation': { label: 'Cowork — review before publishing', cls: 'src-cowork' }
 };
 
 function sortedInternalNotes(id){

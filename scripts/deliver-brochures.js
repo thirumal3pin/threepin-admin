@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { rowToProperty, assertHeadersMapped } from '../api/_inventory-shared.js';
+import { columnLetter, resolveQueueColumns, mapToDashboardProperty } from './_pipeline-shared.js';
 
 // Runs locally (via launchd, not on Vercel) so it has real, unrestricted
 // network access — unlike the Cowork task that generates these brochures,
@@ -63,21 +64,12 @@ const INVENTORY_BROCHURE_LINK_HEADER = 'Brochure_Link';
 // pointed at Status - one fixed read away from overwriting it. Resolve by
 // header text instead, exactly like resolveInventoryColumns() below.
 //
-// These are Google Form question texts, not short database-style headers:
-// they are long, contain parenthetical examples, and carry stray double and
-// trailing spaces. So match on a normalized, stable PREFIX rather than the
-// full string - except Status, which is matched exactly so it cannot collide
-// with a future "Construction Status"-type column.
-const QUEUE_COLUMNS = {
-  idTitle:       { match: 'property id',                 mode: 'prefix', required: true },
-  photosLink:    { match: 'google drive photo folder',   mode: 'prefix', required: true },
-  detailsText:   { match: 'property details',            mode: 'prefix', required: false },
-  internalNotes: { match: 'internal team instructions',  mode: 'prefix', required: false },
-  status:        { match: 'status',                      mode: 'exact',  required: true },
-  emailed:       { match: 'brochure emailed',            mode: 'prefix', required: true }
-};
-const normalizeHeader = h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
-const DASHBOARD_TENANT_ID = 't_3pinrealty'; // dashboard.html / crm.html tenant, confirmed against live Firestore data
+// QUEUE_COLUMNS, normalizeHeader, resolveQueueColumns, columnLetter,
+// DASHBOARD_TENANT_ID and mapToDashboardProperty now live in
+// ./_pipeline-shared.js (imported above) - scripts/replace-brochure.js needs
+// the exact same logic, and a private copy there had already drifted (a
+// hardcoded Queue column letter that never got this header-shift fix, and a
+// `{...data}` spread that bypassed the dead-field-name exclusions below).
 
 const SA_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
   || path.join(import.meta.dirname, '..', 'api', 'pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json');
@@ -95,169 +87,9 @@ function getFirestoreDb() {
   return getFirestore();
 }
 
-// The dashboard's status filter recognizes exactly these two strings — any
-// other value drops a property out of BOTH filter buttons, making it
-// invisible on the grid without any visible error. A stage description the
-// source uses ("Pre-Launch", "Demolition stage", ...) is kept verbatim in
-// constructionStage instead of being discarded.
-const STATUS_READY = 'Ready to Move';
-const STATUS_UNDER_CONSTRUCTION = 'Under Construction';
-
-function normalizeStatus(data) {
-  if (data.readyToMove === 'Yes' || data.newOrResale === 'Resale') {
-    return { status: STATUS_READY };
-  }
-  const raw = String(data.status || '').trim();
-  if (raw === STATUS_READY) return { status: STATUS_READY };
-  if (!raw || raw === STATUS_UNDER_CONSTRUCTION) return { status: STATUS_UNDER_CONSTRUCTION };
-  return { status: STATUS_UNDER_CONSTRUCTION, constructionStage: raw };
-}
-
-// Only assigns the key when the value is present — Firestore merge writes an
-// empty string or null right over whatever real value was already there, so
-// "not stated in this delivery" must mean "leave it alone", not "blank it".
-function setIfPresent(target, key, value) {
-  if (value !== undefined && value !== null && value !== '') target[key] = value;
-}
-
-// Maps the brochure pipeline's property JSON onto dashboard.html's actual
-// schema (see the PMODAL_FIELDS list in dashboard-assets/app.js for what the
-// dashboard's own Add/Edit form edits — that list is the ground truth for
-// "canonical", not this pipeline's convenience). Built key by key rather
-// than spreading `data`: a spread let every dead source field name
-// (propertyId, propertyType, price, priceInCr, readyToMove, newOrResale,
-// possessionDate, builtupArea) ride along forever, and dashboard-assets/
-// app.js's normalizeProperty() re-derives `status` from the leftover
-// readyToMove/newOrResale on every manual save — so a user switching a
-// property to "Ready to Move" in the UI got silently reverted back to
-// "Under Construction" on the next edit. That dashboard-side bug is fixed
-// separately; this stops the pipeline from planting the stale fields that
-// trigger it.
-//
-function isBlank(v) {
-  return v === undefined || v === null || v === '';
-}
-
-// `existing` is the property's current Firestore doc (or null if this is a
-// brand-new property).
-//
-// Two writers touch this collection: this script (Queue sheet + local
-// brochure JSON, every 30 min) and scripts/sync-inventory.js (the Inventory
-// sheet, run separately). They overlap on every property that's in both
-// places, and on every descriptive field — name, type, status, possession,
-// startingPrice, sqftRange, and more. Whichever ran last used to win, so a
-// brochure re-delivery could silently revert a correction made in the
-// Inventory sheet (the same class of bug as the readyToMove/status one
-// below, one level up — see docs/mac-scheduler-handoff.md, Problem 3).
-//
-// The fix: the Inventory sheet owns descriptive fields once a property
-// exists. This script only ever WRITES a descriptive field for a brand-new
-// property (so a card is never blank while waiting for the next Inventory
-// sync) or to fill one still blank on an existing doc. It never overwrites
-// a descriptive field that's already set — that's the sync's job, and it
-// doesn't matter which of the two ran most recently. Delivery artifacts
-// (brochureLink/photosLink/detailsText) and audit fields are this script's
-// own, always written regardless.
-function mapToDashboardProperty(data, existing) {
-  const out = {};
-  const setDescriptive = existing
-    ? (key, value) => { if (isBlank(existing[key])) setIfPresent(out, key, value); }
-    : (key, value) => setIfPresent(out, key, value);
-
-  // Identity — system-owned, always written
-  const propertyId = data.propertyId || data.propertyCode || (existing && existing.propertyCode) || '';
-  out.propertyCode = propertyId;
-  out.tenantId = DASHBOARD_TENANT_ID;
-
-  // Basic info
-  setDescriptive('name', data.name);
-  setDescriptive('builder', data.builder || 'Individual Owner');
-  setDescriptive('location', data.location);
-  setDescriptive('type', data.propertyType || data.type);
-  setDescriptive('config', data.config);
-
-  // Status / sale info
-  const { status, constructionStage } = normalizeStatus(data);
-  setDescriptive('status', status);
-  if (constructionStage !== undefined) setDescriptive('constructionStage', constructionStage);
-  setDescriptive('saleType', data.newOrResale);
-  setDescriptive('propertyAge', data.ageOfProperty);
-  setDescriptive('possession', data.possessionDate || data.possession || 'Contact for details');
-
-  // Pricing
-  let startingPrice;
-  if (data.startingPrice) startingPrice = data.startingPrice;
-  else if (data.price) startingPrice = data.price;
-  else if (data.priceInCr) startingPrice = `₹${data.priceInCr} Cr`;
-  else startingPrice = 'Price on Request';
-  setDescriptive('startingPrice', startingPrice);
-  setDescriptive('pricePerSqft', data.pricePerSqft);
-
-  // Specs — sqftRange falls back through built-up -> super built-up -> carpet,
-  // same priority order the old code used, just without keeping the raw
-  // builtupArea name around afterwards.
-  setDescriptive('sqftRange', data.sqftRange || data.builtupArea || data.superBuiltupArea || data.carpetArea);
-  setDescriptive('superBuiltupArea', data.superBuiltupArea);
-  setDescriptive('carpetArea', data.carpetArea);
-  setDescriptive('uds', data.uds);
-  setDescriptive('totalUnits', data.totalUnits);
-  setDescriptive('totalLandArea', data.totalLandArea);
-  setDescriptive('totalTowers', data.totalTowers);
-  setDescriptive('totalFloors', data.totalFloors);
-  setDescriptive('floorNo', data.floorNo);
-  setDescriptive('facing', data.facing);
-  setDescriptive('bathrooms', data.bathrooms);
-  setDescriptive('parking', data.parking);
-  setDescriptive('parkingType', data.parkingType);
-  setDescriptive('furnishing', data.furnishing);
-  setDescriptive('cornerUnit', data.cornerUnit);
-  setDescriptive('vastu', data.vastu);
-  setDescriptive('powerBackup', data.ebGenerator);
-  setDescriptive('approval', data.approval);
-
-  // Description
-  setDescriptive('highlights', data.highlights);
-  setDescriptive('amenities', data.amenities);
-  setDescriptive('nearbyLandmark', data.nearbyLandmark);
-  setDescriptive('connectivity', data.connectivity);
-  setDescriptive('contactName', data.contactName);
-  setDescriptive('contactNumber', data.contactNumber);
-  setDescriptive('sheetNotes', data.notes);
-
-  // Everything else the source JSON carries with no canonical field above —
-  // same descriptive-tier ownership, so fill in only when the existing doc
-  // has none at all rather than merging key by key (a partial overwrite of
-  // a bag-of-extras is more confusing than helpful).
-  const extras = {};
-  setIfPresent(extras, 'Nearby', data.nearby);
-  setIfPresent(extras, 'Main Door Facing', data.mainDoorFacing);
-  setIfPresent(extras, 'Plot Size', data.plotSize);
-  setIfPresent(extras, 'Maintenance', data.maintenance);
-  setIfPresent(extras, 'Negotiable', data.negotiable);
-  setIfPresent(extras, 'GST Applicable', data.gstApplicable);
-  setIfPresent(extras, 'Registration Extra', data.registrationExtra);
-  setIfPresent(extras, 'Loan Eligible', data.loanEligible);
-  setIfPresent(extras, 'Site Visit Status', data.siteVisitStatus);
-  if (Object.keys(extras).length && (!existing || isBlank(existing.sheetExtras))) out.sheetExtras = extras;
-
-  // Delivery artifacts — this pipeline owns these outright, always written
-  // regardless of what else exists on the doc.
-  setIfPresent(out, 'brochureLink', data.brochureLink);
-  setIfPresent(out, 'photosLink', data.photosLink);
-  setIfPresent(out, 'detailsText', data.detailsText);
-
-  // Deliberately NOT written, even though the source JSON may carry them:
-  //   - soldOut, interestLevel — dashboard-owned; writing either would
-  //     un-sell a property or wipe a lead rating on the next scheduler run.
-  //   - availability — Inventory sheet's own column.
-
-  // Audit
-  out.createdAt = (existing && existing.createdAt) || Date.now();
-  out.updatedAt = Date.now();
-  out.source = 'pipeline';
-
-  return out;
-}
+// data.notes is deliberately NOT mapped to sheetNotes by mapToDashboardProperty
+// (in ./_pipeline-shared.js) — see the comment above
+// upsertCoworkGenerationNote() below for why.
 
 async function upsertDashboardProperty(propertyId, propertyJson, driveFileUrl, photosLink, detailsText) {
   const db = getFirestoreDb();
@@ -382,12 +214,6 @@ async function logDelivery(token, propertyId, result, detail) {
   }
 }
 
-function columnLetter(zeroBasedIndex) {
-  return zeroBasedIndex < 26
-    ? String.fromCharCode(65 + zeroBasedIndex)
-    : String.fromCharCode(64 + Math.floor(zeroBasedIndex / 26)) + String.fromCharCode(65 + (zeroBasedIndex % 26));
-}
-
 // Reads the Inventory header row once per run and resolves both columns by
 // their header text rather than a hardcoded letter — a future reorg then
 // either keeps working automatically or fails loudly (skip + warn below),
@@ -405,32 +231,6 @@ async function resolveInventoryColumns(token) {
     brochureLink: findColumn(INVENTORY_BROCHURE_LINK_HEADER),
   };
   return resolvedInventoryColumns;
-}
-
-// Resolves every Queue column to a 0-based index by header text. Returns null
-// for an optional column that is not there; throws if a required one is
-// missing, because guessing at that point is how the last outage happened.
-function resolveQueueColumns(headerRow) {
-  const norm = (headerRow || []).map(normalizeHeader);
-  const cols = {};
-  const missing = [];
-  for (const [key, spec] of Object.entries(QUEUE_COLUMNS)) {
-    const idx = norm.findIndex(h => spec.mode === 'exact' ? h === spec.match : h.startsWith(spec.match));
-    if (idx === -1) {
-      cols[key] = null;
-      if (spec.required) missing.push(`${key} (expected header ${spec.mode} "${spec.match}")`);
-    } else {
-      cols[key] = idx;
-    }
-  }
-  if (missing.length) {
-    throw new Error(
-      `Queue sheet header(s) not found: ${missing.join('; ')}. ` +
-      `Headers present: ${norm.filter(Boolean).map(h => JSON.stringify(h)).join(', ')}. ` +
-      `Refusing to run rather than act on the wrong columns.`
-    );
-  }
-  return cols;
 }
 
 // -- Internal notes: Queue sheet -> the property's Internal Notes tab --
@@ -500,6 +300,54 @@ async function syncInternalNotesFromQueue(rows, cols) {
     }
   }
   console.log(`Internal notes: ${created} created, ${updated} updated, ${skipped} unchanged/protected, ${failed} failed.`);
+}
+
+// -- Cowork's generation notes: brochure JSON -> the property's Internal Notes tab --
+// Cowork's *_property.json carries a `notes` field, but it is NOT a property
+// note - it is Cowork's own QA log of the brochure-generation run itself
+// (fields it had to guess and flag for confirmation, which photos it found
+// and blurred faces in, how it ordered pages). That is operationally useful,
+// but it is not the same thing as the Inventory sheet's "Notes" column, which
+// is a Tier-A field the Inventory sheet alone owns (docs/PROPERTY-PIPELINE.md
+// §1) and which mapToDashboardProperty() maps to `sheetNotes`.
+//
+// This used to be mapped straight onto `sheetNotes` because both are called
+// "notes" in their respective schemas. That silently violated the one-owner-
+// per-field rule: every first-time delivery overwrote the dashboard's public
+// Notes field with Cowork's internal QA commentary ("Privacy: blurred ~20
+// face regions...", "flag for user confirmation..."), and because the
+// property usually has no Inventory sheet row yet, nothing ever corrected it
+// - it just sat there, wrong, until someone noticed and fixed it by hand.
+//
+// Routed here instead, using the exact same import/protection pattern as
+// upsertInternalNoteFromQueue() below: a fixed doc id so re-delivery updates
+// the same entry rather than duplicating it, and once a person edits or
+// deletes it in the dashboard its `source` becomes 'manual' and this stops
+// touching it.
+const COWORK_NOTE_DOC_ID = 'cowork-generation';
+
+async function upsertCoworkGenerationNote(propertyId, text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return { changed: false, reason: 'blank' };
+
+  const db = getFirestoreDb();
+  const propRef = db.collection('properties').doc(propertyId);
+  const noteRef = propRef.collection('internalNotes').doc(COWORK_NOTE_DOC_ID);
+  const snap = await noteRef.get();
+  const existing = snap.exists ? snap.data() : null;
+
+  if (existing && existing.source !== 'cowork-generation') return { changed: false, reason: 'edited in dashboard - left alone' };
+  if (existing && String(existing.text || '') === trimmed) return { changed: false, reason: 'unchanged' };
+
+  await noteRef.set({
+    id: COWORK_NOTE_DOC_ID,
+    text: trimmed,
+    source: 'cowork-generation',
+    author: 'Cowork',
+    createdAt: (existing && existing.createdAt) || Date.now(),
+    updatedAt: Date.now()
+  }, { merge: true });
+  return { changed: true, reason: existing ? 'updated' : 'created' };
 }
 
 function extractFolderId(driveUrl) {
@@ -783,6 +631,14 @@ async function deliverRow(sheetsToken, rowIndex, row, cols) {
     }
   } catch (e) {
     dashboardError = String(e.message || e);
+  }
+
+  // Non-fatal, like the local JSON write above — the brochure already went
+  // out, so a hiccup here must never fail the delivery.
+  try {
+    await upsertCoworkGenerationNote(propertyId, data.notes);
+  } catch (e) {
+    console.warn(`[WARN] ${propertyId}: could not import Cowork's generation notes (${e.message})`);
   }
 
   return {
