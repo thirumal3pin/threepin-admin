@@ -41,6 +41,10 @@ export const ACCOUNTS = [
 
   ['3000', 'Share capital', 'equity'],
   ['3100', 'Opening balance equity', 'equity'],
+  // Only ever seen from inside one of the two records: it carries the other book's side of a
+  // transfer between them, so each book balances alone. Across both books it nets to zero and
+  // never appears at all.
+  ['3200', 'Transfers between your two records', 'equity'],
 
   ['4000', 'Brokerage — seller side', 'income'],
   ['4010', 'Brokerage — buyer side', 'income'],
@@ -519,6 +523,11 @@ export function dealFigures(d) {
 }
 
 // Cash position for the Overview. "Free to use" strips out money that is not really ours.
+// Reads whichever book is open, and is right in each because a book is now whole: an invoice
+// and the cash that settles it are never in different books, so what clients owe here is what
+// clients owe in THIS record. (This briefly forced all money to stop the nonsense the old
+// half-a-book filter produced — negative bank, negative receivables. The two-book model fixes
+// the cause, so the figures follow the book again.)
 export function cashPosition(upto) {
   const bank = bal('1000', { upto }), petty = bal('1010', { upto }), card = bal('2300', { upto });
   const vendorDues = bal('2000', { upto }), tokens = bal('2100', { upto });
@@ -1918,37 +1927,153 @@ export function cashBook(from, to, accs = ['1000', '1010']) {
   return { from: f, to: t, accs, opening, rows, in: totalIn, out: totalOut, closing: r2(opening + totalIn - totalOut) };
 }
 
-// ═══════ SCOPE — WITH, WITHOUT OR ONLY PETTY CASH ═══════
+// ═══════ TWO BOOKS, NOT ONE BOOK WITH A FILTER ═══════
 //
-// "What went through the box?" is a question about entries, not accounts, so the scope is a
-// filter on entries: an entry is petty-cash if any of its lines touches 1010. Lists, the P&L,
-// category and cash-flow reports and every export honour it. The trial balance and balance
-// sheet do not — a bank-to-box top-up touches both accounts, and a statement that ignored it
-// would misstate the bank.
+// The owner keeps the cash box as a COMPLETELY SEPARATE RECORD — its own income, its own
+// costs, its own receivables — and the two must never merge. So the switch does not hide part
+// of one set of books; it chooses WHICH SET OF BOOKS you are reading, and each one has to be
+// whole and balanced on its own.
+//
+// Which book an entry belongs to:
+//   · money moved through the box   -> the cash book
+//   · money moved through the bank  -> the bank book
+//   · no money moved at all (an invoice raised but unpaid, a bill received but unpaid) ->
+//     the book of the DOCUMENT it belongs to.
+//
+// That last rule is the whole point. It used to be "no petty-cash line, so not petty cash",
+// which put an invoice in one book and the cash that settled it in the other: "without the
+// box" showed income with nobody having paid, and "only the box" reported a NEGATIVE
+// receivable of the same amount, because it kept the payment and dropped the invoice. An
+// invoice and its settlement now always land in the same book.
 
 export const PETTY = '1010';
+export const BANK = '1000';
+// A transfer between the two records is the one entry that belongs to both. Each book keeps
+// its own leg and books the other side here, so each still balances on its own. It nets to
+// zero across the two, which is why it never appears when both books are shown together.
+export const BRIDGE = '3200';
 const SCOPES = ['with', 'without', 'only'];
 let SCOPE = 'with';
 
 export function setScope(mode) { SCOPE = SCOPES.includes(mode) ? mode : 'with'; return SCOPE; }
 export const scopeMode = () => SCOPE;
-export const scopeLabel = m => ({ with: 'All money', without: 'Without petty cash', only: 'Petty cash only' })[m || SCOPE];
+export const scopeLabel = m => ({ with: 'Both records', without: 'Bank book', only: 'Cash book' })[m || SCOPE];
 export const touchesPetty = t => (t.lines || []).some(l => l.acc === PETTY);
-export function inScope(t, mode = SCOPE) {
-  if (mode === 'only') return touchesPetty(t);
-  if (mode === 'without') return !touchesPetty(t);
-  return true;
+const touchesBank = t => (t.lines || []).some(l => l.acc === BANK);
+
+// Classification always reads EVERY entry, never the narrowed set — otherwise choosing a book
+// would change what things are, and the answer would depend on the question.
+const allTxns = () => FULL || S.txns;
+
+// A document belongs to the book its money moved through: whichever entries settled it, or
+// failing that the entry that raised it. `book` on the document itself wins when it is set,
+// which is how the form lets the owner say up front where an unpaid invoice belongs.
+function bookOfDoc(src, coll, doc) {
+  // What actually happened beats what was expected. If money has settled this document, the
+  // book is wherever that money moved — the form may have said "will come into the bank" in
+  // September and the client may have turned up with notes in October, and the notes are the
+  // fact. `book` only decides while nothing has moved.
+  let settled = false;
+  for (const t of src) {
+    if (!(t.allocations || []).some(a => a.coll === coll && a.id === doc.id)) continue;
+    if (touchesPetty(t)) return 'cash';
+    settled = true;
+  }
+  const raised = src.find(x => x.id === doc.txnId);
+  if (raised && touchesPetty(raised)) return 'cash';
+  if (settled) return 'bank';
+  return doc.book || 'bank';
 }
-export const scopedTxns = (txns, mode = SCOPE) => (txns || S.txns).filter(t => inScope(t, mode));
+
+// Built once per entry list and reused: an accrual has to look up the document it belongs to,
+// and doing that by scanning every entry each time would make the P&L quadratic.
+let INDEX = null;
+// The stamp has to notice a document being told which record it belongs to, and that can
+// happen in place — sync replaces the array, but an update applied to the object does not. It
+// is only the `book` field that matters here, so counting the declared ones is enough and
+// stays cheap; `paid` and `status` moving around cannot change which book anything is in.
+function bookStamp(src) {
+  // Which book, not merely whether one was named: moving a document from the bank record to
+  // the cash one leaves the count identical and has to rebuild the index all the same.
+  let h = 0;
+  for (const list of [S.invoices, S.bills]) {
+    for (const d of (list || [])) h = (h * 31 + (d.book === 'cash' ? 1 : d.book === 'bank' ? 2 : 0)) | 0;
+  }
+  return `${src.length}|${(S.invoices || []).length}|${(S.bills || []).length}|${h}`;
+}
+function bookIndex() {
+  const src = allTxns();
+  const stamp = bookStamp(src);
+  if (INDEX && INDEX.src === src && INDEX.stamp === stamp) return INDEX;
+  const byDoc = new Map(), byTxn = new Map();
+  for (const [coll, list] of [['invoices', S.invoices], ['bills', S.bills]]) {
+    for (const doc of (list || [])) {
+      const book = bookOfDoc(src, coll, doc);
+      byDoc.set(coll + ':' + doc.id, book);
+      if (doc.txnId) byTxn.set(doc.txnId, book);
+    }
+  }
+  INDEX = { src, stamp, byDoc, byTxn };
+  return INDEX;
+}
+
+// 'bank' | 'cash' | 'both'. 'both' is a transfer between the two records: it is in each book,
+// with the other book's leg swapped for the bridge so neither ends up short.
+export function bookOf(t) {
+  const petty = touchesPetty(t), bank = touchesBank(t);
+  if (petty && bank) return 'both';
+  if (petty) return 'cash';
+  if (bank) return 'bank';
+  const idx = bookIndex();
+  for (const a of (t.allocations || [])) {
+    const b = idx.byDoc.get(a.coll + ':' + a.id);
+    if (b) return b;
+  }
+  return idx.byTxn.get(t.id) || 'bank';
+}
+
+export function inScope(t, mode = SCOPE) {
+  if (mode === 'with') return true;
+  const b = bookOf(t);
+  return b === 'both' || b === (mode === 'only' ? 'cash' : 'bank');
+}
+
+// Inside one book, the other book's leg of a transfer becomes the bridge, so the book balances
+// and its own cash still moves by the right amount.
+function asSeenFrom(t, book) {
+  if (bookOf(t) !== 'both') return t;
+  const foreign = book === 'cash' ? BANK : PETTY;
+  return { ...t, lines: t.lines.map(l => l.acc === foreign ? { ...l, acc: BRIDGE } : l) };
+}
+
+export const scopedTxns = (txns, mode = SCOPE) =>
+  (txns || S.txns).filter(t => inScope(t, mode)).map(t => mode === 'with' ? t : asSeenFrom(t, mode === 'only' ? 'cash' : 'bank'));
 
 // Run fn with the books narrowed to the scope. Synchronous on purpose — nothing may await
 // in between, or another render could see the narrowed set.
+//
+// `mode: 'with'` used to return fn() immediately. That looks like a harmless shortcut and is
+// not: a whole page renders inside scoped(render), so the statements that force full scope
+// from in there — the trial balance, the balance sheet, their CSVs — took the shortcut and
+// read whatever the page had already narrowed. Asking for all money returned the bank short
+// by every top-up that had been filtered out. FULL is the unnarrowed list, so a nested
+// scoped(fn, 'with') genuinely means all money instead of "whatever is left".
+let FULL = null;
 export function scoped(fn, mode = SCOPE) {
-  if (mode === 'with') return fn();
-  const all = S.txns;
-  S.txns = all.filter(t => inScope(t, mode));
-  try { return fn(); } finally { S.txns = all; }
+  const outer = S.txns;
+  const base = FULL || outer;
+  const prevFull = FULL;
+  FULL = base;
+  S.txns = mode === 'with' ? base : scopedTxns(base, mode);
+  try { return fn(); } finally { S.txns = outer; FULL = prevFull; }
 }
+
+// Balances are never scoped. A balance is a cumulative position, and half the entries do not
+// make half a position — they make a wrong one: filter out a bank-to-box top-up and the bank
+// is overstated by it; filter out the payment that cleared an invoice and the client still
+// looks like they owe you. The switch answers "what went through the box?", which is a
+// question about flows. Income, expenses and entry lists honour it; balances never do.
+export const atFullScope = fn => scoped(fn, 'with');
 
 // The box's own story: what went in, what went out, and what it paid for.
 export function pettyActivity(f = {}) {

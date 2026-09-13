@@ -58,8 +58,14 @@ const cashLine = (v, line) => (line.acc === '1000' && v.method) ? { ...line, met
 // client pays a brokerage invoice in cash across the desk exactly as often as they transfer
 // it. The old forms asked "not yet / received now into bank" and hard-wired the bank, so a
 // fee settled from the cash box had nowhere to go.
+// Not yet paid is still an answer about WHICH RECORD the money belongs to, because the cash
+// box is kept as a separate set of books: an invoice that will be settled in cash is a
+// cash-book invoice from the moment it is raised, not from the day the notes arrive. Asking
+// only "has it been paid?" left an unpaid invoice in neither record until something settled
+// it, which is how one deal ended up with its invoice in one book and its money in the other.
 const RECEIVED_INTO = [
-  ['later', 'Not yet paid — will follow up'],
+  ['later', 'Not yet paid — will come into the bank'],
+  ['later:cash', 'Not yet paid — will come in cash'],
   ['1000', 'Received now — into Bank (1000)'],
   ['1010', 'Received now — into the cash box (1010)'],
 ];
@@ -67,6 +73,8 @@ const RECEIVED_INTO = [
 // entries already saved and scenarios already written keep working.
 const paidInto = recv => recv === 'now' ? '1000' : (recv === '1000' || recv === '1010') ? recv : null;
 const unpaid = x => !paidInto(x.recv);
+// Which of the two records the document belongs to, whether or not the money has arrived.
+const bookOfRecv = recv => (recv === '1010' || recv === 'later:cash') ? 'cash' : 'bank';
 
 // A party field holds either an existing id (string) or a not-yet-created
 // {__new:true, name, phone, type} from the "add new" row of the picker. During preview we
@@ -692,6 +700,7 @@ EV.invoice = {
         kind: 'brokerage', partyId: pid, dealId: d.id, base, gstRate: rate, placeOfSupply,
         cgst: gstSplit.cgst, sgst: gstSplit.sgst, igst: gstSplit.igst,
         total, paid: r2(Math.min(paidNow, total)), dueDate: into ? null : (v.dueDate || addDays(v.date || today(), 30)),
+        book: bookOfRecv(v.recv),
         date: v.date || today(),
       },
     };
@@ -828,6 +837,7 @@ EV.dealfee = {
         cgst: split.cgst, sgst: split.sgst, igst: split.igst,
         total, paid: r2(Math.min(paidNow, total)),
         dueDate: into ? null : (v.dueDate || addDays(v.date || today(), 30)),
+        book: bookOfRecv(v.recv),
         sac: st.sacCodes?.[v.kind === 'retainer' ? 'consultancy' : 'brokerage'] || '997221',
         desc: `${label} — ${dealLabel(d)}`,
         date: v.date || today(),

@@ -13,7 +13,7 @@ import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
-  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
+  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, atFullScope, methodLabel, movesMoney, moneyMoved,
   settlementOf, explain, INCOME_ACCS, EXPENSE_ACCS,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
@@ -242,15 +242,17 @@ function scopeBanner() {
   const mode = scopeMode();
   if (!SCOPED_VIEWS.has(view)) return '';
   // The same three choices as the header, for screens where the header cannot hold them.
-  const inline = `<div class="scope-inline"><span class="lbl">Petty cash</span><div class="seg" role="tablist">
-    ${[['with', 'All'], ['without', 'Without'], ['only', 'Only']].map(([m, l]) =>
+  const inline = `<div class="scope-inline"><span class="lbl">Record</span><div class="seg" role="tablist">
+    ${[['with', 'Both'], ['without', 'Bank'], ['only', 'Cash']].map(([m, l]) =>
       `<button type="button" role="tab" class="${mode === m ? 'on' : ''}" aria-selected="${mode === m}" onclick="fin.setScope('${m}')">${l}</button>`).join('')}
   </div></div>`;
   if (mode === 'with') return inline;
   return inline + `<div class="scope-banner" role="status">
-    <b>${esc(scopeLabel(mode))}</b> — ${mode === 'only' ? 'showing only entries that went through the cash box.' : 'entries through the cash box are left out.'}
-    ${view === 'books' ? 'The trial balance and balance sheet always show everything.' : ''}
-    <button type="button" class="btn ghost sm" onclick="fin.setScope('with')">Show all money</button>
+    <b>${esc(scopeLabel(mode))}</b> — ${mode === 'only'
+      ? 'the cash box kept as its own record: everything it earned, spent and is owed. Deals settled in cash live here in full — invoice, income and money.'
+      : 'your banked record on its own. Anything settled through the cash box is a cash-book deal and is not counted here.'}
+    ${view === 'books' ? 'The trial balance and balance sheet always show both records together.' : ''}
+    <button type="button" class="btn ghost sm" onclick="fin.setScope('with')">Show both records</button>
   </div>`;
 }
 
@@ -1556,12 +1558,18 @@ function explainFigure(json) {
   let spec;
   try { spec = typeof json === 'string' ? JSON.parse(json) : json; } catch { return; }
   const title = spec.title || 'This figure';
-  // Read inside the same petty-cash scope the page was rendered in, or the parts would not
-  // add up to the total that was clicked.
-  const res = SCOPED_VIEWS.has(view) ? scoped(() => explain(spec)) : explain(spec);
   const when = spec.month ? mlabel(spec.month)
     : spec.fy ? 'FY ' + spec.fy
       : spec.from || spec.to ? `${spec.from || 'the start'} to ${spec.to || 'today'}` : 'all time';
+  // Read inside the same petty-cash scope the page was rendered in, or the parts would not
+  // add up to the total that was clicked. A figure with no period is a BALANCE — the bank,
+  // what clients owe, tokens held — and those are never scoped (finance-core atFullScope),
+  // so drilling one has to read all money too or the lines would contradict the total above
+  // them. A figure with a month or a range is a flow and follows the page.
+  const balanceFigure = when === 'all time';
+  const res = SCOPED_VIEWS.has(view) && !balanceFigure
+    ? scoped(() => explain(spec))
+    : atFullScope(() => explain(spec));
 
   modal({
     title: `${title} — ${fmt(res.total)}`,
