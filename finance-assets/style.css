@@ -707,7 +707,8 @@ tr.undone td.lead .tag { text-decoration: none; }
   .dir-tiles .tile { min-height: 84px; padding: var(--s3); }
 }
 
-/* The petty-cash switch: in the header on a desk, at the top of the page on a phone. */
+/* The Record switch — which of the two books you are reading: in the header on a desk, at
+   the top of the page on a phone. */
 .scope-inline { display: none; align-items: center; gap: 10px; margin: 0 0 var(--s3); }
 .scope-inline .lbl { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 .scope-inline .seg { margin: 0; }

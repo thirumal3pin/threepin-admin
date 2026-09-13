@@ -919,7 +919,7 @@ function screenItems() {
         ['General journal', 'Every entry, both sides.'],
       ],
       doThis: 'Run the check before month-end and before filing. Send your CA the journal and the ledger CSVs.',
-      behind: 'booksHealth(), trialBalanceDetail(from, upto), plStatement(), balanceSheetGrouped(). The statements always read the full ledger, whatever the petty-cash switch is set to.',
+      behind: 'booksHealth(), trialBalanceDetail(from, upto), plStatement(), balanceSheetGrouped(). The statements always read both records together, whichever one the Record switch is showing.',
     }),
 
     item('Setup group', '<h2>Set up</h2>'),

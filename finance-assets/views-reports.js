@@ -689,8 +689,11 @@ function journalSection() {
 
 // ═══════ EXPORTS ═══════
 
-const scopeSuffix = () => scopeMode() === 'with' ? '' : '-' + scopeMode() + '-petty-cash';
-const scopeRow = () => scopeMode() === 'with' ? [] : [[`Petty-cash scope: ${scopeLabel()}`]];
+// The two records are separate sets of books, so an export says which one it is — both in
+// the file name and in a first row inside the file, because a CSV gets renamed and
+// forwarded and a CA should never have to guess whether they are holding the whole firm.
+const scopeSuffix = () => scopeMode() === 'with' ? '' : (scopeMode() === 'only' ? '-cash-book' : '-bank-book');
+const scopeRow = () => scopeMode() === 'with' ? [] : [[`Record: ${scopeLabel()} — one of two separate books; not the whole firm`]];
 
 function journalCsvRows() {
   const rows = [...scopeRow(), ['Txn', 'Date', 'Description', 'Account code', 'Account name', 'Debit', 'Credit', 'Party', 'Event', 'Reversal']];

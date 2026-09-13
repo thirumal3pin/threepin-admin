@@ -13,7 +13,7 @@ import {
   A, getState, fmt, esc, num, today, ym, addMonths, mlabel,
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
-  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, atFullScope, methodLabel, movesMoney, moneyMoved,
+  setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
   settlementOf, explain, INCOME_ACCS, EXPENSE_ACCS,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
@@ -70,10 +70,10 @@ const ALIASES = { invoices: 'deals' };
 
 const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
 
-// Which screens the petty-cash scope changes. Everything else always shows all money.
-// Everything that reads entries back honours the petty-cash switch, the dashboard included —
-// the owner asked for one filter across the app. The statements inside Books are the only
-// exception and they force full scope themselves.
+// Which screens follow the Record switch. Everything else always shows both records.
+// Everything that reads entries back honours it, the dashboard included — the owner asked
+// for one switch across the app. The statements inside Books are the only exception: they
+// force both records themselves, so a trial balance is always of the whole firm.
 const SCOPED_VIEWS = new Set(['overview', 'month', 'txns', 'reports', 'books', 'analytics']);
 
 // ═══════ NAVIGATION MODULES ═══════
@@ -1561,15 +1561,10 @@ function explainFigure(json) {
   const when = spec.month ? mlabel(spec.month)
     : spec.fy ? 'FY ' + spec.fy
       : spec.from || spec.to ? `${spec.from || 'the start'} to ${spec.to || 'today'}` : 'all time';
-  // Read inside the same petty-cash scope the page was rendered in, or the parts would not
-  // add up to the total that was clicked. A figure with no period is a BALANCE — the bank,
-  // what clients owe, tokens held — and those are never scoped (finance-core atFullScope),
-  // so drilling one has to read all money too or the lines would contradict the total above
-  // them. A figure with a month or a range is a flow and follows the page.
-  const balanceFigure = when === 'all time';
-  const res = SCOPED_VIEWS.has(view) && !balanceFigure
-    ? scoped(() => explain(spec))
-    : atFullScope(() => explain(spec));
+  // Read inside the same record the page was rendered in, or the parts would not add up to
+  // the total that was clicked. Balances follow the record like everything else, because a
+  // record is whole: what clients owe in the cash book is what the cash book's own clients owe.
+  const res = SCOPED_VIEWS.has(view) ? scoped(() => explain(spec)) : explain(spec);
 
   modal({
     title: `${title} — ${fmt(res.total)}`,

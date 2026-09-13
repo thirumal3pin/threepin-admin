@@ -2068,13 +2068,6 @@ export function scoped(fn, mode = SCOPE) {
   try { return fn(); } finally { S.txns = outer; FULL = prevFull; }
 }
 
-// Balances are never scoped. A balance is a cumulative position, and half the entries do not
-// make half a position — they make a wrong one: filter out a bank-to-box top-up and the bank
-// is overstated by it; filter out the payment that cleared an invoice and the client still
-// looks like they owe you. The switch answers "what went through the box?", which is a
-// question about flows. Income, expenses and entry lists honour it; balances never do.
-export const atFullScope = fn => scoped(fn, 'with');
-
 // The box's own story: what went in, what went out, and what it paid for.
 export function pettyActivity(f = {}) {
   const rows = [];
