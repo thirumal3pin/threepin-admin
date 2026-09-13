@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -113,15 +113,35 @@ function subscribeToData(tenantId){
     });
 }
 
+// The lead fields TailorTalk keeps current until someone edits them here (see
+// api/_tailortalk-shared.js FOLLOW_FIELDS — the two lists must match).
+const TT_FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
+
 window.crmFirebase = {
   // Notes + history live in per-lead subcollections now (see saveNote /
   // saveHistory below), so they are stripped from the parent write: the lead
   // doc stays small and constant-size, so a note-add never rewrites a growing
   // document and the board listener never streams note/history bodies.
+  //
+  // TailorTalk writes the same document from the server (api/tailortalk.js),
+  // so this save must never carry a stale copy of what it wrote: `tt` is
+  // stripped, a shared field is only sent once the team has taken it over
+  // (ttHold), and the write merges instead of replacing the whole document.
   saveLead: (lead) => {
-    const { notes, history, ...rest } = lead;
-    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }).catch(e => console.error('Firestore save lead error:', e));
+    const { notes, history, tt, ttState, ...rest } = lead;
+    if (tt) {
+      TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
+    }
+    if ('phone' in rest && typeof window.phoneKey === 'function') rest.phoneKey = window.phoneKey(rest.phone);
+    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }, { merge: true }).catch(e => console.error('Firestore save lead error:', e));
   },
+  // "Use TailorTalk's value": writes the value AND hands the field back to TailorTalk in one
+  // update — saveLead() would drop the field again because it is no longer held.
+  releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
+    .catch(e => { console.error('Firestore release field error:', e); throw e; }),
+  // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
+  getLeadTailorTalk: (leadId) => getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'))
+    .then(s => (s.exists() ? s.data() : null)),
   deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => console.error('Firestore delete lead error:', e)),
 
   // ── Notes / history subcollections ──

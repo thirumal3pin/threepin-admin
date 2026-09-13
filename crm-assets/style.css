@@ -303,6 +303,123 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lcard-flag.sent{color:var(--green);background:var(--green-bg);}
 .lcard-flag.not-sent{color:var(--ink3);background:var(--bg2);}
 
+/* ── TAILORTALK ──
+   Leads the TailorTalk AI agent is talking to. The filter row sits under search and scrolls
+   sideways on a phone rather than wrapping into a second header. Temperature reuses the
+   semantic marks: hot = red, warm = amber, cold = blue; an escalation or flag is red with the
+   same left stripe the overdue follow-up uses, so "needs a person" reads the same way. */
+[hidden]{display:none!important;}
+.lf-bar{display:flex;align-items:center;gap:6px;margin-top:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:1px;}
+.lf-bar::-webkit-scrollbar{display:none;}
+.lf-bar:empty{display:none;}
+.lf-chip{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;padding:6px 12px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);font-family:var(--sans);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s;}
+.lf-chip:hover{border-color:var(--brand);color:var(--ink);}
+.lf-chip.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
+.lf-chip.sub{font-size:12px;padding:5px 11px;}
+.lf-chip.sub.at{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink);}
+.lf-n{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;opacity:.72;}
+.lf-sep{width:1px;height:20px;background:var(--border2);flex-shrink:0;margin:0 3px;}
+
+.lcard-src.tailortalk{background:var(--green-bg);color:var(--green);}
+.lcard-tt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;}
+.tt-chip{display:inline-block;font-size:10.5px;font-weight:600;border-radius:var(--r1);padding:3px 7px;background:var(--bg2);color:var(--ink3);white-space:nowrap;}
+.tt-chip.hot{background:var(--red-bg);color:var(--red);}
+.tt-chip.warm{background:var(--amber-bg);color:var(--amber);}
+.tt-chip.cold{background:var(--blue-bg);color:var(--blue);}
+.tt-chip.dead{color:var(--ink4);}
+.tt-chip.converted{background:var(--green-bg);color:var(--green);}
+.tt-chip.alert{background:var(--red-bg);color:var(--red);box-shadow:inset 2px 0 0 var(--red);}
+.tt-chip.paused{background:var(--purple-bg);color:var(--purple);}
+.tt-chip.time{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:500;}
+.lcard:has(.tt-chip.alert){border-left:2px solid var(--red);}
+/* An open custom-trigger signal: the lead asked for something the team must act on. */
+.tt-chip.action{background:var(--amber-bg);color:var(--amber);box-shadow:inset 2px 0 0 var(--amber);}
+.tt-chip.lost{background:var(--bg2);color:var(--ink3);box-shadow:inset 2px 0 0 var(--ink4);}
+.lcard:has(.tt-chip.action):not(:has(.tt-chip.alert)){border-left:2px solid var(--amber);}
+
+.tt-signal{display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;background:var(--amber-bg);border:1px solid var(--amber-line);box-shadow:inset 3px 0 0 var(--amber);border-radius:var(--r2);padding:11px 14px;margin-bottom:10px;}
+.tt-signal.lost{background:var(--bg2);border-color:var(--border2);box-shadow:inset 3px 0 0 var(--ink4);}
+.tt-signal-main{min-width:0;flex:1 1 260px;}
+.tt-signal-t{font-size:13.5px;font-weight:700;color:var(--ink);}
+.tt-signal-t .tt-when{font-weight:500;}
+.tt-signal-q{font-size:13px;color:var(--ink2);margin-top:3px;word-break:break-word;}
+.tt-signal-acts{display:flex;gap:6px;flex-wrap:wrap;}
+.tt-signal-acts .tt-btn{margin-top:0;}
+.tt-btn.quiet{border-color:transparent;background:transparent;color:var(--ink3);}
+.tt-btn.quiet:hover{border-color:var(--border2);color:var(--ink);}
+.tt-signal.alert{background:var(--red-bg);border-color:var(--red-line);box-shadow:inset 3px 0 0 var(--red);}
+.tt-chip.muted{background:transparent;color:var(--ink4);box-shadow:inset 0 0 0 1px var(--border);}
+/* Vendors & collabs is a different kind of record, not a status — it sits apart in quiet ink. */
+.lf-chip.biz:not(.at){border-style:dashed;}
+.lf-chip.sub.warn:not(.at){border-color:var(--amber-line);color:var(--amber);}
+
+/* Overview · Activity · Conversation — an underline tab row, the record-page pattern. */
+.tt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:4px 0 14px;overflow-x:auto;scrollbar-width:none;}
+.tt-tabs::-webkit-scrollbar{display:none;}
+.tt-tab{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;padding:9px 12px 10px;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink3);cursor:pointer;transition:color .15s,border-color .15s;}
+.tt-tab:hover{color:var(--ink);}
+.tt-tab.at{color:var(--ink);border-bottom-color:var(--brand);}
+.tt-tab-n{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--ink4);background:var(--bg2);border-radius:99px;padding:1px 7px;}
+.tt-tab.at .tt-tab-n{color:var(--brand-ink);background:var(--brand-soft);}
+.tt-panel{margin-bottom:12px;}
+.tt-more{display:block;margin:10px auto 0;}
+
+/* Activity: a day per entry on a plotted rail. Labels are the mono annotation layer; the
+   value carries the fact; times sit right-aligned in the margin where the eye expects them. */
+.tt-activity{position:relative;padding-left:18px;}
+.tt-activity::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:1.5px;background:var(--border);}
+.tt-day{position:relative;margin-bottom:16px;}
+.tt-day:last-child{margin-bottom:0;}
+.tt-day::before{content:'';position:absolute;left:-17px;top:5px;width:9px;height:9px;border-radius:50%;background:var(--card);box-shadow:0 0 0 2px var(--brand);}
+.tt-day-h{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;}
+.tt-day-d{font-size:13px;font-weight:700;color:var(--ink);}
+.tt-day-r{font-family:var(--mono);font-size:10.5px;color:var(--ink4);}
+.tt-day-b{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:6px 0;}
+.tt-ev{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;padding:6px 14px;font-size:12.5px;line-height:1.5;color:var(--ink2);}
+.tt-ev + .tt-ev{border-top:1px dashed var(--border);}
+.tt-ev-k{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);padding-top:2px;}
+.tt-ev-v{min-width:0;word-break:break-word;}
+.tt-ev-t{font-family:var(--mono);font-size:10.5px;color:var(--ink4);font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:4px;}
+.tt-ev.warn .tt-ev-k{color:var(--amber);}
+.tt-ev.good .tt-ev-k{color:var(--green);}
+.tt-day-q{margin:4px 14px 6px;padding:8px 11px;border-left:2px solid var(--border2);font-size:12.5px;color:var(--ink3);font-style:italic;word-break:break-word;}
+
+/* Conversation: day separators and the AI's "left for the team" as a system line. */
+.tt-chat-day{align-self:stretch;display:flex;align-items:center;gap:10px;margin:6px 0 2px;font-family:var(--mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);}
+.tt-chat-day::before,.tt-chat-day::after{content:'';flex:1;height:1px;background:var(--border2);}
+.tt-chat-sys{align-self:center;font-size:11.5px;color:var(--amber);background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:99px;padding:3px 11px;}
+
+.tt-says{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--brand-soft);border:1px solid var(--brand-line);border-radius:var(--r2);padding:10px 13px;margin-bottom:10px;font-size:12.5px;color:var(--ink2);}
+.tt-says .tt-btn{margin-top:0;}
+.tt-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-bottom:14px;}
+.tt-stat{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:11px 13px;min-width:0;}
+.tt-stat.alert{background:var(--red-bg);border-color:var(--red-line);}
+.tt-stat.good{background:var(--green-bg);border-color:var(--green-line);}
+.tt-stat-l{font-family:var(--mono);letter-spacing:.04em;font-size:9.5px;font-weight:600;color:var(--ink4);text-transform:uppercase;}
+.tt-stat-v{font-size:13.5px;font-weight:600;margin-top:4px;word-break:break-word;}
+.tt-stat-s{font-size:11.5px;color:var(--ink3);margin-top:3px;word-break:break-word;}
+.tt-stat a,.tt-item a{color:var(--blue);text-decoration:none;}
+.tt-stat a:hover,.tt-item a:hover{text-decoration:underline;}
+.tt-unread{color:var(--brand-ink);}
+.tt-btn{display:inline-block;margin-top:8px;font-family:var(--sans);font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;transition:border-color .15s,color .15s;}
+.tt-btn:hover{border-color:var(--brand);color:var(--ink);}
+.tt-profile{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-bottom:14px;}
+.tt-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:12px 14px;min-width:0;}
+.tt-card-v{font-size:13px;line-height:1.55;color:var(--ink2);margin-top:6px;white-space:pre-wrap;word-break:break-word;}
+.tt-sub{font-family:var(--mono);letter-spacing:.04em;font-size:9.5px;font-weight:600;color:var(--ink4);text-transform:uppercase;margin:4px 0 8px;}
+.tt-list{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.tt-item{display:flex;justify-content:space-between;align-items:baseline;gap:4px 12px;flex-wrap:wrap;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:9px 13px;font-size:12.5px;}
+.tt-when{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:11.5px;color:var(--ink3);}
+.tt-foot{font-size:11px;color:var(--ink4);}
+.tt-chat{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto;padding:12px;background:var(--bg2);border-radius:var(--r2);margin-bottom:8px;}
+.tt-msg{max-width:82%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;word-break:break-word;color:var(--ink);}
+.tt-msg-text{white-space:pre-wrap;}
+.tt-msg.user{align-self:flex-start;background:var(--card);border:1px solid var(--border);border-bottom-left-radius:4px;}
+.tt-msg.assistant{align-self:flex-end;background:var(--green-bg);border:1px solid var(--green-line);border-bottom-right-radius:4px;}
+.tt-msg.team{align-self:flex-end;background:var(--blue-bg);border:1px solid var(--blue-line);border-bottom-right-radius:4px;}
+.tt-msg-meta{font-family:var(--mono);font-size:10px;color:var(--ink4);margin-bottom:3px;}
+.tt-chat-more{align-self:center;margin:0 0 4px;}
+
 /* ── LIST VIEW ── */
 .list-view{border:1px solid var(--border);border-radius:var(--r3);overflow:hidden;background:var(--white);}
 .list-view table{width:100%;border-collapse:collapse;}
@@ -509,6 +626,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .history-dot.followed-up{background:var(--green-bg);}
 .history-dot.created{background:var(--brand-soft);}
 .history-dot.details-sent{background:var(--blue-bg);}
+.history-dot.tailortalk{background:var(--green-bg);}
 .history-content{flex:1;min-width:0;padding-top:4px;}
 .history-text{font-size:13px;color:var(--ink2);line-height:1.55;}
 .history-text b{color:var(--ink);font-weight:700;}
@@ -909,6 +1027,14 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .lcard-foot{font-size:9.5px;gap:4px;}
   .lcard-time{font-size:9px;}
   .lcard-followup,.lcard-flag,.lcard-next{font-size:9.5px;padding:3px 7px;}
+  .tt-chip{font-size:9.5px;padding:3px 6px;}
+  .dp-wa-mine{display:none;}
+  .lf-bar{margin:9px -12px 0;padding:0 12px 1px;}
+  .tt-strip{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .tt-profile{grid-template-columns:1fr;}
+  .tt-msg{max-width:90%;}
+  .tt-ev{grid-template-columns:1fr;gap:1px;}
+  .tt-tab{padding:9px 10px 10px;font-size:12.5px;}
   
   /* List view optimizations */
   #listView{padding:8px;}

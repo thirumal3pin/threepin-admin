@@ -10,15 +10,14 @@ function getAnthropic() {
   return _anthropic;
 }
 
-// Triggered by the client (debounced, see scheduleSummaryRegeneration in
-// app.js) after any lead save — stage change, note, follow-up edit, field
-// edit, details-sent toggle. Regenerates that one lead's AI summary from its
+// Triggered by the client's "Regenerate" button (regenerateSummaryNow in app.js), reached
+// through api/lead-summary.js. Regenerates that one lead's AI summary from its
 // own details/notes/history only (see _lead-summary-shared.js guardrails).
 //
 // A failure here must never take down anything else: on error we patch only
 // aiSummaryError, leaving the last successful aiSummary exactly as it was —
 // the UI shows the stale summary plus a small "couldn't refresh" notice.
-export async function POST(request) {
+export async function generatePost(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {

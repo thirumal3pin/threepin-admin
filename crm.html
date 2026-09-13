@@ -153,6 +153,7 @@ function toggleDensity(){
             <button class="more-dd-item" onclick="openBotEditor()">🤖 AI Bot</button>
             <button class="more-dd-item" onclick="openExportModal()">⬇️ Export Leads</button>
             <button class="more-dd-item" onclick="runBackfillSummaries()">✨ Backfill AI Summaries</button>
+            <button class="more-dd-item" onclick="runTailorTalkSync()">🔄 Sync TailorTalk</button>
             <div class="dd-sep"></div>
             <button class="more-dd-item danger" onclick="crmLogout()">Logout</button>
           </div>
@@ -164,6 +165,8 @@ function toggleDensity(){
       <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
       <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
     </div>
+    <!-- Lead filter: All / TailorTalk / Other, plus TailorTalk status. Drawn by renderLeadFilterBar() in app.js. -->
+    <div class="lf-bar" id="leadFilterBar" role="toolbar" aria-label="Filter leads"></div>
   </div>
 
   <!-- MAIN -->
@@ -346,6 +349,13 @@ function toggleDensity(){
         <div class="sec-title">📇 Lead Info</div>
         <div class="info-grid" id="dpInfo"></div>
         <div class="dp-meta-row" id="dpMeta"></div>
+      </div>
+
+      <!-- TailorTalk: what needs a person, the lead at a glance, then Overview · Activity ·
+           Conversation tabs. Drawn by renderTtSection() in app.js. -->
+      <div class="sec" id="dpTtSec" hidden>
+        <div class="sec-title">💬 TailorTalk</div>
+        <div id="dpTt"></div>
       </div>
 
       <div class="sec" id="dpRawSec">

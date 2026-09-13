@@ -86,6 +86,14 @@ service cloud.firestore {
       allow read, write: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
     }
+    // TailorTalk's AI profile, bookings and conversation for a lead. Readable by the lead's
+    // tenant; written only by api/tailortalk.js (Admin SDK), so the page can never overwrite
+    // what TailorTalk last said.
+    match /leads/{leadId}/tailortalk/{docId} {
+      allow read: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+      allow write: if false;
+    }
     match /conversations/{convoId} {
       allow read: if ownsTenantField();
       // Only the webhook (Admin SDK, bypasses rules) writes conversations —
@@ -107,6 +115,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /waSecrets/{tid} {
+      allow read, write: if false;
+    }
+    // TailorTalk webhook bookkeeping and unusable payloads — server-only.
+    match /ttState/{tid} {
+      allow read, write: if false;
+    }
+    match /ttDeadLetters/{docId} {
       allow read, write: if false;
     }
 

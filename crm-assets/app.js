@@ -24,7 +24,9 @@ let dashboardEmailSettingsDraft = { enabled:false, recipients:[] };
 const CHANNEL_META = {
   call: { label: 'Direct Call', icon: '📞' },
   whatsapp: { label: 'WhatsApp', icon: '🟢' },
-  instagram: { label: 'Instagram', icon: '📸' }
+  instagram: { label: 'Instagram', icon: '📸' },
+  // Only TailorTalk's website chat sets this; the Add Lead form doesn't offer it.
+  website: { label: 'Website Chat', icon: '🌐' }
 };
 function channelLabel(c){
   const m = CHANNEL_META[c];
@@ -79,13 +81,24 @@ window.applyLeadsSnapshot = function(list){
     }
   }
   refreshAll();
-  // The AI summary regenerates server-side (see generate-lead-summary.js)
-  // and arrives back through this same snapshot — refresh just that block
-  // if its lead's detail page happens to be open, without touching any
-  // in-progress form state elsewhere in the panel.
+  // The AI summary regenerates server-side (see api/_lead-summary-generate.js)
+  // and TailorTalk updates arrive from api/tailortalk.js — both come back
+  // through this same snapshot. Refresh just the blocks they touch if the
+  // lead's detail page is open, without touching any in-progress form state
+  // elsewhere in the panel.
   if(currentDetailId && document.getElementById('dp').classList.contains('open')){
     const l = leads.find(x=>x.id===currentDetailId);
-    if(l) renderAiSummary(l);
+    if(l){
+      renderAiSummary(l);
+      if(isTtLead(l)){
+        renderDetailInfo(l);
+        renderFollowUpSpotlight(l);
+        renderTtSection(l);
+        // A new TailorTalk event also wrote history/notes and a new profile.
+        const cached = ttStateCache.get(l.id);
+        if(!cached || cached.at !== l.tt.lastEventAt){ loadTtState(l); loadLeadThreads(l); }
+      }
+    }
   }
 };
 window.applyPipelineSnapshot = function(list){
@@ -112,6 +125,7 @@ window.applyDashboardEmailSettingsSnapshot = function(settings){
 function refreshAll(){
   if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else applyFilters();
+  try{ renderLeadFilterBar(); } catch(e){ console.error('renderLeadFilterBar failed:', e); }
   try{ updateStats(); } catch(e){ console.error('updateStats failed:', e); }
   try{ updateFollowupBadge(); } catch(e){ console.error('updateFollowupBadge failed:', e); }
   try{ checkFollowupNotify(false); } catch(e){ console.error('checkFollowupNotify failed:', e); }
@@ -121,6 +135,7 @@ function refreshAll(){
 function init(){
   setupSearch();
   updateNavState();
+  renderLeadFilterBar();
   applyFilters();
   updateStats();
   updateNotifyBtnLabel();
@@ -218,8 +233,10 @@ function clearSearch(){
 
 function applyFilters(){
   filteredLeads = leads.filter(l=>{
+    if(!passesLeadFilter(l)) return false;
     if(currentSearch){
-      const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel)].join(' ').toLowerCase();
+      const tt = isTtLead(l) ? [l.tt.status, l.tt.values && l.tt.values.propertyInterest, l.tt.values && l.tt.values.budget, l.tt.handle, l.tt.contact, l.tt.adTitle] : [];
+      const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel),...tt].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
@@ -229,6 +246,552 @@ function applyFilters(){
   else if(currentView==='followups') renderFollowups();
   // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
   // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
+}
+
+// ═══════ TAILORTALK ═══════
+// Leads that TailorTalk (the WhatsApp / Instagram / website AI agent) is talking to carry a
+// small `tt` snapshot, written only by api/tailortalk.js — on every webhook and every pull. The
+// AI profile, bookings and the whole conversation live in leads/{id}/tailortalk/state, read once
+// when a lead is opened. Field ownership is explained at the top of api/_tailortalk-shared.js.
+const TT_FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
+const TT_FIELD_LABELS = { name:'Name', propertyInterest:'Property / Locality', budget:'Budget', enquiryType:'Enquiry type' };
+const TT_STATUS = {
+  hot:       { label:'Hot',       icon:'🔥' },
+  warm:      { label:'Warm',      icon:'🌤️' },
+  cold:      { label:'Cold',      icon:'❄️' },
+  dead:      { label:'Dead',      icon:'⚫' },
+  converted: { label:'Converted', icon:'✅' }
+};
+const TT_SOURCES = { whatsapp_ad:'WhatsApp ad', whatsapp_dm:'WhatsApp', whatsapp_campaign:'WhatsApp campaign', instagram_dm:'Instagram', instagram_ad:'Instagram ad', web_chat:'Website chat' };
+const TT_PROFILE = [
+  ['requirement_details','Requirement'], ['budget_and_finance','Budget & finance'],
+  ['preferred_location','Preferred location'], ['intent_and_who','Intent & who'],
+  ['properties_discussed','Properties discussed'], ['objections_and_blockers','Objections & blockers'],
+  ['stage_and_next_action','Stage & next action'], ['activity_so_far','Activity so far'],
+  ['chat_summary','Chat summary'], ['remarks','Remarks'], ['flag_details','Flag details']
+];
+// Same value as BUSINESS_ENQUIRY_TYPE in api/_tailortalk-shared.js.
+const TT_BUSINESS_TYPE = 'Vendor / Collaboration';
+const TT_CHAT_PAGE = 40;
+const TT_ACTIVITY_DAYS = 7;
+const TT_WINDOW_MS = 24*60*60*1000;
+const TT_FOLLOWUP_GAP_MS = 3*60*60*1000;
+const TT_RETURN_GAP_MS = 24*60*60*1000;
+
+// Custom-trigger signals (SIGNALS in api/_tailortalk-shared.js — same keys).
+const TT_SIGNALS = {
+  wants_contact:   { icon:'🙋', chip:'Wants a call/visit', title:'Wants a call or visit' },
+  details_request: { icon:'📨', chip:'Wants details',      title:'Asked for property details' },
+  seller_lead:     { icon:'🏷️', chip:'Seller',             title:'Owner wants to sell or list' },
+  lost_signal:     { icon:'💤', chip:'Might be lost',      title:'Might be lost' }
+};
+function ttSignalMeta(key){ return TT_SIGNALS[key] || { icon:'🔔', chip: prettyKey(key), title: prettyKey(key) }; }
+
+function isTtLead(l){ return !!(l && l.tt && l.tt.id); }
+// The separate CRM category: vendors, collaborations, influencers — anything TailorTalk files
+// outside "sales", or a lead the team gave that enquiry type by hand.
+function isBusinessLead(l){
+  if(!l) return false;
+  if(isTtLead(l) && l.tt.category && String(l.tt.category).toLowerCase() !== 'sales') return true;
+  return l.enquiryType === TT_BUSINESS_TYPE;
+}
+function ttStatusLabel(s){ return TT_STATUS[s] ? TT_STATUS[s].label : (s ? s.charAt(0).toUpperCase()+s.slice(1) : ''); }
+function ttSourceLabel(s){ return TT_SOURCES[s] || (s ? String(s).replace(/_/g,' ') : ''); }
+function isNoReplyMarker(m){ return !!m && ((m.meta && m.meta.type==='no_response') || /^<no response from agent>$/i.test(String(m.content||'').trim())); }
+
+// ── What needs a person ──
+// Something is open only if it happened after BOTH the team's last touch on the lead (every CRM
+// action moves updatedAt; TailorTalk's writes never do) and tt.attentionFrom (the import's
+// 48-hour look-back, so weeks-old escalations don't flood the list).
+function ttAttentionSince(l){ return Math.max(l.updatedAt || 0, (isTtLead(l) && l.tt.attentionFrom) || 0); }
+function ttOpenSignals(l){
+  if(!isTtLead(l) || !l.tt.signals) return [];
+  const since = ttAttentionSince(l);
+  return Object.entries(l.tt.signals).filter(([, s]) => s && s.at > since).sort((a, b) => b[1].at - a[1].at);
+}
+function ttOpenAlerts(l){
+  if(!isTtLead(l)) return [];
+  const t = l.tt, since = ttAttentionSince(l), out = [];
+  if(t.escalated && t.escalatedAt && t.escalatedAt > since) out.push({ key:'escalated', at:t.escalatedAt });
+  if(t.flagged && t.flaggedAt && t.flaggedAt > since) out.push({ key:'flagged', at:t.flaggedAt });
+  if(t.awaitingTeamAt && t.awaitingTeamAt > since) out.push({ key:'waiting', at:t.awaitingTeamAt });
+  return out;
+}
+function ttIsWaiting(l){ return ttOpenAlerts(l).some(a => a.key==='waiting'); }
+function ttNeedsAttention(l){ return isTtLead(l) && (ttOpenSignals(l).length > 0 || ttOpenAlerts(l).length > 0); }
+
+// ── Filter: Sales / TailorTalk / Other / Vendors & collabs, and within TailorTalk a status ──
+// Per device (localStorage), like the theme — one person's working view, not a team setting.
+const LEAD_FILTER_KEY = 'crmLeadFilter';
+const LEAD_SCOPES = ['all', 'tt', 'other', 'business'];
+let leadFilter = { scope:'all', status:null };
+try{
+  const saved = JSON.parse(localStorage.getItem(LEAD_FILTER_KEY) || 'null');
+  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null };
+}catch(e){}
+
+const TT_STATUS_FILTERS = [
+  { key:'attention', label:'Needs attention', test:ttNeedsAttention },
+  { key:'waiting',   label:'Waiting for team', test:ttIsWaiting },
+  { key:'hot',       label:'Hot',       test:l=>l.tt.status==='hot' },
+  { key:'warm',      label:'Warm',      test:l=>l.tt.status==='warm' },
+  { key:'cold',      label:'Cold',      test:l=>l.tt.status==='cold' },
+  { key:'dead',      label:'Dead',      test:l=>l.tt.status==='dead' },
+  { key:'paused',    label:'AI paused', test:l=>l.tt.locked===true },
+  { key:'converted', label:'Converted', test:l=>l.tt.converted===true }
+];
+
+function passesLeadFilter(l){
+  const business = isBusinessLead(l);
+  if(leadFilter.scope==='business') return business;
+  if(business) return false;
+  if(leadFilter.scope==='tt'){
+    if(!isTtLead(l)) return false;
+    const f = leadFilter.status && TT_STATUS_FILTERS.find(x=>x.key===leadFilter.status);
+    return f ? f.test(l) : true;
+  }
+  if(leadFilter.scope==='other') return !isTtLead(l);
+  return true;
+}
+function saveLeadFilter(){
+  try{ localStorage.setItem(LEAD_FILTER_KEY, JSON.stringify(leadFilter)); }catch(e){}
+}
+function setLeadScope(scope){
+  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null };
+  saveLeadFilter();
+  renderLeadFilterBar();
+  applyFilters();
+}
+function setLeadStatusFilter(key){
+  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key };
+  saveLeadFilter();
+  renderLeadFilterBar();
+  applyFilters();
+}
+function renderLeadFilterBar(){
+  const el = document.getElementById('leadFilterBar');
+  if(!el) return;
+  const sales = leads.filter(l => !isBusinessLead(l));
+  const ttSales = sales.filter(isTtLead);
+  const business = leads.length - sales.length;
+  const chip = (cls, pressed, onclick, label, n) =>
+    `<button type="button" class="lf-chip${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}">${label}<span class="lf-n">${n}</span></button>`;
+  let html = chip('', leadFilter.scope==='all', "setLeadScope('all')", 'Sales leads', sales.length)
+    + chip(' tt', leadFilter.scope==='tt', "setLeadScope('tt')", 'TailorTalk', ttSales.length)
+    + chip('', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length)
+    + chip(' biz', leadFilter.scope==='business', "setLeadScope('business')", 'Vendors &amp; collabs', business);
+  if(leadFilter.scope==='tt'){
+    html += '<span class="lf-sep" aria-hidden="true"></span>'
+      + TT_STATUS_FILTERS.map(f => {
+          const n = ttSales.filter(f.test).length;
+          const tone = (f.key==='attention' || f.key==='waiting') && n ? ' warn' : '';
+          return chip(' sub'+tone, leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, n);
+        }).join('');
+  }
+  el.innerHTML = html;
+}
+
+// ── Board card ──
+function ttCardHtml(l){
+  if(!isTtLead(l)) return '';
+  const t = l.tt, bits = [];
+  ttOpenSignals(l).forEach(([key, s]) => {
+    const m = ttSignalMeta(key);
+    bits.push(`<span class="tt-chip ${key==='lost_signal'?'lost':'action'}" title="${escapeHtml(m.title + (s.quote ? ' — “' + s.quote + '”' : ''))}">${m.icon} ${escapeHtml(m.chip)}</span>`);
+  });
+  const alerts = ttOpenAlerts(l);
+  if(alerts.some(a => a.key==='waiting')) bits.push('<span class="tt-chip action" title="The AI left the lead\'s latest message for the team">⏳ Waiting for team</span>');
+  if(TT_STATUS[t.status]) bits.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
+  else if(t.status) bits.push(`<span class="tt-chip">${escapeHtml(ttStatusLabel(t.status))}</span>`);
+  if(t.converted && t.status!=='converted') bits.push('<span class="tt-chip converted">✅ Converted</span>');
+  if(t.escalated){
+    const fresh = alerts.some(a => a.key==='escalated');
+    bits.push(`<span class="tt-chip ${fresh?'alert':'muted'}" title="${escapeHtml(t.escalatedTo ? 'Escalated to '+t.escalatedTo : 'Escalated in TailorTalk')}">${fresh?'🚨 ':''}Escalated</span>`);
+  }
+  if(t.flagged){
+    const fresh = alerts.some(a => a.key==='flagged');
+    bits.push(`<span class="tt-chip ${fresh?'alert':'muted'}" title="${escapeHtml(t.flagDetails || 'Flagged in TailorTalk')}">${fresh?'🚩 ':''}Flagged</span>`);
+  }
+  if(t.locked) bits.push('<span class="tt-chip paused" title="The AI is paused on this chat in TailorTalk">🔒 AI paused</span>');
+  if(t.lastMessageAt) bits.push(`<span class="tt-chip time" title="Last message from the lead">💬 ${timeAgo(t.lastMessageAt)}</span>`);
+  return bits.length ? `<div class="lcard-tt">${bits.join('')}</div>` : '';
+}
+function sourceBadge(l){
+  if(l.source==='tailortalk') return { cls:'tailortalk', text:'TailorTalk' };
+  if(l.source==='meta') return { cls:'meta', text:'Meta' };
+  if(l.source==='whatsapp_bot') return { cls:'meta', text:'WA Bot' };
+  return { cls:'manual', text:'Manual' };
+}
+
+// ── Sync ──
+// Walks every lead in TailorTalk one page per request (api/tailortalk.js ?action=sync) and
+// applies each exactly like a webhook — new ones are added, changed ones updated, unchanged
+// ones left untouched. The daily cron does the same for leads active since the last run.
+let ttSyncRunning = false;
+async function runTailorTalkSync(){
+  if(ttSyncRunning) return;
+  closeMoreMenu();
+  ttSyncRunning = true;
+  let startAfter = null, processed = 0, created = 0, updated = 0, failed = 0, guard = 0;
+  showToast('Syncing TailorTalk…');
+  try{
+    while(guard++ < 200){
+      const idToken = await window.crmAuth.getIdToken();
+      if(!idToken){ showToast('Please log in again'); break; }
+      const res = await fetch('/api/tailortalk?action=sync', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
+        body: JSON.stringify(startAfter ? { startAfter } : {})
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || !data.ok){ showToast(data.error ? 'Sync failed: '+data.error : 'Sync failed'); break; }
+      processed += data.processed || 0; created += data.created || 0; updated += data.updated || 0; failed += data.failed || 0;
+      if(data.done){
+        showToast(`✓ TailorTalk synced — ${processed} checked${created?`, ${created} new`:''}${updated?`, ${updated} updated`:''}${failed?`, ${failed} failed`:''}`);
+        break;
+      }
+      showToast(`Syncing TailorTalk… ${processed} checked${created?`, ${created} new`:''}`);
+      startAfter = data.next;
+    }
+  } catch(e){
+    console.error('runTailorTalkSync failed:', e);
+    showToast('Sync failed — check your connection');
+  } finally {
+    ttSyncRunning = false;
+  }
+}
+
+// ── Lead page ──
+// leads/{id}/tailortalk/state, keyed by lead id and stamped with the tt.lastEventAt it was read
+// at, so a newer TailorTalk event (seen through the leads snapshot) triggers one re-read.
+const ttStateCache = new Map();
+const ttStateLoading = new Set();
+const ttChatExpanded = new Set();
+const ttActivityExpanded = new Set();
+const TT_TAB_KEY = 'crmTtTab';
+let ttTab = 'overview';
+try{ const t = localStorage.getItem(TT_TAB_KEY); if(['overview','activity','conversation'].includes(t)) ttTab = t; }catch(e){}
+
+async function loadTtState(l){
+  if(!isTtLead(l) || !window.crmFirebase || !window.crmFirebase.getLeadTailorTalk) return;
+  if(ttStateLoading.has(l.id)) return;
+  ttStateLoading.add(l.id);
+  const at = l.tt.lastEventAt || null;
+  try{
+    const state = await window.crmFirebase.getLeadTailorTalk(l.id);
+    ttStateCache.set(l.id, { at, state: state || null, error: null });
+  } catch(e){
+    console.error('loadTtState failed:', e);
+    ttStateCache.set(l.id, { at, state: null, error: e && e.code==='permission-denied' ? 'rules' : 'load' });
+  } finally {
+    ttStateLoading.delete(l.id);
+    const cur = leads.find(x=>x.id===l.id);
+    if(cur && currentDetailId===l.id && document.getElementById('dp').classList.contains('open')) renderTtSection(cur);
+  }
+}
+
+function setTtTab(tab){
+  ttTab = tab;
+  try{ localStorage.setItem(TT_TAB_KEY, tab); }catch(e){}
+  const l = leads.find(x=>x.id===currentDetailId);
+  if(l) renderTtSection(l);
+}
+
+function wonStage(){
+  return stages.find(s=>s.id==='closed_won') || stages.find(s=>/won/i.test(s.name||'')) || null;
+}
+function lostStage(){
+  return stages.find(s=>s.id==='closed_lost') || stages.find(s=>/lost/i.test(s.name||'')) || null;
+}
+function moveTtLeadToLost(id){
+  const l = leads.find(x=>x.id===id);
+  const lost = lostStage();
+  if(!l || !lost) return;
+  if(!confirm(`Move ${l.name} to "${lost.name}"?`)) return;
+  changeStage(id, lost.id);
+  showToast(`Moved to ${lost.name}`);
+  renderTtSection(l);
+}
+function moveTtLeadToWon(id){
+  const l = leads.find(x=>x.id===id);
+  const won = wonStage();
+  if(!l || !won) return;
+  if(!confirm(`TailorTalk marked ${l.name} as converted. Move this lead to "${won.name}"?`)) return;
+  changeStage(id, won.id);
+  showToast(`✓ Moved to ${won.name}`);
+  renderTtSection(l);
+}
+// Clears everything open on the lead (signals, a new escalation, a message waiting for the team)
+// in one logged step, for when reading it was the whole job.
+const TT_ALERT_TITLES = { escalated:'New escalation', flagged:'New flag', waiting:'Message waiting for the team' };
+function markTtHandled(id, what){
+  const l = leads.find(x=>x.id===id);
+  if(!l) return;
+  addHistory(l, 'followed-up', `Handled: <b>${escapeHtml(what)}</b>`);
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'signal-handled';
+  persistLead(l);
+  refreshAll();
+  if(currentDetailId===id){ renderTtSection(l); renderHistory(l); }
+  showToast('✓ Marked handled');
+}
+function markTtDetailsSent(id){
+  if(currentDetailId!==id) openDetail(id);
+  setDetailsSent(true);
+  const l = leads.find(x=>x.id===id);
+  if(l){ refreshAll(); renderTtSection(l); }
+  showToast('✓ Details marked as sent');
+}
+
+// The team edited a field TailorTalk used to keep current; this hands it back.
+async function useTailorTalkValue(id, field){
+  const l = leads.find(x=>x.id===id);
+  if(!isTtLead(l) || !l.tt.values || !l.tt.values[field]) return;
+  const value = l.tt.values[field];
+  const label = TT_FIELD_LABELS[field];
+  if(!confirm(`Change ${label} to "${value}" and let TailorTalk keep it up to date from now on?`)) return;
+  try{
+    await window.crmFirebase.releaseLeadField(id, field, value);
+  } catch(e){
+    showToast('Could not update — check your connection');
+    return;
+  }
+  addHistory(l, 'field', `${escapeHtml(label)} changed from <b>${escapeHtml(l[field]||'—')}</b> to <b>${escapeHtml(value)}</b> — TailorTalk keeps it up to date again`);
+  l[field] = value;
+  l.ttHold = { ...(l.ttHold||{}), [field]: false };
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'field';
+  persistLead(l);
+  refreshAll();
+  if(currentDetailId===id){ renderDetailInfo(l); renderTtSection(l); renderHistory(l); }
+  showToast(`✓ ${label} now follows TailorTalk`);
+}
+
+function ttStat(label, value, sub, cls){
+  return `<div class="tt-stat${cls?' '+cls:''}"><div class="tt-stat-l">${label}</div><div class="tt-stat-v">${value}</div>${sub?`<div class="tt-stat-s">${sub}</div>`:''}</div>`;
+}
+function fmtWhen(ts){
+  return new Date(ts).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+function fmtClock(ts){ return new Date(ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }); }
+function fmtDay(ts){ return new Date(ts).toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' }); }
+function dayKeyOf(ts){ const d = new Date(ts); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function relDay(ts){
+  const today = dayKeyOf(Date.now()), y = dayKeyOf(Date.now() - 86400000), k = dayKeyOf(ts);
+  if(k===today) return 'Today';
+  if(k===y) return 'Yesterday';
+  return timeAgo(new Date(ts).setHours(12,0,0,0));
+}
+function gapWords(ms){
+  const h = Math.round(ms/3600000);
+  if(h < 48) return `${h} hours`;
+  return `${Math.round(ms/86400000)} days`;
+}
+function prettyKey(k){
+  return String(k).replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
+}
+
+// ── Activity: one entry per day, from the stored conversation plus TailorTalk's history ──
+// Nothing here is stored — it is recomputed from what the lead page already loaded, so it
+// cannot drift from the conversation and costs no writes.
+function ttActivityDays(l, st){
+  const days = new Map();
+  const dayFor = ts => {
+    const k = dayKeyOf(ts);
+    if(!days.has(k)) days.set(k, { key:k, first:ts, last:ts, lead:0, ai:0, team:0, followups:0, left:[], cameBackAfter:null, quote:null, events:[] });
+    const d = days.get(k);
+    d.first = Math.min(d.first, ts); d.last = Math.max(d.last, ts);
+    return d;
+  };
+  let prev = null;
+  ((st && st.chat) || []).forEach(m => {
+    if(!m.at) return;
+    const d = dayFor(m.at);
+    if(isNoReplyMarker(m)){ d.left.push(m.at); return; }
+    if(m.role==='user'){
+      if(!d.lead && prev && m.at - prev.at > TT_RETURN_GAP_MS) d.cameBackAfter = m.at - prev.at;
+      d.lead++;
+      if(!d.quote && m.content) d.quote = m.content;
+    } else if(m.role==='human_agent'){
+      d.team++;
+    } else {
+      d.ai++;
+      if(prev && prev.role!=='user' && m.at - prev.at > TT_FOLLOWUP_GAP_MS) d.followups++;
+    }
+    prev = m;
+  });
+  (l.history || []).filter(h => h.by==='TailorTalk' && h.at).forEach(h => dayFor(h.at).events.push(h));
+  Object.entries((l.tt && l.tt.signals) || {}).forEach(([key, s]) => { if(s && s.at) dayFor(s.at).events.push({ at:s.at, signal:key, quote:s.quote }); });
+  return Array.from(days.values()).sort((a,b) => b.first - a.first);
+}
+
+function ttActivityHtml(l, st){
+  const days = ttActivityDays(l, st);
+  if(!days.length) return '<div class="empty-mini">No activity recorded yet.</div>';
+  const expanded = ttActivityExpanded.has(l.id);
+  const shown = expanded ? days : days.slice(0, TT_ACTIVITY_DAYS);
+  const row = (k, v, cls) => `<div class="tt-ev${cls?' '+cls:''}"><span class="tt-ev-k">${k}</span><span class="tt-ev-v">${v}</span></div>`;
+  const html = shown.map(d => {
+    const rows = [];
+    const msgs = d.lead + d.ai + d.team;
+    if(msgs){
+      const parts = [`${d.lead} from the lead`, `${d.ai} AI`];
+      if(d.team) parts.push(`${d.team} team`);
+      rows.push(row('Chat', `${msgs} message${msgs===1?'':'s'} · ${parts.join(' · ')} <span class="tt-ev-t">${fmtClock(d.first)}${d.last!==d.first?'–'+fmtClock(d.last):''}</span>`));
+    }
+    if(d.cameBackAfter) rows.push(row('Returned', `Came back after ${gapWords(d.cameBackAfter)}`, 'good'));
+    if(d.followups) rows.push(row('Follow-up', `${d.followups} AI follow-up${d.followups===1?'':'s'} sent`));
+    if(d.left.length) rows.push(row('For team', `${d.left.length} message${d.left.length===1?'':'s'} left for the team <span class="tt-ev-t">${d.left.map(fmtClock).join(', ')}</span>`, 'warn'));
+    d.events.sort((a,b)=>a.at-b.at).forEach(e => {
+      if(e.signal){
+        const m = ttSignalMeta(e.signal);
+        rows.push(row('Signal', `${m.icon} ${escapeHtml(m.title)}${e.quote?` — “${escapeHtml(e.quote)}”`:''} <span class="tt-ev-t">${fmtClock(e.at)}</span>`, 'warn'));
+      } else {
+        rows.push(row('Update', `${e.text} <span class="tt-ev-t">${fmtClock(e.at)}</span>`));
+      }
+    });
+    return `<div class="tt-day">
+      <div class="tt-day-h"><span class="tt-day-d">${fmtDay(d.first)}</span><span class="tt-day-r">${relDay(d.first)}</span></div>
+      <div class="tt-day-b">${rows.join('')}${d.quote?`<div class="tt-day-q">“${escapeHtml(d.quote.length>160?d.quote.slice(0,159)+'…':d.quote)}”</div>`:''}</div>
+    </div>`;
+  }).join('');
+  const more = days.length > shown.length
+    ? `<button type="button" class="tt-btn tt-more" onclick="ttActivityExpanded.add('${l.id}');renderTtSection(leads.find(x=>x.id==='${l.id}'))">Show all ${days.length} days</button>` : '';
+  return `<div class="tt-activity">${html}</div>${more}`;
+}
+
+function ttOverviewHtml(l, st){
+  const t = l.tt;
+  const cards = TT_PROFILE.filter(([k]) => st.profile && st.profile[k] && !(k==='flag_details' && t.flagged))
+    .map(([k, label]) => `<div class="tt-card"><div class="tt-stat-l">${label}</div><div class="tt-card-v">${escapeHtml(st.profile[k])}</div></div>`);
+  Object.entries(st.extra || {}).forEach(([k, v]) => {
+    cards.push(`<div class="tt-card"><div class="tt-stat-l">${escapeHtml(prettyKey(k))}</div><div class="tt-card-v">${escapeHtml(String(v))}</div></div>`);
+  });
+  let html = cards.length ? `<div class="tt-profile">${cards.join('')}</div>` : '<div class="empty-mini">TailorTalk hasn\'t written a profile for this lead yet.</div>';
+  const bookings = (st.bookings || []).slice().sort((a,b)=>(b.start||0)-(a.start||0));
+  if(bookings.length){
+    html += `<div class="tt-sub">Bookings</div><div class="tt-list">${bookings.map(b => `
+      <div class="tt-item"><span><b>${escapeHtml(b.summary || 'Booking')}</b>${b.minutes?` · ${b.minutes} min`:''}${b.link?` · <a href="${escapeHtml(b.link)}" target="_blank" rel="noopener">Meeting link</a>`:''}</span><span class="tt-when">${b.start?fmtWhen(b.start):'—'}</span></div>`).join('')}</div>`;
+  }
+  const payments = (st.payments || []).slice().sort((a,b)=>(b.at||0)-(a.at||0));
+  if(payments.length){
+    html += `<div class="tt-sub">Payments</div><div class="tt-list">${payments.map(p => `
+      <div class="tt-item"><span><b>${p.amount!=null ? (p.currency==='INR'?'₹':escapeHtml(p.currency)+' ')+Number(p.amount).toLocaleString('en-IN') : 'Payment'}</b> · ${escapeHtml(p.id)}</span><span class="tt-when">${p.at?fmtWhen(p.at):'—'}</span></div>`).join('')}</div>`;
+  }
+  return html;
+}
+
+function ttConversationHtml(l, st){
+  const chat = st.chat || [];
+  if(!chat.length) return '<div class="empty-mini">No messages stored yet.</div>';
+  const expanded = ttChatExpanded.has(l.id);
+  const shown = expanded ? chat : chat.slice(-TT_CHAT_PAGE);
+  const hiddenCount = chat.length - shown.length;
+  const who = m => m.role==='user' ? escapeHtml(l.name || 'Lead') : m.role==='assistant' ? 'AI agent' : ('Team' + (m.email ? ' · '+escapeHtml(m.email.split('@')[0]) : ''));
+  let lastDay = null;
+  const body = shown.map(m => {
+    let sep = '';
+    const k = m.at ? dayKeyOf(m.at) : null;
+    if(k && k!==lastDay){ sep = `<div class="tt-chat-day"><span>${fmtDay(m.at)}</span></div>`; lastDay = k; }
+    if(isNoReplyMarker(m)) return `${sep}<div class="tt-chat-sys">AI didn’t reply — left for the team${m.at?' · '+fmtClock(m.at):''}</div>`;
+    const cls = m.role==='user' ? 'user' : m.role==='assistant' ? 'assistant' : 'team';
+    return `${sep}<div class="tt-msg ${cls}"><div class="tt-msg-meta">${who(m)}${m.at?' · '+fmtClock(m.at):''}</div><div class="tt-msg-text">${escapeHtml(m.content || (m.meta && m.meta.type ? '['+m.meta.type+']' : ''))}</div></div>`;
+  }).join('');
+  const more = hiddenCount > 0
+    ? `<button type="button" class="tt-btn tt-chat-more" onclick="ttChatExpanded.add('${l.id}');renderTtSection(leads.find(x=>x.id==='${l.id}'))">Show ${hiddenCount} earlier message${hiddenCount===1?'':'s'}</button>`
+    : (st.chatTruncated ? '<div class="tt-foot tt-chat-more">Older messages were too long to keep.</div>' : '');
+  return `<div class="tt-chat" id="dpTtChatScroll">${more}${body}</div>
+    <div class="tt-foot">Reply from TailorTalk’s inbox — your reply appears here with TailorTalk’s next update.</div>`;
+}
+
+function renderTtSection(l){
+  const sec = document.getElementById('dpTtSec');
+  if(!sec) return;
+  if(!isTtLead(l)){ sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const t = l.tt;
+  const cached = ttStateCache.get(l.id);
+  const st = cached && cached.state;
+
+  // 1. Needs a person now: open signals, a new escalation/flag, a message left for the team.
+  const actionRow = (icon, title, when, quote, actions, cls) => `<div class="tt-signal${cls?' '+cls:''}">
+      <div class="tt-signal-main">
+        <div class="tt-signal-t">${icon} ${escapeHtml(title)}<span class="tt-when"> · ${timeAgo(when)}</span></div>
+        ${quote ? `<div class="tt-signal-q">“${escapeHtml(quote)}”</div>` : ''}
+      </div>
+      <div class="tt-signal-acts">${actions.join('')}</div>
+    </div>`;
+  const handled = what => `<button type="button" class="tt-btn quiet" onclick="markTtHandled('${l.id}', ${escapeHtml(JSON.stringify(what))})">Handled</button>`;
+  const rows = ttOpenSignals(l).map(([key, s]) => {
+    const m = ttSignalMeta(key);
+    const actions = [];
+    if(key==='wants_contact') actions.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
+    if(key==='details_request' && l.detailsSent!==true) actions.push(`<button type="button" class="tt-btn" onclick="markTtDetailsSent('${l.id}')">Mark details sent</button>`);
+    if(key==='lost_signal' && lostStage() && l.stageId!==lostStage().id) actions.push(`<button type="button" class="tt-btn" onclick="moveTtLeadToLost('${l.id}')">Move to ${escapeHtml(lostStage().name)}</button>`);
+    actions.push(handled(m.title));
+    return actionRow(m.icon, m.title + (s.count>1?` (asked ${s.count}×)`:''), s.at, s.quote, actions, key==='lost_signal'?'lost':'');
+  });
+  const lastLeadMsg = st && st.chat ? [...st.chat].reverse().find(m => m.role==='user' && m.content) : null;
+  ttOpenAlerts(l).forEach(a => {
+    const actions = [`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`, handled(TT_ALERT_TITLES[a.key])];
+    if(a.key==='waiting') rows.push(actionRow('⏳', 'Waiting for the team — the AI didn’t reply', a.at, lastLeadMsg && lastLeadMsg.content.slice(0,160), actions));
+    if(a.key==='escalated') rows.push(actionRow('🚨', `Escalated${t.escalatedTo?' to '+t.escalatedTo:''} in TailorTalk`, a.at, null, actions, 'alert'));
+    if(a.key==='flagged') rows.push(actionRow('🚩', `Flagged${t.flagDetails?': '+t.flagDetails:''}`, a.at, null, actions, 'alert'));
+  });
+
+  // 2. Fields the team took over, where TailorTalk has since heard something different.
+  const says = TT_FOLLOW_FIELDS.filter(f => l.ttHold && l.ttHold[f] && t.values && t.values[f] && t.values[f] !== (l[f]||''))
+    .map(f => `<div class="tt-says"><span>TailorTalk now says <b>${escapeHtml(TT_FIELD_LABELS[f].toLowerCase())}</b>: <b>${escapeHtml(t.values[f])}</b> · you have <b>${escapeHtml(l[f]||'—')}</b></span><button type="button" class="tt-btn" onclick="useTailorTalkValue('${l.id}','${f}')">Use TailorTalk's value</button></div>`)
+    .join('');
+
+  // 3. The lead at a glance.
+  const stats = [];
+  const s = TT_STATUS[t.status];
+  stats.push(ttStat('Status', s ? `${s.icon} ${s.label}` : (t.status ? escapeHtml(ttStatusLabel(t.status)) : '—'), t.statusAt ? 'since '+timeAgo(t.statusAt) : ''));
+  if(t.lastMessageAt){
+    let windowNote = '';
+    if(l.channel==='whatsapp' || t.integration==='whatsapp'){
+      const left = t.lastMessageAt + TT_WINDOW_MS - Date.now();
+      windowNote = left > 0 ? `Reply window open · ${relativeFollowUpText(Date.now()+left).replace(/^In /,'')} left` : 'Reply window closed — template needed';
+    }
+    stats.push(ttStat('Last message', timeAgo(t.lastMessageAt) + (t.lastSeen===false ? ' · <span class="tt-unread">unread</span>' : ''), windowNote));
+  }
+  stats.push(ttStat('AI', t.locked ? '🔒 Paused' : '🤖 Replying', t.followups ? `${t.followups} follow-up${t.followups===1?'':'s'} sent` : ''));
+  const origin = ttSourceLabel(t.leadSource) || channelLabel(l.channel);
+  const ad = t.adTitle ? (t.adUrl ? `<a href="${escapeHtml(t.adUrl)}" target="_blank" rel="noopener">${escapeHtml(t.adTitle)}</a>` : escapeHtml(t.adTitle)) : '';
+  stats.push(ttStat('Came from', escapeHtml(origin || '—'), ad || (t.createdAt ? 'first message '+fmtDay(t.createdAt) : '')));
+  if(t.converted){
+    const won = wonStage();
+    const btn = won && l.stageId!==won.id ? `<button type="button" class="tt-btn" onclick="moveTtLeadToWon('${l.id}')">Move to ${escapeHtml(won.name)}</button>` : '';
+    stats.push(ttStat('Converted', '✅ Yes', (t.convertedAt ? fmtWhen(t.convertedAt) : '') + btn, 'good'));
+  }
+  if(t.escalated && !ttOpenAlerts(l).some(a=>a.key==='escalated')) stats.push(ttStat('Escalated', escapeHtml(t.escalatedTo || 'Yes'), t.escalatedAt ? fmtWhen(t.escalatedAt) : 'before it reached the CRM'));
+  if(t.flagged && !ttOpenAlerts(l).some(a=>a.key==='flagged')) stats.push(ttStat('Flagged', escapeHtml(t.flagDetails || 'Yes')));
+  if(t.owner) stats.push(ttStat('TailorTalk owner', escapeHtml(t.owner)));
+
+  // 4. Overview · Activity · Conversation.
+  let panel;
+  if(!cached) panel = '<div class="empty-mini">Loading TailorTalk details…</div>';
+  else if(cached.error==='rules') panel = '<div class="empty-mini">TailorTalk details can\'t be read — the Firestore rules need updating.</div>';
+  else if(cached.error) panel = '<div class="empty-mini">Couldn\'t load TailorTalk details — check your connection.</div>';
+  else if(!st) panel = '<div class="empty-mini">No TailorTalk details yet — they arrive with the next update.</div>';
+  else panel = ttTab==='activity' ? ttActivityHtml(l, st) : ttTab==='conversation' ? ttConversationHtml(l, st) : ttOverviewHtml(l, st);
+
+  const msgCount = st && st.chat ? st.chat.filter(m => !isNoReplyMarker(m)).length : null;
+  const dayCount = st ? ttActivityDays(l, st).length : null;
+  const tab = (key, label, n) => `<button type="button" role="tab" class="tt-tab${ttTab===key?' at':''}" aria-selected="${ttTab===key}" onclick="setTtTab('${key}')">${label}${n!=null?`<span class="tt-tab-n">${n}</span>`:''}</button>`;
+
+  document.getElementById('dpTt').innerHTML = `
+    ${rows.join('')}
+    ${says}
+    <div class="tt-strip">${stats.join('')}</div>
+    <div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('activity','Activity', dayCount)}${tab('conversation','Conversation', msgCount)}</div>
+    <div class="tt-panel" role="tabpanel">${panel}</div>
+    <div class="tt-foot">Last change from TailorTalk ${timeAgo(t.syncedAt || t.lastEventAt)}</div>`;
+  if(ttTab==='conversation' && !ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
 }
 
 // ═══════ NAV: view switching, view dropdown, more menu ═══════
@@ -318,6 +881,9 @@ function followUpBadge(l){
 // summary regeneration can never be forgotten on some new call site later.
 function persistLead(l){
   window.crmFirebase.saveLead(l);
+  // Any team action closes the lead's open TailorTalk signals (see ttOpenSignals) — redraw
+  // them now rather than when the snapshot comes back.
+  if(currentDetailId===l.id && isTtLead(l) && document.getElementById('dp').classList.contains('open')) renderTtSection(l);
 }
 
 // Add a note to a lead: update the in-memory arrays + denormalized lastNote/
@@ -376,7 +942,7 @@ async function regenerateSummaryNow(leadId){
   try{
     const idToken = await window.crmAuth.getIdToken();
     if(!idToken){ showToast('Please log in again'); return; }
-    const res = await fetch('/api/generate-lead-summary', {
+    const res = await fetch('/api/lead-summary?op=generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
       body: JSON.stringify({ leadId })
@@ -413,7 +979,7 @@ async function runBackfillSummaries(){
     while(safety++ < 1000){
       const idToken = await window.crmAuth.getIdToken();
       if(!idToken){ showToast('Please log in again'); break; }
-      const res = await fetch('/api/backfill-lead-summaries', {
+      const res = await fetch('/api/lead-summary?op=backfill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+idToken },
         body: JSON.stringify(cursor ? { cursor } : {})
@@ -459,7 +1025,7 @@ function addHistory(l, type, text){
   return event;
 }
 function historyIcon(type){
-  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨' }[type] || '•';
+  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬' }[type] || '•';
 }
 function renderHistory(l){
   const el = document.getElementById('historyPanel');
@@ -593,18 +1159,22 @@ function leadCardHtml(l){
   const stage = stageById(l.stageId);
   const next = nextStageId(l.stageId);
   const nextStage = next ? stageById(next) : null;
+  const src = sourceBadge(l);
   return `
   <div class="lcard" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
     <div class="lcard-top">
       <div class="lcard-name">${escapeHtml(l.name)}</div>
-      <div class="lcard-src ${l.source}">${l.source==='meta'?'Meta':'Manual'}</div>
+      <div class="lcard-src ${src.cls}">${src.text}</div>
     </div>
     <div class="lcard-meta">
       ${l.phone?`<div>📞 ${escapeHtml(l.phone)}</div>`:''}
+      ${!l.phone && isTtLead(l) && l.tt.handle?`<div>📸 @${escapeHtml(l.tt.handle)}</div>`:''}
       ${l.channel?`<div>${channelLabel(l.channel)}</div>`:''}
       ${l.enquiryType?`<div>🏷️ ${escapeHtml(l.enquiryType)}</div>`:''}
       ${l.propertyInterest?`<div>🏠 ${escapeHtml(l.propertyInterest)}</div>`:''}
+      ${l.budget && isTtLead(l)?`<div>💰 ${escapeHtml(l.budget)}</div>`:''}
     </div>
+    ${ttCardHtml(l)}
     ${detailsSentChip(l)}
     ${followUpBadge(l)}
     <div class="lcard-foot">
@@ -615,7 +1185,7 @@ function leadCardHtml(l){
 }
 
 // ═══════ LIST VIEW (sortable + per-column filter, Excel-style) ═══════
-function sourceLabel(s){ return s==='meta'?'📱 Meta':(s==='whatsapp_bot'?'🤖 WhatsApp Bot':'✍️ Manual'); }
+function sourceLabel(s){ return s==='meta'?'📱 Meta':(s==='whatsapp_bot'?'🤖 WhatsApp Bot':(s==='tailortalk'?'💬 TailorTalk':'✍️ Manual')); }
 const LIST_COLUMNS = [
   { key:'name', label:'Name', filterable:true, get:l=>l.name||'', sortVal:l=>(l.name||'').toLowerCase() },
   { key:'contact', label:'Contact', filterable:false, get:l=>l.phone||l.email||'—', sortVal:l=>(l.phone||l.email||'').toLowerCase() },
@@ -624,6 +1194,8 @@ const LIST_COLUMNS = [
   { key:'propertyInterest', label:'Interest', filterable:true, get:l=>l.propertyInterest||'—', sortVal:l=>(l.propertyInterest||'').toLowerCase() },
   { key:'stage', label:'Stage', filterable:true, get:l=>{ const s=stageById(l.stageId); return s?s.name:'—'; }, sortVal:l=>{ const s=stageById(l.stageId); return s?s.name.toLowerCase():''; } },
   { key:'source', label:'Source', filterable:true, get:l=>sourceLabel(l.source), sortVal:l=>sourceLabel(l.source).toLowerCase() },
+  { key:'ttStatus', label:'TailorTalk', filterable:true, get:l=>isTtLead(l)?(ttStatusLabel(l.tt.status)||'Linked'):'—', sortVal:l=>{ const order={hot:0,warm:1,cold:2,converted:3,dead:4}; return isTtLead(l)?(order[l.tt.status]??5):9; } },
+  { key:'ttLastMessage', label:'Last message', filterable:false, get:l=>isTtLead(l)&&l.tt.lastMessageAt?timeAgo(l.tt.lastMessageAt):'—', sortVal:l=>isTtLead(l)?(l.tt.lastMessageAt||0):0 },
   { key:'followUpAt', label:'Follow-up', filterable:false, get:l=>l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—', sortVal:l=>l.followUpAt||0 },
   { key:'updatedAt', label:'Updated', filterable:false, get:l=>timeAgo(l.updatedAt||l.createdAt), sortVal:l=>l.updatedAt||l.createdAt||0 },
   { key:'updatedBy', label:'Updated By', filterable:true, get:l=>l.updatedBy||'—', sortVal:l=>(l.updatedBy||'').toLowerCase() }
@@ -750,6 +1322,8 @@ function renderList(){
         <td>${escapeHtml(l.propertyInterest||'—')}</td>
         <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:'—'}</td>
         <td>${sourceLabel(l.source)}</td>
+        <td>${isTtLead(l)?`<span class="tt-chip ${escapeHtml(l.tt.status||'')}">${TT_STATUS[l.tt.status]?TT_STATUS[l.tt.status].icon+' ':''}${escapeHtml(ttStatusLabel(l.tt.status)||'Linked')}</span>${ttNeedsAttention(l)?' <span class="tt-chip alert" title="Escalated or flagged in TailorTalk">🚨</span>':''}`:'—'}</td>
+        <td>${isTtLead(l)&&l.tt.lastMessageAt?timeAgo(l.tt.lastMessageAt):'—'}</td>
         <td>${l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—'}</td>
         <td>${timeAgo(l.updatedAt||l.createdAt)}</td>
         <td>${l.updatedBy?escapeHtml(l.updatedBy):'—'}</td>
@@ -1098,8 +1672,13 @@ function openEditLeadModal(id){
   lmModalContactAt = l.contactAt || l.createdAt || Date.now();
   document.getElementById('lmContactTimeDisplay').textContent = new Date(lmModalContactAt).toLocaleString();
   document.getElementById('lmErr').classList.remove('show');
+  lmOpenValues = { name: l.name||'', propertyInterest: l.propertyInterest||'', budget: l.budget||'', enquiryType: document.getElementById('lmEnquiryType').value||'' };
   document.getElementById('lModal').classList.add('open');
 }
+// What the TailorTalk-shared fields showed when Edit opened. TailorTalk may update the lead
+// while the form sits open; a field the person didn't touch must take that newer value, not
+// write the old one back (and take the field over) on save.
+let lmOpenValues = null;
 function closeLeadModal(){
   document.getElementById('lModal').classList.remove('open');
   hideNewTypeRow();
@@ -1202,6 +1781,12 @@ function leadFormDiffs(l, form){
 function applyLeadForm(l, form, now){
   rememberProperty(form.enquiryType, form.propertyInterest);
   const diffs = leadFormDiffs(l, form);
+  // A shared field someone changes here stops following TailorTalk (see TAILORTALK above).
+  if(isTtLead(l)){
+    const hold = { ...(l.ttHold||{}) };
+    TT_FOLLOW_FIELDS.forEach(f => { if((l[f]||'') !== (form[f]||'')) hold[f] = true; });
+    l.ttHold = hold;
+  }
   const oldStageId = l.stageId;
   const stageChanged = oldStageId !== form.stageId;
 
@@ -1235,6 +1820,9 @@ function saveLeadModal(){
     const l = leads.find(x=>x.id===lModalEditId);
     if(l){
       const now = Date.now();
+      if(isTtLead(l) && lmOpenValues){
+        TT_FOLLOW_FIELDS.forEach(f => { if((form[f]||'') === (lmOpenValues[f]||'')) form[f] = l[f] || ''; });
+      }
       applyLeadForm(l, form, now);
       if(form.noteText) logNote(l, { id:'n'+now, text: form.noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
@@ -1485,6 +2073,9 @@ async function runExport(){
       'Budget': l.budget || '',
       'Stage': stage ? stage.name : '',
       'Source': sourceLabel(l.source),
+      'TailorTalk Status': isTtLead(l) ? ttStatusLabel(l.tt.status) : '',
+      'TailorTalk Converted': isTtLead(l) ? (l.tt.converted ? 'Yes' : 'No') : '',
+      'Last TailorTalk Message': isTtLead(l) && l.tt.lastMessageAt ? new Date(l.tt.lastMessageAt).toLocaleString() : '',
       'Sent Details': l.detailsSent === true ? 'Yes' : 'No',
       'Time of Contact': l.contactAt ? new Date(l.contactAt).toLocaleString() : '',
       'Follow-up': l.followUpAt ? new Date(l.followUpAt).toLocaleString() : '',
@@ -1501,7 +2092,8 @@ async function runExport(){
   const leadsSheet = XLSX.utils.json_to_sheet(leadRows);
   leadsSheet['!cols'] = [
     {wch:20},{wch:14},{wch:22},{wch:14},{wch:16},{wch:24},{wch:12},{wch:14},
-    {wch:16},{wch:12},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
+    {wch:16},{wch:14},{wch:12},{wch:19},
+    {wch:12},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
   ];
   XLSX.utils.book_append_sheet(wb, leadsSheet, 'Leads');
 
@@ -1518,36 +2110,32 @@ function openDetail(id){
   if(!l) return;
   currentDetailId = id;
   document.getElementById('dpName').textContent = l.name;
-  document.getElementById('dpSub').textContent = l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads' : 'Manually added lead';
+  document.getElementById('dpSub').textContent =
+    l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads'
+    : l.source==='tailortalk' ? `Lead via TailorTalk${l.tt && l.tt.leadSource ? ' · '+ttSourceLabel(l.tt.leadSource) : ''}`
+    : isTtLead(l) ? 'Manually added lead · linked to a TailorTalk conversation'
+    : 'Manually added lead';
   renderAiSummary(l);
 
   const waBtn = document.getElementById('dpWaBtn');
   const waUrl = waHref(l.phone);
   waBtn.style.display = waUrl ? '' : 'none';
   if(waUrl) waBtn.href = waUrl;
+  // For a TailorTalk lead this opens the agent's OWN WhatsApp, not the business number the
+  // lead has been chatting with — say so, because the message won't be in TailorTalk's chat.
+  waBtn.innerHTML = isTtLead(l) ? '💬 WhatsApp<span class="dp-wa-mine"> from my phone</span>' : '💬 WhatsApp';
+  waBtn.title = isTtLead(l) ? 'Opens WhatsApp on this device. It is not sent from the business number and will not appear in the TailorTalk chat.' : '';
 
   renderDetailStageRow(l);
   renderFollowUpSpotlight(l);
-
-  const infoHtml = `
-    ${l.channel?`<div class="info-b"><div class="info-b-l">Channel</div><div class="info-b-v">${channelLabel(l.channel)}</div></div>`:''}
-    ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${encodeURIComponent(l.phone)}">${escapeHtml(l.phone)}</a></div></div>`:''}
-    ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${encodeURIComponent(l.email)}">${escapeHtml(l.email)}</a></div></div>`:''}
-    ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${escapeHtml(l.enquiryType)}</div></div>`:''}
-    ${l.propertyInterest?`<div class="info-b highlight"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${escapeHtml(l.propertyInterest)}</div></div>`:''}
-    ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${escapeHtml(l.budget)}</div></div>`:''}
-    ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
-    ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
-  `;
-  document.getElementById('dpInfo').innerHTML = infoHtml;
-
-  const metaHtml = `
-    <div class="dp-meta-item"><span class="dp-meta-l">Contacted</span><span class="dp-meta-v">${new Date(l.contactAt||l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
-    <div class="dp-meta-item"><span class="dp-meta-l">Added</span><span class="dp-meta-v">${new Date(l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
-    ${l.createdBy?`<div class="dp-meta-item"><span class="dp-meta-l">By</span><span class="dp-meta-v">${escapeHtml(l.createdBy.split('@')[0])}</span></div>`:''}
-    ${l.updatedBy?`<div class="dp-meta-item"><span class="dp-meta-l">Updated by</span><span class="dp-meta-v">${escapeHtml(l.updatedBy.split('@')[0])}</span></div>`:''}
-  `;
-  document.getElementById('dpMeta').innerHTML = metaHtml;
+  renderDetailInfo(l);
+  ttChatExpanded.delete(id);
+  ttActivityExpanded.delete(id);
+  renderTtSection(l);
+  if(isTtLead(l)){
+    const cached = ttStateCache.get(l.id);
+    if(!cached || cached.at !== l.tt.lastEventAt || cached.error) loadTtState(l);
+  }
 
   const rawSec = document.getElementById('dpRawSec');
   if(l.source==='meta' && l.rawFieldData){
@@ -1566,6 +2154,30 @@ function openDetail(id){
   // Notes + history live in subcollections — load them on open (the board
   // never needs them). Renders again once they arrive.
   loadLeadThreads(l);
+}
+
+// Lead Info block — its own function so a TailorTalk update can refresh it on an open lead.
+function renderDetailInfo(l){
+  const infoHtml = `
+    ${l.channel?`<div class="info-b"><div class="info-b-l">Channel</div><div class="info-b-v">${channelLabel(l.channel)}</div></div>`:''}
+    ${l.phone?`<div class="info-b"><div class="info-b-l">Phone</div><div class="info-b-v"><a href="tel:${encodeURIComponent(l.phone)}">${escapeHtml(l.phone)}</a></div></div>`:''}
+    ${l.email?`<div class="info-b"><div class="info-b-l">Email</div><div class="info-b-v"><a href="mailto:${encodeURIComponent(l.email)}">${escapeHtml(l.email)}</a></div></div>`:''}
+    ${!l.phone && isTtLead(l) && l.tt.handle?`<div class="info-b"><div class="info-b-l">Instagram</div><div class="info-b-v"><a href="https://instagram.com/${encodeURIComponent(l.tt.handle)}" target="_blank" rel="noopener">@${escapeHtml(l.tt.handle)}</a></div></div>`:''}
+    ${l.enquiryType?`<div class="info-b"><div class="info-b-l">Enquiry Type</div><div class="info-b-v">${escapeHtml(l.enquiryType)}</div></div>`:''}
+    ${l.propertyInterest?`<div class="info-b highlight"><div class="info-b-l">Property / Locality</div><div class="info-b-v">${escapeHtml(l.propertyInterest)}</div></div>`:''}
+    ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${escapeHtml(l.budget)}</div></div>`:''}
+    ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
+    ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
+  `;
+  document.getElementById('dpInfo').innerHTML = infoHtml;
+
+  const metaHtml = `
+    <div class="dp-meta-item"><span class="dp-meta-l">Contacted</span><span class="dp-meta-v">${new Date(l.contactAt||l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
+    <div class="dp-meta-item"><span class="dp-meta-l">Added</span><span class="dp-meta-v">${new Date(l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
+    ${l.createdBy?`<div class="dp-meta-item"><span class="dp-meta-l">By</span><span class="dp-meta-v">${escapeHtml(l.createdBy.split('@')[0])}</span></div>`:''}
+    ${l.updatedBy?`<div class="dp-meta-item"><span class="dp-meta-l">Updated by</span><span class="dp-meta-v">${escapeHtml(l.updatedBy.split('@')[0])}</span></div>`:''}
+  `;
+  document.getElementById('dpMeta').innerHTML = metaHtml;
 }
 
 // Fetch a lead's notes + history subcollections into the in-memory object and
@@ -1588,6 +2200,7 @@ async function loadLeadThreads(l){
       renderNotes(l);
       renderHistory(l);
       renderFollowUpSpotlight(l);
+      if(isTtLead(l)) renderTtSection(l);
     }
   } catch(e){
     console.error('loadLeadThreads failed:', e);

@@ -1,5 +1,5 @@
-// Shared by api/generate-lead-summary.js (per-lead, triggered on every save)
-// and scripts/backfill-lead-summaries.js (one-time bulk run) so the prompt
+// Shared by api/_lead-summary-generate.js (one lead, on demand) and
+// api/_lead-summary-backfill.js (bulk run), both behind api/lead-summary.js, so the prompt
 // and guardrails can never drift between the two call sites.
 //
 // Cheap + small on purpose: this runs automatically every time ANY lead

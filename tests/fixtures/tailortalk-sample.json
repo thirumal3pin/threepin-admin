@@ -1,0 +1,83 @@
+{
+  "webhook_trigger": "sample_trigger",
+  "data": {
+    "lead_name": "John Doe",
+    "lead_contact": "1234567890",
+    "lead_status": "cold",
+    "category": "sales",
+    "is_converted": false,
+    "converted_at": null,
+    "activity_so_far": "Brochure for ANR004 sent on Oct 12; location shared on Oct 13; site visit for VLCA002 requested on Oct 14; visit confirmed for Oct 16 at 4 PM; visit completed on Oct 16; feedback given: liked the layout but felt the balcony was small; price negotiation started on Oct 17.",
+    "preferred_location": "Velachery (earlier: Adyar, Tambaram). Lead is currently fixed on Velachery due to proximity to workplace.",
+    "intent_and_who": "Buy, residential, for himself and his spouse, came from an Instagram reel.",
+    "stage_and_next_action": "Negotiating. Next action: 3 PIN to share the final discounted price quote by Oct 19. Lead is highly engaged.",
+    "properties_discussed": "NOL002 - rejected, over budget; ANR004 - rejected, wants ground floor; VLCA002 - visit completed, shortlisted, likes the layout but concerned about balcony size.",
+    "objections_and_blockers": "Price too high for VLCA002; spouse initially concerned about the lack of a dedicated play area for children.",
+    "budget_and_finance": "3.3 Cr (earlier: 2.5 Cr). Budget is firm. Needs a home loan from HDFC, pre-approval letter already submitted.",
+    "requirement_details": "3 BHK apartment, minimum 1500 sq.ft, north-facing, must have two covered car parks, gated community, possession needed within 6 months. Deal-breaker: must be a gated community.",
+    "total_followups": 0,
+    "chat_summary": "Dummy chat summary generated for testing purposes.",
+    "last_message_seen": true,
+    "lead_lock_status": false,
+    "escalated": false,
+    "escalated_to": null,
+    "escalation_id": null,
+    "flagged": false,
+    "flag_details": null,
+    "remarks": null,
+    "integration": "whatsapp",
+    "lead_source": "whatsapp_ad",
+    "metadata": [
+      {
+        "type": "booking",
+        "booking_id": "booking_123456789",
+        "start_time": "2026-09-14T18:22:50+05:30",
+        "duration_minutes": 30,
+        "summary": "Product demo call",
+        "description": null,
+        "gmail_id": "sample@gmail.com",
+        "meeting_link": "https://meet.google.com/sample-link",
+        "attendees_emails": ["john.doe@example.com"],
+        "booked_at": "2026-09-13T12:52:50+00:00"
+      },
+      {
+        "type": "razorpay_payment",
+        "payment_id": "pay_123456789",
+        "order_id": "order_123456789",
+        "amount": 50000,
+        "currency": "INR",
+        "authorized_at": "2026-09-13T18:22:50+05:30"
+      },
+      {
+        "type": "shopify_order",
+        "order_id": "6993095885102",
+        "order_name": "#1002",
+        "amount": 2550,
+        "currency": "INR",
+        "items": [
+          { "title": "Yellow Shrug With Crop Top", "variant_title": "XS / Yellow", "variant_id": "48123456789012", "product_id": "9123456789012", "sku": "SHRUG-XS-YEL", "quantity": 2, "price": 850 },
+          { "title": "Cotton Dupatta", "variant_title": "Free Size / Ivory", "variant_id": "48123456789013", "product_id": "9123456789013", "sku": "DUP-FS-IVR", "quantity": 1, "price": 750 }
+        ],
+        "order_status_url": "https://sample-store.myshopify.com/orders/abc123",
+        "paid_at": "2026-09-13T12:52:50+00:00"
+      }
+    ],
+    "owner": null,
+    "profile_pic": null,
+    "id": "dummy_jlpkxncx",
+    "ad_data": {
+      "id": "ad_123456789",
+      "title": "Summer Sale Campaign 2026",
+      "source_url": "https://fb.me/sample_ad_url"
+    },
+    "created_at": "2026-09-13T18:22:50+05:30",
+    "chat_history": [
+      { "role": "user", "content": "Hi, I am interested in your services.", "time": "2026-09-13T12:52:50+00:00", "message_id": null, "metadata": null },
+      { "role": "assistant", "content": "Hello! How can I help you today?", "time": "2026-09-13T12:52:50+00:00", "message_id": null, "metadata": null },
+      { "role": "human_agent", "content": "Hi John, I'm from the sales team. Let me help you with pricing.", "time": "2026-09-13T12:52:50+00:00", "message_id": null, "metadata": null, "email": "agent@example.com" }
+    ]
+  },
+  "event_version": "v1",
+  "event_type": "lead",
+  "occurred_at": "2026-09-13T18:22:50+05:30"
+}

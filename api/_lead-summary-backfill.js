@@ -9,18 +9,17 @@ function getAnthropic() {
   return _anthropic;
 }
 
-// Give the function the full serverless budget — even so we only ever do a
-// SMALL number of Claude calls per HTTP request (see CHUNK), because a few
-// hundred sequential ~1-2s calls in one request would blow past any function
-// time limit and time out mid-run. Instead the client calls this repeatedly,
-// walking a document-id cursor until `done` (see runBackfillSummaries in
-// crm-assets/app.js).
-export const maxDuration = 60;
+// Reached through api/lead-summary.js, which carries the 60s maxDuration. Even
+// so we only ever do a SMALL number of Claude calls per HTTP request (see
+// CHUNK), because a few hundred sequential ~1-2s calls in one request would
+// blow past any function time limit and time out mid-run. Instead the client
+// calls this repeatedly, walking a document-id cursor until `done` (see
+// runBackfillSummaries in crm-assets/app.js).
 const CHUNK = 5;
 
 // Still one Claude call at a time (never a single batched prompt) so nothing
 // from one lead's prompt can bleed into another's.
-export async function POST(request) {
+export async function backfillPost(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
