@@ -275,6 +275,12 @@ main > * { animation: rise .18s ease-out both; }
 
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-bottom: var(--s4); }
 
+/* Deal actions read as money in / bill it / money out rather than one undifferentiated row,
+   so the thing you came to record is findable without reading every button. */
+.actiongroup { margin-bottom: var(--s3); }
+.actiongroup > .small { margin-bottom: var(--s1); }
+.actiongroup > .actions { margin-bottom: 0; }
+
 /* ═══════ FORMS ═══════ */
 
 .field { margin-bottom: var(--s4); }

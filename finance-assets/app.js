@@ -827,6 +827,7 @@ const CORE = {
   billarrived: ['sub', 'month', 'amt', 'date'],
   confirmcharge: ['sub', 'month', 'result', 'amt', 'via', 'date'],
   invoice: ['deal', 'from', 'amt', 'gst', 'gstRate', 'adv', 'recv', 'date'],
+  dealfee: ['deal', 'from', 'kind', 'amt', 'gst', 'gstRate', 'adv', 'recv', 'date'],
   token: ['deal', 'from', 'amt', 'via', 'date'],
   dealcost: ['deal', 'what', 'amt', 'bear', 'how', 'date'],
   petty: ['date', 'a1', 'c1', 'd1', 'a2', 'c2', 'd2', 'a3', 'c3', 'd3'],
@@ -1142,7 +1143,9 @@ function mountDealPicker(f) {
     value: vals[f.k] ? getState().deals.find(d => d.id === vals[f.k]) : null,
     placeholder: opts.length ? 'Search deals' : 'No deals available — add one first',
     allowNew: false,
-    describe: d => d.nickname || d.propertyName || d.id,
+    // Cancelled deals are offered now — money still moves on them — so the picker has to say
+    // which ones are dead, or a cancellation fee and a live brokerage look identical here.
+    describe: d => (d.nickname || d.propertyName || d.id) + (d.status === 'cancelled' ? ' · cancelled' : ''),
     search: async q => getState().deals
       .filter(d => allowed.has(d.id))
       .filter(d => !q || (d.nickname + ' ' + (d.propertyName || '') + ' ' + (d.propertyCode || ''))

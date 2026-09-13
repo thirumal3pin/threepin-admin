@@ -158,16 +158,31 @@ function drawer(id) {
       </div>
 
       <h3>Record on this deal</h3>
-      <div class="actions">
-        ${d.status === 'open' ? act('register', { deal: d.id }, 'Mark registered', 'btn sm primary') : ''}
-        ${d.status !== 'cancelled' && d.buyer?.partyId ? act('invoice', { deal: d.id, from: 'buyer' }, f.buyer.billed ? 'Invoice the buyer again' : 'Invoice the buyer', d.status === 'registered' && !f.buyer.billed ? 'btn sm primary' : 'btn sm') : ''}
-        ${d.status !== 'cancelled' && d.seller?.partyId ? act('invoice', { deal: d.id, from: 'seller' }, f.seller.billed ? 'Invoice the seller again' : 'Invoice the seller', d.status === 'registered' && !f.seller.billed ? 'btn sm primary' : 'btn sm') : ''}
-        ${d.status !== 'cancelled' ? act('token', { deal: d.id }, 'Token received') : ''}
-        ${d.status !== 'cancelled' ? act('dealcost', { deal: d.id }, 'Cost for this deal') : ''}
-        ${[d.buyer, d.seller].filter(p => p?.partyId && bal('1100', { party: p.partyId, deal: d.id }) > 0.5)
-          .map(p => act('dealpay', { party: p.partyId }, `${p.name || 'Client'} pays`)).join('')}
-        ${f.tokens > 0.5 ? act('settle', { deal: d.id }, 'Settle the token') : ''}
+      <p class="small muted" style="margin:-4px 0 8px">Status is where the deal sits on its timeline — it never limits what you can record.
+        Money comes in and goes out, and a fee falls due, whenever it actually does${d.status === 'cancelled' ? ', a cancelled deal included' : ''}.</p>
+      <div class="actiongroup">
+        <div class="small muted">Money in</div>
+        <div class="actions">
+          ${act('token', { deal: d.id }, 'Token / advance received')}
+          ${[d.buyer, d.seller].filter(p => p?.partyId && bal('1100', { party: p.partyId, deal: d.id }) > 0.5)
+            .map(p => act('dealpay', { party: p.partyId }, `${p.name || 'Client'} pays what they owe`, 'btn sm primary')).join('')}
+          ${f.tokens > 0.5 ? act('settle', { deal: d.id }, 'Settle the token — apply, refund or keep') : ''}
+        </div>
       </div>
+      <div class="actiongroup">
+        <div class="small muted">Bill it</div>
+        <div class="actions">
+          ${d.buyer?.partyId ? act('invoice', { deal: d.id, from: 'buyer' }, f.buyer.billed ? 'Invoice the buyer again' : 'Invoice the buyer', d.status === 'registered' && !f.buyer.billed ? 'btn sm primary' : 'btn sm') : ''}
+          ${d.seller?.partyId ? act('invoice', { deal: d.id, from: 'seller' }, f.seller.billed ? 'Invoice the seller again' : 'Invoice the seller', d.status === 'registered' && !f.seller.billed ? 'btn sm primary' : 'btn sm') : ''}
+          ${act('dealfee', { deal: d.id }, 'Charge a flat fee', d.status === 'cancelled' ? 'btn sm primary' : 'btn sm')}
+        </div>
+      </div>
+      <div class="actiongroup">
+        <div class="small muted">Money out</div>
+        <div class="actions">${act('dealcost', { deal: d.id }, 'Cost for this deal')}</div>
+      </div>
+      ${d.status === 'open' ? `<div class="actiongroup"><div class="small muted">Milestone</div>
+        <div class="actions">${act('register', { deal: d.id }, 'Mark registered', 'btn sm primary')}</div></div>` : ''}
 
       <h3>Every line on this deal <span class="muted">(${lines.length})</span></h3>
       ${lines.length ? `<div class="tbl-wrap"><table>
@@ -190,7 +205,7 @@ function drawer(id) {
       </div>
       <div class="field"><label for="dl_status">Status</label>
         <select id="dl_status">${Object.entries(STATUS).map(([k, [l]]) => `<option value="${k}" ${d.status === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <div class="hint">Registered is set by "Deal registered" or the button above. Invoices can be raised before or after. Use Cancelled when it falls through; a token can then be settled.</div></div>`,
+        <div class="hint">Registered is set by "Deal registered" or the button above. Invoices can be raised before or after — status does not gate them. Use Cancelled when it falls through: you can still settle the token, bill a cancellation fee, collect what is owed and pay a cost that had already been incurred.</div></div>`,
     foot: `<button class="btn primary" type="button" onclick="finDeals.save('${esc(d.id)}')">Save details</button>`,
   });
 }

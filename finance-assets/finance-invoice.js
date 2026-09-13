@@ -192,7 +192,15 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   return {
     company,
     placeOfSupply,
-    docType: inv.kind === 'creditnote' ? 'CREDIT NOTE' : 'TAX INVOICE',
+    // A document with no tax on it is not a tax invoice. A registered person supplying
+    // something exempt or outside GST issues a BILL OF SUPPLY (s.31(3)(c)); someone not
+    // registered at all issues neither, just an invoice. This used to say TAX INVOICE on
+    // everything, which was harmless while every invoice carried GST and wrong the moment one
+    // did not — a withdrawal fee is usually compensation rather than a supply, so it carries
+    // no tax and would otherwise print a tax invoice showing no tax.
+    docType: inv.kind === 'creditnote' ? 'CREDIT NOTE'
+      : taxTotal > 0.005 ? 'TAX INVOICE'
+        : company.gstin ? 'BILL OF SUPPLY' : 'INVOICE',
     against: inv.against || '', invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
     totalWords: words(total),
     bank, missing,

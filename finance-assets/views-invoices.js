@@ -12,6 +12,17 @@ import { empty, note, tag, table, toast, modal, closeModal, dueCell } from './ui
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
 import * as SY from './finance-sync.js';
 
+// What the invoice is for, said on the row. A flat fee is not brokerage and a cancellation
+// fee least of all — labelling them all "brokerage" made a GST return hard to check against
+// the income heads they actually posted to.
+const KIND_TAG = {
+  other: 'other income',
+  'fee:cancel': 'cancellation fee',
+  'fee:retainer': 'retainer',
+  'fee:flat': 'flat brokerage',
+  forfeit: 'forfeited advance',
+};
+
 // An invoice's status is derived from the payments allocated to it (its `paid` figure). An
 // invoice from before allocations existed has no such figure, so for those it falls back to
 // whatever the client still owes on that deal.
@@ -95,7 +106,7 @@ export function renderInvoices() {
       const st = statusOf(inv);
       return `<tr>
           <td class="lead nowrap">${esc(inv.invoiceNo || '—')}
-            ${inv.kind === 'creditnote' ? `<br><span class="small faint">against ${esc(inv.against || '')}</span>` : inv.kind === 'other' ? tag('other income') : tag('brokerage')}
+            ${inv.kind === 'creditnote' ? `<br><span class="small faint">against ${esc(inv.against || '')}</span>` : tag(KIND_TAG[inv.kind === 'fee' ? 'fee:' + (inv.feeKind || 'cancel') : inv.kind] || 'brokerage')}
             ${s.parties.find(p => p.id === inv.partyId)?.gstin ? tag('B2B', 'ok') : ''}</td>
           <td class="nowrap small" data-label="Date">${esc(inv.date)}</td>
           <td data-label="Client">${esc(pname(inv.partyId))}</td>

@@ -231,6 +231,13 @@ const SCENARIOS = [
     point: 'It is <b>not income</b>. The deal has not happened. It is held for the client and your profit does not move. <span class="small faint">(Cr 2100 Client advances held.)</span>',
   },
   {
+    group: 'Deals — from token to cash', id: 'token-cash',
+    situation: 'The same token, but handed over as ₹50,000 in notes across the desk.',
+    event: 'token',
+    values: { date: '2026-09-10', deal: 'D1', from: 'buyer', amt: 50000, via: '1010' },
+    point: 'Identical entry, different account: it lands in the <b>cash box</b> rather than the bank. Every money question on a deal offers both, because half of what a brokerage takes never touches a bank the day it arrives. <span class="small faint">(Dr 1010 instead of Dr 1000.)</span>',
+  },
+  {
     group: 'Deals — from token to cash', id: 'invoice', button: 'Invoice the buyer',
     situation: 'The deal registered and the buyer\'s fee is due. Brokerage is ₹1,00,000 plus GST, the token comes off, the rest is owed.',
     event: 'invoice',
@@ -264,6 +271,36 @@ const SCENARIOS = [
     event: 'dealcost',
     values: { date: '2026-10-08', deal: 'D1', what: 'EC extract', amt: 5000, gst: 'no', bear: 'buyer', how: '1000' },
     point: 'Not your expense — a <b>recoverable</b>. It joins what the client owes and goes onto their settlement. Choose "Company" instead and it becomes a deal expense that reduces the deal\'s net.',
+  },
+  {
+    group: 'Deals — from token to cash', id: 'invoice-cash',
+    situation: 'A smaller deal: the ₹40,000 brokerage is due and the client pays it in cash on the spot.',
+    event: 'invoice',
+    values: { date: '2026-10-06', deal: 'D1', from: 'buyer', amt: 40000, gst: 'no', tds: 0, adv: 0, recv: '1010', method: 'cash' },
+    point: 'The invoice is raised and settled in the same breath, into the <b>cash box</b> — no receivable is ever created, and the invoice is marked paid from the first second. Choosing the bank instead would post the identical entry to 1000. <span class="small faint">(Cr 4010 income, Dr 1010 cash box.)</span>',
+  },
+  {
+    group: 'Deals — from token to cash', id: 'dealfee-cancel',
+    situation: 'The buyer walks away. Your agreement says a ₹25,000 withdrawal fee is due, and you are holding their ₹50,000 token.',
+    event: 'dealfee',
+    prepare: s => { s.deals[0].status = 'cancelled'; },
+    values: { date: '2026-11-20', deal: 'D1', from: 'buyer', kind: 'cancel', what: '', amt: 25000, gst: 'no', tds: 0, adv: 25000, recv: 'later' },
+    point: 'A <b>cancelled deal still earns</b>. The fee is income now, a numbered invoice is created for it, and ₹25,000 of the token converts to pay it — leaving ₹25,000 still held, to refund with "Settle a token". Before this existed the only way to book any of it was to forfeit the <i>whole</i> token, and a client who had paid no token could not be billed at all. <span class="small faint">(Cr 4030 Forfeited advances, Dr 2100 token.)</span>',
+  },
+  {
+    group: 'Deals — from token to cash', id: 'dealfee-retainer',
+    situation: 'Before showing anything, you take a ₹15,000 advisory retainer plus GST, paid by UPI.',
+    event: 'dealfee',
+    values: { date: '2026-09-09', deal: 'D1', from: 'buyer', kind: 'retainer', what: '', amt: 15000, gst: 'yes', gstRate: 18, gstAmt: 2700, total: 17700, tds: 0, adv: 0, recv: '1000', method: 'upi' },
+    point: 'The same button, a different head: advisory work is <b>consultancy income</b> (4020), not brokerage, so the GST return and the income statement both read correctly. A retainer is a service like any other, so GST applies normally — unlike a withdrawal fee, which is usually compensation and often carries none.',
+  },
+  {
+    group: 'Deals — from token to cash', id: 'dealcost-cash',
+    situation: 'You pay ₹5,000 for the EC out of the cash box, on a deal that has already fallen through.',
+    event: 'dealcost',
+    prepare: s => { s.deals[0].status = 'cancelled'; },
+    values: { date: '2026-11-22', deal: 'D1', what: 'EC extract', amt: 5000, gst: 'no', bear: 'self', how: '1010' },
+    point: 'A dead deal still has bills to pay — you ordered the EC before the buyer walked, and it still has to be paid for. The cost lands on the deal so its true net is visible: a deal that lost you money should say so rather than disappear.',
   },
   {
     group: 'Deals — from token to cash', id: 'writeoff',
@@ -552,6 +589,25 @@ function startItems() {
         <div class="card"><h3>4. Settled</h3><p class="small muted" style="margin:0">You pay on the 15th. Cash leaves and the bill closes. <b>Profit does not move</b> — it was counted in step 2.</p></div>
       </div>
       ${note('Worth reading twice: <b>profit moved in step 2, cash moved in step 4.</b> That gap is not an error, it is the whole reason the books are worth keeping. This month shows both at once.')}`),
+    item('A deal is not a pipeline', `
+      <h2>A deal's status never decides what you can record</h2>
+      <p>A deal moves through <b>open → registered</b>, and sometimes to <b>cancelled</b>. That is a label on its timeline — it says where the deal got to. It does <b>not</b> say what may be recorded against it, because money does not wait for a milestone.</p>
+      <p class="small muted">You take a token before anything is agreed. You pay for the EC the week after. The agreement says half the brokerage falls due on signing, not on registration, so you invoice while the deal is still open. The client pays in notes across the desk. Then the buyer walks away, and a withdrawal fee is due on a deal that will never register. Every one of those is normal, and every one of them is recordable at any point.</p>
+      <div class="grid g3">
+        <div class="card"><h3>Money in, any time</h3><p class="small muted" style="margin:0">Before an invoice exists it is a <b>token</b>, held for the client. Once one exists it is a <b>payment</b>, matched to it. Either way it lands in the bank <b>or the cash box</b>, and the form says how it moved — UPI, cheque, cash at the counter — so the statement match works later.</p></div>
+        <div class="card"><h3>Billed when it falls due</h3><p class="small muted" style="margin:0">An invoice is raised when <b>your agreement</b> says the fee is due, which may be before registration, on it, or in stages after. Raising one does not change the deal's status, and the deal's status does not gate it.</p></div>
+        <div class="card"><h3>A dead deal still earns</h3><p class="small muted" style="margin:0">A cancelled deal keeps every action. Collect what is still owed, pay the bill you had already run up, refund the token — and bill the <b>cancellation fee</b>, whether or not a token was ever paid.</p></div>
+      </div>
+      ${table(`<th style="width:34%">What happened</th><th>Which button</th>`, [
+      ['Money arrived and you have not invoiced them yet', '<b>Token / advance received</b> — held for the client, not income. Bank or cash box.'],
+      ['Money arrived against an invoice', '<b>Client pays what they owe</b> — matched to the invoice. Bank or cash box.'],
+      ['A side\'s brokerage has fallen due', '<b>Invoice the buyer / seller</b> — at any status. Income now, GST payable now.'],
+      ['You agreed a flat number, not a percentage', '<b>Charge a flat fee on a deal</b> — retainer, advisory, or a flat brokerage.'],
+      ['The deal is off and a fee is due anyway', '<b>Charge a flat fee on a deal</b> → cancellation. Works with no token held.'],
+      ['You are holding a token and the deal ended', '<b>Settle a token</b> — apply it to an invoice, refund it, keep it, or move it to another deal.'],
+      ['You spent something on this deal', '<b>Cost on a deal</b> — bank, cash box, credit card, or a bill to pay later. Company bears it, or it is recoverable from a client.'],
+    ].map(([a, b]) => `<tr><td><b>${esc(a)}</b></td><td class="small">${b}</td></tr>`).join(''))}
+      ${note('Where a fee lands matters at year-end: a <b>cancellation fee</b> is Forfeited advances (4030), a <b>retainer</b> is Consultancy income (4020), a <b>flat brokerage</b> is the same buyer- or seller-side head the percentage would have used. Letting a client off part of any of them comes back off that same head — income is what came in.')}`),
     item('What each tab is for', `
       <h2>Every page at a glance</h2>
       <p class="small muted">One line each. The full card for any of them is in <b>The screens</b>.</p>
@@ -939,10 +995,16 @@ function sopItems() {
     ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join(''))}
       <h2>Which button? — deals and clients</h2>
       ${table(`<th>What happened</th><th>Use</th>`, [
-      ['A client gave a token or advance before you invoiced them', '<b>Token / advance received</b> — not income'],
+      ['A client gave a token or advance before you invoiced them', '<b>Token / advance received</b> — not income. Bank or cash box'],
       ['The sale deed registered', '<b>Deal registered</b> — the date; no money, no income yet'],
-      ['A side\'s brokerage is due', '<b>Invoice the buyer / seller</b> — this is the income; the invoice is raised'],
-      ['A client paid what they owe', '<b>Client payment received</b> — matched to their invoices'],
+      ['A side\'s brokerage is due', '<b>Invoice the buyer / seller</b> — this is the income; the invoice is raised. At any status, including before registration if the agreement says so'],
+      ['A client paid what they owe', '<b>Client payment received</b> — matched to their invoices. Bank or cash box'],
+      ['The client paid the brokerage in cash, there and then', '<b>Invoice the buyer / seller</b> → Payment: <i>received now, into the cash box</i>. One entry; no receivable is ever created'],
+      ['The client paid by card machine or a payment gateway', 'Received into the <b>bank</b>, with "How it moved" set to <i>Card machine / payment gateway</i>. If the gateway kept a fee, record the payment with <b>Client payment received</b> and put the fee in "Discount you gave them" → <i>bank charges</i> — the invoice still closes in full'],
+      ['You agreed a flat fee rather than a percentage', '<b>Charge a flat fee on a deal</b> → flat brokerage, or a retainer for advisory work'],
+      ['The deal fell through and a cancellation fee is due', '<b>Charge a flat fee on a deal</b> → cancellation. Works on a cancelled deal, and with no token held'],
+      ['The deal fell through and you are holding their token', '<b>Settle a token</b> — apply it to an invoice, refund it, keep it, or move it to another deal'],
+      ['A cancelled deal still owes you money, or still has a bill to pay', 'Every deal action stays available on a cancelled deal — <b>Client payment received</b>, <b>Cost on a deal</b>, and the rest'],
       ['Consultancy, a referral fee, interest', '<b>Other income</b> — invoice optional'],
       ['Capital or a director\'s loan came in', '<b>Capital / director loan received</b> — under Money in; never income'],
       ['A bank or NBFC loan came in', '<b>New bank / NBFC loan</b> — creates the EMI schedule'],

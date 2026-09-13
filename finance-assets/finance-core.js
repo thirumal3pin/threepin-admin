@@ -114,9 +114,13 @@ export const PAY_VIA = [['1000', 'Bank (1000)'], ['2300', 'Credit card (2300)'],
 // How the money moved through the bank account. Not an account: UPI, a debit card and
 // NetBanking all draw on the same balance. Kept on the entry so a statement line can be
 // matched by it and the owner can see how something was paid.
+// How the money moved, when it moved through the bank. Purely descriptive — it changes no
+// posting, it is what makes a line findable in the statement later. 'card' is a client paying
+// you on a machine or a gateway (the money lands in the bank, and any fee the gateway kept is
+// recorded as a short receipt on the payment); 'debit' is you swiping your own card.
 export const PAY_METHODS = [
-  ['upi', 'UPI'], ['debit', 'Debit card'], ['netbanking', 'NetBanking / NEFT'],
-  ['cheque', 'Cheque'], ['cash', 'Cash at the counter'],
+  ['upi', 'UPI'], ['card', 'Card machine / payment gateway'], ['debit', 'Debit card'],
+  ['netbanking', 'NetBanking / NEFT'], ['cheque', 'Cheque'], ['cash', 'Cash at the counter'],
 ];
 export const methodLabel = m => PAY_METHODS.find(x => x[0] === m)?.[1] || '';
 

@@ -54,6 +54,20 @@ const methodField = (viaKey = 'via', o = {}) => F('method', 'How it moved', 'sel
 // The bank line remembers the method, so the drawer and the statement match can show it.
 const cashLine = (v, line) => (line.acc === '1000' && v.method) ? { ...line, method: v.method } : line;
 
+// Every "has it been paid yet?" question on a deal offers the same three answers, because a
+// client pays a brokerage invoice in cash across the desk exactly as often as they transfer
+// it. The old forms asked "not yet / received now into bank" and hard-wired the bank, so a
+// fee settled from the cash box had nowhere to go.
+const RECEIVED_INTO = [
+  ['later', 'Not yet paid — will follow up'],
+  ['1000', 'Received now — into Bank (1000)'],
+  ['1010', 'Received now — into the cash box (1010)'],
+];
+// 'now' is what these forms stored before the cash box was an option; it still means bank, so
+// entries already saved and scenarios already written keep working.
+const paidInto = recv => recv === 'now' ? '1000' : (recv === '1000' || recv === '1010') ? recv : null;
+const unpaid = x => !paidInto(x.recv);
+
 // A party field holds either an existing id (string) or a not-yet-created
 // {__new:true, name, phone, type} from the "add new" row of the picker. During preview we
 // stand in a sentinel id so the journal still renders; finance-sync.js swaps in the real id
@@ -66,9 +80,14 @@ export const pnameOf = x =>
 
 const partyState = x => typeof x === 'string' ? (S().parties.find(p => p.id === x)?.state || '') : (x?.state || '');
 
+// A deal's status says where it sits on the timeline. It never decides what may be recorded
+// against it. Cancelled deals used to be filtered out here, which meant the one moment you
+// most need to bill — the deal died and a cancellation fee is due — was the one moment the
+// deal could not be picked. The EC you had already ordered could not be paid for either, and
+// a client who paid late had nowhere for the money to land. Every deal is offered; the dead
+// ones are marked so nobody bills one by accident.
 const dealOpts = () => S().deals
-  .filter(d => d.status !== 'cancelled')
-  .map(d => [d.id, d.nickname || d.propertyName || d.id]);
+  .map(d => [d.id, dealLabel(d) + (d.status === 'cancelled' ? ' · cancelled' : '')]);
 
 const dealsWith = (code, test) => S().deals
   .filter(d => test(bal(code, { deal: d.id })))
@@ -188,6 +207,10 @@ export function gstFields(amtLabel, o = {}) {
     F('amt', amtLabel, 'number', { hint: o.hint, show: o.show, required: true }),
     F('gst', o.kind === 'output' ? 'Charge GST on this?' : 'GST on this?', 'select', {
       opts: [['no', 'No GST'], ['yes', 'Yes']], def: o.def || 'no',
+      // Whether GST is due at all is sometimes the hardest question on the form — a forfeited
+      // advance is the classic case. The caveat belongs against this question, not against
+      // the amount box above it.
+      hint: o.gstHint,
       // A purchase asks this as one three-way question instead; fieldsFor() drops this field
       // whenever the form carries that one. It used to be hidden by testing whether `rcm` had
       // a value yet, which was true only AFTER the first render — so the very first paint of
@@ -494,10 +517,11 @@ EV.dealcost = {
       def: '5045', show: x => x.bear === 'self',
     }),
     F('how', 'Paid from', 'select', {
-      opts: [['1000', 'Now — from Bank (1000)'], ['1010', 'Now — from Petty cash (1010)'],
+      opts: [['1000', 'Now — from Bank (1000)'], ['1010', 'Now — from the cash box (1010)'],
       ['2300', 'Now — on the Credit card (2300)'], ['bill', 'Bill received — pay later']],
       def: '1000',
     }),
+    methodField('how'),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor', show: x => x.how === 'bill' }),
     F('dueDate', 'Due on', 'date', { show: x => x.how === 'bill', hint: 'Leave blank for 30 days' }),
   ],
@@ -546,7 +570,7 @@ EV.dealcost = {
         acc: v.bear === 'self' ? (v.acc || '5045') : '1100', taxable: amt, gst: gi, total, dealId: d.id, dueDate: v.dueDate || null,
       }));
     } else {
-      lines.push({ acc: v.how || '1000', cr: total });
+      lines.push(cashLine(v, { acc: v.how || '1000', cr: total }));
       eff.push(`${fmt(total)} leaves ${A[v.how || '1000'].name}.`);
     }
 
@@ -576,10 +600,9 @@ EV.invoice = {
         return `Held from this client on this deal: ${fmt(h)}${r ? ` · Recoverable costs already due: ${fmt(r)}` : ''}`;
       },
     }),
-    F('recv', 'Balance payment', 'select', {
-      opts: [['later', 'Not yet paid — will follow up'], ['now', 'Received now into bank']], def: 'later',
-    }),
-    F('dueDate', 'Payment due by', 'date', { show: x => x.recv !== 'now', hint: 'Leave blank for 30 days' }),
+    F('recv', 'Balance payment', 'select', { opts: RECEIVED_INTO, def: 'later' }),
+    methodField('recv'),
+    F('dueDate', 'Payment due by', 'date', { show: unpaid, hint: 'Leave blank for 30 days' }),
   ],
   onchange: (k, v) => {
     if (k === 'deal' || k === 'from') {
@@ -601,7 +624,8 @@ EV.invoice = {
     return [
       ...dateChecks(v),
       ...(d ? [] : [err('deal', 'Pick the deal')]),
-      ...(d && d.status === 'open' ? [warn('deal', 'This deal is not marked registered yet. A tax invoice counts the brokerage as income now and makes the GST payable this month whether or not the client pays — raise it only if this amount is already due under your agreement. If it is not due yet, record a token instead.')] : []),
+      ...(d && d.status === 'open' ? [warn('deal', 'This deal is not marked registered yet — which is fine if the agreement says this much is due now (a staged fee, or brokerage payable on agreement). Raising it counts the brokerage as income this month and makes the GST payable, whether or not the client pays. If the money is only a booking amount and nothing is due yet, record a token instead.')] : []),
+      ...(d && d.status === 'cancelled' ? [warn('deal', 'This deal is cancelled. Invoicing it is right when brokerage was genuinely earned before it fell through; if what you are owed is an agreed cancellation or withdrawal fee instead, "Charge a flat fee on a deal" books it to the right income head.')] : []),
       ...(d && !p ? [err('from', 'This deal has no such client yet — add them on the Deals tab')] : []),
       ...posAmt(v, 'amt', 'Enter the brokerage'), ...gstChecks(v),
       ...(num(v.adv) > held + 0.005 ? [err('adv', `Only ${fmt(held)} is held from this client`)] : []),
@@ -631,9 +655,10 @@ EV.invoice = {
     if (gst) lines.push(...outputTaxLines(gst, isIntra(d.propertyState), { deal: d.id }));
     if (tds) lines.push({ acc: '1150', dr: tds, party: pid, deal: d.id });
     if (adv) lines.push({ acc: '2100', dr: adv, party: pid, deal: d.id });
+    const into = paidInto(v.recv);
     if (rem > 0.5) {
-      lines.push(v.recv === 'now'
-        ? { acc: '1000', dr: rem }
+      lines.push(into
+        ? cashLine(v, { acc: into, dr: rem })
         : { acc: '1100', dr: rem, party: pid, deal: d.id });
     }
 
@@ -642,8 +667,8 @@ EV.invoice = {
     if (adv) eff.push(`${fmt(adv)} token converts to income.`);
     if (tds) eff.push(`${fmt(tds)} TDS withheld by the client — claim it at year-end.`);
     if (rem > 0.5) {
-      eff.push(v.recv === 'now'
-        ? `${fmt(rem)} into bank.`
+      eff.push(into
+        ? `${fmt(rem)} into ${A[into].name}.`
         : `${fmt(rem)} now owed by ${esc(pname(pid))}${recov ? ` (plus ${fmt(recov)} recoverable costs = <b>${fmt(rem + recov)}</b> to collect)` : ''}.`);
     }
     if (held - adv > 0.5) eff.push(`${fmt(held - adv)} token still held — settle it separately.`);
@@ -658,7 +683,7 @@ EV.invoice = {
 
     // The invoice's paid figure starts with what was already settled by the token and by a
     // payment received on the spot, so its status is right from the first second.
-    const paidNow = adv + tds + (v.recv === 'now' ? rem : 0);
+    const paidNow = adv + tds + (into ? rem : 0);
 
     return {
       desc: `Brokerage — ${dealLabel(d)} (${pname(pid)})`,
@@ -666,12 +691,161 @@ EV.invoice = {
       invoice: {
         kind: 'brokerage', partyId: pid, dealId: d.id, base, gstRate: rate, placeOfSupply,
         cgst: gstSplit.cgst, sgst: gstSplit.sgst, igst: gstSplit.igst,
-        total, paid: r2(Math.min(paidNow, total)), dueDate: v.recv === 'now' ? null : (v.dueDate || addDays(v.date || today(), 30)),
+        total, paid: r2(Math.min(paidNow, total)), dueDate: into ? null : (v.dueDate || addDays(v.date || today(), 30)),
         date: v.date || today(),
       },
     };
   },
 };
+
+// ═══════ A FEE THAT IS NOT THE BROKERAGE ═══════
+//
+// The brokerage invoice is tied to a side's expected percentage and to a deal that completes.
+// Plenty of what a brokerage actually earns is neither: a cancellation fee when the buyer
+// walks, a retainer taken before any property is shown, a flat number agreed instead of a
+// percentage. Until now the only way to book any of it was "Settle a token → keep", which
+// needs a token already sitting there and can never exceed it — so a client who owed a
+// 25,000 withdrawal fee but had paid no token could not be billed at all.
+//
+// This bills any agreed amount, on any deal, at any point in its life. A held token comes off
+// it exactly as it does on a brokerage invoice, and whatever is left is either received on
+// the spot — bank or cash box — or carried as owed with a due date.
+EV.dealfee = {
+  title: 'Charge a flat fee on a deal', group: 'Deals', dir: 'in',
+  when: 'A fee you agreed that is not a percentage brokerage — a <b>cancellation or withdrawal fee</b> when the deal falls through, a <b>retainer or advisory fee</b>, or a <b>flat brokerage</b> agreed as a fixed number. Can be raised at <b>any point in the deal</b>, cancelled ones included; that is usually exactly when a cancellation fee falls due. Income is counted now and a numbered invoice is created, the same as any other invoice. Any token you hold from this client on this deal can come off it.',
+  fields: v => [
+    F('date', 'Date', 'date', { def: today() }),
+    F('deal', 'Deal', 'deal', { opts: dealOpts() }),
+    F('from', 'Who is paying you', 'select', { opts: partySides(v.deal) }),
+    F('kind', 'What the fee is for', 'select', {
+      opts: [
+        ['cancel', 'Cancellation / withdrawal fee — the deal is off'],
+        ['retainer', 'Retainer or advisory fee'],
+        ['flat', 'Flat brokerage agreed for this deal'],
+      ],
+      def: 'cancel',
+      hint: x => `Books to ${A[feeAcc(x.kind, deal(x.deal), sideParty(deal(x.deal), x.from))].name}.`,
+    }),
+    F('what', 'What to call it on the invoice', 'text', {
+      hint: 'Optional — "Withdrawal fee as per clause 7". Left blank, the fee type is used.',
+    }),
+    ...gstFields('Fee (before GST)', {
+      kind: 'output', def: 'no',
+      // `kind` is defaulted by the form on first paint, so the hint has to assume the same
+      // default rather than read an undefined value and show the wrong branch.
+      gstHint: x => (x.kind || 'cancel') === 'cancel'
+        ? 'A fee for walking away is often compensation rather than a sale, and then no GST is due (CBIC Circular 178/10/2022). Charge it only if your CA says this one is taxable.'
+        : 'A retainer or a flat brokerage is a service like any other — GST applies as usual.',
+    }),
+    F('tds', 'TDS % the client deducts', 'number', { def: 0, show: () => tdsOn() }),
+    F('adv', 'Token to knock off this fee', 'number', {
+      def: 0,
+      show: x => { const p = sideParty(deal(x.deal), x.from); return !!(p && bal('2100', { party: p, deal: x.deal }) > 0.5); },
+      hint: x => {
+        const p = sideParty(deal(x.deal), x.from);
+        return p ? `Held from this client on this deal: ${fmt(bal('2100', { party: p, deal: x.deal }))}` : '';
+      },
+    }),
+    F('recv', 'Payment', 'select', { opts: RECEIVED_INTO, def: 'later' }),
+    methodField('recv'),
+    F('ref', 'Reference', 'text', { show: x => !!paidInto(x.recv), hint: 'UPI reference or cheque number.' }),
+    F('dueDate', 'Payment due by', 'date', { show: unpaid, hint: 'Leave blank for 30 days' }),
+  ],
+  onchange: (k, v) => {
+    if (k === 'deal' || k === 'from') {
+      const p = sideParty(deal(v.deal), v.from);
+      v.adv = p ? bal('2100', { party: p, deal: v.deal }) : 0;
+    }
+    gstSync(k, v);
+  },
+  check: v => {
+    const d = deal(v.deal);
+    const p = d && sideParty(d, v.from);
+    const held = p ? bal('2100', { party: p, deal: v.deal }) : 0;
+    return [
+      ...dateChecks(v),
+      ...(d ? [] : [err('deal', 'Pick the deal this fee is on')]),
+      ...(d && !p ? [err('from', 'This deal has no such client yet — add them on the Deals tab')] : []),
+      ...posAmt(v, 'amt', 'Enter the fee'),
+      ...gstChecks(v),
+      ...(num(v.adv) > held + 0.005 ? [err('adv', `Only ${fmt(held)} is held from this client on this deal`)] : []),
+      ...(num(v.adv) < 0 ? [err('adv', 'Enter zero or more')] : []),
+      ...(tdsOn() && num(v.tds) > 10 ? [err('tds', 'TDS on a brokerage or commission is normally 2% (194H) — check the rate')] : []),
+    ];
+  },
+  build: v => {
+    const d = deal(v.deal);
+    if (!d) return need('Pick a deal.');
+    const pid = sideParty(d, v.from);
+    if (!pid) return need('No ' + (v.from || 'party') + ' on this deal yet.');
+    const base = num(v.amt);
+    if (!base) return need('Enter the fee.');
+
+    const gst = gstOf(v);
+    const rate = v.gst === 'yes' ? num(v.gstRate) : 0;
+    const total = r2(base + gst);
+    const tds = tdsOn() ? Math.round(base * num(v.tds) / 100) : 0;
+    const held = bal('2100', { party: pid, deal: d.id });
+    const adv = r2(Math.min(Math.max(0, num(v.adv)), held, r2(total - tds)));
+    const rem = r2(total - tds - adv);
+    const into = paidInto(v.recv);
+    const acc = feeAcc(v.kind, d, pid);
+    const label = String(v.what || '').trim() || FEE_LABEL[v.kind] || 'Fee';
+
+    const lines = [{ acc, cr: base, deal: d.id, party: pid }];
+    if (gst) lines.push(...outputTaxLines(gst, isIntra(d.propertyState), { deal: d.id }));
+    if (tds) lines.push({ acc: '1150', dr: tds, party: pid, deal: d.id });
+    if (adv) lines.push({ acc: '2100', dr: adv, party: pid, deal: d.id });
+    if (rem > 0.5) {
+      lines.push(into
+        ? cashLine(v, { acc: into, dr: rem })
+        : { acc: '1100', dr: rem, party: pid, deal: d.id });
+    }
+
+    const eff = [`Income <b>${fmt(base)}</b> this month (${A[acc].name}). Profit goes up by that.`];
+    if (d.status === 'cancelled') eff.push('The deal stays cancelled — a fee earned on a deal that died is still income.');
+    if (gst) eff.push(`${fmt(gst)} GST collected — owed to the government, not yours.`);
+    if (adv) eff.push(`${fmt(adv)} of the token held converts to this fee.`);
+    if (tds) eff.push(`${fmt(tds)} TDS withheld by the client — claim it at year-end.`);
+    if (rem > 0.5) {
+      eff.push(into
+        ? `${fmt(rem)} into ${A[into].name}.`
+        : `${fmt(rem)} now owed by ${esc(pname(pid))}, due ${esc(v.dueDate || 'in 30 days')}.`);
+    }
+    if (held - adv > 0.5) eff.push(`${fmt(held - adv)} token still held on this deal — refund it or apply it with "Settle a token".`);
+
+    const st = S().settings;
+    const pos = d.propertyState || st.state;
+    const split = splitGst(base, rate, pos, st.state);
+    const paidNow = adv + tds + (into ? rem : 0);
+
+    return {
+      desc: `${label} — ${dealLabel(d)} (${pname(pid)})`,
+      lines, effects: eff,
+      invoice: {
+        kind: 'fee', feeKind: v.kind || 'cancel', partyId: pid, dealId: d.id,
+        base, gstRate: rate, placeOfSupply: pos,
+        cgst: split.cgst, sgst: split.sgst, igst: split.igst,
+        total, paid: r2(Math.min(paidNow, total)),
+        dueDate: into ? null : (v.dueDate || addDays(v.date || today(), 30)),
+        sac: st.sacCodes?.[v.kind === 'retainer' ? 'consultancy' : 'brokerage'] || '997221',
+        desc: `${label} — ${dealLabel(d)}`,
+        date: v.date || today(),
+      },
+    };
+  },
+};
+
+const FEE_LABEL = { cancel: 'Cancellation fee', retainer: 'Retainer fee', flat: 'Brokerage (flat)' };
+
+// Where a flat fee lands. A cancellation fee is money earned on a deal that died, which is
+// what 4030 already collects; a retainer is advisory work, not brokerage; a flat brokerage is
+// brokerage and belongs on the same side head the percentage would have used.
+function feeAcc(kind, d, pid) {
+  if (kind === 'retainer') return '4020';
+  if (kind === 'flat') return d && d.buyer?.partyId === pid ? '4010' : '4000';
+  return '4030';
+}
 
 EV.dealpay = {
   title: 'Client pays what they owe', group: 'Money in', dir: 'in',
@@ -806,6 +980,10 @@ function autoAllocInvoices(v) {
 function incomeAccOf(inv) {
   if (!inv) return '4000';
   if (inv.kind === 'other') return '4020';
+  // A flat fee was booked to whichever head its type chose; letting the client off part of it
+  // has to come back off that same head, or a waived cancellation fee would quietly reduce
+  // brokerage income instead.
+  if (inv.kind === 'fee') return feeAcc(inv.feeKind, inv.dealId ? deal(inv.dealId) : null, inv.partyId);
   const d = inv.dealId ? deal(inv.dealId) : null;
   return d && d.buyer?.partyId === inv.partyId ? '4010' : '4000';
 }
@@ -2914,6 +3092,7 @@ export const CHOOSER = [
   ['Invoices', [
     { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the buyer', preset: { from: 'buyer' }, sub: 'Brokerage falls due. Income now; GST payable.' },
     { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice the seller', preset: { from: 'seller' }, sub: 'Brokerage falls due. Income now; GST payable.' },
+    { key: 'dealfee', kw: ['cancellation', 'withdrawal', 'flat fee', 'retainer', 'advisory', 'fell through', 'backed out'], label: 'Charge a flat fee on a deal', sub: 'Cancellation, retainer or flat brokerage — even on a dead deal.' },
     { key: 'otherinc', kw: ['consultancy', 'referral', 'interest', 'valuation', 'fee'], label: 'Invoice for other income', sub: 'Consultancy, referral fee, valuation — a numbered invoice.' },
     { key: 'creditnote', kw: ['reduce', 'discount', 'renegotiated'], label: 'Credit note — reduce an invoice', sub: 'Renegotiated brokerage. Income and GST come down.' },
   ]],
@@ -2926,7 +3105,10 @@ export const CHOOSER = [
   ['Deals', [
     { key: 'newdeal', kw: ['pipeline', 'listing', 'new deal', 'client'], label: 'Add a deal', sub: 'Opens it in the pipeline. Nothing posts.' },
     { key: 'register', kw: ['registration', 'deed', 'sale deed', 'closed'], label: 'Deal registered', sub: 'The milestone and its date. Nothing posts.' },
-    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet.' },
+    { key: 'token', kw: ['advance', 'earnest', 'booking', 'deposit'], label: 'Token / advance received', sub: 'Held for the client. Not income yet. Bank or cash box.' },
+    { key: 'dealpay', kw: ['client paid', 'brokerage received', 'collection'], label: 'Client pays what they owe', sub: 'Matched to their invoices. Bank or cash box.' },
+    { key: 'invoice', kw: ['brokerage', 'commission', 'bill the', 'gst invoice'], label: 'Invoice a side of a deal', sub: 'Any point in the deal. Income now; GST payable.' },
+    { key: 'dealfee', kw: ['cancellation', 'withdrawal', 'flat fee', 'retainer', 'advisory', 'fell through', 'backed out'], label: 'Charge a flat fee on a deal', sub: 'Cancellation, retainer or flat brokerage — even on a dead deal.' },
     { key: 'dealcost', kw: ['ec', 'patta', 'lawyer', 'legal', 'travel', 'documentation'], label: 'Cost on a deal', sub: 'EC, patta, legal — for one particular deal.' },
     { key: 'settle', kw: ['refund', 'forfeit', 'token back'], label: 'Settle a token', sub: 'Apply to the invoice, refund, or keep.' },
   ]],
