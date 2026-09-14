@@ -258,6 +258,7 @@ export async function pullTailorTalkPage(db, tenantId, token, { startAfter = nul
 
   let processed = 0, created = 0, updated = 0, unchanged = 0, failed = 0, reachedOld = false;
   const errors = [];
+  const changedLeadIds = [];
   for (const lead of leads) {
     const lastMsg = Date.parse(lead.last_message_time) || 0;
     if (stopBefore && lastMsg && lastMsg < stopBefore) { reachedOld = true; break; }
@@ -265,6 +266,7 @@ export async function pullTailorTalkPage(db, tenantId, token, { startAfter = nul
       const r = await applyTailorTalkEvent(db, tenantId, { webhook_trigger: 'sync', event_type: 'lead', occurred_at: new Date(now).toISOString(), data: lead }, { now });
       processed++;
       if (r.created) created++; else if (r.unchanged) unchanged++; else if (r.ok) updated++;
+      if (r.ok && r.leadId && !r.unchanged) changedLeadIds.push(r.leadId);
     } catch (e) {
       failed++;
       errors.push({ id: lead.id, error: String((e && e.message) || e).slice(0, 200) });
@@ -278,5 +280,5 @@ export async function pullTailorTalkPage(db, tenantId, token, { startAfter = nul
   const lastTime = last && Date.parse(last.last_message_time);
   const next = lastTime ? new Date(lastTime + 1000).toISOString() : null;
   const done = reachedOld || leads.length < body.limit || !next || (startAfter && next >= startAfter);
-  return { processed, created, updated, unchanged, failed, errors, next: done ? null : next, done: !!done, fetched: leads.length };
+  return { processed, created, updated, unchanged, failed, errors, changedLeadIds, next: done ? null : next, done: !!done, fetched: leads.length };
 }

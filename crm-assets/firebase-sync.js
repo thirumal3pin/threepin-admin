@@ -109,6 +109,7 @@ function subscribeToData(tenantId){
             recipients: Array.isArray(data.dashboardEmailRecipients) ? data.dashboardEmailRecipients : null
           });
         }
+        if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
       }, (err) => console.error('Firestore settings sync error:', err));
     });
 }
@@ -127,8 +128,10 @@ window.crmFirebase = {
   // so this save must never carry a stale copy of what it wrote: `tt` is
   // stripped, a shared field is only sent once the team has taken it over
   // (ttHold), and the write merges instead of replacing the whole document.
+  // `ai` is the lead automation's verdict (api/_lead-automation.js) — server-owned the same way;
+  // the page changes only its suggestion/undo bookkeeping, through updateLeadAi().
   saveLead: (lead) => {
-    const { notes, history, tt, ttState, ...rest } = lead;
+    const { notes, history, tt, ttState, ai, ...rest } = lead;
     if (tt) {
       TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
     }
@@ -139,6 +142,14 @@ window.crmFirebase = {
   // update — saveLead() would drop the field again because it is no longer held.
   releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
     .catch(e => { console.error('Firestore release field error:', e); throw e; }),
+  // Dotted paths only ('ai.suggestion', 'ai.dismissed.visit_pending', 'ai.lastMove') — the rest of
+  // the AI's verdict is left exactly as the server wrote it.
+  updateLeadAi: (leadId, fields) => {
+    const safe = Object.fromEntries(Object.entries(fields).filter(([k]) => /^ai\.[A-Za-z_.]+$/.test(k)));
+    return updateDoc(doc(db, 'leads', leadId), safe).catch(e => console.error('Firestore AI field update error:', e));
+  },
+  saveAutomationSettings: ({ enabled }) => setDoc(settingsRef(currentTenantId), { leadAutomation: { enabled: !!enabled } }, { merge: true })
+    .catch(e => console.error('Firestore save automation settings error:', e)),
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
   getLeadTailorTalk: (leadId) => getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'))
     .then(s => (s.exists() ? s.data() : null)),

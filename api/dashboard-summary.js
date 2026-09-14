@@ -39,7 +39,7 @@ function statCardsHtml(m) {
     // Today's completed visits, NOT the all-time size of the stage — this is a
     // report on one day's activity, so a standing total belongs nowhere in it.
     ['Site Visits Today', m.siteVisitDone.movedTodayCount],
-    ['Missed Calls', m.missedCalls.total],
+    ['Needs Action', m.needsAction.total],
     ['Closed Today', m.movedToWonToday.count]
   ];
   return `<div style="display:table;width:100%;border-collapse:collapse;margin-bottom:16px;">` +
@@ -305,7 +305,7 @@ async function renderDashboardEmailHtml(m, dateStr) {
 function renderDashboardEmailText(m, dateStr) {
   const lines = [`3 PIN Realty — EOD Dashboard Summary — ${dateStr}`, ''];
   lines.push(`New today: ${m.newLeadsToday.total} | Followed up: ${m.followedUpToday.count} | Overdue: ${m.overdueFollowUps.count} | Cold: ${m.coldLeads.count}`);
-  lines.push(`Pending site visit: ${m.siteVisitPending.total} | Site visits done today: ${m.siteVisitDone.movedTodayCount} | Missed calls: ${m.missedCalls.total} | Closed today: ${m.movedToWonToday.count}`);
+  lines.push(`Pending site visit: ${m.siteVisitPending.total} | Site visits done today: ${m.siteVisitDone.movedTodayCount} | Needs action: ${m.needsAction.total} | Closed today: ${m.movedToWonToday.count}`);
   lines.push('');
   const k = m.kpis;
   lines.push(`Total leads (excl. spam): ${k.nonSpamTotal} | Open pipeline: ${formatINR(k.openPipelineValueINR)} | Conversion: ${k.conversionPct === null ? '—' : k.conversionPct + '%'}`);

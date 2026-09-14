@@ -543,7 +543,7 @@ window.renderDashboardView = function(){
     dashStatCard('Cold Leads', m.coldLeads.count, 'coldLeads'),
     dashStatCard('Pending Site Visit', m.siteVisitPending.total, 'siteVisitPending'),
     dashStatCard('Site Visits Today', m.siteVisitDone.movedTodayCount, 'siteVisitDone'),
-    dashStatCard('Missed Calls', m.missedCalls.total, 'missedCalls'),
+    dashStatCard('Needs Action', m.needsAction.total, 'needsAction'),
     dashStatCard('Closed Today', m.movedToWonToday.count, 'movedToWonToday')
   ].join('');
 
@@ -658,9 +658,9 @@ window.renderDashboardView = function(){
       ${dashSection('stageChangesToday', '🔀', 'Stage Changes Today', `${m.stageChangesToday.count} (${m.stageChangesToday.forwardCount} forward)`, () => buildLeadListBody(m.stageChangesToday.leads))}
       ${dashSection('siteVisitPending', '🕓', 'Pending Site Visit', m.siteVisitPending.total, () => buildSiteVisitBody('siteVisitPending'))}
       ${dashSection('siteVisitDone', '🏠', 'Site Visits Done', `${m.siteVisitDone.movedTodayCount} today · ${m.siteVisitDone.total} all-time`, buildSiteVisitDoneBody)}
-      ${dashSection('missedCalls', '📵', 'Missed Calls', m.missedCalls.total, () => buildLeadListBody(m.missedCalls.leads))}
-      ${dashSection('movedToWonToday', '🎉', 'Moved to Closed Today', m.movedToWonToday.count, buildWonBody)}
-      ${dashSection('movedToDeadToday', '🚫', 'Moved to Not Interested / Spam Today', m.movedToDeadToday.count, buildDeadBody)}
+      ${dashSection('needsAction', '🔴', 'Needs Action Now', m.needsAction.total, () => buildLeadListBody(m.needsAction.leads))}
+      ${dashSection('movedToWonToday', '🎉', 'Moved to Won Today', m.movedToWonToday.count, buildWonBody)}
+      ${dashSection('movedToDeadToday', '🚫', 'Moved to Lost Today', m.movedToDeadToday.count, buildDeadBody)}
       ${dashSection('newLeadsNoActionToday', '🆕', 'New Today, No Action Yet', m.newLeadsNoActionToday.count, () => buildLeadListBody(m.newLeadsNoActionToday.leads))}
       ${dashSection('newLeadsToday', '📈', 'New Leads Today', m.newLeadsToday.total, buildNewTodayBody)}
       ${dashSection('followUpsDueTomorrow', '🌤️', "Tomorrow's Follow-up Plan", m.followUpsDueTomorrow.count, buildTomorrowBody)}

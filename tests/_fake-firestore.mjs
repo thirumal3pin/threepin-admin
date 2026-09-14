@@ -119,7 +119,8 @@ export function createFakeDb() {
           return refOrQuery.path && refOrQuery.collection ? refOrQuery.get() : refOrQuery.get();
         },
         set(ref, data, opts) { wrote = true; assertNoUndefined(data); ops.push(() => applySet(ref, data, opts)); return t; },
-        update(ref, data) { wrote = true; assertNoUndefined(data); ops.push(() => applyUpdate(ref, data)); return t; }
+        update(ref, data) { wrote = true; assertNoUndefined(data); ops.push(() => applyUpdate(ref, data)); return t; },
+        delete(ref) { wrote = true; ops.push(() => { stats.writes++; store.delete(ref.path); }); return t; }
       };
       const result = await fn(t);
       ops.forEach(op => op());

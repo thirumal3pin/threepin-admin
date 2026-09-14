@@ -1,4 +1,22 @@
 import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared.js';
+import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
+
+// What needs a person right now — the same rule book the board and action queue use, so the
+// morning digest never lists something the CRM does not show, or misses something it does.
+const ACTION_LIMIT = 30;
+function actionItems(leadsSnap, stages, now = Date.now()) {
+  const items = [];
+  leadsSnap.forEach(d => {
+    const l = d.data();
+    const top = computeAttention(l, { stages, now })[0];
+    if (top && SEVERITY_RANK[top.severity] >= SEVERITY_RANK.high) items.push({ lead: l, top });
+  });
+  return items.sort((a, b) => (SEVERITY_RANK[b.top.severity] - SEVERITY_RANK[a.top.severity]) || ((a.top.at || 0) - (b.top.at || 0)));
+}
+function actionLine(item, stages) {
+  const stage = stages.find(s => s.id === item.lead.stageId);
+  return `${item.lead.name || 'Lead'} — ${item.top.label}${item.top.detail ? ' (' + item.top.detail + ')' : ''} — ${stage ? stage.name : 'no stage'} — ${item.lead.phone || 'no phone'}`;
+}
 
 // wa.me / Cloud API sends need digits only, country code, no leading zeros.
 // Recipients here are typed by hand in the CRM, so normalize the same way
@@ -82,8 +100,14 @@ function updatedByLabel(l) {
 function leadLine(l) {
   return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — last updated by ${updatedByLabel(l)}`;
 }
-function formatDigestText(overdue, days, startOfToday) {
+function formatDigestText(overdue, days, startOfToday, actions = [], stages = []) {
   const lines = ['Follow-up digest', ''];
+  if (actions.length) {
+    lines.push(`NEEDS ACTION NOW (${actions.length}):`);
+    actions.slice(0, ACTION_LIMIT).forEach(a => lines.push(`- ${actionLine(a, stages)}`));
+    if (actions.length > ACTION_LIMIT) lines.push(`- …and ${actions.length - ACTION_LIMIT} more in the CRM`);
+    lines.push('');
+  }
   if (overdue.length) {
     lines.push(`OVERDUE (${overdue.length}):`);
     overdue.forEach(l => lines.push(`- ${leadLine(l)}`));
@@ -101,8 +125,14 @@ function formatDigestText(overdue, days, startOfToday) {
   if (!overdue.length && !days.some(a => a.length)) lines.push(`Nothing due in the next ${LOOKAHEAD_DAYS} days.`);
   return lines.join('\n').trim();
 }
-function formatWhatsAppDigest(overdue, days, startOfToday) {
+function formatWhatsAppDigest(overdue, days, startOfToday, actions = [], stages = []) {
   const lines = ['📅 *Follow-up digest*', ''];
+  if (actions.length) {
+    lines.push(`🔴 Needs action now (${actions.length}):`);
+    actions.slice(0, ACTION_LIMIT).forEach(a => lines.push(`• ${actionLine(a, stages)}`));
+    if (actions.length > ACTION_LIMIT) lines.push(`• …and ${actions.length - ACTION_LIMIT} more in the CRM`);
+    lines.push('');
+  }
   if (overdue.length) {
     lines.push(`⚠️ Overdue (${overdue.length}):`);
     overdue.forEach(l => lines.push(`• ${leadLine(l)}`));
@@ -155,8 +185,30 @@ function sectionHtml(title, color, rows, showTime) {
       ${rows.map(l => leadRowHtml(l, showTime)).join('')}
     </table>`;
 }
-function formatDigestHtml(overdue, days, startOfToday) {
-  let body = sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
+function actionSectionHtml(actions, stages) {
+  if (!actions.length) return '';
+  const rows = actions.slice(0, ACTION_LIMIT).map(a => {
+    const stage = stages.find(s => s.id === a.lead.stageId);
+    const color = a.top.severity === 'critical' ? '#B91C1C' : '#B45309';
+    return `<tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${escapeHtml(a.lead.name || 'Lead')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;color:${color};">${escapeHtml(a.top.label)}${a.top.detail ? `<div style="color:#888;font-size:12px;">${escapeHtml(a.top.detail)}</div>` : ''}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(stage ? stage.name : '—')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(a.lead.phone || '—')}</td>
+    </tr>`;
+  }).join('');
+  const more = actions.length > ACTION_LIMIT ? `<p style="font-family:sans-serif;color:#888;font-size:12px;">…and ${actions.length - ACTION_LIMIT} more in the CRM.</p>` : '';
+  return `
+    <h3 style="color:#B91C1C;margin:18px 0 8px;font-family:sans-serif;">🔴 Needs action now (${actions.length})</h3>
+    <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;table-layout:fixed;">
+      <colgroup><col style="width:22%"><col style="width:44%"><col style="width:17%"><col style="width:17%"></colgroup>
+      <tr style="text-align:left;color:#888;font-size:11px;text-transform:uppercase;"><th style="padding:4px 10px;">Name</th><th style="padding:4px 10px;">What to do</th><th style="padding:4px 10px;">Stage</th><th style="padding:4px 10px;">Phone</th></tr>
+      ${rows}
+    </table>${more}`;
+}
+function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = []) {
+  let body = actionSectionHtml(actions, stages);
+  body += sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
   days.forEach((arr, i) => { body += sectionHtml(`📅 ${dayLabel(i, startOfToday)}`, i === 0 ? '#B45309' : '#1D4ED8', arr, true); });
   return `<div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#0A0A0A;">
     <div style="padding:0 0 14px;border-bottom:3px solid #FE8D00;margin-bottom:6px;">
@@ -174,12 +226,17 @@ async function digestForTenant(db, tenantId) {
   const emailRecipients = settings.followupDigestEmailEnabled ? (settings.followupDigestEmails || []) : [];
   if (!waRecipients.length && !emailRecipients.length) return { tenantId, skipped: true, results: [] };
 
-  const leadsSnap = await db.collection('leads').where('tenantId', '==', tenantId).get();
+  const [leadsSnap, pipelineSnap] = await Promise.all([
+    db.collection('leads').where('tenantId', '==', tenantId).get(),
+    db.collection('pipelines').doc(tenantId).get()
+  ]);
+  const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
   const { overdue, days, startOfToday } = bucketLeads(leadsSnap);
+  const actions = actionItems(leadsSnap, stages);
 
   const results = [];
   if (waRecipients.length) {
-    const message = formatWhatsAppDigest(overdue, days, startOfToday);
+    const message = formatWhatsAppDigest(overdue, days, startOfToday, actions, stages);
     for (const raw of waRecipients) {
       const to = normalizePhone(raw);
       if (!to) continue;
@@ -192,8 +249,8 @@ async function digestForTenant(db, tenantId) {
     const dateStr = triggeredAt.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ });
     const timeStr = triggeredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ });
     const subject = `3 PIN Realty Follow up (${dateStr}) ${timeStr}`;
-    const text = formatDigestText(overdue, days, startOfToday);
-    const html = formatDigestHtml(overdue, days, startOfToday);
+    const text = formatDigestText(overdue, days, startOfToday, actions, stages);
+    const html = formatDigestHtml(overdue, days, startOfToday, actions, stages);
     for (const to of emailRecipients) {
       const r = await sendEmail(to, subject, text, html);
       results.push({ channel: 'email', to, ...r });

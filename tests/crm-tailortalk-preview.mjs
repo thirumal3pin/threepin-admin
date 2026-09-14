@@ -12,6 +12,7 @@ import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planUpdate } from '../api/_tailortalk-shared.js';
+import { planPipelineMigration } from '../crm-assets/pipeline.js';
 
 const OUT = process.argv[2] || 'tailortalk-preview';
 mkdirSync(OUT, { recursive: true });
@@ -19,11 +20,11 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const NOW = Date.now();
 const H = 3600000;
 const TENANT = 't_3pinrealty';
-const STAGES = [
-  { id: 'new', name: 'New', color: '#1D4ED8' }, { id: 'contacted', name: 'Contacted', color: '#B45309' },
-  { id: 'site_visit', name: 'Site Visit', color: '#6D28D9' }, { id: 'negotiation', name: 'Negotiation', color: '#B45309' },
-  { id: 'closed_won', name: 'Closed Won', color: '#15803D' }, { id: 'closed_lost', name: 'Closed Lost', color: '#B91C1C' }
-];
+// The reworked, keyed pipeline (same ids the live migration keeps).
+const STAGES = planPipelineMigration([
+  { id: 'new', name: 'New' }, { id: 'site_visit', name: 'Site Visit' }, { id: 'negotiation', name: 'in Negotiation' },
+  { id: 'closed_won', name: 'Closed' }, { id: 'closed_lost', name: 'Not interested' }
+], []).stages;
 const TYPES = ['Property Enquiry', 'Seller Listing', 'General'];
 const SAMPLE = JSON.parse(readFileSync(new URL('./fixtures/tailortalk-sample.json', import.meta.url), 'utf8'));
 const iso = ms => new Date(ms).toISOString();
@@ -60,7 +61,7 @@ const seeds = [
     lead_lock_status: true, preferred_location: 'Anna Nagar. Near her parents.', budget_and_finance: '1.2 Cr. Loan pre-approved.',
     metadata: [], ad_data: null, created_at: iso(NOW - 50 * H),
     chat_history: chat(400, [['user', 'Looking for a 2 BHK in Anna Nagar'], ['assistant', 'Happy to help! What budget are you considering?'], ['user', 'Can you send me the brochure and floor plan?']])
-  }, { stageId: 'contacted' }, 'details_request'),
+  }, { stageId: 'options_shared' }, 'details_request'),
   ttLead('tt3', {
     lead_name: 'Meena R', lead_contact: '919500067890', lead_status: 'cold', is_converted: true, converted_at: iso(NOW - 5 * 24 * H),
     preferred_location: 'Nanganallur', budget_and_finance: '85 L', intent_and_who: 'Sell, owner of a 2 BHK flat', metadata: [], ad_data: null,
@@ -70,7 +71,7 @@ const seeds = [
     lead_name: 'Karthik Subramaniam', lead_contact: '919876543211', lead_status: 'warm', flagged: true, flag_details: 'Asked for a discount twice',
     budget_and_finance: '2 Cr (earlier: 1.8 Cr)', preferred_location: 'Adyar', metadata: [], created_at: iso(NOW - 6 * 24 * H),
     chat_history: chat(1500, [['user', 'Can you do 2 Cr for the Adyar flat?']])
-  }, { stageId: 'contacted', source: 'manual', createdBy: 'owner@threepin.in', budget: '1.8 Cr', ttHold: { budget: true } }),
+  }, { stageId: 'options_shared', source: 'manual', createdBy: 'owner@threepin.in', budget: '1.8 Cr', ttHold: { budget: true } }),
   ttLead('tt5', {
     lead_name: 'AdSpark Media', lead_contact: '919444012121', category: 'others', lead_status: 'vendor pitch',
     intent_and_who: 'Selling advertising packages', preferred_location: null, budget_and_finance: null, metadata: [], ad_data: null,
@@ -160,28 +161,28 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   await page.evaluate(() => setLeadStatusFilter('hot'));
   const hot = await page.evaluate(() => document.querySelectorAll('.lcard').length);
   if (hot !== 1) errors.push(`Hot filter should show 1 card, showed ${hot}`);
-  await page.evaluate(() => setLeadStatusFilter('attention'));
+  await page.evaluate(() => { setLeadScope('tt'); setLeadFocus('action'); });
   const att = await page.evaluate(() => document.querySelectorAll('.lcard').length);
-  if (att !== 3) errors.push(`Needs-attention filter should show 3 cards (escalated, flagged, wants details), showed ${att}`);
-  const chip = await page.evaluate(() => [...document.querySelectorAll('.tt-chip.action')].map(c => c.textContent.trim()));
-  if (!chip.some(c => /Wants details/.test(c))) errors.push('Signal chip missing on the board: ' + JSON.stringify(chip));
-  else console.log('  ok  signal chip on the board:', chip.join(', '));
+  if (att !== 3) errors.push(`Needs-action focus should show 3 cards (escalated, flagged, wants details), showed ${att}`);
+  const alertLine = await page.evaluate(() => [...document.querySelectorAll('.lcard-alert')].map(c => c.textContent.trim()));
+  if (!alertLine.some(c => /Asked for property details/.test(c))) errors.push('Signal missing on the board: ' + JSON.stringify(alertLine));
+  else console.log('  ok  signal on the board:', alertLine.join(' | '));
   await shot(page, '03-board-needs-attention', { clip: { x: 0, y: 0, width: 1440, height: 560 } });
-  // The lead page offers the matching action; "Handled" closes the signal everywhere.
+  // The lead page lists what needs a person once; "Handled" closes it everywhere.
   await page.evaluate(() => openDetail('tt2'));
   await page.waitForTimeout(300);
-  const row = await page.evaluate(() => { const r = document.querySelector('#dpTt .tt-signal'); return r ? r.textContent.replace(/\s+/g, ' ').trim() : null; });
-  if (!row || !/Asked for property details/.test(row) || !/brochure and floor plan/.test(row) || !/Mark details sent/.test(row)) errors.push('Signal row on the lead page is wrong: ' + row);
+  const row = await page.evaluate(() => [...document.querySelectorAll('#dpStand .st-item')].map(r => r.textContent.replace(/\s+/g, ' ').trim()).join(' | '));
+  if (!/Asked for property details/.test(row) || !/brochure and floor plan/.test(row) || !/Log follow-up/.test(row)) errors.push('Signal row on the lead page is wrong: ' + row);
   else console.log('  ok  signal row:', row);
-  await page.locator('#dpTtSec').screenshot({ path: join(OUT, '03b-detail-signal.png') });
-  // (setLeadStatusFilter toggles, so reset the scope before selecting it again.)
-  const waitingChip = await page.evaluate(() => [...document.querySelectorAll('.tt-chip.action')].some(c => /Waiting for team/.test(c.textContent)));
-  if (!waitingChip) errors.push('A conversation ending on "no response" should show "Waiting for team" on the board');
-  else console.log('  ok  "Waiting for team" chip shows for a message the AI left for the team');
-  await page.evaluate(() => { markTtHandled('tt2', 'Asked for property details'); closeDetail(); setLeadScope('tt'); setLeadStatusFilter('attention'); });
+  await page.locator('#dpStandSec').screenshot({ path: join(OUT, '03b-detail-signal.png') });
+  const waiting = await page.evaluate(() => attentionFor(leads.find(l => l.id === 'tt1')).map(a => a.key));
+  if (!waiting.includes('waiting_for_team')) errors.push('A conversation ending on "no response" should raise waiting_for_team: ' + JSON.stringify(waiting));
+  else console.log('  ok  "waiting for team" raised for a message the AI left for the team');
+  await page.evaluate(() => { markHandledUi('tt2', 'Asked for property details'); closeDetail(); });
   const attAfter = await page.evaluate(() => document.querySelectorAll('.lcard').length);
-  if (attAfter !== 2) errors.push(`After "Handled", needs-attention should drop to 2, got ${attAfter}`);
-  else console.log('  ok  "Handled" closes the signal (needs attention 3 → 2)');
+  if (attAfter !== 2) errors.push(`After "Handled", needs action should drop to 2, got ${attAfter}`);
+  else console.log('  ok  "Handled" closes the signal (needs action 3 → 2)');
+  await page.evaluate(() => setLeadFocus('action'));
   await page.evaluate(() => setLeadScope('other'));
   const other = await page.evaluate(() => document.querySelectorAll('.lcard').length);
   if (other !== 2) errors.push(`Other filter should show 2 cards, showed ${other}`);
@@ -314,7 +315,7 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   need('never sends notes/history bodies', !('notes' in ttSave.data) && !('history' in ttSave.data));
   need('leaves out name / locality / enquiry type TailorTalk still follows', !('name' in ttSave.data) && !('propertyInterest' in ttSave.data) && !('enquiryType' in ttSave.data));
   need('sends the budget the team took over', ttSave.data.budget === '1.8 Cr');
-  need('sends the team\'s own fields (stage)', ttSave.data.stageId === 'contacted');
+  need('sends the team\'s own fields (stage)', ttSave.data.stageId === 'options_shared');
   need('stamps phoneKey', ttSave.data.phoneKey === '919876543211');
   need('a lead without TailorTalk still sends every field', plainSave.data.name === 'Suresh Kumar' && plainSave.data.propertyInterest === 'Villa in Anna Nagar');
   need('"Use TailorTalk\'s value" writes the value and releases the hold together', release.op === 'update' && release.data.budget === '2 Cr' && release.data['ttHold.budget'] === false);

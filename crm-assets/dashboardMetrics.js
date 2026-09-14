@@ -11,26 +11,27 @@
 // Never mutates the leads/stages arrays or their elements.
 // ═══════════════════════════════════════════════════════════════════════
 
+import { stageKeyOf, stageKindOf } from './pipeline.js';
+import { computeAttention, SEVERITY_RANK } from './leadAttention.js';
+
 const DAY_MS = 86400000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const COLD_DAYS = 7;
 const ACTION_LINE_MAX = 90;
 
-// Stage classification is by NAME (trimmed/lowercased) — stages are fully
-// user-editable via "Manage Pipeline Stages", so nothing here is an id.
-// Anything not matched is "open" (neither won nor dead) — no broader
-// "active pipeline" concept is computed by design (kept intentionally lean).
+// Stage classification is by the stage's KEY (crm-assets/pipeline.js) — names
+// and colours stay user-editable in Manage Stages without changing what a
+// column means. Pipelines saved before keys existed are read by name.
+// Anything not matched is "open" (neither won nor dead).
 const WON_STAGE_NAMES = ['closed'];
 const DEAD_STAGE_NAMES = ['not interested', 'spam'];
 // Spam is a strict subset of "dead": the property-wise totals below exclude
 // ONLY spam (junk that was never a real enquiry), while genuinely lost leads
-// still count towards a property's demand.
+// still count towards a property's demand. In the keyed pipeline spam is a
+// loss reason (lead.lostReason === 'spam') on the Lost column.
 const SPAM_STAGE_NAMES = ['spam'];
 // The one enquiry type whose leads are analysed property-by-property.
 const PROPERTY_ENQUIRY_NAME = 'property enquiry';
-const SITE_VISIT_DONE_NAME = 'site visit done';
-const SITE_VISIT_PENDING_NAME = 'site visit';
-const MISSED_CALLS_NAME = 'missed calls';
 // Days of daily new-lead history returned for the trend chart. The existing
 // 7-day average is derived from the same buckets, so the two can never drift.
 const TREND_DAYS = 14;
@@ -143,7 +144,16 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const stageById = new Map(stages.map(s => [s.id, s]));
   const stageOrder = new Map(stages.map((s, i) => [s.id, i]));
   const stageNameOf = (stageId) => { const s = stageById.get(stageId); return s ? s.name : (stageId || 'Unknown'); };
-  const kindOf = (stageId) => { const s = stageById.get(stageId); return s ? classifyStage(s.name) : 'open'; };
+  const kindOf = (stageId) => {
+    const s = stageById.get(stageId);
+    if (!s) return 'open';
+    const k = stageKindOf(s);
+    if (k === 'won') return 'won';
+    if (k === 'lost') return 'dead';
+    return classifyStage(s.name);
+  };
+  const keyOf = (stageId) => stageKeyOf(stageById.get(stageId));
+  const spamOf = (l) => SPAM_STAGE_NAMES.includes(normName(stageNameOf(l.stageId))) || (kindOf(l.stageId) === 'dead' && l.lostReason === 'spam');
 
   const stageCounts = new Map(); // stageId -> count
   const ownerMap = new Map();    // ownerLabel -> stats
@@ -166,7 +176,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const siteVisitDoneMovedToday = [];
   const siteVisitPendingLeads = [];
   const siteVisitPendingMovedToday = [];
-  const missedCallsLeads = [];
+  const needsActionLeads = [];
   const movedToWonToday = [];
   const movedToDeadToday = [];
   const newLeadsNoActionToday = [];
@@ -257,7 +267,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   for (const l of leads) {
     const kind = kindOf(l.stageId);
     const isOpen = kind === 'open';
-    const isSpam = SPAM_STAGE_NAMES.includes(normName(stageNameOf(l.stageId)));
+    const isSpam = spamOf(l);
 
     stageCounts.set(l.stageId, (stageCounts.get(l.stageId) || 0) + 1);
     enquiryTypeCountsAll.set(l.enquiryType || 'Unspecified', (enquiryTypeCountsAll.get(l.enquiryType || 'Unspecified') || 0) + 1);
@@ -311,16 +321,17 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       if (kind === 'dead') movedToDeadToday.push(l);
     }
 
-    const sName = normName(stageNameOf(l.stageId));
-    if (sName === SITE_VISIT_DONE_NAME) {
+    const sKey = keyOf(l.stageId);
+    if (sKey === 'visit_done') {
       siteVisitDoneLeads.push(l);
       if (isToday(l.stageChangedAt)) siteVisitDoneMovedToday.push(l);
     }
-    if (sName === SITE_VISIT_PENDING_NAME) {
+    if (sKey === 'visit_pending') {
       siteVisitPendingLeads.push(l);
       if (isToday(l.stageChangedAt)) siteVisitPendingMovedToday.push(l);
     }
-    if (sName === MISSED_CALLS_NAME) missedCallsLeads.push(l);
+    // Needs action = something urgent a person must do now (crm-assets/leadAttention.js).
+    if (computeAttention(l, { stages, now }).some(a => SEVERITY_RANK[a.severity] >= SEVERITY_RANK.high)) needsActionLeads.push(l);
 
     // ── Portfolio KPIs + per-property rollup ──
     const budgetINR = parseBudgetToINR(l.budget);
@@ -361,11 +372,11 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       }
       if (kind === 'won') { p.won++; if (countsForValue) p.wonValueINR += budgetINR; }
       if (kind === 'dead') p.lost++;
-      if (sName === SITE_VISIT_DONE_NAME) {
+      if (sKey === 'visit_done') {
         p.siteVisitDone++;
         if (isToday(l.stageChangedAt)) p.siteVisitDoneToday++;
       }
-      if (sName === SITE_VISIT_PENDING_NAME) p.siteVisitPending++;
+      if (sKey === 'visit_pending') p.siteVisitPending++;
       if (l.detailsSent === true) p.detailsSent++;
       if (isToday(l.createdAt)) p.newToday++;
       const touched = l.updatedAt || l.createdAt || 0;
@@ -489,7 +500,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     stageChangesToday: { count: stageChangesToday.length, forwardCount: stageChangesForward, leads: stageChangesToday },
     siteVisitDone: { total: siteVisitDoneLeads.length, leads: siteVisitDoneLeads, movedTodayCount: siteVisitDoneMovedToday.length, movedTodayLeads: siteVisitDoneMovedToday },
     siteVisitPending: { total: siteVisitPendingLeads.length, leads: siteVisitPendingLeads, movedTodayCount: siteVisitPendingMovedToday.length, movedTodayLeads: siteVisitPendingMovedToday },
-    missedCalls: { total: missedCallsLeads.length, leads: missedCallsLeads },
+    needsAction: { total: needsActionLeads.length, leads: needsActionLeads },
     movedToWonToday: {
       count: movedToWonToday.length, leads: movedToWonToday,
       totalValueINR: movedToWonToday.reduce((sum, l) => {
@@ -557,7 +568,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     // a guess. Each count below is a fact about the current data.
     journey: [
       { label: 'Total leads', count: nonSpamTotal },
-      { label: 'Details shared', count: leads.filter(l => l.detailsSent === true && !SPAM_STAGE_NAMES.includes(normName(stageNameOf(l.stageId)))).length },
+      { label: 'Details shared', count: leads.filter(l => l.detailsSent === true && !spamOf(l)).length },
       { label: 'Site visit done', count: siteVisitDoneLeads.length },
       { label: 'Closed', count: wonLeadCount }
     ].map(s => ({ ...s, pct: pct(s.count, nonSpamTotal) })),

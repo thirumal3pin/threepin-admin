@@ -90,6 +90,8 @@ window.applyLeadsSnapshot = function(list){
     const l = leads.find(x=>x.id===currentDetailId);
     if(l){
       renderAiSummary(l);
+      renderStandSection(l);
+      renderDetailStageRow(l);
       if(isTtLead(l)){
         renderDetailInfo(l);
         renderFollowUpSpotlight(l);
@@ -123,6 +125,7 @@ window.applyDashboardEmailSettingsSnapshot = function(settings){
 // never be able to leave the board/list showing stale-empty data. This was a
 // real mobile bug — see checkFollowupNotify() for the specific case.
 function refreshAll(){
+  attnCache = new Map();
   if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else applyFilters();
   try{ renderLeadFilterBar(); } catch(e){ console.error('renderLeadFilterBar failed:', e); }
@@ -140,6 +143,65 @@ function init(){
   updateStats();
   updateNotifyBtnLabel();
   setInterval(()=>checkFollowupNotify(false), 15*60*1000);
+  // Time-based reasons (a due time passing, a reply window closing) change without any data
+  // change — redraw every minute so an overdue step turns red on its own.
+  setInterval(()=>{ if(document.visibilityState === 'visible') refreshAll(); }, 60*1000);
+  startLiveRefresh();
+}
+
+// ═══════ LIVE REFRESH + LEAD AUTOMATION SWITCH ═══════
+// While the CRM is open it asks the server every 5 minutes for the newest TailorTalk updates and
+// lets due AI reads run (api/tailortalk.js ?action=refresh). New data arrives through the normal
+// Firestore snapshot; this only nudges the server. The switch lives in settings/{tenant}.
+let leadAutomation = { enabled:false, model:null };
+window.applyAutomationSettingsSnapshot = function(s){
+  leadAutomation = { enabled: !!(s && s.enabled), model: (s && s.model) || null };
+  updateAutomationBtn();
+};
+function updateAutomationBtn(){
+  const btn = document.getElementById('autoBtn');
+  if(btn) btn.textContent = leadAutomation.enabled ? '🤖 Lead automation: On' : '🤖 Lead automation: Off';
+}
+function toggleLeadAutomation(){
+  closeMoreMenu();
+  const next = !leadAutomation.enabled;
+  const msg = next
+    ? 'Turn on lead automation?\n\nThe AI will read TailorTalk chats when they go quiet, move leads forward on clear evidence, set follow-ups for promised steps, and suggest when unsure. Every move is logged and can be undone.'
+    : 'Turn off lead automation?\n\nLeads stay where they are. Nothing is read or moved until you turn it back on.';
+  if(!confirm(msg)) return;
+  leadAutomation = { ...leadAutomation, enabled: next };
+  if(window.crmFirebase && window.crmFirebase.saveAutomationSettings) window.crmFirebase.saveAutomationSettings({ enabled: next });
+  updateAutomationBtn();
+  showToast(next ? '🤖 Lead automation on' : 'Lead automation off');
+  if(next) liveRefresh(true);
+}
+let liveRefreshTimer = null, liveRefreshRunning = false, lastLiveRefresh = 0;
+function startLiveRefresh(){
+  if(liveRefreshTimer) return;
+  setTimeout(() => liveRefresh(false), 4000);
+  liveRefreshTimer = setInterval(() => { if(document.visibilityState === 'visible') liveRefresh(false); }, 5*60*1000);
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && Date.now() - lastLiveRefresh > 5*60*1000) liveRefresh(false); });
+}
+async function liveRefresh(loud){
+  if(liveRefreshRunning || !window.crmAuth) return;
+  liveRefreshRunning = true;
+  lastLiveRefresh = Date.now();
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    if(!idToken) return;
+    const res = await fetch('/api/tailortalk?action=refresh', { method:'POST', headers:{ 'Authorization':'Bearer '+idToken } });
+    const data = await res.json().catch(()=>({}));
+    if(res.ok && data.ok){
+      if(data.moved) showToast(`🤖 ${data.moved} lead${data.moved===1?'':'s'} moved by the AI`);
+      else if(loud) showToast(data.aiRan ? `🤖 Read ${data.aiRan} lead${data.aiRan===1?'':'s'} — no moves needed` : '✓ Up to date');
+    } else if(loud){
+      showToast(data.error ? `Refresh failed: ${data.error}` : 'Refresh failed');
+    }
+  } catch(e){
+    if(loud) showToast('Refresh failed — check your connection');
+  } finally {
+    liveRefreshRunning = false;
+  }
 }
 
 // ═══════ BROWSER FOLLOW-UP ALERTS ═══════
@@ -183,22 +245,24 @@ async function toggleBrowserNotify(){
 function checkFollowupNotify(force){
   if(!fuNotifyEnabled) return;
   if(!('Notification' in window) || Notification.permission!=='granted') return;
-  const withFollowup = leads.filter(l=>l.followUpAt);
-  if(!withFollowup.length) return;
-  const buckets = followupBuckets(withFollowup);
-  const count = buckets.overdue.length + buckets.today.length;
+  // Same number as the Follow-ups badge: leads that need a person now.
+  const urgent = leads.filter(l => !isBusinessLead(l) && isUrgentUi(l));
+  const critical = urgent.filter(l => { const t = topAttentionUi(l); return t && t.severity === 'critical'; }).length;
+  const count = urgent.length;
   if(count<=0) return;
   const now = Date.now();
   if(!force && now-fuLastNotifiedAt < FU_NOTIFY_INTERVAL_MS) return;
   fuLastNotifiedAt = now;
+  const body = critical ? `${critical} overdue or closing now · ${count - critical} more today` : `${count} lead${count===1?'':'s'} need a person today`;
+  const buckets = { overdue: { length: critical }, today: { length: count - critical } };
   // Mobile Chrome/Android throws "Illegal constructor" here — the Notification
   // constructor is desktop-only there, and permission can still be 'granted',
   // so there's no feature test that predicts it. An unhandled throw used to
   // abort refreshAll() mid-flight and leave the board rendered empty on phones;
   // now it degrades to an in-app toast and turns the preference back off.
   try{
-    const n = new Notification('📅 Follow-ups need attention', {
-      body: `${buckets.overdue.length} overdue, ${buckets.today.length} due today`,
+    const n = new Notification('🔴 Leads need attention', {
+      body,
       tag: 'crm-followups'
     });
     n.onclick = () => { window.focus(); toggleView('followups'); n.close(); };
@@ -232,10 +296,11 @@ function clearSearch(){
 }
 
 function applyFilters(){
+  attnCache = new Map();
   filteredLeads = leads.filter(l=>{
     if(!passesLeadFilter(l)) return false;
     if(currentSearch){
-      const tt = isTtLead(l) ? [l.tt.status, l.tt.values && l.tt.values.propertyInterest, l.tt.values && l.tt.values.budget, l.tt.handle, l.tt.contact, l.tt.adTitle] : [];
+      const tt = isTtLead(l) ? [l.tt.status, l.tt.values && l.tt.values.propertyInterest, l.tt.values && l.tt.values.budget, l.tt.handle, l.tt.contact, l.tt.adTitle, l.ai && l.ai.line] : [];
       const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel),...tt].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
@@ -339,21 +404,93 @@ function ttOpenAlerts(l){
   return out;
 }
 function ttIsWaiting(l){ return ttOpenAlerts(l).some(a => a.key==='waiting'); }
-function ttNeedsAttention(l){ return isTtLead(l) && (ttOpenSignals(l).length > 0 || ttOpenAlerts(l).length > 0); }
+function ttNeedsAttention(l){ return needsActionUi(l); }
+
+// ═══════ PIPELINE, ATTENTION AND LEAD AUTOMATION (client side) ═══════
+// What each column means lives in crm-assets/pipeline.js; what needs a person lives in
+// crm-assets/leadAttention.js — both bridged onto window in crm.html and shared with the
+// dashboard, the daily digest and the server-side AI. This block only draws them.
+const SEV_RANK = { critical:3, high:2, medium:1, low:0 };
+let attnCache = new Map();
+function attentionFor(l){
+  if(!l) return [];
+  if(attnCache.has(l.id)) return attnCache.get(l.id);
+  const api = window.leadAttention;
+  const list = api ? api.computeAttention(l, { stages, now: Date.now(), signalLabel: key => ttSignalMeta(key).title }) : [];
+  attnCache.set(l.id, list);
+  return list;
+}
+function topAttentionUi(l){ return attentionFor(l)[0] || null; }
+function needsActionUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.medium); }
+function isUrgentUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.high); }
+function stageKeyOfId(stageId){
+  const s = stageById(stageId);
+  return s && window.crmPipeline ? window.crmPipeline.stageKeyOf(s) : null;
+}
+function stageKindOfId(stageId){
+  const s = stageById(stageId);
+  return s && window.crmPipeline ? window.crmPipeline.stageKindOf(s) : null;
+}
+function stageIdForKey(key){
+  const s = window.crmPipeline ? window.crmPipeline.stageForKey(stages, key) : null;
+  return s ? s.id : null;
+}
+function stageRuleOf(stage){
+  const key = window.crmPipeline ? window.crmPipeline.stageKeyOf(stage) : null;
+  const def = key && window.crmPipeline.stageDef(key);
+  return def ? def.rule : '';
+}
+function fmtDue(ts){
+  if(!ts) return '';
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const tomorrow = new Date(now.getTime() + 86400000).toDateString() === d.toDateString();
+  const time = d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+  if(sameDay) return `today ${time}`;
+  if(tomorrow) return `tomorrow ${time}`;
+  return d.toLocaleString([], { weekday:'short', day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
+}
+
+// The one line a card leads with: what happens next, and whose move it is.
+function nextStepOf(l){
+  const kind = stageKindOfId(l.stageId);
+  if(kind === 'won') return { cls:'done', text:'Deal won' };
+  if(kind === 'lost'){
+    const r = window.crmPipeline && l.lostReason ? window.crmPipeline.LOST_REASONS[l.lostReason] : null;
+    return { cls:'done', text: r ? `Lost — ${r}` : 'Lost' };
+  }
+  if(kind === 'hold' && l.holdUntil) return { cls:'wait', text:`Revisit ${fmtDue(l.holdUntil)}` };
+  const ai = l.ai || {};
+  const owes = window.leadAttention ? window.leadAttention.teamOwes(l) : null;
+  if(owes) return { cls: owes.dueAt && owes.dueAt < Date.now() ? 'overdue' : 'team', text: owes.action, due: owes.dueAt };
+  if(l.followUpAt) return { cls: l.followUpAt < Date.now() ? 'overdue' : 'team', text: l.followUpNote || 'Follow up', due: l.followUpAt };
+  if(ai.next && ai.next.owner === 'lead') return { cls:'wait', text:`Waiting on lead: ${ai.next.action}` };
+  if(ai.line) return { cls:'info', text: ai.line };
+  return null;
+}
+
+// Reasons the next-step line itself already states — never repeated underneath it.
+const STEP_KEYS = new Set(['team_owes', 'promise_overdue', 'followup_overdue']);
+
+// ── Focus filters: the "what should I do now" views, available in every scope ──
+const FOCUS_FILTERS = [
+  { key:'action',   label:'Needs action',   test: l => needsActionUi(l), tone:'warn' },
+  { key:'overdue',  label:'Overdue',        test: l => attentionFor(l).some(a => a.key==='promise_overdue' || a.key==='followup_overdue' || a.key==='visit_outcome' || a.key==='window_closing'), tone:'bad' },
+  { key:'ai_moved', label:'Moved by AI today', test: l => !!(l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 24*3600000) },
+  { key:'review',   label:'AI suggestions', test: l => attentionFor(l).some(a => a.key==='ai_suggestion') }
+];
 
 // ── Filter: Sales / TailorTalk / Other / Vendors & collabs, and within TailorTalk a status ──
 // Per device (localStorage), like the theme — one person's working view, not a team setting.
 const LEAD_FILTER_KEY = 'crmLeadFilter';
 const LEAD_SCOPES = ['all', 'tt', 'other', 'business'];
-let leadFilter = { scope:'all', status:null };
+let leadFilter = { scope:'all', status:null, focus:null };
 try{
   const saved = JSON.parse(localStorage.getItem(LEAD_FILTER_KEY) || 'null');
-  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null };
+  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null };
 }catch(e){}
 
 const TT_STATUS_FILTERS = [
-  { key:'attention', label:'Needs attention', test:ttNeedsAttention },
-  { key:'waiting',   label:'Waiting for team', test:ttIsWaiting },
   { key:'hot',       label:'Hot',       test:l=>l.tt.status==='hot' },
   { key:'warm',      label:'Warm',      test:l=>l.tt.status==='warm' },
   { key:'cold',      label:'Cold',      test:l=>l.tt.status==='cold' },
@@ -362,29 +499,40 @@ const TT_STATUS_FILTERS = [
   { key:'converted', label:'Converted', test:l=>l.tt.converted===true }
 ];
 
-function passesLeadFilter(l){
+function inScope(l, scope, status){
   const business = isBusinessLead(l);
-  if(leadFilter.scope==='business') return business;
+  if(scope==='business') return business;
   if(business) return false;
-  if(leadFilter.scope==='tt'){
+  if(scope==='tt'){
     if(!isTtLead(l)) return false;
-    const f = leadFilter.status && TT_STATUS_FILTERS.find(x=>x.key===leadFilter.status);
+    const f = status && TT_STATUS_FILTERS.find(x=>x.key===status);
     return f ? f.test(l) : true;
   }
-  if(leadFilter.scope==='other') return !isTtLead(l);
+  if(scope==='other') return !isTtLead(l);
   return true;
+}
+function passesLeadFilter(l){
+  if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
+  const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
+  return focus ? focus.test(l) : true;
 }
 function saveLeadFilter(){
   try{ localStorage.setItem(LEAD_FILTER_KEY, JSON.stringify(leadFilter)); }catch(e){}
 }
 function setLeadScope(scope){
-  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null };
+  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
 }
 function setLeadStatusFilter(key){
-  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key };
+  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus };
+  saveLeadFilter();
+  renderLeadFilterBar();
+  applyFilters();
+}
+function setLeadFocus(key){
+  leadFilter = { ...leadFilter, focus: leadFilter.focus===key ? null : key };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
@@ -401,13 +549,16 @@ function renderLeadFilterBar(){
     + chip(' tt', leadFilter.scope==='tt', "setLeadScope('tt')", 'TailorTalk', ttSales.length)
     + chip('', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length)
     + chip(' biz', leadFilter.scope==='business', "setLeadScope('business')", 'Vendors &amp; collabs', business);
+  const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
+  html += '<span class="lf-sep" aria-hidden="true"></span>'
+    + FOCUS_FILTERS.map(f => {
+        const n = scoped.filter(f.test).length;
+        const tone = f.tone && n ? ' ' + f.tone : '';
+        return chip(' sub focus'+tone, leadFilter.focus===f.key, `setLeadFocus('${f.key}')`, f.label, n);
+      }).join('');
   if(leadFilter.scope==='tt'){
     html += '<span class="lf-sep" aria-hidden="true"></span>'
-      + TT_STATUS_FILTERS.map(f => {
-          const n = ttSales.filter(f.test).length;
-          const tone = (f.key==='attention' || f.key==='waiting') && n ? ' warn' : '';
-          return chip(' sub'+tone, leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, n);
-        }).join('');
+      + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
   el.innerHTML = html;
 }
@@ -745,38 +896,7 @@ function renderTtSection(l){
   const cached = ttStateCache.get(l.id);
   const st = cached && cached.state;
 
-  // 1. Needs a person now: open signals, a new escalation/flag, a message left for the team.
-  const actionRow = (icon, title, when, quote, actions, cls) => `<div class="tt-signal${cls?' '+cls:''}">
-      <div class="tt-signal-main">
-        <div class="tt-signal-t">${icon} ${escapeHtml(title)}<span class="tt-when"> · ${timeAgo(when)}</span></div>
-        ${quote ? `<div class="tt-signal-q">“${escapeHtml(quote)}”</div>` : ''}
-      </div>
-      <div class="tt-signal-acts">${actions.join('')}</div>
-    </div>`;
-  const handled = what => `<button type="button" class="tt-btn quiet" onclick="markTtHandled('${l.id}', ${escapeHtml(JSON.stringify(what))})">Handled</button>`;
-  const rows = ttOpenSignals(l).map(([key, s]) => {
-    const m = ttSignalMeta(key);
-    const actions = [];
-    (m.actions || []).forEach(a => {
-      if(a==='followup') actions.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
-      else if(a==='details' && l.detailsSent!==true) actions.push(`<button type="button" class="tt-btn" onclick="markTtDetailsSent('${l.id}')">Mark details sent</button>`);
-      else if(a.startsWith('stage:')){
-        const find = TT_STAGE_FINDERS[a.slice(6)];
-        const stage = find && find();
-        if(stage && l.stageId!==stage.id) actions.push(`<button type="button" class="tt-btn" onclick="moveTtLeadToStage('${l.id}','${stage.id}')">Move to ${escapeHtml(stage.name)}</button>`);
-      }
-    });
-    actions.push(handled(m.title));
-    const cls = m.tone==='lost' ? 'lost' : m.tone==='alert' ? 'alert' : '';
-    return actionRow(m.icon, m.title + (s.count>1?` (${s.count}×)`:''), s.at, ttSignalQuote(key, s), actions, cls);
-  });
-  const lastLeadMsg = st && st.chat ? [...st.chat].reverse().find(m => m.role==='user' && m.content) : null;
-  ttOpenAlerts(l).forEach(a => {
-    const actions = [`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`, handled(TT_ALERT_TITLES[a.key])];
-    if(a.key==='waiting') rows.push(actionRow('⏳', 'Waiting for the team — the AI didn’t reply', a.at, lastLeadMsg && lastLeadMsg.content.slice(0,160), actions));
-    if(a.key==='escalated') rows.push(actionRow('🚨', `Escalated${t.escalatedTo?' to '+t.escalatedTo:''} in TailorTalk`, a.at, null, actions, 'alert'));
-    if(a.key==='flagged') rows.push(actionRow('🚩', `Flagged${t.flagDetails?': '+t.flagDetails:''}`, a.at, null, actions, 'alert'));
-  });
+  // What needs a person is listed once, in "Where this lead stands" above (renderStandSection).
 
   // 2. Fields the team took over, where TailorTalk has since heard something different.
   const says = TT_FOLLOW_FIELDS.filter(f => l.ttHold && l.ttHold[f] && t.values && t.values[f] && t.values[f] !== (l[f]||''))
@@ -821,7 +941,6 @@ function renderTtSection(l){
   const tab = (key, label, n) => `<button type="button" role="tab" class="tt-tab${ttTab===key?' at':''}" aria-selected="${ttTab===key}" onclick="setTtTab('${key}')">${label}${n!=null?`<span class="tt-tab-n">${n}</span>`:''}</button>`;
 
   document.getElementById('dpTt').innerHTML = `
-    ${rows.join('')}
     ${says}
     <div class="tt-strip">${stats.join('')}</div>
     <div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('activity','Activity', dayCount)}${tab('conversation','Conversation', msgCount)}</div>
@@ -1142,12 +1261,28 @@ function renderBoard(){
     return;
   }
   board.innerHTML = `<div class="kanban">${stages.map(stage=>{
-    const colLeads = filteredLeads.filter(l=>l.stageId===stage.id);
+    // Most urgent first, then the most recently active — what a person should look at first.
+    const colLeads = filteredLeads.filter(l=>l.stageId===stage.id).sort((a, b) => {
+      const ra = topAttentionUi(a), rb = topAttentionUi(b);
+      const sa = ra ? SEV_RANK[ra.severity] : -1, sb = rb ? SEV_RANK[rb.severity] : -1;
+      if(sb !== sa) return sb - sa;
+      const ta = Math.max(a.updatedAt||0, (a.tt && a.tt.lastMessageAt)||0), tb = Math.max(b.updatedAt||0, (b.tt && b.tt.lastMessageAt)||0);
+      return tb - ta;
+    });
+    const urgent = colLeads.filter(isUrgentUi).length;
+    const rule = stageRuleOf(stage);
+    const kind = window.crmPipeline ? window.crmPipeline.stageKindOf(stage) : null;
     return `
-    <div class="kcol">
+    <div class="kcol${kind==='lost'||kind==='won'||kind==='hold' ? ' kcol-side kcol-'+kind : ''}">
       <div class="kcol-hdr">
-        <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${escapeHtml(stage.name)}</div>
-        <div class="kcol-count">${colLeads.length}</div>
+        <div class="kcol-head">
+          <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${escapeHtml(stage.name)}</div>
+          ${rule ? `<div class="kcol-rule">${escapeHtml(rule)}</div>` : ''}
+        </div>
+        <div class="kcol-counts">
+          ${urgent ? `<span class="kcol-urgent" title="${urgent} need action now">${urgent}</span>` : ''}
+          <div class="kcol-count">${colLeads.length}</div>
+        </div>
       </div>
       <div class="kcol-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
         ${colLeads.length ? colLeads.map(l=>leadCardHtml(l)).join('') : '<div class="kcol-empty">No leads</div>'}
@@ -1191,31 +1326,55 @@ function detailsSentChip(l){
   return `<div class="lcard-flag ${sent?'sent':'not-sent'}">${sent?'📨 Details sent':'📭 Details not sent'}</div>`;
 }
 
+// The next column along the milestone path (never into Won/On hold/Lost by a one-tap button
+// from somewhere unrelated). Falls back to plain column order on a pipeline without keys.
+function nextLadderStageId(stageId){
+  const P = window.crmPipeline;
+  const key = stageKeyOfId(stageId);
+  if(P && key){
+    const i = P.LADDER.indexOf(key);
+    if(i < 0 || i >= P.LADDER.length - 1) return null;
+    return stageIdForKey(P.LADDER[i+1]);
+  }
+  return nextStageId(stageId);
+}
+
+// A card answers four questions at a glance, in this order: who, what are they after, what
+// happens next, and is anything wrong. Everything else is one tap away on the lead page.
 function leadCardHtml(l){
-  const stage = stageById(l.stageId);
-  const next = nextStageId(l.stageId);
+  const next = nextLadderStageId(l.stageId);
   const nextStage = next ? stageById(next) : null;
   const src = sourceBadge(l);
+  const top = topAttentionUi(l);
+  const step = nextStepOf(l);
+  const what = [l.propertyInterest, l.budget].filter(Boolean).map(s => escapeHtml(s)).join(' · ');
+  const chips = [];
+  if(isTtLead(l)){
+    const t = l.tt;
+    if(TT_STATUS[t.status]) chips.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
+    if(t.locked) chips.push('<span class="tt-chip paused" title="The AI is paused on this chat in TailorTalk">🔒 AI paused</span>');
+    if(t.lastMessageAt) chips.push(`<span class="tt-chip time" title="Last message from the lead">💬 ${timeAgo(t.lastMessageAt)}</span>`);
+  }
+  // The step line already says what the team owes; the alert line says the NEXT different thing.
+  const attn = attentionFor(l);
+  const coveredByStep = a => step && STEP_KEYS.has(a.key);
+  const alertItem = attn.find(a => SEV_RANK[a.severity] >= SEV_RANK.medium && !coveredByStep(a));
+  const extra = attn.filter(a => a !== alertItem && !coveredByStep(a)).length;
+  const aiMoved = l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 48*3600000 && l.stageId === stageIdForKey(l.ai.lastMove.to);
+  const sevCls = top ? ` sev-${top.severity}` : '';
   return `
-  <div class="lcard" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
+  <div class="lcard${sevCls}" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
     <div class="lcard-top">
       <div class="lcard-name">${escapeHtml(l.name)}</div>
       <div class="lcard-src ${src.cls}">${src.text}</div>
     </div>
-    <div class="lcard-meta">
-      ${l.phone?`<div>📞 ${escapeHtml(l.phone)}</div>`:''}
-      ${!l.phone && isTtLead(l) && l.tt.handle?`<div>📸 @${escapeHtml(l.tt.handle)}</div>`:''}
-      ${l.channel?`<div>${channelLabel(l.channel)}</div>`:''}
-      ${l.enquiryType?`<div>🏷️ ${escapeHtml(l.enquiryType)}</div>`:''}
-      ${l.propertyInterest?`<div>🏠 ${escapeHtml(l.propertyInterest)}</div>`:''}
-      ${l.budget && isTtLead(l)?`<div>💰 ${escapeHtml(l.budget)}</div>`:''}
-    </div>
-    ${ttCardHtml(l)}
-    ${detailsSentChip(l)}
-    ${followUpBadge(l)}
+    ${what ? `<div class="lcard-what">${what}</div>` : (l.enquiryType ? `<div class="lcard-what">${escapeHtml(l.enquiryType)}</div>` : '')}
+    ${step ? `<div class="lcard-step ${step.cls}"><span class="lcard-step-t">${escapeHtml(step.text)}</span>${step.due ? `<span class="lcard-step-due">${escapeHtml(fmtDue(step.due))}</span>` : ''}</div>` : ''}
+    ${alertItem ? `<div class="lcard-alert ${alertItem.severity}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
+    ${chips.length ? `<div class="lcard-tt">${chips.slice(0,3).join('')}</div>` : ''}
     <div class="lcard-foot">
-      <div class="lcard-time">${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}</div>
-      ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${nextStage.name}</button>`:''}
+      <div class="lcard-time">${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
+      ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}
     </div>
   </div>`;
 }
@@ -1229,6 +1388,7 @@ const LIST_COLUMNS = [
   { key:'enquiryType', label:'Type', filterable:true, get:l=>l.enquiryType||'—', sortVal:l=>(l.enquiryType||'').toLowerCase() },
   { key:'propertyInterest', label:'Interest', filterable:true, get:l=>l.propertyInterest||'—', sortVal:l=>(l.propertyInterest||'').toLowerCase() },
   { key:'stage', label:'Stage', filterable:true, get:l=>{ const s=stageById(l.stageId); return s?s.name:'—'; }, sortVal:l=>{ const s=stageById(l.stageId); return s?s.name.toLowerCase():''; } },
+  { key:'next', label:'Next step', filterable:false, get:l=>{ const s=nextStepOf(l); return s?s.text:'—'; }, sortVal:l=>{ const t=topAttentionUi(l); return t ? -SEV_RANK[t.severity]*1e13 + (t.at||0) : 9e15; } },
   { key:'source', label:'Source', filterable:true, get:l=>sourceLabel(l.source), sortVal:l=>sourceLabel(l.source).toLowerCase() },
   { key:'ttStatus', label:'TailorTalk', filterable:true, get:l=>isTtLead(l)?(ttStatusLabel(l.tt.status)||'Linked'):'—', sortVal:l=>{ const order={hot:0,warm:1,cold:2,converted:3,dead:4}; return isTtLead(l)?(order[l.tt.status]??5):9; } },
   { key:'ttLastMessage', label:'Last message', filterable:false, get:l=>isTtLead(l)&&l.tt.lastMessageAt?timeAgo(l.tt.lastMessageAt):'—', sortVal:l=>isTtLead(l)?(l.tt.lastMessageAt||0):0 },
@@ -1357,6 +1517,7 @@ function renderList(){
         <td>${escapeHtml(l.enquiryType||'—')}</td>
         <td>${escapeHtml(l.propertyInterest||'—')}</td>
         <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:'—'}</td>
+        <td>${(() => { const s = nextStepOf(l); const t = topAttentionUi(l); return s || t ? `<span class="lv-next ${t ? t.severity : ''}">${escapeHtml(s ? s.text : t.label)}${s && s.due ? ` · ${escapeHtml(fmtDue(s.due))}` : ''}</span>` : '—'; })()}</td>
         <td>${sourceLabel(l.source)}</td>
         <td>${isTtLead(l)?`<span class="tt-chip ${escapeHtml(l.tt.status||'')}">${TT_STATUS[l.tt.status]?TT_STATUS[l.tt.status].icon+' ':''}${escapeHtml(ttStatusLabel(l.tt.status)||'Linked')}</span>${ttNeedsAttention(l)?' <span class="tt-chip alert" title="Escalated or flagged in TailorTalk">🚨</span>':''}`:'—'}</td>
         <td>${isTtLead(l)&&l.tt.lastMessageAt?timeAgo(l.tt.lastMessageAt):'—'}</td>
@@ -1394,20 +1555,59 @@ function followupBuckets(list){
   Object.values(buckets).forEach(arr=>arr.sort((a,b)=>a.followUpAt-b.followUpAt));
   return buckets;
 }
+// The badge counts leads that need a person NOW (critical or high) — one number that means
+// "open the queue", instead of every follow-up due at some point today.
 function updateFollowupBadge(){
   const badge = document.getElementById('fuBadge');
   if(!badge) return;
-  const withFollowup = leads.filter(l=>l.followUpAt);
-  if(!withFollowup.length){ badge.style.display='none'; return; }
-  const buckets = followupBuckets(withFollowup);
-  const count = buckets.overdue.length + buckets.today.length;
-  if(count>0){
-    badge.textContent = count;
+  const urgent = leads.filter(l => !isBusinessLead(l) && isUrgentUi(l));
+  const critical = urgent.filter(l => { const t = topAttentionUi(l); return t && t.severity === 'critical'; }).length;
+  if(urgent.length){
+    badge.textContent = urgent.length;
     badge.style.display='';
-    badge.classList.toggle('urgent', buckets.overdue.length>0);
+    badge.classList.toggle('urgent', critical > 0);
   } else {
     badge.style.display='none';
   }
+}
+
+// Reasons whose time is a due time (show it); the rest carry when something last happened.
+const DUE_KEYS = new Set(['promise_overdue', 'team_owes', 'followup_overdue', 'visit_outcome', 'hold_due', 'window_closing']);
+const QUEUE_GROUPS = [
+  { key:'critical', label:'🔴 Do now', hint:'Promised and overdue, or the reply window is closing' },
+  { key:'high',     label:'🟠 Today',  hint:'Waiting on the team' },
+  { key:'medium',   label:'🟡 This week', hint:'Keep the deal moving' }
+];
+function queueRowHtml(l, a){
+  const stage = stageById(l.stageId);
+  const waUrl = waHref(l.phone);
+  return `<div class="fu-row q-row ${a.severity}" onclick="openDetail('${l.id}')">
+    <div class="fu-row-main">
+      <div class="fu-name-row">
+        <span class="fu-name">${escapeHtml(l.name)}</span>
+        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
+      </div>
+      <div class="q-what">${escapeHtml(a.label)}</div>
+      ${a.detail ? `<div class="fu-note">${escapeHtml(a.detail)}</div>` : ''}
+    </div>
+    <div class="fu-row-side">
+      ${a.at && DUE_KEYS.has(a.key) ? `<div class="fu-time ${a.severity==='critical'?'overdue':'today'}">${escapeHtml(fmtDue(a.at))}</div>` : ''}
+      <button class="fu-action-btn done" onclick="event.stopPropagation();openFollowUpLogModal('${l.id}')" title="Log what you did">✓</button>
+      ${waUrl?`<a class="fu-wa-btn" href="${waUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">💬</a>`:''}
+    </div>
+  </div>`;
+}
+function actionQueueHtml(list){
+  const items = list.filter(l => !isBusinessLead(l)).map(l => ({ l, a: topAttentionUi(l) })).filter(x => x.a && SEV_RANK[x.a.severity] >= SEV_RANK.medium);
+  if(!items.length) return '<div class="q-empty">✓ Nothing needs a person right now.</div>';
+  return QUEUE_GROUPS.map(g => {
+    const rows = items.filter(x => x.a.severity === g.key).sort((x, y) => (x.a.at || Infinity) - (y.a.at || Infinity));
+    if(!rows.length) return '';
+    return `<div class="fu-group">
+      <div class="fu-group-hdr q-${g.key}">${g.label} <span class="fu-count">${rows.length}</span><span class="q-hint">${g.hint}</span></div>
+      <div class="fu-rows">${rows.map(x => queueRowHtml(x.l, x.a)).join('')}</div>
+    </div>`;
+  }).join('');
 }
 function followupRowHtml(l, bucketKey){
   const stage = stageById(l.stageId);
@@ -1441,9 +1641,11 @@ function followupRowHtml(l, bucketKey){
 }
 function renderFollowups(){
   const wrap = document.getElementById('followupsView');
-  const withFollowup = filteredLeads.filter(l=>l.followUpAt);
+  const queue = `<div class="q-wrap"><div class="q-title">Needs a person</div>${actionQueueHtml(filteredLeads)}</div>`;
+  const openStages = l => { const k = stageKindOfId(l.stageId); return k !== 'won' && k !== 'lost'; };
+  const withFollowup = filteredLeads.filter(l=>l.followUpAt && openStages(l));
   if(!withFollowup.length){
-    wrap.innerHTML = '<div class="nores"><div class="nores-i">📅</div><div class="nores-t">No follow-ups scheduled</div><div class="nores-sub">Set one from a lead\'s Notes &amp; Follow-ups section.</div></div>';
+    wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="nores"><div class="nores-i">📅</div><div class="nores-t">No follow-ups scheduled</div><div class="nores-sub">Set one from a lead\'s Notes &amp; Follow-ups section.</div></div></div>`;
     return;
   }
   const buckets = followupBuckets(withFollowup);
@@ -1455,32 +1657,243 @@ function renderFollowups(){
       <div class="fu-rows">${arr.map(l=>followupRowHtml(l, g.key)).join('')}</div>
     </div>`;
   }).join('');
-  wrap.innerHTML = `<div class="fu-wrap">${groupsHtml}</div>`;
+  wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="q-title">Follow-up calendar</div>${groupsHtml}</div>`;
 }
 
-function changeStage(id, stageId){
+// A person moving a lead. Lost and On hold ask why (and until when) first — that reason is
+// what the dashboard, the AI and whoever picks the lead up next rely on.
+function changeStage(id, stageId, opts = {}){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
+  const toKind = stageKindOfId(stageId);
+  if(l.stageId !== stageId && (toKind === 'lost' || toKind === 'hold') && !opts.reason){
+    openStageReasonModal(id, stageId, opts);
+    applyFilters();
+    if(currentDetailId===id) renderDetailStageRow(l);
+    return;
+  }
   const stageChanged = l.stageId !== stageId;
+  const now = Date.now();
   if(stageChanged){
     const oldStage = stageById(l.stageId);
     const newStage = stageById(stageId);
+    const P = window.crmPipeline;
+    let why = '';
+    if(toKind === 'lost' && opts.reason) why = ` (${escapeHtml((P && P.LOST_REASONS[opts.reason]) || opts.reason)})`;
+    if(toKind === 'hold' && opts.reason) why = ` (${escapeHtml((P && P.HOLD_REASONS[opts.reason]) || opts.reason)}${opts.until ? ', revisit '+escapeHtml(fmtDue(opts.until)) : ''})`;
     if(oldStage && newStage){
-      addHistory(l, 'stage', `Stage changed from <b>${escapeHtml(oldStage.name)}</b> to <b>${escapeHtml(newStage.name)}</b>`);
+      addHistory(l, 'stage', `Stage changed from <b>${escapeHtml(oldStage.name)}</b> to <b>${escapeHtml(newStage.name)}</b>${why}`);
     }
     // Denormalized onto the parent doc (same write, no extra read/write) so
     // the Dashboard's computeDashboardMetrics can tell "moved to stage X
     // today" apart from a note/follow-up update without reading history.
     l.prevStageId = l.stageId;
-    l.stageChangedAt = Date.now();
+    l.stageChangedAt = now;
+    // Who decided: the AI does not override a person's choice until the lead says something new.
+    l.stageChangedBy = currentUserEmail || 'team';
+    const fromKind = stageKindOfId(l.stageId);
+    if(fromKind === 'lost' && toKind !== 'lost') l.lostReason = null;
+    if(fromKind === 'hold' && toKind !== 'hold'){ l.holdReason = null; l.holdUntil = null; }
+    if(toKind === 'lost'){ l.lostReason = opts.reason || l.lostReason || 'other'; }
+    if(toKind === 'hold'){
+      l.holdReason = opts.reason || 'other';
+      l.holdUntil = opts.until || null;
+      if(opts.until){ l.followUpAt = opts.until; l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = 'Revisit — the lead asked to be contacted around now'; }
+    }
+    if(toKind === 'lost' || toKind === 'won'){ l.followUpAt = null; }
   }
   l.stageId = stageId;
-  l.updatedAt = Date.now();
+  l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   if(stageChanged) l.lastActionType = 'stage';
   applyFilters();
   persistLead(l);
-  if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); }
+  if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); renderStandSection(l); renderFollowUpSpotlight(l); renderNoteFollowUpFields(l); }
+}
+
+// ── Reason for Lost / On hold ──
+let stageReasonDraft = null;
+function openStageReasonModal(leadId, stageId, opts = {}){
+  const P = window.crmPipeline;
+  const kind = stageKindOfId(stageId);
+  const l = leads.find(x=>x.id===leadId);
+  if(!P || !l) return;
+  stageReasonDraft = { leadId, stageId, kind };
+  const reasons = kind === 'lost' ? P.LOST_REASONS : P.HOLD_REASONS;
+  const pre = opts.reasonHint || (kind === 'lost' ? (l.ai && l.ai.lostReason) : (l.ai && l.ai.holdReason)) || '';
+  document.getElementById('srTitle').textContent = kind === 'lost' ? `Why is ${l.name} lost?` : `Why is ${l.name} on hold?`;
+  document.getElementById('srReason').innerHTML = Object.entries(reasons).map(([k, v]) => `<option value="${k}" ${k===pre?'selected':''}>${escapeHtml(v)}</option>`).join('');
+  document.getElementById('srUntilRow').style.display = kind === 'hold' ? '' : 'none';
+  const hint = opts.untilHint || (l.ai && l.ai.holdUntil) || null;
+  document.getElementById('srUntil').value = hint ? toDateInputValue(new Date(hint)) : '';
+  document.getElementById('srErr').classList.remove('show');
+  document.getElementById('stageReasonModal').classList.add('open');
+}
+function closeStageReasonModal(){
+  document.getElementById('stageReasonModal').classList.remove('open');
+  stageReasonDraft = null;
+}
+function saveStageReason(){
+  const d = stageReasonDraft;
+  if(!d) return;
+  const reason = document.getElementById('srReason').value;
+  let until = null;
+  if(d.kind === 'hold'){
+    const v = document.getElementById('srUntil').value;
+    if(v){
+      until = new Date(`${v}T10:00:00`).getTime();
+      if(until < Date.now()){ const e = document.getElementById('srErr'); e.textContent = 'Pick a revisit date in the future.'; e.classList.add('show'); return; }
+    }
+  }
+  closeStageReasonModal();
+  changeStage(d.leadId, d.stageId, { reason, until });
+  showToast(d.kind === 'lost' ? 'Moved to Lost' : 'Moved to On hold');
+}
+
+// ── The AI's verdict on a lead: accept, dismiss, undo, re-check ──
+function patchLeadAi(l, fields){
+  // Local copy first so the page updates now; the snapshot confirms.
+  l.ai = l.ai || {};
+  Object.entries(fields).forEach(([path, value]) => {
+    const parts = path.split('.').slice(1);
+    let o = l.ai;
+    parts.slice(0, -1).forEach(p => { o[p] = o[p] || {}; o = o[p]; });
+    o[parts[parts.length-1]] = value;
+  });
+  if(window.crmFirebase && window.crmFirebase.updateLeadAi) window.crmFirebase.updateLeadAi(l.id, fields);
+}
+function acceptAiSuggestion(id){
+  const l = leads.find(x=>x.id===id);
+  const s = l && l.ai && l.ai.suggestion;
+  if(!s) return;
+  const stageId = stageIdForKey(s.stage);
+  if(!stageId) return;
+  patchLeadAi(l, { 'ai.suggestion': null });
+  changeStage(id, stageId, { reasonHint: l.ai.lostReason || l.ai.holdReason, untilHint: l.ai.holdUntil });
+}
+function dismissAiSuggestion(id){
+  const l = leads.find(x=>x.id===id);
+  const s = l && l.ai && l.ai.suggestion;
+  if(!s) return;
+  patchLeadAi(l, { 'ai.suggestion': null, [`ai.dismissed.${s.stage}`]: Date.now() });
+  addHistory(l, 'field', `Dismissed the AI's suggestion to move to <b>${escapeHtml((window.crmPipeline && window.crmPipeline.stageDef(s.stage) || {}).name || s.stage)}</b>`);
+  refreshAll();
+  if(currentDetailId===id){ renderStandSection(l); renderHistory(l); }
+}
+function undoAiMove(id){
+  const l = leads.find(x=>x.id===id);
+  const m = l && l.ai && l.ai.lastMove;
+  if(!m) return;
+  const back = m.fromStageId && stageById(m.fromStageId) ? m.fromStageId : stageIdForKey(m.from);
+  if(!back) return;
+  // Remember the undo so the AI does not make the same move again without a new message.
+  patchLeadAi(l, { 'ai.lastMove': null, [`ai.dismissed.${m.to}`]: Date.now() });
+  changeStage(id, back, { reason: l.lostReason || l.holdReason || 'other' });
+  showToast('Move undone');
+}
+let recheckingIds = new Set();
+async function recheckLead(id){
+  if(recheckingIds.has(id)) return;
+  recheckingIds.add(id);
+  const l = leads.find(x=>x.id===id);
+  if(l && currentDetailId===id) renderStandSection(l);
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/tailortalk?action=ai-lead', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken }, body: JSON.stringify({ leadId: id }) });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || data.ok === false) showToast(data.error ? `Re-check failed: ${data.error}` : (data.skipped ? `Skipped: ${data.skipped}` : 'Re-check failed'));
+    else showToast(data.moved ? `🤖 Moved to ${(window.crmPipeline.stageDef(data.moved.to)||{}).name}` : data.suggested ? '🤖 AI has a suggestion' : '🤖 Checked — no change');
+  } catch(e){
+    showToast('Re-check failed — check your connection');
+  } finally {
+    recheckingIds.delete(id);
+    const cur = leads.find(x=>x.id===id);
+    if(cur && currentDetailId===id) renderStandSection(cur);
+  }
+}
+function markHandledUi(id, what){
+  const l = leads.find(x=>x.id===id);
+  if(!l) return;
+  addHistory(l, 'followed-up', `Handled: <b>${escapeHtml(what)}</b>`);
+  l.updatedAt = Date.now();
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  l.lastActionType = 'signal-handled';
+  persistLead(l);
+  refreshAll();
+  if(currentDetailId===id){ renderStandSection(l); renderTtSection(l); renderHistory(l); }
+  showToast('✓ Marked handled');
+}
+function markVisitedUi(id){
+  const stageId = stageIdForKey('visit_done');
+  if(stageId) changeStage(id, stageId);
+}
+
+// ── "Where this lead stands" on the lead page ──
+function renderStandSection(l){
+  const sec = document.getElementById('dpStandSec');
+  const el = document.getElementById('dpStand');
+  if(!sec || !el) return;
+  if(isBusinessLead(l)){ sec.hidden = true; return; }
+  sec.hidden = false;
+  const P = window.crmPipeline;
+  const ai = l.ai || {};
+  const stage = stageById(l.stageId);
+  const kind = stageKindOfId(l.stageId);
+  const parts = [];
+
+  const rule = stage ? stageRuleOf(stage) : '';
+  let why = '';
+  if(kind === 'lost' && l.lostReason) why = P.LOST_REASONS[l.lostReason] || l.lostReason;
+  if(kind === 'hold') why = [l.holdReason && P.HOLD_REASONS[l.holdReason], l.holdUntil && `revisit ${fmtDue(l.holdUntil)}`].filter(Boolean).join(' · ');
+  parts.push(`<div class="st-head">
+    <div class="st-stage"><span class="kcol-dot" style="background:${stage ? stage.color : '#999'}"></span><b>${escapeHtml(stage ? stage.name : 'No column')}</b>${rule ? `<span class="st-rule">${escapeHtml(rule)}</span>` : ''}</div>
+    ${why ? `<div class="st-why">${escapeHtml(why)}</div>` : ''}
+  </div>`);
+
+  const step = nextStepOf(l);
+  const stepIsTeam = step && (step.cls === 'team' || step.cls === 'overdue');
+  if(step) parts.push(`<div class="st-step ${step.cls}${stepIsTeam ? ' with-acts' : ''}"><span class="st-label">Next step</span><span>${escapeHtml(step.text)}${step.due ? `<span class="st-due"> · ${escapeHtml(fmtDue(step.due))}</span>` : ''}</span>${stepIsTeam ? `<span class="st-item-acts"><button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button><button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(step.text))})">Done</button></span>` : ''}</div>`);
+  if(ai.visit && (ai.visit.at || ai.visit.status !== 'none')){
+    const vs = { requested:'Asked for', scheduled:'Agreed', done:'Done', cancelled:'Cancelled', none:'' }[ai.visit.status] || '';
+    parts.push(`<div class="st-row"><span class="st-label">Site visit</span><span>${escapeHtml([vs, ai.visit.property, ai.visit.at && fmtDue(ai.visit.at)].filter(Boolean).join(' · '))}</span></div>`);
+  }
+
+  // Everything that needs a person, with the action that settles it.
+  const attn = attentionFor(l).filter(a => a.key !== 'ai_suggestion' && !(stepIsTeam && STEP_KEYS.has(a.key)));
+  if(attn.length){
+    parts.push(`<div class="st-attn">${attn.map(a => {
+      const btns = [];
+      if(a.key === 'visit_outcome') btns.push(`<button type="button" class="tt-btn" onclick="markVisitedUi('${l.id}')">They visited</button>`);
+      if(a.key.startsWith('signal:') || ['waiting_for_team','escalated','flagged','promise_overdue','team_owes','window_closing','followup_overdue','visit_unscheduled','feedback_due','negotiation_stalled','hold_due','lead_silent','visit_outcome'].includes(a.key)) btns.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
+      if(a.key === 'stale') btns.push(`<button type="button" class="tt-btn" onclick="changeStage('${l.id}','${stageIdForKey('lost')}')">Close as lost</button>`);
+      btns.push(`<button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(a.label))})">Handled</button>`);
+      return `<div class="st-item ${a.severity}">
+        <div class="st-item-main"><div class="st-item-t">${escapeHtml(a.label)}</div>${a.detail ? `<div class="st-item-d">${escapeHtml(a.detail)}</div>` : ''}</div>
+        <div class="st-item-acts">${btns.join('')}</div>
+      </div>`;
+    }).join('')}</div>`);
+  }
+
+  if(ai.suggestion && ai.suggestion.stage && stageKeyOfId(l.stageId) !== ai.suggestion.stage){
+    const def = P.stageDef(ai.suggestion.stage);
+    parts.push(`<div class="st-suggest">
+      <div><b>🤖 AI suggests: ${escapeHtml(def ? def.name : ai.suggestion.stage)}</b><div class="st-item-d">${escapeHtml(ai.suggestion.evidence || '')}${ai.suggestion.why ? ` · not moved automatically: ${escapeHtml(ai.suggestion.why)}` : ''}</div></div>
+      <div class="st-item-acts"><button type="button" class="tt-btn" onclick="acceptAiSuggestion('${l.id}')">Move</button><button type="button" class="tt-btn quiet" onclick="dismissAiSuggestion('${l.id}')">Dismiss</button></div>
+    </div>`);
+  }
+  if(ai.lastMove && Date.now() - ai.lastMove.at < 7*86400000 && l.stageId === stageIdForKey(ai.lastMove.to)){
+    const from = P.stageDef(ai.lastMove.from), to = P.stageDef(ai.lastMove.to);
+    parts.push(`<div class="st-moved">
+      <div>🤖 Moved from <b>${escapeHtml(from ? from.name : ai.lastMove.from)}</b> to <b>${escapeHtml(to ? to.name : ai.lastMove.to)}</b> ${timeAgo(ai.lastMove.at)}<div class="st-item-d">${escapeHtml(ai.lastMove.evidence || '')}</div></div>
+      <div class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="undoAiMove('${l.id}')">Undo</button></div>
+    </div>`);
+  }
+
+  const checking = recheckingIds.has(l.id);
+  const canRead = isTtLead(l) || (l.noteCount || 0) > 0;
+  const read = ai.at ? `AI read this lead ${timeAgo(ai.at)}${ai.confidence ? ' · ' + ai.confidence + ' confidence' : ''}${ai.error ? ' · last read failed: ' + escapeHtml(ai.error) : ''}` : (canRead ? 'Not read by the AI yet' : 'No chat or notes for the AI to read');
+  parts.push(`<div class="st-foot"><span>${read}</span>${canRead ? `<button type="button" class="tt-btn quiet" ${checking?'disabled':''} onclick="recheckLead('${l.id}')">${checking ? 'Reading…' : 'Re-check'}</button>` : ''}</div>`);
+  el.innerHTML = parts.join('');
 }
 
 // ═══════ ADD / EDIT LEAD MODAL ═══════
@@ -1830,12 +2243,19 @@ function applyLeadForm(l, form, now){
   l.email=form.email; l.enquiryType=form.enquiryType; l.propertyInterest=form.propertyInterest;
   l.budget=form.budget; l.detailsSent=form.detailsSent;
   l.contactAt = l.contactAt || lmModalContactAt || now;
+  if((l.followUpAt||null) !== (form.followUpAt||null)){ l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null; }
   l.followUpAt = form.followUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || null;
   l.notes = l.notes || [];
   // See changeStage() for why these are stamped — same "today" bucketing need.
-  if(stageChanged){ l.prevStageId = oldStageId; l.stageChangedAt = now; }
+  if(stageChanged){
+    l.prevStageId = oldStageId; l.stageChangedAt = now; l.stageChangedBy = currentUserEmail || 'team';
+    const toKind = stageKindOfId(form.stageId);
+    if(toKind === 'lost' && !l.lostReason) l.lostReason = 'other';
+    if(toKind !== 'lost') l.lostReason = null;
+    if(toKind !== 'hold'){ l.holdReason = null; l.holdUntil = null; }
+  }
   l.lastActionType = stageChanged ? 'stage' : (form.noteText ? 'note' : 'field');
   diffs.forEach(d => addHistory(l, d.type, d.text));
   return diffs;
@@ -2163,6 +2583,7 @@ function openDetail(id){
   waBtn.title = isTtLead(l) ? 'Opens WhatsApp on this device. It is not sent from the business number and will not appear in the TailorTalk chat.' : '';
 
   renderDetailStageRow(l);
+  renderStandSection(l);
   renderFollowUpSpotlight(l);
   renderDetailInfo(l);
   ttChatExpanded.delete(id);
@@ -2379,6 +2800,7 @@ function saveFollowUpLog(){
     }
   }
   l.followUpAt = followUpAt;
+  l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   l.lastActionType = 'followed-up';
@@ -2394,6 +2816,7 @@ function removeFollowUp(leadId){
   if(!confirm(`Remove the follow-up for "${l.name}"?`)) return;
   if(l.followUpAt) addHistory(l, 'followup-removed', 'Follow-up removed');
   l.followUpAt = null;
+  l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = Date.now(); l.followUpNote = null;
   l.updatedAt = Date.now();
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   l.lastActionType = 'followup-removed';
@@ -2437,6 +2860,7 @@ function addNote(){
       addHistory(l, 'followup-removed', 'Follow-up removed');
     }
   }
+  if(nextFollowUpAt !== currentAt){ l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null; }
   l.followUpAt = nextFollowUpAt;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
@@ -2495,7 +2919,9 @@ function moveStageDraft(i, dir){
 }
 function deleteStageDraft(i){
   if(stageManagerDraft.length<=1){ showToast('Keep at least one stage'); return; }
-  if(!confirm(`Delete stage "${stageManagerDraft[i].name}"? Leads in it will move to the first stage.`)) return;
+  const keyed = stageManagerDraft[i].key;
+  const warn = keyed ? `\n\nThis column is part of the lead pipeline ("${stageManagerDraft[i].key}"). Lead automation, the dashboard and the daily digest rely on it — without it, automation stops moving leads.` : '';
+  if(!confirm(`Delete stage "${stageManagerDraft[i].name}"? Leads in it will move to the first stage.${warn}`)) return;
   stageManagerDraft.splice(i,1);
   renderStageManagerRows();
 }
