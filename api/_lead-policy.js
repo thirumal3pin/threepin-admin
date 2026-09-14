@@ -8,7 +8,7 @@
 //   • Never declare a deal Won — that is always a person's call (a suggestion).
 //   • A column a person chose stands until the lead says something new after that choice.
 //   • Lost and On hold need a stated reason; a lead who writes again after either is re-opened.
-//     Only the lead's own words close a lead, and never while the team still owes them a reply.
+//     Only the lead's own words close or park a lead, and never while the team still owes them.
 //   • What the AI moved and a person undid is not repeated until the lead says something new.
 //   • The team's due step becomes the follow-up — unless a person already has an earlier one.
 //   • Vendors, collaborations and unknown custom columns are never touched.
@@ -137,7 +137,9 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
     else if (conf === 'high' && AUTO_LOST.has(verdict.lostReason)) moveTo = 'lost';
     else suggest('loss not certain');
   } else if (target === 'on_hold') {
-    if (conf === 'high' && (curKey !== 'lost')) moveTo = 'on_hold';
+    // "We have no match yet, the team will look" is the team's work, not the lead's pause.
+    if (verdict.next.owner === 'team') suggest('the team still owes this lead something');
+    else if (conf === 'high' && (curKey !== 'lost')) moveTo = 'on_hold';
     else suggest('pause not certain');
   } else if (curKey === 'on_hold' || curKey === 'lost') {
     // Re-open only when the lead has written since it was parked.

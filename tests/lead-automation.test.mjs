@@ -170,6 +170,19 @@ function fakeClient(answer, { failBeta = false, stop = 'end_turn' } = {}) {
     const blocked = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'SAFETY' }] }) }) } });
     eq('A Gemini safety block is reported, not applied', blocked.error, 'refused');
     eq('No Gemini key is reported clearly', (await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: '' } })).error, 'GEMINI_API_KEY is not set');
+    // Rate limits: wait what Google asks (when short) and try again; otherwise hand the lead back.
+    const limited = (retryDelay) => ({ ok: false, status: 429, json: async () => ({ error: { code: 429, message: 'You exceeded your current quota', details: retryDelay ? [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay }] : [] } }) });
+    const answered = { ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(good) }] } }] }) };
+    const seq = list => { let i = 0; return async () => list[Math.min(i++, list.length - 1)]; };
+    const waits = [];
+    const recovered = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: seq([limited('3s'), answered]), sleepImpl: async ms => { waits.push(ms); } } });
+    check('A short rate limit is waited out and retried', recovered.ok && JSON.stringify(waits) === '[3000]', JSON.stringify({ recovered, waits }));
+    const longWait = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: seq([limited('37s')]), sleepImpl: async () => { throw new Error('must not wait'); } } });
+    eq('A long rate limit is handed back with Google\'s delay', [longWait.ok, longWait.retryable, longWait.retryAfterMs, longWait.error], [false, true, 37000, 'rate limited']);
+    const stuck = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: seq([limited(null)]), sleepImpl: async () => {} } });
+    check('Still limited after the retries → handed back, not failed', !stuck.ok && stuck.retryable === true);
+    const denied = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({ error: { message: 'API key not valid' } }) }) } }).catch(e => ({ thrown: e.message }));
+    check('A bad key is a real error, not retried', /403/.test(denied.thrown || ''), JSON.stringify(denied));
   }
   const h = fakeClient(good);
   await classifyLead({ client: h, model: 'claude-haiku-4-5', caseFile: cf, now: NOW });
@@ -244,6 +257,8 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('"Not a fit" is a judgement call — only a suggestion', !notAFit.moved && notAFit.suggested === 'lost');
   const angry = decide(ttLead({ stageId: sid('options') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_interested', next: { owner: 'team', action: 'Call back — missed three callbacks', kind: 'call', dueAt: null } }));
   check('A lead the team still owes is never closed', !angry.moved && angry.suggested === 'lost' && angry.patch.ai.suggestion.why === 'the team still owes this lead a reply');
+  const noMatchYet = decide(ttLead({ stageId: sid('visit_done') }), verdict({ stage: 'on_hold', confidence: 'high', holdReason: 'no_match', next: { owner: 'team', action: 'Find matching land in Gummidipondi', kind: 'find_property', dueAt: null }, visit: { status: 'none', at: null } }));
+  check('"No match yet, team will look" is not parked On hold', !noMatchYet.moved && noMatchYet.suggested === 'on_hold');
 }
 {
   const holdV = verdict({ stage: 'on_hold', confidence: 'high', holdReason: 'postponed', holdUntil: Date.parse('2026-09-30T10:00:00+05:30'), next: { owner: 'none', action: null, dueAt: null }, visit: { status: 'none', at: null } });
@@ -388,6 +403,20 @@ section('Runs on Firestore: apply, audit, debounce');
   check('A message during the run keeps the lead queued', !!db._get('aiQueue/L1'));
   const drained = await drainQueue(db, T, { client, model: 'claude-haiku-4-5', now: NOW + 90000 });
   check('The queue drains what is due', drained.ran === 1 && !db._get('aiQueue/L1'), JSON.stringify(drained));
+
+  // Rate limited while draining: nothing recorded on the lead, the entry stays for later, the
+  // drain stops instead of hammering the model.
+  const aiBefore = JSON.stringify(db._get('leads/L1').ai);
+  const runsBefore = db._list('leads/L1/aiRuns').length;
+  await queueLeadAutomation(db, T, 'L1', { now: NOW + 100000, delayMs: 0 });
+  await queueLeadAutomation(db, T, 'L2', { now: NOW + 100001, delayMs: 0 });
+  const gem = { apiKey: 'k', fetchImpl: async () => ({ ok: false, status: 429, json: async () => ({ error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '40s' }] } }) }) };
+  const limitedDrain = await drainQueue(db, T, { model: 'gemini-3.5-flash-lite', now: NOW + 110000, gemini: gem });
+  check('A rate-limited drain stops at the first limit', limitedDrain.rateLimited && limitedDrain.ran === 1, JSON.stringify(limitedDrain));
+  check('…records nothing on the lead', JSON.stringify(db._get('leads/L1').ai) === aiBefore && db._list('leads/L1/aiRuns').length === runsBefore);
+  const q1 = db._get('aiQueue/L1');
+  check('…and keeps it queued for a couple of minutes later', q1 && q1.claimedDueAt === null && q1.dueAt > Date.now() + 90000 && q1.retries === 1, JSON.stringify(q1));
+  check('…with the others still waiting their turn', !!db._get('aiQueue/L2') && db._get('aiQueue/L2').claimedDueAt === null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

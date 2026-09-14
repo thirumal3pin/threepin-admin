@@ -47,7 +47,7 @@ import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { applyTailorTalkEvent, pullTailorTalkPage } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
-  automationSettings, runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, DEBOUNCE_MS
+  automationSettings, runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, retryAtFor, DEBOUNCE_MS
 } from './_lead-automation.js';
 
 export const maxDuration = 60;
@@ -79,10 +79,12 @@ function scheduleAutomation(db, tenantId, leadId, model) {
     await sleep(dueAt - Date.now() + 250);
     const claimed = await claimQueued(db, leadId, Date.now());
     if (!claimed) return;
+    let r = null;
     try {
-      await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, trigger: 'webhook' });
+      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, trigger: 'webhook' });
     } finally {
-      await finishQueued(db, leadId, claimed);
+      // Rate limited → stays queued; the CRM's next refresh reads it.
+      await finishQueued(db, leadId, claimed, { retryAt: retryAtFor(r) });
     }
   })().catch(e => console.error('lead automation after webhook failed:', leadId, e)));
 }
@@ -287,18 +289,23 @@ async function adminAiPost(request) {
   }
 
   const results = [];
-  let cursor = null;
+  let cursor = typeof body.cursor === 'string' ? body.cursor : null;
+  let rateLimited = null;
   for (const leadId of ids) {
     if (Date.now() - started > 45000) break;
+    let r;
     try {
-      results.push(await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, apply, trigger: apply ? 'backfill' : 'preview' }));
+      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, apply, trigger: apply ? 'backfill' : 'preview' });
     } catch (e) {
-      results.push({ leadId, ok: false, error: String((e && e.message) || e).slice(0, 300) });
+      r = { leadId, ok: false, error: String((e && e.message) || e).slice(0, 300) };
     }
+    // Rate limited: stop here and leave the cursor before this lead, so the next call resumes it.
+    if (r.retry) { rateLimited = { leadId, retryAfterMs: r.retryAfterMs || 60000 }; break; }
+    results.push(r);
     cursor = leadId;
   }
   const finished = results.length === ids.length;
-  return json({ ok: true, apply, model, count: results.length, cursor, done: finished && ids.length < limit && !(Array.isArray(body.leadIds) && body.leadIds.length), results });
+  return json({ ok: true, apply, model, count: results.length, cursor, rateLimited, done: finished && ids.length < limit && !(Array.isArray(body.leadIds) && body.leadIds.length), results });
 }
 
 export async function POST(request) {

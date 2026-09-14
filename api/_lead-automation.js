@@ -32,7 +32,7 @@ function historyId(now) { histSeq = (histSeq + 1) % 1e6; return `h${now}ai${hist
  * @param {object} o { client, model, now, apply = true, trigger }
  * @returns summary { leadId, ok, skipped?, error?, verdict?, moved?, suggested?, followUp?, usage? }
  */
-export async function runLeadAutomation(db, tenantId, leadId, { client, model = LEAD_AI_MODEL, now = Date.now(), apply = true, trigger = 'manual' } = {}) {
+export async function runLeadAutomation(db, tenantId, leadId, { client, model = LEAD_AI_MODEL, now = Date.now(), apply = true, trigger = 'manual', gemini } = {}) {
   const ref = db.collection('leads').doc(leadId);
   const [leadSnap, stateSnap, notesSnap, pipeSnap] = await Promise.all([
     ref.get(),
@@ -54,7 +54,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   const caseFile = buildCaseFile({ lead, state, notes, stages, now });
   let answer;
   try {
-    answer = await classifyLead({ client, model, caseFile, now });
+    answer = await classifyLead({ client, model, caseFile, now, gemini });
   } catch (e) {
     answer = { ok: false, error: String((e && e.message) || e).slice(0, 300), model };
   }
@@ -66,6 +66,8 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     usage: answer.usage ? { input: answer.usage.input_tokens || 0, output: answer.usage.output_tokens || 0, cacheRead: answer.usage.cache_read_input_tokens || 0 } : null
   };
 
+  // A rate limit is not the lead's failure: nothing is recorded, the caller re-queues it.
+  if (!answer.ok && answer.retryable) return { leadId, ok: false, error: answer.error, retry: true, retryAfterMs: answer.retryAfterMs };
   if (!answer.ok) {
     if (apply) {
       await ref.update({ 'ai.error': answer.error, 'ai.errorAt': now });
@@ -126,16 +128,22 @@ export async function claimQueued(db, leadId, now = Date.now()) {
 }
 
 // Clears the queue entry unless a newer message re-queued the lead while it was being read.
-export async function finishQueued(db, leadId, claimedDueAt) {
+// With retryAt (the AI was rate limited) the entry stays, due again at that time.
+export async function finishQueued(db, leadId, claimedDueAt, { retryAt = null } = {}) {
   const ref = db.collection('aiQueue').doc(leadId);
   await db.runTransaction(async t => {
     const snap = await t.get(ref);
-    if (snap.exists && snap.data().dueAt === claimedDueAt) t.delete(ref);
+    if (!snap.exists || snap.data().dueAt !== claimedDueAt) return;
+    if (retryAt) t.set(ref, { dueAt: retryAt, claimedDueAt: null, retries: (snap.data().retries || 0) + 1 }, { merge: true });
+    else t.delete(ref);
   });
 }
 
+export const retryAtFor = (result, now = Date.now()) =>
+  result && result.retry ? now + Math.min(Math.max(result.retryAfterMs || 0, 2 * 60000), 30 * 60000) : null;
+
 // Runs whatever is due, oldest first, within a time budget. Leftovers stay queued.
-export async function drainQueue(db, tenantId, { client, model, now = Date.now(), budgetMs = 40000, trigger = 'queue' } = {}) {
+export async function drainQueue(db, tenantId, { client, model, now = Date.now(), budgetMs = 40000, trigger = 'queue', gemini } = {}) {
   const started = Date.now();
   const snap = await db.collection('aiQueue').where('tenantId', '==', tenantId).get();
   const due = snap.docs.map(d => d.data()).filter(q => q.dueAt <= now && q.claimedDueAt !== q.dueAt).sort((a, b) => a.dueAt - b.dueAt);
@@ -144,13 +152,16 @@ export async function drainQueue(db, tenantId, { client, model, now = Date.now()
     if (Date.now() - started > budgetMs) break;
     const claimed = await claimQueued(db, q.leadId, Math.max(now, Date.now()));
     if (!claimed) continue;
+    let r;
     try {
-      results.push(await runLeadAutomation(db, tenantId, q.leadId, { client, model, trigger }));
+      r = await runLeadAutomation(db, tenantId, q.leadId, { client, model, trigger, gemini });
     } catch (e) {
-      results.push({ leadId: q.leadId, ok: false, error: String((e && e.message) || e).slice(0, 200) });
+      r = { leadId: q.leadId, ok: false, error: String((e && e.message) || e).slice(0, 200) };
     } finally {
-      await finishQueued(db, q.leadId, claimed);
+      await finishQueued(db, q.leadId, claimed, { retryAt: retryAtFor(r) });
     }
+    results.push(r);
+    if (r.retry) break; // the model is rate limited — the rest stay queued for the next drain
   }
-  return { due: due.length, ran: results.length, results };
+  return { due: due.length, ran: results.length, results, rateLimited: results.some(r => r.retry) };
 }

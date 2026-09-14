@@ -63,6 +63,7 @@ export const LEAD_AI_SYSTEM = [
   '- on_hold: the LEAD paused — said later, after a date or an event, or the budget or loan is not ready. While 3 PIN is still searching for a match for a lead who is actively chatting, keep the lead at its milestone with next_owner "team" and next_kind "find_property"; use on_hold with no_match only when the lead agreed to wait until something suitable comes up.',
   '- lost: the LEAD stopped — said not interested, bought or rented elsewhere, chose someone else, or asked for no more contact; or it is not a genuine enquiry (spam, wrong number) or a vendor, agent or job seeker rather than a customer.',
   '  NOT lost: a lead who is angry, doubtful or complaining because 3 PIN was slow or missed a callback. They are still waiting on 3 PIN — keep their milestone, next_owner "team", urgency high. A property that missed the budget or location is not lost either.',
+  '- Property owners (sell, rent_out): new while they share details, photos or a price of their property; visit_pending only once a visit to inspect it is asked for or agreed; negotiation when commission or listing terms are discussed; won when they sign the listing.',
   '',
   'HOW TO JUDGE:',
   '- Place the lead at the FURTHEST milestone the evidence shows, like ticking boxes in order: options sent? visit asked for or agreed? visited? talking price or token? deal done?',
@@ -244,9 +245,19 @@ const takesFallbacks = model => /^claude-(opus-5|fable-5-1)/.test(model);
 
 // Gemini: generateContent with a JSON-schema response, over plain HTTPS (no SDK). The key goes in
 // a header, never the URL, so it cannot land in a log line.
-async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.GEMINI_API_KEY, fetchImpl = fetch }) {
+// Google's retry hint on a 429 ("retryDelay": "37s"), if it sent one.
+function retryDelayMs(body) {
+  const info = ((body.error && body.error.details) || []).find(d => /RetryInfo/.test(d['@type'] || ''));
+  const secs = info && parseFloat(String(info.retryDelay || ''));
+  return Number.isFinite(secs) ? Math.ceil(secs * 1000) : null;
+}
+
+const RETRYABLE = new Set([429, 500, 503]);
+const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.GEMINI_API_KEY, fetchImpl = fetch, sleepImpl = sleepMs, retries = 2, maxWaitMs = 8000 }) {
   if (!apiKey) return { ok: false, error: 'GEMINI_API_KEY is not set', model };
-  const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const request = () => fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
@@ -255,7 +266,19 @@ async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.G
       generationConfig: { responseMimeType: 'application/json', responseJsonSchema: LEAD_AI_SCHEMA, temperature: 0.1, maxOutputTokens: 4000 }
     })
   });
-  const body = await res.json().catch(() => ({}));
+  let res, body;
+  for (let attempt = 0; ; attempt++) {
+    res = await request();
+    body = await res.json().catch(() => ({}));
+    if (res.ok || !RETRYABLE.has(res.status)) break;
+    const hinted = retryDelayMs(body);
+    // Out of retries, or Google asks for a longer wait than one request can afford: hand the lead
+    // back to the queue instead of recording a failure.
+    if (attempt >= retries || (hinted && hinted > maxWaitMs)) {
+      return { ok: false, error: res.status === 429 ? 'rate limited' : `Gemini unavailable (${res.status})`, retryable: true, retryAfterMs: hinted || 60000, model };
+    }
+    await sleepImpl(hinted || 2000 * (attempt + 1));
+  }
   if (!res.ok) {
     const err = new Error(`Gemini answered ${res.status}: ${String((body.error && body.error.message) || '').slice(0, 200)}`);
     err.status = res.status;
