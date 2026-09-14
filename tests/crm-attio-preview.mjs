@@ -191,6 +191,38 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.close();
 }
 
+// ── 7. One timeline ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  await page.evaluate(() => {
+    const l = leads.find(x => x.id === 'A4');
+    l.notes = [{ id: 'n1', text: 'Called — wants 82 L final', createdAt: Date.now() - 2 * 3600000, by: 'karthik@threepin.in' }];
+    l.history = [
+      { id: 'h1', type: 'created', text: 'Lead added via <b>Phone</b>', at: Date.now() - 30 * 86400000, by: 'owner@threepin.in' },
+      { id: 'h2', type: 'stage', text: '🤖 Moved from <b>Visited</b> to <b>Negotiating</b> — "82 L is my final"', at: Date.now() - 3 * 86400000, by: 'AI' },
+      { id: 'h3', type: 'followup', text: 'Next follow-up set for <b>Sep 16</b>', at: Date.now() - 86400000, by: 'owner@threepin.in' },
+      { id: 'h4', type: 'field', text: 'Budget changed from <b>80 L</b> to <b>85 L</b>', at: Date.now() - 5 * 86400000, by: 'owner@threepin.in' }
+    ];
+    window.crmFirebase.getLeadNotes = async () => l.notes; window.crmFirebase.getLeadHistory = async () => l.history;
+    openDetail('A4');
+  });
+  await page.waitForTimeout(400);
+  const chips = (await text(page, '#tlFilters .tl-f')).join(' | ');
+  ok('The timeline offers a filter per kind with counts', /All\s*5 \| Notes\s*1 \| Stage\s*1 \| Follow-ups\s*1 \| AI\s*1 \| Edits\s*2/.test(chips), chips);
+  const all = (await text(page, '#timelinePanel .tl-text')).join(' | ');
+  ok('Newest first: the note, the follow-up, the AI move, the edit, the creation', /Called — wants 82 L final.*follow-up set.*Moved from Visited.*Budget changed.*Lead added/.test(all), all);
+  ok('…grouped under day headings', (await text(page, '#timelinePanel .tl-day')).length >= 3);
+  await page.locator('#dpTimelineSec').screenshot({ path: join(OUT, '40-timeline.png') });
+  await page.evaluate(() => setTimelineFilter('stage'));
+  ok('The Stage filter includes the AI\'s stage move', JSON.stringify(await text(page, '#timelinePanel .tl-text')) === JSON.stringify(['🤖 Moved from Visited to Negotiating — "82 L is my final"']));
+  await page.evaluate(() => setTimelineFilter('notes'));
+  ok('The Notes filter shows notes with who wrote them', /Called — wants 82 L final/.test((await text(page, '#timelinePanel')).join(' ')) && /karthik/.test((await text(page, '#timelinePanel .tl-meta')).join(' ')));
+  await page.evaluate(() => { document.getElementById('noteInput').value = 'Sent the agreement draft'; addNote(); });
+  ok('Adding a note shows it at the top straight away', (await text(page, '#timelinePanel .tl-text'))[0] === 'Sent the agreement draft');
+  await page.evaluate(() => setTimelineFilter('all'));
+  await page.close();
+}
+
 // ── 6. Bulk actions ──
 {
   const page = await openPage({ width: 1440, height: 900 });

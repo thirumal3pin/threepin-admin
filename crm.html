@@ -375,9 +375,14 @@ function toggleDensity(){
         <div class="raw-data" id="dpRaw"></div>
       </div>
 
-      <div class="sec">
-        <div class="sec-title">📝 Notes</div>
-        <div id="notesPanel"></div>
+      <!-- One timeline: notes, stage moves, follow-ups, AI moves, TailorTalk (per-day chat summaries
+           and updates) and edits, filterable. Drawn by renderTimeline() in app.js. -->
+      <div class="sec" id="dpTimelineSec">
+        <div class="sec-title">🕓 Timeline</div>
+        <div class="note-add">
+          <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
+          <button class="note-btn" onclick="addNote()">Add</button>
+        </div>
         <div class="note-fu-row">
           <div class="field">
             <label for="noteFollowUpDate">Next Follow-up Date</label>
@@ -393,15 +398,8 @@ function toggleDensity(){
           </div>
           <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
         </div>
-        <div class="note-add">
-          <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
-          <button class="note-btn" onclick="addNote()">Add</button>
-        </div>
-      </div>
-
-      <div class="sec">
-        <div class="sec-title">🕓 Lead History</div>
-        <div class="history-list" id="historyPanel"></div>
+        <div class="tl-filters" id="tlFilters" role="toolbar" aria-label="Filter the timeline"></div>
+        <div class="timeline" id="timelinePanel"></div>
       </div>
     </div>
   </div>

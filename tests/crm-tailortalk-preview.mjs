@@ -200,11 +200,13 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   await shot(page, '05-detail-hot-lead');
   await page.evaluate(() => { setTtTab('overview'); });
   await page.locator('#dpTtSec').screenshot({ path: join(OUT, '05b-detail-overview.png') });
-  await page.evaluate(() => { setTtTab('activity'); });
-  const act = await page.evaluate(() => document.querySelector('#dpTt .tt-activity') ? document.querySelector('#dpTt .tt-activity').textContent.replace(/\s+/g, ' ').trim().slice(0, 220) : null);
-  if (!act || !/from the lead/.test(act)) errors.push('Activity tab should summarise the day: ' + act);
-  else console.log('  ok  activity:', act);
-  await page.locator('#dpTtSec').screenshot({ path: join(OUT, '05c-detail-activity.png') });
+  // The day-by-day chat summary lives in the lead's Timeline now (TailorTalk filter).
+  await page.evaluate(() => { setTimelineFilter('tailortalk'); });
+  const act = await page.evaluate(() => { const el = document.getElementById('timelinePanel'); return el ? el.textContent.replace(/\s+/g, ' ').trim().slice(0, 260) : null; });
+  if (!act || !/from the lead/.test(act)) errors.push('Timeline should summarise the chat day: ' + act);
+  else console.log('  ok  timeline chat day:', act);
+  await page.locator('#dpTimelineSec').screenshot({ path: join(OUT, '05c-detail-timeline.png') });
+  await page.evaluate(() => { setTimelineFilter('all'); });
   await page.evaluate(() => { setTtTab('conversation'); });
   const sys = await page.evaluate(() => !!document.querySelector('#dpTt .tt-chat-sys') && !!document.querySelector('#dpTt .tt-chat-day'));
   if (!sys) errors.push('Conversation should show day separators and the "left for the team" line');
@@ -246,8 +248,8 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   await page.waitForTimeout(400);
   await page.evaluate(() => document.getElementById('dpTtSec').scrollIntoView() || window.scrollBy(0, -80));
   await shot(page, '09-phone-detail');
-  await page.evaluate(() => { setTtTab('activity'); document.getElementById('dpTtSec').scrollIntoView(); });
-  await shot(page, '09b-phone-activity');
+  await page.evaluate(() => { document.getElementById('dpTimelineSec').scrollIntoView(); });
+  await shot(page, '09b-phone-timeline');
   await page.evaluate(() => setTtTab('overview'));
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   if (overflow > 1) errors.push(`Phone lead page scrolls sideways by ${overflow}px`);

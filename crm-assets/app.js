@@ -339,7 +339,6 @@ const TT_PROFILE = [
 // Same value as BUSINESS_ENQUIRY_TYPE in api/_tailortalk-shared.js.
 const TT_BUSINESS_TYPE = 'Vendor / Collaboration';
 const TT_CHAT_PAGE = 40;
-const TT_ACTIVITY_DAYS = 7;
 const TT_WINDOW_MS = 24*60*60*1000;
 const TT_FOLLOWUP_GAP_MS = 3*60*60*1000;
 const TT_RETURN_GAP_MS = 24*60*60*1000;
@@ -796,10 +795,10 @@ async function runTailorTalkSync(){
 const ttStateCache = new Map();
 const ttStateLoading = new Set();
 const ttChatExpanded = new Set();
-const ttActivityExpanded = new Set();
 const TT_TAB_KEY = 'crmTtTab';
 let ttTab = 'overview';
-try{ const t = localStorage.getItem(TT_TAB_KEY); if(['overview','activity','conversation'].includes(t)) ttTab = t; }catch(e){}
+// (The per-day Activity tab moved into the lead's Timeline.)
+try{ const t = localStorage.getItem(TT_TAB_KEY); if(['overview','conversation'].includes(t)) ttTab = t; }catch(e){}
 
 async function loadTtState(l){
   if(!isTtLead(l) || !window.crmFirebase || !window.crmFirebase.getLeadTailorTalk) return;
@@ -815,12 +814,12 @@ async function loadTtState(l){
   } finally {
     ttStateLoading.delete(l.id);
     const cur = leads.find(x=>x.id===l.id);
-    if(cur && currentDetailId===l.id && document.getElementById('dp').classList.contains('open')) renderTtSection(cur);
+    if(cur && currentDetailId===l.id && document.getElementById('dp').classList.contains('open')){ renderTtSection(cur); renderTimeline(cur); }
   }
 }
 
 function setTtTab(tab){
-  ttTab = tab;
+  ttTab = tab === 'conversation' ? 'conversation' : 'overview';
   try{ localStorage.setItem(TT_TAB_KEY, tab); }catch(e){}
   const l = leads.find(x=>x.id===currentDetailId);
   if(l) renderTtSection(l);
@@ -929,9 +928,9 @@ function prettyKey(k){
   return String(k).replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
 }
 
-// ── Activity: one entry per day, from the stored conversation plus TailorTalk's history ──
+// ── Chat days: one entry per day, from the stored conversation plus TailorTalk's history ──
 // Nothing here is stored — it is recomputed from what the lead page already loaded, so it
-// cannot drift from the conversation and costs no writes.
+// cannot drift from the conversation and costs no writes. The Timeline draws it (ttDayItems).
 function ttActivityDays(l, st){
   const days = new Map();
   const dayFor = ts => {
@@ -961,41 +960,6 @@ function ttActivityDays(l, st){
   (l.history || []).filter(h => h.by==='TailorTalk' && h.at).forEach(h => dayFor(h.at).events.push(h));
   Object.entries((l.tt && l.tt.signals) || {}).forEach(([key, s]) => { if(s && s.at) dayFor(s.at).events.push({ at:s.at, signal:key, quote:ttSignalQuote(key, s) }); });
   return Array.from(days.values()).sort((a,b) => b.first - a.first);
-}
-
-function ttActivityHtml(l, st){
-  const days = ttActivityDays(l, st);
-  if(!days.length) return '<div class="empty-mini">No activity recorded yet.</div>';
-  const expanded = ttActivityExpanded.has(l.id);
-  const shown = expanded ? days : days.slice(0, TT_ACTIVITY_DAYS);
-  const row = (k, v, cls) => `<div class="tt-ev${cls?' '+cls:''}"><span class="tt-ev-k">${k}</span><span class="tt-ev-v">${v}</span></div>`;
-  const html = shown.map(d => {
-    const rows = [];
-    const msgs = d.lead + d.ai + d.team;
-    if(msgs){
-      const parts = [`${d.lead} from the lead`, `${d.ai} AI`];
-      if(d.team) parts.push(`${d.team} team`);
-      rows.push(row('Chat', `${msgs} message${msgs===1?'':'s'} · ${parts.join(' · ')} <span class="tt-ev-t">${fmtClock(d.first)}${d.last!==d.first?'–'+fmtClock(d.last):''}</span>`));
-    }
-    if(d.cameBackAfter) rows.push(row('Returned', `Came back after ${gapWords(d.cameBackAfter)}`, 'good'));
-    if(d.followups) rows.push(row('Follow-up', `${d.followups} AI follow-up${d.followups===1?'':'s'} sent`));
-    if(d.left.length) rows.push(row('For team', `${d.left.length} message${d.left.length===1?'':'s'} left for the team <span class="tt-ev-t">${d.left.map(fmtClock).join(', ')}</span>`, 'warn'));
-    d.events.sort((a,b)=>a.at-b.at).forEach(e => {
-      if(e.signal){
-        const m = ttSignalMeta(e.signal);
-        rows.push(row('Signal', `${m.icon} ${escapeHtml(m.title)}${e.quote?` — “${escapeHtml(e.quote)}”`:''} <span class="tt-ev-t">${fmtClock(e.at)}</span>`, 'warn'));
-      } else {
-        rows.push(row('Update', `${e.text} <span class="tt-ev-t">${fmtClock(e.at)}</span>`));
-      }
-    });
-    return `<div class="tt-day">
-      <div class="tt-day-h"><span class="tt-day-d">${fmtDay(d.first)}</span><span class="tt-day-r">${relDay(d.first)}</span></div>
-      <div class="tt-day-b">${rows.join('')}${d.quote?`<div class="tt-day-q">“${escapeHtml(d.quote.length>160?d.quote.slice(0,159)+'…':d.quote)}”</div>`:''}</div>
-    </div>`;
-  }).join('');
-  const more = days.length > shown.length
-    ? `<button type="button" class="tt-btn tt-more" onclick="ttActivityExpanded.add('${l.id}');renderTtSection(leads.find(x=>x.id==='${l.id}'))">Show all ${days.length} days</button>` : '';
-  return `<div class="tt-activity">${html}</div>${more}`;
 }
 
 function ttOverviewHtml(l, st){
@@ -1084,22 +1048,21 @@ function renderTtSection(l){
   if(t.flagged && !ttOpenAlerts(l).some(a=>a.key==='flagged')) stats.push(ttStat('Flagged', escapeHtml(t.flagDetails || 'Yes')));
   if(t.owner) stats.push(ttStat('TailorTalk owner', escapeHtml(t.owner)));
 
-  // 4. Overview · Activity · Conversation.
+  // 4. Overview · Conversation (the day-by-day summary is in the Timeline).
   let panel;
   if(!cached) panel = '<div class="empty-mini">Loading TailorTalk details…</div>';
   else if(cached.error==='rules') panel = '<div class="empty-mini">TailorTalk details can\'t be read — the Firestore rules need updating.</div>';
   else if(cached.error) panel = '<div class="empty-mini">Couldn\'t load TailorTalk details — check your connection.</div>';
   else if(!st) panel = '<div class="empty-mini">No TailorTalk details yet — they arrive with the next update.</div>';
-  else panel = ttTab==='activity' ? ttActivityHtml(l, st) : ttTab==='conversation' ? ttConversationHtml(l, st) : ttOverviewHtml(l, st);
+  else panel = ttTab==='conversation' ? ttConversationHtml(l, st) : ttOverviewHtml(l, st);
 
   const msgCount = st && st.chat ? st.chat.filter(m => !isNoReplyMarker(m)).length : null;
-  const dayCount = st ? ttActivityDays(l, st).length : null;
   const tab = (key, label, n) => `<button type="button" role="tab" class="tt-tab${ttTab===key?' at':''}" aria-selected="${ttTab===key}" onclick="setTtTab('${key}')">${label}${n!=null?`<span class="tt-tab-n">${n}</span>`:''}</button>`;
 
   document.getElementById('dpTt').innerHTML = `
     ${says}
     <div class="tt-strip">${stats.join('')}</div>
-    <div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('activity','Activity', dayCount)}${tab('conversation','Conversation', msgCount)}</div>
+    <div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('conversation','Conversation', msgCount)}</div>
     <div class="tt-panel" role="tabpanel">${panel}</div>
     <div class="tt-foot">Last change from TailorTalk ${timeAgo(t.syncedAt || t.lastEventAt)}</div>`;
   if(ttTab==='conversation' && !ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
@@ -1338,20 +1301,101 @@ function addHistory(l, type, text){
 function historyIcon(type){
   return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬' }[type] || '•';
 }
-function renderHistory(l){
-  const el = document.getElementById('historyPanel');
-  if(!el) return;
-  const items = (l.history||[]).slice().sort((a,b)=>b.at-a.at);
-  if(!items.length){ el.innerHTML = '<div class="empty-mini">No changes logged yet.</div>'; return; }
-  el.innerHTML = items.map(h=>`
-    <div class="history-item">
-      <div class="history-dot ${h.type}">${historyIcon(h.type)}</div>
-      <div class="history-content">
-        <div class="history-text">${h.text}</div>
-        <div class="history-time">${new Date(h.at).toLocaleString([], { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' })}${h.by?' · '+escapeHtml(h.by.split('@')[0]):''}</div>
-      </div>
-    </div>`).join('');
+
+// ═══════ TIMELINE — everything that happened to a lead, in one feed ═══════
+// Notes, stage moves, follow-ups, the AI's moves, TailorTalk (a one-line summary per chat day plus
+// its updates) and edits, newest first, grouped by day, with a filter per kind. Nothing is stored
+// for it: it is drawn from the notes, history and conversation the lead page already loaded.
+const TL_FILTERS = [
+  { key:'all', label:'All' }, { key:'notes', label:'Notes' }, { key:'stage', label:'Stage' },
+  { key:'followups', label:'Follow-ups' }, { key:'ai', label:'AI' }, { key:'tailortalk', label:'TailorTalk' }, { key:'edits', label:'Edits' }
+];
+const TL_FILTER_KEY = 'crmTimelineFilter';
+const TL_PAGE = 40;
+let tlFilter = 'all';
+try{ const f = localStorage.getItem(TL_FILTER_KEY); if(TL_FILTERS.some(x => x.key === f)) tlFilter = f; }catch(e){}
+const tlExpanded = new Set();
+
+function historyTags(h){
+  const text = String(h.text || '');
+  const tags = [];
+  if(h.by === 'AI' || text.startsWith('🤖')) tags.push('ai');
+  if(h.by === 'TailorTalk' || h.type === 'tailortalk') tags.push('tailortalk');
+  if(h.type === 'stage') tags.push('stage');
+  if(h.type === 'followup' || h.type === 'followup-removed' || h.type === 'followed-up') tags.push('followups');
+  if(!tags.length) tags.push('edits');
+  return tags;
 }
+// TailorTalk's conversation, one line per day (the chat itself stays in the Conversation tab).
+function ttDayItems(l){
+  const cached = ttStateCache.get(l.id);
+  const st = cached && cached.state;
+  if(!isTtLead(l) || !st) return [];
+  const where = { whatsapp:'WhatsApp', instagram:'Instagram', web:'Website chat', website:'Website chat' }[(l.tt && l.tt.integration) || l.channel] || 'Chat';
+  return ttActivityDays(l, st).map(d => {
+    const parts = [];
+    const msgs = d.lead + d.ai + d.team;
+    if(msgs) parts.push(`<b>${msgs} message${msgs===1?'':'s'}</b> — ${d.lead} from the lead, ${d.ai} AI${d.team ? `, ${d.team} team` : ''} <span class="tl-t">${fmtClock(d.first)}${d.last!==d.first ? '–'+fmtClock(d.last) : ''}</span>`);
+    if(d.cameBackAfter) parts.push(`<span class="tl-good">came back after ${gapWords(d.cameBackAfter)}</span>`);
+    if(d.followups) parts.push(`${d.followups} AI follow-up${d.followups===1?'':'s'}`);
+    if(d.left.length) parts.push(`<span class="tl-warn">${d.left.length} message${d.left.length===1?'':'s'} left for the team</span>`);
+    d.events.filter(e => e.signal).forEach(e => { const m = ttSignalMeta(e.signal); parts.push(`<span class="tl-warn">${m.icon} ${escapeHtml(m.title)}${e.quote ? ` — “${escapeHtml(e.quote)}”` : ''}</span>`); });
+    if(!parts.length) return null;
+    const quote = d.quote ? `<div class="tl-quote">“${escapeHtml(d.quote.length > 160 ? d.quote.slice(0,159)+'…' : d.quote)}”</div>` : '';
+    return { tags:['tailortalk'], at: d.last, icon:'💬', html: `${where}: ${parts.join(' · ')}${quote}`, by: null, summary: true };
+  }).filter(Boolean);
+}
+function timelineItems(l){
+  return [
+    ...(l.notes || []).map(n => ({ tags:['notes'], at: n.createdAt || 0, icon:'📝', html: `<div class="tl-note">${noteTextHtml(n.text)}</div>`, by: n.by, noteId: n.id })),
+    ...(l.history || []).map(h => ({ tags: historyTags(h), at: h.at || 0, icon: historyIcon(h.type), html: h.text || '', by: h.by })),
+    ...ttDayItems(l)
+  ].sort((a, b) => b.at - a.at);
+}
+function noteTextHtml(text){ return escapeHtml(text || ''); }
+function timelineDayLabel(ts){
+  const r = relDay(ts);
+  return r === 'Today' || r === 'Yesterday' ? `${r} · ${fmtDay(ts)}` : fmtDay(ts);
+}
+function renderTimeline(l){
+  const list = document.getElementById('timelinePanel');
+  const bar = document.getElementById('tlFilters');
+  if(!list || !l) return;
+  const items = timelineItems(l);
+  const count = key => key === 'all' ? items.length : items.filter(i => i.tags.includes(key)).length;
+  if(bar) bar.innerHTML = TL_FILTERS.filter(f => f.key === 'all' || f.key === tlFilter || count(f.key))
+    .map(f => `<button type="button" class="tl-f${tlFilter===f.key?' at':''}" aria-pressed="${tlFilter===f.key}" onclick="setTimelineFilter('${f.key}')">${f.label}<span>${count(f.key)}</span></button>`).join('');
+  const matching = tlFilter === 'all' ? items : items.filter(i => i.tags.includes(tlFilter));
+  if(!matching.length){
+    list.innerHTML = `<div class="empty-mini">${items.length ? 'Nothing of this kind yet.' : 'Nothing logged yet — add a note above.'}</div>`;
+    return;
+  }
+  const shown = tlExpanded.has(l.id) ? matching : matching.slice(0, TL_PAGE);
+  const byLabel = by => !by ? '' : by === 'AI' ? '🤖 AI' : ['TailorTalk', 'CRM rework'].includes(by) ? by : escapeHtml(String(by).split('@')[0]);
+  let lastDay = null;
+  list.innerHTML = shown.map(i => {
+    const day = dayKeyOf(i.at);
+    const head = day !== lastDay ? `<div class="tl-day">${timelineDayLabel(i.at)}</div>` : '';
+    lastDay = day;
+    const tone = i.tags.includes('notes') ? ' note' : i.tags.includes('ai') ? ' ai' : i.tags.includes('tailortalk') ? ' tt' : i.tags.includes('stage') ? ' stage' : '';
+    const meta = [i.summary ? '' : fmtClock(i.at), byLabel(i.by)].filter(Boolean).join(' · ');
+    return `${head}<div class="tl-item${tone}">
+      <div class="tl-ico" aria-hidden="true">${i.icon}</div>
+      <div class="tl-body">
+        <div class="tl-text">${i.html}</div>
+        ${meta || i.noteId ? `<div class="tl-meta">${meta}${i.noteId ? `<button type="button" class="tl-del" onclick="deleteNote('${l.id}','${i.noteId}')">Delete</button>` : ''}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') + (matching.length > shown.length ? `<button type="button" class="tt-btn tl-more" onclick="tlExpanded.add('${l.id}');renderTimeline(leads.find(x=>x.id==='${l.id}'))">Show all ${matching.length}</button>` : '');
+}
+function setTimelineFilter(key){
+  tlFilter = TL_FILTERS.some(f => f.key === key) ? key : 'all';
+  try{ localStorage.setItem(TL_FILTER_KEY, tlFilter); }catch(e){}
+  const l = leads.find(x => x.id === currentDetailId);
+  if(l) renderTimeline(l);
+}
+// Notes and history both draw into the one timeline.
+function renderHistory(l){ renderTimeline(l); }
 
 // ═══════ FOLLOW-UP SPOTLIGHT ═══════
 function followUpUrgencyClass(ts){
@@ -2846,7 +2890,7 @@ function openDetail(id){
   renderFollowUpSpotlight(l);
   renderDetailInfo(l);
   ttChatExpanded.delete(id);
-  ttActivityExpanded.delete(id);
+  tlExpanded.delete(id);
   renderTtSection(l);
   if(isTtLead(l)){
     const cached = ttStateCache.get(l.id);
@@ -3080,18 +3124,7 @@ function toggleRaw(){
 }
 
 // ═══════ NOTES ═══════
-function renderNotes(l){
-  const notes = l.notes || [];
-  const html = notes.length ? notes.slice().reverse().map(n=>`
-    <div class="note-item">
-      <div class="note-meta">
-        <span class="note-time">${new Date(n.createdAt).toLocaleString()}${n.by?' · '+escapeHtml(n.by):''}</span>
-        <button class="note-delete" onclick="deleteNote('${l.id}','${n.id}')">×</button>
-      </div>
-      <div class="note-text">${escapeHtml(n.text)}</div>
-    </div>`).join('') : '<div class="empty-mini">No notes yet — log a call or follow-up below.</div>';
-  document.getElementById('notesPanel').innerHTML = html;
-}
+function renderNotes(l){ renderTimeline(l); }
 function renderNoteFollowUpFields(l){
   const fu = l.followUpAt ? new Date(l.followUpAt) : null;
   document.getElementById('noteFollowUpDate').value = fu ? toDateInputValue(fu) : '';
