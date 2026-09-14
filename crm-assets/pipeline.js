@@ -17,16 +17,18 @@
 // One column per milestone. A lead sits in the FURTHEST milestone it has reached — so placing a
 // lead is a string of yes/no questions: sent options? asked to visit? visited? talking price?
 // done? Each column's `rule` is that question, shown under the column name on the board.
+// `targetDays` is how long a lead should normally sit in an open column before it moves on; the
+// board's days-in-stage chip turns amber past it.
 export const STAGE_DEFS = [
-  { key: 'new',           name: 'New',           kind: 'open', color: '#1D4ED8', step: 0,
+  { key: 'new',           name: 'New',           kind: 'open', color: '#1D4ED8', step: 0, targetDays: 2,
     rule: 'Nothing specific sent yet' },
-  { key: 'options',       name: 'Options sent',  kind: 'open', color: '#0891B2', step: 1,
+  { key: 'options',       name: 'Options sent',  kind: 'open', color: '#0891B2', step: 1, targetDays: 7,
     rule: 'We sent a property, brochure or price' },
-  { key: 'visit_pending', name: 'Visit planned', kind: 'open', color: '#6D28D9', step: 2,
+  { key: 'visit_pending', name: 'Visit planned', kind: 'open', color: '#6D28D9', step: 2, targetDays: 5,
     rule: 'Visit asked for or agreed — not done yet' },
-  { key: 'visit_done',    name: 'Visited',       kind: 'open', color: '#7C3AED', step: 3,
+  { key: 'visit_done',    name: 'Visited',       kind: 'open', color: '#7C3AED', step: 3, targetDays: 4,
     rule: 'They have seen the property' },
-  { key: 'negotiation',   name: 'Negotiating',   kind: 'open', color: '#B45309', step: 4,
+  { key: 'negotiation',   name: 'Negotiating',   kind: 'open', color: '#B45309', step: 4, targetDays: 14,
     rule: 'Talking price, token or documents' },
   { key: 'won',           name: 'Won',           kind: 'won',  color: '#15803D', step: 5,
     rule: 'Token paid, signed or rented' },
@@ -114,6 +116,44 @@ export function hasKeyedPipeline(stages) {
 }
 
 export function ladderIndex(key) { return LADDER.indexOf(key); }
+
+// ── Milestone dates ───────────────────────────────────────────────────────
+//
+// lead.reached = { new, options, visit_pending, visit_done, negotiation, won } — the first time the
+// lead ENTERED each milestone column (ms). Written on every move (the board, bulk actions, the AI)
+// and never overwritten, so a lead that goes back and forward keeps its first date. A milestone
+// that was skipped has no date; the funnel counts it as passed because a later one was reached.
+
+const DAY_MS = 86400000;
+
+// The fields to write when a lead enters `key` — or null when there is nothing new to record.
+export function reachedUpdate(lead, key, at) {
+  if (!LADDER.includes(key)) return null;
+  const reached = (lead && lead.reached) || {};
+  return reached[key] ? null : { [`reached.${key}`]: at };
+}
+
+// The furthest ladder step the lead has ever reached (0 = New … 5 = Won), from its milestone dates
+// and its current column — so leads from before milestone dates existed still count.
+export function furthestStep(lead, stages) {
+  const reached = (lead && lead.reached) || {};
+  let best = -1;
+  LADDER.forEach((k, i) => { if (reached[k]) best = Math.max(best, i); });
+  const stage = (Array.isArray(stages) ? stages : []).find(s => s.id === (lead && lead.stageId));
+  const current = LADDER.indexOf(stageKeyOf(stage));
+  return Math.max(best, current, 0);
+}
+
+// Whole days in the current column, and whether that is past the column's target.
+export function stageAge(lead, stages, now = Date.now()) {
+  const stage = (Array.isArray(stages) ? stages : []).find(s => s.id === (lead && lead.stageId));
+  const def = stageDef(stageKeyOf(stage));
+  const since = (lead && (lead.stageChangedAt || lead.createdAt)) || null;
+  if (!since || !def) return null;
+  const days = Math.max(0, Math.floor((now - since) / DAY_MS));
+  const target = def.kind === 'open' ? def.targetDays : null;
+  return { days, since, target, over: target != null && days > target, farOver: target != null && days > 2 * target };
+}
 
 // ── Migration: an old pipeline and its leads → the keyed pipeline ─────────
 //

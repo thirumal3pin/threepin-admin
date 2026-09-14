@@ -14,7 +14,7 @@
 //   • Vendors, collaborations and unknown custom columns are never touched.
 //   • Nothing here touches updatedAt: that field means "a person last worked this lead".
 
-import { stageKeyOf, stageKindOf, stageForKey, stageDef, hasKeyedPipeline, LADDER, LOST_REASONS, HOLD_REASONS } from '../crm-assets/pipeline.js';
+import { stageKeyOf, stageKindOf, stageForKey, stageDef, hasKeyedPipeline, reachedUpdate, LADDER, LOST_REASONS, HOLD_REASONS } from '../crm-assets/pipeline.js';
 import { isBusinessLead } from '../crm-assets/leadAttention.js';
 
 const MIN = 60000;
@@ -166,6 +166,7 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
       stageChangedAt: now,
       stageChangedBy: 'ai'
     });
+    Object.assign(patch, reachedUpdate(lead, moveTo, now) || {});
     if (moveTo === 'lost') patch.lostReason = verdict.lostReason;
     if (moveTo === 'on_hold') { patch.holdReason = verdict.holdReason; patch.holdUntil = verdict.holdUntil || null; }
     if (curKey === 'on_hold' && moveTo !== 'on_hold') { patch.holdUntil = null; patch.holdReason = null; }

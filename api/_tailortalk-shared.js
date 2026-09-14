@@ -494,7 +494,8 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
       lastActionType: 'created',
       noteCount: 0,
       lastNote: null,
-      ttHold: {}
+      ttHold: {},
+      reached: { new: createdAt }
     });
     const first = firstEntry();
     hist('created', first || `Lead added from <b>TailorTalk</b>${origin ? ' (' + escapeHtml(origin) + ')' : ''}`, (firstMsg && firstMsg.at) || createdAt);

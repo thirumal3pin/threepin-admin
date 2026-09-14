@@ -435,6 +435,33 @@ function stageIdForKey(key){
   const s = window.crmPipeline ? window.crmPipeline.stageForKey(stages, key) : null;
   return s ? s.id : null;
 }
+// The first time a lead enters a milestone column (lead.reached, see crm-assets/pipeline.js).
+// Never overwritten — the funnel and "days to a visit" read these.
+function markReached(l, stageId, at){
+  const P = window.crmPipeline;
+  const key = stageKeyOfId(stageId);
+  if(!P || !P.reachedUpdate(l, key, at)) return;
+  l.reached = { ...(l.reached || {}), [key]: at };
+}
+// The milestones a lead has reached, with dates: "New 3 Sep → Options sent 4 Sep → Visit planned 9 Sep".
+function milestoneTrailHtml(l){
+  const P = window.crmPipeline;
+  const reached = l.reached || {};
+  const steps = P ? P.LADDER.filter(k => reached[k]) : [];
+  if(steps.length < 2) return '';
+  const day = t => new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+  return `<div class="st-trail">${steps.map(k => { const s = stageById(stageIdForKey(k)); return `<span>${escapeHtml(s ? s.name : k)} <i>${day(reached[k])}</i></span>`; }).join('<b>→</b>')}</div>`;
+}
+// On a card only when a lead is stuck: "9d in stage", amber past the column's usual time, red past
+// twice it. The exact age is always on the lead page.
+function stageAgeHtml(l){
+  const P = window.crmPipeline;
+  const age = P && P.stageAge(l, stages);
+  if(!age || !age.over) return '';
+  const st = stageById(l.stageId);
+  const title = `${age.days} days in ${st ? st.name : 'this column'} — usually ${age.target} or fewer`;
+  return `<span class="lcard-age${age.farOver ? ' far' : ' over'}" title="${escapeHtml(title)}">${age.days}d in stage</span>`;
+}
 function stageRuleOf(stage){
   const key = window.crmPipeline ? window.crmPipeline.stageKeyOf(stage) : null;
   const def = key && window.crmPipeline.stageDef(key);
@@ -1373,7 +1400,7 @@ function leadCardHtml(l){
     ${alertItem ? `<div class="lcard-alert ${alertItem.severity}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
     ${chips.length ? `<div class="lcard-tt">${chips.slice(0,3).join('')}</div>` : ''}
     <div class="lcard-foot">
-      <div class="lcard-time">${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
+      <div class="lcard-time">${stageAgeHtml(l)}${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
       ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}
     </div>
   </div>`;
@@ -1691,6 +1718,7 @@ function changeStage(id, stageId, opts = {}){
     l.stageChangedAt = now;
     // Who decided: the AI does not override a person's choice until the lead says something new.
     l.stageChangedBy = currentUserEmail || 'team';
+    markReached(l, stageId, now);
     const fromKind = stageKindOfId(l.stageId);
     if(fromKind === 'lost' && toKind !== 'lost') l.lostReason = null;
     if(fromKind === 'hold' && toKind !== 'hold'){ l.holdReason = null; l.holdUntil = null; }
@@ -1706,8 +1734,10 @@ function changeStage(id, stageId, opts = {}){
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   if(stageChanged) l.lastActionType = 'stage';
-  applyFilters();
   persistLead(l);
+  // Bulk actions change many leads and redraw once at the end.
+  if(opts.silent) return;
+  applyFilters();
   if(currentDetailId===id){ renderDetailStageRow(l); renderHistory(l); renderStandSection(l); renderFollowUpSpotlight(l); renderNoteFollowUpFields(l); }
 }
 
@@ -1845,9 +1875,13 @@ function renderStandSection(l){
   let why = '';
   if(kind === 'lost' && l.lostReason) why = P.LOST_REASONS[l.lostReason] || l.lostReason;
   if(kind === 'hold') why = [l.holdReason && P.HOLD_REASONS[l.holdReason], l.holdUntil && `revisit ${fmtDue(l.holdUntil)}`].filter(Boolean).join(' · ');
+  const age = P.stageAge(l, stages);
+  const ageText = age ? (age.days === 0 ? 'since today' : `for ${age.days} day${age.days === 1 ? '' : 's'}`) : '';
+  const ageCls = age && age.over ? (age.farOver ? ' far' : ' over') : '';
   parts.push(`<div class="st-head">
-    <div class="st-stage"><span class="kcol-dot" style="background:${stage ? stage.color : '#999'}"></span><b>${escapeHtml(stage ? stage.name : 'No column')}</b>${rule ? `<span class="st-rule">${escapeHtml(rule)}</span>` : ''}</div>
+    <div class="st-stage"><span class="kcol-dot" style="background:${stage ? stage.color : '#999'}"></span><b>${escapeHtml(stage ? stage.name : 'No column')}</b>${ageText ? `<span class="st-age${ageCls}" title="${age && age.target != null ? escapeHtml('Usually ' + age.target + ' days or fewer') : ''}">${ageText}</span>` : ''}${rule ? `<span class="st-rule">${escapeHtml(rule)}</span>` : ''}</div>
     ${why ? `<div class="st-why">${escapeHtml(why)}</div>` : ''}
+    ${milestoneTrailHtml(l)}
   </div>`);
 
   const step = nextStepOf(l);
@@ -2251,6 +2285,7 @@ function applyLeadForm(l, form, now){
   // See changeStage() for why these are stamped — same "today" bucketing need.
   if(stageChanged){
     l.prevStageId = oldStageId; l.stageChangedAt = now; l.stageChangedBy = currentUserEmail || 'team';
+    markReached(l, form.stageId, now);
     const toKind = stageKindOfId(form.stageId);
     if(toKind === 'lost' && !l.lostReason) l.lostReason = 'other';
     if(toKind !== 'lost') l.lostReason = null;
@@ -2312,6 +2347,8 @@ function createLeadFromForm(form){
     // from one that already got a first note, with zero extra reads/writes.
     lastActionType: form.noteText ? 'note' : 'created'
   };
+  markReached(l, stageIdForKey('new'), now);
+  markReached(l, form.stageId, now);
   // Brand-new lead: the subcollection security rule checks the PARENT lead's
   // tenantId, so the parent doc must exist before we write its notes/history.
   // Create the parent first, then log the 'created' event + optional first
@@ -2939,6 +2976,7 @@ function saveStageManager(){
   leads.forEach(l=>{
     if(!validIds.has(l.stageId)){
       l.stageId = fallbackId;
+      markReached(l, fallbackId, Date.now());
       persistLead(l);
     }
   });

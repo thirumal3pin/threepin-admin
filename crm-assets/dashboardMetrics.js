@@ -11,8 +11,8 @@
 // Never mutates the leads/stages arrays or their elements.
 // ═══════════════════════════════════════════════════════════════════════
 
-import { stageKeyOf, stageKindOf } from './pipeline.js';
-import { computeAttention, SEVERITY_RANK } from './leadAttention.js';
+import { stageKeyOf, stageKindOf, stageForKey, furthestStep, LADDER } from './pipeline.js';
+import { computeAttention, SEVERITY_RANK, isBusinessLead } from './leadAttention.js';
 
 const DAY_MS = 86400000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -486,6 +486,22 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
   const nonSpamTotal = totalLeads - spamCount;
   const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
+  // The milestone funnel: how many sales leads ever reached each column of the ladder, and how
+  // long that typically took from the enquiry. The keyed pipeline (pipeline.js) plus the first-
+  // entry dates in lead.reached make "reached at least this milestone" a recorded fact — a lead
+  // that later went On hold or Lost still counts for every milestone it got to.
+  const funnelLeads = leads.filter(l => !spamOf(l) && !isBusinessLead(l));
+  const journey = LADDER.map((key, i) => {
+    const got = funnelLeads.filter(l => furthestStep(l, stages) >= i);
+    const spans = got
+      .map(l => (l.reached && l.reached[key] && (l.reached.new || l.createdAt)) ? l.reached[key] - (l.reached.new || l.createdAt) : null)
+      .filter(v => v !== null && v >= 0)
+      .sort((a, b) => a - b);
+    const median = i > 0 && spans.length ? Math.round(spans[Math.floor(spans.length / 2)] / DAY_MS) : null;
+    const st = stageForKey(stages, key);
+    return { key, label: i === 0 ? 'Enquiries' : (st ? st.name : key), count: got.length, pct: pct(got.length, funnelLeads.length), medianDays: median };
+  });
+
   return {
     meta: {
       generatedAt: now,
@@ -562,16 +578,8 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       }))
     },
 
-    // Four checkpoints every lead can be measured against RIGHT NOW. This is
-    // deliberately not a cumulative stage funnel: stages are user-editable and
-    // leads can skip or move backwards, so "reached at least stage N" would be
-    // a guess. Each count below is a fact about the current data.
-    journey: [
-      { label: 'Total leads', count: nonSpamTotal },
-      { label: 'Details shared', count: leads.filter(l => l.detailsSent === true && !spamOf(l)).length },
-      { label: 'Site visit done', count: siteVisitDoneLeads.length },
-      { label: 'Closed', count: wonLeadCount }
-    ].map(s => ({ ...s, pct: pct(s.count, nonSpamTotal) })),
+    // Milestone funnel (see above): [{ key, label, count, pct, medianDays }], sales leads only.
+    journey,
 
     kpis: {
       totalLeads,

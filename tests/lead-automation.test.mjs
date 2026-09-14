@@ -7,8 +7,10 @@
 //   node tests/lead-automation.test.mjs
 
 import {
-  planPipelineMigration, stageKeyOf, stageKindOf, hasKeyedPipeline, stageForKey, STAGE_DEFS
+  planPipelineMigration, stageKeyOf, stageKindOf, hasKeyedPipeline, stageForKey, STAGE_DEFS,
+  reachedUpdate, furthestStep, stageAge
 } from '../crm-assets/pipeline.js';
+import { computeDashboardMetrics } from '../crm-assets/dashboardMetrics.js';
 import { computeAttention, needsAction, teamOwes } from '../crm-assets/leadAttention.js';
 import { buildCaseFile, normaliseVerdict, classifyLead, LEAD_AI_SCHEMA } from '../api/_lead-ai.js';
 import { decideLeadChanges, withinWorkingHours } from '../api/_lead-policy.js';
@@ -89,6 +91,31 @@ eq('Legacy names resolve to keys', [stageKeyOf({ name: 'Closed' }), stageKeyOf({
 eq('Spam reads as a lost kind even unkeyed', stageKindOf({ name: 'Spam' }), 'lost');
 const STAGES = plan.stages;
 const sid = key => stageForKey(STAGES, key).id;
+
+section('Milestone dates, days in a column, the funnel');
+{
+  eq('Entering a milestone for the first time records it', reachedUpdate({ reached: { new: 1 } }, 'options', 5), { 'reached.options': 5 });
+  eq('…but never overwrites the first date', reachedUpdate({ reached: { options: 2 } }, 'options', 5), null);
+  eq('On hold and Lost are not milestones', [reachedUpdate({}, 'on_hold', 5), reachedUpdate({}, 'lost', 5)], [null, null]);
+  eq('The furthest step counts a lead that later went Lost', furthestStep({ stageId: sid('lost'), reached: { new: 1, visit_done: 3 } }, STAGES), 3);
+  eq('…and a lead from before milestone dates by its column', furthestStep({ stageId: sid('negotiation') }, STAGES), 4);
+  const age = stageAge({ stageId: sid('options'), stageChangedAt: NOW - 8.5 * DAY }, STAGES, NOW);
+  eq('Days in the column, against its target', [age.days, age.target, age.over, age.farOver], [8, 7, true, false]);
+  eq('Closed columns have no target', stageAge({ stageId: sid('won'), stageChangedAt: NOW - 40 * DAY }, STAGES, NOW).target, null);
+
+  const funnelLeads = [
+    { id: 'f1', stageId: sid('new'), createdAt: NOW - 10 * DAY, reached: { new: NOW - 10 * DAY } },
+    { id: 'f2', stageId: sid('options'), createdAt: NOW - 10 * DAY, reached: { new: NOW - 10 * DAY, options: NOW - 9 * DAY } },
+    { id: 'f3', stageId: sid('lost'), lostReason: 'not_interested', createdAt: NOW - 10 * DAY, reached: { new: NOW - 10 * DAY, options: NOW - 8 * DAY, visit_pending: NOW - 6 * DAY } },
+    { id: 'f4', stageId: sid('won'), createdAt: NOW - 30 * DAY, reached: { new: NOW - 30 * DAY, negotiation: NOW - 10 * DAY, won: NOW - 2 * DAY } },
+    { id: 'f5', stageId: sid('lost'), lostReason: 'spam', createdAt: NOW - DAY },
+    { id: 'f6', stageId: sid('visit_done'), enquiryType: 'Vendor / Collaboration', createdAt: NOW - DAY }
+  ];
+  const j = computeDashboardMetrics(funnelLeads, STAGES, NOW).journey;
+  eq('Funnel counts every milestone a sales lead ever reached (spam and vendors out)', j.map(s => s.count), [4, 3, 2, 1, 1, 1]);
+  eq('…labelled by the tenant\'s column names', j.map(s => s.label), ['Enquiries', 'Options sent', 'Visit planned', 'Visited', 'Negotiating', 'Won']);
+  eq('…with the typical days from enquiry', [j[1].medianDays, j[5].medianDays], [2, 28]);
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 section('AI verdict validation');
@@ -222,6 +249,7 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   eq('The due step becomes the follow-up', d.patch.followUpAt, Date.parse('2026-09-14T17:00:00+05:30'));
   eq('…marked as set by the AI with the action', [d.patch.followUpBy, d.patch.followUpNote], ['ai', 'Call to confirm Saturday visit to TNAG0001']);
   eq('Last move is remembered for Undo', [d.patch.ai.lastMove.from, d.patch.ai.lastMove.to], ['new', 'visit_pending']);
+  eq('The AI\'s move records the milestone date', d.patch['reached.visit_pending'], NOW);
 }
 {
   const d = decide(ttLead(), verdict({ stage: 'negotiation', confidence: 'medium' }));

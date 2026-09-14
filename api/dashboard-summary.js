@@ -173,8 +173,9 @@ function journeySection(m) {
     <td style="${TD}font-weight:600;">${escapeHtml(s.label)}</td>
     <td style="${TD}">${s.count}</td>
     <td style="${TD}">${s.pct === null ? '—' : s.pct + '%'}</td>
+    <td style="${TD}">${s.medianDays == null ? '—' : s.medianDays + 'd'}</td>
   </tr>`).join('');
-  return sectionWrap('🚀 Lead Journey', null, tableWrap(['Checkpoint', 'Leads', '% of all'], body));
+  return sectionWrap('🚀 Lead Journey', null, tableWrap(['Milestone reached', 'Leads', '% of all', 'Typical days in'], body));
 }
 
 function mixSection(m) {

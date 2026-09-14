@@ -458,7 +458,7 @@ function dashFunnelHtml(steps){
           <span class="dash-funnel-val">${s.count}<span class="dash-funnel-pct">${s.pct === null ? '' : ` · ${s.pct}% of all`}</span></span>
         </div>
         <div class="dash-funnel-track"><div class="dash-funnel-fill" style="width:${w}%;background:${colour}"></div></div>
-        ${drop !== null ? `<div class="dash-funnel-step">${drop}% carried through from “${escapeHtml(steps[i-1].label)}”</div>` : ''}
+        ${drop !== null ? `<div class="dash-funnel-step">${drop}% carried through from “${escapeHtml(steps[i-1].label)}”${s.medianDays != null ? ` · typically ${s.medianDays === 0 ? 'the same day' : s.medianDays + ' day' + (s.medianDays === 1 ? '' : 's')} after the enquiry` : ''}</div>` : ''}
       </div>`;
     }).join('')}
   </div>`;
@@ -590,7 +590,7 @@ window.renderDashboardView = function(){
         <div class="dash-card">
           <div class="dash-card-hdr"><div>
             <div class="dash-card-title">Lead Journey</div>
-            <div class="dash-card-sub">Where the book stands right now</div>
+            <div class="dash-card-sub">How far sales leads have ever got — spam and vendors excluded</div>
           </div></div>
           ${dashFunnelHtml(m.journey)}
         </div>

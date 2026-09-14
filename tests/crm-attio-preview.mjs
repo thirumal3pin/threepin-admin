@@ -1,0 +1,127 @@
+// ═══════ CRM PREVIEW — MILESTONES, VIEWS, PROPERTIES, BULK, TIMELINE, MENTIONS ═══════
+//
+// Opens the real crm.html in Chromium with firebase-sync.js swapped for an in-memory stand-in and
+// checks the features borrowed from Attio: milestone dates (days-in-stage chip, lead page trail,
+// the dashboard funnel), saved team views, lead ↔ property links, bulk actions in the list, the
+// one filterable timeline and @mentions. Screenshots each.
+//
+//   node tests/crm-attio-preview.mjs <out-dir>
+
+import { chromium } from 'playwright';
+import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { planPipelineMigration } from '../crm-assets/pipeline.js';
+
+const OUT = process.argv[2] || 'attio-preview';
+mkdirSync(OUT, { recursive: true });
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const NOW = Date.now();
+const H = 3600000, D = 24 * H;
+const T = 't_3pinrealty';
+const STAGES = planPipelineMigration([
+  { id: 'new', name: 'New' }, { id: 'site_visit', name: 'Site Visit' }, { id: 'stage_done', name: 'Site Visit Done' },
+  { id: 'negotiation', name: 'in Negotiation' }, { id: 'closed_won', name: 'Closed' }, { id: 'closed_lost', name: 'Not interested' }
+], []).stages;
+const sid = key => STAGES.find(s => s.key === key).id;
+const tt = (over = {}) => ({ id: 'x' + Math.random().toString(36).slice(2, 7), category: 'sales', integration: 'whatsapp', status: 'warm', lastMessageAt: NOW - 2 * H, lastReplyAt: NOW - 2 * H + 60000, ...over });
+
+const LEADS = [
+  { id: 'A1', tenantId: T, name: 'Rajesh Kumar', phone: '9840012345', source: 'tailortalk', stageId: sid('visit_pending'), propertyInterest: 'Velachery VLCA002', budget: '3.3 Cr',
+    createdAt: NOW - 9 * D, updatedAt: NOW - D, stageChangedAt: NOW - 6 * D, reached: { new: NOW - 9 * D, options: NOW - 8 * D, visit_pending: NOW - 6 * D },
+    propertyCodes: ['VLCA002'], tt: tt({ status: 'hot' }) },
+  { id: 'A2', tenantId: T, name: 'Priya S', source: 'tailortalk', stageId: sid('options'), propertyInterest: 'Anna Nagar 2 BHK', budget: '1.2 Cr',
+    createdAt: NOW - 20 * D, updatedAt: NOW - 16 * D, stageChangedAt: NOW - 16 * D, reached: { new: NOW - 20 * D, options: NOW - 16 * D }, tt: tt() },
+  { id: 'A3', tenantId: T, name: 'Arun Prakash', phone: '98765 43211', source: 'manual', stageId: sid('new'), propertyInterest: 'Kilpauk villa', createdAt: NOW - 3 * H, updatedAt: NOW - 3 * H, reached: { new: NOW - 3 * H } },
+  { id: 'A4', tenantId: T, name: 'Meena R', phone: '98765 43212', source: 'manual', stageId: sid('negotiation'), propertyInterest: 'Nanganallur', budget: '85 L',
+    createdAt: NOW - 30 * D, updatedAt: NOW - 2 * D, stageChangedAt: NOW - 3 * D, reached: { new: NOW - 30 * D, visit_done: NOW - 10 * D, negotiation: NOW - 3 * D } },
+  { id: 'A5', tenantId: T, name: 'Won Deal', source: 'manual', stageId: sid('won'), propertyInterest: 'T Nagar', createdAt: NOW - 60 * D, updatedAt: NOW - 10 * D, reached: { new: NOW - 60 * D, won: NOW - 12 * D } },
+  { id: 'A6', tenantId: T, name: 'Divya Sundaram', phone: '98765 43216', source: 'manual', stageId: sid('lost'), lostReason: 'not_interested', createdAt: NOW - 40 * D, updatedAt: NOW - 5 * D, reached: { new: NOW - 40 * D, options: NOW - 35 * D } }
+];
+
+const STUB = `
+const LEADS = ${JSON.stringify(LEADS)};
+const STAGES = ${JSON.stringify(STAGES)};
+window.__saved = []; window.__aiUpdates = []; window.__settings = []; window.__history = []; window.__notes = [];
+window.crmFirebase = {
+  saveLead: async l => { window.__saved.push(JSON.parse(JSON.stringify(l))); },
+  deleteLead: async () => {}, getLeadNotes: async () => [], getLeadHistory: async () => [],
+  saveNote: async (id, n) => { window.__notes.push({ id, n }); }, deleteNoteDoc: async () => {}, saveHistory: async (id, h) => { window.__history.push({ id, h }); }, savePipeline: async () => {},
+  getBotConfig: async () => null, saveBotConfig: async () => {}, saveEnquiryTypes: async () => {}, saveProperties: async () => {},
+  saveFollowupDigestSettings: async () => {}, saveDashboardEmailSettings: async () => {},
+  releaseLeadField: async () => {}, getLeadTailorTalk: async () => null,
+  updateLeadAi: async (id, f) => { window.__aiUpdates.push({ id, f }); }, saveAutomationSettings: async () => {},
+  saveView: async v => { window.__settings.push({ view: v }); }, deleteView: async id => { window.__settings.push({ deleted: id }); },
+  getInventory: async () => [
+    { id: 'VLCA002', propertyCode: 'VLCA002', name: 'Casagrand Velachery', location: 'Velachery', startingPrice: '₹1.2 Cr' },
+    { id: 'ANR003', propertyCode: 'ANR003', name: 'Firm Srivaruni', location: 'Anna Nagar West', startingPrice: '₹3.25 Cr' }
+  ],
+  registerTeamMember: async () => {}
+};
+window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => 't_3pinrealty' };
+window.onCrmAuthChange({ email: 'owner@threepin.in' });
+window.applyPipelineSnapshot(STAGES);
+window.applyEnquiryTypesSnapshot(['Property Enquiry','Seller Listing','General']);
+window.applyAutomationSettingsSnapshot({ enabled: true });
+if (window.applyViewsSnapshot) window.applyViewsSnapshot({});
+if (window.applyTeamSnapshot) window.applyTeamSnapshot({ 'owner@threepin.in': { email: 'owner@threepin.in' }, 'karthik@threepin.in': { email: 'karthik@threepin.in' } });
+window.applyLeadsSnapshot(JSON.parse(JSON.stringify(LEADS)));
+window.__ready = true;
+`;
+
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.jpg': 'image/jpeg', '.json': 'application/json' };
+const browser = await chromium.launch();
+const errors = [];
+const ok = (label, cond, detail) => { if (cond) console.log('  ok  ' + label); else errors.push(label + (detail !== undefined ? ' — ' + detail : '')); };
+
+async function openPage(viewport, { theme = null, search = '' } = {}) {
+  const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  await ctx.addInitScript(t => { try { localStorage.clear(); if (t) localStorage.setItem('crmTheme', t); } catch (e) {} }, theme);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(`${viewport.width}px: ${e.message}`));
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push(`${viewport.width}px console: ${m.text()}`); });
+  page.on('dialog', d => d.accept());
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.hostname !== 'crm.local') return route.abort();
+    if (url.pathname === '/crm-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: STUB });
+    if (url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
+    const file = join(ROOT, decodeURIComponent(url.pathname));
+    if (!existsSync(file)) return route.fulfill({ status: 404, body: '' });
+    return route.fulfill({ contentType: TYPES[extname(file)] || 'application/octet-stream', body: readFileSync(file) });
+  });
+  await page.goto('http://crm.local/crm.html' + search);
+  await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
+  await page.waitForTimeout(400);
+  return page;
+}
+const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)].map(e => e.textContent.replace(/\s+/g, ' ').trim()), sel);
+const cardText = (page, name) => page.evaluate(n => { const c = [...document.querySelectorAll('.lcard')].find(x => x.querySelector('.lcard-name').textContent === n); return c ? c.textContent.replace(/\s+/g, ' ') : null; }, name);
+
+// ── 3. Milestones ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  ok('A lead stuck past its column\'s usual time shows it on the card', /16d in stage/.test(await cardText(page, 'Priya S') || ''));
+  ok('…a lead within it does not', !/in stage/.test(await cardText(page, 'Arun Prakash') || 'in stage'));
+  await page.screenshot({ path: join(OUT, '01-board-age.png') });
+  await page.evaluate(() => openDetail('A1'));
+  await page.waitForTimeout(300);
+  const stand = (await text(page, '#dpStand')).join(' ');
+  ok('Lead page says how long it has been in the column', /Visit planned\s*for 6 days/.test(stand), stand.slice(0, 160));
+  ok('…and the milestones it reached with dates', /New .*→.*Options sent .*→.*Visit planned/.test(stand), stand.slice(0, 300));
+  await page.locator('#dpStandSec').screenshot({ path: join(OUT, '02-lead-trail.png') });
+  await page.evaluate(() => { closeDetail(); changeStage('A3', 'options_shared'); });
+  const moved = await page.evaluate(() => leads.find(l => l.id === 'A3').reached);
+  ok('Moving a lead records the milestone date', moved && moved.options > 0 && moved.new > 0, JSON.stringify(moved));
+  await page.evaluate(() => toggleView('dashboard'));
+  await page.waitForTimeout(400);
+  const funnel = (await text(page, '.dash-funnel')).join(' ');
+  // Arun was just moved to Options sent; the lost lead had reached it; Won and Negotiating skipped past it.
+  ok('The dashboard funnel counts milestones ever reached', /Enquiries\s*6.*Options sent\s*6.*Visit planned\s*3.*Visited\s*2.*Negotiating\s*2.*Won\s*1/.test(funnel), funnel.slice(0, 400));
+  await page.screenshot({ path: join(OUT, '03-dashboard-funnel.png'), fullPage: false });
+  await page.close();
+}
+
+await browser.close();
+if (errors.length) { console.log('ERRORS:\n' + errors.join('\n')); process.exit(1); }
+console.log('No page errors');
