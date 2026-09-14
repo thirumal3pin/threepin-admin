@@ -73,6 +73,8 @@ function claude() {
 }
 // Several CRM tabs refresh every few minutes; TailorTalk is pulled at most this often per tenant.
 const REFRESH_PULL_EVERY_MS = 2 * 60000;
+// Bulk re-reads (admin-ai with apply) run on Claude Haiku, like the lead summaries.
+const BULK_MODEL = 'claude-haiku-4-5-20251001';
 
 // After the webhook has been answered: queue this lead (it is read once its chat goes quiet) and
 // read a few leads whose chats already have. Nothing sleeps waiting for a quiet period — the next
@@ -286,7 +288,9 @@ async function adminAiPost(request) {
   const limit = Math.min(Math.max(Number(body.limit) || 8, 1), 25);
   const db = getDb();
   const auto = await automationSettings(db, tenantId);
-  const model = typeof body.model === 'string' && body.model ? body.model : auto.model;
+  // Live reads use the tenant's model (Gemini's free tier); a bulk apply defaults to Claude — the
+  // owner's call: big one-off runs go the way the AI summaries already do, not to the free tier.
+  const model = typeof body.model === 'string' && body.model ? body.model : (apply ? BULK_MODEL : auto.model);
   const started = Date.now();
 
   let ids;
