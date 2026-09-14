@@ -81,6 +81,7 @@ window.applyLeadsSnapshot = function(list){
     }
   }
   refreshAll();
+  try{ notifyNewMentions(); }catch(e){}
   // The AI summary regenerates server-side (see api/_lead-summary-generate.js)
   // and TailorTalk updates arrive from api/tailortalk.js — both come back
   // through this same snapshot. Refresh just the blocks they touch if the
@@ -137,6 +138,7 @@ function refreshAll(){
 // ═══════ INIT ═══════
 function init(){
   setupSearch();
+  setupMentions();
   updateNavState();
   renderLeadFilterBar();
   applyFilters();
@@ -501,6 +503,7 @@ const STEP_KEYS = new Set(['team_owes', 'promise_overdue', 'followup_overdue']);
 
 // ── Focus filters: the "what should I do now" views, available in every scope ──
 const FOCUS_FILTERS = [
+  { key:'mentions', label:'@ Mentioned me', test: l => !!myOpenMention(l), tone:'warn', onlyWhenAny: true },
   { key:'action',   label:'Needs action',   test: l => needsActionUi(l), tone:'warn' },
   { key:'overdue',  label:'Overdue',        test: l => attentionFor(l).some(a => a.key==='promise_overdue' || a.key==='followup_overdue' || a.key==='visit_outcome' || a.key==='window_closing'), tone:'bad' },
   { key:'ai_moved', label:'Moved by AI today', test: l => !!(l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 24*3600000) },
@@ -590,6 +593,7 @@ function renderLeadFilterBar(){
   html += '<span class="lf-sep" aria-hidden="true"></span>'
     + FOCUS_FILTERS.map(f => {
         const n = scoped.filter(f.test).length;
+        if(f.onlyWhenAny && !n && leadFilter.focus !== f.key) return '';
         const tone = f.tone && n ? ' ' + f.tone : '';
         return chip(' sub focus'+tone, leadFilter.focus===f.key, `setLeadFocus('${f.key}')`, f.label, n);
       }).join('');
@@ -1352,7 +1356,7 @@ function timelineItems(l){
     ...ttDayItems(l)
   ].sort((a, b) => b.at - a.at);
 }
-function noteTextHtml(text){ return escapeHtml(text || ''); }
+function noteTextHtml(text){ return mentionifyHtml(escapeHtml(text || '')); }
 function timelineDayLabel(ts){
   const r = relDay(ts);
   return r === 'Today' || r === 'Yesterday' ? `${r} · ${fmtDay(ts)}` : fmtDay(ts);
@@ -1549,6 +1553,8 @@ function leadCardHtml(l){
   const step = nextStepOf(l);
   const what = [l.propertyInterest, l.budget].filter(Boolean).map(s => escapeHtml(s)).join(' · ');
   const chips = [];
+  const mention = myOpenMention(l);
+  if(mention) chips.push(`<span class="tt-chip mention" title="${escapeHtml((window.crmMentions.displayName(mention.by || '') || 'Someone') + ': ' + (mention.text || ''))}">@ you</span>`);
   if(isTtLead(l)){
     const t = l.tt;
     if(TT_STATUS[t.status]) chips.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
@@ -2149,6 +2155,13 @@ function renderStandSection(l){
     ${why ? `<div class="st-why">${escapeHtml(why)}</div>` : ''}
     ${milestoneTrailHtml(l)}
   </div>`);
+  const mention = myOpenMention(l);
+  if(mention){
+    parts.push(`<div class="st-item mention">
+      <div class="st-item-main"><div class="st-item-t">@ ${escapeHtml(window.crmMentions.displayName(mention.by || '') || 'Someone')} mentioned you</div><div class="st-item-d">“${escapeHtml(mention.text || '')}” · ${timeAgo(mention.at)}</div></div>
+      <div class="st-item-acts"><button type="button" class="tt-btn" onclick="markMentionDone('${l.id}')">Done</button></div>
+    </div>`);
+  }
 
   const step = nextStepOf(l);
   const stepIsTeam = step && (step.cls === 'team' || step.cls === 'overdue');
@@ -2930,7 +2943,10 @@ function renderDetailInfo(l){
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
     <div class="info-b pl-row" id="dpPropLinks">${propertyLinksInner(l)}</div>
   `;
+  // A snapshot redraw must not throw away a property search being typed.
+  const plFocused = document.activeElement && document.activeElement.id === 'plInput';
   document.getElementById('dpInfo').innerHTML = infoHtml;
+  if(plFocused){ const i = document.getElementById('plInput'); if(i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
   if((l.propertyCodes || []).length && !inventory) loadInventory().then(() => { if(currentDetailId === l.id) renderPropertyLinks(l.id); });
 
   const metaHtml = `
@@ -3254,7 +3270,18 @@ function addNote(){
   }
 
   const now = Date.now();
-  logNote(l, { id:'n'+now, text, createdAt: now, by: currentUserEmail || null });
+  const M = window.crmMentions;
+  const mentioned = M ? M.mentionedEmails(text, teamRoster(), currentUserEmail) : [];
+  const note = { id:'n'+now, text, createdAt: now, by: currentUserEmail || null };
+  if(mentioned.length) note.mentions = mentioned;
+  logNote(l, note);
+  if(mentioned.length){
+    // The latest mention of each person, on the lead itself — what their filter, card and digest read.
+    l.mentions = { ...(l.mentions || {}) };
+    mentioned.forEach(email => { l.mentions[M.teamKey(email)] = { email, by: currentUserEmail || null, at: now, noteId: note.id, text: text.slice(0, 160), doneAt: null }; });
+    showToast(`✓ Note added — ${mentioned.map(M.displayName).join(', ')} will see it`);
+  }
+  hideMentionMenu();
   if(nextFollowUpAt !== currentAt){
     if(nextFollowUpAt){
       const when = new Date(nextFollowUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -3276,6 +3303,115 @@ function addNote(){
   applyFilters();
   persistLead(l);
 }
+// ═══════ @MENTIONS (crm-assets/mentions.js) ═══════
+// The team is the list in settings/{tenant}.team — set by the owner, never guessed from lead data
+// and never added to on login.
+let team = {};
+window.applyTeamSnapshot = function(map){
+  team = map && typeof map === 'object' ? map : {};
+};
+function teamRoster(){
+  const set = new Set();
+  Object.values(team).forEach(m => { const e = m && m.email; if(e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e))) set.add(String(e).trim().toLowerCase()); });
+  return [...set].sort();
+}
+function myOpenMention(l){ return window.crmMentions && currentUserEmail ? window.crmMentions.openMentionFor(l, currentUserEmail) : null; }
+function markMentionDone(leadId){
+  const l = leads.find(x => x.id === leadId);
+  const M = window.crmMentions;
+  if(!l || !M || !currentUserEmail) return;
+  const key = M.teamKey(currentUserEmail);
+  if(!l.mentions || !l.mentions[key]) return;
+  l.mentions = { ...l.mentions, [key]: { ...l.mentions[key], doneAt: Date.now() } };
+  persistLead(l);
+  refreshAll();
+  if(currentDetailId === leadId) renderStandSection(l);
+  showToast('✓ Done');
+}
+// A note's @handles, highlighted when they are someone on the team.
+function mentionifyHtml(escapedText){
+  const M = window.crmMentions;
+  if(!M) return escapedText;
+  const handles = new Map(teamRoster().map(e => [M.handleOf(e), e]));
+  return escapedText.replace(/(^|[^\w@])@([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)/gi, (all, pre, h) => {
+    const email = handles.get(h.toLowerCase());
+    return email ? `${pre}<span class="mention" title="${escapeHtml(email)}">@${escapeHtml(M.displayName(email))}</span>` : all;
+  });
+}
+// New mentions of me while the CRM is open → one toast.
+const mentionsSeen = new Set();
+let mentionsPrimed = false;
+function notifyNewMentions(){
+  if(!currentUserEmail || !window.crmMentions) return;
+  const mine = leads.map(l => ({ l, m: myOpenMention(l) })).filter(x => x.m);
+  const fresh = mine.filter(x => !mentionsSeen.has(`${x.l.id}:${x.m.at}`));
+  fresh.forEach(x => mentionsSeen.add(`${x.l.id}:${x.m.at}`));
+  if(!mentionsPrimed){ mentionsPrimed = true; return; }  // what was already open at load is on the filter chip
+  if(fresh.length === 1) showToast(`@ ${window.crmMentions.displayName(fresh[0].m.by || '')} mentioned you on ${fresh[0].l.name}`);
+  else if(fresh.length > 1) showToast(`@ You were mentioned on ${fresh.length} leads`);
+}
+
+// The @ picker under the note box.
+let mentionState = null;
+function setupMentions(){
+  const inp = document.getElementById('noteInput');
+  if(!inp || inp.dataset.mentions) return;
+  inp.dataset.mentions = '1';
+  inp.addEventListener('input', updateMentionMenu);
+  inp.addEventListener('click', updateMentionMenu);
+  inp.addEventListener('keydown', mentionKeydown);
+  inp.addEventListener('blur', () => setTimeout(hideMentionMenu, 150));
+}
+function mentionMenuOpen(){ return !!mentionState; }
+function updateMentionMenu(){
+  const inp = document.getElementById('noteInput');
+  const M = window.crmMentions;
+  if(!inp || !M){ hideMentionMenu(); return; }
+  const caret = inp.selectionStart == null ? inp.value.length : inp.selectionStart;
+  const m = /(^|[^\w@])@([a-z0-9._-]*)$/i.exec(inp.value.slice(0, caret));
+  if(!m){ hideMentionMenu(); return; }
+  const q = m[2].toLowerCase();
+  const me = String(currentUserEmail || '').toLowerCase();
+  const items = teamRoster().filter(e => e !== me && (M.handleOf(e).startsWith(q) || M.displayName(e).toLowerCase().includes(q))).slice(0, 6);
+  if(!items.length){ hideMentionMenu(); return; }
+  const keep = mentionState && mentionState.items[mentionState.index];
+  mentionState = { start: caret - m[2].length - 1, end: caret, items, index: Math.max(0, items.indexOf(keep)) };
+  renderMentionMenu();
+}
+function renderMentionMenu(){
+  const menu = document.getElementById('mentionMenu');
+  const M = window.crmMentions;
+  if(!menu || !mentionState || !M) return;
+  menu.hidden = false;
+  menu.innerHTML = mentionState.items.map((e, i) => `<button type="button" role="option" aria-selected="${i === mentionState.index}" class="${i === mentionState.index ? 'at' : ''}" onmousedown="event.preventDefault();pickMention(${i})"><b>${escapeHtml(M.displayName(e))}</b><small>@${escapeHtml(M.handleOf(e))}</small></button>`).join('');
+}
+function hideMentionMenu(){
+  mentionState = null;
+  const menu = document.getElementById('mentionMenu');
+  if(menu){ menu.hidden = true; menu.innerHTML = ''; }
+}
+function mentionKeydown(e){
+  if(!mentionState) return;
+  const n = mentionState.items.length;
+  if(e.key === 'ArrowDown'){ e.preventDefault(); mentionState.index = (mentionState.index + 1) % n; renderMentionMenu(); }
+  else if(e.key === 'ArrowUp'){ e.preventDefault(); mentionState.index = (mentionState.index - 1 + n) % n; renderMentionMenu(); }
+  else if(e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); pickMention(mentionState.index); }
+  else if(e.key === 'Escape'){ e.preventDefault(); hideMentionMenu(); }
+}
+function pickMention(i){
+  const inp = document.getElementById('noteInput');
+  const M = window.crmMentions;
+  if(!inp || !mentionState || !M) return;
+  const email = mentionState.items[i];
+  const token = '@' + M.handleOf(email) + ' ';
+  const { start, end } = mentionState;
+  inp.value = inp.value.slice(0, start) + token + inp.value.slice(end);
+  const caret = start + token.length;
+  hideMentionMenu();
+  inp.focus();
+  inp.setSelectionRange(caret, caret);
+}
+
 function deleteNote(leadId, noteId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;

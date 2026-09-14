@@ -158,10 +158,6 @@ window.crmFirebase = {
     .catch(e => { console.error('Firestore save view error:', e); throw e; }),
   deleteView: (id) => updateDoc(settingsRef(currentTenantId), { ['views.' + id]: deleteField() })
     .catch(e => { console.error('Firestore delete view error:', e); throw e; }),
-  // The team roster for @mentions: settings.team.{key} = { email, lastSeenAt } — each person adds
-  // themselves when they open the CRM (at most once a day).
-  registerTeamMember: (key, member) => updateDoc(settingsRef(currentTenantId), { ['team.' + key]: member })
-    .catch(e => console.error('Firestore register team member error:', e)),
   // The inventory (properties collection) for linking leads to property codes — read once, on
   // first use, not kept live: the CRM only needs codes and names.
   getInventory: () => getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)))

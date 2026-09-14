@@ -738,7 +738,15 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .fu-spotlight.none .fu-spotlight-when{font-size:15px;font-weight:600;color:var(--ink2);}
 
 /* ── Timeline: notes, stage moves, follow-ups, AI, TailorTalk and edits in one feed ── */
-.note-add{display:flex;gap:8px;margin:0 0 10px;}
+.note-add{display:flex;gap:8px;margin:0 0 10px;position:relative;}
+/* @mentions: the picker under the note box, highlighted names in notes, the card chip, the lead-page row. */
+.mention-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:220px;max-width:calc(100% - 8px);padding:4px;border:1px solid var(--border2);border-radius:var(--r2);background:var(--raised);box-shadow:0 10px 26px rgba(0,0,0,.14);display:flex;flex-direction:column;}
+.mention-menu button{display:flex;align-items:baseline;justify-content:space-between;gap:12px;text-align:left;border:none;background:transparent;padding:7px 9px;border-radius:var(--r1);font-family:var(--sans);font-size:13px;color:var(--ink);cursor:pointer;}
+.mention-menu button small{font-family:var(--mono);font-size:11px;color:var(--ink4);}
+.mention-menu button.at,.mention-menu button:hover{background:var(--purple-bg);}
+.mention{color:var(--purple);font-weight:600;background:var(--purple-bg);border-radius:5px;padding:0 3px;}
+.tt-chip.mention{background:var(--purple-bg);color:var(--purple);box-shadow:inset 2px 0 0 var(--purple);font-weight:700;}
+.st-item.mention{margin-bottom:8px;background:var(--purple-bg);border-color:var(--purple-line);box-shadow:inset 3px 0 0 var(--purple);}
 .tl-filters{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 10px;}
 .tl-f{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);color:var(--ink3);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;}
 .tl-f span{font-family:var(--mono);font-size:10.5px;opacity:.7;}

@@ -1,5 +1,6 @@
 import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared.js';
 import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
+import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
 
 // What needs a person right now — the same rule book the board and action queue use, so the
 // morning digest never lists something the CRM does not show, or misses something it does.
@@ -100,8 +101,13 @@ function updatedByLabel(l) {
 function leadLine(l) {
   return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — last updated by ${updatedByLabel(l)}`;
 }
-function formatDigestText(overdue, days, startOfToday, actions = [], stages = []) {
+function formatDigestText(overdue, days, startOfToday, actions = [], stages = [], mentions = []) {
   const lines = ['Follow-up digest', ''];
+  if (mentions.length) {
+    lines.push(`MENTIONED YOU (${mentions.length}):`);
+    mentions.slice(0, ACTION_LIMIT).forEach(({ lead, mention }) => lines.push(`- ${lead.name || 'Lead'} — ${displayName(mention.by || '') || 'A teammate'}: “${mention.text || ''}”`));
+    lines.push('');
+  }
   if (actions.length) {
     lines.push(`NEEDS ACTION NOW (${actions.length}):`);
     actions.slice(0, ACTION_LIMIT).forEach(a => lines.push(`- ${actionLine(a, stages)}`));
@@ -206,8 +212,23 @@ function actionSectionHtml(actions, stages) {
       ${rows}
     </table>${more}`;
 }
-function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = []) {
-  let body = actionSectionHtml(actions, stages);
+// Notes where a teammate @mentioned this recipient, still open (crm-assets/mentions.js).
+function mentionSectionHtml(mentions) {
+  if (!mentions.length) return '';
+  const rows = mentions.slice(0, ACTION_LIMIT).map(({ lead, mention }) => `<tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;">${escapeHtml(lead.name || 'Lead')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;"><b>${escapeHtml(displayName(mention.by || '') || 'A teammate')}</b>: “${escapeHtml(mention.text || '')}”</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;">${escapeHtml(lead.phone || '—')}</td>
+    </tr>`).join('');
+  return `
+    <h3 style="color:#6D28D9;margin:18px 0 8px;font-family:sans-serif;">@ Mentioned you (${mentions.length})</h3>
+    <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;table-layout:fixed;">
+      <colgroup><col style="width:22%"><col style="width:61%"><col style="width:17%"></colgroup>
+      ${rows}
+    </table>`;
+}
+function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = [], mentions = []) {
+  let body = mentionSectionHtml(mentions) + actionSectionHtml(actions, stages);
   body += sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
   days.forEach((arr, i) => { body += sectionHtml(`📅 ${dayLabel(i, startOfToday)}`, i === 0 ? '#B45309' : '#1D4ED8', arr, true); });
   return `<div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#0A0A0A;">
@@ -249,10 +270,13 @@ async function digestForTenant(db, tenantId) {
     const dateStr = triggeredAt.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ });
     const timeStr = triggeredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: TZ });
     const subject = `3 PIN Realty Follow up (${dateStr}) ${timeStr}`;
-    const text = formatDigestText(overdue, days, startOfToday, actions, stages);
-    const html = formatDigestHtml(overdue, days, startOfToday, actions, stages);
+    const allLeads = leadsSnap.docs.map(d => d.data());
     for (const to of emailRecipients) {
-      const r = await sendEmail(to, subject, text, html);
+      // The same digest for everyone, plus the notes that mention this recipient.
+      const mine = openMentionsFor(allLeads, to);
+      const text = formatDigestText(overdue, days, startOfToday, actions, stages, mine);
+      const html = formatDigestHtml(overdue, days, startOfToday, actions, stages, mine);
+      const r = await sendEmail(to, mine.length ? `${subject} · ${mine.length} mention${mine.length === 1 ? '' : 's'}` : subject, text, html);
       results.push({ channel: 'email', to, ...r });
     }
   }

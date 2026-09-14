@@ -38,7 +38,7 @@ function ttLead(id, data, extra = {}, signal = null) {
   return { lead: { ...p.leadWrite, ...extra, tt: { ...p.leadWrite.tt, ...(extra.tt || {}) } }, state: p.stateWrite };
 }
 
-const chat = (mins, rows) => rows.map(([role, content], i) => ({ role, content, time: iso(NOW - (mins - i * 3) * 60000), ...(role === 'human_agent' ? { email: 'thirumal@threepin.in' } : {}) }));
+const chat = (mins, rows) => rows.map(([role, content], i) => ({ role, content, time: iso(NOW - (mins - i * 3) * 60000), ...(role === 'human_agent' ? { email: 'agent.b@example.com' } : {}) }));
 
 const seeds = [
   ttLead('tt1', {
@@ -51,7 +51,7 @@ const seeds = [
       ['user', 'Around 3.3 Cr. Need possession within 6 months. Must be a gated community.'],
       ['assistant', 'VLCA002 fits that. Would you like to visit this weekend?'],
       ['user', 'Yes, Sunday evening works. Can someone call me about the price?'],
-      ['human_agent', 'Hi Rajesh, Thirumal from 3 PIN here. I will call you in 10 minutes.'],
+      ['human_agent', 'Hi Rajesh, this is the 3 PIN team. I will call you in 10 minutes.'],
       ['user', 'Also, is the car park covered?'],
       ['assistant', '<No response from agent>']
     ])
@@ -71,7 +71,7 @@ const seeds = [
     lead_name: 'Karthik Subramaniam', lead_contact: '919876543211', lead_status: 'warm', flagged: true, flag_details: 'Asked for a discount twice',
     budget_and_finance: '2 Cr (earlier: 1.8 Cr)', preferred_location: 'Adyar', metadata: [], created_at: iso(NOW - 6 * 24 * H),
     chat_history: chat(1500, [['user', 'Can you do 2 Cr for the Adyar flat?']])
-  }, { stageId: 'options_shared', source: 'manual', createdBy: 'owner@threepin.in', budget: '1.8 Cr', ttHold: { budget: true } }),
+  }, { stageId: 'options_shared', source: 'manual', createdBy: 'agent.a@example.com', budget: '1.8 Cr', ttHold: { budget: true } }),
   ttLead('tt5', {
     lead_name: 'AdSpark Media', lead_contact: '919444012121', category: 'others', lead_status: 'vendor pitch',
     intent_and_who: 'Selling advertising packages', preferred_location: null, budget_and_finance: null, metadata: [], ad_data: null,
@@ -105,7 +105,7 @@ window.crmFirebase = {
   getLeadTailorTalk: async id => STATES[id] || null
 };
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => 't_3pinrealty' };
-window.onCrmAuthChange({ email: 'owner@threepin.in' });
+window.onCrmAuthChange({ email: 'agent.a@example.com' });
 window.applyPipelineSnapshot(STAGES);
 window.applyEnquiryTypesSnapshot(['Property Enquiry','Seller Listing','General']);
 window.applyLeadsSnapshot(JSON.parse(JSON.stringify(LEADS)));

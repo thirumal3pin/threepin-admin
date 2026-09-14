@@ -34,7 +34,8 @@ const LEADS = [
     createdAt: NOW - 20 * D, updatedAt: NOW - 16 * D, stageChangedAt: NOW - 16 * D, reached: { new: NOW - 20 * D, options: NOW - 16 * D }, tt: tt() },
   { id: 'A3', tenantId: T, name: 'Arun Prakash', phone: '98765 43211', source: 'manual', stageId: sid('new'), propertyInterest: 'Kilpauk villa', createdAt: NOW - 3 * H, updatedAt: NOW - 3 * H, reached: { new: NOW - 3 * H } },
   { id: 'A4', tenantId: T, name: 'Meena R', phone: '98765 43212', source: 'manual', stageId: sid('negotiation'), propertyInterest: 'Nanganallur', budget: '85 L',
-    createdAt: NOW - 30 * D, updatedAt: NOW - 2 * D, stageChangedAt: NOW - 3 * D, reached: { new: NOW - 30 * D, visit_done: NOW - 10 * D, negotiation: NOW - 3 * D } },
+    createdAt: NOW - 30 * D, updatedAt: NOW - 2 * D, updatedBy: 'agent.a@example.com', stageChangedAt: NOW - 3 * D, reached: { new: NOW - 30 * D, visit_done: NOW - 10 * D, negotiation: NOW - 3 * D },
+    mentions: { agent_b_example_com: { email: 'agent.b@example.com', by: 'agent.a@example.com', at: NOW - 2 * D, noteId: 'n0', text: '@agent.b she wants 82 L — can the owner do it?', doneAt: null } } },
   { id: 'A5', tenantId: T, name: 'Won Deal', source: 'manual', stageId: sid('won'), propertyInterest: 'T Nagar', createdAt: NOW - 60 * D, updatedAt: NOW - 10 * D, reached: { new: NOW - 60 * D, won: NOW - 12 * D } },
   { id: 'A6', tenantId: T, name: 'Divya Sundaram', phone: '98765 43216', source: 'manual', stageId: sid('lost'), lostReason: 'not_interested', createdAt: NOW - 40 * D, updatedAt: NOW - 5 * D, reached: { new: NOW - 40 * D, options: NOW - 35 * D } }
 ];
@@ -55,16 +56,15 @@ window.crmFirebase = {
   getInventory: async () => [
     { id: 'VLCA002', propertyCode: 'VLCA002', name: 'Casagrand Velachery', location: 'Velachery', startingPrice: '₹1.2 Cr' },
     { id: 'ANR003', propertyCode: 'ANR003', name: 'Firm Srivaruni', location: 'Anna Nagar West', startingPrice: '₹3.25 Cr' }
-  ],
-  registerTeamMember: async () => {}
+  ]
 };
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => 't_3pinrealty' };
-window.onCrmAuthChange({ email: 'owner@threepin.in' });
+window.onCrmAuthChange({ email: 'agent.a@example.com' });
 window.applyPipelineSnapshot(STAGES);
 window.applyEnquiryTypesSnapshot(['Property Enquiry','Seller Listing','General']);
 window.applyAutomationSettingsSnapshot({ enabled: true });
 if (window.applyViewsSnapshot) window.applyViewsSnapshot({});
-if (window.applyTeamSnapshot) window.applyTeamSnapshot({ 'owner@threepin.in': { email: 'owner@threepin.in' }, 'karthik@threepin.in': { email: 'karthik@threepin.in' } });
+if (window.applyTeamSnapshot) window.applyTeamSnapshot({ 'agent.a@example.com': { email: 'agent.a@example.com' }, 'agent.b@example.com': { email: 'agent.b@example.com' } });
 window.applyLeadsSnapshot(JSON.parse(JSON.stringify(LEADS)));
 window.__ready = true;
 `;
@@ -74,7 +74,8 @@ const browser = await chromium.launch();
 const errors = [];
 const ok = (label, cond, detail) => { if (cond) console.log('  ok  ' + label); else errors.push(label + (detail !== undefined ? ' — ' + detail : '')); };
 
-async function openPage(viewport, { theme = null, search = '' } = {}) {
+async function openPage(viewport, { theme = null, search = '', user = 'agent.a@example.com' } = {}) {
+  const stub = STUB.replace("window.onCrmAuthChange({ email: 'agent.a@example.com' });", `window.onCrmAuthChange({ email: '${user}' });`);
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
   await ctx.addInitScript(t => { try { localStorage.clear(); if (t) localStorage.setItem('crmTheme', t); } catch (e) {} }, theme);
   const page = await ctx.newPage();
@@ -84,7 +85,7 @@ async function openPage(viewport, { theme = null, search = '' } = {}) {
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.hostname !== 'crm.local') return route.abort();
-    if (url.pathname === '/crm-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: STUB });
+    if (url.pathname === '/crm-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: stub });
     if (url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
     const file = join(ROOT, decodeURIComponent(url.pathname));
     if (!existsSync(file)) return route.fulfill({ status: 404, body: '' });
@@ -196,12 +197,12 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   const page = await openPage({ width: 1440, height: 900 });
   await page.evaluate(() => {
     const l = leads.find(x => x.id === 'A4');
-    l.notes = [{ id: 'n1', text: 'Called — wants 82 L final', createdAt: Date.now() - 2 * 3600000, by: 'karthik@threepin.in' }];
+    l.notes = [{ id: 'n1', text: 'Called — wants 82 L final', createdAt: Date.now() - 2 * 3600000, by: 'agent.b@example.com' }];
     l.history = [
-      { id: 'h1', type: 'created', text: 'Lead added via <b>Phone</b>', at: Date.now() - 30 * 86400000, by: 'owner@threepin.in' },
+      { id: 'h1', type: 'created', text: 'Lead added via <b>Phone</b>', at: Date.now() - 30 * 86400000, by: 'agent.a@example.com' },
       { id: 'h2', type: 'stage', text: '🤖 Moved from <b>Visited</b> to <b>Negotiating</b> — "82 L is my final"', at: Date.now() - 3 * 86400000, by: 'AI' },
-      { id: 'h3', type: 'followup', text: 'Next follow-up set for <b>Sep 16</b>', at: Date.now() - 86400000, by: 'owner@threepin.in' },
-      { id: 'h4', type: 'field', text: 'Budget changed from <b>80 L</b> to <b>85 L</b>', at: Date.now() - 5 * 86400000, by: 'owner@threepin.in' }
+      { id: 'h3', type: 'followup', text: 'Next follow-up set for <b>Sep 16</b>', at: Date.now() - 86400000, by: 'agent.a@example.com' },
+      { id: 'h4', type: 'field', text: 'Budget changed from <b>80 L</b> to <b>85 L</b>', at: Date.now() - 5 * 86400000, by: 'agent.a@example.com' }
     ];
     window.crmFirebase.getLeadNotes = async () => l.notes; window.crmFirebase.getLeadHistory = async () => l.history;
     openDetail('A4');
@@ -216,10 +217,48 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.evaluate(() => setTimelineFilter('stage'));
   ok('The Stage filter includes the AI\'s stage move', JSON.stringify(await text(page, '#timelinePanel .tl-text')) === JSON.stringify(['🤖 Moved from Visited to Negotiating — "82 L is my final"']));
   await page.evaluate(() => setTimelineFilter('notes'));
-  ok('The Notes filter shows notes with who wrote them', /Called — wants 82 L final/.test((await text(page, '#timelinePanel')).join(' ')) && /karthik/.test((await text(page, '#timelinePanel .tl-meta')).join(' ')));
+  ok('The Notes filter shows notes with who wrote them', /Called — wants 82 L final/.test((await text(page, '#timelinePanel')).join(' ')) && /agent\.b/.test((await text(page, '#timelinePanel .tl-meta')).join(' ')));
   await page.evaluate(() => { document.getElementById('noteInput').value = 'Sent the agreement draft'; addNote(); });
   ok('Adding a note shows it at the top straight away', (await text(page, '#timelinePanel .tl-text'))[0] === 'Sent the agreement draft');
   await page.evaluate(() => setTimelineFilter('all'));
+  await page.close();
+}
+
+// ── 8. @mentions ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  ok('No "Mentioned me" chip for someone nobody mentioned', !(await text(page, '#leadFilterBar .lf-chip')).some(c => /Mentioned me/.test(c)));
+  await page.evaluate(() => openDetail('A3'));
+  await page.waitForTimeout(300);
+  await page.click('#noteInput');
+  await page.keyboard.type('Please call @agent');
+  await page.waitForTimeout(100);
+  ok('Typing @ suggests teammates', /Agent B\s*@agent\.b/.test((await text(page, '#mentionMenu button')).join(' ')), (await text(page, '#mentionMenu')).join(' '));
+  await page.locator('#dpTimelineSec .note-add').screenshot({ path: join(OUT, '50-mention-picker.png') });
+  await page.keyboard.press('Enter');
+  ok('Enter picks the teammate instead of saving the note', await page.inputValue('#noteInput') === 'Please call @agent.b ' && await page.evaluate(() => !(leads.find(l => l.id === 'A3').notes || []).length));
+  await page.keyboard.type('today about the Kilpauk villa');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  const saved = await page.evaluate(() => { const l = leads.find(x => x.id === 'A3'); const n = window.__notes.find(x => x.id === 'A3'); return { m: l.mentions && l.mentions.agent_b_example_com, noteMentions: n && n.n.mentions }; });
+  ok('Saving records the mention on the note and the lead', saved.m && saved.m.email === 'agent.b@example.com' && saved.m.by === 'agent.a@example.com' && !saved.m.doneAt && JSON.stringify(saved.noteMentions) === '["agent.b@example.com"]', JSON.stringify(saved));
+  ok('…and the timeline highlights the name', /@Agent B/.test((await text(page, '#timelinePanel .mention')).join(' ')));
+  await page.close();
+}
+{
+  const page = await openPage({ width: 1440, height: 900 }, { user: 'agent.b@example.com' });
+  const chip = (await text(page, '#leadFilterBar .lf-chip')).find(c => /Mentioned me/.test(c)) || '';
+  ok('The person mentioned gets a "Mentioned me" filter with the count', /@ Mentioned me\s*1/.test(chip), chip);
+  ok('…the card says "@ you"', /@ you/.test(await cardText(page, 'Meena R') || ''));
+  await page.evaluate(() => setLeadFocus('mentions'));
+  ok('…the filter shows just that lead', JSON.stringify(await text(page, '.lcard .lcard-name')) === '["Meena R"]');
+  await page.screenshot({ path: join(OUT, '51-mentioned-me.png') });
+  await page.evaluate(() => openDetail('A4'));
+  await page.waitForTimeout(300);
+  ok('…and the lead page says who mentioned them and what about', /@ Agent A mentioned you.*she wants 82 L/.test((await text(page, '#dpStand')).join(' ')));
+  await page.locator('#dpStandSec').screenshot({ path: join(OUT, '52-mention-stand.png') });
+  await page.evaluate(() => markMentionDone('A4'));
+  ok('Done clears it everywhere', await page.evaluate(() => !myOpenMention(leads.find(l => l.id === 'A4'))) && !/@ you/.test(await cardText(page, 'Meena R') || ''));
   await page.close();
 }
 
@@ -237,14 +276,14 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   ok('Moving several to Lost asks one reason for all', await page.evaluate(() => document.getElementById('stageReasonModal').classList.contains('open') && document.getElementById('srTitle').textContent === 'Why are 2 leads lost?'));
   await page.evaluate(() => { document.getElementById('srReason').value = 'unreachable'; saveStageReason(); });
   const lost = await page.evaluate(() => ['A2', 'A3'].map(id => { const l = leads.find(x => x.id === id); return [l.stageId, l.lostReason, l.stageChangedBy]; }));
-  ok('…and moves each with that reason, as a person\'s decision', JSON.stringify(lost) === JSON.stringify([['closed_lost', 'unreachable', 'owner@threepin.in'], ['closed_lost', 'unreachable', 'owner@threepin.in']]), JSON.stringify(lost));
+  ok('…and moves each with that reason, as a person\'s decision', JSON.stringify(lost) === JSON.stringify([['closed_lost', 'unreachable', 'agent.a@example.com'], ['closed_lost', 'unreachable', 'agent.a@example.com']]), JSON.stringify(lost));
   ok('…logging a history line on each', await page.evaluate(() => ['A2', 'A3'].every(id => window.__history.some(h => h.id === id && /to <b>Lost<\/b> \(Unreachable\)/.test(h.h.text)))));
   ok('…and clears the selection', await page.evaluate(() => bulkSelected.size === 0) && (await page.$('.bulk-bar')) === null);
   await page.evaluate(() => { toggleBulkAll(true); bulkFuOpen = true; renderList(); });
   const n = await page.evaluate(() => bulkSelected.size);
   ok('Select all ticks every row on screen', n === await page.evaluate(() => listVisibleIds.length) && n > 0, n);
   await page.evaluate(() => { const d = new Date(Date.now() + 2 * 86400000); document.getElementById('bulkFuDate').value = d.toISOString().slice(0, 10); document.getElementById('bulkFuTime').value = '11:00'; bulkSetFollowUp(); });
-  const fus = await page.evaluate(() => leads.filter(l => l.followUpAt && l.followUpBy === 'owner@threepin.in').length);
+  const fus = await page.evaluate(() => leads.filter(l => l.followUpAt && l.followUpBy === 'agent.a@example.com').length);
   ok('Setting a follow-up in bulk sets it on each selected lead', fus === n, `${fus} of ${n}`);
   await page.evaluate(() => { toggleBulkLead('A1', true); setLeadScope('other'); });
   ok('A filter that hides a ticked lead also unticks it', await page.evaluate(() => !bulkSelected.has('A1')));

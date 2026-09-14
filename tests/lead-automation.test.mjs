@@ -12,6 +12,7 @@ import {
 } from '../crm-assets/pipeline.js';
 import { computeDashboardMetrics } from '../crm-assets/dashboardMetrics.js';
 import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
+import { teamKey, handleOf, displayName, mentionedEmails, openMentionFor, openMentionsFor } from '../crm-assets/mentions.js';
 import { computeAttention, needsAction, teamOwes } from '../crm-assets/leadAttention.js';
 import { buildCaseFile, normaliseVerdict, classifyLead, LEAD_AI_SCHEMA } from '../api/_lead-ai.js';
 import { decideLeadChanges, withinWorkingHours } from '../api/_lead-policy.js';
@@ -155,10 +156,10 @@ const caseState = {
     { role: 'assistant', content: '<No response from agent>', at: NOW - DAY + 60000, meta: { type: 'no_response' } }
   ]
 };
-const cf = buildCaseFile({ lead: caseLead, state: caseState, notes: [{ text: 'Called, busy. Try evening.', createdAt: NOW - 3 * HOUR, by: 'thirumal@threepin.in' }], stages: STAGES, now: NOW });
+const cf = buildCaseFile({ lead: caseLead, state: caseState, notes: [{ text: 'Called, busy. Try evening.', createdAt: NOW - 3 * HOUR, by: 'agent.a@example.com' }], stages: STAGES, now: NOW });
 check('Case file states the time in IST', /Now: .*IST/.test(cf));
 check('Case file names the CRM stage', /CRM stage now: New/.test(cf));
-check('Case file includes team notes with author', /\[.*thirumal\] Called, busy\. Try evening\./.test(cf));
+check('Case file includes team notes with author', /\[.*agent\.a\] Called, busy\. Try evening\./.test(cf));
 check('Case file includes TailorTalk\'s own stage text', /Stage and next action \(TailorTalk's own AI\): Actively looking/.test(cf));
 check('Case file marks a message the AI left for the team', /\(AI did not reply — left for the team\)/.test(cf));
 check('Case file speaks the lead by first name', /Lead \(Rajesh\): Can we see it on Saturday\?/.test(cf));
@@ -270,10 +271,10 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('Never declares Won', !d.moved && d.suggested === 'won');
 }
 {
-  const personMoved = ttLead({ stageId: sid('options'), stageChangedAt: NOW - 30 * 60000, stageChangedBy: 'thirumal@threepin.in' });
+  const personMoved = ttLead({ stageId: sid('options'), stageChangedAt: NOW - 30 * 60000, stageChangedBy: 'agent.a@example.com' });
   const d = decide(personMoved, verdict());
   check('A person\'s choice after the last message stands', !d.moved && d.suggested === 'visit_pending');
-  const newsSince = ttLead({ stageId: sid('options'), stageChangedAt: NOW - 3 * HOUR, stageChangedBy: 'thirumal@threepin.in' });
+  const newsSince = ttLead({ stageId: sid('options'), stageChangedAt: NOW - 3 * HOUR, stageChangedBy: 'agent.a@example.com' });
   eq('…until the lead says something new', decide(newsSince, verdict()).moved, { from: 'options', to: 'visit_pending' });
 }
 {
@@ -310,7 +311,7 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('…but not without a new message', !quiet.moved);
 }
 {
-  const manual = { id: 'M1', tenantId: T, stageId: sid('visit_pending'), stageChangedAt: NOW - 10 * DAY, updatedBy: 'thirumal@threepin.in', createdAt: NOW - 20 * DAY, updatedAt: NOW - 2 * DAY, lastNote: { text: 'Visited the site, wants to think', createdAt: NOW - 2 * DAY } };
+  const manual = { id: 'M1', tenantId: T, stageId: sid('visit_pending'), stageChangedAt: NOW - 10 * DAY, updatedBy: 'agent.a@example.com', createdAt: NOW - 20 * DAY, updatedAt: NOW - 2 * DAY, lastNote: { text: 'Visited the site, wants to think', createdAt: NOW - 2 * DAY } };
   const visitedV = verdict({ stage: 'visit_done', confidence: 'high', next: { owner: 'team', action: 'Call for feedback', kind: 'collect_feedback', dueAt: null }, visit: { status: 'done', at: null } });
   eq('A manual lead moves on a team note written after the stage was set', decide(manual, visitedV).moved, { from: 'visit_pending', to: 'visit_done' });
   const oldNote = { ...manual, lastNote: { text: 'Visited', createdAt: NOW - 12 * DAY } };
@@ -325,12 +326,12 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('Nothing moves before the pipeline is reworked', !legacy.moved && legacy.skipped === 'pipeline not reworked yet');
 }
 {
-  const personFu = ttLead({ followUpAt: NOW + 30 * 60000, followUpBy: 'thirumal@threepin.in', followUpSetAt: NOW - 2 * HOUR });
+  const personFu = ttLead({ followUpAt: NOW + 30 * 60000, followUpBy: 'agent.a@example.com', followUpSetAt: NOW - 2 * HOUR });
   const d = decide(personFu, verdict());
   check('An earlier follow-up a person set is kept', !('followUpAt' in d.patch));
-  const laterPerson = ttLead({ followUpAt: NOW + 3 * DAY, followUpBy: 'thirumal@threepin.in', followUpSetAt: NOW - 30 * 60000 });
+  const laterPerson = ttLead({ followUpAt: NOW + 3 * DAY, followUpBy: 'agent.a@example.com', followUpSetAt: NOW - 30 * 60000 });
   check('A person\'s later follow-up set after the last message is kept', !('followUpAt' in decide(laterPerson, verdict()).patch));
-  const laterStale = ttLead({ followUpAt: NOW + 3 * DAY, followUpBy: 'thirumal@threepin.in', followUpSetAt: NOW - 2 * DAY });
+  const laterStale = ttLead({ followUpAt: NOW + 3 * DAY, followUpBy: 'agent.a@example.com', followUpSetAt: NOW - 2 * DAY });
   eq('…but an earlier due step from newer messages replaces it', decide(laterStale, verdict()).patch.followUpAt, Date.parse('2026-09-14T17:00:00+05:30'));
   const noDue = decide(ttLead(), verdict({ next: { owner: 'team', action: 'Send TNAG0001 photos', kind: 'send_details', dueAt: null }, visit: { status: 'none', at: null } }));
   eq('No stated time → two working hours from now', noDue.patch.followUpAt, NOW + 2 * HOUR);
@@ -422,7 +423,7 @@ section('Runs on Firestore: apply, audit, debounce');
   // A person moves the lead while the AI is reading — the write-time decision respects it.
   db._store.set('leads/L2', ttLead({ id: 'L2' }));
   db._store.set('leads/L2/tailortalk/state', caseState);
-  const personMovesDuringRead = async p => { db._store.set('leads/L2', { ...db._get('leads/L2'), stageId: sid('options'), stageChangedAt: NOW + 1000, stageChangedBy: 'thirumal@threepin.in' }); return fakeClient(good).messages.create(p); };
+  const personMovesDuringRead = async p => { db._store.set('leads/L2', { ...db._get('leads/L2'), stageId: sid('options'), stageChangedAt: NOW + 1000, stageChangedBy: 'agent.a@example.com' }); return fakeClient(good).messages.create(p); };
   const racing = { beta: { messages: { create: personMovesDuringRead } }, messages: { create: personMovesDuringRead } };
   await runLeadAutomation(db, T, 'L2', { client: racing, model: 'claude-haiku-4-5', now: NOW + 2000 });
   eq('A person\'s move during the AI read is kept', db._get('leads/L2').stageId, sid('options'));
@@ -481,7 +482,7 @@ section('Requests that cannot change anything are not made');
         { role: 'user', content: 'Call me on +91 98848 83370 or 9790820750, mail kiru.r@gmail.com', at: NOW - HOUR },
         { role: 'human_agent', email: 'swami@threepin.in', content: 'Owner number 044-2615 1234. Budget ₹1,00,00,000 for ANR003, 1937 sqft, 2026', at: NOW - 30 * 60000 }
       ] },
-      notes: [{ text: 'Spoke on 919884883370', createdAt: NOW - HOUR, by: 'thirumal@threepin.in' }], stages: STAGES, now: NOW
+      notes: [{ text: 'Spoke on 919884883370', createdAt: NOW - HOUR, by: 'agent.a@example.com' }], stages: STAGES, now: NOW
     });
     check('Phone numbers never reach the model', !/98848|9790820750|2615|919884883370/.test(pii) && (pii.match(/\[phone\]/g) || []).length === 4, pii);
     check('…nor email addresses', !/kiru\.r@gmail\.com/.test(pii) && /\[email\]/.test(pii));
@@ -510,13 +511,13 @@ section('Requests that cannot change anything are not made');
   db._store.set('leads/E1/tailortalk/state', { ...caseState, chat: [...caseState.chat, { role: 'user', content: 'Saturday 11 works', at: NOW + 2 * HOUR }] });
   await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + 3 * HOUR });
   eq('A new message → a new request', calls, 3);
-  db._store.set('leads/E1/notes/n1', { text: 'Owner confirmed Saturday', createdAt: NOW + 3 * HOUR, by: 'thirumal@threepin.in' });
+  db._store.set('leads/E1/notes/n1', { text: 'Owner confirmed Saturday', createdAt: NOW + 3 * HOUR, by: 'agent.a@example.com' });
   await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + 4 * HOUR });
   eq('A new team note → a new request', calls, 4);
   await runLeadAutomation(db, T, 'E1', { ...opts, model: 'claude-sonnet-5', now: NOW + 4 * HOUR });
   eq('Another model reads again', calls, 5);
 
-  db._store.set('leads/C1', ttLead({ id: 'C1', stageId: sid('lost'), stageChangedAt: NOW - HOUR, stageChangedBy: 'thirumal@threepin.in', lostReason: 'not_interested', tt: { id: 'c1', category: 'sales', lastMessageAt: NOW - 2 * HOUR } }));
+  db._store.set('leads/C1', ttLead({ id: 'C1', stageId: sid('lost'), stageChangedAt: NOW - HOUR, stageChangedBy: 'agent.a@example.com', lostReason: 'not_interested', tt: { id: 'c1', category: 'sales', lastMessageAt: NOW - 2 * HOUR } }));
   db._store.set('leads/C1/tailortalk/state', caseState);
   const closed = await runLeadAutomation(db, T, 'C1', { ...opts, now: NOW });
   check('A lost lead who has not written since is not read', closed.skipped === 'closed or parked, and the lead has not written since' && calls === 5);
@@ -551,6 +552,21 @@ section('Lead ↔ property links');
   db._store.set('leads/P1/tailortalk/state', { ...caseState, profile: { ...caseState.profile, properties_discussed: 'TNAG0001 (liked), VLCA002 (too far), ANR003' } });
   const r = await runLeadAutomation(db, T, 'P1', { client: fakeClient(good), model: 'claude-haiku-4-5', now: NOW });
   eq('An AI read links the inventory codes the lead talked about (not removed ones, not other tenants\')', [r.links, db._get('leads/P1').propertyCodes], [['TNAG0001'], ['TNAG0001']]);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section('@mentions');
+{
+  const roster = ['agent.a@example.com', 'agent.b@example.com', 'agent.c@example.com'];
+  eq('Keys, handles and names from an email', [teamKey('Agent.C@example.com'), handleOf('Agent.C@example.com'), displayName('agent.c@example.com')], ['agent_c_example_com', 'agent.c', 'Agent C']);
+  eq('Mentions are read from a note, once each, not the writer, not strangers or emails',
+    mentionedEmails('@Agent.B take Saturday. cc @agent.c, @nobody — mail agent.a@example.com; @agent.b again @agent.a', roster, 'agent.a@example.com'),
+    ['agent.b@example.com', 'agent.c@example.com']);
+  const lead = { id: 'm1', updatedBy: 'agent.a@example.com', updatedAt: NOW, mentions: { agent_b_example_com: { email: 'agent.b@example.com', by: 'agent.a@example.com', at: NOW, text: 'take Saturday', doneAt: null } } };
+  check('A mention is open for the person mentioned', !!openMentionFor(lead, 'Agent.B@example.com') && !openMentionFor(lead, 'agent.c@example.com'));
+  check('…until they press Done', !openMentionFor({ ...lead, mentions: { agent_b_example_com: { ...lead.mentions.agent_b_example_com, doneAt: NOW + 1 } } }, 'agent.b@example.com'));
+  check('…or do anything on the lead afterwards', !openMentionFor({ ...lead, updatedBy: 'agent.b@example.com', updatedAt: NOW + 60000 }, 'agent.b@example.com'));
+  eq('Open mentions for a person across leads, newest first', openMentionsFor([lead, { id: 'm2', mentions: { agent_b_example_com: { email: 'agent.b@example.com', at: NOW + 5, doneAt: null } } }], 'agent.b@example.com').map(x => x.lead.id), ['m2', 'm1']);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

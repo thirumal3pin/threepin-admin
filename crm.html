@@ -380,8 +380,9 @@ function toggleDensity(){
       <div class="sec" id="dpTimelineSec">
         <div class="sec-title">🕓 Timeline</div>
         <div class="note-add">
-          <input type="text" class="note-input" id="noteInput" placeholder="Log a call, follow-up, or update…" onkeydown="if(event.key==='Enter')addNote()">
+          <input type="text" class="note-input" id="noteInput" autocomplete="off" placeholder="Log a call, follow-up, or update… type @ to mention a teammate" onkeydown="if(event.key==='Enter' && !mentionMenuOpen())addNote()">
           <button class="note-btn" onclick="addNote()">Add</button>
+          <div class="mention-menu" id="mentionMenu" role="listbox" aria-label="Mention a teammate" hidden></div>
         </div>
         <div class="note-fu-row">
           <div class="field">
@@ -786,8 +787,10 @@ function toggleDensity(){
   import { computeDashboardMetrics, formatINR } from './crm-assets/dashboardMetrics.js';
   import * as crmPipeline from './crm-assets/pipeline.js';
   import * as leadAttention from './crm-assets/leadAttention.js';
+  import * as crmMentions from './crm-assets/mentions.js';
   window.crmPipeline = crmPipeline;
   window.leadAttention = leadAttention;
+  window.crmMentions = crmMentions;
   window.computeDashboardMetrics = computeDashboardMetrics;
   window.formatINR = formatINR;
 </script>

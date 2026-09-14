@@ -67,7 +67,7 @@ window.crmFirebase = {
   updateLeadAi: async (id, f) => { window.__aiUpdates.push({ id, f }); }, saveAutomationSettings: async () => {}
 };
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => 't_3pinrealty' };
-window.onCrmAuthChange({ email: 'owner@threepin.in' });
+window.onCrmAuthChange({ email: 'agent.a@example.com' });
 window.applyPipelineSnapshot(STAGES);
 window.applyEnquiryTypesSnapshot(['Property Enquiry','Seller Listing','General']);
 window.applyAutomationSettingsSnapshot({ enabled: true });
@@ -158,7 +158,7 @@ const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)]
   await page.locator('#dpStandSec').screenshot({ path: join(OUT, '03-lead-suggestion.png') });
   await page.evaluate(() => acceptAiSuggestion('L2'));
   const afterAccept = await page.evaluate(() => { const l = leads.find(x => x.id === 'L2'); return { stage: l.stageId, by: l.stageChangedBy, sug: l.ai.suggestion }; });
-  ok('Accepting a suggestion moves the lead as a person\'s decision', afterAccept.stage === 'negotiation' && afterAccept.by === 'owner@threepin.in' && afterAccept.sug === null, JSON.stringify(afterAccept));
+  ok('Accepting a suggestion moves the lead as a person\'s decision', afterAccept.stage === 'negotiation' && afterAccept.by === 'agent.a@example.com' && afterAccept.sug === null, JSON.stringify(afterAccept));
 
   await page.evaluate(() => openDetail('L1'));
   await page.waitForTimeout(300);
