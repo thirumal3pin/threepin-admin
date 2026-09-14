@@ -257,6 +257,20 @@ eq('Junk signal names are ignored', normaliseSignal('drop table; --'), null);
   const ordinary = planUpdate({ envelope: real({}, { occurred_at: '2026-09-13T20:40:00+05:30' }), lead: { ...handled, tt: s3.leadWrite.tt }, state: s3.stateWrite, leadId: 'L1', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 7300000 });
   check('An ordinary message keeps earlier signals', !!ordinary.leadWrite.tt.signals.wants_contact);
 
+  const promise = planUpdate({
+    envelope: real({ chat_history: [...SAMPLE.data.chat_history,
+      { role: 'user', content: 'Can I see photos of ANRA002?', time: '2026-09-13T13:30:00+00:00' },
+      { role: 'assistant', content: 'We do not have visuals in the system — our team will share photos and a video with you directly today.', time: '2026-09-13T13:30:20+00:00' },
+      { role: 'assistant', content: '<No response from agent>', time: '2026-09-13T13:30:40+00:00', metadata: { type: 'no_response' } }] }, { webhook_trigger: 'custom', occurred_at: '2026-09-13T19:01:00+05:30' }),
+    lead: null, state: null, leadId: 'LP', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'team_promise'
+  });
+  const ps = promise.leadWrite.tt.signals.team_promise;
+  check('team_promise keeps what 3 PIN promised', /our team will share photos/.test(ps.reply || ''), JSON.stringify(ps));
+  check('…ignoring the "no response" marker', !/No response/.test(ps.reply || ''));
+  check('…and the history shows the promise, not the lead\'s question', promise.history.some(h => /🤝 <b>Team promised the lead something<\/b> — “We do not have visuals/.test(h.text)), promise.history.map(h => h.text).join(' | '));
+  check('A firing produces an event for the log', promise.signalEvent && promise.signalEvent.signal === 'team_promise' && promise.signalEvent.repeat === false && promise.signalEvent.status === 'cold' && promise.signalEvent.stageId === 'new', JSON.stringify(promise.signalEvent));
+  const owner = planUpdate({ envelope: real({ intent_and_who: 'Enquiring for a relative' }), lead: null, state: null, leadId: 'LO', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'owner_listing' });
+  eq('owner_listing sets the enquiry type to Seller Listing', owner.leadWrite.enquiryType, 'Seller Listing');
   const seller = planUpdate({ envelope: real({ intent_and_who: 'Enquiring for a relative' }), lead: null, state: null, leadId: 'L9', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'seller_lead' });
   eq('Seller signal sets the enquiry type', seller.leadWrite.enquiryType, 'Seller Listing');
   const staleSig = planUpdate({ envelope: real({}, { occurred_at: '2026-09-13T18:00:00+05:30', webhook_trigger: 'custom' }), lead: { ...handled, tt: { ...s3.leadWrite.tt, lastEventAt: Date.parse('2026-09-13T21:00:00+05:30') } }, state: s3.stateWrite, leadId: 'L1', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'lost_signal' });
@@ -416,9 +430,16 @@ section('Firestore: webhook end to end');
   eq('Stage the team set survives', db._get(`leads/${id}`).stageId, 'contacted');
   eq('Status still follows', db._get(`leads/${id}`).tt.status, 'hot');
 
-  const sigRes = await applyTailorTalkEvent(db, TENANT, real({}, { webhook_trigger: 'custom', occurred_at: '2026-09-13T19:30:00+05:30' }), { now: NOW + 180000, signal: 'details_request' });
+  const sigEnv = real({}, { webhook_trigger: 'custom', occurred_at: '2026-09-13T19:30:00+05:30' });
+  const sigRes = await applyTailorTalkEvent(db, TENANT, sigEnv, { now: NOW + 180000, signal: 'ready_to_close' });
   eq('A signal webhook updates the same lead', sigRes.leadId, id);
-  check('…and the signal is saved', !!db._get(`leads/${id}`).tt.signals.details_request);
+  check('…and the signal is saved', !!db._get(`leads/${id}`).tt.signals.ready_to_close);
+  const events = db._list('ttSignalEvents');
+  eq('The firing is written to the event log', events.length, 1);
+  const ev = db._get(events[0]);
+  check('…with the lead, signal, moment and context', ev.leadId === id && ev.signal === 'ready_to_close' && ev.at === Date.parse('2026-09-13T19:30:00+05:30') && ev.tenantId === TENANT && ev.status === 'cold' && ev.stageId === 'contacted' && ev.handledAt === null, JSON.stringify(ev));
+  await applyTailorTalkEvent(db, TENANT, sigEnv, { now: NOW + 185000, signal: 'ready_to_close' });
+  eq('A retry of the same firing does not add a second log entry', db._list('ttSignalEvents').length, 1);
   const testSig = await applyTailorTalkEvent(db, TENANT, SAMPLE, { now: NOW + 190000, signal: 'wants_contact' });
   check('Test Webhook on a signal webhook still creates nothing', testSig.test && db._list('leads').length === 1);
   eq('…and records which signal was tested', db._get(`ttState/${TENANT}`).lastTestSignal, 'wants_contact');

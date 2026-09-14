@@ -278,14 +278,30 @@ const TT_WINDOW_MS = 24*60*60*1000;
 const TT_FOLLOWUP_GAP_MS = 3*60*60*1000;
 const TT_RETURN_GAP_MS = 24*60*60*1000;
 
-// Custom-trigger signals (SIGNALS in api/_tailortalk-shared.js — same keys).
+// Custom-trigger signals (SIGNAL_DEFS in api/_tailortalk-shared.js — same keys).
+//   tone     alert = money or trust is leaking now · action = someone should act · lost = closing out
+//   quote    reply = show what 3 PIN said (the promise / the gap), else the lead's words
+//   actions  followup · details · stage:<site_visit|negotiation|closed_lost>
 const TT_SIGNALS = {
-  wants_contact:   { icon:'🙋', chip:'Wants a call/visit', title:'Wants a call or visit' },
-  details_request: { icon:'📨', chip:'Wants details',      title:'Asked for property details' },
-  seller_lead:     { icon:'🏷️', chip:'Seller',             title:'Owner wants to sell or list' },
-  lost_signal:     { icon:'💤', chip:'Might be lost',      title:'Might be lost' }
+  team_promise:   { icon:'🤝', chip:'Team promised',     title:'Team promised the lead something', tone:'alert',  quote:'reply', actions:['followup'] },
+  needs_human:    { icon:'🙋', chip:'Needs a person',    title:'Needs a person now',               tone:'alert',  actions:['followup'] },
+  site_visit:     { icon:'📅', chip:'Site visit',        title:'Site visit asked or agreed',       tone:'action', actions:['stage:site_visit','followup'] },
+  ready_to_close: { icon:'💰', chip:'Ready to close',    title:'Negotiating or ready to book',     tone:'alert',  actions:['stage:negotiation','followup'] },
+  no_match:       { icon:'🔍', chip:'No match',          title:'Nothing matched what they want',   tone:'action', quote:'reply', actions:['followup'] },
+  owner_listing:  { icon:'🏷️', chip:'Owner listing',     title:'Owner wants to sell or rent out',  tone:'action', actions:['followup'] },
+  revisit_later:  { icon:'⏰', chip:'Come back later',   title:'Postponed — come back later',      tone:'lost',   actions:['followup'] },
+  lost_deal:      { icon:'💤', chip:'Stopped looking',   title:'Stopped looking',                  tone:'lost',   actions:['stage:closed_lost'] },
+  loan_help:      { icon:'🏦', chip:'Needs a loan',      title:'Needs a home loan',                tone:'action', actions:['followup'] },
+  shared_listing: { icon:'🔗', chip:'Asked about a post', title:'Asked about a specific post or listing', tone:'action', actions:['followup'] },
+  ai_quality:     { icon:'⚠️', chip:'AI answer disputed', title:'AI answer disputed or stuck',     tone:'alert',  actions:['followup'] },
+  // The first set, still understood if a webhook with these keys exists.
+  wants_contact:   { icon:'🙋', chip:'Wants a call/visit', title:'Wants a call or visit',       tone:'action', actions:['followup'] },
+  details_request: { icon:'📨', chip:'Wants details',      title:'Asked for property details',  tone:'action', actions:['details'] },
+  seller_lead:     { icon:'🏷️', chip:'Seller',             title:'Owner wants to sell or list', tone:'action', actions:['followup'] },
+  lost_signal:     { icon:'💤', chip:'Might be lost',      title:'Might be lost',               tone:'lost',   actions:['stage:closed_lost'] }
 };
-function ttSignalMeta(key){ return TT_SIGNALS[key] || { icon:'🔔', chip: prettyKey(key), title: prettyKey(key) }; }
+function ttSignalMeta(key){ return TT_SIGNALS[key] || { icon:'🔔', chip: prettyKey(key), title: prettyKey(key), tone:'action', actions:['followup'] }; }
+function ttSignalQuote(key, s){ return ttSignalMeta(key).quote==='reply' ? (s.reply || s.quote) : (s.quote || s.reply); }
 
 function isTtLead(l){ return !!(l && l.tt && l.tt.id); }
 // The separate CRM category: vendors, collaborations, influencers — anything TailorTalk files
@@ -397,7 +413,8 @@ function ttCardHtml(l){
   const t = l.tt, bits = [];
   ttOpenSignals(l).forEach(([key, s]) => {
     const m = ttSignalMeta(key);
-    bits.push(`<span class="tt-chip ${key==='lost_signal'?'lost':'action'}" title="${escapeHtml(m.title + (s.quote ? ' — “' + s.quote + '”' : ''))}">${m.icon} ${escapeHtml(m.chip)}</span>`);
+    const q = ttSignalQuote(key, s);
+    bits.push(`<span class="tt-chip ${m.tone==='lost'?'lost':m.tone==='alert'?'alert':'action'}" title="${escapeHtml(m.title + (q ? ' — “' + q + '”' : ''))}">${m.icon} ${escapeHtml(m.chip)}</span>`);
   });
   const alerts = ttOpenAlerts(l);
   if(alerts.some(a => a.key==='waiting')) bits.push('<span class="tt-chip action" title="The AI left the lead\'s latest message for the team">⏳ Waiting for team</span>');
@@ -503,13 +520,20 @@ function wonStage(){
 function lostStage(){
   return stages.find(s=>s.id==='closed_lost') || stages.find(s=>/lost/i.test(s.name||'')) || null;
 }
-function moveTtLeadToLost(id){
+// A signal's suggested stage, found by the default id first and then by name, so a renamed or
+// re-created pipeline still resolves ("Site Visit", "Negotiation", "Closed Lost").
+const TT_STAGE_FINDERS = {
+  site_visit:  () => stages.find(s=>s.id==='site_visit') || stages.find(s=>/visit/i.test(s.name||'')) || null,
+  negotiation: () => stages.find(s=>s.id==='negotiation') || stages.find(s=>/negotiat/i.test(s.name||'')) || null,
+  closed_lost: () => lostStage()
+};
+function moveTtLeadToStage(id, stageId){
   const l = leads.find(x=>x.id===id);
-  const lost = lostStage();
-  if(!l || !lost) return;
-  if(!confirm(`Move ${l.name} to "${lost.name}"?`)) return;
-  changeStage(id, lost.id);
-  showToast(`Moved to ${lost.name}`);
+  const stage = stageById(stageId);
+  if(!l || !stage) return;
+  if(!confirm(`Move ${l.name} to "${stage.name}"?`)) return;
+  changeStage(id, stage.id);
+  showToast(`Moved to ${stage.name}`);
   renderTtSection(l);
 }
 function moveTtLeadToWon(id){
@@ -623,7 +647,7 @@ function ttActivityDays(l, st){
     prev = m;
   });
   (l.history || []).filter(h => h.by==='TailorTalk' && h.at).forEach(h => dayFor(h.at).events.push(h));
-  Object.entries((l.tt && l.tt.signals) || {}).forEach(([key, s]) => { if(s && s.at) dayFor(s.at).events.push({ at:s.at, signal:key, quote:s.quote }); });
+  Object.entries((l.tt && l.tt.signals) || {}).forEach(([key, s]) => { if(s && s.at) dayFor(s.at).events.push({ at:s.at, signal:key, quote:ttSignalQuote(key, s) }); });
   return Array.from(days.values()).sort((a,b) => b.first - a.first);
 }
 
@@ -728,11 +752,18 @@ function renderTtSection(l){
   const rows = ttOpenSignals(l).map(([key, s]) => {
     const m = ttSignalMeta(key);
     const actions = [];
-    if(key==='wants_contact') actions.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
-    if(key==='details_request' && l.detailsSent!==true) actions.push(`<button type="button" class="tt-btn" onclick="markTtDetailsSent('${l.id}')">Mark details sent</button>`);
-    if(key==='lost_signal' && lostStage() && l.stageId!==lostStage().id) actions.push(`<button type="button" class="tt-btn" onclick="moveTtLeadToLost('${l.id}')">Move to ${escapeHtml(lostStage().name)}</button>`);
+    (m.actions || []).forEach(a => {
+      if(a==='followup') actions.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
+      else if(a==='details' && l.detailsSent!==true) actions.push(`<button type="button" class="tt-btn" onclick="markTtDetailsSent('${l.id}')">Mark details sent</button>`);
+      else if(a.startsWith('stage:')){
+        const find = TT_STAGE_FINDERS[a.slice(6)];
+        const stage = find && find();
+        if(stage && l.stageId!==stage.id) actions.push(`<button type="button" class="tt-btn" onclick="moveTtLeadToStage('${l.id}','${stage.id}')">Move to ${escapeHtml(stage.name)}</button>`);
+      }
+    });
     actions.push(handled(m.title));
-    return actionRow(m.icon, m.title + (s.count>1?` (asked ${s.count}×)`:''), s.at, s.quote, actions, key==='lost_signal'?'lost':'');
+    const cls = m.tone==='lost' ? 'lost' : m.tone==='alert' ? 'alert' : '';
+    return actionRow(m.icon, m.title + (s.count>1?` (${s.count}×)`:''), s.at, ttSignalQuote(key, s), actions, cls);
   });
   const lastLeadMsg = st && st.chat ? [...st.chat].reverse().find(m => m.role==='user' && m.content) : null;
   ttOpenAlerts(l).forEach(a => {

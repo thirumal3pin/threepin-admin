@@ -9,6 +9,7 @@
 //   leads/{id}/tailortalk/state      AI profile, bookings, payments, full conversation
 //   leads/{id}/history, /notes       the same threads the team writes to, by "TailorTalk"
 //   ttState/{tenantId}               server-only bookkeeping (last event, last test, backfill)
+//   ttSignalEvents/{lead_signal_sec} every custom-trigger firing, append-only, for automations
 //   ttDeadLetters/{auto}             payloads that could not be used, kept for a look later
 
 import {
@@ -194,6 +195,15 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
       const id = eventId('h', at);
       t.set(ref.collection('history').doc(id), { id, type: h.type, text: h.text, at, by: 'TailorTalk' });
     });
+
+    // Append-only log of custom-trigger firings, one document per moment — what automations,
+    // alerts and reports ("unmet demand this month") are built on. The id is derived from the
+    // moment, so a webhook retry rewrites the same document instead of adding a second.
+    if (plan.signalEvent) {
+      const e = plan.signalEvent;
+      const eventRef = db.collection('ttSignalEvents').doc(`${ref.id}_${e.signal}_${Math.floor(e.at / 1000)}`);
+      t.set(eventRef, { tenantId, leadId: ref.id, ...e, receivedAt: now, handledAt: null });
+    }
 
     return { leadId: ref.id, created: plan.isNew, stale: plan.stale, history: plan.history.length };
   });

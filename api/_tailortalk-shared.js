@@ -42,17 +42,34 @@ const KNOWN_KEYS = new Set([
 // Custom-trigger webhooks. TailorTalk's Custom event carries no name of its own, so each one is
 // a separate webhook whose URL ends in &signal=<key>. A signal stays "open" on the lead until
 // someone on the team does anything to it (lead.updatedAt moves past the signal) — see
-// ttOpenSignals() in crm-assets/app.js, which carries the same keys and labels.
-export const SIGNALS = {
-  wants_contact:   'Wants a call or visit',
-  details_request: 'Asked for property details',
-  seller_lead:     'Owner wants to sell or list',
-  lost_signal:     'Might be lost'
+// TT_SIGNALS in crm-assets/app.js, which carries the same keys, labels and actions.
+//
+// The keys are a contract: automations and reports will be written against them, so a key is
+// never renamed — add a new one instead. `quoteFrom: 'reply'` records the AI's latest reply as
+// the evidence (the promise is in what 3 PIN said, not in what the lead said).
+export const SIGNAL_DEFS = {
+  team_promise:   { label: 'Team promised the lead something', icon: '🤝', quoteFrom: 'reply' },
+  needs_human:    { label: 'Needs a person now',               icon: '🙋' },
+  site_visit:     { label: 'Site visit asked or agreed',       icon: '📅' },
+  ready_to_close: { label: 'Negotiating or ready to book',     icon: '💰' },
+  no_match:       { label: 'Nothing matched what they want',   icon: '🔍', quoteFrom: 'reply' },
+  owner_listing:  { label: 'Owner wants to sell or rent out',  icon: '🏷️' },
+  revisit_later:  { label: 'Postponed — come back later',      icon: '⏰' },
+  lost_deal:      { label: 'Stopped looking',                  icon: '💤' },
+  loan_help:      { label: 'Needs a home loan',                icon: '🏦' },
+  shared_listing: { label: 'Asked about a specific post or listing', icon: '🔗' },
+  ai_quality:     { label: 'AI answer disputed or stuck',      icon: '⚠️' },
+  // The first set, still understood if a webhook with these keys exists.
+  wants_contact:   { label: 'Wants a call or visit',       icon: '🙋' },
+  details_request: { label: 'Asked for property details',  icon: '📨' },
+  seller_lead:     { label: 'Owner wants to sell or list', icon: '🏷️' },
+  lost_signal:     { label: 'Might be lost',               icon: '💤' }
 };
-const SIGNAL_ICONS = { wants_contact: '🙋', details_request: '📨', seller_lead: '🏷️', lost_signal: '💤' };
+export const SIGNALS = Object.fromEntries(Object.entries(SIGNAL_DEFS).map(([k, v]) => [k, v.label]));
+const OWNER_SIGNALS = new Set(['owner_listing', 'seller_lead']);
 
 // Any lowercase key is accepted (a new custom webhook needs no deploy to start recording); only
-// the four above get their own label and behaviour.
+// the keys above get their own label and behaviour.
 export function normaliseSignal(s) {
   const v = String(s || '').trim().toLowerCase();
   return /^[a-z][a-z0-9_]{0,31}$/.test(v) ? v : null;
@@ -265,7 +282,7 @@ export const sameText = (a, b) => String(a || '').toLowerCase().replace(/[^\p{L}
  * @param {Array}   o.enquiryTypes   the tenant's enquiry types
  * @param {number}  o.now
  * @param {?string} o.signal         the custom-trigger webhook this came through (see SIGNALS)
- * @returns {{ isNew, stale, leadWrite, stateWrite, history: Array, notes: Array }}
+ * @returns {{ isNew, stale, leadWrite, stateWrite, history: Array, notes: Array, signalEvent: ?object }}
  */
 export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, enquiryTypes, now, signal = null }) {
   const d = (envelope && envelope.data) || {};
@@ -317,28 +334,38 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     // Vendors and collaborations get their own category; the seller webhook is an explicit
     // answer to "is this an owner?", so it outranks the guess from intent_and_who.
     enquiryType: (isBusinessCategory(d.category) && (enquiryTypes || []).includes(BUSINESS_ENQUIRY_TYPE) && BUSINESS_ENQUIRY_TYPE)
-      || (signal === 'seller_lead' && sellerType)
+      || (OWNER_SIGNALS.has(signal) && sellerType)
       || enquiryTypeFor(d.intent_and_who, enquiryTypes)
   };
 
   // ── Custom-trigger signal ──
   // One entry per signal key: when it first fired since the team last touched the lead, the
-  // latest time it fired, how often, and the lead's own words at that moment.
+  // latest time it fired, how often, and the words at that moment — the lead's latest message
+  // and 3 PIN's latest reply. `signalEvent` is the same moment for the append-only event log
+  // that automations read (ttSignalEvents); a retry of an event already recorded yields none.
   const signals = { ...((prevTt && prevTt.signals) || {}) };
+  let signalEvent = null;
   if (signal) {
     const prev = signals[signal];
+    const def = SIGNAL_DEFS[signal] || null;
+    const cut = s => (s ? (s.length > 200 ? s.slice(0, 199) + '…' : s) : null);
     const lastUser = [...chat].reverse().find(m => m.role === 'user' && m.content);
-    const quote = lastUser ? (lastUser.content.length > 160 ? lastUser.content.slice(0, 159) + '…' : lastUser.content) : null;
+    const lastReply = [...chat].reverse().find(m => (m.role === 'assistant' || m.role === 'human_agent') && m.content && !isNoReplyMarker(m));
+    const quote = cut(lastUser && lastUser.content);
+    const reply = cut(lastReply && lastReply.content);
+    const shown = def && def.quoteFrom === 'reply' ? reply : quote;
     const handledAt = (lead && lead.updatedAt) || 0;
     if (prev && occurredAt <= (prev.lastAt || prev.at)) {
       // A retry of an event already recorded — nothing new happened.
     } else if (prev && prev.at > handledAt) {
-      // Still open: the same ask again. Keep when it started, refresh the words.
-      signals[signal] = { ...prev, lastAt: occurredAt, quote: quote || prev.quote || null, count: (prev.count || 1) + 1 };
+      // Still open: the same moment again. Keep when it started, refresh the words.
+      signals[signal] = { ...prev, lastAt: occurredAt, quote: quote || prev.quote || null, reply: reply || prev.reply || null, count: (prev.count || 1) + 1 };
+      signalEvent = { signal, at: occurredAt, quote, reply, repeat: true };
     } else {
-      signals[signal] = { at: occurredAt, lastAt: occurredAt, quote, count: 1 };
-      const label = SIGNALS[signal] || `Custom trigger “${signal}”`;
-      hist('tailortalk', `${SIGNAL_ICONS[signal] || '🔔'} <b>${escapeHtml(label)}</b>${quote ? ' — “' + escapeHtml(quote) + '”' : ''}`);
+      signals[signal] = { at: occurredAt, lastAt: occurredAt, quote, reply, count: 1 };
+      signalEvent = { signal, at: occurredAt, quote, reply, repeat: false };
+      const label = def ? def.label : `Custom trigger “${signal}”`;
+      hist('tailortalk', `${def ? def.icon : '🔔'} <b>${escapeHtml(label)}</b>${shown ? ' — “' + escapeHtml(shown) + '”' : ''}`);
     }
   }
 
@@ -621,7 +648,13 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
         updatedAt: now
       };
 
-  return { isNew, stale, leadWrite, stateWrite, history, notes };
+  if (signalEvent) {
+    // What the lead looked like at that moment — the context an automation or a report needs
+    // ("closing signals from Warm leads") without re-reading the lead.
+    signalEvent.status = tt.status || null;
+    signalEvent.stageId = (lead && lead.stageId) || leadWrite.stageId || null;
+  }
+  return { isNew, stale, leadWrite, stateWrite, history, notes, signalEvent };
 }
 
 // TailorTalk's "Sample payload" and "Test Webhook" send a made-up lead. It proves the URL works
