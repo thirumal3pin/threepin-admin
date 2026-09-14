@@ -8,6 +8,7 @@
 //   • Never declare a deal Won — that is always a person's call (a suggestion).
 //   • A column a person chose stands until the lead says something new after that choice.
 //   • Lost and On hold need a stated reason; a lead who writes again after either is re-opened.
+//     Only the lead's own words close a lead, and never while the team still owes them a reply.
 //   • What the AI moved and a person undid is not repeated until the lead says something new.
 //   • The team's due step becomes the follow-up — unless a person already has an earlier one.
 //   • Vendors, collaborations and unknown custom columns are never touched.
@@ -21,7 +22,9 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const IST_OFFSET = 5.5 * HOUR;
 
-const AUTO_LOST = new Set(['not_interested', 'bought_elsewhere', 'spam', 'not_a_fit']);
+// Only what the lead said themselves closes a lead on its own. "Not a fit", budget and no-match
+// are judgement calls, so they stay suggestions.
+const AUTO_LOST = new Set(['not_interested', 'bought_elsewhere', 'spam']);
 const URGENT_KINDS = new Set(['call', 'send_details', 'confirm_visit', 'negotiate', 'paperwork']);
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -129,7 +132,9 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
   } else if (target === 'won') {
     suggest('only a person marks a deal won');
   } else if (target === 'lost') {
-    if (conf === 'high' && AUTO_LOST.has(verdict.lostReason)) moveTo = 'lost';
+    // A lead the team still owes something is never closed: that loss would be our own failure.
+    if (verdict.next.owner === 'team') suggest('the team still owes this lead a reply');
+    else if (conf === 'high' && AUTO_LOST.has(verdict.lostReason)) moveTo = 'lost';
     else suggest('loss not certain');
   } else if (target === 'on_hold') {
     if (conf === 'high' && (curKey !== 'lost')) moveTo = 'on_hold';

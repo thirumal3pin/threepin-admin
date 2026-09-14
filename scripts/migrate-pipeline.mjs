@@ -9,8 +9,9 @@
 //   leads that sat in a removed column ("Contacted", "General", "Missed Calls", "Spam") are placed
 //     by what their record says (planPipelineMigration), with a history line saying why
 //   hand-entered leads untouched since before --stale-before (default 1 Aug 2026 IST) that are
-//     still open → Lost, reason "Unreachable" (owner's decision, 14 Sep 2026); their follow-up
-//     date is cleared so they stop showing as overdue
+//     still open (owner's decision, 14 Sep 2026): early ones (New, Options sent) → Lost, reason
+//     "Unreachable"; ones that reached a visit or negotiation → On hold, so a person decides.
+//     Their follow-up date is cleared so they stop showing as overdue
 //   settings/{tenant}.leadAutomation = { enabled: false, model } unless already set
 //
 // Leads TailorTalk is talking to are not closed here — the AI places them from their chats.
@@ -18,7 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { planPipelineMigration, stageKindOf, stageForKey } from '../crm-assets/pipeline.js';
+import { planPipelineMigration, stageKindOf, stageKeyOf, stageForKey } from '../crm-assets/pipeline.js';
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -40,6 +41,8 @@ const plan = planPipelineMigration(oldStages, leads);
 const byId = new Map(plan.moves.map(m => [m.id, m]));
 const stageName = id => (plan.stages.find(s => s.id === id) || oldStages.find(s => s.id === id) || { name: id }).name;
 const lostId = stageForKey(plan.stages, 'lost').id;
+const holdId = stageForKey(plan.stages, 'on_hold').id;
+const EARLY = new Set(['new', 'options']);
 
 // Hand-entered, still open after placement, untouched since before the cutoff → Lost (unreachable).
 const stale = [];
@@ -48,9 +51,10 @@ for (const l of leads) {
   if (l.enquiryType === 'Vendor / Collaboration') continue;
   const placedStageId = byId.has(l.id) ? byId.get(l.id).toStageId : l.stageId;
   const kind = stageKindOf(plan.stages.find(s => s.id === placedStageId));
-  if (kind === 'won' || kind === 'lost') continue;
+  if (kind !== 'open') continue; // re-running must not park or close a lead twice
   if ((l.updatedAt || l.createdAt || 0) >= STALE_BEFORE) continue;
-  stale.push({ lead: l, fromStageId: placedStageId });
+  const key = stageKeyOf(plan.stages.find(s => s.id === placedStageId));
+  stale.push({ lead: l, fromStageId: placedStageId, to: EARLY.has(key) ? 'lost' : 'on_hold' });
 }
 
 console.log(`tenant ${TENANT} · ${leads.length} leads · ${APPLY ? 'APPLYING' : 'dry run'}`);
@@ -60,8 +64,8 @@ const moveSummary = {};
 plan.moves.forEach(m => { const k = `${m.fromName} → ${stageName(m.toStageId)}${m.lostReason ? ' (' + m.lostReason + ')' : ''}`; moveSummary[k] = (moveSummary[k] || 0) + 1; });
 console.log('\nplacement moves:', JSON.stringify(moveSummary, null, 1));
 const staleSummary = {};
-stale.forEach(s => { const k = stageName(s.fromStageId); staleSummary[k] = (staleSummary[k] || 0) + 1; });
-console.log(`\nuntouched since before ${new Date(STALE_BEFORE).toISOString().slice(0, 10)} → Lost (unreachable): ${stale.length}`, JSON.stringify(staleSummary));
+stale.forEach(s => { const k = `${stageName(s.fromStageId)} → ${s.to === 'lost' ? 'Lost (unreachable)' : 'On hold'}`; staleSummary[k] = (staleSummary[k] || 0) + 1; });
+console.log(`\nuntouched since before ${new Date(STALE_BEFORE).toISOString().slice(0, 10)}: ${stale.length} — lost ${stale.filter(s => s.to === 'lost').length}, on hold ${stale.filter(s => s.to === 'on_hold').length}`, JSON.stringify(staleSummary, null, 1));
 console.log(`…of which with an overdue follow-up: ${stale.filter(s => s.lead.followUpAt && s.lead.followUpAt < now).length}`);
 
 if (!APPLY) { console.log('\nDry run — nothing written. Re-run with --apply.'); process.exit(0); }
@@ -92,9 +96,18 @@ for (const m of plan.moves) {
 for (const s of stale) {
   const ref = db.collection('leads').doc(s.lead.id);
   const from = byId.has(s.lead.id) ? byId.get(s.lead.id).fromName : stageName(s.lead.stageId);
-  await queue(b => b.update(ref, { stageId: lostId, prevStageId: s.lead.stageId || null, stageChangedBy: 'migration', lostReason: 'unreachable', followUpAt: null }));
+  const since = new Date(s.lead.updatedAt || s.lead.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
+  const base = { prevStageId: s.lead.stageId || null, stageChangedBy: 'migration', followUpAt: null };
+  if (s.to === 'lost') {
+    await queue(b => b.update(ref, { ...base, stageId: lostId, lostReason: 'unreachable' }));
+  } else {
+    await queue(b => b.update(ref, { ...base, stageId: holdId, holdReason: 'other', holdUntil: null }));
+  }
   const id = hid();
-  await queue(b => b.set(ref.collection('history').doc(id), { id, type: 'stage', text: `Stage changed from <b>${from}</b> to <b>Lost</b> (Unreachable) in the pipeline rework — untouched since ${new Date(s.lead.updatedAt || s.lead.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' })}`, at: now, by: 'CRM rework' }));
+  const text = s.to === 'lost'
+    ? `Stage changed from <b>${from}</b> to <b>Lost</b> (Unreachable) in the pipeline rework — untouched since ${since}`
+    : `Stage changed from <b>${from}</b> to <b>On hold</b> in the pipeline rework — reached ${stageName(s.fromStageId)} but untouched since ${since}; review and re-open or close`;
+  await queue(b => b.set(ref.collection('history').doc(id), { id, type: 'stage', text, at: now, by: 'CRM rework' }));
 }
 await flush();
 

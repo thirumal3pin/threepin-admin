@@ -106,6 +106,14 @@ check('An unknown stage is rejected', normaliseVerdict({ ...good, stage: 'contac
 eq('A date years away is dropped', normaliseVerdict({ ...good, next_due: '2031-01-01T10:00:00+05:30' }, NOW).next.dueAt, null);
 eq('No action means no owner', normaliseVerdict({ ...good, next_action: '' }, NOW).next.owner, 'none');
 eq('A hold reason only survives on hold', normaliseVerdict({ ...good, hold_reason: 'postponed' }, NOW).holdReason, null);
+eq('A visit asked for lifts Options to Visit planned', normaliseVerdict({ ...good, stage: 'options', visit_status: 'requested' }, NOW).stage, 'visit_pending');
+eq('A visit done lifts Visit planned to Visited', normaliseVerdict({ ...good, stage: 'visit_pending', visit_status: 'done' }, NOW).stage, 'visit_done');
+eq('A later milestone is not pulled back by the visit', normaliseVerdict({ ...good, stage: 'negotiation', visit_status: 'requested' }, NOW).stage, 'negotiation');
+eq('Visit planned always has a visit status', normaliseVerdict({ ...good, visit_status: 'none', visit_at: null }, NOW).visit.status, 'requested');
+{
+  const fb = normaliseVerdict({ ...good, stage: 'visit_done', visit_status: 'done', next_owner: 'none', next_action: null, next_kind: 'none', next_due: null }, NOW).next;
+  eq('After a visit with nothing pending, the team calls for feedback', [fb.owner, fb.kind, fb.action], ['team', 'collect_feedback', 'Call for feedback on the visit to TNAG0001']);
+}
 check('Schema lists every stage key', JSON.stringify(LEAD_AI_SCHEMA.properties.stage.enum) === JSON.stringify(STAGE_DEFS.map(d => d.key)));
 check('Schema is strict', LEAD_AI_SCHEMA.additionalProperties === false && LEAD_AI_SCHEMA.required.length === Object.keys(LEAD_AI_SCHEMA.properties).length);
 
@@ -232,6 +240,10 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('No follow-up on a lost lead', !('followUpAt' in d.patch));
   const unsure = decide(ttLead({ stageId: sid('options') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'unreachable' }));
   check('Unreachable is only a suggestion', !unsure.moved && unsure.suggested === 'lost');
+  const notAFit = decide(ttLead({ stageId: sid('options') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_a_fit', next: { owner: 'none', action: null, dueAt: null } }));
+  check('"Not a fit" is a judgement call — only a suggestion', !notAFit.moved && notAFit.suggested === 'lost');
+  const angry = decide(ttLead({ stageId: sid('options') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_interested', next: { owner: 'team', action: 'Call back — missed three callbacks', kind: 'call', dueAt: null } }));
+  check('A lead the team still owes is never closed', !angry.moved && angry.suggested === 'lost' && angry.patch.ai.suggestion.why === 'the team still owes this lead a reply');
 }
 {
   const holdV = verdict({ stage: 'on_hold', confidence: 'high', holdReason: 'postponed', holdUntil: Date.parse('2026-09-30T10:00:00+05:30'), next: { owner: 'none', action: null, dueAt: null }, visit: { status: 'none', at: null } });
@@ -302,6 +314,8 @@ const keys = list => list.map(a => a.key);
   check('A pending visit with no time asks to fix one', keys(att(noTime)).includes('visit_unscheduled'));
   const doneQuiet = ttLead({ stageId: sid('visit_done'), stageChangedAt: NOW - 4 * DAY, updatedAt: NOW - 4 * DAY, tt: { id: 'x', category: 'sales', lastMessageAt: NOW - 4 * DAY, lastReplyAt: NOW - 4 * DAY } });
   check('A quiet visit-done lead asks for feedback', keys(att(doneQuiet)).includes('feedback_due'));
+  const doneOwed = { ...doneQuiet, ai: { next: { owner: 'team', action: 'Call for feedback on the visit', kind: 'collect_feedback', dueAt: NOW + HOUR, setAt: NOW - HOUR } } };
+  check('…once, not twice, when the feedback call is already the to-do', keys(att(doneOwed)).includes('team_owes') && !keys(att(doneOwed)).includes('feedback_due'));
   const negQuiet = ttLead({ stageId: sid('negotiation'), stageChangedAt: NOW - 6 * DAY, updatedAt: NOW - 6 * DAY, tt: { id: 'x', category: 'sales', lastMessageAt: NOW - 5 * DAY, lastReplyAt: NOW - 5 * DAY } });
   check('A stalled negotiation is flagged', keys(att(negQuiet)).includes('negotiation_stalled'));
   const holdDue = ttLead({ stageId: sid('on_hold'), holdUntil: NOW - HOUR, updatedAt: NOW - 10 * DAY });

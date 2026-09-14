@@ -5,7 +5,7 @@
 // nothing about the CRM itself: api/_lead-policy.js turns the verdict into moves, follow-ups and
 // suggestions with human-style guardrails. The Claude client is passed in, so tests run offline.
 
-import { STAGE_DEFS, LOST_REASONS, HOLD_REASONS, stageKeyOf, stageDef } from '../crm-assets/pipeline.js';
+import { STAGE_DEFS, LADDER, LOST_REASONS, HOLD_REASONS, stageKeyOf, stageDef } from '../crm-assets/pipeline.js';
 
 // Live: Google's Gemini 3.5 Flash-Lite (the owner's choice — the lowest-cost tier; it read the
 // test lead correctly in ~1.5 s). Pinned to a version so a Google-side alias change cannot shift
@@ -56,12 +56,13 @@ export const LEAD_AI_SYSTEM = [
   'STAGES — choose exactly one:',
   '- new: enquiry received; the requirement is unclear or nothing specific has been shared with them yet.',
   '- options: 3 PIN has shared at least one specific property, brochure, location, photos or price, and the lead is evaluating. Questions about a shared property keep the lead here.',
-  '- visit_pending: the lead asked to see a property, agreed to a visit, or a visit date/time is proposed or fixed — and nothing says it has happened. An owner asking 3 PIN to come and see their property counts too.',
+  '- visit_pending: the lead asked to see a property, agreed to a visit (a plain "yes" counts, even before a date is fixed), or a visit date/time is proposed or fixed — and nothing says it has happened. An owner asking 3 PIN to come and see their property counts too.',
   '- visit_done: someone says the visit happened ("visited", "saw the flat", a team note "site visit done", feedback about the visit).',
   '- negotiation: the lead is discussing price or terms for a specific property — best or final price, discount, a counter-offer, token/advance/booking amount, deposit, agreement, or documents such as patta, EC, approvals, RERA. A first "what is the price?" is NOT negotiation.',
   '- won: the deal is done — token or advance paid and confirmed, agreement signed, registration done, tenant moving in, or an owner signed the listing.',
-  '- on_hold: still interested but paused — postponed to a later time or condition, waiting for 3 PIN to find a matching property, or the budget is not ready.',
-  '- lost: stopped — not interested, bought or rented elsewhere, chose someone else, asked for no more contact, not a genuine enquiry (spam, wrong number), or a vendor, agent or job seeker rather than a customer.',
+  '- on_hold: the LEAD paused — said later, after a date or an event, or the budget or loan is not ready. While 3 PIN is still searching for a match for a lead who is actively chatting, keep the lead at its milestone with next_owner "team" and next_kind "find_property"; use on_hold with no_match only when the lead agreed to wait until something suitable comes up.',
+  '- lost: the LEAD stopped — said not interested, bought or rented elsewhere, chose someone else, or asked for no more contact; or it is not a genuine enquiry (spam, wrong number) or a vendor, agent or job seeker rather than a customer.',
+  '  NOT lost: a lead who is angry, doubtful or complaining because 3 PIN was slow or missed a callback. They are still waiting on 3 PIN — keep their milestone, next_owner "team", urgency high. A property that missed the budget or location is not lost either.',
   '',
   'HOW TO JUDGE:',
   '- Place the lead at the FURTHEST milestone the evidence shows, like ticking boxes in order: options sent? visit asked for or agreed? visited? talking price or token? deal done?',
@@ -69,19 +70,26 @@ export const LEAD_AI_SYSTEM = [
   '- Something offered is not something agreed: "Would you like to visit?" is not visit_pending until the lead asks or agrees.',
   '- A lead can skip stages — for example straight to negotiation.',
   '- A newer team note overrides the chat. The CRM stage the team chose is evidence too; move away from it only when the conversation clearly shows something newer.',
-  '- When evidence is thin or contradictory, lower the confidence instead of guessing. high = an explicit, recent statement; medium = strongly implied; low = weak or mixed signals.',
+  '- When evidence is thin or contradictory, lower the confidence instead of guessing. high = a message states it explicitly; medium = you are inferring it; low = weak or mixed signals.',
+  '- visit_status must agree with the stage: requested when a visit was asked for or agreed with no fixed time, scheduled when a time is fixed, done once it happened.',
   '- "3 PIN AI" is the assistant; "3 PIN team" is a human; "AI did not reply" means a lead message is waiting for a person.',
   '',
   'NEXT STEP:',
-  '- next_owner is "team" when 3 PIN promised something (to call, send details or photos, confirm or arrange a visit, check with the owner, find options), when the lead asked something only a person can answer, when a lead message is still unanswered, or when a visit or meeting needs confirming. It is "lead" when 3 PIN is waiting for the lead\'s reply or decision. It is "none" when nothing is pending.',
+  '- next_owner: go through these in order and use the first that applies —',
+  '  1. 3 PIN (the AI or the team) promised something not yet delivered: a callback, details, photos, a brochure, matching options, checking with the owner, confirming a visit → "team".',
+  '  2. The lead\'s latest message is unanswered, asks something only a person can answer, or asks to be called → "team".',
+  '  3. A visit happened and no feedback is recorded → "team", next_kind "collect_feedback".',
+  '  4. A visit was asked for or agreed but has no fixed time → "team", next_kind "confirm_visit" ("nudge" if the lead said they would come back with a date).',
+  '  5. 3 PIN has delivered everything it promised and is waiting for the lead\'s reply or decision → "lead".',
+  '  6. Nothing is pending (a closed deal, a lost lead) → "none".',
   '- next_action: one short imperative line a team member can act on, naming the property code when known, e.g. "Call to confirm Saturday 12:30 PM visit to ANRL001". Null when next_owner is "none".',
   '- next_due: when that step is due, only if the conversation states or clearly implies a time ("call me at 5", "tomorrow morning" → 10:00). Resolve relative dates against the timestamp of the message that said it. ISO 8601 with +05:30. Null when no time is implied.',
   '- visit_at: the proposed or agreed visit date and time, same rules. visit_property: the property code or a short name.',
   '- hold_until: the date the lead said to come back ("end of September" → the 30th at 10:00). Null if none.',
   '- lost_reason when the stage is lost; hold_reason when the stage is on_hold; otherwise null.',
   '- urgency: high when the lead wants to act soon, is frustrated, or has been waiting on 3 PIN; low for idle browsing.',
-  '- evidence: a short quote or paraphrase that proves the stage, with its date.',
-  '- status_line: one line of at most 90 characters a manager reads on the board, e.g. "Agreed to see TNAG0001 on Sat; team to confirm the time".',
+  '- evidence: a short quote or paraphrase that proves the stage, with its date — at most 160 characters.',
+  '- status_line: one line of at most 80 characters a manager reads on the board, e.g. "Agreed to see TNAG0001 on Sat; team to confirm the time".',
   '',
   'Answer only with the JSON object.'
 ].join('\n');
@@ -205,6 +213,16 @@ export function normaliseVerdict(raw, now) {
     urgency: oneOf(raw.urgency, ['high', 'normal', 'low'], 'normal'),
     line: clip(raw.status_line, 100)
   };
+  // The stage must agree with the visit the model itself described: a lead who asked for or
+  // agreed to a visit has at least a visit planned, one who visited has at least visited.
+  const rung = LADDER.indexOf(v.stage);
+  if (rung >= 0 && rung < LADDER.indexOf('visit_pending') && ['requested', 'scheduled'].includes(v.visit.status)) v.stage = 'visit_pending';
+  if (rung >= 0 && rung < LADDER.indexOf('visit_done') && v.visit.status === 'done') v.stage = 'visit_done';
+  if (v.stage === 'visit_pending' && v.visit.status === 'none') v.visit.status = 'requested';
+  // After a visit someone has to ask how it went — a small model often leaves that out.
+  if (v.stage === 'visit_done' && v.next.owner === 'none') {
+    v.next = { owner: 'team', action: `Call for feedback on the visit${v.visit.property ? ' to ' + v.visit.property : ''}`, kind: 'collect_feedback', dueAt: null };
+  }
   return v;
 }
 

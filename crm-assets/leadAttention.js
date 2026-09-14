@@ -141,7 +141,7 @@ export function computeAttention(lead, ctx = {}) {
       add('visit_unscheduled', 'medium', 'Fix a time for the site visit', `pending for ${ago(now - inStageSince)}`, inStageSince);
     }
   }
-  if (key === 'visit_done' && now - inStageSince > 2 * DAY && now - lastActivity > 2 * DAY) {
+  if (key === 'visit_done' && now - inStageSince > 2 * DAY && now - lastActivity > 2 * DAY && !owes) {
     add('feedback_due', 'medium', 'Get feedback on the visit', `nothing for ${ago(now - lastActivity)}`, lastActivity);
   }
   if (key === 'negotiation' && now - lastActivity > 3 * DAY) {
