@@ -48,6 +48,10 @@ const KNOWN_KEYS = new Set([
 // never renamed — add a new one instead. `quoteFrom: 'reply'` records the AI's latest reply as
 // the evidence (the promise is in what 3 PIN said, not in what the lead said).
 export const SIGNAL_DEFS = {
+  // The plan allows two webhooks, so one custom webhook watches for every moment below at
+  // once. TailorTalk does not say which moment matched — both sides of the exchange are kept
+  // so the team can see it at a glance.
+  moment:         { label: 'Key moment — needs a look',         icon: '⚡', quoteFrom: 'both' },
   team_promise:   { label: 'Team promised the lead something', icon: '🤝', quoteFrom: 'reply' },
   needs_human:    { label: 'Needs a person now',               icon: '🙋' },
   site_visit:     { label: 'Site visit asked or agreed',       icon: '📅' },
@@ -353,7 +357,9 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     const lastReply = [...chat].reverse().find(m => (m.role === 'assistant' || m.role === 'human_agent') && m.content && !isNoReplyMarker(m));
     const quote = cut(lastUser && lastUser.content);
     const reply = cut(lastReply && lastReply.content);
-    const shown = def && def.quoteFrom === 'reply' ? reply : quote;
+    const shown = def && def.quoteFrom === 'both'
+      ? [quote, reply && `3 PIN: ${reply}`].filter(Boolean).join(' — ')
+      : def && def.quoteFrom === 'reply' ? reply : quote;
     const handledAt = (lead && lead.updatedAt) || 0;
     if (prev && occurredAt <= (prev.lastAt || prev.at)) {
       // A retry of an event already recorded — nothing new happened.

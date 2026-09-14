@@ -283,6 +283,7 @@ const TT_RETURN_GAP_MS = 24*60*60*1000;
 //   quote    reply = show what 3 PIN said (the promise / the gap), else the lead's words
 //   actions  followup · details · stage:<site_visit|negotiation|closed_lost>
 const TT_SIGNALS = {
+  moment:         { icon:'⚡', chip:'Key moment',        title:'Key moment — needs a look',        tone:'action', quote:'both',  actions:['followup'] },
   team_promise:   { icon:'🤝', chip:'Team promised',     title:'Team promised the lead something', tone:'alert',  quote:'reply', actions:['followup'] },
   needs_human:    { icon:'🙋', chip:'Needs a person',    title:'Needs a person now',               tone:'alert',  actions:['followup'] },
   site_visit:     { icon:'📅', chip:'Site visit',        title:'Site visit asked or agreed',       tone:'action', actions:['stage:site_visit','followup'] },
@@ -301,7 +302,11 @@ const TT_SIGNALS = {
   lost_signal:     { icon:'💤', chip:'Might be lost',      title:'Might be lost',               tone:'lost',   actions:['stage:closed_lost'] }
 };
 function ttSignalMeta(key){ return TT_SIGNALS[key] || { icon:'🔔', chip: prettyKey(key), title: prettyKey(key), tone:'action', actions:['followup'] }; }
-function ttSignalQuote(key, s){ return ttSignalMeta(key).quote==='reply' ? (s.reply || s.quote) : (s.quote || s.reply); }
+function ttSignalQuote(key, s){
+  const from = ttSignalMeta(key).quote;
+  if(from==='both') return [s.quote, s.reply && `3 PIN: ${s.reply}`].filter(Boolean).join(' — ') || null;
+  return from==='reply' ? (s.reply || s.quote) : (s.quote || s.reply);
+}
 
 function isTtLead(l){ return !!(l && l.tt && l.tt.id); }
 // The separate CRM category: vendors, collaborations, influencers — anything TailorTalk files

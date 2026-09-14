@@ -269,6 +269,14 @@ eq('Junk signal names are ignored', normaliseSignal('drop table; --'), null);
   check('…ignoring the "no response" marker', !/No response/.test(ps.reply || ''));
   check('…and the history shows the promise, not the lead\'s question', promise.history.some(h => /🤝 <b>Team promised the lead something<\/b> — “We do not have visuals/.test(h.text)), promise.history.map(h => h.text).join(' | '));
   check('A firing produces an event for the log', promise.signalEvent && promise.signalEvent.signal === 'team_promise' && promise.signalEvent.repeat === false && promise.signalEvent.status === 'cold' && promise.signalEvent.stageId === 'new', JSON.stringify(promise.signalEvent));
+  const moment = planUpdate({
+    envelope: real({ chat_history: [...SAMPLE.data.chat_history,
+      { role: 'user', content: 'Can someone call me at 5 today?', time: '2026-09-13T13:40:00+00:00' },
+      { role: 'assistant', content: 'Sure, our team will call you at 5 PM.', time: '2026-09-13T13:40:15+00:00' }] }, { webhook_trigger: 'custom', occurred_at: '2026-09-13T19:11:00+05:30' }),
+    lead: null, state: null, leadId: 'LM', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'moment'
+  });
+  check('A key moment shows both sides of the exchange', moment.history.some(h => /⚡ <b>Key moment — needs a look<\/b> — “Can someone call me at 5 today\? — 3 PIN: Sure, our team will call you at 5 PM\.”/.test(h.text)), moment.history.map(h => h.text).join(' | '));
+  check('…and is logged for automations', moment.signalEvent && moment.signalEvent.signal === 'moment');
   const owner = planUpdate({ envelope: real({ intent_and_who: 'Enquiring for a relative' }), lead: null, state: null, leadId: 'LO', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'owner_listing' });
   eq('owner_listing sets the enquiry type to Seller Listing', owner.leadWrite.enquiryType, 'Seller Listing');
   const seller = planUpdate({ envelope: real({ intent_and_who: 'Enquiring for a relative' }), lead: null, state: null, leadId: 'L9', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW, signal: 'seller_lead' });
