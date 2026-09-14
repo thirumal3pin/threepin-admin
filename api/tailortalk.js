@@ -27,10 +27,11 @@
 //   POST /api/tailortalk?action=admin-ai maintenance (Bearer CRM_ADMIN_KEY): preview or apply
 //        lead automation over many leads, { apply, leadIds?, cursor?, limit? }.
 //
-// Lead automation (when settings/{tenant}.leadAutomation.enabled): after a webhook, the lead
-// is queued for 30 s; more messages push that back; when the chat goes quiet the AI reads it
-// once (api/_lead-automation.js). waitUntil keeps the function alive after the webhook has
-// already been answered, so TailorTalk never waits on the AI.
+// Lead automation (when settings/{tenant}.leadAutomation.enabled): after a webhook the lead is
+// queued; more messages push its read back until the chat has been quiet for 2 minutes (at most
+// 10 minutes after the first unread message). Every webhook, CRM refresh and the nightly sync
+// reads whatever is due (api/_lead-automation.js), after the webhook has already been answered
+// (waitUntil), so TailorTalk never waits on the AI.
 //
 // Environment (Vercel → Settings → Environment Variables):
 //   TAILORTALK_WEBHOOK_KEY   a long random string; the same one goes in the webhook URL
@@ -47,7 +48,7 @@ import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { applyTailorTalkEvent, pullTailorTalkPage } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
-  automationSettings, runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, retryAtFor, DEBOUNCE_MS
+  automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
 
 export const maxDuration = 60;
@@ -70,22 +71,16 @@ function claude() {
   if (!_anthropic) _anthropic = new Anthropic();
   return _anthropic;
 }
-const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, ms)));
+// Several CRM tabs refresh every few minutes; TailorTalk is pulled at most this often per tenant.
+const REFRESH_PULL_EVERY_MS = 2 * 60000;
 
-// After the webhook has been answered: wait for the chat to go quiet, then read the lead once.
+// After the webhook has been answered: queue this lead (it is read once its chat goes quiet) and
+// read a few leads whose chats already have. Nothing sleeps waiting for a quiet period — the next
+// webhook, the CRM's refresh or the nightly sync picks this lead up.
 function scheduleAutomation(db, tenantId, leadId, model) {
   waitUntil((async () => {
-    const dueAt = await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), delayMs: DEBOUNCE_MS });
-    await sleep(dueAt - Date.now() + 250);
-    const claimed = await claimQueued(db, leadId, Date.now());
-    if (!claimed) return;
-    let r = null;
-    try {
-      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, trigger: 'webhook' });
-    } finally {
-      // Rate limited → stays queued; the CRM's next refresh reads it.
-      await finishQueued(db, leadId, claimed, { retryAt: retryAtFor(r) });
-    }
+    await queueLeadAutomation(db, tenantId, leadId, { now: Date.now() });
+    await drainQueue(db, tenantId, { client: claude(), model, budgetMs: 30000, maxRuns: 3, trigger: 'webhook' });
   })().catch(e => console.error('lead automation after webhook failed:', leadId, e)));
 }
 
@@ -165,20 +160,22 @@ async function syncCron(request) {
     await stateRef.set({ lastSyncAt: started, lastSyncError: String((e && e.message) || e).slice(0, 300) }, { merge: true });
     return json({ ok: false, error: 'Sync failed', ...total }, 500);
   }
-  // The nightly run reads no leads with the AI itself; it queues the ones that changed so the
-  // morning's first CRM refresh reads them (a cron run has a hard time limit).
-  let queued = 0;
+  // Queue what changed, then read what is due with the time left, so the morning digest sees
+  // fresh reads; anything left over is read by the first CRM refresh.
+  let queued = 0, aiRan = 0;
   const auto = await automationSettings(db, tenantId);
   if (auto.enabled) {
-    for (const leadId of changed) { await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), delayMs: 0 }); queued++; }
+    for (const leadId of changed) { await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 }); queued++; }
+    const left = 52000 - (Date.now() - started);
+    if (left > 5000) aiRan = (await drainQueue(db, tenantId, { client: claude(), model: auto.model, budgetMs: left - 5000, trigger: 'nightly' })).ran;
   }
   await stateRef.set({
     lastSyncAt: started,
     lastSyncError: null,
-    lastSyncResult: { ...total, errors: total.errors.slice(0, 10), done, aiQueued: queued },
+    lastSyncResult: { ...total, errors: total.errors.slice(0, 10), done, aiQueued: queued, aiRan },
     ...(done ? { lastSyncCompletedAt: started } : {})
   }, { merge: true });
-  return json({ ok: true, done, ...total, aiQueued: queued });
+  return json({ ok: true, done, ...total, aiQueued: queued, aiRan });
 }
 
 async function crmUser(request) {
@@ -204,7 +201,7 @@ async function syncPost(request) {
     const page = await pullTailorTalkPage(db, tenantId, token, { startAfter, pageSize: 25, now: started });
     // Queue, don't read: a full sync can change many leads and the refresh drains the queue.
     const auto = await automationSettings(db, tenantId);
-    if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), delayMs: 0 });
+    if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 });
     if (page.done) {
       await db.collection('ttState').doc(tenantId).set({ lastSyncAt: started, lastSyncCompletedAt: started, lastSyncError: null, lastSyncBy: user.email || null }, { merge: true });
     }
@@ -214,6 +211,17 @@ async function syncPost(request) {
     console.error('tailortalk sync page failed:', e);
     return json({ ok: false, error: String((e && e.message) || e).slice(0, 300) }, 502);
   }
+}
+
+async function claimRefreshPull(db, tenantId, now) {
+  const ref = db.collection('ttState').doc(tenantId);
+  return db.runTransaction(async t => {
+    const snap = await t.get(ref);
+    const last = (snap.exists && snap.data().lastRefreshPullAt) || 0;
+    if (now - last < REFRESH_PULL_EVERY_MS) return false;
+    t.set(ref, { lastRefreshPullAt: now }, { merge: true });
+    return true;
+  });
 }
 
 // The CRM calls this when it opens and every few minutes: fresh TailorTalk data, then due AI runs.
@@ -226,17 +234,19 @@ async function refreshPost(request) {
   const started = Date.now();
   const out = { ok: true };
   try {
-    if (token) {
+    const auto = await automationSettings(db, tenantId);
+    out.automation = auto.enabled;
+    // Webhooks already deliver changes as they happen; the pull only catches a missed one, so
+    // several open tabs share one pull every couple of minutes.
+    if (token && await claimRefreshPull(db, tenantId, started)) {
       const page = await pullTailorTalkPage(db, tenantId, token, { pageSize: 25, now: started });
       out.pulled = page.processed; out.created = page.created; out.updated = page.updated;
-      const auto = await automationSettings(db, tenantId);
-      if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), delayMs: 0 });
-      out.automation = auto.enabled;
-      if (auto.enabled) {
-        const drained = await drainQueue(db, tenantId, { client: claude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
-        out.aiDue = drained.due; out.aiRan = drained.ran;
-        out.moved = drained.results.filter(r => r.moved).length;
-      }
+      if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 });
+    }
+    if (auto.enabled) {
+      const drained = await drainQueue(db, tenantId, { client: claude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
+      out.aiDue = drained.due; out.aiRan = drained.ran; out.rateLimited = !!drained.rateLimited;
+      out.moved = drained.results.filter(r => r.moved).length;
     }
     return json(out);
   } catch (e) {
@@ -255,7 +265,8 @@ async function aiLeadPost(request) {
   const db = getDb();
   const auto = await automationSettings(db, user.tenantId);
   try {
-    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: claude(), model: auto.model, trigger: `recheck:${(user.email || '').split('@')[0]}` });
+    // A person asked for a fresh read, so it is made even if nothing new has been said.
+    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: claude(), model: auto.model, force: true, trigger: `recheck:${(user.email || '').split('@')[0]}` });
     return json({ ok: r.ok !== false, ...r });
   } catch (e) {
     console.error('ai-lead failed:', e);
@@ -295,7 +306,9 @@ async function adminAiPost(request) {
     if (Date.now() - started > 45000) break;
     let r;
     try {
-      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, apply, trigger: apply ? 'backfill' : 'preview' });
+      // A preview always asks; a backfill skips leads already read on the same evidence unless
+      // { force: true } (e.g. after a prompt change the evidence key changes anyway).
+      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, apply, force: !apply || body.force === true, trigger: apply ? 'backfill' : 'preview' });
     } catch (e) {
       r = { leadId, ok: false, error: String((e && e.message) || e).slice(0, 300) };
     }

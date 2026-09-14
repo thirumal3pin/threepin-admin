@@ -165,7 +165,15 @@ function fakeClient(answer, { failBeta = false, stop = 'end_turn' } = {}) {
     const g = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'test-key', fetchImpl: fakeFetch } });
     check('Gemini classification succeeds', g.ok && g.verdict.stage === 'visit_pending', JSON.stringify(g));
     check('Gemini gets the key in a header, never the URL', sent[0].init.headers['x-goog-api-key'] === 'test-key' && !/test-key/.test(sent[0].url));
-    check('Gemini is asked for JSON in our schema with the same instructions', sent[0].init.body.generationConfig.responseMimeType === 'application/json' && JSON.stringify(sent[0].init.body.generationConfig.responseJsonSchema) === JSON.stringify(LEAD_AI_SCHEMA) && /sales coordinator at 3 PIN Realty/.test(sent[0].init.body.systemInstruction.parts[0].text));
+    {
+      const gc = sent[0].init.body.generationConfig;
+      check('Gemini 3.5: no deprecated sampling settings', !('temperature' in gc) && !('topP' in gc) && !('topK' in gc), JSON.stringify(gc));
+      eq('Gemini 3.5: minimal thinking, a capped answer', [gc.thinkingConfig, gc.maxOutputTokens], [{ thinkingLevel: 'minimal' }, 2048]);
+      const jitter = [];
+      await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', random: () => 0.5, fetchImpl: (() => { let i = 0; return async () => (i++ < 2 ? { ok: false, status: 503, json: async () => ({}) } : fakeFetch()); })(), sleepImpl: async ms => { jitter.push(ms); } } }).catch(() => null);
+      eq('Without a hint, retries back off exponentially (1 s, 2 s, with jitter)', jitter, [1000, 2000]);
+    }
+    check('Gemini is asked for JSON in our schema with the same instructions',sent[0].init.body.generationConfig.responseMimeType === 'application/json' && JSON.stringify(sent[0].init.body.generationConfig.responseJsonSchema) === JSON.stringify(LEAD_AI_SCHEMA) && /sales coordinator at 3 PIN Realty/.test(sent[0].init.body.systemInstruction.parts[0].text));
     eq('Gemini usage is recorded', g.usage.input_tokens, 1381);
     const blocked = await classifyLead({ model: 'gemini-3.5-flash-lite', caseFile: cf, now: NOW, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'SAFETY' }] }) }) } });
     eq('A Gemini safety block is reported, not applied', blocked.error, 'refused');
@@ -379,7 +387,7 @@ section('Runs on Firestore: apply, audit, debounce');
   db._store.set('leads/M0', { id: 'M0', tenantId: T, stageId: sid('new') });
   eq('A lead with nothing to read is skipped', (await runLeadAutomation(db, T, 'M0', { client, model: 'claude-haiku-4-5', now: NOW })).skipped, 'nothing to read');
 
-  const bad = await runLeadAutomation(db, T, 'L1', { client: fakeClient('nope'), model: 'claude-haiku-4-5', now: NOW + HOUR });
+  const bad = await runLeadAutomation(db, T, 'L1', { client: fakeClient('nope'), model: 'claude-haiku-4-5', now: NOW + HOUR, force: true });
   check('A failed read records the error without changing the stage', !bad.ok && db._get('leads/L1').ai.error === 'unreadable answer' && db._get('leads/L1').stageId === sid('visit_pending'));
 
   // A person moves the lead while the AI is reading — the write-time decision respects it.
@@ -391,25 +399,36 @@ section('Runs on Firestore: apply, audit, debounce');
   eq('A person\'s move during the AI read is kept', db._get('leads/L2').stageId, sid('options'));
 
   // Debounce.
-  await queueLeadAutomation(db, T, 'L1', { now: NOW, delayMs: 30000 });
+  await queueLeadAutomation(db, T, 'L1', { now: NOW, quietMs: 30000 });
   check('Not claimable before the quiet period ends', (await claimQueued(db, 'L1', NOW + 10000)) === null);
-  await queueLeadAutomation(db, T, 'L1', { now: NOW + 20000, delayMs: 30000 });
+  await queueLeadAutomation(db, T, 'L1', { now: NOW + 20000, quietMs: 30000 });
   check('A newer message pushes the run back', (await claimQueued(db, 'L1', NOW + 35000)) === null);
   const claimed = await claimQueued(db, 'L1', NOW + 51000);
   eq('Claimable once quiet', claimed, NOW + 50000);
   check('Only one worker can claim it', (await claimQueued(db, 'L1', NOW + 52000)) === null);
-  await queueLeadAutomation(db, T, 'L1', { now: NOW + 53000, delayMs: 30000 });
+  await queueLeadAutomation(db, T, 'L1', { now: NOW + 53000, quietMs: 30000 });
+  eq('A message during the run restarts the wait from that message', db._get('aiQueue/L1').firstQueuedAt, NOW + 53000);
   await finishQueued(db, 'L1', claimed);
   check('A message during the run keeps the lead queued', !!db._get('aiQueue/L1'));
   const drained = await drainQueue(db, T, { client, model: 'claude-haiku-4-5', now: NOW + 90000 });
   check('The queue drains what is due', drained.ran === 1 && !db._get('aiQueue/L1'), JSON.stringify(drained));
+  {
+    // A chat that never goes quiet is still read within the maximum wait.
+    const Q = 2 * 60000, MAXW = 10 * 60000;
+    let due;
+    for (let m = 0; m <= 14; m++) due = await queueLeadAutomation(db, T, 'BUSY', { now: NOW + m * 60000, quietMs: Q, maxWaitMs: MAXW });
+    eq('A busy chat is read no later than 10 minutes after its first unread message', due, NOW + 14 * 60000);
+    const early = await queueLeadAutomation(db, T, 'BUSY2', { now: NOW, quietMs: Q, maxWaitMs: MAXW });
+    eq('…and a single message waits for the quiet period', early, NOW + Q);
+    db._store.delete('aiQueue/BUSY'); db._store.delete('aiQueue/BUSY2');
+  }
 
   // Rate limited while draining: nothing recorded on the lead, the entry stays for later, the
   // drain stops instead of hammering the model.
   const aiBefore = JSON.stringify(db._get('leads/L1').ai);
   const runsBefore = db._list('leads/L1/aiRuns').length;
-  await queueLeadAutomation(db, T, 'L1', { now: NOW + 100000, delayMs: 0 });
-  await queueLeadAutomation(db, T, 'L2', { now: NOW + 100001, delayMs: 0 });
+  await queueLeadAutomation(db, T, 'L1', { now: NOW + 100000, quietMs: 0 });
+  await queueLeadAutomation(db, T, 'L2', { now: NOW + 100001, quietMs: 0 });
   const gem = { apiKey: 'k', fetchImpl: async () => ({ ok: false, status: 429, json: async () => ({ error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '40s' }] } }) }) };
   const limitedDrain = await drainQueue(db, T, { model: 'gemini-3.5-flash-lite', now: NOW + 110000, gemini: gem });
   check('A rate-limited drain stops at the first limit', limitedDrain.rateLimited && limitedDrain.ran === 1, JSON.stringify(limitedDrain));
@@ -417,6 +436,73 @@ section('Runs on Firestore: apply, audit, debounce');
   const q1 = db._get('aiQueue/L1');
   check('…and keeps it queued for a couple of minutes later', q1 && q1.claimedDueAt === null && q1.dueAt > Date.now() + 90000 && q1.retries === 1, JSON.stringify(q1));
   check('…with the others still waiting their turn', !!db._get('aiQueue/L2') && db._get('aiQueue/L2').claimedDueAt === null);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section('Requests that cannot change anything are not made');
+{
+  const longAi = { role: 'assistant', content: 'Here are our villa options: ' + 'x'.repeat(400) + ' - Radiance NOL002 and Firm ANR003', at: NOW - HOUR };
+  const cf2 = buildCaseFile({ lead: caseLead, state: { profile: { activity_so_far: 'Chatted about TNAG0001', requirement_details: '3BHK' }, chat: [...caseState.chat, longAi] }, notes: [], stages: STAGES, now: NOW });
+  check('A long assistant listing is clipped but keeps its property codes', /3 PIN AI: Here are our villa options: x+… \[also: NOL002, ANR003\]/.test(cf2), cf2.split('\n').find(l => /villa options/.test(l)));
+  check('"Activity so far" is left out while the whole chat is shown', !/Activity so far/.test(cf2) && /Requirement: 3BHK/.test(cf2));
+  {
+    const pii = buildCaseFile({
+      lead: { ...caseLead, name: 'Dr Kiruthika Raman' },
+      state: { chat: [
+        { role: 'user', content: 'Call me on +91 98848 83370 or 9790820750, mail kiru.r@gmail.com', at: NOW - HOUR },
+        { role: 'human_agent', email: 'swami@threepin.in', content: 'Owner number 044-2615 1234. Budget ₹1,00,00,000 for ANR003, 1937 sqft, 2026', at: NOW - 30 * 60000 }
+      ] },
+      notes: [{ text: 'Spoke on 919884883370', createdAt: NOW - HOUR, by: 'thirumal@threepin.in' }], stages: STAGES, now: NOW
+    });
+    check('Phone numbers never reach the model', !/98848|9790820750|2615|919884883370/.test(pii) && (pii.match(/\[phone\]/g) || []).length === 4, pii);
+    check('…nor email addresses', !/kiru\.r@gmail\.com/.test(pii) && /\[email\]/.test(pii));
+    check('…while prices, sizes, years and property codes stay', /₹1,00,00,000 for ANR003, 1937 sqft, 2026/.test(pii));
+    check('The lead is named by first name (with a title kept)', /Name: Dr Kiruthika\n/.test(pii) && /Lead \(Dr Kiruthika\):/.test(pii) && !/Raman/.test(pii));
+  }
+  const leadLong = buildCaseFile({ lead: caseLead, state: { chat: [{ role: 'user', content: 'y'.repeat(500), at: NOW }] }, notes: [], stages: STAGES, now: NOW });
+  check('The lead\'s own words are not clipped at the listing length', /Lead \(Rajesh\): y{500}$/m.test(leadLong));
+
+  const db = createFakeDb();
+  db._store.set(`pipelines/${T}`, { stages: STAGES });
+  db._store.set('leads/E1', ttLead({ id: 'E1' }));
+  db._store.set('leads/E1/tailortalk/state', caseState);
+  let calls = 0;
+  const inner = fakeClient(good);
+  const counting = { beta: inner.beta, messages: { create: async p => { calls++; return inner.messages.create(p); } } };
+  const opts = { client: counting, model: 'claude-haiku-4-5' };
+
+  await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW });
+  eq('The first read asks the model', calls, 1);
+  check('…and the AI moved the lead and set a follow-up', db._get('leads/E1').stageId === sid('visit_pending') && !!db._get('leads/E1').followUpAt);
+  const again = await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + HOUR });
+  check('Same evidence → no request, even though the AI\'s own writes changed the lead', calls === 1 && again.skipped === 'nothing new since the last read', JSON.stringify(again));
+  const forced = await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + HOUR, force: true });
+  check('Re-check forces a read', calls === 2 && !forced.skipped);
+  db._store.set('leads/E1/tailortalk/state', { ...caseState, chat: [...caseState.chat, { role: 'user', content: 'Saturday 11 works', at: NOW + 2 * HOUR }] });
+  await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + 3 * HOUR });
+  eq('A new message → a new request', calls, 3);
+  db._store.set('leads/E1/notes/n1', { text: 'Owner confirmed Saturday', createdAt: NOW + 3 * HOUR, by: 'thirumal@threepin.in' });
+  await runLeadAutomation(db, T, 'E1', { ...opts, now: NOW + 4 * HOUR });
+  eq('A new team note → a new request', calls, 4);
+  await runLeadAutomation(db, T, 'E1', { ...opts, model: 'claude-sonnet-5', now: NOW + 4 * HOUR });
+  eq('Another model reads again', calls, 5);
+
+  db._store.set('leads/C1', ttLead({ id: 'C1', stageId: sid('lost'), stageChangedAt: NOW - HOUR, stageChangedBy: 'thirumal@threepin.in', lostReason: 'not_interested', tt: { id: 'c1', category: 'sales', lastMessageAt: NOW - 2 * HOUR } }));
+  db._store.set('leads/C1/tailortalk/state', caseState);
+  const closed = await runLeadAutomation(db, T, 'C1', { ...opts, now: NOW });
+  check('A lost lead who has not written since is not read', closed.skipped === 'closed or parked, and the lead has not written since' && calls === 5);
+  db._store.set('leads/C1', { ...db._get('leads/C1'), tt: { id: 'c1', category: 'sales', lastMessageAt: NOW - 10 * 60000 } });
+  await runLeadAutomation(db, T, 'C1', { ...opts, now: NOW });
+  eq('…but is once the lead writes again', calls, 6);
+
+  db._store.set(`aiState/${T}`, { blockedUntil: NOW + 60000 });
+  db._store.set('leads/E2', ttLead({ id: 'E2' }));
+  db._store.set('leads/E2/tailortalk/state', caseState);
+  const blocked = await runLeadAutomation(db, T, 'E2', { ...opts, now: NOW });
+  check('While rate limited nothing is asked — the lead is handed back', blocked.retry && blocked.retryAfterMs === 60000 && calls === 6, JSON.stringify(blocked));
+  await queueLeadAutomation(db, T, 'E2', { now: NOW - 5 * 60000, quietMs: 0 });
+  const heldDrain = await drainQueue(db, T, { ...opts, now: NOW });
+  check('…and a drain does not even claim queued leads', heldDrain.rateLimited && heldDrain.ran === 0 && db._get('aiQueue/E2').claimedDueAt === null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

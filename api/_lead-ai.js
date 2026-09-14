@@ -5,6 +5,7 @@
 // nothing about the CRM itself: api/_lead-policy.js turns the verdict into moves, follow-ups and
 // suggestions with human-style guardrails. The Claude client is passed in, so tests run offline.
 
+import { createHash } from 'node:crypto';
 import { STAGE_DEFS, LADDER, LOST_REASONS, HOLD_REASONS, stageKeyOf, stageDef } from '../crm-assets/pipeline.js';
 
 // Live: Google's Gemini 3.5 Flash-Lite (the owner's choice — the lowest-cost tier; it read the
@@ -17,7 +18,11 @@ export const LEAD_AI_VERSION = 1;
 const HOUR = 3600000;
 const MAX_MESSAGES = 40;
 const MAX_MESSAGE_CHARS = 600;
-const MAX_FIELD_CHARS = 1200;
+// The assistant's replies are mostly property listings — half of every case file. Their opening
+// lines and the property codes carry the evidence; the bullet points do not.
+const MAX_AI_MESSAGE_CHARS = 280;
+const MAX_FIELD_CHARS = 500;
+const PROPERTY_CODE = /\b[A-Z]{2,5}\d{3,4}\b/g;
 
 const STAGES = STAGE_DEFS.map(d => d.key);
 const NEXT_KINDS = ['call', 'send_details', 'confirm_visit', 'attend_visit', 'collect_feedback', 'negotiate', 'paperwork', 'find_property', 'nudge', 'other', 'none'];
@@ -49,64 +54,71 @@ export const LEAD_AI_SCHEMA = {
 };
 
 export const LEAD_AI_SYSTEM = [
-  'You are the sales coordinator at 3 PIN Realty, a real-estate brokerage in Chennai. Buyers and tenants chat with 3 PIN\'s AI assistant on WhatsApp, Instagram and the website; property owners also write in to sell or rent out. The team follows up by phone, WhatsApp and site visits.',
+  'You are the sales coordinator at 3 PIN Realty, a Chennai real-estate brokerage. Buyers and tenants chat with 3 PIN\'s AI assistant (WhatsApp, Instagram, web); owners write in to sell or rent out. From the evidence only, decide the lead\'s real stage, who owes the next step, and the visit, hold and loss details.',
   '',
-  'Read one lead\'s record the way an experienced coordinator would and decide, from evidence only: the pipeline stage the lead is really in, who owes the next step and what it is, and the site-visit, hold and loss details.',
+  'STAGES (exactly one):',
+  '- new: requirement unclear, or nothing specific shared yet.',
+  '- options: 3 PIN shared a specific property, brochure, location, photos or price and the lead is evaluating (questions about it stay here).',
+  '- visit_pending: the lead asked for or agreed to a visit (a plain "yes" counts, even with no date), or a time is proposed or fixed — and nothing says it happened.',
+  '- visit_done: someone says the visit happened (visited, saw it, a "site visit done" note, feedback on it).',
+  '- negotiation: price or terms for a specific property — best price, discount, counter-offer, token or advance, deposit, agreement, documents (patta, EC, approvals, RERA). A first "what is the price?" is not negotiation.',
+  '- won: token or advance paid, agreement signed, registered, tenant moving in, or an owner signed the listing.',
+  '- on_hold: the LEAD paused — later, after a date or event, or budget or loan not ready. If 3 PIN is still searching for an active lead, keep its milestone with next_owner "team" and next_kind "find_property"; use on_hold with no_match only if the lead agreed to wait.',
+  '- lost: the LEAD stopped — not interested, bought or rented elsewhere, chose someone else, asked for no contact — or spam, a wrong number, a vendor, agent or job seeker. NOT lost: anger or doubt because 3 PIN was slow or missed a callback (keep the milestone, next_owner "team", urgency high), or a property that missed the budget or location.',
+  '- Owners (sell, rent_out): new while sharing details, photos or price; visit_pending once an inspection is asked for or agreed; negotiation on commission or listing terms; won when the listing is signed.',
   '',
-  'STAGES — choose exactly one:',
-  '- new: enquiry received; the requirement is unclear or nothing specific has been shared with them yet.',
-  '- options: 3 PIN has shared at least one specific property, brochure, location, photos or price, and the lead is evaluating. Questions about a shared property keep the lead here.',
-  '- visit_pending: the lead asked to see a property, agreed to a visit (a plain "yes" counts, even before a date is fixed), or a visit date/time is proposed or fixed — and nothing says it has happened. An owner asking 3 PIN to come and see their property counts too.',
-  '- visit_done: someone says the visit happened ("visited", "saw the flat", a team note "site visit done", feedback about the visit).',
-  '- negotiation: the lead is discussing price or terms for a specific property — best or final price, discount, a counter-offer, token/advance/booking amount, deposit, agreement, or documents such as patta, EC, approvals, RERA. A first "what is the price?" is NOT negotiation.',
-  '- won: the deal is done — token or advance paid and confirmed, agreement signed, registration done, tenant moving in, or an owner signed the listing.',
-  '- on_hold: the LEAD paused — said later, after a date or an event, or the budget or loan is not ready. While 3 PIN is still searching for a match for a lead who is actively chatting, keep the lead at its milestone with next_owner "team" and next_kind "find_property"; use on_hold with no_match only when the lead agreed to wait until something suitable comes up.',
-  '- lost: the LEAD stopped — said not interested, bought or rented elsewhere, chose someone else, or asked for no more contact; or it is not a genuine enquiry (spam, wrong number) or a vendor, agent or job seeker rather than a customer.',
-  '  NOT lost: a lead who is angry, doubtful or complaining because 3 PIN was slow or missed a callback. They are still waiting on 3 PIN — keep their milestone, next_owner "team", urgency high. A property that missed the budget or location is not lost either.',
-  '- Property owners (sell, rent_out): new while they share details, photos or a price of their property; visit_pending only once a visit to inspect it is asked for or agreed; negotiation when commission or listing terms are discussed; won when they sign the listing.',
+  'JUDGING:',
+  '- Place the lead at the FURTHEST milestone reached (options → visit asked or agreed → visited → price or token → done); stages can be skipped.',
+  '- The newest evidence wins (a cancelled visit, revived interest). A newer team note overrides the chat; the CRM stage is evidence — leave it only for something clearly newer.',
+  '- Offered is not agreed: "Would you like to visit?" needs the lead\'s yes.',
+  '- confidence: high = stated explicitly; medium = inferred; low = weak or mixed signals.',
+  '- visit_status matches the stage: requested (no fixed time), scheduled (time fixed), done.',
+  '- "3 PIN AI" is the assistant, "3 PIN team" a person; "AI did not reply" means a lead message waits for a person.',
   '',
-  'HOW TO JUDGE:',
-  '- Place the lead at the FURTHEST milestone the evidence shows, like ticking boxes in order: options sent? visit asked for or agreed? visited? talking price or token? deal done?',
-  '- The most recent evidence wins. A later message overrides an earlier one (a cancelled visit, interest revived after a pause).',
-  '- Something offered is not something agreed: "Would you like to visit?" is not visit_pending until the lead asks or agrees.',
-  '- A lead can skip stages — for example straight to negotiation.',
-  '- A newer team note overrides the chat. The CRM stage the team chose is evidence too; move away from it only when the conversation clearly shows something newer.',
-  '- When evidence is thin or contradictory, lower the confidence instead of guessing. high = a message states it explicitly; medium = you are inferring it; low = weak or mixed signals.',
-  '- visit_status must agree with the stage: requested when a visit was asked for or agreed with no fixed time, scheduled when a time is fixed, done once it happened.',
-  '- "3 PIN AI" is the assistant; "3 PIN team" is a human; "AI did not reply" means a lead message is waiting for a person.',
-  '',
-  'NEXT STEP:',
-  '- next_owner: go through these in order and use the first that applies —',
-  '  1. 3 PIN (the AI or the team) promised something not yet delivered: a callback, details, photos, a brochure, matching options, checking with the owner, confirming a visit → "team".',
-  '  2. The lead\'s latest message is unanswered, asks something only a person can answer, or asks to be called → "team".',
-  '  3. A visit happened and no feedback is recorded → "team", next_kind "collect_feedback".',
-  '  4. A visit was asked for or agreed but has no fixed time → "team", next_kind "confirm_visit" ("nudge" if the lead said they would come back with a date).',
-  '  5. 3 PIN has delivered everything it promised and is waiting for the lead\'s reply or decision → "lead".',
-  '  6. Nothing is pending (a closed deal, a lost lead) → "none".',
-  '- next_action: one short imperative line a team member can act on, naming the property code when known, e.g. "Call to confirm Saturday 12:30 PM visit to ANRL001". Null when next_owner is "none".',
-  '- next_due: when that step is due, only if the conversation states or clearly implies a time ("call me at 5", "tomorrow morning" → 10:00). Resolve relative dates against the timestamp of the message that said it. ISO 8601 with +05:30. Null when no time is implied.',
-  '- visit_at: the proposed or agreed visit date and time, same rules. visit_property: the property code or a short name.',
-  '- hold_until: the date the lead said to come back ("end of September" → the 30th at 10:00). Null if none.',
-  '- lost_reason when the stage is lost; hold_reason when the stage is on_hold; otherwise null.',
-  '- urgency: high when the lead wants to act soon, is frustrated, or has been waiting on 3 PIN; low for idle browsing.',
-  '- evidence: a short quote or paraphrase that proves the stage, with its date — at most 160 characters.',
-  '- status_line: one line of at most 80 characters a manager reads on the board, e.g. "Agreed to see TNAG0001 on Sat; team to confirm the time".',
+  'NEXT STEP — next_owner is the first rule that applies:',
+  '1. 3 PIN promised something not yet delivered (callback, details, photos, brochure, options, owner check, visit confirmation) → "team".',
+  '2. The lead\'s latest message is unanswered, needs a person, or asks for a call → "team".',
+  '3. Visited and no feedback recorded → "team", next_kind "collect_feedback".',
+  '4. Visit asked for or agreed without a fixed time → "team", "confirm_visit" ("nudge" if the lead will come back with a date).',
+  '5. 3 PIN delivered everything and awaits the lead\'s reply or decision → "lead".',
+  '6. Nothing pending → "none".',
+  '- next_action: one short imperative naming the property code when known, e.g. "Call to confirm Sat 12:30 PM visit to ANRL001"; null when "none".',
+  '- next_due, visit_at, hold_until: only when stated or clearly implied ("tomorrow morning" → 10:00, "end of September" → the 30th at 10:00), resolved against that message\'s timestamp, ISO 8601 with +05:30; otherwise null. visit_property: the code or a short name.',
+  '- lost_reason only when lost, hold_reason only when on_hold; otherwise null.',
+  '- urgency: high if eager, frustrated or kept waiting by 3 PIN; low for idle browsing.',
+  '- evidence: a quote or paraphrase with its date, at most 160 characters. status_line: at most 80 characters for the board, e.g. "Agreed to see TNAG0001 Sat; team to confirm time".',
   '',
   'Answer only with the JSON object.'
 ].join('\n');
 
 // ── The case file ──────────────────────────────────────────────────────────
 
-const clip = (s, n) => { const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// Phone numbers and email addresses never help judge a lead, so they never leave the CRM: every
+// piece of text in the case file (and the verdict) passes through clip(), which masks them.
+const PHONE = /(?<![\w₹])(?:\+?91[\s-]?)?(?:[6-9]\d{4}[\s-]?\d{5}|0?44[\s-]?\d{4}[\s-]?\d{4})(?!\d)/g;
+const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
+export const redact = s => String(s == null ? '' : s).replace(EMAIL, '[email]').replace(PHONE, '[phone]');
+const clip = (s, n) => { const t = redact(s).replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// "Dr Kiruthika Raman" → "Dr Kiruthika", "Rajesh Kumar" → "Rajesh": enough to say who to call.
+const shortName = name => { const w = String(name || '').trim().split(/\s+/); return (/^(dr|mr|mrs|ms|miss)\.?$/i.test(w[0]) ? w.slice(0, 2) : w.slice(0, 1)).join(' '); };
 
 export function fmtIstLong(ms) {
   return new Date(ms).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 function speaker(m, leadName) {
-  if (m.role === 'user') return `Lead${leadName ? ' (' + leadName.split(' ')[0] + ')' : ''}`;
+  if (m.role === 'user') return `Lead${leadName ? ' (' + clip(shortName(leadName), 40) + ')' : ''}`;
   if (m.role === 'human_agent') return `3 PIN team${m.email ? ' (' + String(m.email).split('@')[0] + ')' : ''}`;
   return '3 PIN AI';
+}
+
+function messageText(m) {
+  if (m.role === 'user' || m.role === 'human_agent') return clip(m.content, MAX_MESSAGE_CHARS);
+  const text = clip(m.content, MAX_AI_MESSAGE_CHARS);
+  if (!text.endsWith('…')) return text;
+  const shown = new Set(text.match(PROPERTY_CODE) || []);
+  const more = [...new Set(String(m.content).match(PROPERTY_CODE) || [])].filter(c => !shown.has(c));
+  return more.length ? `${text} [also: ${more.slice(0, 8).join(', ')}]` : text;
 }
 
 const PROFILE_LABELS = [
@@ -130,7 +142,7 @@ export function buildCaseFile({ lead, state, notes, stages, now }) {
   lines.push(`Now: ${fmtIstLong(now)} IST`);
   lines.push('');
   lines.push('LEAD');
-  lines.push(`Name: ${clip(lead.name || 'Unknown', 60)}`);
+  lines.push(`Name: ${clip(shortName(lead.name) || 'Unknown', 40)}`);
   lines.push(`Channel: ${lead.channel || tt.integration || 'unknown'}${tt.leadSource ? ' · source: ' + tt.leadSource : ''}${tt.adTitle ? ' · ad: ' + clip(tt.adTitle, 60) : ''}`);
   lines.push(`Enquiry type in CRM: ${lead.enquiryType || '—'} · Property/locality: ${clip(lead.propertyInterest || '—', 80)} · Budget: ${clip(lead.budget || '—', 40)}`);
   lines.push(`CRM stage now: ${stageName}${lead.stageChangedAt ? ` (since ${fmtIstLong(lead.stageChangedAt)}, set by ${String(by).split('@')[0]})` : ''}`);
@@ -145,8 +157,10 @@ export function buildCaseFile({ lead, state, notes, stages, now }) {
     teamNotes.forEach(n => lines.push(`- [${fmtIstLong(n.createdAt || 0)}${n.by ? ' · ' + String(n.by).split('@')[0] : ''}] ${clip(n.text, 400)}`));
   }
 
+  const chat = ((state && state.chat) || []).filter(m => m && (m.content || (m.meta && m.meta.type)));
   const profile = (state && state.profile) || {};
-  const prof = PROFILE_LABELS.filter(([k]) => profile[k]);
+  // "Activity so far" retells the chat; it only adds anything when older messages are cut off.
+  const prof = PROFILE_LABELS.filter(([k]) => profile[k] && !(k === 'activity_so_far' && chat.length <= MAX_MESSAGES));
   if (prof.length) {
     lines.push('', 'TAILORTALK PROFILE (written by TailorTalk\'s AI; can lag the chat):');
     prof.forEach(([k, label]) => lines.push(`${label}: ${clip(profile[k], MAX_FIELD_CHARS)}`));
@@ -158,20 +172,40 @@ export function buildCaseFile({ lead, state, notes, stages, now }) {
     bookings.forEach(b => lines.push(`- ${clip(b.summary || 'Booking', 80)}${b.start ? ' at ' + fmtIstLong(b.start) : ''}`));
   }
 
-  const chat = ((state && state.chat) || []).filter(m => m && (m.content || (m.meta && m.meta.type)));
   if (chat.length) {
     const shown = chat.slice(-MAX_MESSAGES);
     lines.push('', `CONVERSATION (${shown.length === chat.length ? 'all' : 'last ' + shown.length + ' of ' + chat.length} messages, oldest first, IST):`);
     for (const m of shown) {
       const noReply = (m.meta && m.meta.type === 'no_response') || /^<no response from agent>$/i.test(String(m.content || '').trim());
       const when = m.at ? fmtIstLong(m.at) : 'time unknown';
-      lines.push(noReply ? `[${when}] (AI did not reply — left for the team)` : `[${when}] ${speaker(m, lead.name)}: ${clip(m.content, MAX_MESSAGE_CHARS)}`);
+      lines.push(noReply ? `[${when}] (AI did not reply — left for the team)` : `[${when}] ${speaker(m, lead.name)}: ${messageText(m)}`);
     }
   } else {
     lines.push('', 'CONVERSATION: none recorded — judge from the CRM record and notes.');
   }
 
   return lines.join('\n');
+}
+
+// What a verdict depends on — the conversation, notes, bookings, TailorTalk's profile and the
+// lead's own details — and not what the automation writes itself (stage, follow-up, details sent)
+// or the clock. The same key as the last successful read means nothing new has been said, so
+// asking again would pay for the same answer. The prompt, schema and model are part of the key:
+// changing any of them makes every lead readable again.
+const PROMPT_KEY = createHash('sha256').update(`${LEAD_AI_VERSION}\n${LEAD_AI_SYSTEM}\n${JSON.stringify(LEAD_AI_SCHEMA)}`).digest('hex').slice(0, 12);
+
+export function evidenceKey({ lead, state, notes, model }) {
+  const tt = lead.tt || {};
+  const profile = (state && state.profile) || {};
+  const src = JSON.stringify([
+    PROMPT_KEY, model || '',
+    [lead.name, lead.enquiryType, lead.propertyInterest, lead.budget, lead.channel, tt.status, !!tt.locked, !!tt.escalated, !!tt.converted],
+    (notes || []).filter(n => n && n.text).map(n => [n.createdAt || 0, n.text]).sort((a, b) => a[0] - b[0]).slice(-8),
+    PROFILE_LABELS.map(([k]) => profile[k] || ''),
+    ((state && state.bookings) || []).map(b => [b.summary || '', b.start || 0]),
+    ((state && state.chat) || []).slice(-MAX_MESSAGES).map(m => [m.at || 0, m.role || '', m.content || '', (m.meta && m.meta.type) || ''])
+  ]);
+  return createHash('sha256').update(src).digest('base64url').slice(0, 24);
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────
@@ -252,19 +286,38 @@ function retryDelayMs(body) {
   return Number.isFinite(secs) ? Math.ceil(secs * 1000) : null;
 }
 
-const RETRYABLE = new Set([429, 500, 503]);
+// Google's guidance (ai.google.dev/gemini-api/docs/troubleshooting): retry 408, 429 and 5xx with
+// exponential backoff and jitter, a capped number of times; never 400 or 403.
+const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
 const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.GEMINI_API_KEY, fetchImpl = fetch, sleepImpl = sleepMs, retries = 2, maxWaitMs = 8000 }) {
+// The request body, identical for every lead except the case file. Per the Gemini 3.5 guide:
+//   • no temperature/topP/topK — deprecated for 3.5 models; below 1.0 they can loop. Determinism
+//     comes from the system instruction's explicit rules and the strict schema instead.
+//   • thinkingLevel "minimal" — Flash-Lite's default, stated so a default change cannot quietly
+//     add billed thinking tokens to a classification that does not need them.
+//   • maxOutputTokens caps thinking + answer; a verdict is ~200 tokens, so 2048 only matters for a
+//     runaway answer, which comes back as MAX_TOKENS and is treated as a failed read.
+export function geminiRequest(caseFile) {
+  return {
+    systemInstruction: { parts: [{ text: LEAD_AI_SYSTEM }] },
+    contents: [{ role: 'user', parts: [{ text: caseFile }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseJsonSchema: LEAD_AI_SCHEMA,
+      thinkingConfig: { thinkingLevel: 'minimal' },
+      maxOutputTokens: 2048
+    }
+  };
+}
+
+async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.GEMINI_API_KEY, fetchImpl = fetch, sleepImpl = sleepMs, retries = 2, maxWaitMs = 8000, random = Math.random }) {
   if (!apiKey) return { ok: false, error: 'GEMINI_API_KEY is not set', model };
+  const payload = JSON.stringify(geminiRequest(caseFile));
   const request = () => fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: LEAD_AI_SYSTEM }] },
-      contents: [{ role: 'user', parts: [{ text: caseFile }] }],
-      generationConfig: { responseMimeType: 'application/json', responseJsonSchema: LEAD_AI_SCHEMA, temperature: 0.1, maxOutputTokens: 4000 }
-    })
+    body: payload
   });
   let res, body;
   for (let attempt = 0; ; attempt++) {
@@ -277,7 +330,7 @@ async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.G
     if (attempt >= retries || (hinted && hinted > maxWaitMs)) {
       return { ok: false, error: res.status === 429 ? 'rate limited' : `Gemini unavailable (${res.status})`, retryable: true, retryAfterMs: hinted || 60000, model };
     }
-    await sleepImpl(hinted || 2000 * (attempt + 1));
+    await sleepImpl(hinted || Math.round(1000 * 2 ** attempt * (0.75 + random() / 2)));
   }
   if (!res.ok) {
     const err = new Error(`Gemini answered ${res.status}: ${String((body.error && body.error.message) || '').slice(0, 200)}`);
@@ -285,7 +338,8 @@ async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.G
     throw err;
   }
   const m = body.usageMetadata || {};
-  const usage = { input_tokens: m.promptTokenCount || 0, output_tokens: (m.candidatesTokenCount || 0) + (m.thoughtsTokenCount || 0), cache_read_input_tokens: m.cachedContentTokenCount || 0 };
+  // Thinking is billed as output; it is also kept apart so the log shows whether "minimal" holds.
+  const usage = { input_tokens: m.promptTokenCount || 0, output_tokens: (m.candidatesTokenCount || 0) + (m.thoughtsTokenCount || 0), thinking_tokens: m.thoughtsTokenCount || 0, cache_read_input_tokens: m.cachedContentTokenCount || 0 };
   const cand = (body.candidates || [])[0];
   if (!cand) return { ok: false, error: body.promptFeedback && body.promptFeedback.blockReason ? 'refused' : 'no answer', usage, model };
   if (['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(cand.finishReason)) return { ok: false, error: 'refused', usage, model };
