@@ -122,6 +122,45 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.close();
 }
 
+// ── 4. Saved team views ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  ok('The views chip starts empty', (await text(page, '#viewsCtlBtn'))[0].startsWith('☆ Views'));
+  await page.evaluate(() => { setLeadScope('tt'); setLeadFocus('action'); toggleView('list'); toggleListSort('name'); });
+  await page.evaluate(() => { const i = document.getElementById('searchInput'); i.value = 'raj'; i.dispatchEvent(new Event('input')); });
+  await page.click('#viewsCtlBtn');
+  ok('Opening the menu offers to save what is on screen', await page.isVisible('#viewNameInput'));
+  await page.fill('#viewNameInput', 'Hot TailorTalk to call');
+  await page.evaluate(() => { renderLeadFilterBar(); applyFilters(); });
+  ok('…and a redraw while typing keeps the name', await page.inputValue('#viewNameInput') === 'Hot TailorTalk to call');
+  await page.screenshot({ path: join(OUT, '20-views-menu.png') });
+  await page.press('#viewNameInput', 'Enter');
+  await page.waitForTimeout(100);
+  const saved = await page.evaluate(() => window.__settings.map(s => s.view).filter(Boolean)[0]);
+  ok('Saving writes the view for the team', saved && saved.name === 'Hot TailorTalk to call' && saved.scope === 'tt' && saved.focus === 'action' && saved.view === 'list' && saved.search === 'raj' && saved.sortCol === 'name', JSON.stringify(saved));
+  ok('…and the chip shows it is active', (await text(page, '#viewsCtlBtn'))[0].startsWith('★ Hot TailorTalk to call'));
+  await page.evaluate(() => { clearSearch(); setLeadScope('all'); toggleView('kanban'); });
+  ok('Changing the filters clears the active name', (await text(page, '#viewsCtlBtn'))[0].startsWith('☆ Views'));
+  await page.evaluate(id => applySavedView(id), saved.id);
+  const restored = await page.evaluate(() => ({ f: leadFilter, s: document.getElementById('searchInput').value, v: currentView, sort: listSortCol }));
+  ok('Picking the view restores scope, focus, search, list and sort', restored.f.scope === 'tt' && restored.f.focus === 'action' && restored.s === 'raj' && restored.v === 'list' && restored.sort === 'name', JSON.stringify(restored));
+  ok('…and names it again', (await text(page, '#viewsCtlBtn'))[0].startsWith('★ Hot TailorTalk to call'));
+  await page.evaluate(() => window.applyViewsSnapshot({ vx: { id: 'vx', name: 'Visits this week', scope: 'all', status: null, focus: 'overdue', search: '', view: 'kanban', sortCol: null, sortDir: null, colFilters: {} } }));
+  await page.click('#viewsCtlBtn');
+  ok('Views saved by someone else appear from the live settings', /Visits this week.*Sales leads · Overdue · Board/.test((await text(page, '.lf-views-menu')).join(' ')));
+  await page.evaluate(() => deleteSavedView('vx'));
+  ok('Deleting a view removes it for everyone', await page.evaluate(() => !savedViews.vx && window.__settings.some(s => s.deleted === 'vx')));
+  await page.close();
+}
+{
+  const page = await openPage({ width: 390, height: 844 });
+  await page.click('#viewsCtlBtn');
+  const box = await page.evaluate(() => { const r = document.querySelector('.lf-views-menu').getBoundingClientRect(); return { left: r.left, right: r.right, w: window.innerWidth }; });
+  ok('On a phone the views menu stays on screen', box.left >= 0 && box.right <= box.w, JSON.stringify(box));
+  await page.screenshot({ path: join(OUT, '21-views-phone.png') });
+  await page.close();
+}
+
 // ── 6. Bulk actions ──
 {
   const page = await openPage({ width: 1440, height: 900 });

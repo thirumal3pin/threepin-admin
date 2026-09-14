@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where, deleteField
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -110,6 +110,8 @@ function subscribeToData(tenantId){
           });
         }
         if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
+        if (window.applyViewsSnapshot) window.applyViewsSnapshot(data.views || {});
+        if (window.applyTeamSnapshot) window.applyTeamSnapshot(data.team || {});
       }, (err) => console.error('Firestore settings sync error:', err));
     });
 }
@@ -150,6 +152,21 @@ window.crmFirebase = {
   },
   saveAutomationSettings: ({ enabled }) => setDoc(settingsRef(currentTenantId), { leadAutomation: { enabled: !!enabled } }, { merge: true })
     .catch(e => console.error('Firestore save automation settings error:', e)),
+  // Saved team views: settings.views.{id}. One dotted path per view, so two people saving
+  // different views at the same moment never overwrite each other.
+  saveView: (view) => updateDoc(settingsRef(currentTenantId), { ['views.' + view.id]: view })
+    .catch(e => { console.error('Firestore save view error:', e); throw e; }),
+  deleteView: (id) => updateDoc(settingsRef(currentTenantId), { ['views.' + id]: deleteField() })
+    .catch(e => { console.error('Firestore delete view error:', e); throw e; }),
+  // The team roster for @mentions: settings.team.{key} = { email, lastSeenAt } — each person adds
+  // themselves when they open the CRM (at most once a day).
+  registerTeamMember: (key, member) => updateDoc(settingsRef(currentTenantId), { ['team.' + key]: member })
+    .catch(e => console.error('Firestore register team member error:', e)),
+  // The inventory (properties collection) for linking leads to property codes — read once, on
+  // first use, not kept live: the CRM only needs codes and names.
+  getInventory: () => getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)))
+    .then(s => s.docs.map(d => { const p = d.data(); return { id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }; }))
+    .catch(e => { console.error('Firestore inventory read error:', e); return []; }),
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
   getLeadTailorTalk: (leadId) => getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'))
     .then(s => (s.exists() ? s.data() : null)),

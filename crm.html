@@ -166,8 +166,11 @@ function toggleDensity(){
       <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
       <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
     </div>
-    <!-- Lead filter: All / TailorTalk / Other, plus TailorTalk status. Drawn by renderLeadFilterBar() in app.js. -->
-    <div class="lf-bar" id="leadFilterBar" role="toolbar" aria-label="Filter leads"></div>
+    <!-- Saved team views (renderViewsCtl) + lead filter: All / TailorTalk / Other, focus and TailorTalk status (renderLeadFilterBar), in app.js. -->
+    <div class="lf-row">
+      <div class="lf-views" id="viewsCtl"></div>
+      <div class="lf-bar" id="leadFilterBar" role="toolbar" aria-label="Filter leads"></div>
+    </div>
   </div>
 
   <!-- MAIN -->

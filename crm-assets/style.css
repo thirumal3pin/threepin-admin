@@ -313,6 +313,26 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    same left stripe the overdue follow-up uses, so "needs a person" reads the same way. */
 [hidden]{display:none!important;}
 .lf-bar{display:flex;align-items:center;gap:6px;margin-top:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:1px;}
+/* Saved views sit outside the scrolling chip bar so their menu is never clipped. */
+.lf-row{display:flex;align-items:center;gap:6px;margin-top:10px;min-width:0;}
+.lf-row .lf-bar{margin-top:0;flex:1;min-width:0;}
+.lf-views{position:relative;flex-shrink:0;}
+.lf-views:empty{display:none;}
+.lf-chip.views{border-style:solid;}
+.lf-chip.views.on{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink);}
+.lf-views-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:60;width:min(320px,calc(100vw - 32px));padding:8px;border:1px solid var(--border2);border-radius:var(--r3);background:var(--raised);box-shadow:0 12px 32px rgba(0,0,0,.14);}
+.lf-view-row{display:flex;align-items:stretch;gap:4px;border-radius:var(--r1);}
+.lf-view-row:hover{background:var(--bg2);}
+.lf-view-row.at{background:var(--brand-soft);}
+.lf-view-go{flex:1;min-width:0;text-align:left;padding:7px 8px;border:none;background:transparent;color:var(--ink);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;}
+.lf-view-go small{display:block;font-weight:400;font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lf-view-x{border:none;background:transparent;color:var(--ink4);font-size:16px;padding:0 8px;cursor:pointer;border-radius:var(--r1);}
+.lf-view-x:hover{color:var(--red);background:var(--red-bg);}
+.lf-views-empty{padding:8px;font-size:12.5px;color:var(--ink3);}
+.lf-views-save{display:flex;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid var(--border);}
+.lf-views-save input{flex:1;min-width:0;font-family:var(--sans);font-size:13px;padding:6px 8px;border:1.5px solid var(--border);border-radius:var(--r1);background:var(--white);color:var(--ink);}
+.lf-views-save button{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:6px 12px;border:none;border-radius:var(--r1);background:var(--brand);color:#fff;cursor:pointer;}
+.lf-views-hint{margin-top:6px;font-size:11px;color:var(--ink4);line-height:1.4;}
 .lf-bar::-webkit-scrollbar{display:none;}
 .lf-bar:empty{display:none;}
 .lf-chip{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;padding:6px 12px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);font-family:var(--sans);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s;}

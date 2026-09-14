@@ -285,7 +285,8 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
       export const setDoc=async(ref,data,opts)=>{w().push({op:'set',path:ref.path,data:JSON.parse(JSON.stringify(data)),opts:opts||null});};
       export const updateDoc=async(ref,data)=>{w().push({op:'update',path:ref.path,data});};
       export const deleteDoc=async()=>{}; export const onSnapshot=()=>()=>{}; export const getDoc=async()=>({exists:()=>false,data:()=>null});
-      export const getDocs=async()=>({docs:[]}); export const writeBatch=()=>({set(){},commit:async()=>{}}); export const query=()=>({}); export const where=()=>({});`,
+      export const getDocs=async()=>({docs:[]}); export const writeBatch=()=>({set(){},commit:async()=>{}}); export const query=()=>({}); export const where=()=>({});
+      export const deleteField=()=>({__deleteField:true});`,
     'firebase-auth.js': 'export const getAuth=()=>({}); export const signInWithEmailAndPassword=async()=>{}; export const signOut=async()=>{}; export const onAuthStateChanged=()=>{};'
   };
   await page.route('**/*', route => {

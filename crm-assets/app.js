@@ -301,7 +301,7 @@ function applyFilters(){
     if(!passesLeadFilter(l)) return false;
     if(currentSearch){
       const tt = isTtLead(l) ? [l.tt.status, l.tt.values && l.tt.values.propertyInterest, l.tt.values && l.tt.values.budget, l.tt.handle, l.tt.contact, l.tt.adTitle, l.ai && l.ai.line] : [];
-      const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel),...tt].join(' ').toLowerCase();
+      const hay = [l.name,l.phone,l.email,l.propertyInterest,l.enquiryType,l.budget,channelLabel(l.channel),...(l.propertyCodes||[]),...tt].join(' ').toLowerCase();
       if(!hay.includes(currentSearch)) return false;
     }
     return true;
@@ -309,6 +309,7 @@ function applyFilters(){
   if(currentView==='kanban') renderBoard();
   else if(currentView==='list') renderList();
   else if(currentView==='followups') renderFollowups();
+  updateViewsChip();
   // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
   // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
 }
@@ -588,6 +589,124 @@ function renderLeadFilterBar(){
       + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
   el.innerHTML = html;
+  if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
+  updateViewsChip();
+}
+
+// ═══════ SAVED TEAM VIEWS ═══════
+// A named combination of scope, focus, TailorTalk status, search, board or list, and the list's
+// sort and column filters — saved for the whole team in settings.views.{id}. Picking one restores
+// all of it; the chip shows the view's name while nothing has been changed since.
+let savedViews = {};
+let viewsMenuOpen = false;
+window.applyViewsSnapshot = function(map){
+  savedViews = map && typeof map === 'object' ? map : {};
+  renderViewsCtl();
+};
+function currentViewState(){
+  const colFilters = {};
+  Object.keys(listColumnFilters).sort().forEach(k => { colFilters[k] = [...listColumnFilters[k]].sort(); });
+  const list = lastBrowseView === 'list';
+  return {
+    scope: leadFilter.scope, status: leadFilter.status || null, focus: leadFilter.focus || null,
+    search: currentSearch || '', view: list ? 'list' : 'kanban',
+    sortCol: list && listSortCol ? listSortCol : null, sortDir: list && listSortCol ? listSortDir : null,
+    colFilters: list ? colFilters : {}
+  };
+}
+const viewStateKey = s => JSON.stringify([s.scope, s.status || null, s.focus || null, (s.search || '').toLowerCase(), s.view, s.sortCol || null, s.sortDir || null, Object.keys(s.colFilters || {}).sort().map(k => [k, [...s.colFilters[k]].sort()])]);
+function activeSavedView(){
+  const key = viewStateKey(currentViewState());
+  return Object.values(savedViews).find(v => v && viewStateKey(v) === key) || null;
+}
+function viewSummary(v){
+  const scope = { all:'Sales leads', tt:'TailorTalk', other:'Other sources', business:'Vendors & collabs' }[v.scope] || 'Sales leads';
+  const focus = v.focus && FOCUS_FILTERS.find(f => f.key === v.focus);
+  const status = v.status && TT_STATUS_FILTERS.find(f => f.key === v.status);
+  const cols = Object.keys(v.colFilters || {}).length;
+  return [scope, status && status.label, focus && focus.label, v.search && `“${v.search}”`, v.view === 'list' ? 'List' : 'Board', cols && `${cols} column filter${cols === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+}
+function renderViewsCtl(){
+  const el = document.getElementById('viewsCtl');
+  if(!el) return;
+  const typing = document.activeElement && document.activeElement.id === 'viewNameInput' ? document.activeElement.value : null;
+  const active = activeSavedView();
+  const list = Object.values(savedViews).filter(Boolean).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const menu = viewsMenuOpen ? `<div class="lf-views-menu" onclick="event.stopPropagation()">
+      ${list.length ? list.map(v => `<div class="lf-view-row${active && active.id === v.id ? ' at' : ''}">
+          <button type="button" class="lf-view-go" onclick="applySavedView('${escapeHtml(v.id)}')">${escapeHtml(v.name)}<small>${escapeHtml(viewSummary(v))}</small></button>
+          <button type="button" class="lf-view-x" title="Delete this view" aria-label="Delete ${escapeHtml(v.name)}" onclick="deleteSavedView('${escapeHtml(v.id)}')">×</button>
+        </div>`).join('') : '<div class="lf-views-empty">No saved views yet.</div>'}
+      <div class="lf-views-save">
+        <input id="viewNameInput" maxlength="40" placeholder="Name what you see now…" onkeydown="if(event.key==='Enter')saveCurrentView()">
+        <button type="button" onclick="saveCurrentView()">Save</button>
+      </div>
+      <div class="lf-views-hint">Saves the filters, search, board or list and the list's sort — shared with the whole team.</div>
+    </div>` : '';
+  el.innerHTML = `<button type="button" id="viewsCtlBtn" class="lf-chip views${active ? ' on' : ''}" aria-expanded="${viewsMenuOpen}" onclick="toggleViewsMenu(event)">${active ? '★ ' + escapeHtml(active.name) : '☆ Views'}<span class="dd-chevron">⌄</span></button>${menu}`;
+  if(typing !== null){ const inp = document.getElementById('viewNameInput'); if(inp){ inp.value = typing; inp.focus(); } }
+}
+// Only the chip's label follows the filters — the open menu (and a name being typed) is left alone.
+function updateViewsChip(){
+  const btn = document.getElementById('viewsCtlBtn');
+  if(!btn) return;
+  const active = activeSavedView();
+  btn.classList.toggle('on', !!active);
+  btn.innerHTML = `${active ? '★ ' + escapeHtml(active.name) : '☆ Views'}<span class="dd-chevron">⌄</span>`;
+}
+function toggleViewsMenu(e){
+  if(e) e.stopPropagation();
+  viewsMenuOpen = !viewsMenuOpen;
+  renderViewsCtl();
+  if(viewsMenuOpen){ const inp = document.getElementById('viewNameInput'); if(inp) inp.focus(); }
+}
+document.addEventListener('click', () => { if(viewsMenuOpen){ viewsMenuOpen = false; renderViewsCtl(); } });
+async function saveCurrentView(){
+  const inp = document.getElementById('viewNameInput');
+  const name = (inp ? inp.value : '').trim().slice(0, 40);
+  if(!name){ showToast('Give the view a name'); if(inp) inp.focus(); return; }
+  const existing = Object.values(savedViews).find(v => v && String(v.name).toLowerCase() === name.toLowerCase());
+  if(existing && !confirm(`Replace the saved view "${existing.name}" with what you see now?`)) return;
+  const id = existing ? existing.id : 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const view = { id, name, ...currentViewState(), createdBy: (existing && existing.createdBy) || currentUserEmail || null, createdAt: (existing && existing.createdAt) || Date.now(), updatedAt: Date.now() };
+  savedViews = { ...savedViews, [id]: view };
+  viewsMenuOpen = false;
+  renderViewsCtl();
+  try{ await window.crmFirebase.saveView(view); showToast(`✓ Saved view “${name}”`); }
+  catch(e){ showToast('Could not save the view — check your connection'); }
+}
+async function deleteSavedView(id){
+  const v = savedViews[id];
+  if(!v || !confirm(`Delete the view "${v.name}" for everyone?`)) return;
+  const { [id]: _gone, ...rest } = savedViews;
+  savedViews = rest;
+  renderViewsCtl();
+  try{ await window.crmFirebase.deleteView(id); showToast('View deleted'); }
+  catch(e){ showToast('Could not delete the view — check your connection'); }
+}
+function applySavedView(id){
+  const v = savedViews[id];
+  if(!v) return;
+  leadFilter = {
+    scope: LEAD_SCOPES.includes(v.scope) ? v.scope : 'all',
+    status: v.scope === 'tt' && TT_STATUS_FILTERS.some(f => f.key === v.status) ? v.status : null,
+    focus: FOCUS_FILTERS.some(f => f.key === v.focus) ? v.focus : null
+  };
+  saveLeadFilter();
+  const inp = document.getElementById('searchInput');
+  if(inp) inp.value = v.search || '';
+  currentSearch = String(v.search || '').toLowerCase();
+  const clr = document.getElementById('srchClear');
+  if(clr) clr.classList.toggle('show', !!currentSearch);
+  listSortCol = LIST_COLUMNS.some(c => c.key === v.sortCol) ? v.sortCol : null;
+  listSortDir = v.sortDir === 'desc' ? 'desc' : 'asc';
+  listColumnFilters = {};
+  Object.entries(v.colFilters || {}).forEach(([k, vals]) => { if(LIST_COLUMNS.some(c => c.key === k && c.filterable) && Array.isArray(vals)) listColumnFilters[k] = new Set(vals); });
+  bulkSelected = new Set();
+  viewsMenuOpen = false;
+  renderViewsCtl();
+  renderLeadFilterBar();
+  toggleView(v.view === 'list' ? 'list' : 'kanban');
 }
 
 // ── Board card ──
@@ -1642,6 +1761,7 @@ function renderList(){
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
+  updateViewsChip();
 }
 
 // ═══════ FOLLOW-UPS VIEW (date-grouped, calendar-style) ═══════
