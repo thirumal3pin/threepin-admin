@@ -69,7 +69,7 @@ export const LEAD_AI_SYSTEM = [
   '',
   'JUDGING:',
   '- Place the lead at the FURTHEST milestone reached (options → visit asked or agreed → visited → price or token → done); stages can be skipped.',
-  '- The newest evidence wins (a cancelled visit, revived interest). A newer team note overrides the chat; the CRM stage is evidence — leave it only for something clearly newer.',
+  '- The newest evidence wins (a cancelled visit, revived interest). A newer team note overrides the chat. A CRM stage set by a person is evidence — leave it only for something clearly newer; a stage set by the AI or the CRM rework is not evidence, judge from the conversation.',
   '- Offered is not agreed: "Would you like to visit?" needs the lead\'s yes.',
   '- confidence: high = stated explicitly; medium = inferred; low = weak or mixed signals.',
   '- visit_status matches the stage: requested (no fixed time), scheduled (time fixed), done.',
