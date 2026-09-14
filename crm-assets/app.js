@@ -540,6 +540,7 @@ function inScope(l, scope, status){
   return true;
 }
 function passesLeadFilter(l){
+  if(propertyFilter) return (l.propertyCodes || []).includes(propertyFilter);
   if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
   const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
   return focus ? focus.test(l) : true;
@@ -573,6 +574,15 @@ function renderLeadFilterBar(){
   const business = leads.length - sales.length;
   const chip = (cls, pressed, onclick, label, n) =>
     `<button type="button" class="lf-chip${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}">${label}<span class="lf-n">${n}</span></button>`;
+  if(propertyFilter){
+    // Came from a property page: that property's leads, whatever their scope.
+    if(!inventory) loadInventory().then(() => renderLeadFilterBar());
+    const n = leads.filter(l => (l.propertyCodes || []).includes(propertyFilter)).length;
+    el.innerHTML = `<button type="button" class="lf-chip prop at" onclick="clearPropertyFilter()" title="Show all leads again">🏠 Leads for ${escapeHtml(propertyShortLabel(propertyFilter))}<span class="lf-n">${n}</span><span aria-hidden="true">×</span></button>`;
+    if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
+    updateViewsChip();
+    return;
+  }
   let html = chip('', leadFilter.scope==='all', "setLeadScope('all')", 'Sales leads', sales.length)
     + chip(' tt', leadFilter.scope==='tt', "setLeadScope('tt')", 'TailorTalk', ttSales.length)
     + chip('', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length)
@@ -2874,8 +2884,10 @@ function renderDetailInfo(l){
     ${l.budget?`<div class="info-b highlight"><div class="info-b-l">Budget</div><div class="info-b-v">${escapeHtml(l.budget)}</div></div>`:''}
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
+    <div class="info-b pl-row" id="dpPropLinks">${propertyLinksInner(l)}</div>
   `;
   document.getElementById('dpInfo').innerHTML = infoHtml;
+  if((l.propertyCodes || []).length && !inventory) loadInventory().then(() => { if(currentDetailId === l.id) renderPropertyLinks(l.id); });
 
   const metaHtml = `
     <div class="dp-meta-item"><span class="dp-meta-l">Contacted</span><span class="dp-meta-v">${new Date(l.contactAt||l.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></div>
@@ -2884,6 +2896,115 @@ function renderDetailInfo(l){
     ${l.updatedBy?`<div class="dp-meta-item"><span class="dp-meta-l">Updated by</span><span class="dp-meta-v">${escapeHtml(l.updatedBy.split('@')[0])}</span></div>`:''}
   `;
   document.getElementById('dpMeta').innerHTML = metaHtml;
+}
+
+// ═══════ PROPERTY LINKS (lead ↔ inventory, crm-assets/propertyLinks.js) ═══════
+// lead.propertyCodes are inventory ids. Automation links codes a lead already talks about; a
+// person links more from here, or unlinks one — which automation then never re-adds.
+let inventory = null;
+let inventoryLoading = null;
+let propLinkOpenFor = null;
+let propLinkQuery = '';
+function loadInventory(){
+  if(inventory) return Promise.resolve(inventory);
+  if(!inventoryLoading){
+    inventoryLoading = Promise.resolve(window.crmFirebase && window.crmFirebase.getInventory ? window.crmFirebase.getInventory() : [])
+      .then(list => { inventory = Array.isArray(list) ? list : []; return inventory; })
+      .catch(() => { inventoryLoading = null; return []; });
+  }
+  return inventoryLoading;
+}
+const inventoryById = id => (inventory || []).find(p => p.id === id) || null;
+// "ANR003" for coded rows; older inventory rows only have a number as their id, so they go by name.
+const propertyCodeOf = p => p && p.propertyCode && !/^\d+$/.test(p.propertyCode) ? p.propertyCode : '';
+function propertyShortLabel(id){
+  const p = inventoryById(id);
+  if(!p) return /^\d+$/.test(id) ? `Property ${id}` : id;
+  return [propertyCodeOf(p), p.name].filter(Boolean).join(' · ') || id;
+}
+function propertyLinksInner(l){
+  const ids = l.propertyCodes || [];
+  const chips = ids.map(id => {
+    const p = inventoryById(id);
+    const code = p ? propertyCodeOf(p) : (/^\d+$/.test(id) ? '' : id);
+    const title = p ? [p.name, p.location, p.config, p.startingPrice].filter(Boolean).join(' · ') : id;
+    return `<span class="pl-chip${p && p.soldOut ? ' sold' : ''}"><a href="property.html?id=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${code ? `<b>${escapeHtml(code)}</b>` : ''}${p && p.name ? `<span>${escapeHtml(p.name)}</span>` : (code ? '' : escapeHtml(propertyShortLabel(id)))}${p && p.soldOut ? '<i>sold</i>' : ''}</a><button type="button" aria-label="Unlink ${escapeHtml(propertyShortLabel(id))}" title="Unlink" onclick="unlinkProperty('${l.id}','${escapeHtml(id)}')">×</button></span>`;
+  }).join('');
+  const open = propLinkOpenFor === l.id;
+  return `<div class="info-b-l">Properties</div>
+    <div class="info-b-v">
+      <div class="pl-chips">${chips || '<span class="pl-none">None linked</span>'}${open ? '' : `<button type="button" class="pl-add" onclick="openPropertyLink('${l.id}')">＋ Link</button>`}</div>
+      ${open ? `<div class="pl-pick">
+        <div class="pl-pick-row"><input id="plInput" autocomplete="off" placeholder="Search code, name or area…" value="${escapeHtml(propLinkQuery)}" oninput="propLinkQuery=this.value; renderPropertyResults('${l.id}')" onkeydown="if(event.key==='Escape')closePropertyLink()"><button type="button" class="pl-cancel" onclick="closePropertyLink()">Done</button></div>
+        <div class="pl-results" id="plResults">${propertyResultsHtml(l)}</div>
+      </div>` : ''}
+    </div>`;
+}
+function propertyResultsHtml(l){
+  if(!inventory) return '<div class="pl-empty">Loading inventory…</div>';
+  const ids = new Set(l.propertyCodes || []);
+  const q = propLinkQuery.trim().toLowerCase();
+  const matches = inventory.filter(p => !ids.has(p.id) && (!q || [p.id, p.propertyCode, p.name, p.location, p.config].join(' ').toLowerCase().includes(q))).slice(0, 8);
+  if(!matches.length) return '<div class="pl-empty">No matching property</div>';
+  return matches.map(p => `<button type="button" onclick="linkProperty('${l.id}','${escapeHtml(p.id)}')">${propertyCodeOf(p) ? `<b>${escapeHtml(propertyCodeOf(p))}</b> ` : ''}${escapeHtml(p.name || p.id)}<small>${escapeHtml([p.location, p.config, p.startingPrice, p.soldOut ? 'sold' : ''].filter(Boolean).join(' · '))}</small></button>`).join('');
+}
+function renderPropertyLinks(leadId){
+  const el = document.getElementById('dpPropLinks');
+  const l = leads.find(x => x.id === leadId);
+  if(!el || !l) return;
+  el.innerHTML = propertyLinksInner(l);
+}
+function renderPropertyResults(leadId){
+  const el = document.getElementById('plResults');
+  const l = leads.find(x => x.id === leadId);
+  if(el && l) el.innerHTML = propertyResultsHtml(l);
+}
+function openPropertyLink(leadId){
+  propLinkOpenFor = leadId; propLinkQuery = '';
+  renderPropertyLinks(leadId);
+  const inp = document.getElementById('plInput'); if(inp) inp.focus();
+  loadInventory().then(() => { if(propLinkOpenFor === leadId) renderPropertyResults(leadId); });
+}
+function closePropertyLink(){
+  const id = propLinkOpenFor;
+  propLinkOpenFor = null; propLinkQuery = '';
+  if(id) renderPropertyLinks(id);
+}
+function linkProperty(leadId, propertyId){
+  const l = leads.find(x => x.id === leadId);
+  if(!l || (l.propertyCodes || []).includes(propertyId)) return;
+  const now = Date.now();
+  l.propertyCodes = [...(l.propertyCodes || []), propertyId];
+  l.unlinkedPropertyIds = (l.unlinkedPropertyIds || []).filter(x => x !== propertyId);
+  addHistory(l, 'field', `Linked to property <b>${escapeHtml(propertyShortLabel(propertyId))}</b>`);
+  l.updatedAt = now; l.updatedBy = currentUserEmail || l.updatedBy || null; l.lastActionType = 'field';
+  persistLead(l);
+  propLinkQuery = '';
+  renderPropertyLinks(leadId);
+  const inp = document.getElementById('plInput'); if(inp) inp.focus();
+  if(currentDetailId === leadId) renderHistory(l);
+}
+function unlinkProperty(leadId, propertyId){
+  const l = leads.find(x => x.id === leadId);
+  if(!l) return;
+  const now = Date.now();
+  l.propertyCodes = (l.propertyCodes || []).filter(x => x !== propertyId);
+  if(!(l.unlinkedPropertyIds || []).includes(propertyId)) l.unlinkedPropertyIds = [...(l.unlinkedPropertyIds || []), propertyId];
+  addHistory(l, 'field', `Unlinked property <b>${escapeHtml(propertyShortLabel(propertyId))}</b>`);
+  l.updatedAt = now; l.updatedBy = currentUserEmail || l.updatedBy || null; l.lastActionType = 'field';
+  persistLead(l);
+  renderPropertyLinks(leadId);
+  if(currentDetailId === leadId) renderHistory(l);
+}
+// crm.html?propertyId=ANR003 (from Property Intelligence and property pages): only the leads
+// linked to that property, until the chip is cleared.
+let propertyFilter = null;
+try{ propertyFilter = new URLSearchParams(location.search).get('propertyId') || null; }catch(e){}
+function clearPropertyFilter(){
+  propertyFilter = null;
+  try{ const u = new URL(location.href); u.searchParams.delete('propertyId'); history.replaceState(null, '', u.pathname + u.search + u.hash); }catch(e){}
+  renderLeadFilterBar();
+  applyFilters();
 }
 
 // Fetch a lead's notes + history subcollections into the in-memory object and

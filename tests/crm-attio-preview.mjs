@@ -161,6 +161,36 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.close();
 }
 
+// ── 5. Lead ↔ property links ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  await page.evaluate(() => openDetail('A1'));
+  await page.waitForTimeout(400);
+  ok('A linked property shows by code and name', /VLCA002\s*Casagrand Velachery/.test((await text(page, '#dpPropLinks')).join(' ')), (await text(page, '#dpPropLinks')).join(' '));
+  await page.evaluate(() => openPropertyLink('A1'));
+  await page.fill('#plInput', 'anna');
+  await page.waitForTimeout(150);
+  const results = (await text(page, '#plResults button')).join(' | ');
+  ok('Searching the inventory by area finds the property', /ANR003 Firm Srivaruni/.test(results) && !/VLCA002/.test(results), results);
+  await page.locator('#dpInfo').screenshot({ path: join(OUT, '30-property-link.png') });
+  await page.evaluate(() => linkProperty('A1', 'ANR003'));
+  const linked = await page.evaluate(() => { const l = leads.find(x => x.id === 'A1'); return { codes: l.propertyCodes, hist: window.__history.some(h => h.id === 'A1' && /Linked to property <b>ANR003 · Firm Srivaruni<\/b>/.test(h.h.text)) }; });
+  ok('Linking adds it with a history line', JSON.stringify(linked.codes) === '["VLCA002","ANR003"]' && linked.hist, JSON.stringify(linked));
+  await page.evaluate(() => unlinkProperty('A1', 'VLCA002'));
+  const unl = await page.evaluate(() => { const l = leads.find(x => x.id === 'A1'); return { codes: l.propertyCodes, un: l.unlinkedPropertyIds }; });
+  ok('Unlinking removes it and remembers not to re-add it', JSON.stringify(unl.codes) === '["ANR003"]' && JSON.stringify(unl.un) === '["VLCA002"]', JSON.stringify(unl));
+  await page.close();
+}
+{
+  const page = await openPage({ width: 1440, height: 900 }, { search: '?propertyId=VLCA002' });
+  await page.waitForTimeout(300);
+  const chip = (await text(page, '#leadFilterBar')).join(' ');
+  ok('Opening the CRM from a property page shows only that property\'s leads', /Leads for VLCA002 · Casagrand Velachery\s*1/.test(chip) && JSON.stringify(await text(page, '.lcard .lcard-name')) === '["Rajesh Kumar"]', chip);
+  await page.evaluate(() => clearPropertyFilter());
+  ok('…until the chip is cleared', (await text(page, '.lcard .lcard-name')).length > 1);
+  await page.close();
+}
+
 // ── 6. Bulk actions ──
 {
   const page = await openPage({ width: 1440, height: 900 });

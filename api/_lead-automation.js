@@ -18,6 +18,7 @@ import { buildCaseFile, classifyLead, evidenceKey, LEAD_AI_MODEL } from './_lead
 import { decideLeadChanges } from './_lead-policy.js';
 import { isBusinessLead } from '../crm-assets/leadAttention.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
+import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
 
 // A chat is read once it has been quiet for QUIET_MS — WhatsApp comes in bursts, and one read after
 // the burst sees everything — but never later than MAX_WAIT_MS after its first unread message, so a
@@ -112,10 +113,13 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   }
 
   const verdict = answer.verdict;
+  // Properties the lead is about, as far as the inventory knows them (crm-assets/propertyLinks.js).
+  const candidates = codesIn(verdict.visit && verdict.visit.property, state && state.profile && state.profile.properties_discussed, lead.propertyInterest);
+  const known = candidates.length ? await inventoryIds(db, tenantId, now) : new Set();
   if (!apply) {
     const d = decideLeadChanges({ lead, verdict, stages, now, run: { model: runRecord.model, chatLen } });
     const { ai, ...fields } = d.patch;
-    return { leadId, ok: true, preview: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, fields, history: d.history.map(h => h.text), usage: runRecord.usage };
+    return { leadId, ok: true, preview: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, fields, links: linksToAdd(lead, candidates, known), history: d.history.map(h => h.text), usage: runRecord.usage };
   }
 
   // Decide again against the lead as it is at write time: a person may have moved it while the
@@ -126,6 +130,8 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     const current = fresh.data();
     const d = decideLeadChanges({ lead: current, verdict, stages, now, run: { model: runRecord.model, chatLen } });
     const patch = { ...d.patch, ai: { ...d.patch.ai, error: null, errorAt: null, inputKey } };
+    const links = linksToAdd(current, candidates, known);
+    if (links.length) patch.propertyCodes = [...(current.propertyCodes || []), ...links];
     t.update(ref, patch);
     d.history.forEach((h, i) => {
       const id = historyId(now + i);
@@ -136,9 +142,24 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
       verdict: { stage: verdict.stage, confidence: verdict.confidence, intent: verdict.intent, evidence: verdict.evidence, next: verdict.next, visit: verdict.visit, line: verdict.line },
       moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped
     });
-    return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, usage: runRecord.usage };
+    return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, links, usage: runRecord.usage };
   });
   return summary;
+}
+
+// Inventory document ids for a tenant, cached per function instance for 10 minutes (ids only).
+const INVENTORY_TTL_MS = 10 * 60000;
+const inventoryCache = new WeakMap(); // db → Map(tenantId → { at, ids })
+export async function inventoryIds(db, tenantId, now = Date.now()) {
+  if (!inventoryCache.has(db)) inventoryCache.set(db, new Map());
+  const perDb = inventoryCache.get(db);
+  const hit = perDb.get(tenantId);
+  if (hit && now - hit.at < INVENTORY_TTL_MS) return hit.ids;
+  const q = db.collection('properties').where('tenantId', '==', tenantId);
+  const snap = await (typeof q.select === 'function' ? q.select() : q).get();
+  const ids = new Set(snap.docs.map(d => d.id));
+  perDb.set(tenantId, { at: now, ids });
+  return ids;
 }
 
 // ── Debounce queue: aiQueue/{leadId} = { tenantId, dueAt, claimedDueAt } ───

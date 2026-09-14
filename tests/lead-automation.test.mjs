@@ -11,6 +11,7 @@ import {
   reachedUpdate, furthestStep, stageAge
 } from '../crm-assets/pipeline.js';
 import { computeDashboardMetrics } from '../crm-assets/dashboardMetrics.js';
+import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
 import { computeAttention, needsAction, teamOwes } from '../crm-assets/leadAttention.js';
 import { buildCaseFile, normaliseVerdict, classifyLead, LEAD_AI_SCHEMA } from '../api/_lead-ai.js';
 import { decideLeadChanges, withinWorkingHours } from '../api/_lead-policy.js';
@@ -531,6 +532,25 @@ section('Requests that cannot change anything are not made');
   await queueLeadAutomation(db, T, 'E2', { now: NOW - 5 * 60000, quietMs: 0 });
   const heldDrain = await drainQueue(db, T, { ...opts, now: NOW });
   check('…and a drain does not even claim queued leads', heldDrain.rateLimited && heldDrain.ran === 0 && db._get('aiQueue/E2').claimedDueAt === null);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section('Lead ↔ property links');
+{
+  eq('Codes are read from free text, once each, upper-cased', codesIn('Shown anr003 and TNAG0001', 'TNAG0001 again; RERA no. TN/29/2021', null), ['ANR003', 'TNAG0001']);
+  const known = new Set(['ANR003', 'TNAG0001', '12']);
+  eq('Only inventory codes that are not linked and were not removed by a person', linksToAdd({ propertyCodes: ['ANR003'], unlinkedPropertyIds: ['TNAG0001'] }, ['ANR003', 'TNAG0001', 'XYZ999'], known), []);
+  eq('…a new known code is added', linksToAdd({}, ['TNAG0001', 'XYZ999', 'TNAG0001'], known), ['TNAG0001']);
+
+  const db = createFakeDb();
+  db._store.set(`pipelines/${T}`, { stages: STAGES });
+  db._store.set('properties/TNAG0001', { tenantId: T, propertyCode: 'TNAG0001', name: 'T Nagar plot' });
+  db._store.set('properties/VLCA002', { tenantId: T, propertyCode: 'VLCA002', name: 'Velachery' });
+  db._store.set('properties/OTHER1', { tenantId: 'someone_else', propertyCode: 'ANR003' });
+  db._store.set('leads/P1', ttLead({ id: 'P1', propertyInterest: 'T Nagar', unlinkedPropertyIds: ['VLCA002'] }));
+  db._store.set('leads/P1/tailortalk/state', { ...caseState, profile: { ...caseState.profile, properties_discussed: 'TNAG0001 (liked), VLCA002 (too far), ANR003' } });
+  const r = await runLeadAutomation(db, T, 'P1', { client: fakeClient(good), model: 'claude-haiku-4-5', now: NOW });
+  eq('An AI read links the inventory codes the lead talked about (not removed ones, not other tenants\')', [r.links, db._get('leads/P1').propertyCodes], [['TNAG0001'], ['TNAG0001']]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
