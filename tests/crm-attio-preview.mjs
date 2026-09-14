@@ -122,6 +122,34 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.close();
 }
 
+// ── 6. Bulk actions ──
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  await page.evaluate(() => toggleView('list'));
+  await page.waitForTimeout(200);
+  ok('No toolbar until a row is ticked', (await page.$('.bulk-bar')) === null);
+  await page.evaluate(() => { toggleBulkLead('A2', true); toggleBulkLead('A3', true); });
+  ok('Ticking rows shows the toolbar with the count', /2 selected/.test((await text(page, '.bulk-bar')).join(' ')));
+  ok('…and highlights the rows', (await page.$$('.list-view tbody tr.sel')).length === 2);
+  await page.screenshot({ path: join(OUT, '10-bulk-bar.png') });
+  await page.evaluate(() => bulkMoveTo('closed_lost'));
+  ok('Moving several to Lost asks one reason for all', await page.evaluate(() => document.getElementById('stageReasonModal').classList.contains('open') && document.getElementById('srTitle').textContent === 'Why are 2 leads lost?'));
+  await page.evaluate(() => { document.getElementById('srReason').value = 'unreachable'; saveStageReason(); });
+  const lost = await page.evaluate(() => ['A2', 'A3'].map(id => { const l = leads.find(x => x.id === id); return [l.stageId, l.lostReason, l.stageChangedBy]; }));
+  ok('…and moves each with that reason, as a person\'s decision', JSON.stringify(lost) === JSON.stringify([['closed_lost', 'unreachable', 'owner@threepin.in'], ['closed_lost', 'unreachable', 'owner@threepin.in']]), JSON.stringify(lost));
+  ok('…logging a history line on each', await page.evaluate(() => ['A2', 'A3'].every(id => window.__history.some(h => h.id === id && /to <b>Lost<\/b> \(Unreachable\)/.test(h.h.text)))));
+  ok('…and clears the selection', await page.evaluate(() => bulkSelected.size === 0) && (await page.$('.bulk-bar')) === null);
+  await page.evaluate(() => { toggleBulkAll(true); bulkFuOpen = true; renderList(); });
+  const n = await page.evaluate(() => bulkSelected.size);
+  ok('Select all ticks every row on screen', n === await page.evaluate(() => listVisibleIds.length) && n > 0, n);
+  await page.evaluate(() => { const d = new Date(Date.now() + 2 * 86400000); document.getElementById('bulkFuDate').value = d.toISOString().slice(0, 10); document.getElementById('bulkFuTime').value = '11:00'; bulkSetFollowUp(); });
+  const fus = await page.evaluate(() => leads.filter(l => l.followUpAt && l.followUpBy === 'owner@threepin.in').length);
+  ok('Setting a follow-up in bulk sets it on each selected lead', fus === n, `${fus} of ${n}`);
+  await page.evaluate(() => { toggleBulkLead('A1', true); setLeadScope('other'); });
+  ok('A filter that hides a ticked lead also unticks it', await page.evaluate(() => !bulkSelected.has('A1')));
+  await page.close();
+}
+
 await browser.close();
 if (errors.length) { console.log('ERRORS:\n' + errors.join('\n')); process.exit(1); }
 console.log('No page errors');

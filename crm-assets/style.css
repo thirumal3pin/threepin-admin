@@ -521,6 +521,17 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .list-view tbody tr{transition:background .1s;}
 .list-view tbody tr:hover td{background:var(--brand-soft);}
 .list-view tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 var(--brand);}
+/* Bulk selection: a narrow tick column and a toolbar that appears only while rows are ticked. */
+.list-view th.lv-sel,.list-view td.lv-sel{width:34px;padding-left:12px;padding-right:0;cursor:default;}
+.lv-sel input{width:15px;height:15px;accent-color:var(--brand);cursor:pointer;}
+.list-view tbody tr.sel td{background:var(--brand-soft);}
+.bulk-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;border:1.5px solid var(--brand-line,var(--border2));border-radius:var(--r3);background:var(--raised);box-shadow:0 4px 14px rgba(0,0,0,.08);font-size:13px;}
+.bulk-bar b{margin-right:4px;}
+.bulk-bar select,.bulk-bar button,.bulk-bar input{font-family:var(--sans);font-size:12.5px;padding:5px 9px;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;}
+.bulk-bar button:hover,.bulk-bar select:hover{border-color:var(--brand);color:var(--ink);}
+.bulk-bar button.quiet{border-color:transparent;background:transparent;color:var(--ink3);}
+.bulk-bar button.primary{background:var(--brand);border-color:var(--brand);color:#fff;}
+.bulk-fu{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .lv-th{display:flex;align-items:center;justify-content:space-between;gap:4px;}
 .lv-th-label{cursor:pointer;display:inline-flex;align-items:center;gap:4px;user-select:none;white-space:nowrap;}
 .lv-th-label:hover{color:var(--ink);}

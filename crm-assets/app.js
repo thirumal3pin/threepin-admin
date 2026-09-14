@@ -1428,6 +1428,84 @@ let listSortDir = 'asc';
 let listColumnFilters = {}; // key -> Set of allowed display values; absent = no filter
 let openFilterCol = null;
 
+// ═══════ BULK ACTIONS (list view) ═══════
+// Tick rows, then move them, set or clear their follow-up in one go. Every lead still goes
+// through the same path as a single change (changeStage / history / persistLead), so the log,
+// milestone dates and the AI's "a person decided" rule are identical to doing it one by one.
+let bulkSelected = new Set();
+let listVisibleIds = [];
+let bulkFuOpen = false;
+function toggleBulkLead(id, on){ if(on) bulkSelected.add(id); else bulkSelected.delete(id); renderList(); }
+function toggleBulkAll(on){ bulkSelected = on ? new Set(listVisibleIds) : new Set(); renderList(); }
+function clearBulkSelection(){ bulkSelected = new Set(); bulkFuOpen = false; renderList(); }
+function bulkBarHtml(){
+  const n = bulkSelected.size;
+  if(!n) return '';
+  const opts = stages.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+  const fu = bulkFuOpen ? `<span class="bulk-fu">
+      <input type="date" id="bulkFuDate" value="${toDateInputValue(new Date(Date.now() + 86400000))}">
+      <input type="time" id="bulkFuTime" value="10:00">
+      <button class="primary" onclick="bulkSetFollowUp()">Set</button>
+    </span>` : '';
+  return `<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
+    <b>${n} selected</b>
+    <select aria-label="Move selected to" onchange="bulkMoveTo(this.value); this.value=''"><option value="">Move to…</option>${opts}</select>
+    <button onclick="bulkFuOpen=!bulkFuOpen; renderList()">Set follow-up</button>${fu}
+    <button onclick="bulkClearFollowUp()">Clear follow-up</button>
+    <button class="quiet" onclick="clearBulkSelection()">Cancel</button>
+  </div>`;
+}
+function bulkLeads(){ return [...bulkSelected].map(id => leads.find(l => l.id === id)).filter(Boolean); }
+function bulkMoveTo(stageId){
+  if(!stageId) return;
+  const kind = stageKindOfId(stageId);
+  const ids = bulkLeads().filter(l => l.stageId !== stageId).map(l => l.id);
+  if(!ids.length){ showToast('Already in that column'); return; }
+  if(kind === 'lost' || kind === 'hold'){ openStageReasonModal(null, stageId, { leadIds: ids }); return; }
+  bulkApplyStage(ids, stageId, {});
+}
+function bulkApplyStage(ids, stageId, opts){
+  ids.forEach(id => changeStage(id, stageId, { ...opts, silent: true }));
+  const st = stageById(stageId);
+  clearBulkSelection();
+  applyFilters();
+  showToast(`✓ Moved ${ids.length} lead${ids.length === 1 ? '' : 's'} to ${st ? st.name : 'the column'}`);
+}
+function bulkSetFollowUp(){
+  const d = document.getElementById('bulkFuDate'), t = document.getElementById('bulkFuTime');
+  const r = computeFollowUpAt(d ? d.value : '', t ? t.value : '');
+  if(!d || !d.value){ showToast('Pick a date'); return; }
+  if(r.error){ showToast(r.error); return; }
+  const now = Date.now();
+  const when = new Date(r.value).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  const list = bulkLeads();
+  list.forEach(l => {
+    if(l.followUpAt === r.value) return;
+    addHistory(l, 'followup', `Next follow-up ${l.followUpAt ? 'changed to' : 'set for'} <b>${when}</b> (bulk)`);
+    l.followUpAt = r.value; l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null;
+    l.updatedAt = now; l.updatedBy = currentUserEmail || l.updatedBy || null; l.lastActionType = 'followup';
+    persistLead(l);
+  });
+  clearBulkSelection();
+  refreshAll();
+  showToast(`✓ Follow-up set for ${list.length} lead${list.length === 1 ? '' : 's'}`);
+}
+function bulkClearFollowUp(){
+  const list = bulkLeads().filter(l => l.followUpAt);
+  if(!list.length){ showToast('None of them has a follow-up'); return; }
+  if(!confirm(`Remove the follow-up from ${list.length} lead${list.length === 1 ? '' : 's'}?`)) return;
+  const now = Date.now();
+  list.forEach(l => {
+    addHistory(l, 'followup-removed', 'Follow-up removed (bulk)');
+    l.followUpAt = null; l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null;
+    l.updatedAt = now; l.updatedBy = currentUserEmail || l.updatedBy || null; l.lastActionType = 'followup-removed';
+    persistLead(l);
+  });
+  clearBulkSelection();
+  refreshAll();
+  showToast(`Follow-up removed from ${list.length} lead${list.length === 1 ? '' : 's'}`);
+}
+
 // Filter dropdowns list values from filteredLeads (the global search/source
 // filter), not from other columns' filters — a lightweight approximation of
 // Excel's cascading filters, good enough for this dataset's size.
@@ -1527,17 +1605,27 @@ function renderList(){
     </th>`;
   }).join('')}</tr>`;
 
+  // Selection only ever covers rows on screen — a filter change drops leads that left the list,
+  // so a bulk action can never touch a lead nobody can see.
+  const visibleIds = new Set(rows.map(l => l.id));
+  bulkSelected = new Set([...bulkSelected].filter(id => visibleIds.has(id)));
+  listVisibleIds = rows.map(l => l.id);
+  const allSel = rows.length > 0 && rows.every(l => bulkSelected.has(l.id));
+  const selHead = `<th class="lv-sel"><input type="checkbox" aria-label="Select all" ${allSel ? 'checked' : ''} onclick="event.stopPropagation();toggleBulkAll(this.checked)"></th>`;
+
   if(!rows.length){
-    wrap.innerHTML = `<div class="list-view"><table><thead>${theadHtml}</thead></table></div>
+    wrap.innerHTML = `<div class="list-view"><table><thead>${theadHtml.replace('<tr>', '<tr>' + selHead)}</thead></table></div>
       <div class="nores"><div class="nores-i">🔍</div><div class="nores-t">No leads match the current column filters</div></div>`;
     return;
   }
 
-  wrap.innerHTML = `<div class="list-view"><table>
-    <thead>${theadHtml}</thead>
+  wrap.innerHTML = `${bulkBarHtml()}<div class="list-view"><table>
+    <thead>${theadHtml.replace('<tr>', '<tr>' + selHead)}</thead>
     <tbody>${rows.map(l=>{
       const stage = stageById(l.stageId);
-      return `<tr onclick="openDetail('${l.id}')">
+      const sel = bulkSelected.has(l.id);
+      return `<tr class="${sel ? 'sel' : ''}" onclick="openDetail('${l.id}')">
+        <td class="lv-sel" onclick="event.stopPropagation()"><input type="checkbox" aria-label="Select ${escapeHtml(l.name)}" ${sel ? 'checked' : ''} onclick="toggleBulkLead('${l.id}', this.checked)"></td>
         <td><b>${escapeHtml(l.name)}</b></td>
         <td>${escapeHtml(l.phone||l.email||'—')}</td>
         <td>${l.channel?channelLabel(l.channel):'—'}</td>
@@ -1746,12 +1834,15 @@ let stageReasonDraft = null;
 function openStageReasonModal(leadId, stageId, opts = {}){
   const P = window.crmPipeline;
   const kind = stageKindOfId(stageId);
-  const l = leads.find(x=>x.id===leadId);
+  // Bulk: one reason for every selected lead.
+  const bulk = Array.isArray(opts.leadIds) && opts.leadIds.length ? opts.leadIds : null;
+  const l = bulk ? { name: `${bulk.length} lead${bulk.length === 1 ? '' : 's'}`, ai: null } : leads.find(x=>x.id===leadId);
   if(!P || !l) return;
-  stageReasonDraft = { leadId, stageId, kind };
+  stageReasonDraft = { leadId, leadIds: bulk, stageId, kind };
   const reasons = kind === 'lost' ? P.LOST_REASONS : P.HOLD_REASONS;
   const pre = opts.reasonHint || (kind === 'lost' ? (l.ai && l.ai.lostReason) : (l.ai && l.ai.holdReason)) || '';
-  document.getElementById('srTitle').textContent = kind === 'lost' ? `Why is ${l.name} lost?` : `Why is ${l.name} on hold?`;
+  const verb = bulk && bulk.length > 1 ? 'are' : 'is';
+  document.getElementById('srTitle').textContent = kind === 'lost' ? `Why ${verb} ${l.name} lost?` : `Why ${verb} ${l.name} on hold?`;
   document.getElementById('srReason').innerHTML = Object.entries(reasons).map(([k, v]) => `<option value="${k}" ${k===pre?'selected':''}>${escapeHtml(v)}</option>`).join('');
   document.getElementById('srUntilRow').style.display = kind === 'hold' ? '' : 'none';
   const hint = opts.untilHint || (l.ai && l.ai.holdUntil) || null;
@@ -1776,6 +1867,7 @@ function saveStageReason(){
     }
   }
   closeStageReasonModal();
+  if(d.leadIds){ bulkApplyStage(d.leadIds, d.stageId, { reason, until }); return; }
   changeStage(d.leadId, d.stageId, { reason, until });
   showToast(d.kind === 'lost' ? 'Moved to Lost' : 'Moved to On hold');
 }
