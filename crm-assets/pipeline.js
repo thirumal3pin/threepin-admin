@@ -23,7 +23,7 @@ export const STAGE_DEFS = [
   { key: 'new',           name: 'New',           kind: 'open', color: '#1D4ED8', step: 0, targetDays: 2,
     rule: 'Nothing specific sent yet' },
   { key: 'options',       name: 'Options sent',  kind: 'open', color: '#0891B2', step: 1, targetDays: 7,
-    rule: 'We sent a property, brochure or price' },
+    rule: 'Sent a property, details or location — they are weighing it up' },
   { key: 'visit_pending', name: 'Visit planned', kind: 'open', color: '#6D28D9', step: 2, targetDays: 5,
     rule: 'Visit asked for or agreed — not done yet' },
   { key: 'visit_done',    name: 'Visited',       kind: 'open', color: '#7C3AED', step: 3, targetDays: 4,

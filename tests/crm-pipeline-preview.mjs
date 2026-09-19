@@ -155,7 +155,9 @@ const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)]
   await page.evaluate(() => openDetail('L2'));
   await page.waitForTimeout(300);
   const stand = (await text(page, '#dpStand')).join(' ');
-  ok('Lead page shows the column and its rule', /Options sent.*We sent a property, brochure or price/.test(stand), stand.slice(0, 200));
+  // The rule now says what the column means for the LEAD (they are weighing it
+  // up), not just what we did — asking for more details belongs here too.
+  ok('Lead page shows the column and its rule', /Options sent.*Sent a property, details or location/.test(stand), stand.slice(0, 200));
   ok('…the next step with its due time', /Next step.*Share final price for ANRA002/.test(stand));
   ok('…and the AI suggestion with why it did not move', /AI suggests: Negotiating/.test(stand) && /not moved automatically: evidence not strong enough/.test(stand));
   await page.locator('#dpStandSec').screenshot({ path: join(OUT, '03-lead-suggestion.png') });

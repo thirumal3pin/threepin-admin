@@ -108,7 +108,14 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
   const lastAnyMsg = Math.max(lastLeadMsg, tt.lastReplyAt || 0, lastNoteAt);
   const decidedByPersonAt = humanSetter(lead.stageChangedBy) ? (lead.stageChangedAt || 0)
     : (!lead.stageChangedBy && lead.stageChangedAt && humanSetter(lead.updatedBy) ? lead.stageChangedAt : 0);
-  const newEvidenceSincePerson = lastAnyMsg > decidedByPersonAt;
+  // lastLeadMsg, NOT lastAnyMsg. For a chat lead that is the lead's own
+  // messages; for a hand-typed lead it is the team's notes, which are the only
+  // evidence there is. The difference matters: a coordinator who sets the
+  // column and writes "visited, need the feedback" a minute later was, with
+  // lastAnyMsg, producing "new evidence" that unlocked overriding the column
+  // they had just chosen. The team's own words are never grounds to overrule
+  // the team — only the lead saying something new is.
+  const newEvidenceSincePerson = lastLeadMsg > decidedByPersonAt;
   const dismissedAt = (ai.dismissed || {})[target] || 0;
   const dismissedNoNews = dismissedAt && dismissedAt >= lastLeadMsg;
 
@@ -203,7 +210,9 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
       const existing = lead.followUpAt || null;
       const setByPerson = humanSetter(lead.followUpBy) || (!lead.followUpBy && !!existing);
       const personSetAt = lead.followUpSetAt || lead.updatedAt || 0;
-      const personStillCurrent = setByPerson && personSetAt >= lastAnyMsg;
+        // Same rule as the column above: a note the team wrote itself does not
+    // make the team's own follow-up stale.
+    const personStillCurrent = setByPerson && personSetAt >= lastLeadMsg;
       const earlierAlready = existing && existing <= pick.at + 30 * MIN;
       const same = existing && Math.abs(existing - pick.at) < 15 * MIN;
       if (!same && !earlierAlready && !personStillCurrent) {

@@ -318,6 +318,46 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   check('…but not on a note older than the person\'s stage choice', !decide(oldNote, visitedV).moved);
 }
 {
+  // ── The Kiran Sooryaa case, from production ──
+  // A coordinator set Visited at 02:41 pm and wrote "visited, need the
+  // feedback" at 02:42 pm. The note counted as new evidence, which unlocked
+  // overriding the column they had just chosen by hand — and the AI then put
+  // the lead in Negotiating, on a conversation where the only mention of price
+  // in 83 messages was a property card the assistant itself had sent.
+  const justSet = ttLead({
+    stageId: sid('visit_done'),
+    stageChangedAt: NOW - 61 * 60000,          // person set the column an hour ago
+    stageChangedBy: 'thirumal@threepin.in',
+    lastNote: { text: 'visited , need the feedback', createdAt: NOW - 60 * 60000 },
+    updatedAt: NOW - 60 * 60000, updatedBy: 'thirumal@threepin.in',
+    tt: { id: 'x1', category: 'sales', integration: 'whatsapp', lastMessageAt: NOW - 25 * HOUR, lastReplyAt: NOW - 25 * HOUR },
+  });
+  const negV = verdict({ stage: 'negotiation', confidence: 'high', visit: { status: 'done', at: null } });
+  const d = decide(justSet, negV);
+  check('A team note does not unlock overriding the column that team member just set',
+    !d.moved && d.suggested === 'negotiation', JSON.stringify({ moved: d.moved, suggested: d.suggested }));
+  eq('…and the reason says so', d.patch.ai.suggestion.why, 'a person chose this column after the last message');
+
+  // The lead speaking again is still news, and still moves it.
+  const leadSpoke = { ...justSet, tt: { ...justSet.tt, lastMessageAt: NOW - 60000 } };
+  eq('…but the lead writing again does move it', decide(leadSpoke, negV).moved, { from: 'visit_done', to: 'negotiation' });
+
+  // A hand-typed lead has no chat, so its notes remain the only evidence.
+  const manualNote = { id: 'M9', tenantId: T, stageId: sid('visit_pending'), stageChangedAt: NOW - 10 * DAY,
+    updatedBy: 'agent.a@example.com', createdAt: NOW - 20 * DAY, updatedAt: NOW - 2 * DAY,
+    lastNote: { text: 'Visited the site', createdAt: NOW - 2 * DAY } };
+  eq('A hand-typed lead still moves on its notes',
+    decide(manualNote, verdict({ stage: 'visit_done', confidence: 'high', next: { owner: 'team', action: 'Call for feedback', kind: 'collect_feedback', dueAt: null }, visit: { status: 'done', at: null } })).moved,
+    { from: 'visit_pending', to: 'visit_done' });
+
+  // And a follow-up the same person set is not restated by their own note.
+  const fuSet = ttLead({ stageId: sid('visit_done'), followUpAt: NOW + 2 * HOUR, followUpBy: 'thirumal@threepin.in',
+    followUpSetAt: NOW - 61 * 60000, lastNote: { text: 'called, will revert', createdAt: NOW - 60 * 60000 },
+    tt: { id: 'x1', category: 'sales', lastMessageAt: NOW - 25 * HOUR } });
+  check('A person’s follow-up is not overwritten because they also left a note',
+    !('followUpAt' in decide(fuSet, verdict({ stage: 'visit_done' })).patch));
+}
+{
   const d = decide(ttLead({ stageId: sid('won') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_interested' }));
   check('A won deal is never moved automatically', !d.moved);
   const vendor = decide(ttLead({ tt: { id: 'v', category: 'others', lastMessageAt: NOW - HOUR } }), verdict());
