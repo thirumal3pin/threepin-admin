@@ -251,6 +251,42 @@ async function run(engine, name, viewport) {
   ok('…with one timestamp, not one per line', tl.stampsInFirstRow === 1, String(tl.stampsInFirstRow));
   ok('…and the note leads it', /visited , need the feedback/.test(tl.firstRowText), tl.firstRowText);
 
+  // A timeline carrying one of each kind, to look at and to check.
+  const kinds = await page.evaluate(async () => {
+    const l = leads.find(x => x.id === 'L1');
+    const T = Date.now();
+    l.notes = [{ id:'n1', text:'visited , need the feedback', createdAt: T - 600000, by:'thirumal@threepin.in' }];
+    l.history = [
+      { id:'h1', type:'followed-up', text:'Followed up · next <b>Sep 20, 03:42 PM</b>', at: T - 600000, by:'thirumal@threepin.in' },
+      { id:'h2', type:'stage', text:'Stage changed from <b>Visit planned</b> to <b>Visited</b>', at: T - 900000, by:'thirumal@threepin.in' },
+      { id:'h3', type:'followed-up', text:'Handled: <b>Call Kiran to confirm Fri 18 Sep 3:30 PM visit to IYYA0001</b>', at: T - 900000, by:'thirumal@threepin.in' },
+      { id:'h4', type:'tailortalk', text:'TailorTalk stage: <b>Actively looking, next action: confirm the site visit date with the lead</b> → <b>Actively looking, next action is lead to confirm</b>', at: T - 4000000, by:'TailorTalk' },
+      { id:'h5', type:'tailortalk', text:'AI paused — a team member has taken over the chat in TailorTalk', at: T - 4000000, by:'TailorTalk' },
+      { id:'h6', type:'field', text:'Budget changed from <b>3.3 Cr</b> to <b>3.6 Cr</b>', at: T - 5000000, by:'thirumal@threepin.in' },
+      { id:'h7', type:'stage', text:'🤖 Moved from <b>Options sent</b> to <b>Visit planned</b>', at: T - 6000000, by:'AI' },
+    ];
+    setTimelineFilter('all');
+    renderTimeline(l);
+    await new Promise(r => setTimeout(r, 300));
+    const rows = [...document.querySelectorAll('#timelinePanel .tl-item')];
+    return {
+      labels: [...document.querySelectorAll('#timelinePanel .tl-kind')].map(k => k.textContent.trim()),
+      rowsWithMeta: rows.filter(r => r.querySelector('.tl-meta')).length,
+      rows: rows.length,
+      // Each moment must state its time once, above the things that happened.
+      metaFirst: rows.every(r => { const b = r.querySelector('.tl-body'); return !b.querySelector('.tl-meta') || b.firstElementChild.classList.contains('tl-meta'); }),
+      deleteOutsideText: [...document.querySelectorAll('#timelinePanel .tl-text')].every(t => !t.querySelector('.tl-del')),
+    };
+  });
+  console.log('    kinds:', JSON.stringify(kinds));
+  ok('every line names its kind', kinds.labels.length >= 7, JSON.stringify(kinds.labels));
+  ok('the kinds are told apart', new Set(kinds.labels).size >= 5, JSON.stringify([...new Set(kinds.labels)]));
+  ok('an AI move reads as AI, not just a stage change', kinds.labels.includes('AI'), JSON.stringify(kinds.labels));
+  ok('TailorTalk updates are labelled', kinds.labels.filter(x => x === 'TailorTalk').length >= 2, JSON.stringify(kinds.labels));
+  ok('the time leads each moment', kinds.metaFirst, String(kinds.metaFirst));
+  ok('the delete control stays out of the note text', kinds.deleteOutsideText, String(kinds.deleteOutsideText));
+  await page.locator('#dpTimelineSec').screenshot({ path: join(OUT, `timeline-${name.replace(/[^a-z0-9]+/gi,'-')}.png`) });
+
   await page.screenshot({ path: join(OUT, `conversation-${name.replace(/[^a-z0-9]+/gi,'-')}.png`) });
   await browser.close();
 }

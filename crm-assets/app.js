@@ -1543,6 +1543,19 @@ let tlFilter = 'all';
 try{ const f = localStorage.getItem(TL_FILTER_KEY); if(TL_FILTERS.some(x => x.key === f)) tlFilter = f; }catch(e){}
 const tlExpanded = new Set();
 
+// Every row says what kind of event it is, in words. Before this the only
+// identification was a 12px emoji in a circle — and TailorTalk used the same
+// 💬 for a stage change, a paused AI and a day's messages, so three different
+// kinds of thing were indistinguishable until you read all of them.
+// Order matters: an AI stage move is tagged both 'ai' and 'stage', and "AI" is
+// the more useful of the two to lead with.
+const TL_KIND_ORDER = ['notes', 'ai', 'tailortalk', 'stage', 'followups', 'edits'];
+const TL_KIND_LABEL = { notes:'Note', ai:'AI', tailortalk:'TailorTalk', stage:'Stage', followups:'Follow-up', edits:'Edit' };
+function timelineKind(item){
+  const key = TL_KIND_ORDER.find(k => item.tags.includes(k));
+  return { key: key || 'edits', label: TL_KIND_LABEL[key] || 'Event' };
+}
+
 function historyTags(h){
   const text = String(h.text || '');
   const tags = [];
@@ -1639,16 +1652,19 @@ function renderTimeline(l){
     // The control is a sibling of the text, never inside it — otherwise the
     // note's own text reads "Sent the agreement draftDelete" to anything that
     // looks at it, tests and screen readers alike.
-    const body = ordered.map(i =>
-      `<div class="tl-line">
+    const body = ordered.map(i => {
+      const k = timelineKind(i);
+      return `<div class="tl-line tl-k-${k.key}">
+        <div class="tl-kind">${k.label}</div>
         <div class="tl-text">${i.html}</div>
         ${i.noteId ? `<button type="button" class="tl-del" onclick="deleteNote('${l.id}','${i.noteId}')">Delete</button>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     return `${head}<div class="tl-item${tone}${g.lines.length > 1 ? ' tl-multi' : ''}">
       <div class="tl-ico" aria-hidden="true">${lead.icon}</div>
       <div class="tl-body">
-        ${body}
         ${meta ? `<div class="tl-meta">${meta}</div>` : ''}
+        ${body}
       </div>
     </div>`;
   }).join('') + (groups.length > shown.length ? `<button type="button" class="tt-btn tl-more" onclick="tlExpanded.add('${l.id}');renderTimeline(leads.find(x=>x.id==='${l.id}'))">Show all ${groups.length}</button>` : '');
