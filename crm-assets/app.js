@@ -425,6 +425,15 @@ function attentionFor(l){
 function topAttentionUi(l){ return attentionFor(l)[0] || null; }
 function needsActionUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.medium); }
 function isUrgentUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.high); }
+
+// ── What earns red ──
+// Severity alone was too broad a test for colour: every TailorTalk signal is
+// 'high', so nearly every chat lead carried an alert rail and the colour stopped
+// meaning anything. Red on the board now means exactly one thing — something is
+// past the time it was due — which is also precisely what the Overdue filter
+// selects, so the board and the filter can never tell you different stories.
+const OVERDUE_KEYS = new Set(['promise_overdue', 'followup_overdue', 'visit_outcome', 'window_closing']);
+function isOverdueUi(l){ return attentionFor(l).some(a => OVERDUE_KEYS.has(a.key)); }
 function stageKeyOfId(stageId){
   const s = stageById(stageId);
   return s && window.crmPipeline ? window.crmPipeline.stageKeyOf(s) : null;
@@ -502,10 +511,28 @@ function nextStepOf(l){
 const STEP_KEYS = new Set(['team_owes', 'promise_overdue', 'followup_overdue']);
 
 // ── Focus filters: the "what should I do now" views, available in every scope ──
+// End of the working day in IST — "today" has to mean the team's today, not
+// the browser's UTC day, or a 9 PM follow-up drops out of the list at 5:30.
+function endOfTodayIst(now){
+  const IST = 5.5 * 3600000, DAY = 86400000;
+  return Math.floor(((now || Date.now()) + IST) / DAY) * DAY - IST + DAY - 1;
+}
 const FOCUS_FILTERS = [
   { key:'mentions', label:'@ Mentioned me', test: l => !!myOpenMention(l), tone:'warn', onlyWhenAny: true },
   { key:'action',   label:'Needs action',   test: l => needsActionUi(l), tone:'warn' },
-  { key:'overdue',  label:'Overdue',        test: l => attentionFor(l).some(a => a.key==='promise_overdue' || a.key==='followup_overdue' || a.key==='visit_outcome' || a.key==='window_closing'), tone:'bad' },
+  { key:'overdue',  label:'Overdue',        test: l => isOverdueUi(l), tone:'bad' },
+  // Everything a person has to get through before going home: anything due by
+  // the end of today, overdue included, since an overdue one is still today's.
+  { key:'today',    label:'Due today',      test: l => {
+      const end = endOfTodayIst();
+      if(l.followUpAt && l.followUpAt <= end) return true;
+      const owes = window.leadAttention ? window.leadAttention.teamOwes(l) : null;
+      if(owes && owes.dueAt && owes.dueAt <= end) return true;
+      const v = visitAtOf(l);
+      return !!(v && v <= end);
+    }, tone:'warn' },
+  // Visits booked from now on, in the order they happen — the day's run sheet.
+  { key:'visits',   label:'Site visits',    test: l => { const v = visitAtOf(l); return !!v && v > Date.now() - 12*3600000; } },
   { key:'ai_moved', label:'Moved by AI today', test: l => !!(l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 24*3600000) },
   { key:'review',   label:'AI suggestions', test: l => attentionFor(l).some(a => a.key==='ai_suggestion') }
 ];
@@ -1010,6 +1037,126 @@ function ttConversationHtml(l, st){
     <div class="tt-foot">Reply from TailorTalk’s inbox — your reply appears here with TailorTalk’s next update.</div>`;
 }
 
+// ═══════ CONVERSATION PANE ═══════
+// On a wide screen the chat belongs BESIDE the lead, not buried under a tab:
+// reading what was said while editing the record is the whole job. Below
+// DP_SPLIT_MIN there is no room for two columns, so it becomes a sheet that
+// takes the screen instead — a toggle, not a squeeze.
+const DP_SPLIT_MIN = 1100;
+const DP_SIDE_KEY = 'crmDpSideW';
+const DP_PANE_KEY = 'crmConvPane';
+let convPaneOpen = true;       // wide-screen preference, remembered
+let convSheetOpen = false;     // narrow-screen, this viewing only
+try{ convPaneOpen = localStorage.getItem(DP_PANE_KEY) !== 'off'; }catch(e){}
+
+function dpIsWide(){ return window.innerWidth >= DP_SPLIT_MIN; }
+function conversationPaneActive(){
+  const l = currentDetailId ? leads.find(x => x.id === currentDetailId) : null;
+  if(!l || !isTtLead(l)) return false;
+  return dpIsWide() ? convPaneOpen : convSheetOpen;
+}
+function toggleConversationPane(){
+  if(dpIsWide()){
+    convPaneOpen = !convPaneOpen;
+    try{ localStorage.setItem(DP_PANE_KEY, convPaneOpen ? 'on' : 'off'); }catch(e){}
+  } else {
+    convSheetOpen = !convSheetOpen;
+  }
+  syncConversationPane();
+  // Re-render so the inline tab set picks the conversation back up when the
+  // pane gives it away, and drops it when the pane takes it.
+  const l = currentDetailId ? leads.find(x => x.id === currentDetailId) : null;
+  if(l) renderTtSection(l);
+}
+function syncConversationPane(){
+  const split = document.getElementById('dpSplit');
+  const btn = document.getElementById('dpConvBtn');
+  if(!split) return;
+  const l = currentDetailId ? leads.find(x => x.id === currentDetailId) : null;
+  const has = !!(l && isTtLead(l));
+  if(btn){
+    btn.hidden = !has;
+    btn.setAttribute('aria-pressed', has && conversationPaneActive() ? 'true' : 'false');
+  }
+  const on = has && conversationPaneActive();
+  split.classList.toggle('split', on && dpIsWide());
+  split.classList.toggle('sheet', on && !dpIsWide());
+  if(on) renderConversationPane(l);
+  else { const b = document.getElementById('dpSideBody'); if(b) b.innerHTML = ''; }
+}
+function renderConversationPane(l){
+  const box = document.getElementById('dpSideBody');
+  if(!box) return;
+  const cached = ttStateCache.get(l.id);
+  const st = cached && cached.state;
+  if(!cached) box.innerHTML = '<div class="empty-mini">Loading the conversation…</div>';
+  else if(cached.error === 'rules') box.innerHTML = '<div class="empty-mini">The conversation can\'t be read — the Firestore rules need updating.</div>';
+  else if(cached.error) box.innerHTML = '<div class="empty-mini">Couldn\'t load the conversation — check your connection.</div>';
+  else if(!st) box.innerHTML = '<div class="empty-mini">No conversation yet — it arrives with the next update.</div>';
+  else box.innerHTML = ttConversationHtml(l, st);
+  if(!ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
+}
+
+// ── The draggable divider ──
+function initDpResizer(){
+  const rz = document.getElementById('dpResizer');
+  const split = document.getElementById('dpSplit');
+  if(!rz || !split || rz.dataset.wired) return;
+  rz.dataset.wired = '1';
+
+  let stored = null;
+  try{ stored = parseFloat(localStorage.getItem(DP_SIDE_KEY)); }catch(e){}
+  const apply = pct => {
+    // Clamped so neither side can be dragged away to nothing.
+    const v = Math.min(62, Math.max(22, pct));
+    document.documentElement.style.setProperty('--dp-side-w', v + '%');
+    rz.setAttribute('aria-valuenow', Math.round(v));
+    try{ localStorage.setItem(DP_SIDE_KEY, String(v)); }catch(e){}
+    return v;
+  };
+  apply(isFinite(stored) ? stored : 34);
+
+  const pctFromX = x => {
+    const r = split.getBoundingClientRect();
+    return (1 - (x - r.left) / r.width) * 100;
+  };
+  const onMove = e => {
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    apply(pctFromX(x));
+  };
+  const stop = () => {
+    rz.classList.remove('dragging');
+    document.body.classList.remove('dp-resizing');
+    removeEventListener('mousemove', onMove);
+    removeEventListener('touchmove', onMove);
+    removeEventListener('mouseup', stop);
+    removeEventListener('touchend', stop);
+  };
+  const start = e => {
+    e.preventDefault();
+    rz.classList.add('dragging');
+    document.body.classList.add('dp-resizing');
+    addEventListener('mousemove', onMove);
+    addEventListener('touchmove', onMove, { passive:false });
+    addEventListener('mouseup', stop);
+    addEventListener('touchend', stop);
+  };
+  rz.addEventListener('mousedown', start);
+  rz.addEventListener('touchstart', start, { passive:false });
+  // A divider that can only be dragged is a divider a keyboard cannot move.
+  rz.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 8 : 2;
+    if(e.key === 'ArrowLeft'){ e.preventDefault(); apply(parseFloat(rz.getAttribute('aria-valuenow')) + step); }
+    else if(e.key === 'ArrowRight'){ e.preventDefault(); apply(parseFloat(rz.getAttribute('aria-valuenow')) - step); }
+    else if(e.key === 'Home'){ e.preventDefault(); apply(34); }
+  });
+  // Double-click restores the default split, the usual escape hatch from a
+  // divider dragged somewhere unhelpful.
+  rz.addEventListener('dblclick', () => apply(34));
+}
+// Crossing the breakpoint has to re-decide between split and sheet.
+addEventListener('resize', () => { if(currentDetailId) syncConversationPane(); });
+
 function renderTtSection(l){
   const sec = document.getElementById('dpTtSec');
   if(!sec) return;
@@ -1053,23 +1200,33 @@ function renderTtSection(l){
   if(t.owner) stats.push(ttStat('TailorTalk owner', escapeHtml(t.owner)));
 
   // 4. Overview · Conversation (the day-by-day summary is in the Timeline).
+  // While the side pane owns the conversation, showing it here as well would
+  // put the same chat on screen twice.
+  const paneHasChat = conversationPaneActive();
+  const tab2 = paneHasChat ? 'overview' : ttTab;
   let panel;
   if(!cached) panel = '<div class="empty-mini">Loading TailorTalk details…</div>';
   else if(cached.error==='rules') panel = '<div class="empty-mini">TailorTalk details can\'t be read — the Firestore rules need updating.</div>';
   else if(cached.error) panel = '<div class="empty-mini">Couldn\'t load TailorTalk details — check your connection.</div>';
   else if(!st) panel = '<div class="empty-mini">No TailorTalk details yet — they arrive with the next update.</div>';
-  else panel = ttTab==='conversation' ? ttConversationHtml(l, st) : ttOverviewHtml(l, st);
+  else panel = tab2==='conversation' ? ttConversationHtml(l, st) : ttOverviewHtml(l, st);
 
   const msgCount = st && st.chat ? st.chat.filter(m => !isNoReplyMarker(m)).length : null;
-  const tab = (key, label, n) => `<button type="button" role="tab" class="tt-tab${ttTab===key?' at':''}" aria-selected="${ttTab===key}" onclick="setTtTab('${key}')">${label}${n!=null?`<span class="tt-tab-n">${n}</span>`:''}</button>`;
+  const tab = (key, label, n) => `<button type="button" role="tab" class="tt-tab${tab2===key?' at':''}" aria-selected="${tab2===key}" onclick="setTtTab('${key}')">${label}${n!=null?`<span class="tt-tab-n">${n}</span>`:''}</button>`;
+  const tabs = paneHasChat
+    ? `<div class="tt-tabs" role="tablist">${tab('overview','Overview')}</div>`
+    : `<div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('conversation','Conversation', msgCount)}</div>`;
 
   document.getElementById('dpTt').innerHTML = `
     ${says}
     <div class="tt-strip">${stats.join('')}</div>
-    <div class="tt-tabs" role="tablist">${tab('overview','Overview')}${tab('conversation','Conversation', msgCount)}</div>
+    ${tabs}
     <div class="tt-panel" role="tabpanel">${panel}</div>
     <div class="tt-foot">Last change from TailorTalk ${timeAgo(t.syncedAt || t.lastEventAt)}</div>`;
-  if(ttTab==='conversation' && !ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
+  if(tab2==='conversation' && !ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
+  // Data arrives async, so the pane is refreshed from the same place the
+  // inline section is — never left showing "Loading…" after the chat lands.
+  if(paneHasChat) renderConversationPane(l);
 }
 
 // ═══════ NAV: view switching, view dropdown, more menu ═══════
@@ -1096,9 +1253,24 @@ function toggleViewDropdown(e){
   if(e) e.stopPropagation();
   document.getElementById('viewDd').classList.toggle('open');
   document.getElementById('moreDd').classList.remove('open');
+  syncDropdownAria();
+}
+// A trigger that claims aria-expanded="false" while its menu is open is worse
+// than one that says nothing, so every path that opens or closes a menu ends
+// here rather than each setting the attribute itself.
+function syncDropdownAria(){
+  const pairs = [['viewDd','.view-dd-btn'],['moreDd','.menu-btn']];
+  pairs.forEach(([id,sel])=>{
+    const dd = document.getElementById(id);
+    const btn = dd && dd.querySelector(sel);
+    if(btn) btn.setAttribute('aria-expanded', dd.classList.contains('open') ? 'true' : 'false');
+  });
+  const nav = document.getElementById('hdrNav'), navBtn = document.getElementById('hdrMenuBtn');
+  if(nav && navBtn) navBtn.setAttribute('aria-expanded', nav.classList.contains('mobile-open') ? 'true' : 'false');
 }
 function closeViewDropdown(){
   document.getElementById('viewDd').classList.remove('open');
+  syncDropdownAria();
 }
 function toggleMoreMenu(e){
   if(e) e.stopPropagation();
@@ -1114,6 +1286,7 @@ function toggleHdrNav(e){
   if(hdrNav) hdrNav.classList.toggle('mobile-open');
   document.getElementById('viewDd').classList.remove('open');
   document.getElementById('moreDd').classList.remove('open');
+  syncDropdownAria();
 }
 document.addEventListener('click', (e)=>{
   const hdrNav = document.querySelector('.hdr-nav');
@@ -1458,6 +1631,106 @@ function renderFollowUpSpotlight(l){
 }
 
 // ═══════ KANBAN BOARD ═══════
+
+// ── Where a site visit sits in time ──
+// Two different dates, and the difference matters: when the visit is BOOKED
+// for, versus when the lead first asked for one. A visit asked for nine days
+// ago and still unbooked is the thing that goes cold.
+function visitAtOf(l){ return (l && l.ai && l.ai.visit && l.ai.visit.at) || null; }
+function visitAskedAtOf(l){
+  if(!l) return null;
+  const sig = l.tt && l.tt.signals && l.tt.signals.site_visit;
+  if(sig && sig.at) return sig.at;
+  // No chat signal: the moment it entered the visit column is the best record
+  // we have of when a visit was first on the table.
+  if(stageKeyOfId(l.stageId) === 'visit_pending') return l.stageChangedAt || l.createdAt || null;
+  return null;
+}
+
+// ── Per-column sort ──
+// The board's default order answers "what should I touch first". These are the
+// other questions a person actually asks of one column: who moved in here
+// recently, who has just messaged, whose visit is next. Each column remembers
+// its own choice, because the question differs by column — "visit time" is the
+// point of the Visit planned column and meaningless in New.
+const BOARD_SORTS = [
+  { key:'smart',   label:'Most urgent',      meta:null },
+  { key:'moved',   label:'Recently moved',   meta:l => l.stageChangedAt ? 'moved ' + timeAgo(l.stageChangedAt) : null,
+    val:l => -(l.stageChangedAt || l.createdAt || 0) },
+  { key:'message', label:'Recent message',   meta:l => (l.tt && l.tt.lastMessageAt) ? '💬 ' + timeAgo(l.tt.lastMessageAt) : null,
+    val:l => -((l.tt && l.tt.lastMessageAt) || 0) },
+  { key:'visit',   label:'Visit time',       meta:l => visitAtOf(l) ? '📍 visit ' + fmtDue(visitAtOf(l)) : null,
+    val:l => visitAtOf(l) || Infinity },
+  { key:'asked',   label:'Visit asked',      meta:l => visitAskedAtOf(l) ? '📍 asked ' + timeAgo(visitAskedAtOf(l)) : null,
+    val:l => -(visitAskedAtOf(l) || 0) },
+  { key:'followup',label:'Follow-up due',    meta:l => l.followUpAt ? '📅 ' + fmtDue(l.followUpAt) : null,
+    val:l => l.followUpAt || Infinity },
+  { key:'created', label:'Newest first',     meta:l => l.createdAt ? 'added ' + timeAgo(l.createdAt) : null,
+    val:l => -(l.createdAt || 0) },
+  { key:'name',    label:'Name A–Z',         meta:null, val:l => (l.name || '').toLowerCase() }
+];
+const BOARD_SORT_KEY = 'crmBoardSort';
+let boardSort = {};
+try{ boardSort = JSON.parse(localStorage.getItem(BOARD_SORT_KEY) || '{}') || {}; }catch(e){ boardSort = {}; }
+let openSortCol = null;
+
+function boardSortOf(stageId){
+  return BOARD_SORTS.find(s => s.key === boardSort[stageId]) || BOARD_SORTS[0];
+}
+function setBoardSort(stageId, key){
+  if(key === 'smart') delete boardSort[stageId]; else boardSort[stageId] = key;
+  openSortCol = null;
+  try{ localStorage.setItem(BOARD_SORT_KEY, JSON.stringify(boardSort)); }catch(e){}
+  renderBoard();
+}
+function toggleSortMenu(stageId, ev){
+  if(ev) ev.stopPropagation();
+  openSortCol = openSortCol === stageId ? null : stageId;
+  renderBoard();
+}
+// Reset every column at once — eight menus is a lot to undo one at a time.
+function resetAllBoardSorts(){
+  boardSort = {};
+  openSortCol = null;
+  try{ localStorage.removeItem(BOARD_SORT_KEY); }catch(e){}
+  renderBoard();
+  showToast('Every column back to Most urgent');
+}
+document.addEventListener('click', () => { if(openSortCol){ openSortCol = null; renderBoard(); } });
+
+function sortColumnLeads(list, sort){
+  if(sort.key === 'smart'){
+    // Most urgent first, then the most recently active — what a person should look at first.
+    return list.sort((a, b) => {
+      const ra = topAttentionUi(a), rb = topAttentionUi(b);
+      const sa = ra ? SEV_RANK[ra.severity] : -1, sb = rb ? SEV_RANK[rb.severity] : -1;
+      if(sb !== sa) return sb - sa;
+      const ta = Math.max(a.updatedAt||0, (a.tt && a.tt.lastMessageAt)||0), tb = Math.max(b.updatedAt||0, (b.tt && b.tt.lastMessageAt)||0);
+      return tb - ta;
+    });
+  }
+  return list.sort((a, b) => {
+    const av = sort.val(a), bv = sort.val(b);
+    // Leads with no value for this sort sink to the bottom rather than jumbling
+    // through the middle — an empty date is not "the oldest date".
+    if(typeof av === 'number' && typeof bv === 'number'){
+      if(!isFinite(av) && !isFinite(bv)) return 0;
+      if(!isFinite(av)) return 1;
+      if(!isFinite(bv)) return -1;
+      return av - bv;
+    }
+    return String(av).localeCompare(String(bv));
+  });
+}
+
+function sortMenuHtml(stage, active){
+  if(openSortCol !== stage.id) return '';
+  return `<div class="kcol-sort-pop" role="menu" onclick="event.stopPropagation()">
+    ${BOARD_SORTS.map(s => `<button type="button" role="menuitemradio" aria-checked="${s.key===active.key}" class="kcol-sort-opt${s.key===active.key?' at':''}" onclick="setBoardSort('${stage.id}','${s.key}')">${escapeHtml(s.label)}</button>`).join('')}
+    ${Object.keys(boardSort).length ? '<div class="dd-sep"></div><button type="button" role="menuitem" class="kcol-sort-opt reset" onclick="resetAllBoardSorts()">Reset every column</button>' : ''}
+  </div>`;
+}
+
 function renderBoard(){
   const board = document.getElementById('kanbanView');
   if(!stages.length){
@@ -1465,15 +1738,11 @@ function renderBoard(){
     return;
   }
   board.innerHTML = `<div class="kanban">${stages.map(stage=>{
-    // Most urgent first, then the most recently active — what a person should look at first.
-    const colLeads = filteredLeads.filter(l=>l.stageId===stage.id).sort((a, b) => {
-      const ra = topAttentionUi(a), rb = topAttentionUi(b);
-      const sa = ra ? SEV_RANK[ra.severity] : -1, sb = rb ? SEV_RANK[rb.severity] : -1;
-      if(sb !== sa) return sb - sa;
-      const ta = Math.max(a.updatedAt||0, (a.tt && a.tt.lastMessageAt)||0), tb = Math.max(b.updatedAt||0, (b.tt && b.tt.lastMessageAt)||0);
-      return tb - ta;
-    });
-    const urgent = colLeads.filter(isUrgentUi).length;
+    const sort = boardSortOf(stage.id);
+    const colLeads = sortColumnLeads(filteredLeads.filter(l=>l.stageId===stage.id), sort);
+    // The badge counts what is actually past its time, so it agrees exactly with
+    // the Overdue filter chip instead of offering a second, different number.
+    const overdue = colLeads.filter(isOverdueUi).length;
     const rule = stageRuleOf(stage);
     const kind = window.crmPipeline ? window.crmPipeline.stageKindOf(stage) : null;
     return `
@@ -1484,15 +1753,55 @@ function renderBoard(){
           ${rule ? `<div class="kcol-rule">${escapeHtml(rule)}</div>` : ''}
         </div>
         <div class="kcol-counts">
-          ${urgent ? `<span class="kcol-urgent" title="${urgent} need action now">${urgent}</span>` : ''}
+          ${overdue ? `<span class="kcol-urgent" title="${overdue} past due in this column">${overdue}</span>` : ''}
           <div class="kcol-count">${colLeads.length}</div>
+          <div class="kcol-sort${sort.key!=='smart'?' set':''}">
+            <button type="button" class="kcol-sort-btn" aria-haspopup="true" aria-expanded="${openSortCol===stage.id}"
+                    aria-label="Sort ${escapeHtml(stage.name)} — currently ${escapeHtml(sort.label)}"
+                    title="Sorted by ${escapeHtml(sort.label)}" onclick="toggleSortMenu('${stage.id}',event)">⇅</button>
+            ${sortMenuHtml(stage, sort)}
+          </div>
         </div>
       </div>
+      ${sort.key!=='smart' ? `<button type="button" class="kcol-sort-tag" onclick="setBoardSort('${stage.id}','smart')" title="Back to Most urgent">${escapeHtml(sort.label)} <span aria-hidden="true">×</span></button>` : ''}
       <div class="kcol-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
-        ${colLeads.length ? colLeads.map(l=>leadCardHtml(l)).join('') : '<div class="kcol-empty">No leads</div>'}
+        ${colLeads.length ? colLeads.map(l=>leadCardHtml(l, sort)).join('') : '<div class="kcol-empty">No leads</div>'}
       </div>
     </div>`;
   }).join('')}</div>`;
+  restoreCardFocus();
+}
+
+// ── Keyboard equivalent of dragging a card ──
+// Dragging was the only way to move a lead anywhere except one step forward, so
+// a keyboard user could not work the board at all. Alt + ←/→ walks the card
+// through the columns; the board is re-rendered and focus follows the card so
+// you can move it again straight away.
+function onCardKeydown(e, id){
+  if(e.key === 'Enter' || e.key === ' '){
+    if(e.target !== e.currentTarget) return;   // let buttons inside the card act
+    e.preventDefault();
+    openDetail(id);
+    return;
+  }
+  if(!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+  e.preventDefault();
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  const i = stages.findIndex(s => s.id === l.stageId);
+  const to = stages[i + (e.key === 'ArrowRight' ? 1 : -1)];
+  if(!to){ showToast(e.key === 'ArrowRight' ? 'Already in the last column' : 'Already in the first column'); return; }
+  pendingFocusLeadId = id;
+  changeStage(id, to.id);
+}
+// changeStage re-renders the board, which throws away the focused element — this
+// puts the caret back on the card wherever it landed.
+let pendingFocusLeadId = null;
+function restoreCardFocus(){
+  if(!pendingFocusLeadId) return;
+  const el = document.querySelector(`.lcard[data-lead="${pendingFocusLeadId}"]`);
+  pendingFocusLeadId = null;
+  if(el){ el.focus({ preventScroll:false }); }
 }
 
 let draggedLeadId = null;
@@ -1545,7 +1854,7 @@ function nextLadderStageId(stageId){
 
 // A card answers four questions at a glance, in this order: who, what are they after, what
 // happens next, and is anything wrong. Everything else is one tap away on the lead page.
-function leadCardHtml(l){
+function leadCardHtml(l, sort){
   const next = nextLadderStageId(l.stageId);
   const nextStage = next ? stageById(next) : null;
   const src = sourceBadge(l);
@@ -1567,17 +1876,22 @@ function leadCardHtml(l){
   const alertItem = attn.find(a => SEV_RANK[a.severity] >= SEV_RANK.medium && !coveredByStep(a));
   const extra = attn.filter(a => a !== alertItem && !coveredByStep(a)).length;
   const aiMoved = l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 48*3600000 && l.stageId === stageIdForKey(l.ai.lastMove.to);
-  const sevCls = top ? ` sev-${top.severity}` : '';
+  // One class, one meaning. Everything else a card has to say, it says in words.
+  const sevCls = isOverdueUi(l) ? ' is-overdue' : '';
+  // Sorting by a value you cannot see is guesswork, so a non-default sort puts
+  // the value it ordered on onto every card in that column.
+  const sortMeta = sort && sort.meta ? sort.meta(l) : null;
   return `
-  <div class="lcard${sevCls}" draggable="true" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')">
+  <div class="lcard${sevCls}" draggable="true" tabindex="0" role="link" aria-label="Open ${escapeHtml(l.name || 'lead')}" data-lead="${l.id}" ondragstart="onCardDragStart(event,'${l.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${l.id}')" onkeydown="onCardKeydown(event,'${l.id}')">
     <div class="lcard-top">
       <div class="lcard-name">${escapeHtml(l.name)}</div>
       <div class="lcard-src ${src.cls}">${src.text}</div>
     </div>
     ${what ? `<div class="lcard-what">${what}</div>` : (l.enquiryType ? `<div class="lcard-what">${escapeHtml(l.enquiryType)}</div>` : '')}
     ${step ? `<div class="lcard-step ${step.cls}"><span class="lcard-step-t">${escapeHtml(step.text)}</span>${step.due ? `<span class="lcard-step-due">${escapeHtml(fmtDue(step.due))}</span>` : ''}</div>` : ''}
-    ${alertItem ? `<div class="lcard-alert ${alertItem.severity}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
-    ${chips.length ? `<div class="lcard-tt">${chips.slice(0,3).join('')}</div>` : ''}
+    ${alertItem ? `<div class="lcard-alert ${OVERDUE_KEYS.has(alertItem.key) ? 'overdue' : 'note'}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
+    ${sortMeta ? `<div class="lcard-sortmeta">${escapeHtml(sortMeta)}</div>` : ''}
+    ${chips.length ? `<div class="lcard-tt">${chips.slice(0,2).join('')}</div>` : ''}
     <div class="lcard-foot">
       <div class="lcard-time">${stageAgeHtml(l)}${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
       ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}
@@ -1771,13 +2085,16 @@ function renderList(){
   }
 
   const theadHtml = `<tr>${LIST_COLUMNS.map(col=>{
-    const sortIcon = listSortCol===col.key ? (listSortDir==='asc'?'▲':'▼') : '↕';
+    const sorted = listSortCol===col.key;
+    const sortIcon = sorted ? (listSortDir==='asc'?'▲':'▼') : '↕';
     const filterActive = listColumnFilters[col.key] ? ' active' : '';
-    const filterBtn = col.filterable ? `<button class="lv-filter-btn${filterActive}" onclick="toggleListFilter('${col.key}',event)">▾</button>` : '';
+    const filterBtn = col.filterable ? `<button class="lv-filter-btn${filterActive}" aria-label="Filter by ${escapeHtml(col.label)}" aria-expanded="${openFilterCol===col.key}" onclick="toggleListFilter('${col.key}',event)">▾</button>` : '';
     const dropdown = (col.filterable && openFilterCol===col.key) ? renderFilterDropdown(col) : '';
-    return `<th>
+    // aria-sort tells a screen reader what the ▲/▼ glyph tells everyone else.
+    const ariaSort = sorted ? (listSortDir==='asc'?'ascending':'descending') : 'none';
+    return `<th class="${col.key==='name'?'lv-name':''}" aria-sort="${ariaSort}">
       <div class="lv-th">
-        <span class="lv-th-label" onclick="toggleListSort('${col.key}')">${col.label} <span class="lv-sort-ico">${sortIcon}</span></span>
+        <button type="button" class="lv-th-label" aria-label="Sort by ${escapeHtml(col.label)}" onclick="toggleListSort('${col.key}')">${col.label} <span class="lv-sort-ico" aria-hidden="true">${sortIcon}</span></button>
         ${filterBtn}
       </div>
       ${dropdown}
@@ -1793,19 +2110,22 @@ function renderList(){
   const selHead = `<th class="lv-sel"><input type="checkbox" aria-label="Select all" ${allSel ? 'checked' : ''} onclick="event.stopPropagation();toggleBulkAll(this.checked)"></th>`;
 
   if(!rows.length){
-    wrap.innerHTML = `<div class="list-view"><table><thead>${theadHtml.replace('<tr>', '<tr>' + selHead)}</thead></table></div>
+    wrap.innerHTML = `<div class="lv-scroll"><div class="list-view"><table><thead>${theadHtml.replace('<tr>', '<tr>' + selHead)}</thead></table></div></div>
       <div class="nores"><div class="nores-i">🔍</div><div class="nores-t">No leads match the current column filters</div></div>`;
+    wireListScroll();
     return;
   }
 
-  wrap.innerHTML = `${bulkBarHtml()}<div class="list-view"><table>
+  wrap.innerHTML = `${bulkBarHtml()}<div class="lv-scroll"><div class="list-view"><table>
     <thead>${theadHtml.replace('<tr>', '<tr>' + selHead)}</thead>
     <tbody>${rows.map(l=>{
       const stage = stageById(l.stageId);
       const sel = bulkSelected.has(l.id);
-      return `<tr class="${sel ? 'sel' : ''}" onclick="openDetail('${l.id}')">
+      // tabindex + Enter/Space make the row reachable without a mouse; the row is
+      // the primary way into a lead, so it cannot be click-only.
+      return `<tr class="${sel ? 'sel' : ''}" tabindex="0" role="link" aria-label="Open ${escapeHtml(l.name)}" onclick="openDetail('${l.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${l.id}');}">
         <td class="lv-sel" onclick="event.stopPropagation()"><input type="checkbox" aria-label="Select ${escapeHtml(l.name)}" ${sel ? 'checked' : ''} onclick="toggleBulkLead('${l.id}', this.checked)"></td>
-        <td><b>${escapeHtml(l.name)}</b></td>
+        <td class="lv-name"><b>${escapeHtml(l.name)}</b></td>
         <td>${escapeHtml(l.phone||l.email||'—')}</td>
         <td>${l.channel?channelLabel(l.channel):'—'}</td>
         <td>${escapeHtml(l.enquiryType||'—')}</td>
@@ -1820,9 +2140,93 @@ function renderList(){
         <td>${l.updatedBy?escapeHtml(l.updatedBy):'—'}</td>
       </tr>`;
     }).join('')}</tbody>
-  </table></div>`;
+  </table></div></div>
+    <div class="lv-scroll-hint" role="status"><span aria-hidden="true">↔</span> <span id="lvScrollHint"></span></div>`;
+  wireListScroll();
   updateViewsChip();
 }
+
+// ═══════ LIST VIEW SCROLL AFFORDANCE ═══════
+// The table is wider than any screen. Without a visible edge on the side that
+// still has content, the box looks finished and nobody thinks to scroll it —
+// which is exactly how 14 columns end up feeling like 6.
+function wireListScroll(){
+  const box = document.querySelector('#listView .lv-scroll');
+  const sc = box && box.querySelector('.list-view');
+  if(!box || !sc) return;
+
+  const sync = () => {
+    const selTh = sc.querySelector('th.lv-sel');
+    if(selTh) box.style.setProperty('--lv-sel-w', selTh.getBoundingClientRect().width + 'px');
+    const hidden = sc.scrollWidth - sc.clientWidth;
+    box.classList.toggle('can-scroll-x', hidden > 4);
+    box.classList.toggle('has-more-x', hidden - sc.scrollLeft > 4);
+    box.classList.toggle('is-scrolled-x', sc.scrollLeft > 2);
+    const hint = document.getElementById('lvScrollHint');
+    if(hint) hint.textContent = hidden > 4
+      ? `${Math.round(hidden)}px more to the right — shift + scroll, or drag the bar`
+      : '';
+  };
+
+  sc.addEventListener('scroll', () => { sync(); positionListFilterPop(); }, { passive:true });
+  // A vertical wheel over a table that only scrolls sideways does nothing on a
+  // mouse without a tilt wheel — the commonest way this reads as "broken".
+  // Translate it, but only while there is somewhere left to go, so the page
+  // still scrolls normally once the table hits its edge.
+  sc.addEventListener('wheel', e => {
+    if(e.deltaX || e.shiftKey) return;
+    const hidden = sc.scrollWidth - sc.clientWidth;
+    if(hidden <= 4) return;
+    const room = e.deltaY > 0 ? hidden - sc.scrollLeft : sc.scrollLeft;
+    // Only claim the gesture when the table itself cannot scroll vertically;
+    // otherwise a tall table would refuse to scroll down at all.
+    if(sc.scrollHeight - sc.clientHeight > 4) return;
+    if(room <= 0) return;
+    e.preventDefault();
+    sc.scrollLeft += e.deltaY;
+  }, { passive:false });
+
+  if(window.ResizeObserver){
+    const ro = new ResizeObserver(sync);
+    ro.observe(sc);
+    const t = sc.querySelector('table');
+    if(t) ro.observe(t);
+  }
+  sync();
+  positionListFilterPop();
+}
+
+// The filter dropdown lives inside a `th`, and the table is now a scroll
+// container — an absolutely positioned pop would be clipped by it the moment
+// it hung past the edge. Lifting it to `position:fixed` and placing it against
+// the trigger's own rect lets it sit over the table, and clamps it into the
+// viewport so a right-hand column's menu is never half off-screen.
+function positionListFilterPop(){
+  const pop = document.querySelector('#listView .lv-filter-pop');
+  if(!pop) return;
+  const th = pop.closest('th');
+  const btn = th && th.querySelector('.lv-filter-btn');
+  const sc = document.querySelector('#listView .list-view');
+  if(!btn || !sc) return;
+
+  const b = btn.getBoundingClientRect();
+  const box = sc.getBoundingClientRect();
+  // Scrolled out of the table's own viewport: nothing to anchor to.
+  if(b.right < box.left - 1 || b.left > box.right + 1){ pop.style.visibility = 'hidden'; return; }
+  pop.style.visibility = '';
+
+  const w = pop.offsetWidth || 200, h = pop.offsetHeight || 260;
+  const pad = 8;
+  let left = Math.min(b.left, window.innerWidth - w - pad);
+  let top = b.bottom + 4;
+  // Flip above the trigger rather than run off the bottom of the window.
+  if(top + h > window.innerHeight - pad) top = Math.max(pad, b.top - h - 4);
+  pop.style.left = Math.max(pad, left) + 'px';
+  pop.style.top = top + 'px';
+}
+addEventListener('resize', positionListFilterPop);
+// Capture phase so it also fires for the page scroll that moves the whole table.
+addEventListener('scroll', positionListFilterPop, true);
 
 // ═══════ FOLLOW-UPS VIEW (date-grouped, calendar-style) ═══════
 const FU_GROUP_DEFS = [
@@ -2345,7 +2749,33 @@ function renderPropertyPop(){
   }).join('');
   const activeEl = pop.querySelector('.combo-opt.at');
   if(activeEl) activeEl.scrollIntoView({ block:'nearest' });
+  positionComboPop();
 }
+// The pop is `position:fixed` because .modal-body is a scrollport — as an
+// absolutely positioned child it was clipped to whatever slice of the 238px
+// list happened to fit below the field, which on the Add Lead form is usually
+// one or two rows. Fixed means it has to be placed by hand, and flipped above
+// the field when there is no room beneath it.
+function positionComboPop(){
+  const pop = document.getElementById('lmInterestPop');
+  const combo = document.getElementById('lmInterestCombo');
+  if(!pop || !combo || !propertyPopOpen) return;
+  const r = combo.getBoundingClientRect();
+  const pad = 8;
+  pop.style.width = r.width + 'px';
+  pop.style.left = Math.max(pad, Math.min(r.left, innerWidth - r.width - pad)) + 'px';
+  const below = innerHeight - r.bottom - pad;
+  const above = r.top - pad;
+  if(below < 140 && above > below){
+    pop.style.maxHeight = Math.min(238, above) + 'px';
+    pop.style.top = Math.max(pad, r.top - Math.min(238, above) - 6) + 'px';
+  } else {
+    pop.style.maxHeight = Math.min(238, below) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+  }
+}
+addEventListener('resize', positionComboPop);
+addEventListener('scroll', positionComboPop, true);
 function openPropertyPop(){
   if(!isPropertyEnquiryType(document.getElementById('lmEnquiryType').value)) return;
   propertyPopOpen = true;
@@ -2923,7 +3353,16 @@ function openDetail(id){
   renderDetailsSentToggle(l);
   renderHistory(l);
   document.getElementById('dp').classList.add('open');
-  window.scrollTo(0,0);
+  // The lead pane scrolls, not #dp — and resetting the page scroll here used to
+  // throw away the caller's place in a long list, which closeDetail() then
+  // returned them to the top of.
+  const dpb = document.querySelector('#dp .dp-body');
+  if(dpb) dpb.scrollTop = 0;
+  // A sheet is per-viewing: opening the next lead should not inherit the last
+  // one's open conversation on a narrow screen.
+  convSheetOpen = false;
+  initDpResizer();
+  syncConversationPane();
   // Notes + history live in subcollections — load them on open (the board
   // never needs them). Renders again once they arrive.
   loadLeadThreads(l);
@@ -3109,6 +3548,9 @@ function renderDetailsSentToggle(l){
   const effective = l.detailsSent === true;
   wrap.querySelector('.yes').classList.toggle('active', effective);
   wrap.querySelector('.no').classList.toggle('active', !effective);
+  // Colour alone told a screen-reader user nothing about which one is chosen.
+  wrap.querySelector('.yes').setAttribute('aria-pressed', effective ? 'true' : 'false');
+  wrap.querySelector('.no').setAttribute('aria-pressed', effective ? 'false' : 'true');
   wrap.classList.toggle('sent', effective);
   wrap.classList.toggle('not-sent', !effective);
 }
@@ -3134,9 +3576,14 @@ function onDetailStageChange(){
 function closeDetail(){
   document.getElementById('dp').classList.remove('open');
   currentDetailId = null;
+  convSheetOpen = false;
+  const split = document.getElementById('dpSplit');
+  if(split) split.classList.remove('split', 'sheet');
 }
 function toggleRaw(){
-  document.getElementById('dpRaw').classList.toggle('show');
+  const shown = document.getElementById('dpRaw').classList.toggle('show');
+  const btn = document.querySelector('.raw-toggle');
+  if(btn) btn.setAttribute('aria-expanded', shown ? 'true' : 'false');
 }
 
 // ═══════ NOTES ═══════
@@ -3437,11 +3884,11 @@ function closeStageManager(){
 function renderStageManagerRows(){
   document.getElementById('stageRows').innerHTML = stageManagerDraft.map((s,i)=>`
     <div class="stage-row">
-      <button class="stage-move" onclick="moveStageDraft(${i},-1)" ${i===0?'disabled style="opacity:.3"':''}>↑</button>
-      <button class="stage-move" onclick="moveStageDraft(${i},1)" ${i===stageManagerDraft.length-1?'disabled style="opacity:.3"':''}>↓</button>
-      <span class="stage-color" style="background:${s.color}" onclick="cycleStageColor(${i})"></span>
-      <input type="text" value="${s.name}" oninput="renameStageDraft(${i}, this.value)">
-      <button class="stage-del" onclick="deleteStageDraft(${i})">🗑️</button>
+      <button class="stage-move" aria-label="Move ${escapeHtml(s.name)} up" onclick="moveStageDraft(${i},-1)" ${i===0?'disabled':''}>↑</button>
+      <button class="stage-move" aria-label="Move ${escapeHtml(s.name)} down" onclick="moveStageDraft(${i},1)" ${i===stageManagerDraft.length-1?'disabled':''}>↓</button>
+      <button type="button" class="stage-color" style="background:${s.color}" aria-label="Change colour of ${escapeHtml(s.name)}" onclick="cycleStageColor(${i})"></button>
+      <input type="text" aria-label="Stage name" value="${escapeHtml(s.name)}" oninput="renameStageDraft(${i}, this.value)">
+      <button class="stage-del" aria-label="Delete stage ${escapeHtml(s.name)}" onclick="deleteStageDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameStageDraft(i, val){ stageManagerDraft[i].name = val; }
@@ -3508,7 +3955,7 @@ function renderDigestRecipientRows(){
   document.getElementById('digestRecipientRows').innerHTML = digestSettingsDraft.recipients.map((r,i)=>`
     <div class="req-info-row">
       <input type="text" value="${escapeHtml(r)}" oninput="renameDigestRecipientDraft(${i}, this.value)">
-      <button class="stage-del" onclick="removeDigestRecipientDraft(${i})">🗑️</button>
+      <button class="stage-del" aria-label="Remove recipient ${escapeHtml(r)}" onclick="removeDigestRecipientDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameDigestRecipientDraft(i, val){ digestSettingsDraft.recipients[i] = val; }
@@ -3525,7 +3972,7 @@ function renderDigestEmailRows(){
   document.getElementById('digestEmailRows').innerHTML = digestSettingsDraft.emails.map((r,i)=>`
     <div class="req-info-row">
       <input type="text" value="${escapeHtml(r)}" oninput="renameDigestEmailDraft(${i}, this.value)">
-      <button class="stage-del" onclick="removeDigestEmailDraft(${i})">🗑️</button>
+      <button class="stage-del" aria-label="Remove email ${escapeHtml(r)}" onclick="removeDigestEmailDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameDigestEmailDraft(i, val){ digestSettingsDraft.emails[i] = val; }
@@ -3602,7 +4049,7 @@ function renderDashboardEmailRows(){
   document.getElementById('dashboardEmailRows').innerHTML = dashboardEmailSettingsDraft.recipients.map((r,i)=>`
     <div class="req-info-row">
       <input type="text" value="${escapeHtml(r)}" oninput="renameDashboardEmailDraft(${i}, this.value)">
-      <button class="stage-del" onclick="removeDashboardEmailDraft(${i})">🗑️</button>
+      <button class="stage-del" aria-label="Remove email ${escapeHtml(r)}" onclick="removeDashboardEmailDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameDashboardEmailDraft(i, val){ dashboardEmailSettingsDraft.recipients[i] = val; }
@@ -3943,8 +4390,8 @@ function syncBotDraftFromForm(){
 function renderRequiredInfoRows(){
   document.getElementById('botRequiredInfoRows').innerHTML = botConfigDraft.requiredInfo.map((r,i)=>`
     <div class="req-info-row">
-      <input type="text" value="${r.label}" oninput="renameRequiredInfoDraft(${i}, this.value)">
-      <button class="stage-del" onclick="removeRequiredInfoDraft(${i})">🗑️</button>
+      <input type="text" aria-label="Required info" value="${escapeHtml(r.label)}" oninput="renameRequiredInfoDraft(${i}, this.value)">
+      <button class="stage-del" aria-label="Remove ${escapeHtml(r.label)}" onclick="removeRequiredInfoDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameRequiredInfoDraft(i, val){ botConfigDraft.requiredInfo[i].label = val; }
@@ -3962,12 +4409,12 @@ function renderStepsRows(){
   document.getElementById('botStepsRows').innerHTML = botConfigDraft.steps.map((s,i)=>`
     <div class="step-row">
       <div class="step-row-hdr">
-        <button class="stage-move" onclick="moveStepDraft(${i},-1)" ${i===0?'disabled style="opacity:.3"':''}>↑</button>
-        <button class="stage-move" onclick="moveStepDraft(${i},1)" ${i===botConfigDraft.steps.length-1?'disabled style="opacity:.3"':''}>↓</button>
-        <input type="text" value="${s.title}" oninput="renameStepTitleDraft(${i}, this.value)">
-        <button class="stage-del" onclick="removeStepDraft(${i})">🗑️</button>
+        <button class="stage-move" aria-label="Move step up" onclick="moveStepDraft(${i},-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="stage-move" aria-label="Move step down" onclick="moveStepDraft(${i},1)" ${i===botConfigDraft.steps.length-1?'disabled':''}>↓</button>
+        <input type="text" aria-label="Step title" value="${escapeHtml(s.title)}" oninput="renameStepTitleDraft(${i}, this.value)">
+        <button class="stage-del" aria-label="Remove step ${escapeHtml(s.title)}" onclick="removeStepDraft(${i})">🗑️</button>
       </div>
-      <textarea rows="2" oninput="renameStepInstructionsDraft(${i}, this.value)">${s.instructions}</textarea>
+      <textarea rows="2" aria-label="Step instructions" oninput="renameStepInstructionsDraft(${i}, this.value)">${escapeHtml(s.instructions)}</textarea>
     </div>`).join('');
 }
 function renameStepTitleDraft(i, val){ botConfigDraft.steps[i].title = val; }
@@ -3987,8 +4434,8 @@ function addStepDraft(){
 function renderGuardrailsRows(){
   document.getElementById('botGuardrailsRows').innerHTML = botConfigDraft.guardrails.map((g,i)=>`
     <div class="req-info-row">
-      <input type="text" value="${g}" oninput="renameGuardrailDraft(${i}, this.value)">
-      <button class="stage-del" onclick="removeGuardrailDraft(${i})">🗑️</button>
+      <input type="text" aria-label="Guardrail" value="${escapeHtml(g)}" oninput="renameGuardrailDraft(${i}, this.value)">
+      <button class="stage-del" aria-label="Remove guardrail" onclick="removeGuardrailDraft(${i})">🗑️</button>
     </div>`).join('');
 }
 function renameGuardrailDraft(i, val){ botConfigDraft.guardrails[i] = val; }
@@ -4206,12 +4653,172 @@ function connectGoogleDrive(){
 // ═══════ TOAST ═══════
 function showToast(msg){
   const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
-  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2400);
+  // Cleared on hide as well as set on show: #toast is only faded to opacity:0,
+  // so a node left holding stale text is still read out by a screen reader.
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.classList.remove('show');t.textContent='';},2400);
 }
 
-// keyboard: ESC closes panels
-document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeDupModal(); closeDetail(); closeLeadModal(); closeStageManager(); closeBotEditor(); closeDigestManager(); closeDashboardEmailManager(); closeFollowUpLogModal(); closeViewDropdown(); closeMoreMenu(); }
+// ═══════ LAYERS: FOCUS, ESCAPE AND SCROLL LOCK ═══════
+// Every overlay in this app opens the same way — a `.open` class on a fixed,
+// full-viewport element — so one observer can give all of them the dialog
+// behaviour they were each missing, without touching fifteen open/close
+// functions and risking their individual logic.
+const LAYER_SEL = '.modal-overlay, #dp, #botEditorPanel';
+const LAYER_CLOSERS = {
+  lModal: closeLeadModal, dupModal: closeDupModal, stageModal: closeStageManager,
+  fuLogModal: closeFollowUpLogModal, digestModal: closeDigestManager,
+  dashboardEmailModal: closeDashboardEmailManager, stageReasonModal: closeStageReasonModal,
+  exportModal: closeExportModal, dp: closeDetail, botEditorPanel: closeBotEditor
+};
+const layerReturnFocus = new WeakMap();
+
+function openLayers(){
+  // Painted order, so the last entry is the one actually on top.
+  return [...document.querySelectorAll(LAYER_SEL)]
+    .filter(el => el.classList.contains('open'))
+    .sort((a,b) => (parseInt(getComputedStyle(a).zIndex) || 0) - (parseInt(getComputedStyle(b).zIndex) || 0));
+}
+function topLayer(){ const l = openLayers(); return l[l.length - 1] || null; }
+
+function focusablesIn(el){
+  return [...el.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+    .filter(n => n.offsetParent !== null || n === document.activeElement);
+}
+
+function onLayerOpened(el){
+  layerReturnFocus.set(el, document.activeElement);
+  // The page behind is inert to assistive tech, matching what sighted users
+  // see: a dimmed, unreachable board.
+  const root = document.getElementById('appRoot');
+  const f = focusablesIn(el);
+  // Prefer the first real field over the close button, which is first in DOM.
+  const target = el.querySelector('.modal-body input:not([type=hidden]),.modal-body select,.modal-body textarea') || f[0];
+  if(target) try{ target.focus({ preventScroll:true }); }catch(e){ target.focus(); }
+  syncLayerState(root);
+}
+function onLayerClosed(el){
+  const prev = layerReturnFocus.get(el);
+  layerReturnFocus.delete(el);
+  syncLayerState(document.getElementById('appRoot'));
+  // Only restore if nothing else took focus meanwhile, and the element is still
+  // in the document — otherwise focus silently falls to <body> and the user is
+  // dropped at the top of the page.
+  if(prev && prev.isConnected && !topLayer()){
+    try{ prev.focus({ preventScroll:true }); }catch(e){}
+  }
+}
+function syncLayerState(root){
+  const any = openLayers().length > 0;
+  // Scroll lock: without it a flick inside a modal scroll-chains to the board
+  // behind it, so closing the modal lands somewhere else entirely.
+  document.body.classList.toggle('layer-open', any);
+  if(root) root.toggleAttribute('inert', any && !root.contains(topLayer()));
+}
+
+new MutationObserver(muts => {
+  muts.forEach(m => {
+    if(m.attributeName !== 'class') return;
+    const el = m.target;
+    if(!el.matches || !el.matches(LAYER_SEL)) return;
+    const now = el.classList.contains('open');
+    const was = el.dataset.layerOpen === '1';
+    if(now === was) return;
+    el.dataset.layerOpen = now ? '1' : '0';
+    now ? onLayerOpened(el) : onLayerClosed(el);
+  });
+}).observe(document.documentElement, { attributes:true, subtree:true, attributeFilter:['class'] });
+
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    // Close only the topmost layer. Closing all of them meant that pressing
+    // Escape in the Edit modal also closed the lead behind it, dumping you back
+    // on the board having lost your place.
+    const top = topLayer();
+    if(top){
+      e.preventDefault();
+      const fn = LAYER_CLOSERS[top.id];
+      fn ? fn() : top.classList.remove('open');
+      return;
+    }
+    // No layer open — fall through to the lightweight popups.
+    closeViewDropdown(); closeMoreMenu(); closePropertyPop();
+    const nav = document.querySelector('.hdr-nav.mobile-open');
+    if(nav) nav.classList.remove('mobile-open');
+    return;
+  }
+  if(e.key === 'Tab'){
+    // Focus trap: Tab used to walk straight out of an open dialog into the
+    // header buttons behind it.
+    const top = topLayer();
+    if(!top) return;
+    const f = focusablesIn(top);
+    if(!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if(e.shiftKey && (document.activeElement === first || !top.contains(document.activeElement))){
+      e.preventDefault(); last.focus();
+    } else if(!e.shiftKey && document.activeElement === last){
+      e.preventDefault(); first.focus();
+    }
+  }
+});
+
+// ═══════ ROVING FOCUS FOR TOOLBARS AND TABS ═══════
+// The filter rows, the timeline filters, the bulk bar and the TailorTalk tabs
+// all declare role="toolbar" / role="tablist". Those roles are a promise that
+// arrow keys move between the items and that the group is ONE tab stop — a
+// declared role that does nothing is worse than no role, because a screen
+// reader announces the contract and then it isn't honoured. One delegated
+// handler keeps that promise everywhere rather than per component.
+const ROVING_SEL = '[role="toolbar"],[role="tablist"]';
+function rovingItems(group){
+  return [...group.querySelectorAll('button,a[href],select,input')]
+    .filter(el => !el.disabled && el.offsetParent !== null);
+}
+document.addEventListener('keydown', e => {
+  const group = e.target.closest && e.target.closest(ROVING_SEL);
+  if(!group) return;
+  // Inside a text field the arrows belong to the caret.
+  if(/^(INPUT|TEXTAREA)$/.test(e.target.tagName) && !/^(checkbox|radio|button)$/.test(e.target.type)) return;
+  if(e.target.tagName === 'SELECT' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+  const keys = ['ArrowLeft','ArrowRight','Home','End'];
+  if(!keys.includes(e.key)) return;
+  const items = rovingItems(group);
+  const i = items.indexOf(e.target);
+  if(i < 0 || items.length < 2) return;
+  e.preventDefault();
+  const to = e.key === 'Home' ? 0
+    : e.key === 'End' ? items.length - 1
+    : e.key === 'ArrowRight' ? (i + 1) % items.length
+    : (i - 1 + items.length) % items.length;
+  items[to].focus();
+});
+// One tab stop per group: Tab enters at the active item and leaves the group,
+// instead of walking through fifteen filter chips to reach the board.
+function syncRovingTabstops(root){
+  (root || document).querySelectorAll(ROVING_SEL).forEach(group => {
+    const items = rovingItems(group);
+    if(items.length < 2) return;
+    const active = group.querySelector('[aria-selected="true"],[aria-pressed="true"],.at') || items[0];
+    items.forEach(el => { el.tabIndex = el === active ? 0 : -1; });
+  });
+}
+// Re-applied after any render, since the chips are rebuilt wholesale each time.
+// Coalesced to one pass per frame: the board re-renders every card on any
+// change, and doing this per mutation would be hundreds of passes.
+let rovingQueued = false;
+new MutationObserver(() => {
+  if(rovingQueued) return;
+  rovingQueued = true;
+  requestAnimationFrame(() => { rovingQueued = false; syncRovingTabstops(); });
+}).observe(document.documentElement, { childList:true, subtree:true });
+
+// Click the dim area to dismiss — expected of every dialog, and the only exit
+// some modals had was their × button.
+document.addEventListener('mousedown', e => {
+  if(e.target.classList && e.target.classList.contains('modal-overlay') && e.target.classList.contains('open')){
+    const fn = LAYER_CLOSERS[e.target.id];
+    fn ? fn() : e.target.classList.remove('open');
+  }
 });
 
 // ═══════ REAL AUTH (Firebase Authentication) ═══════

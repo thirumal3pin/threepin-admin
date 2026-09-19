@@ -61,6 +61,10 @@
   --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
 
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
+  /* A hard 1280px cap drew the whole app down the middle of a wide monitor with
+     the sides empty. This grows with the viewport and stops where more width
+     stops helping, instead of where a laptop happened to be the test machine. */
+  --shell-w: min(2400px, 95vw);
 
   --r-sm: 8px;
   --r: 10px;
@@ -555,7 +559,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 /* ═══════ DESKTOP ═══════ */
 
 @media (min-width: 860px) {
-  .shell { display: grid; grid-template-columns: 224px 1fr; max-width: 1280px; margin: 0 auto; }
+  .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); max-width: var(--shell-w); margin: 0 auto; }
 
   .side { display: block; position: sticky; top: var(--nav-h); align-self: start; height: calc(100vh - var(--nav-h)); overflow-y: auto; padding: var(--s4) var(--s3) var(--s6); border-right: 1px solid var(--line); }
   .side .eh { margin: var(--s5) 12px var(--s2); }
@@ -574,9 +578,10 @@ tr.undone td.lead .tag { text-decoration: none; }
   main { padding: var(--s8) var(--s8) var(--s12); max-width: none; margin: 0; width: 100%; min-width: 0; }
   .shell > * { min-width: 0; }
 
-  .grid { grid-template-columns: repeat(3, 1fr); }
+  /* auto-fit so a wider screen gets more cards per row, not wider cards. */
+  .grid { grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
   .grid.g1 { grid-template-columns: 1fr; }
-  .grid.g3 { grid-template-columns: repeat(4, 1fr); }
+  .grid.g3 { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
 
   .record-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s6); align-items: start; }
   .preview { position: sticky; top: calc(var(--nav-h) + var(--s5)); }

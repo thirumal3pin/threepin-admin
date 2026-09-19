@@ -113,7 +113,10 @@ const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)]
   await page.screenshot({ path: join(OUT, '01-board.png') });
 
   const l1 = await page.evaluate(() => { const c = [...document.querySelectorAll('.lcard')].find(x => /Rajesh/.test(x.textContent)); return c ? { cls: c.className, step: c.querySelector('.lcard-step') && c.querySelector('.lcard-step').className, text: c.textContent.replace(/\s+/g, ' ') } : null; });
-  ok('An overdue promise makes the card critical', l1 && /sev-critical/.test(l1.cls) && /overdue/.test(l1.step), JSON.stringify(l1));
+  // The card's rail is now driven by isOverdueUi() rather than by severity —
+  // 'high' covered every chat signal, so most cards wore one and it stopped
+  // meaning anything. 'is-overdue' is the single class that earns red.
+  ok('An overdue promise makes the card overdue', l1 && /is-overdue/.test(l1.cls) && /overdue/.test(l1.step), JSON.stringify(l1));
   ok('…and leads with the promised step', l1 && /Call to confirm Sunday 11 AM visit to VLCA002/.test(l1.text));
   ok('…and shows the AI moved it', l1 && /🤖 moved/.test(l1.text));
   const urgentBadge = await page.evaluate(() => { const col = [...document.querySelectorAll('.kcol')].find(c => c.querySelector('.kcol-title').textContent.trim() === 'Visit planned'); const b = col && col.querySelector('.kcol-urgent'); return b ? b.textContent : null; });

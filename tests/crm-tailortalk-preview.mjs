@@ -208,7 +208,11 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   await page.locator('#dpTimelineSec').screenshot({ path: join(OUT, '05c-detail-timeline.png') });
   await page.evaluate(() => { setTimelineFilter('all'); });
   await page.evaluate(() => { setTtTab('conversation'); });
-  const sys = await page.evaluate(() => !!document.querySelector('#dpTt .tt-chat-sys') && !!document.querySelector('#dpTt .tt-chat-day'));
+  // On a wide screen the chat lives in the side pane beside the lead; on a
+  // narrow one it is still the inline tab. Look wherever it actually is.
+  const sys = await page.evaluate(() =>
+    !!document.querySelector('#dpTt .tt-chat-sys, #dpSideBody .tt-chat-sys')
+    && !!document.querySelector('#dpTt .tt-chat-day, #dpSideBody .tt-chat-day'));
   if (!sys) errors.push('Conversation should show day separators and the "left for the team" line');
   await page.locator('#dpTtSec').screenshot({ path: join(OUT, '05d-detail-conversation.png') });
   await page.evaluate(() => { setTtTab('overview'); });

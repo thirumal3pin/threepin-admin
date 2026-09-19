@@ -25,7 +25,28 @@
   addEventListener('DOMContentLoaded',function(){
     var b=document.getElementById('densBtn');
     if(b) b.textContent=document.documentElement.dataset.density==='compact'?'Comfortable rows':'Compact rows';
+    trackHeaderHeight();
   });
+
+  // The list view sizes its own scroll box against the sticky header so its
+  // column headings can stick. That header is not a fixed height — the filter
+  // chips and saved-view row wrap on narrow screens, and the search field
+  // reflows — so it is measured live rather than guessed at in the stylesheet.
+  function trackHeaderHeight(){
+    var hdr=document.getElementById('hdr');
+    if(!hdr) return;
+    var set=function(){
+      var h=Math.round(hdr.getBoundingClientRect().height);
+      // Zero while #appRoot is still display:none behind the login screen —
+      // keep the stylesheet's fallback rather than publishing a bogus 0px.
+      if(h>0) document.documentElement.style.setProperty('--hdr-h',h+'px');
+    };
+    set();
+    if(window.ResizeObserver) new ResizeObserver(set).observe(hdr);
+    addEventListener('resize',set);
+    // Web fonts land after first paint and change the header's height with them.
+    if(document.fonts&&document.fonts.ready) document.fonts.ready.then(set);
+  }
 })();
 function toggleTheme(){
   var r=document.documentElement;
@@ -96,12 +117,12 @@ function toggleDensity(){
 <div id="appRoot" style="display:none">
 
   <!-- HEADER -->
-  <div id="hdr">
+  <header id="hdr">
     <div class="hdr-row">
       <div class="brand">
         <img src="logo.jpg" alt="3 PIN Realty" class="brand-logo">
         <div>
-          <div class="brand-name">3 PIN Realty</div>
+          <h1 class="brand-name">3 PIN Realty</h1>
           <div class="brand-sub">Lead CRM</div>
         </div>
       </div>
@@ -110,8 +131,8 @@ function toggleDensity(){
       <a href="dashboard.html" class="nav-mobile-icon" title="Property Intelligence"><i class="fas fa-building"></i></a>
       <a href="3pinfinance" class="nav-mobile-icon fin" title="Finance"><i class="fas fa-indian-rupee-sign"></i></a>
 
-      <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrNav(event)" aria-label="Menu">☰</button>
-      <div class="hdr-nav">
+      <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrNav(event)" aria-label="Menu" aria-expanded="false" aria-haspopup="true" aria-controls="hdrNav">☰</button>
+      <div class="hdr-nav" id="hdrNav">
         <button class="fu-nav-btn" id="fuNavBtn" onclick="toggleView('followups')">
           <span class="fu-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span><span class="fu-nav-label">Follow-ups</span><span class="fu-badge" id="fuBadge" style="display:none">0</span>
         </button>
@@ -120,7 +141,7 @@ function toggleDensity(){
         </button>
 
         <div class="view-dd" id="viewDd">
-          <button class="view-dd-btn at" onclick="toggleViewDropdown(event)">
+          <button class="view-dd-btn at" onclick="toggleViewDropdown(event)" aria-expanded="false" aria-haspopup="true" aria-controls="viewDdMenu">
             <span id="viewDdLabel">Board</span><span class="dd-chevron">⌄</span>
           </button>
           <div class="dd-menu" id="viewDdMenu">
@@ -137,7 +158,7 @@ function toggleDensity(){
         </button>
 
         <div class="more-dd" id="moreDd">
-          <button class="menu-btn" onclick="toggleMoreMenu(event)" aria-label="More">⋮</button>
+          <button class="menu-btn" onclick="toggleMoreMenu(event)" aria-label="More" aria-expanded="false" aria-haspopup="true" aria-controls="moreDdMenu">⋮</button>
           <div class="dd-menu more-dd-menu" id="moreDdMenu">
             <div class="more-dd-user" id="hdrUserEmail"></div>
             <button class="more-dd-item" id="fuNotifyBtn" onclick="toggleBrowserNotify()">🔕 Browser Alerts: Off</button>
@@ -164,7 +185,7 @@ function toggleDensity(){
     <div class="srch-wrap">
       <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input id="searchInput" placeholder="Search by name, phone, email, property interest…">
-      <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
+      <button class="srch-clear" id="srchClear" aria-label="Clear search" onclick="clearSearch()">×</button>
     </div>
     <!-- Saved team views (renderViewsCtl) + lead filter: All / TailorTalk / Other, focus and TailorTalk status (renderLeadFilterBar), in app.js. -->
     <div class="lf-row">
@@ -174,17 +195,17 @@ function toggleDensity(){
   </div>
 
   <!-- MAIN -->
-  <div id="main">
+  <main id="main">
     <div id="kanbanView"></div>
     <div id="listView" style="display:none"></div>
     <div id="followupsView" style="display:none"></div>
     <div id="dashboardView" style="display:none"></div>
-  </div>
+  </main>
 
   <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
 
   <!-- AI BOT EDITOR PANEL -->
-  <div id="botEditorPanel">
+  <div id="botEditorPanel" role="dialog" aria-modal="true" aria-label="AI Bot workflow editor">
     <div class="dp-hdr">
       <button class="dp-back" onclick="closeBotEditor()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
@@ -322,25 +343,33 @@ function toggleDensity(){
   </div>
 
   <!-- LEAD DETAIL PANEL -->
-  <div id="dp">
+  <div id="dp" role="dialog" aria-modal="true" aria-labelledby="dpName">
     <div class="dp-hdr">
       <button class="dp-back" onclick="closeDetail()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
         All Leads
       </button>
       <div class="dp-actions">
+        <!-- Opens the conversation beside the lead on a wide screen, or as a
+             full-height sheet on a narrow one. Hidden entirely for a lead with
+             no TailorTalk chat — see syncConversationPane(). -->
+        <button class="dp-act conv" id="dpConvBtn" onclick="toggleConversationPane()" aria-pressed="false" hidden>💬 Conversation</button>
         <a class="dp-act wa" id="dpWaBtn" href="#" target="_blank" rel="noopener">💬 WhatsApp</a>
         <button class="dp-act" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
         <button class="dp-act danger" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
       </div>
     </div>
+    <!-- Two independently scrolling panes with a draggable divider between
+         them. Collapses to one column below --dp-split-min; the conversation
+         then opens over the top instead of beside. -->
+    <div class="dp-split" id="dpSplit">
     <div class="dp-body">
       <div class="dp-title" id="dpName"></div>
       <div class="dp-sub" id="dpSub"></div>
       <div class="dp-ai-summary" id="dpAiSummary"></div>
       <div class="dp-stage-row">
         <select class="dp-stage-sel" id="dpStageSel" onchange="onDetailStageChange()"></select>
-        <div class="dp-flag-toggle" id="dpDetailsSentToggle">
+        <div class="dp-flag-toggle" id="dpDetailsSentToggle" role="group" aria-label="Sent Details">
           <span class="dp-flag-label">Sent Details</span>
           <button type="button" class="dp-flag-btn yes" onclick="setDetailsSent(true)">Yes</button>
           <button type="button" class="dp-flag-btn no" onclick="setDetailsSent(false)">No</button>
@@ -371,7 +400,7 @@ function toggleDensity(){
 
       <div class="sec" id="dpRawSec">
         <div class="sec-title">📦 Raw Meta Form Data</div>
-        <span class="raw-toggle" onclick="toggleRaw()">show / hide raw fields</span>
+        <button type="button" class="raw-toggle" aria-expanded="false" onclick="toggleRaw()">show / hide raw fields</button>
         <div class="raw-data" id="dpRaw"></div>
       </div>
 
@@ -403,11 +432,24 @@ function toggleDensity(){
         <div class="timeline" id="timelinePanel"></div>
       </div>
     </div>
+
+      <div class="dp-resizer" id="dpResizer" role="separator" aria-orientation="vertical"
+           tabindex="0" aria-label="Resize the conversation panel — arrow keys to adjust"
+           aria-valuemin="22" aria-valuemax="62" aria-valuenow="34"></div>
+
+      <aside class="dp-side" id="dpSide" aria-label="Conversation">
+        <div class="dp-side-hdr">
+          <div class="dp-side-title">💬 Conversation</div>
+          <button type="button" class="dp-side-x" aria-label="Close the conversation panel" onclick="toggleConversationPane()">×</button>
+        </div>
+        <div class="dp-side-body" id="dpSideBody"></div>
+      </aside>
+    </div>
   </div>
 
   <!-- ADD / EDIT LEAD MODAL -->
   <div class="modal-overlay" id="lModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="lmTitle">
       <div class="modal-hdr">
         <div class="modal-title" id="lmTitle">Add New Lead</div>
         <button class="modal-x" onclick="closeLeadModal()">×</button>
@@ -462,7 +504,7 @@ function toggleDensity(){
                    placeholder="e.g. 3BHK in Nanganallur"
                    oninput="onPropertyInput()" onfocus="onPropertyFocus()"
                    onkeydown="onPropertyKeydown(event)" onclick="event.stopPropagation()">
-            <button type="button" class="combo-caret" id="lmInterestCaret" tabindex="-1"
+            <button type="button" class="combo-caret" id="lmInterestCaret" aria-label="Show all properties" tabindex="-1"
                     onclick="event.stopPropagation();togglePropertyPop()">⌄</button>
             <div class="combo-pop" id="lmInterestPop" role="listbox" onclick="event.stopPropagation()"></div>
           </div>
@@ -514,9 +556,9 @@ function toggleDensity(){
        already exists. Either abandon the entry, or fold the newly typed
        details into the existing lead (fully logged in its history + notes). -->
   <div class="modal-overlay" id="dupModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="dupTitle">
       <div class="modal-hdr">
-        <div class="modal-title">⚠️ Lead Already Exists</div>
+        <div class="modal-title" id="dupTitle">⚠️ Lead Already Exists</div>
         <button class="modal-x" onclick="closeDupModal()">×</button>
       </div>
       <!-- Changes come BEFORE the existing lead's details: they're what the
@@ -540,9 +582,9 @@ function toggleDensity(){
 
   <!-- MANAGE STAGES MODAL -->
   <div class="modal-overlay" id="stageModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="stageTitle">
       <div class="modal-hdr">
-        <div class="modal-title">Manage Pipeline Stages</div>
+        <div class="modal-title" id="stageTitle">Manage Pipeline Stages</div>
         <button class="modal-x" onclick="closeStageManager()">×</button>
       </div>
       <div class="modal-body">
@@ -561,9 +603,9 @@ function toggleDensity(){
 
   <!-- LOG FOLLOW-UP MODAL -->
   <div class="modal-overlay" id="fuLogModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="fuLogTitle">
       <div class="modal-hdr">
-        <div class="modal-title">Log Follow-up</div>
+        <div class="modal-title" id="fuLogTitle">Log Follow-up</div>
         <button class="modal-x" onclick="closeFollowUpLogModal()">×</button>
       </div>
       <div class="modal-body">
@@ -604,9 +646,9 @@ function toggleDensity(){
 
   <!-- FOLLOW-UP DIGEST MODAL -->
   <div class="modal-overlay" id="digestModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="digestTitle">
       <div class="modal-hdr">
-        <div class="modal-title">Follow-up Digest</div>
+        <div class="modal-title" id="digestTitle">Follow-up Digest</div>
         <button class="modal-x" onclick="closeDigestManager()">×</button>
       </div>
       <div class="modal-body">
@@ -647,9 +689,9 @@ function toggleDensity(){
 
   <!-- DASHBOARD SUMMARY EMAIL MODAL -->
   <div class="modal-overlay" id="dashboardEmailModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="dashEmailTitle">
       <div class="modal-hdr">
-        <div class="modal-title">Dashboard Summary Email</div>
+        <div class="modal-title" id="dashEmailTitle">Dashboard Summary Email</div>
         <button class="modal-x" onclick="closeDashboardEmailManager()">×</button>
       </div>
       <div class="modal-body">
@@ -677,7 +719,7 @@ function toggleDensity(){
 
   <!-- LOST / ON HOLD REASON MODAL (openStageReasonModal in app.js) -->
   <div class="modal-overlay" id="stageReasonModal">
-    <div class="modal-box sr-box">
+    <div class="modal-box sr-box" role="dialog" aria-modal="true" aria-labelledby="srTitle">
       <div class="modal-hdr">
         <div class="modal-title" id="srTitle">Why?</div>
         <button class="modal-x" onclick="closeStageReasonModal()">×</button>
@@ -702,9 +744,9 @@ function toggleDensity(){
 
   <!-- EXPORT LEADS MODAL -->
   <div class="modal-overlay" id="exportModal">
-    <div class="modal-box">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
       <div class="modal-hdr">
-        <div class="modal-title">Export Leads</div>
+        <div class="modal-title" id="exportTitle">Export Leads</div>
         <button class="modal-x" onclick="closeExportModal()">×</button>
       </div>
       <div class="modal-body">
@@ -760,7 +802,7 @@ function toggleDensity(){
 
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- SRI integrity hashes pin the exact bytes: if cdnjs is ever compromised
      and serves altered JS, the hash mismatch makes the browser refuse to run

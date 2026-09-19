@@ -51,7 +51,11 @@
   --ink:light-dark(#14120F,#ECEAE5);
   --ink2:light-dark(#3B3833,#B9B5AE);
   --ink3:light-dark(#6B6660,#8A867F);
-  --ink4:light-dark(#8C877F,#6C6862);
+  /* --ink4 was #8C877F / #6C6862 — 3.3:1 light and 3.4:1 dark, under the 4.5:1
+     floor in both, on text that is never larger than 12px (timestamps, empty
+     states, hints, filter counts). These clear it while staying the quietest
+     step in the ramp: 4.6:1 on --bg light, 4.7:1 on --bg dark. */
+  --ink4:light-dark(#767068,#908B84);
 
   /* Semantic marks. Each is one hue with a tinted surface and a hairline;
      text sitting on --X-bg is always --X, so no deep one-off hexes anywhere. */
@@ -91,6 +95,17 @@
   --mono:'IBM Plex Mono','SF Mono',Menlo,monospace;
   --serif:var(--sans);
 
+  /* ── How wide the content is allowed to get ──
+     Fixed pixel caps (1140 here, 1280 in Finance) meant a 2560px monitor drew
+     the app down the middle with half the screen empty. These grow with the
+     viewport and stop where the layout stops being useful, rather than where a
+     1440px laptop happened to be the biggest screen anyone tested on.
+     --shell-w  app shells, grids and tables: take the room that is there.
+     --read-w   prose and forms: a line of text stays readable, so this is
+                capped near a comfortable measure however wide the screen is. */
+  --shell-w:min(2400px, 94vw);
+  --read-w:clamp(680px, 60vw, 1020px);
+
   --dens:1;   /* density multiplier — see [data-density] below */
   --ease:cubic-bezier(.22,.61,.36,1);
 }
@@ -103,8 +118,14 @@
 :root[data-density="compact"]{--dens:.68;}
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html{scroll-behavior:smooth;}
-body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100vh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+/* scrollbar-gutter reserves the scrollbar's width permanently, so locking the
+   body when a dialog opens does not shift the whole page sideways. */
+html{scroll-behavior:smooth;scrollbar-gutter:stable;}
+/* Set by syncLayerState() in app.js whenever any modal or full-screen panel is
+   open. Without it, a flick inside a dialog scroll-chains to the board behind
+   it and closing the dialog lands you somewhere you never navigated to. */
+body.layer-open{overflow:hidden;}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100dvh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
 ::selection{background:var(--brand-soft);color:var(--ink);}
 
 /* Every figure in the product is mono and tabular — counts, dates, phone
@@ -230,13 +251,13 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 #searchInput{width:100%;padding:12px 40px 12px 42px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r2);color:var(--ink);font-family:var(--sans);font-size:14px;outline:none;transition:border-color .18s,box-shadow .18s,background .18s;}
 #searchInput:focus{border-color:var(--brand);box-shadow:var(--ring);background:var(--white);}
 #searchInput::placeholder{color:var(--ink4);}
-.srch-clear{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:var(--border);border:none;width:22px;height:22px;border-radius:50%;color:var(--ink3);cursor:pointer;font-size:14px;display:none;align-items:center;justify-content:center;line-height:1;}
+.srch-clear{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:var(--border);border:none;width:26px;height:26px;border-radius:50%;color:var(--ink3);cursor:pointer;font-size:14px;display:none;align-items:center;justify-content:center;line-height:1;}
 .srch-clear.show{display:flex;}
 .srch-clear:hover{background:var(--border2);color:var(--ink);}
 
 .fu-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;border-radius:999px;background:var(--brand);color:#14120F;font-family:var(--mono);font-size:9.5px;font-weight:600;}
 .fu-nav-btn.at .fu-badge{background:var(--brand);color:#14120F;}
-.fu-badge.urgent{background:var(--red);color:#fff;}
+.fu-badge.urgent{background:var(--red);color:light-dark(#fff,#2A0A0A);}
 .digest-toggle-label{display:flex;align-items:flex-start;gap:9px;font-size:13px;color:var(--ink2);line-height:1.5;cursor:pointer;}
 .digest-toggle-label input{margin-top:3px;flex-shrink:0;accent-color:var(--brand);}
 
@@ -260,7 +281,16 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 #main{padding:20px 24px 60px;}
 #kanbanView{position:relative;}
 #kanbanView::before{content:'';position:absolute;inset:-20px -24px;pointer-events:none;background-image:linear-gradient(var(--grid-c) 1px,transparent 1px),linear-gradient(90deg,var(--grid-c) 1px,transparent 1px);background-size:22px 22px;mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 100%);}
-.kanban{position:relative;display:flex;gap:14px;overflow-x:auto;padding-bottom:16px;align-items:flex-start;scroll-snap-type:x proximity;}
+/* overscroll-behavior-x keeps a sideways flick inside the board instead of
+   handing it to the browser's back-navigation gesture — on a trackpad or a
+   phone, "scroll the board" and "leave the page" were the same motion. */
+.kanban{position:relative;display:flex;gap:14px;overflow:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;padding-bottom:16px;align-items:flex-start;scroll-snap-type:x proximity;
+  /* Bounding the height is what makes .kcol-hdr's `position:sticky` mean
+     anything: without it the board is a scrollport that never scrolls
+     vertically, so the column header stuck to a box that never moved and the
+     stage name scrolled away exactly like any other element. */
+  max-height:calc(100dvh - var(--hdr-h,168px) - 42px);
+  scroll-behavior:auto;}
 .kcol{flex:0 0 290px;background:color-mix(in srgb,var(--bg2) 78%,transparent);border:1px solid var(--border);border-radius:var(--r3);padding:0 9px 9px;scroll-snap-align:start;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
 /* The header stays put while its own column scrolls — on a long stage you
    never lose track of which one you're dropping into. */
@@ -284,22 +314,26 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:7px;margin-bottom:6px;}
 .lcard-name{font-weight:700;font-size:13.5px;line-height:1.3;letter-spacing:-.01em;}
 .lcard-src{font-size:9px;font-weight:600;padding:2.5px 8px;border-radius:var(--r1);white-space:nowrap;text-transform:uppercase;}
-.lcard-src.meta{background:var(--blue-bg);color:var(--blue);}
+/* Where a lead came from is metadata on every single card, not a status —
+   spending blue and green on it put two more hues on the board competing with
+   the marks that mean something. The label already says which it is. */
+.lcard-src.meta{background:var(--bg2);color:var(--ink3);}
 .lcard-src.manual{background:var(--bg2);color:var(--ink3);}
 .lcard-meta{font-size:11.5px;color:var(--ink3);display:flex;flex-direction:column;gap:2px;margin-bottom:8px;}
 .lcard-foot{display:flex;justify-content:space-between;align-items:center;gap:6px;}
 .lcard-time{font-size:10px;color:var(--ink4);}
 .lcard-age{display:inline-block;margin-right:6px;padding:0 5px;border-radius:8px;background:var(--bg2);color:var(--ink3);font-weight:600;}
-.lcard-age.over{background:var(--amber-bg);color:var(--amber);}
-.lcard-age.far{background:var(--red-bg);color:var(--red);}
+/* A lead sitting a long time in a column is worth knowing, but it is not a
+   deadline — it was competing with real overdue marks in the same two hues. */
+.lcard-age.over{background:var(--bg2);color:var(--ink2);font-weight:700;}
+.lcard-age.far{background:var(--bg2);color:var(--ink);font-weight:700;box-shadow:inset 2px 0 0 var(--border2);}
 .lcard-followup{font-size:10.5px;font-weight:600;color:var(--ink3);background:var(--bg2);border-radius:var(--r1);padding:4px 8px;margin-bottom:8px;display:inline-block;}
 /* Due state is encoded in form as well as colour: a left stripe on the chip,
    so it survives a colour-blind read and a greyscale print. */
-.lcard-followup.soon{color:var(--amber);background:var(--amber-bg);box-shadow:inset 2px 0 0 var(--amber);}
+.lcard-followup.soon{color:var(--ink2);background:var(--bg2);box-shadow:inset 2px 0 0 var(--border2);}
 .lcard-followup.overdue{color:var(--red);background:var(--red-bg);box-shadow:inset 2px 0 0 var(--red);}
 /* An overdue lead is findable at a glance from across the board. */
-.lcard:has(.lcard-followup.overdue){border-left:2px solid var(--red);}
-.lcard:has(.lcard-followup.soon){border-left:2px solid var(--amber);}
+
 .lcard-next{font-size:10.5px;font-weight:600;padding:4px 10px;border-radius:var(--r1);border:1px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;transition:all .14s;}
 .lcard-next:hover{border-color:var(--brand);background:var(--brand);color:#14120F;}
 .lcard-flag{font-size:10.5px;font-weight:600;border-radius:var(--r1);padding:4px 8px;margin-bottom:8px;display:inline-block;}
@@ -312,7 +346,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    semantic marks: hot = red, warm = amber, cold = blue; an escalation or flag is red with the
    same left stripe the overdue follow-up uses, so "needs a person" reads the same way. */
 [hidden]{display:none!important;}
-.lf-bar{display:flex;align-items:center;gap:6px;margin-top:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:1px;}
+.lf-bar{display:flex;align-items:center;gap:6px;margin-top:10px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:1px;}
+.lf-bar::-webkit-scrollbar{height:0;}
 /* Saved views sit outside the scrolling chip bar so their menu is never clipped. */
 .lf-row{display:flex;align-items:center;gap:6px;margin-top:10px;min-width:0;}
 .lf-row .lf-bar{margin-top:0;flex:1;min-width:0;}
@@ -326,12 +361,12 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lf-view-row.at{background:var(--brand-soft);}
 .lf-view-go{flex:1;min-width:0;text-align:left;padding:7px 8px;border:none;background:transparent;color:var(--ink);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;}
 .lf-view-go small{display:block;font-weight:400;font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.lf-view-x{border:none;background:transparent;color:var(--ink4);font-size:16px;padding:0 8px;cursor:pointer;border-radius:var(--r1);}
+.lf-view-x{border:none;background:transparent;color:var(--ink4);font-size:16px;padding:0 8px;min-height:28px;cursor:pointer;border-radius:var(--r1);}
 .lf-view-x:hover{color:var(--red);background:var(--red-bg);}
 .lf-views-empty{padding:8px;font-size:12.5px;color:var(--ink3);}
 .lf-views-save{display:flex;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid var(--border);}
 .lf-views-save input{flex:1;min-width:0;font-family:var(--sans);font-size:13px;padding:6px 8px;border:1.5px solid var(--border);border-radius:var(--r1);background:var(--white);color:var(--ink);}
-.lf-views-save button{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:6px 12px;border:none;border-radius:var(--r1);background:var(--brand);color:#fff;cursor:pointer;}
+.lf-views-save button{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:6px 12px;border:none;border-radius:var(--r1);background:var(--brand);color:#14120F;cursor:pointer;}
 .lf-views-hint{margin-top:6px;font-size:11px;color:var(--ink4);line-height:1.4;}
 .lf-bar::-webkit-scrollbar{display:none;}
 .lf-bar:empty{display:none;}
@@ -343,20 +378,24 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lf-n{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;opacity:.72;}
 .lf-sep{width:1px;height:20px;background:var(--border2);flex-shrink:0;margin:0 3px;}
 
-.lcard-src.tailortalk{background:var(--green-bg);color:var(--green);}
+.lcard-src.tailortalk{background:var(--bg2);color:var(--ink3);}
 .lcard-tt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;}
 .tt-chip{display:inline-block;font-size:10.5px;font-weight:600;border-radius:var(--r1);padding:3px 7px;background:var(--bg2);color:var(--ink3);white-space:nowrap;}
-.tt-chip.hot{background:var(--red-bg);color:var(--red);}
-.tt-chip.warm{background:var(--amber-bg);color:var(--amber);}
-.tt-chip.cold{background:var(--blue-bg);color:var(--blue);}
+/* Temperature describes a lead; it does not ask anything of you today. As red /
+   amber / blue fills these were three more hues on every chat card, competing
+   with the marks that do demand action. Each status already carries its own
+   emoji (🔥 🌤️ ❄️), so the meaning survives the tint being removed. */
+.tt-chip.hot,.tt-chip.warm,.tt-chip.cold{background:var(--bg2);color:var(--ink2);}
+.tt-chip.hot{font-weight:700;color:var(--ink);}
 .tt-chip.dead{color:var(--ink4);}
 .tt-chip.converted{background:var(--green-bg);color:var(--green);}
 .tt-chip.alert{background:var(--red-bg);color:var(--red);box-shadow:inset 2px 0 0 var(--red);}
-.tt-chip.paused{background:var(--purple-bg);color:var(--purple);}
+.tt-chip.paused{background:var(--bg2);color:var(--ink3);}
 .tt-chip.time{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:500;}
-.lcard:has(.tt-chip.alert){border-left:2px solid var(--red);}
+
 /* An open custom-trigger signal: the lead asked for something the team must act on. */
-.tt-chip.action{background:var(--amber-bg);color:var(--amber);box-shadow:inset 2px 0 0 var(--amber);}
+/* Shape rather than hue: the stripe says "open" without spending a colour. */
+.tt-chip.action{background:var(--bg2);color:var(--ink2);box-shadow:inset 2px 0 0 var(--border2);}
 .tt-chip.lost{background:var(--bg2);color:var(--ink3);box-shadow:inset 2px 0 0 var(--ink4);}
 .lcard:has(.tt-chip.action):not(:has(.tt-chip.alert)){border-left:2px solid var(--amber);}
 
@@ -379,7 +418,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .kcol-head{min-width:0;display:flex;flex-direction:column;gap:2px;}
 .kcol-rule{font-size:10.5px;font-weight:500;color:var(--ink4);line-height:1.35;padding-left:12px;}
 .kcol-counts{display:flex;align-items:center;gap:5px;flex-shrink:0;align-self:flex-start;}
-.kcol-urgent{min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:var(--red);color:#fff;font-family:var(--mono);font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;}
+/* The semantic tokens are text colours that flip pale on the dark ground, so
+   white on them drops to ~2:1 there. light-dark() puts near-black on the pale
+   variant and keeps white on the deep one. */
+.kcol-urgent{min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:var(--red);color:light-dark(#fff,#2A0A0A);font-family:var(--mono);font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;}
 .kcol.kcol-side{background:color-mix(in srgb,var(--bg2) 55%,transparent);}
 .kcol.kcol-lost .lcard,.kcol.kcol-won .lcard{opacity:.86;}
 
@@ -387,20 +429,51 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lcard-step{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.4;border-radius:var(--r1);padding:6px 8px;margin-bottom:7px;background:var(--bg2);color:var(--ink2);}
 .lcard-step-t{min-width:0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .lcard-step-due{flex-shrink:0;font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;color:var(--ink3);}
-.lcard-step.team{background:var(--blue-bg);color:var(--blue);}
-.lcard-step.team .lcard-step-due{color:var(--blue);}
+/* "The team owes something" is the normal state of a live lead, so tinting it
+   blue coloured most of the board for no distinction. Neutral ground; the due
+   time carries the urgency, and only .overdue below earns a hue. */
+.lcard-step.team{background:var(--bg2);color:var(--ink2);}
+.lcard-step.team .lcard-step-due{color:var(--ink3);}
 .lcard-step.overdue{background:var(--red-bg);color:var(--red);font-weight:600;}
 .lcard-step.overdue .lcard-step-due{color:var(--red);}
 .lcard-step.wait{background:transparent;color:var(--ink3);box-shadow:inset 0 0 0 1px var(--border);}
 .lcard-step.info{background:transparent;color:var(--ink3);padding-left:0;padding-right:0;}
 .lcard-step.done{background:transparent;color:var(--ink4);padding-left:0;padding-right:0;}
-.lcard-alert{font-size:11px;font-weight:600;line-height:1.35;margin-bottom:7px;padding-left:8px;border-left:2px solid var(--ink4);color:var(--ink2);}
-.lcard-alert.critical{border-left-color:var(--red);color:var(--red);}
-.lcard-alert.high{border-left-color:var(--amber);color:var(--amber);}
+/* Amber here fired on every chat signal. A signal worth reading is not the same
+   as a deadline missed: the note reads in plain ink, and only a genuinely
+   overdue item is allowed the red. */
+.lcard-alert{font-size:11px;font-weight:600;line-height:1.35;margin-bottom:7px;padding-left:8px;border-left:2px solid var(--border2);color:var(--ink2);}
+.lcard-alert.overdue{border-left-color:var(--red);color:var(--red);}
+.lcard-alert.note{border-left-color:var(--border2);color:var(--ink2);}
 .lcard-alert-more{font-family:var(--mono);font-weight:500;color:var(--ink4);}
+
+/* ── PER-COLUMN SORT ──
+   Quiet at rest, because the default order is right most of the time; it only
+   announces itself once a column is deliberately sorted some other way. */
+.kcol-sort{position:relative;flex-shrink:0;}
+.kcol-sort-btn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:var(--r1);background:transparent;color:var(--ink4);font-size:12px;line-height:1;cursor:pointer;transition:background .14s,color .14s;}
+.kcol-sort-btn:hover{background:var(--bg2);color:var(--ink);}
+.kcol-sort.set .kcol-sort-btn{color:var(--brand-ink);background:var(--brand-soft);}
+.kcol-sort-pop{position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:186px;padding:5px;border:1.5px solid var(--border);border-radius:var(--r2);background:var(--raised);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:1px;}
+.kcol-sort-opt{text-align:left;padding:7px 10px;border:none;border-radius:var(--r1);background:none;font-family:var(--sans);font-size:12.5px;font-weight:500;color:var(--ink2);cursor:pointer;white-space:nowrap;}
+.kcol-sort-opt:hover{background:var(--bg2);color:var(--ink);}
+.kcol-sort-opt.at{background:var(--brand-soft);color:var(--brand-ink);font-weight:700;}
+.kcol-sort-opt.reset{color:var(--ink3);font-size:11.5px;}
+/* The active sort is stated on the column, not just implied by the order —
+   and the tag is the way back to the default. */
+.kcol-sort-tag{display:inline-flex;align-items:center;gap:5px;margin:0 0 8px;padding:3px 9px;border:1px solid var(--border);border-radius:99px;background:var(--bg2);font-family:var(--mono);font-size:10px;letter-spacing:.03em;color:var(--ink3);cursor:pointer;}
+.kcol-sort-tag:hover{border-color:var(--ink3);color:var(--ink);}
+/* The value the column was ordered on, on each card, so the sequence is
+   readable rather than something you have to take on trust. */
+.lcard-sortmeta{font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;letter-spacing:.02em;color:var(--ink3);margin-bottom:7px;}
 .lcard-ai{color:var(--purple);}
-.lcard.sev-critical{border-left:3px solid var(--red);}
-.lcard.sev-high{border-left:3px solid var(--amber);}
+/* The left edge of a card has exactly one job: "this is past due, deal with it
+   today". It used to be painted by four competing rules — severity (where every
+   TailorTalk signal counted as 'high'), an overdue follow-up, a soon follow-up
+   and an escalation chip — so most cards on the board wore a red or amber rail
+   and the mark stopped carrying information. isOverdueUi() in app.js is now the
+   single source, and it is the same test the Overdue filter uses. */
+.lcard.is-overdue{border-left:3px solid var(--red);}
 
 .lf-chip.sub.focus.warn:not(.at){border-color:var(--amber-line);color:var(--amber);}
 .lf-chip.sub.focus.bad:not(.at){border-color:var(--red-line);color:var(--red);}
@@ -431,7 +504,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .st-attn{display:flex;flex-direction:column;gap:6px;margin:10px 0;}
 .st-item{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:9px 12px;border-radius:var(--r2);background:var(--card);border:1px solid var(--border);box-shadow:inset 3px 0 0 var(--ink4);}
 .st-item.critical{background:var(--red-bg);border-color:var(--red-line);box-shadow:inset 3px 0 0 var(--red);}
-.st-item.high{background:var(--amber-bg);border-color:var(--amber-line);box-shadow:inset 3px 0 0 var(--amber);}
+/* 'high' covers every chat signal; tinting them all amber made the lead page
+   as loud as the board used to be. Only a genuine deadline keeps a colour. */
+.st-item.high{box-shadow:inset 3px 0 0 var(--border2);}
 .st-item.low{box-shadow:inset 3px 0 0 var(--border2);}
 .st-item-main{min-width:0;flex:1 1 240px;}
 .st-item-t{font-size:13px;font-weight:600;color:var(--ink);}
@@ -462,7 +537,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lf-chip.sub.warn:not(.at){border-color:var(--amber-line);color:var(--amber);}
 
 /* Overview · Activity · Conversation — an underline tab row, the record-page pattern. */
-.tt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:4px 0 14px;overflow-x:auto;scrollbar-width:none;}
+.tt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:4px 0 14px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
 .tt-tabs::-webkit-scrollbar{display:none;}
 .tt-tab{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;padding:9px 12px 10px;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink3);cursor:pointer;transition:color .15s,border-color .15s;}
 .tt-tab:hover{color:var(--ink);}
@@ -509,13 +584,49 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .tt-chat-more{align-self:center;margin:0 0 4px;}
 
 /* ── LIST VIEW ── */
-.list-view{border:1px solid var(--border);border-radius:var(--r3);overflow:hidden;background:var(--white);}
-.list-view table{width:100%;border-collapse:collapse;}
+/* The table is 14 columns wide — far wider than any screen — so .list-view is
+   the scroll region for BOTH axes, not a clipping box. It used to be
+   `overflow:hidden`, which meant every column past the viewport edge was
+   simply unreachable, and — because a clipped box is still a scrollport —
+   the sticky `th` below anchored to a box that never scrolled, so the header
+   never stuck either. One rule broke both. */
+.lv-scroll{
+  position:relative;                 /* anchors the scroll-affordance fades */
+  border:1px solid var(--border);
+  border-radius:var(--r3);
+  background:var(--white);
+}
+.list-view{
+  overflow:auto;
+  /* Bounding the height is what makes the sticky header real: the table gets
+     its own scrollport instead of riding the page's. --hdr-h is measured from
+     the live sticky header in crm.html; the fallback covers first paint. */
+  max-height:calc(100dvh - var(--hdr-h,168px) - 42px);
+  border-radius:inherit;
+  /* A horizontal swipe/trackpad flick inside the table must not escape to the
+     browser's back-navigation gesture — losing your place mid-scroll is worse
+     than not scrolling at all. */
+  overscroll-behavior-x:contain;
+  -webkit-overflow-scrolling:touch;
+  scroll-behavior:auto;              /* html{scroll-behavior:smooth} would lag drags */
+}
+/* Columns get honest minimums instead of being crushed to fit. Below this the
+   table scrolls; above it, `width:100%` lets it fill a wide screen. */
+.list-view table{width:100%;min-width:1240px;border-collapse:separate;border-spacing:0;}
 /* Sticky header: scanning row 200 without losing the column names is the
-   single thing that makes a long list workable. */
-.list-view th{background:var(--bg2);text-align:left;padding:10px;font-size:10px;font-weight:600;color:var(--ink3);text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:3;}
-.list-view td{padding:calc(12px * var(--dens) + 3px) 14px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;}
-.list-view tr:last-child td{border-bottom:none;}
+   single thing that makes a long list workable.
+   border-collapse:separate is load-bearing here — with `collapse`, collapsed
+   borders belong to the table, not the cell, so they do not travel with a
+   sticky th and the header's bottom rule vanishes the moment it sticks. */
+.list-view th{background:var(--bg2);text-align:left;padding:10px;font-size:10px;font-weight:600;color:var(--ink3);text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:3;white-space:nowrap;}
+/* One line per row. A long property interest used to wrap to five lines and
+   blow the row height up with it, so a screenful fell from ~12 leads to 3 —
+   the scan the list exists for stopped working. Truncated text carries a
+   `title`, set in renderList(), so the full value is still one hover away. */
+.list-view td{padding:calc(12px * var(--dens) + 3px) 14px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;}
+.list-view td.lv-name{max-width:260px;}
+.list-view tbody tr:last-child td{border-bottom:none;}
 /* Hover marks the row with a brand edge rather than a wash — it points at the
    row you're on without repainting a third of the screen. */
 .list-view tbody tr{transition:background .1s;}
@@ -525,25 +636,95 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .list-view th.lv-sel,.list-view td.lv-sel{width:34px;padding-left:12px;padding-right:0;cursor:default;}
 .lv-sel input{width:15px;height:15px;accent-color:var(--brand);cursor:pointer;}
 .list-view tbody tr.sel td{background:var(--brand-soft);}
-.bulk-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;border:1.5px solid var(--brand-line,var(--border2));border-radius:var(--r3);background:var(--raised);box-shadow:0 4px 14px rgba(0,0,0,.08);font-size:13px;}
+
+/* ── Frozen identity columns ──
+   Scrolled out to "Updated By", a row is 14 anonymous values unless the lead's
+   name travels with it. The tick box and the name stay pinned to the left edge;
+   everything else slides under them. */
+.list-view th.lv-sel,.list-view td.lv-sel{position:sticky;left:0;z-index:2;}
+/* --lv-sel-w is measured from the rendered tick column in wireListScroll():
+   a table cell's `width` is only a hint to the layout algorithm, so hardcoding
+   the offset here would leave a gap or an overlap at some densities. */
+.list-view th.lv-name,.list-view td.lv-name{position:sticky;left:var(--lv-sel-w,46px);z-index:2;min-width:160px;}
+.list-view th.lv-sel,.list-view th.lv-name{z-index:4;}
+/* A pinned cell needs an opaque backdrop or the scrolling columns show through
+   it. --brand-soft is translucent on the dark ground, so the row tints are
+   painted AS a layer over the solid surface rather than replacing it. */
+.list-view td.lv-sel,.list-view td.lv-name{background-color:var(--white);}
+.list-view tbody tr:hover td.lv-sel,.list-view tbody tr:hover td.lv-name,
+.list-view tbody tr.sel td.lv-sel,.list-view tbody tr.sel td.lv-name{
+  background-image:linear-gradient(var(--brand-soft),var(--brand-soft));
+}
+/* The seam where pinned meets scrolling: a hairline at rest, a cast shadow
+   once there is actually something hidden underneath it. */
+.list-view td.lv-name::after,.list-view th.lv-name::after{
+  content:'';position:absolute;top:0;right:0;bottom:0;width:1px;background:var(--border);
+}
+.lv-scroll.is-scrolled-x .list-view td.lv-name::after,
+.lv-scroll.is-scrolled-x .list-view th.lv-name::after{
+  width:14px;background:linear-gradient(90deg,var(--shadow-c),transparent);
+  right:-14px;pointer-events:none;
+}
+
+/* ── Scroll affordance ──
+   Nobody scrolls sideways in a box that looks finished. A fade on whichever
+   edge still has content past it is the only thing that says "there is more
+   this way"; it is removed the moment that edge is reached. */
+.lv-scroll::after{
+  content:'';position:absolute;top:1px;right:1px;bottom:1px;width:38px;
+  border-radius:0 var(--r3) var(--r3) 0;pointer-events:none;
+  background:linear-gradient(270deg,var(--white),transparent);
+  opacity:0;transition:opacity .18s;
+}
+.lv-scroll.has-more-x::after{opacity:.92;}
+/* A live count of what is off-screen, so the fade is not the only signal —
+   and so a keyboard or screen-reader user is told the same thing. */
+.lv-scroll-hint{
+  display:none;align-items:center;gap:6px;margin:7px 2px 0;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--ink3);
+}
+.lv-scroll.can-scroll-x + .lv-scroll-hint{display:flex;}
+.lv-scroll-hint kbd{
+  font-family:var(--mono);font-size:10px;background:var(--bg2);border:1px solid var(--border);
+  border-bottom-width:2px;border-radius:5px;padding:1px 5px;color:var(--ink2);
+}
+/* top:0 put it *under* #hdr, which is itself sticky at top:0 with z-index:100
+   and therefore always painted over it. It belongs just below the header. */
+.bulk-bar{position:sticky;top:calc(var(--hdr-h,168px) + 6px);z-index:90;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;border:1.5px solid var(--brand-line,var(--border2));border-radius:var(--r3);background:var(--raised);box-shadow:0 4px 14px rgba(0,0,0,.08);font-size:13px;}
 .bulk-bar b{margin-right:4px;}
 .bulk-bar select,.bulk-bar button,.bulk-bar input{font-family:var(--sans);font-size:12.5px;padding:5px 9px;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;}
 .bulk-bar button:hover,.bulk-bar select:hover{border-color:var(--brand);color:var(--ink);}
 .bulk-bar button.quiet{border-color:transparent;background:transparent;color:var(--ink3);}
-.bulk-bar button.primary{background:var(--brand);border-color:var(--brand);color:#fff;}
+/* #fff on --brand is 2.3:1 — the file header's rule is that --brand is a fill
+   and only black may sit on it. Every other brand-filled control already does. */
+.bulk-bar button.primary{background:var(--brand);border-color:var(--brand);color:#14120F;}
 .bulk-fu{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .lv-th{display:flex;align-items:center;justify-content:space-between;gap:4px;}
-.lv-th-label{cursor:pointer;display:inline-flex;align-items:center;gap:4px;user-select:none;white-space:nowrap;}
+/* A real <button>, so sorting is reachable by Tab and Enter — it used to be a
+   bare <span onclick>, invisible to the keyboard. These resets keep it looking
+   exactly like the header text it replaced. */
+.lv-th-label{cursor:pointer;display:inline-flex;align-items:center;gap:4px;user-select:none;white-space:nowrap;
+  background:none;border:none;padding:0;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;}
 .lv-th-label:hover{color:var(--ink);}
-.lv-sort-ico{font-size:9px;opacity:.55;}
-.lv-filter-btn{background:none;border:none;color:var(--ink4);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:5px;line-height:1;flex-shrink:0;}
+/* The only cue for which column is sorted — at 9px and 55% it was ~2.1:1.
+   Full opacity, and the active direction inherits the header's own ink. */
+.lv-sort-ico{font-size:10px;opacity:1;color:var(--ink4);}
+.list-view th[aria-sort]:not([aria-sort=none]) .lv-sort-ico{color:var(--brand-ink);}
+.list-view th[aria-sort]:not([aria-sort=none]){color:var(--ink);}
+/* 11px glyph in 2px of padding is a ~15px target. The visible chip stays that
+   size; the hit area is grown past it so it is actually tappable. */
+.lv-filter-btn{position:relative;background:none;border:none;color:var(--ink4);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:5px;line-height:1;flex-shrink:0;}
+.lv-filter-btn::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:32px;height:32px;}
 .lv-filter-btn:hover{background:var(--border);color:var(--ink);}
 .lv-filter-btn.active{color:var(--brand-ink);}
-.lv-filter-pop{position:absolute;top:100%;left:0;margin-top:4px;background:var(--raised);border:1.5px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow-lg);padding:8px;min-width:180px;max-width:260px;z-index:50;text-transform:none;letter-spacing:normal;font-weight:500;cursor:default;font-family:var(--sans);}
+/* Fixed, not absolute: the table is a scroll container, and an absolutely
+   positioned menu would be clipped by it. positionListFilterPop() in app.js
+   sets left/top from the trigger's rect and clamps it into the viewport. */
+.lv-filter-pop{position:fixed;top:0;left:0;background:var(--raised);border:1.5px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow-lg);padding:8px;min-width:180px;max-width:260px;z-index:400;text-transform:none;letter-spacing:normal;font-weight:500;cursor:default;font-family:var(--sans);}
 .lv-filter-actions{display:flex;gap:6px;margin-bottom:6px;}
 .lv-filter-actions button{flex:1;padding:5px 8px;border-radius:var(--r1);border:1px solid var(--border);background:var(--bg);color:var(--ink2);font-size:10.5px;font-weight:600;cursor:pointer;}
 .lv-filter-actions button:hover{background:var(--ink);color:var(--bg);border-color:var(--ink);}
-.lv-filter-opts{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;}
+.lv-filter-opts{max-height:220px;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:1px;}
 .lv-filter-opt{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2);padding:4px;border-radius:6px;cursor:pointer;}
 .lv-filter-opt:hover{background:var(--bg2);}
 .lv-filter-opt input{accent-color:var(--brand);}
@@ -586,10 +767,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .fu-time.overdue{color:var(--red);}
 .fu-time.today{color:var(--amber);}
 .fu-wa-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--r1);background:var(--green-bg);color:var(--green);text-decoration:none;font-size:15px;flex-shrink:0;transition:all .14s;}
-.fu-wa-btn:hover{background:var(--green);color:#fff;}
+.fu-wa-btn:hover{background:var(--green);color:light-dark(#fff,#05240F);}
 .fu-action-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);color:var(--ink3);font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all .14s;}
-.fu-action-btn.done:hover{background:var(--green);border-color:var(--green);color:#fff;}
-.fu-action-btn.remove:hover{background:var(--red);border-color:var(--red);color:#fff;}
+.fu-action-btn.done:hover{background:var(--green);border-color:var(--green);color:light-dark(#fff,#05240F);}
+.fu-action-btn.remove:hover{background:var(--red);border-color:var(--red);color:light-dark(#fff,#2A0A0A);}
 
 /* ── NOTE FOLLOW-UP EDIT ROW ── */
 .note-fu-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:14px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r2);}
@@ -597,9 +778,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .note-fu-actions{display:none;gap:8px;flex-basis:100%;}
 .note-fu-btn{padding:8px 14px;border-radius:var(--r1);border:1.5px solid var(--border);background:var(--white);font-size:12.5px;font-weight:700;cursor:pointer;color:var(--ink2);}
 .note-fu-btn.done{color:var(--green);border-color:transparent;background:var(--green-bg);}
-.note-fu-btn.done:hover{background:var(--green);color:#fff;}
+.note-fu-btn.done:hover{background:var(--green);color:light-dark(#fff,#05240F);}
 .note-fu-btn.remove{color:var(--red);border-color:transparent;background:var(--red-bg);}
-.note-fu-btn.remove:hover{background:var(--red);color:#fff;}
+.note-fu-btn.remove:hover{background:var(--red);color:light-dark(#fff,#2A0A0A);}
 .note-fu-hint{font-size:11px;color:var(--ink4);flex-basis:100%;}
 
 .fu-log-name{font-size:18px;font-weight:700;margin-bottom:16px;letter-spacing:-.02em;}
@@ -608,20 +789,64 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .fu-log-presets button:hover{border-color:var(--brand);background:var(--white);color:var(--ink);}
 
 /* ── LEAD DETAIL PANEL ── */
-#dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
-#dp.open{display:block;animation:fadeSlide .24s var(--ease);}
+/* The panel itself no longer scrolls: it is a fixed frame holding a header and
+   a split body, each pane of which scrolls on its own. One shared scrollbar
+   for two side-by-side columns would move both at once. */
+#dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow:hidden;display:none;flex-direction:column;}
+#dp.open{display:flex;animation:fadeSlide .24s var(--ease);}
 @keyframes fadeSlide{from{opacity:0;transform:translateX(22px)}to{opacity:1;transform:none}}
-.dp-hdr{background:color-mix(in srgb,var(--white) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--border);padding:15px 26px;position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+/* Fixed by the flex column above, so it no longer needs to be sticky. */
+.dp-hdr{background:color-mix(in srgb,var(--white) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--border);padding:15px 26px;z-index:10;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:10px;}
 .dp-back{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1.5px solid var(--border);border-radius:var(--r1);padding:8px 15px;font-size:12.5px;font-weight:600;color:var(--ink3);cursor:pointer;transition:all .15s;flex-shrink:0;}
 .dp-back:hover{background:var(--ink);color:var(--bg);border-color:var(--ink);}
-.dp-actions{display:flex;gap:8px;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+.dp-actions{display:flex;gap:8px;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
 .dp-actions::-webkit-scrollbar{display:none;}
 .dp-act{display:inline-flex;align-items:center;gap:6px;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r1);padding:8px 14px;font-size:12px;font-weight:600;color:var(--ink3);cursor:pointer;transition:all .15s;flex-shrink:0;white-space:nowrap;text-decoration:none;}
 .dp-act:hover{border-color:var(--ink);color:var(--ink);}
 .dp-act.danger:hover{background:var(--red-bg);border-color:var(--red);color:var(--red);}
 .dp-act.wa{color:var(--green);border-color:transparent;background:var(--green-bg);}
-.dp-act.wa:hover{background:var(--green);color:#fff;}
-.dp-body{max-width:740px;margin:0 auto;padding:26px 24px 80px;}
+.dp-act.wa:hover{background:var(--green);color:light-dark(#fff,#05240F);}
+/* ── SPLIT: LEAD ON THE LEFT, CONVERSATION ON THE RIGHT ──
+   --dp-side-w is the user's dragged width, stored in localStorage and applied
+   by app.js. The grid only becomes two columns once .split is set, which
+   syncConversationPane() does solely above --dp-split-min and only for a lead
+   that actually has a chat — so a narrow screen and a walk-in lead both get
+   the full width for the lead itself. */
+.dp-split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden;}
+.dp-split.split{grid-template-columns:minmax(0,1fr) auto minmax(280px,var(--dp-side-w,34%));}
+.dp-body{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;min-width:0;padding:26px 24px 80px;}
+/* Prose keeps a readable measure when it has the panel to itself; inside the
+   split the pane is already the constraint, so the column fills it. */
+.dp-body > *{max-width:var(--read-w);margin-left:auto;margin-right:auto;}
+.dp-split.split .dp-body > *{max-width:none;}
+
+.dp-resizer{display:none;width:11px;cursor:col-resize;background:transparent;border:none;padding:0;position:relative;flex-shrink:0;touch-action:none;}
+.dp-split.split .dp-resizer{display:block;}
+/* The grabbable area is 11px; the line you see is 1px. */
+.dp-resizer::before{content:'';position:absolute;inset:0 5px;background:var(--border);transition:background .15s;}
+.dp-resizer:hover::before,.dp-resizer:focus-visible::before,.dp-resizer.dragging::before{background:var(--brand);inset:0 4px;}
+.dp-resizer:focus-visible{outline:none;}
+/* A grip so the divider reads as draggable at rest, not just on hover. */
+.dp-resizer::after{content:'';position:absolute;top:50%;left:50%;width:3px;height:26px;transform:translate(-50%,-50%);border-radius:99px;background:var(--border2);}
+body.dp-resizing{cursor:col-resize;user-select:none;}
+
+.dp-side{display:none;flex-direction:column;min-width:0;border-left:1px solid var(--border);background:var(--card);}
+.dp-split.split .dp-side{display:flex;}
+.dp-side-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 16px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.dp-side-title{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);}
+.dp-side-x{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border:none;border-radius:var(--r1);background:none;color:var(--ink3);font-size:19px;line-height:1;cursor:pointer;}
+.dp-side-x:hover{background:var(--bg2);color:var(--ink);}
+.dp-side-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:14px 16px 20px;}
+/* In its own pane the chat fills the height instead of being a boxed 520px
+   region inside a scrolling page. */
+.dp-side-body .tt-chat{max-height:none;height:auto;}
+/* Below --dp-split-min there is no room to put two columns side by side, so the
+   conversation covers the lead instead of competing with it for width. The
+   header stays visible above it, which is where the toggle back lives. */
+.dp-split{position:relative;}
+.dp-split.sheet .dp-side{display:flex;position:absolute;inset:0;z-index:20;border-left:none;background:var(--bg);animation:fadeSlide .2s var(--ease);}
+.dp-split.sheet .dp-side-hdr{padding:12px 14px;}
+.dp-act.conv[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg);}
 .dp-title{font-size:29px;font-weight:700;margin-bottom:6px;letter-spacing:-.03em;}
 .dp-sub{font-size:13px;color:var(--ink3);margin-bottom:18px;}
 .dp-stage-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:22px;}
@@ -643,8 +868,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dp-flag-label{font-size:10px;font-weight:600;color:var(--ink4);text-transform:uppercase;}
 .dp-flag-btn{padding:6px 14px;border-radius:99px;border:none;background:transparent;font-family:var(--sans);font-size:12px;font-weight:700;color:var(--ink3);cursor:pointer;transition:all .15s;}
 .dp-flag-btn:hover{color:var(--ink);}
-.dp-flag-btn.yes.active{background:var(--green);color:#fff;}
-.dp-flag-btn.no.active{background:var(--red);color:#fff;}
+.dp-flag-btn.yes.active{background:var(--green);color:light-dark(#fff,#05240F);}
+.dp-flag-btn.no.active{background:var(--red);color:light-dark(#fff,#2A0A0A);}
 /* Same pill inside the Add/Edit Lead modal, where it sits under its own
    field label rather than beside the stage selector. */
 .lm-flag-toggle{width:100%;justify-content:space-between;padding:5px 6px 5px 14px;}
@@ -704,7 +929,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .pl-results small{display:block;font-size:11.5px;font-weight:400;color:var(--ink3);}
 .pl-empty{padding:6px 8px;font-size:12.5px;font-weight:400;color:var(--ink4);}
 .lf-chip.prop{gap:8px;}
-.raw-toggle{font-size:11.5px;color:var(--ink4);cursor:pointer;text-decoration:underline;}
+.raw-toggle{font-size:11.5px;color:var(--ink4);cursor:pointer;text-decoration:underline;background:none;border:none;padding:4px 0;font-family:inherit;}
+.raw-toggle:hover{color:var(--ink2);}
 .raw-data{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:12px 14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);white-space:pre-wrap;margin-top:8px;display:none;}
 .raw-data.show{display:block;}
 
@@ -781,16 +1007,22 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .empty-mini{color:var(--ink4);padding:16px;text-align:center;font-size:12.5px;background:var(--bg2);border-radius:var(--r2);}
 
 /* ── MODALS ── */
-.modal-overlay{position:fixed;inset:0;background:light-dark(rgba(20,18,15,.5),rgba(0,0,0,.68));z-index:500;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);}
+/* align-items:flex-start + margin:auto, NOT align-items:center. A centred
+   flex item that overflows its container overflows equally in both directions
+   and the overflow above the top edge cannot be scrolled to in any browser —
+   which is how a phone in landscape lost the Save button entirely. */
+.modal-overlay{position:fixed;inset:0;background:light-dark(rgba(20,18,15,.5),rgba(0,0,0,.68));z-index:500;display:none;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;overscroll-behavior:contain;backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);}
 .modal-overlay.open{display:flex;animation:ovIn .18s ease;}
 @keyframes ovIn{from{opacity:0}to{opacity:1}}
-.modal-box{background:var(--raised);border:1px solid var(--border);border-radius:var(--r4);max-width:480px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:modalIn .22s var(--ease);}
+.modal-box{background:var(--raised);border:1px solid var(--border);border-radius:var(--r4);max-width:480px;width:100%;max-height:88dvh;margin:auto;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:modalIn .22s var(--ease);}
 @keyframes modalIn{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
 .modal-hdr{display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--border);}
 .modal-title{font-size:19px;font-weight:700;letter-spacing:-.02em;}
-.modal-x{background:none;border:none;font-size:24px;color:var(--ink4);cursor:pointer;line-height:1;}
+/* 24px glyph with zero padding was a ~15px tall target. */
+.modal-x{background:none;border:none;font-size:24px;color:var(--ink4);cursor:pointer;line-height:1;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:var(--r1);flex-shrink:0;}
+.modal-x:hover{background:var(--bg2);color:var(--ink);}
 .modal-x:hover{color:var(--ink);}
-.modal-body{padding:20px 24px;overflow-y:auto;flex:1;}
+.modal-body{padding:20px 24px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;flex:1;}
 .field{margin-bottom:14px;}
 .field label{display:block;font-size:10.5px;font-weight:600;text-transform:uppercase;color:var(--ink3);margin-bottom:7px;}
 .field input,.field select,.field textarea{width:100%;padding:10px 13px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r2);font-family:var(--sans);font-size:13.5px;color:var(--ink);outline:none;transition:border-color .18s,box-shadow .18s,background .18s;}
@@ -806,7 +1038,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .combo.is-combo .combo-caret:hover{background:var(--bg2);color:var(--ink);}
 .combo.is-combo input{padding-right:38px;}
 .combo.open .combo-caret{transform:translateY(-50%) rotate(180deg);}
-.combo-pop{display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:var(--raised);border:1.5px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow-lg);padding:5px;max-height:238px;overflow-y:auto;}
+/* position:fixed, placed by positionComboPop() in app.js. As an absolutely
+   positioned child it was clipped by .modal-body's own scrollport, so the
+   property list showed one or two rows and a hard cut. */
+.combo-pop{display:none;position:fixed;z-index:560;background:var(--raised);border:1.5px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow-lg);padding:5px;max-height:238px;overflow-y:auto;overscroll-behavior:contain;}
 .combo.is-combo.open .combo-pop{display:block;}
 .combo-opt{display:block;width:100%;text-align:left;padding:9px 11px;border:none;background:none;border-radius:var(--r1);font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer;}
 .combo-opt:hover,.combo-opt.at{background:var(--brand-soft);color:var(--ink);}
@@ -824,18 +1059,19 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 /* stage manager rows */
 .stage-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r2);padding:8px 10px;}
 .stage-row input[type=text]{flex:1;border:none;background:transparent;font-size:13px;font-weight:600;color:var(--ink);outline:none;padding:4px;}
-.stage-color{width:20px;height:20px;border-radius:50%;flex-shrink:0;border:2px solid var(--white);box-shadow:0 0 0 1px var(--border);cursor:pointer;}
-.stage-move{background:none;border:none;color:var(--ink4);cursor:pointer;font-size:14px;padding:2px 4px;}
+.stage-color{width:22px;height:22px;padding:0;border-radius:50%;flex-shrink:0;border:2px solid var(--white);box-shadow:0 0 0 1px var(--border);cursor:pointer;}
+.stage-move{background:none;border:none;color:var(--ink4);cursor:pointer;font-size:14px;padding:6px 8px;border-radius:var(--r1);}
+.stage-move:disabled{opacity:.3;cursor:default;}
 .stage-move:hover{color:var(--ink);}
-.stage-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:2px 6px;}
+.stage-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:6px 9px;border-radius:var(--r1);}
 .stage-add-row{display:flex;gap:8px;margin-top:6px;}
 .stage-add-row input{flex:1;}
 .stage-add-row button{padding:8px 16px;border-radius:var(--r1);border:none;background:var(--brand);color:#14120F;font-weight:700;font-size:12.5px;cursor:pointer;white-space:nowrap;}
 
 /* ── AI BOT EDITOR ── */
-#botEditorPanel{position:fixed;inset:0;background:var(--bg);z-index:250;overflow-y:auto;display:none;}
+#botEditorPanel{position:fixed;inset:0;background:var(--bg);z-index:250;overflow:hidden auto;overscroll-behavior:contain;display:none;}
 #botEditorPanel.open{display:block;animation:fadeSlide .24s var(--ease);}
-.bot-editor-body{max-width:1100px;margin:0 auto;padding:24px 24px 80px;display:flex;gap:24px;align-items:flex-start;}
+.bot-editor-body{max-width:var(--shell-w);margin:0 auto;padding:24px 24px 80px;display:flex;gap:24px;align-items:flex-start;}
 .bot-editor-form{flex:1;min-width:0;}
 .bot-preview{width:340px;flex-shrink:0;position:sticky;top:86px;background:var(--card);border:1px solid var(--border);border-radius:var(--r3);padding:16px;}
 .bot-textarea{width:100%;padding:11px 13px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r2);font-family:var(--sans);font-size:13.5px;color:var(--ink);outline:none;resize:vertical;line-height:1.6;}
@@ -877,9 +1113,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .chan-disconnect-btn:hover{border-color:var(--red);color:var(--red);}
 
 /* ── WORKFLOW CANVAS ── */
-.wf-wrap{max-width:1100px;margin:0 auto;padding:20px 24px 4px;}
+.wf-wrap{max-width:var(--shell-w);margin:0 auto;padding:20px 24px 4px;}
 .wf-title{font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;}
-.wf-canvas{display:flex;align-items:center;gap:0;background:var(--card);border:1px solid var(--border);border-radius:var(--r3);padding:22px 18px;overflow-x:auto;}
+.wf-canvas{display:flex;align-items:center;gap:0;background:var(--card);border:1px solid var(--border);border-radius:var(--r3);padding:22px 18px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}
 .wf-col{display:flex;flex-direction:column;gap:12px;flex-shrink:0;}
 .wf-col.center{justify-content:center;}
 .wf-rail{flex:1;min-width:34px;align-self:stretch;position:relative;}
@@ -902,6 +1138,21 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .wf-hint{font-size:11px;color:var(--ink4);margin-top:9px;text-align:center;}
 .wf-flash{animation:wfFlash 1.2s ease;border-radius:var(--r2);}
 @keyframes wfFlash{0%,100%{box-shadow:0 0 0 0 rgba(254,141,0,0);}25%{box-shadow:0 0 0 3px var(--brand-line);}}
+
+/* ── TABLET / SMALL LAPTOP (≤1000px) ──
+   The header's two text links plus the nav pills need about 1000px. Below that
+   the links become the icons they already have a design for; the full mobile
+   hamburger takes over lower down. Without this step the header simply ran off
+   the right of the page between 681px and 1000px, taking the whole document's
+   horizontal scroll with it. */
+@media(max-width:1000px){
+  .nav-back-btn,.nav-fin-btn{display:none;}
+  .hdr-nav{gap:5px;}
+  .nav-mobile-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,var(--purple),var(--blue));color:light-dark(#fff,#140A28);font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s;flex-shrink:0;box-shadow:0 2px 6px rgba(109,40,217,.12);margin-left:auto;margin-right:6px;}
+  .nav-mobile-icon:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(109,40,217,.2);}
+  .nav-mobile-icon.fin{background:linear-gradient(135deg,var(--brand),var(--brand-600));box-shadow:0 2px 6px rgba(254,141,0,.18);margin-left:0;}
+  .nav-mobile-icon.fin:hover{box-shadow:0 4px 10px rgba(254,141,0,.28);}
+}
 
 @media(max-width:680px){
   .wf-wrap{padding:14px 14px 2px;}
@@ -947,13 +1198,15 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    at a glance for someone who opens it once a day; everything below them is
    the detail you drill into only when a tile looks wrong.
    ═══════════════════════════════════════════════════════════════════════ */
-.dash-wrap{max-width:1140px;margin:0 auto;padding:4px 0 40px;}
+.dash-wrap{max-width:var(--shell-w);margin:0 auto;padding:4px 0 40px;}
 .dash-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
 .dash-toolbar input[type=date]{padding:9px 12px;border-radius:var(--r2);border:1.5px solid var(--border);background:var(--white);font-family:var(--mono);font-size:12.5px;color:var(--ink);}
 .dash-toolbar input[type=date]:focus{border-color:var(--brand);box-shadow:var(--ring);outline:none;}
 .dash-toolbar-label{font-size:12px;color:var(--ink3);font-weight:600;}
 
-.dash-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:16px;}
+/* auto-fit rather than a hard 4: the tiles stay a sane size and the row
+   simply fits as many as the screen allows. */
+.dash-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:11px;margin-bottom:16px;}
 /* The headline tiles get the only orange rail on the page. It appears on
    hover, so the resting grid stays quiet and the tile you're aiming at is
    unambiguous — the tiles are buttons that jump you into a filtered view. */
@@ -964,7 +1217,11 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dash-stat-val{font-size:30px;font-weight:600;line-height:1;letter-spacing:-.03em;}
 .dash-stat-label{font-size:10px;color:var(--ink3);font-weight:600;text-transform:uppercase;}
 
-.dash-sec{margin-bottom:11px;background:var(--card);border:1px solid var(--border);border-radius:var(--r3);overflow:hidden;}
+/* overflow:hidden here clipped .dash-chart-tip and the SVG end labels that
+   .dash-chart-svg{overflow:visible} exists to let out. Children that need the
+   rounded corner carry their own radius, so the card does not have to trap
+   everything inside it to keep its shape. */
+.dash-sec{margin-bottom:11px;background:var(--card);border:1px solid var(--border);border-radius:var(--r3);}
 .dash-sec-hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:var(--sans);color:var(--ink);transition:background .12s;}
 .dash-sec-hdr:hover{background:var(--bg2);}
 .dash-sec-title{font-size:13.5px;font-weight:700;color:var(--ink);letter-spacing:-.01em;}
@@ -1033,14 +1290,14 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 /* min-width:0 is load-bearing: .dash-sec-body is a flex column, and a flex
    item won't shrink below its content width without it — the table would
    then push the whole page sideways on a phone instead of scrolling itself. */
-.dash-chart-table{overflow-x:auto;margin-top:4px;min-width:0;max-width:100%;}
+.dash-chart-table{overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;margin-top:4px;min-width:0;max-width:100%;}
 .dash-chart-table table{width:100%;border-collapse:collapse;font-size:12.5px;}
 .dash-chart-table th{text-align:left;font-size:10px;font-weight:600;color:var(--ink4);text-transform:uppercase;padding:7px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .dash-chart-table td{padding:8px;border-bottom:1px solid var(--border);color:var(--ink2);white-space:nowrap;}
 .dash-chart-table td.dash-td-name{font-family:var(--sans);font-weight:600;color:var(--ink);white-space:normal;min-width:150px;}
 .dash-chart-table tr:last-child td{border-bottom:none;}
 
-.dash-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.dash-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:10px;}
 .dash-kpi{background:var(--bg2);border-radius:var(--r2);padding:12px 14px;}
 .dash-kpi-val{font-size:22px;font-weight:600;line-height:1.1;letter-spacing:-.02em;}
 .dash-kpi-label{font-size:10px;color:var(--ink3);font-weight:600;text-transform:uppercase;margin-top:4px;}
@@ -1050,7 +1307,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dash-card-grid > .dash-card{margin-bottom:0;}
 
 /* Vertical columns: ≤24px thick, 3px rounded cap, square at the baseline. */
-.dash-cols{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,72px));gap:14px;align-items:end;padding:6px 2px 0;height:180px;justify-content:start;}
+/* --cols is the live stage count, so a 12-stage pipeline needs ~1018px and
+   simply vanished past the card edge. Let it scroll instead. */
+.dash-cols{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,72px));gap:14px;align-items:end;padding:6px 2px 0;height:180px;justify-content:start;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}
 .dash-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0;}
 .dash-col-val{font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:5px;}
 .dash-col-track{width:100%;max-width:24px;flex:1;display:flex;align-items:flex-end;}
@@ -1076,7 +1335,6 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dash-bar-sub{grid-column:2/4;font-size:11px;color:var(--ink4);}
 
 @media(max-width:1000px){
-  .dash-stats{grid-template-columns:repeat(2,1fr);}
   .dash-card-grid{grid-template-columns:1fr;}
   .dash-card-grid > .dash-card{margin-bottom:12px;}
 }
@@ -1092,10 +1350,6 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .brand-name{font-size:17px;letter-spacing:-.02em;} .brand-logo{width:34px;height:34px;}
   .brand-sub{display:none;}
   .nav-back-btn,.nav-fin-btn{display:none;}
-  .nav-mobile-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,var(--purple),var(--blue));color:#fff;font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s;flex-shrink:0;box-shadow:0 2px 6px rgba(109,40,217,.12);margin-left:auto;margin-right:6px;}
-  .nav-mobile-icon:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(109,40,217,.2);}
-  .nav-mobile-icon.fin{background:linear-gradient(135deg,var(--brand),var(--brand-600));box-shadow:0 2px 6px rgba(254,141,0,.18);margin-left:0;}
-  .nav-mobile-icon.fin:hover{box-shadow:0 4px 10px rgba(254,141,0,.28);}
   .hdr-nav{position:absolute;top:50px;right:12px;display:none;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r3);padding:10px;flex-direction:column;gap:6px;min-width:180px;box-shadow:var(--shadow-md);z-index:150;}
   .hdr-nav.mobile-open{display:flex;}
   #main{padding:12px 12px 90px;}
@@ -1130,7 +1384,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .dash-chart-endlabel{font-size:25px;}
 
   .hdr-nav{gap:0;width:auto;position:static;background:transparent;border:none;padding:0;box-shadow:none;}
-  .hdr-nav.mobile-open{position:absolute;display:flex;top:50px;right:12px;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r3);padding:10px;box-shadow:var(--shadow-lg);min-width:200px;max-width:calc(100vw - 24px);max-height:calc(100vh - 70px);overflow-y:auto;z-index:150;}
+  .hdr-nav.mobile-open{position:absolute;display:flex;top:50px;right:12px;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r3);padding:10px;box-shadow:var(--shadow-lg);min-width:200px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 70px);overflow-y:auto;z-index:150;}
   .fu-nav-btn,.view-dd-btn{padding:10px 12px;font-size:12px;width:100%;justify-content:flex-start;border-radius:var(--r1);border:1.5px solid var(--border);}
   .fu-nav-btn:hover,.view-dd-btn:hover{border-color:var(--brand);background:var(--bg);}
   .fu-nav-btn.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
@@ -1149,10 +1403,19 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .dd-sep{margin:6px 0;border-top:1px solid var(--border);}
   .more-dd-item{padding:10px 12px;font-size:12px;width:100%;text-align:left;}
 
-  .mobile-fab{display:flex;position:fixed;bottom:22px;right:18px;width:56px;height:56px;border-radius:50%;background:var(--brand);color:#14120F;align-items:center;justify-content:center;font-size:30px;font-weight:600;line-height:1;box-shadow:var(--shadow-lg);z-index:140;border:none;cursor:pointer;padding:0;}
+  /* Below #hdr's stacking context (z-index:100), not above it: at 140 the FAB
+   painted over any open header dropdown, whose own z-index:150 is local to the
+   header and so never escapes it. */
+  .mobile-fab{display:flex;position:fixed;bottom:22px;right:18px;width:56px;height:56px;border-radius:50%;background:var(--brand);color:#14120F;align-items:center;justify-content:center;font-size:30px;font-weight:600;line-height:1;box-shadow:var(--shadow-lg);z-index:90;border:none;cursor:pointer;padding:0;}
 
-  .list-view{overflow-x:auto;}
-  
+  /* On a phone the header is taller (wrapped chips) and the sticky-header
+     trade is worse than the screen space it costs — give the table the whole
+     viewport minus the header and let the page carry the rest. */
+  .list-view{max-height:calc(100dvh - var(--hdr-h,210px) - 20px);}
+  .list-view table{min-width:1100px;}
+  .list-view th.lv-name,.list-view td.lv-name{min-width:130px;}
+  .lv-scroll::after{width:26px;}
+
   /* Kanban & Card optimizations for mobile */
   .kcol{flex:0 0 85vw;padding:0 8px 8px;}
   .kcol-hdr{padding:9px 3px 8px;margin-bottom:8px;}
@@ -1170,7 +1433,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .tt-profile{grid-template-columns:1fr;}
   .tt-msg{max-width:90%;}
   .tt-ev{grid-template-columns:1fr;gap:1px;}
-  .st-step,.st-row{grid-template-columns:1fr;gap:2px;}
+  .st-step,.st-row,.st-step.with-acts{grid-template-columns:minmax(0,1fr);gap:6px;align-items:start;}
+  .st-step .st-item-acts{justify-content:flex-start;width:100%;}
   .kcol-rule{display:none;}
   .tt-tab{padding:9px 10px 10px;font-size:12.5px;}
   
@@ -1211,13 +1475,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .nav-back-btn,.nav-fin-btn{display:none;}
   .fu-nav-btn{padding:8px;font-size:11px;}
   .more-dd-item{padding:8px 10px;font-size:11px;}
-}
-
-/* ── EXTRA SMALL (original) ── */
-@media(max-width:360px){
-  .hdr-nav{gap:4px;}
   .view-dd-btn{padding:9px 8px;font-size:12px;}
 }
+
+
 
 /* Motion is decoration here, never information — every animation above has a
    static resting state that reads the same, so turning them all off costs
