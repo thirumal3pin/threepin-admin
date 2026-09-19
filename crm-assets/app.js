@@ -831,6 +831,41 @@ let ttTab = 'overview';
 // (The per-day Activity tab moved into the lead's Timeline.)
 try{ const t = localStorage.getItem(TT_TAB_KEY); if(['overview','conversation'].includes(t)) ttTab = t; }catch(e){}
 
+// ── Live conversation ──
+// loadTtState below is a one-shot read, repeated only when tt.lastEventAt
+// changes on the parent lead. Anything that wrote the chat without bumping
+// that field — and the nightly bulk sync, which writes many messages at once —
+// left the pane showing a stale conversation until the lead was reopened.
+// While a lead is on screen we subscribe to its state document instead, so the
+// write itself is what updates the view, whatever produced it.
+let ttWatch = null;   // { id, stop }
+function watchTtState(l){
+  const F = window.crmFirebase;
+  if(!l || !isTtLead(l) || !F || !F.watchLeadTailorTalk){ stopTtWatch(); return; }
+  if(ttWatch && ttWatch.id === l.id) return;   // already on this lead
+  stopTtWatch();
+  const id = l.id;
+  const stop = F.watchLeadTailorTalk(id, (state, err) => {
+    // A lead can be closed between the subscribe and the first callback.
+    if(!ttWatch || ttWatch.id !== id) return;
+    const cur = leads.find(x => x.id === id);
+    ttStateCache.set(id, {
+      at: cur && cur.tt ? cur.tt.lastEventAt : null,
+      state: state || null,
+      error: err ? (err.code === 'permission-denied' ? 'rules' : 'load') : null
+    });
+    if(currentDetailId === id && document.getElementById('dp').classList.contains('open')){
+      renderTtSection(cur || l);
+      renderTimeline(cur || l);
+    }
+  });
+  ttWatch = { id, stop: typeof stop === 'function' ? stop : null };
+}
+function stopTtWatch(){
+  if(ttWatch && ttWatch.stop){ try{ ttWatch.stop(); }catch(e){} }
+  ttWatch = null;
+}
+
 async function loadTtState(l){
   if(!isTtLead(l) || !window.crmFirebase || !window.crmFirebase.getLeadTailorTalk) return;
   if(ttStateLoading.has(l.id)) return;
@@ -890,18 +925,9 @@ function moveTtLeadToWon(id){
 // Clears everything open on the lead (signals, a new escalation, a message waiting for the team)
 // in one logged step, for when reading it was the whole job.
 const TT_ALERT_TITLES = { escalated:'New escalation', flagged:'New flag', waiting:'Message waiting for the team' };
-function markTtHandled(id, what){
-  const l = leads.find(x=>x.id===id);
-  if(!l) return;
-  addHistory(l, 'followed-up', `Handled: <b>${escapeHtml(what)}</b>`);
-  l.updatedAt = Date.now();
-  l.updatedBy = currentUserEmail || l.updatedBy || null;
-  l.lastActionType = 'signal-handled';
-  persistLead(l);
-  refreshAll();
-  if(currentDetailId===id){ renderTtSection(l); renderHistory(l); }
-  showToast('✓ Marked handled');
-}
+// (markTtHandled lived here: a second, unreferenced copy of markHandledUi that
+// wrote the identical "Handled: <x>" line. One action must have exactly one
+// place that records it, or the history stops being trustworthy.)
 function markTtDetailsSent(id){
   if(currentDetailId!==id) openDetail(id);
   setDetailsSent(true);
@@ -1094,7 +1120,22 @@ function renderConversationPane(l){
   else if(cached.error) box.innerHTML = '<div class="empty-mini">Couldn\'t load the conversation — check your connection.</div>';
   else if(!st) box.innerHTML = '<div class="empty-mini">No conversation yet — it arrives with the next update.</div>';
   else box.innerHTML = ttConversationHtml(l, st);
-  if(!ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
+  scrollConversationToLatest(l);
+}
+
+// In the side pane the pane itself scrolls; inline it is the chat box. Scroll
+// whichever one actually has the overflow, or the newest message — the reason
+// the panel is open — sits below the fold every time.
+function scrollConversationToLatest(l){
+  if(l && ttChatExpanded.has(l.id)) return;   // they went looking for history
+  requestAnimationFrame(() => {
+    const chat = document.getElementById('dpTtChatScroll');
+    if(!chat) return;
+    const pane = chat.closest('#dpSideBody');
+    const sc = (pane && pane.scrollHeight > pane.clientHeight + 4) ? pane
+             : (chat.scrollHeight > chat.clientHeight + 4) ? chat : null;
+    if(sc) sc.scrollTop = sc.scrollHeight;
+  });
 }
 
 // ── The draggable divider ──
@@ -1223,7 +1264,7 @@ function renderTtSection(l){
     ${tabs}
     <div class="tt-panel" role="tabpanel">${panel}</div>
     <div class="tt-foot">Last change from TailorTalk ${timeAgo(t.syncedAt || t.lastEventAt)}</div>`;
-  if(tab2==='conversation' && !ttChatExpanded.has(l.id)){ const sc = document.getElementById('dpTtChatScroll'); if(sc) sc.scrollTop = sc.scrollHeight; }
+  if(tab2==='conversation') scrollConversationToLatest(l);
   // Data arrives async, so the pane is refreshed from the same place the
   // inline section is — never left showing "Loading…" after the chat lands.
   if(paneHasChat) renderConversationPane(l);
@@ -1461,10 +1502,19 @@ async function runBackfillSummaries(){
 // never pass raw user input directly, always escapeHtml() it first.
 function addHistory(l, type, text){
   l.history = l.history || [];
+  const now = Date.now();
+  // A double tap writes the line twice. It is easy to do on a phone, and every
+  // one of these buttons re-renders under the finger, so the second tap lands
+  // on a freshly drawn button rather than being swallowed. The same event with
+  // the same text moments apart is never two things that happened — it is one
+  // thing recorded twice. Guarded here rather than per button so every path
+  // into the timeline gets it: Handled, Followed up, stage moves, the lot.
+  const recent = l.history.find(h => h && h.type === type && h.text === text && now - (h.at || 0) < 8000);
+  if(recent) return recent;
   const event = {
-    id: 'h'+Date.now()+Math.random().toString(36).slice(2,7),
+    id: 'h'+now+Math.random().toString(36).slice(2,7),
     type, text,
-    at: Date.now(),
+    at: now,
     by: currentUserEmail || l.updatedBy || null
   };
   l.history.push(event);
@@ -1530,6 +1580,28 @@ function timelineItems(l){
   ].sort((a, b) => b.at - a.at);
 }
 function noteTextHtml(text){ return mentionifyHtml(escapeHtml(text || '')); }
+
+// One action can still legitimately write more than one line — moving a lead
+// to Lost records the move and the reason; an edit records each field. Drawn
+// as separate rows they each repeat the same timestamp and the same name,
+// which is what made the history read as a pile of unrelated events. Entries
+// from the same person within the same minute are one moment, and are drawn
+// as one row with one timestamp.
+function groupTimelineItems(items){
+  const MOMENT = 60000;
+  const out = [];
+  for(const i of items){
+    const g = out[out.length - 1];
+    // Day summaries (TailorTalk chat days) stand alone — they already are a
+    // summary of many things and have no single author.
+    const groupable = g && !i.summary && !g.summary
+      && (g.by || null) === (i.by || null)
+      && Math.abs(g.at - i.at) < MOMENT;
+    if(groupable){ g.lines.push(i); g.at = Math.max(g.at, i.at); }
+    else out.push({ at: i.at, by: i.by, summary: i.summary, lines: [i] });
+  }
+  return out;
+}
 function timelineDayLabel(ts){
   const r = relDay(ts);
   return r === 'Today' || r === 'Yesterday' ? `${r} · ${fmtDay(ts)}` : fmtDay(ts);
@@ -1547,23 +1619,39 @@ function renderTimeline(l){
     list.innerHTML = `<div class="empty-mini">${items.length ? 'Nothing of this kind yet.' : 'Nothing logged yet — add a note above.'}</div>`;
     return;
   }
-  const shown = tlExpanded.has(l.id) ? matching : matching.slice(0, TL_PAGE);
+  const groups = groupTimelineItems(matching);
+  const shown = tlExpanded.has(l.id) ? groups : groups.slice(0, TL_PAGE);
   const byLabel = by => !by ? '' : by === 'AI' ? '🤖 AI' : ['TailorTalk', 'CRM rework'].includes(by) ? by : escapeHtml(String(by).split('@')[0]);
   let lastDay = null;
-  list.innerHTML = shown.map(i => {
-    const day = dayKeyOf(i.at);
-    const head = day !== lastDay ? `<div class="tl-day">${timelineDayLabel(i.at)}</div>` : '';
+  list.innerHTML = shown.map(g => {
+    const day = dayKeyOf(g.at);
+    const head = day !== lastDay ? `<div class="tl-day">${timelineDayLabel(g.at)}</div>` : '';
     lastDay = day;
-    const tone = i.tags.includes('notes') ? ' note' : i.tags.includes('ai') ? ' ai' : i.tags.includes('tailortalk') ? ' tt' : i.tags.includes('stage') ? ' stage' : '';
-    const meta = [i.summary ? '' : fmtClock(i.at), byLabel(i.by)].filter(Boolean).join(' · ');
-    return `${head}<div class="tl-item${tone}">
-      <div class="tl-ico" aria-hidden="true">${i.icon}</div>
-      <div class="tl-body">
+    // A note is the substance of a moment, so it sets the row's tone and its
+    // icon whenever one is present.
+    const lead = g.lines.find(i => i.tags.includes('notes')) || g.lines[0];
+    const tags = lead.tags;
+    const tone = tags.includes('notes') ? ' note' : tags.includes('ai') ? ' ai' : tags.includes('tailortalk') ? ' tt' : tags.includes('stage') ? ' stage' : '';
+    const meta = [g.summary ? '' : fmtClock(g.at), byLabel(g.by)].filter(Boolean).join(' · ');
+    // Notes first, then what was done — the substance before the bookkeeping.
+    const ordered = [...g.lines].sort((a, b) =>
+      (b.tags.includes('notes') ? 1 : 0) - (a.tags.includes('notes') ? 1 : 0));
+    // The control is a sibling of the text, never inside it — otherwise the
+    // note's own text reads "Sent the agreement draftDelete" to anything that
+    // looks at it, tests and screen readers alike.
+    const body = ordered.map(i =>
+      `<div class="tl-line">
         <div class="tl-text">${i.html}</div>
-        ${meta || i.noteId ? `<div class="tl-meta">${meta}${i.noteId ? `<button type="button" class="tl-del" onclick="deleteNote('${l.id}','${i.noteId}')">Delete</button>` : ''}</div>` : ''}
+        ${i.noteId ? `<button type="button" class="tl-del" onclick="deleteNote('${l.id}','${i.noteId}')">Delete</button>` : ''}
+      </div>`).join('');
+    return `${head}<div class="tl-item${tone}${g.lines.length > 1 ? ' tl-multi' : ''}">
+      <div class="tl-ico" aria-hidden="true">${lead.icon}</div>
+      <div class="tl-body">
+        ${body}
+        ${meta ? `<div class="tl-meta">${meta}</div>` : ''}
       </div>
     </div>`;
-  }).join('') + (matching.length > shown.length ? `<button type="button" class="tt-btn tl-more" onclick="tlExpanded.add('${l.id}');renderTimeline(leads.find(x=>x.id==='${l.id}'))">Show all ${matching.length}</button>` : '');
+  }).join('') + (groups.length > shown.length ? `<button type="button" class="tt-btn tl-more" onclick="tlExpanded.add('${l.id}');renderTimeline(leads.find(x=>x.id==='${l.id}'))">Show all ${groups.length}</button>` : '');
 }
 function setTimelineFilter(key){
   tlFilter = TL_FILTERS.some(f => f.key === key) ? key : 'all';
@@ -3363,6 +3451,8 @@ function openDetail(id){
   convSheetOpen = false;
   initDpResizer();
   syncConversationPane();
+  // Live for as long as this lead is on screen.
+  watchTtState(l);
   // Notes + history live in subcollections — load them on open (the board
   // never needs them). Renders again once they arrive.
   loadLeadThreads(l);
@@ -3577,6 +3667,7 @@ function closeDetail(){
   document.getElementById('dp').classList.remove('open');
   currentDetailId = null;
   convSheetOpen = false;
+  stopTtWatch();
   const split = document.getElementById('dpSplit');
   if(split) split.classList.remove('split', 'sheet');
 }
@@ -3650,21 +3741,17 @@ function saveFollowUpLog(){
   }
 
   const now = Date.now();
-  if(noteText){
-    logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
-    addHistory(l, 'followed-up', `Followed up — “${escapeHtml(noteText)}”`);
-  } else {
-    addHistory(l, 'followed-up', 'Marked as followed up');
-  }
   const prevFollowUpAt = l.followUpAt;
-  if((prevFollowUpAt||null) !== (followUpAt||null)){
-    if(followUpAt){
-      const when = new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
-      addHistory(l, 'followup', `Next follow-up ${prevFollowUpAt?'changed to':'set for'} <b>${when}</b>`);
-    } else {
-      addHistory(l, 'followup-removed', 'Follow-up removed');
-    }
-  }
+  const dateChanged = (prevFollowUpAt||null) !== (followUpAt||null);
+  // The note carries what was said, so the event line must not repeat it — it
+  // says what was DONE, and where that leaves the lead. One line, not three.
+  const nextBit = !dateChanged ? ''
+    : followUpAt
+      ? ` · next <b>${new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</b>`
+      : ' · no follow-up from here';
+  if(noteText) logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+  addHistory(l, dateChanged && !followUpAt ? 'followup-removed' : 'followed-up',
+    `Followed up${nextBit}`);
   l.followUpAt = followUpAt;
   l.followUpBy = currentUserEmail || 'team'; l.followUpSetAt = now; l.followUpNote = null;
   l.updatedAt = now;

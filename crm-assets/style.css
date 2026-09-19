@@ -812,7 +812,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    syncConversationPane() does solely above --dp-split-min and only for a lead
    that actually has a chat — so a narrow screen and a walk-in lead both get
    the full width for the lead itself. */
-.dp-split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden;}
+.dp-split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,100%);overflow:hidden;}
 .dp-split.split{grid-template-columns:minmax(0,1fr) auto minmax(280px,var(--dp-side-w,34%));}
 .dp-body{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;min-width:0;padding:26px 24px 80px;}
 /* Belt and braces. If a browser holds a cached copy of the older document, it
@@ -836,7 +836,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dp-resizer::after{content:'';position:absolute;top:50%;left:50%;width:3px;height:26px;transform:translate(-50%,-50%);border-radius:99px;background:var(--border2);}
 body.dp-resizing{cursor:col-resize;user-select:none;}
 
-.dp-side{display:none;flex-direction:column;min-width:0;border-left:1px solid var(--border);background:var(--card);}
+.dp-side{display:none;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--border);background:var(--card);}
 .dp-split.split .dp-side{display:flex;}
 .dp-side-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 16px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .dp-side-title{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);}
@@ -845,7 +845,7 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .dp-side-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:14px 16px 20px;}
 /* In its own pane the chat fills the height instead of being a boxed 520px
    region inside a scrolling page. */
-.dp-side-body .tt-chat{max-height:none;height:auto;}
+.dp-side-body .tt-chat{max-height:none;height:auto;overflow:visible;}
 /* Below --dp-split-min there is no room to put two columns side by side, so the
    conversation covers the lead instead of competing with it for width. The
    header stays visible above it, which is where the toggle back lives. */
@@ -1493,3 +1493,16 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
   .lcard:hover,.fu-row:hover,.dash-stat:hover{transform:none;}
 }
+
+
+/* ── Timeline: one moment, one row ──
+   Several lines can belong to one action (a follow-up and the date it set, a
+   move to Lost and its reason). Grouped they share a single timestamp instead
+   of repeating it, and the lines after the first are stepped down so the row
+   still reads as one event rather than a list. */
+/* Text and its control sit side by side; the second and later lines of a
+   grouped moment step down so the row still reads as one event. */
+.tl-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.tl-line .tl-text{min-width:0;flex:1 1 auto;}
+.tl-multi .tl-line + .tl-line{margin-top:5px;}
+.tl-multi .tl-line + .tl-line .tl-text{color:var(--ink2);font-size:12.5px;}

@@ -142,7 +142,12 @@ const texts = second.history.map(h => h.text).join(' | ');
 check('History: status change', /status changed from <b>Cold<\/b> to <b>Warm<\/b>/.test(texts), texts);
 check('History: budget change', /Budget changed from <b>3\.3 Cr<\/b> to <b>3\.6 Cr<\/b>/.test(texts), texts);
 check('History: AI paused', /AI paused/.test(texts), texts);
-check('History: TailorTalk stage', /TailorTalk stage: <b>Negotiating<\/b> → <b>Site visit booked<\/b>/.test(texts), texts);
+// The entry now carries the whole sentence, not a 40-character headline — the
+// next action is the useful half and it was being cut off. Logging is still
+// decided on the headline, so a rewording of the same stage stays unlogged
+// (see "Rewordings are not changes").
+check('History: TailorTalk stage names both stages in full',
+  /TailorTalk stage: <b>Negotiating\. Next action: 3 PIN to share the final discounted price quote by Oct 19\. Lead is highly engaged\.<\/b> → <b>Site visit booked\. Next action: confirm cab pickup\.<\/b>/.test(texts), texts);
 check('Same booking and payment are not repeated', !second.history.some(h => /Booked through|Payment authorised/.test(h.text)));
 eq('New message appended once', second.stateWrite.chat.length, 4);
 eq('Last message time moves forward', second.leadWrite.tt.lastMessageAt, Date.parse('2026-09-13T13:10:00+00:00'));

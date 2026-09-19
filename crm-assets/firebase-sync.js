@@ -166,6 +166,19 @@ window.crmFirebase = {
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
   getLeadTailorTalk: (leadId) => getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'))
     .then(s => (s.exists() ? s.data() : null)),
+
+  // Live subscription to one lead's conversation, held only while that lead is
+  // open. getLeadTailorTalk above is a one-shot read that the CRM only repeated
+  // when tt.lastEventAt changed on the parent lead — so anything that wrote the
+  // chat without bumping that field (and the daily sync, which writes messages
+  // in bulk) left the pane showing a stale conversation until the lead was
+  // reopened. A listener sees the write itself, whatever caused it.
+  // Returns its own unsubscribe.
+  watchLeadTailorTalk: (leadId, cb) => onSnapshot(
+    doc(db, 'leads', leadId, 'tailortalk', 'state'),
+    s => cb(s.exists() ? s.data() : null, null),
+    e => { console.error('Firestore watch tailortalk error:', e); cb(null, e); }
+  ),
   deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => console.error('Firestore delete lead error:', e)),
 
   // ── Notes / history subcollections ──

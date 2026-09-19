@@ -95,6 +95,16 @@ export function escapeHtml(str) {
 const EMPTYISH = /^(null|none|nil|n\/?a|na|nothing|unknown|not (yet )?(mentioned|specified|provided|available|shared|known|discussed)|-+|—)\.?$/i;
 
 // A trimmed string, or null for blanks and the placeholders an AI writes when it knows nothing.
+// A plain length cap, with no sentence-breaking — for values that ARE a
+// sentence and lose their meaning when cut at the first clause.
+export function clipText(v, max) {
+  const s = clean(v);
+  if (!s) return null;
+  if (s.length <= max) return s;
+  const sp = s.lastIndexOf(' ', max - 1);
+  return s.slice(0, sp > max * 0.6 ? sp : max - 1).replace(/[\s.,;:]+$/, '') + '…';
+}
+
 export function clean(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === 'object') return null;
@@ -422,7 +432,7 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     adId: ad ? clean(ad.id) : null,
     adTitle: ad ? clean(ad.title) : null,
     adUrl: ad ? clean(ad.source_url) : null,
-    stage: shortValue(d.stage_and_next_action, 40),
+    stage: clipText(clean(d.stage_and_next_action), 240),
     values: ttValues,
     // Webhooks send created_at; get_leads sends joined.
     createdAt: toMs(d.created_at) || toMs(d.joined),
@@ -569,7 +579,15 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
         ? `Flagged in TailorTalk${freshTt.flagDetails ? ': <b>' + escapeHtml(freshTt.flagDetails) + '</b>' : ''}`
         : 'Flag cleared in TailorTalk');
     }
-    if (freshTt.stage && !sameText(freshTt.stage, prevTt.stage)) {
+    // Two different questions, deliberately answered by two different values.
+    // WHETHER to log compares the headline — the first clause, which is the
+    // stage itself — so the AI rewording "share the quote" as "share the final
+    // discounted quote by Oct 19" does not manufacture a timeline entry every
+    // time it phrases the same stage differently. WHAT to show is the whole
+    // sentence, because "Actively looking, next action: confirm…" cut at 40
+    // characters told nobody what the next action actually was.
+    const stageHeadline = v => shortValue(v, 40);
+    if (freshTt.stage && !sameText(stageHeadline(freshTt.stage), stageHeadline(prevTt.stage))) {
       hist('tailortalk', prevTt.stage
         ? `TailorTalk stage: <b>${escapeHtml(prevTt.stage)}</b> → <b>${escapeHtml(freshTt.stage)}</b>`
         : `TailorTalk stage: <b>${escapeHtml(freshTt.stage)}</b>`);
