@@ -34,6 +34,8 @@ export const STAGE_DEFS = [
     rule: 'Talking price, token or documents' },
   { key: 'won',           name: 'Won',           kind: 'won',  color: '#15803D', step: 6,
     rule: 'Token paid, signed or rented' },
+  { key: 'sourcing',      name: 'Sourcing',      kind: 'open', color: '#4F46E5', step: null, targetDays: 3,
+    rule: 'We know what they want and have nothing to show yet' },
   { key: 'on_hold',       name: 'On hold',       kind: 'hold', color: '#64748B', step: null,
     rule: 'Interested, but paused for now' },
   { key: 'lost',          name: 'Lost',          kind: 'lost', color: '#B91C1C', step: null,
@@ -43,7 +45,8 @@ export const STAGE_DEFS = [
 export const STAGE_KEYS = STAGE_DEFS.map(d => d.key);
 const DEF_BY_KEY = Object.fromEntries(STAGE_DEFS.map(d => [d.key, d]));
 
-// The forward path a lead walks. On hold and Lost sit beside it.
+// The forward path a lead walks. Sourcing, On hold and Lost sit beside it:
+// none of them is progress. Sourcing is the one where the ball is ours.
 export const LADDER = ['new', 'options', 'send_details', 'visit_pending', 'visit_done', 'negotiation', 'won'];
 
 export const LOST_REASONS = {
@@ -59,7 +62,6 @@ export const LOST_REASONS = {
 
 export const HOLD_REASONS = {
   postponed: 'Postponed by the lead',
-  no_match: 'Waiting for a matching property',
   budget: 'Budget not ready',
   other: 'Other'
 };

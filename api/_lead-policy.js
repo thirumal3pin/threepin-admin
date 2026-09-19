@@ -143,6 +143,14 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
     if (verdict.next.owner === 'team') suggest('the team still owes this lead a reply');
     else if (conf === 'high' && AUTO_LOST.has(verdict.lostReason)) moveTo = 'lost';
     else suggest('loss not certain');
+  } else if (target === 'sourcing') {
+    // Not on the ladder, so the forward/backward test below would read it as a
+    // step backwards from anywhere. It is neither: it is a live lead the team
+    // owes a property to, and the lead does not have to agree to it the way
+    // they must for On hold. Requiring next_owner "team" is what keeps it from
+    // becoming a place to file leads nobody wants to work.
+    if (conf === 'high' && verdict.next.owner === 'team') moveTo = 'sourcing';
+    else suggest('not certain there is nothing to show');
   } else if (target === 'on_hold') {
     // "We have no match yet, the team will look" is the team's work, not the lead's pause.
     if (verdict.next.owner === 'team') suggest('the team still owes this lead something');

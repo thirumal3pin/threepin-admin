@@ -386,6 +386,40 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   eq('…which does tick details sent', onward.patch.detailsSent, true);
 }
 {
+  // ── Sourcing: a live lead we cannot serve yet ──
+  const findV = over => verdict({ stage: 'sourcing', confidence: 'high',
+    next: { owner: 'team', action: 'Find a 2BHK in Porur under 1.5 Cr', kind: 'find_property', dueAt: null },
+    visit: { status: 'none', at: null }, ...over });
+
+  const d = decide(ttLead({ stageId: sid('new') }), findV());
+  eq('A qualified lead with nothing to show goes to Sourcing', d.moved, { from: 'new', to: 'sourcing' });
+  check('…and it is not a milestone', !Object.keys(d.patch).some(k => k.startsWith('reached.')), JSON.stringify(Object.keys(d.patch)));
+  check('…nor does it tick details sent', !('detailsSent' in d.patch));
+
+  // The round trip that made this belong off the ladder: options we sent were
+  // rejected, so we are searching again — and that must not need approval.
+  const rejected = decide(ttLead({ stageId: sid('options'), reached: { new: NOW - 5 * DAY, options: NOW - 3 * DAY } }), findV());
+  eq('Options that did not fit send it back to Sourcing', rejected.moved, { from: 'options', to: 'sourcing' });
+  check('…keeping the milestones it already earned', !('reached.options' in rejected.patch));
+
+  // Out again, the moment we have something. No need for the lead to speak
+  // first — unlike On hold, the stall was ours.
+  const found = decide(ttLead({ stageId: sid('sourcing'), stageChangedAt: NOW - 2 * DAY,
+    tt: { id: 'x1', category: 'sales', lastMessageAt: NOW - 3 * DAY } }), verdict({ stage: 'options', confidence: 'high' }));
+  eq('Sending a property takes it out of Sourcing', found.moved, { from: 'sourcing', to: 'options' });
+
+  // It is for what WE owe. A lead simply weighing up what we sent is not it.
+  const undecided = decide(ttLead({ stageId: sid('options') }), findV({ next: { owner: 'lead', action: null, kind: 'other', dueAt: null } }));
+  check('A lead still deciding is not parked in Sourcing', !undecided.moved && undecided.suggested === 'sourcing', JSON.stringify(undecided.moved));
+  eq('…and it says why', undecided.patch.ai.suggestion.why, 'not certain there is nothing to show');
+
+  // And it cannot become a graveyard.
+  const stale = computeAttention({ ...ttLead({ stageId: sid('sourcing') }), stageChangedAt: NOW - 4 * DAY }, { stages: STAGES, now: NOW });
+  check('A lead left in Sourcing raises it', stale.some(a => a.key === 'sourcing_stale'), JSON.stringify(stale.map(a => a.key)));
+  const fresh = computeAttention({ ...ttLead({ stageId: sid('sourcing') }), stageChangedAt: NOW - HOUR }, { stages: STAGES, now: NOW });
+  check('…but not on the first day', !fresh.some(a => a.key === 'sourcing_stale'));
+}
+{
   const d = decide(ttLead({ stageId: sid('won') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_interested' }));
   check('A won deal is never moved automatically', !d.moved);
   const vendor = decide(ttLead({ tt: { id: 'v', category: 'others', lastMessageAt: NOW - HOUR } }), verdict());

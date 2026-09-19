@@ -146,6 +146,12 @@ export function computeAttention(lead, ctx = {}) {
   if (key === 'send_details' && now - inStageSince > DAY && !owes) {
     add('details_owed', 'high', 'Send the details they asked for', `waiting ${ago(now - inStageSince)}`, inStageSince);
   }
+  // A lead parked here is waiting on US. Three days is the point at which we
+  // either have something or owe them an honest word.
+  if (key === 'sourcing' && now - inStageSince > 3 * DAY) {
+    add('sourcing_stale', 'high', 'Still nothing to show — source it or tell them',
+      `looking for ${ago(now - inStageSince)}`, inStageSince);
+  }
   if (key === 'visit_done' && now - inStageSince > 2 * DAY && now - lastActivity > 2 * DAY && !owes) {
     add('feedback_due', 'medium', 'Get feedback on the visit', `nothing for ${ago(now - lastActivity)}`, lastActivity);
   }
