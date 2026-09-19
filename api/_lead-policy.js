@@ -164,6 +164,14 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
     }
   }
 
+  // A tenant whose pipeline has not gained a newly defined column yet must not
+  // crash the run: there is no id to write, so it becomes a suggestion until
+  // the column exists.
+  if (moveTo && !stageForKey(stages, moveTo)) {
+    suggest('this board has no such column yet');
+    moveTo = null;
+  }
+
   if (moveTo) {
     const toStage = stageForKey(stages, moveTo);
     const fromName = current ? current.name : 'no column';
@@ -179,7 +187,9 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
     if (curKey === 'on_hold' && moveTo !== 'on_hold') { patch.holdUntil = null; patch.holdReason = null; }
     if (curKey === 'lost' && moveTo !== 'lost') patch.lostReason = null;
     // Reaching Options or beyond means details were shared — keep the team's toggle in step.
-    if (LADDER.indexOf(moveTo) >= 1 && moveTo !== 'won' && lead.detailsSent !== true) patch.detailsSent = true;
+    // send_details is the exception: it is the column for details we have NOT
+    // sent, so reaching it must never tick "details sent".
+    if (LADDER.indexOf(moveTo) >= 1 && moveTo !== 'won' && moveTo !== 'send_details' && lead.detailsSent !== true) patch.detailsSent = true;
     ai.lastMove = { from: curKey, fromStageId: lead.stageId || null, to: moveTo, at: now, evidence: verdict.evidence };
     ai.suggestion = null;
     result.moved = { from: curKey, to: moveTo };

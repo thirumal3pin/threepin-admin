@@ -8,7 +8,7 @@
 
 import {
   planPipelineMigration, stageKeyOf, stageKindOf, hasKeyedPipeline, stageForKey, STAGE_DEFS,
-  reachedUpdate, furthestStep, stageAge
+  reachedUpdate, furthestStep, stageAge, LADDER
 } from '../crm-assets/pipeline.js';
 import { computeDashboardMetrics } from '../crm-assets/dashboardMetrics.js';
 import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
@@ -99,8 +99,8 @@ section('Milestone dates, days in a column, the funnel');
   eq('Entering a milestone for the first time records it', reachedUpdate({ reached: { new: 1 } }, 'options', 5), { 'reached.options': 5 });
   eq('…but never overwrites the first date', reachedUpdate({ reached: { options: 2 } }, 'options', 5), null);
   eq('On hold and Lost are not milestones', [reachedUpdate({}, 'on_hold', 5), reachedUpdate({}, 'lost', 5)], [null, null]);
-  eq('The furthest step counts a lead that later went Lost', furthestStep({ stageId: sid('lost'), reached: { new: 1, visit_done: 3 } }, STAGES), 3);
-  eq('…and a lead from before milestone dates by its column', furthestStep({ stageId: sid('negotiation') }, STAGES), 4);
+  eq('The furthest step counts a lead that later went Lost', furthestStep({ stageId: sid('lost'), reached: { new: 1, visit_done: 3 } }, STAGES), LADDER.indexOf('visit_done'));
+  eq('…and a lead from before milestone dates by its column', furthestStep({ stageId: sid('negotiation') }, STAGES), LADDER.indexOf('negotiation'));
   const age = stageAge({ stageId: sid('options'), stageChangedAt: NOW - 8.5 * DAY }, STAGES, NOW);
   eq('Days in the column, against its target', [age.days, age.target, age.over, age.farOver], [8, 7, true, false]);
   eq('Closed columns have no target', stageAge({ stageId: sid('won'), stageChangedAt: NOW - 40 * DAY }, STAGES, NOW).target, null);
@@ -114,9 +114,15 @@ section('Milestone dates, days in a column, the funnel');
     { id: 'f6', stageId: sid('visit_done'), enquiryType: 'Vendor / Collaboration', createdAt: NOW - DAY }
   ];
   const j = computeDashboardMetrics(funnelLeads, STAGES, NOW).journey;
-  eq('Funnel counts every milestone a sales lead ever reached (spam and vendors out)', j.map(s => s.count), [4, 3, 2, 1, 1, 1]);
-  eq('…labelled by the tenant\'s column names', j.map(s => s.label), ['Enquiries', 'Options sent', 'Visit planned', 'Visited', 'Negotiating', 'Won']);
-  eq('…with the typical days from enquiry', [j[1].medianDays, j[5].medianDays], [2, 28]);
+  // Indexed by key, not by position: adding a rung to the ladder must not
+  // silently re-point these assertions at the wrong column, as it just did.
+  const at = key => j.find(s => s.key === key);
+  eq('Funnel counts every milestone a sales lead ever reached (spam and vendors out)',
+    [at('new').count, at('options').count, at('visit_pending').count, at('won').count], [4, 3, 2, 1]);
+  eq('…labelled by the tenant\'s column names', j.map(s => s.label),
+    ['Enquiries', 'Options sent', 'Send more details', 'Visit planned', 'Visited', 'Negotiating', 'Won']);
+  eq('…with the typical days from enquiry', [at('options').medianDays, at('won').medianDays], [2, 28]);
+  eq('A lead past Send more details counts towards it', at('send_details').count, 2);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -356,6 +362,28 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
     tt: { id: 'x1', category: 'sales', lastMessageAt: NOW - 25 * HOUR } });
   check('A person’s follow-up is not overwritten because they also left a note',
     !('followUpAt' in decide(fuSet, verdict({ stage: 'visit_done' })).patch));
+}
+{
+  // A board that has been reworked but has not yet gained a column added to
+  // STAGE_DEFS since. It must keep working: the automation runs, and the new
+  // column is a suggestion until the pipeline document has it. Requiring every
+  // current key here would stop automation for a whole tenant on deploy day.
+  const without = STAGES.filter(s => s.key !== 'send_details');
+  check('A reworked board missing a newly added column is still workable', hasKeyedPipeline(without));
+  const d = decideLeadChanges({ lead: ttLead({ stageId: sid('options') }),
+    verdict: verdict({ stage: 'send_details', confidence: 'high' }), stages: without, now: NOW, run: {} });
+  check('…and that column is suggested, never written', !d.moved && d.suggested === 'send_details', JSON.stringify({ moved: d.moved, suggested: d.suggested }));
+  eq('…saying why', d.patch.ai.suggestion.why, 'this board has no such column yet');
+  check('A legacy board is still rejected', !hasKeyedPipeline(LEGACY));
+}
+{
+  // Reaching "Send more details" means we have NOT sent them.
+  const d = decide(ttLead({ stageId: sid('options'), detailsSent: false }), verdict({ stage: 'send_details', confidence: 'high' }));
+  eq('Moves forward into Send more details', d.moved, { from: 'options', to: 'send_details' });
+  check('…without ticking "details sent"', !('detailsSent' in d.patch), JSON.stringify(d.patch.detailsSent));
+  const onward = decide(ttLead({ stageId: sid('send_details') }), verdict({ stage: 'visit_pending', confidence: 'high' }));
+  eq('…and a visit still carries it onward', onward.moved, { from: 'send_details', to: 'visit_pending' });
+  eq('…which does tick details sent', onward.patch.detailsSent, true);
 }
 {
   const d = decide(ttLead({ stageId: sid('won') }), verdict({ stage: 'lost', confidence: 'high', lostReason: 'not_interested' }));

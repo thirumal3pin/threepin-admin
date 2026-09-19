@@ -141,6 +141,11 @@ export function computeAttention(lead, ctx = {}) {
       add('visit_unscheduled', 'medium', 'Fix a time for the site visit', `pending for ${ago(now - inStageSince)}`, inStageSince);
     }
   }
+  // The column exists to make "they asked, we have not sent it" visible. A day
+  // is generous for sending a location or a floor plan.
+  if (key === 'send_details' && now - inStageSince > DAY && !owes) {
+    add('details_owed', 'high', 'Send the details they asked for', `waiting ${ago(now - inStageSince)}`, inStageSince);
+  }
   if (key === 'visit_done' && now - inStageSince > 2 * DAY && now - lastActivity > 2 * DAY && !owes) {
     add('feedback_due', 'medium', 'Get feedback on the visit', `nothing for ${ago(now - lastActivity)}`, lastActivity);
   }
@@ -153,7 +158,7 @@ export function computeAttention(lead, ctx = {}) {
 
   if (!closed && key !== 'on_hold') {
     const nextOwner = ai && ai.next && ai.next.owner;
-    if (tt && nextOwner === 'lead' && ['options', 'visit_pending', 'visit_done', 'negotiation'].includes(key)
+    if (tt && nextOwner === 'lead' && ['options', 'send_details', 'visit_pending', 'visit_done', 'negotiation'].includes(key)
         && tt.lastMessageAt && now - tt.lastMessageAt > 3 * DAY && (tt.lastReplyAt || 0) > tt.lastMessageAt && touched < now - 3 * DAY) {
       add('lead_silent', 'low', 'No reply from the lead — nudge', `silent for ${ago(now - tt.lastMessageAt)}`, tt.lastMessageAt);
     }

@@ -24,13 +24,15 @@ export const STAGE_DEFS = [
     rule: 'Nothing specific sent yet' },
   { key: 'options',       name: 'Options sent',  kind: 'open', color: '#0891B2', step: 1, targetDays: 7,
     rule: 'Sent a property, details or location — they are weighing it up' },
-  { key: 'visit_pending', name: 'Visit planned', kind: 'open', color: '#6D28D9', step: 2, targetDays: 5,
+  { key: 'send_details',  name: 'Send more details', kind: 'open', color: '#0E7490', step: 2, targetDays: 2,
+    rule: 'They asked for something we have not sent yet' },
+  { key: 'visit_pending', name: 'Visit planned', kind: 'open', color: '#6D28D9', step: 3, targetDays: 5,
     rule: 'Visit asked for or agreed — not done yet' },
-  { key: 'visit_done',    name: 'Visited',       kind: 'open', color: '#7C3AED', step: 3, targetDays: 4,
+  { key: 'visit_done',    name: 'Visited',       kind: 'open', color: '#7C3AED', step: 4, targetDays: 4,
     rule: 'They have seen the property' },
-  { key: 'negotiation',   name: 'Negotiating',   kind: 'open', color: '#B45309', step: 4, targetDays: 14,
+  { key: 'negotiation',   name: 'Negotiating',   kind: 'open', color: '#B45309', step: 5, targetDays: 14,
     rule: 'Talking price, token or documents' },
-  { key: 'won',           name: 'Won',           kind: 'won',  color: '#15803D', step: 5,
+  { key: 'won',           name: 'Won',           kind: 'won',  color: '#15803D', step: 6,
     rule: 'Token paid, signed or rented' },
   { key: 'on_hold',       name: 'On hold',       kind: 'hold', color: '#64748B', step: null,
     rule: 'Interested, but paused for now' },
@@ -42,7 +44,7 @@ export const STAGE_KEYS = STAGE_DEFS.map(d => d.key);
 const DEF_BY_KEY = Object.fromEntries(STAGE_DEFS.map(d => [d.key, d]));
 
 // The forward path a lead walks. On hold and Lost sit beside it.
-export const LADDER = ['new', 'options', 'visit_pending', 'visit_done', 'negotiation', 'won'];
+export const LADDER = ['new', 'options', 'send_details', 'visit_pending', 'visit_done', 'negotiation', 'won'];
 
 export const LOST_REASONS = {
   not_interested: 'Not interested',
@@ -110,9 +112,17 @@ export function stageForKey(stages, key) {
 }
 
 // Automation only runs on a pipeline where every key has its column.
+// The columns the rework established. The question this answers is "has this
+// board been reworked into keyed milestones?", NOT "does it have every column
+// defined today" — those are different questions, and conflating them meant
+// that adding a column to STAGE_DEFS silently stopped the automation for every
+// tenant until their pipeline document caught up. A newly defined column that
+// has not reached a tenant yet is handled where it matters: decideLeadChanges
+// suggests instead of moving while the column does not exist.
+const CORE_KEYS = ['new', 'options', 'visit_pending', 'visit_done', 'negotiation', 'won', 'on_hold', 'lost'];
 export function hasKeyedPipeline(stages) {
   const list = Array.isArray(stages) ? stages : [];
-  return STAGE_KEYS.every(k => list.some(s => s.key === k));
+  return CORE_KEYS.every(k => list.some(s => s.key === k));
 }
 
 export function ladderIndex(key) { return LADDER.indexOf(key); }

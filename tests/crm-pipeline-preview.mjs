@@ -109,7 +109,12 @@ const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)]
   const heads = await text(page, '.kcol-title');
   ok('Eight columns in milestone order', JSON.stringify(heads) === JSON.stringify(STAGE_DEFS.map(d => d.name)), JSON.stringify(heads));
   const rules = await text(page, '.kcol-rule');
-  ok('Every column shows its one-line rule', rules.length === 8 && rules[2] === 'Visit asked for or agreed — not done yet', JSON.stringify(rules));
+  // Counted from STAGE_DEFS rather than hardcoded, so adding a column does not
+  // need this line edited — only the board genuinely failing to show a rule does.
+  ok('Every column shows its one-line rule',
+    rules.length === STAGE_DEFS.length && rules.every(Boolean)
+    && rules[STAGE_DEFS.findIndex(d => d.key === 'visit_pending')] === 'Visit asked for or agreed — not done yet',
+    JSON.stringify(rules));
   await page.screenshot({ path: join(OUT, '01-board.png') });
 
   const l1 = await page.evaluate(() => { const c = [...document.querySelectorAll('.lcard')].find(x => /Rajesh/.test(x.textContent)); return c ? { cls: c.className, step: c.querySelector('.lcard-step') && c.querySelector('.lcard-step').className, text: c.textContent.replace(/\s+/g, ' ') } : null; });
