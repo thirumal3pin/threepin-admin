@@ -815,6 +815,12 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dp-split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden;}
 .dp-split.split{grid-template-columns:minmax(0,1fr) auto minmax(280px,var(--dp-side-w,34%));}
 .dp-body{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;min-width:0;padding:26px 24px 80px;}
+/* Belt and braces. If a browser holds a cached copy of the older document, it
+   reaches this stylesheet with .dp-body as a DIRECT child of #dp and no
+   .dp-split wrapper. #dp is a flex column, so without this the body would take
+   its content height, overflow the panel and be clipped by #dp's own
+   overflow:hidden — an unscrollable lead page until the cache turned over. */
+#dp > .dp-body{flex:1;min-height:0;}
 /* Prose keeps a readable measure when it has the panel to itself; inside the
    split the pane is already the constraint, so the column fills it. */
 .dp-body > *{max-width:var(--read-w);margin-left:auto;margin-right:auto;}

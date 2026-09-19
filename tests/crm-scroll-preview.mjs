@@ -565,6 +565,111 @@ for (const vp of [{ width:1440, height:900 }, { width:1024, height:768 }, { widt
   ok('a second Escape closes the panel underneath',
     !(await page.evaluate(() => document.getElementById('dp').classList.contains('open'))));
 
+  // ── The lead panel must actually scroll vertically ──
+  // Reading a lead is the panel's whole job; if the body cannot scroll, the
+  // timeline and notes below the fold are unreachable.
+  await page.evaluate(() => openDetail('L1'));      // L1 has no TailorTalk chat
+  await page.waitForTimeout(400);
+  const vscroll = await page.evaluate(async () => {
+    const body = document.querySelector('#dp .dp-body');
+    const dp = document.getElementById('dp');
+    const before = body.scrollTop;
+    body.scrollTop = 400;
+    await new Promise(r => setTimeout(r, 80));
+    const inertAncestor = (() => {
+      let n = dp;
+      while (n && n !== document.documentElement) { if (n.hasAttribute && n.hasAttribute('inert')) return n.id || n.tagName; n = n.parentElement; }
+      return null;
+    })();
+    return {
+      scrollH: body.scrollHeight, clientH: body.clientHeight,
+      before, after: body.scrollTop,
+      dpOverflowY: getComputedStyle(dp).overflowY,
+      bodyOverflowY: getComputedStyle(body).overflowY,
+      splitCls: document.getElementById('dpSplit').className,
+      inertAncestor,
+      bodyLocked: document.body.classList.contains('layer-open'),
+    };
+  });
+  console.log('    lead scroll (no chat):', JSON.stringify(vscroll));
+  ok('the lead panel has something to scroll', vscroll.scrollH > vscroll.clientH + 4, JSON.stringify(vscroll));
+  ok('the lead panel actually scrolls vertically', vscroll.after > vscroll.before + 100, `${vscroll.before} -> ${vscroll.after}`);
+  ok('nothing above the panel is inert', !vscroll.inertAncestor, String(vscroll.inertAncestor));
+
+  // Setting scrollTop bypasses input handling entirely, so it proves nothing
+  // about a person using a wheel or a trackpad. This is a real input event.
+  await page.evaluate(() => { document.querySelector('#dp .dp-body').scrollTop = 0; });
+  const box = await page.locator('#dp .dp-body').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 500);
+  await page.waitForTimeout(250);
+  const wheeled = await page.evaluate(() => ({
+    body: document.querySelector('#dp .dp-body').scrollTop,
+    win: window.scrollY,
+  }));
+  console.log('    after a real wheel:', JSON.stringify(wheeled));
+  ok('a mouse wheel over the lead scrolls it', wheeled.body > 100, JSON.stringify(wheeled));
+
+  // A browser holding a cached copy of the older document gets the new
+  // stylesheet with markup that has no .dp-split wrapper. The panel must still
+  // scroll in that combination, or the lead page is simply stuck until the
+  // cache turns over.
+  const legacy = await page.evaluate(async () => {
+    const split = document.getElementById('dpSplit');
+    const dp = document.getElementById('dp');
+    // Unwrap .dp-body back to being a direct child of #dp, as it used to be.
+    const body = split.querySelector('.dp-body');
+    dp.appendChild(body);
+    split.remove();
+    await new Promise(r => setTimeout(r, 120));
+    body.scrollTop = 0;
+    body.scrollTop = 400;
+    await new Promise(r => setTimeout(r, 80));
+    return { scrollH: body.scrollHeight, clientH: body.clientHeight, after: body.scrollTop };
+  });
+  console.log('    legacy markup + new css:', JSON.stringify(legacy));
+  ok('a cached older document still scrolls', legacy.after > 100 && legacy.scrollH > legacy.clientH + 4, JSON.stringify(legacy));
+  // Put the wrapper back — the checks after this one expect the real markup.
+  await page.evaluate(() => {
+    const dp = document.getElementById('dp');
+    const body = dp.querySelector('.dp-body');
+    if (document.getElementById('dpSplit')) return;
+    const split = document.createElement('div');
+    split.className = 'dp-split';
+    split.id = 'dpSplit';
+    dp.appendChild(split);
+    split.appendChild(body);
+    const rz = document.createElement('div');
+    rz.className = 'dp-resizer'; rz.id = 'dpResizer';
+    rz.setAttribute('role','separator'); rz.tabIndex = 0; rz.setAttribute('aria-valuenow','34');
+    split.appendChild(rz);
+    const side = document.createElement('aside');
+    side.className = 'dp-side'; side.id = 'dpSide';
+    side.innerHTML = '<div class="dp-side-hdr"><div class="dp-side-title">Conversation</div>' +
+      '<button type="button" class="dp-side-x" onclick="toggleConversationPane()">x</button></div>' +
+      '<div class="dp-side-body" id="dpSideBody"></div>';
+    split.appendChild(side);
+  });
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(150);
+
+  // And with the conversation pane open, the lead side must still scroll.
+  await page.evaluate(() => openDetail('L2'));      // L2 is a TailorTalk lead
+  await page.waitForTimeout(400);
+  const vscroll2 = await page.evaluate(async () => {
+    const body = document.querySelector('#dp .dp-body');
+    body.scrollTop = 350;
+    await new Promise(r => setTimeout(r, 80));
+    const side = document.getElementById('dpSideBody');
+    return { after: body.scrollTop, scrollH: body.scrollHeight, clientH: body.clientHeight,
+             split: document.getElementById('dpSplit').classList.contains('split'),
+             sideScrolls: side ? getComputedStyle(side).overflowY : null };
+  });
+  console.log('    lead scroll (with chat):', JSON.stringify(vscroll2));
+  ok('the lead side still scrolls beside the conversation', vscroll2.after > 100, JSON.stringify(vscroll2));
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(200);
+
   // Keyboard access to a lead, in both views.
   const kb = await page.evaluate(() => {
     const card = document.querySelector('.lcard');

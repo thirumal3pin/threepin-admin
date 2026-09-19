@@ -31,6 +31,14 @@ export async function POST(request){
   let body = {};
   try { body = await request.json(); } catch { /* empty body means apply */ }
   const dryRun = body.dryRun === true;
+  // Apply a chosen subset instead of the whole plan. The dashboard sends the
+  // ids the person actually approved, so a sheet sync stops being one
+  // all-or-nothing button: you can take the three properties you have checked
+  // and leave the rest pending until you have looked at them.
+  const only = Array.isArray(body.only)
+    ? new Set(body.only.map(x => String(x)).filter(Boolean))
+    : null;
+  if(only && !only.size) return json({ error: 'No properties were selected.' }, 400);
 
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if(!raw) return json({ error: 'Server is missing FIREBASE_SERVICE_ACCOUNT_JSON.' }, 500);
@@ -61,19 +69,35 @@ export async function POST(request){
       // Dashboard edits kept because they're still pending in the Changes
       // worklist — shown in the preview so "why didn't my sheet value come
       // through" is answered on screen instead of looking like a sync bug.
-      protectedFields: plan.protectedFields.slice(0, 40),
+      protectedFields: plan.protectedFields.slice(0, 80),
       skippedDeleted: plan.skippedDeleted,
-      // Enough detail for the dashboard to show what actually moved, capped
-      // so a first-run diff of hundreds of fields can't bloat the response.
+      // The preview used to stop at 60 properties and 8 fields each, silently —
+      // so on a big sheet run "pull all the changes" simply did not. The caps
+      // are now high enough to cover a whole inventory, and whatever they do
+      // elide is reported rather than hidden, so the count on screen can never
+      // disagree with what Apply would write.
       changes: [...plan.creates.map(c => ({ id:c.id, name:c.name, kind:'create', fields:[] })),
                 ...plan.updates.map(u => ({
                   id: u.id, name: u.name, kind: 'update',
-                  fields: u.changes.slice(0, 8).map(c => ({ field:c.field, from:c.from, to:c.to })),
-                  moreFields: Math.max(u.changes.length - 8, 0)
-                }))].slice(0, 60)
+                  fields: u.changes.slice(0, 40).map(c => ({ field:c.field, from:c.from, to:c.to })),
+                  moreFields: Math.max(u.changes.length - 40, 0)
+                }))].slice(0, 400),
+      changesTotal: plan.creates.length + plan.updates.length
     };
 
     if(dryRun || !plan.writes.length) return json({ ok: true, ...summary });
+
+    // Narrow the plan to the approved ids. Done after planning, never before,
+    // so the diff every property is judged on is identical whether it is
+    // applied now or later — a subset apply is the same write the full run
+    // would have made, not a differently-computed one.
+    if(only){
+      plan.writes = plan.writes.filter(p => only.has(p.id));
+      plan.staleExtras = plan.staleExtras.filter(st => only.has(st.id));
+      if(!plan.writes.length){
+        return json({ error: 'Those properties have nothing left to change — the sheet may have moved on. Re-run the preview.' }, 409);
+      }
+    }
 
     // Vercel's filesystem is ephemeral, so the CLI's file backup is no use
     // here. The prior state of every property this run modifies goes into
@@ -94,7 +118,9 @@ export async function POST(request){
     }
 
     await commitWrites(db, plan.writes, plan.staleExtras);
-    return json({ ok: true, ...summary, written: plan.writes.length, backupId: before.length ? runId : null });
+    return json({ ok: true, ...summary, written: plan.writes.length,
+                  appliedIds: plan.writes.map(p => p.id),
+                  backupId: before.length ? runId : null });
   } catch (e) {
     console.error('sync-inventory failed:', e);
     return json({ error: 'Sync failed. ' + String(e.message || e).slice(0, 300) }, 500);

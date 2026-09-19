@@ -543,7 +543,31 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .sync-list{max-height:44vh;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding-right:2px;}
 .sync-row{border:1px solid var(--border);border-radius:10px;padding:10px 13px;background:var(--white);}
 .sync-row.new{border-left:3px solid var(--green);}
-.sync-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:5px;}
+.sync-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;}
+
+/* ── Per-property approval ──
+   A sheet sync used to be one all-or-nothing button, so taking the three rows
+   you had actually checked meant accepting every other change with them. Each
+   row now approves on its own, and the footer applies whatever is ticked. */
+.sync-pickbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 9px;padding-bottom:9px;border-bottom:1px solid var(--border);}
+.sync-pickbar-hint{font-size:12px;color:var(--ink3);}
+.sync-pick-l{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer;}
+.sync-pick{width:16px;height:16px;accent-color:var(--green);cursor:pointer;flex-shrink:0;}
+/* Pushed to the end of the row so the identity reads first and the action sits
+   where the eye lands last. */
+.sync-one-btn{margin-left:auto;flex-shrink:0;padding:5px 13px;border-radius:8px;border:1.5px solid var(--green);background:var(--white);color:var(--green);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:background .14s,color .14s;}
+.sync-one-btn:hover:not(:disabled){background:var(--green);color:#fff;}
+.sync-one-btn:disabled{border-color:var(--border);color:var(--ink4);cursor:default;background:var(--bg);}
+/* Written this session: still listed, so you can see what you have taken, but
+   visibly settled and no longer offering to do it again. */
+.sync-row.applied{background:var(--green-bg);border-color:#BBF7D0;opacity:.75;}
+.sync-row.applied .chg-code{color:var(--green);}
+.pmodal-save.alt{background:var(--white);color:var(--green);border:1.5px solid var(--green);}
+.pmodal-save.alt:hover{background:var(--green);color:#fff;}
+@media(max-width:680px){
+  .sync-one-btn{margin-left:0;width:100%;margin-top:6px;padding:9px;}
+  .sync-head{gap:6px;}
+}
 .sync-kind{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink3);}
 .sync-row.new .sync-kind{color:var(--green);}
 .sync-f{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;font-size:12.5px;padding:2px 0;}

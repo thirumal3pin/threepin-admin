@@ -114,10 +114,60 @@ document.addEventListener('click', e=>{
   }
 });
 
+// ═══════ SEARCH ═══════
+// Everything on a property is searchable, not a hand-kept list of fields.
+// The old list named 13 of them, so built-up area, UDS, land area, price,
+// possession and every extra column the sheet carries were simply unfindable —
+// and the list had to be edited by hand each time the sheet grew a column.
+//
+// Normalising drops whitespace AND the separators people put inside numbers,
+// so a built-up area stored as "1,131" is found by typing 1131, and a search
+// for "1,131" finds a stored 1131. Without this the two never met.
+function normalizeSearch(v){
+  return String(v == null ? '' : v).toLowerCase().replace(/[\s,\u2009\u00a0'`]/g, '');
+}
+
+// URLs and bookkeeping are skipped: matching "drive" against every property
+// that happens to have a Google Drive brochure is a match that means nothing.
+const SEARCH_SKIP_KEYS = new Set([
+  'brochureLink','photosLink','mapLink','detailsLink','imageUrl','thumbnail',
+  'tenantId','createdAt','updatedAt','insertedAt','syncedAt','naFields',
+  'soldOut','favorite','interestLevel'
+]);
+
+// Built once per property object and cached. The Firestore listener hands us a
+// fresh object whenever a property changes, so a WeakMap entry becomes garbage
+// exactly when it goes stale — no invalidation to get wrong.
+const searchHaystacks = new WeakMap();
+function searchHaystack(p){
+  let hay = searchHaystacks.get(p);
+  if(hay !== undefined) return hay;
+  const parts = [];
+  const push = v => {
+    if(v == null) return;
+    const t = typeof v;
+    if(t === 'string' || t === 'number') parts.push(v);
+    else if(Array.isArray(v)) v.forEach(push);
+    // sheetExtras is where every unmapped inventory column lands, so this is
+    // exactly the "details" the search was missing. Keys as well as values:
+    // only some properties carry a given extra column, so "corpus" answering
+    // "which ones have a corpus fund noted" is a real question with a real
+    // answer — unlike a fixed schema field, where every property would match.
+    else if(t === 'object') Object.entries(v).forEach(([k, val]) => { parts.push(k); push(val); });
+  };
+  for(const k of Object.keys(p)){
+    if(SEARCH_SKIP_KEYS.has(k)) continue;
+    push(p[k]);
+  }
+  hay = normalizeSearch(parts.join(' '));
+  searchHaystacks.set(p, hay);
+  return hay;
+}
+
 function setupSearch(){
   const inp = document.getElementById('searchInput');
   inp.addEventListener('input', e => {
-    currentSearch = e.target.value.toLowerCase().replace(/\s+/g, '');
+    currentSearch = normalizeSearch(e.target.value);
     document.getElementById('srchClear').classList.toggle('show', !!currentSearch);
     applyFilters();
   });
@@ -132,12 +182,7 @@ function applyFilters(){
     if(currentType!=='all' && (norm[p.type]||p.type)!==currentType) return false;
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
-    if(currentSearch){
-      // sheetNotes/detailsText/zone included so free-text facts ("negotiable",
-      // a seller situation, a zone name) are findable, not just structured ones.
-      const hay = [p.propertyCode,p.name,p.location,p.zone,p.builder,p.config,p.amenities,p.highlights,p.type,p.sheetNotes,p.detailsText,p.furnishing,p.facing].join(' ').toLowerCase().replace(/\s+/g, '');
-      if(!hay.includes(currentSearch)) return false;
-    }
+    if(currentSearch && !searchHaystack(p).includes(currentSearch)) return false;
     return true;
   });
   if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
@@ -1200,13 +1245,15 @@ async function migrateLegacyInterests(){
 // sheet sync touches every property, so it should never be one careless click.
 let syncBusy = false;
 
-async function callSync(dryRun){
+// `only` is the list of property ids the person ticked. Absent means the whole
+// plan, which is what the Apply-all button still sends.
+async function callSync(dryRun, only){
   const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
   if(!token) throw new Error('You appear to be signed out. Reload and sign in again.');
   const res = await fetch('/api/sync-inventory', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dryRun })
+    body: JSON.stringify(only && only.length ? { dryRun, only } : { dryRun })
   });
   let data;
   try{ data = await res.json(); }
@@ -1215,18 +1262,75 @@ async function callSync(dryRun){
   return data;
 }
 
+// Which properties are ticked, and which have already been written this
+// session. Kept in module state rather than read back off the DOM so a
+// re-render cannot silently lose the selection.
+let syncPlanData = null;
+let syncSelected = new Set();
+let syncApplied = new Set();
+
+function syncPendingChanges(){
+  return ((syncPlanData && syncPlanData.changes) || []).filter(c => !syncApplied.has(c.id));
+}
+function toggleSyncOne(id, on){
+  if(on) syncSelected.add(id); else syncSelected.delete(id);
+  updateSyncFooter();
+}
+function toggleSyncAll(on){
+  syncSelected = on ? new Set(syncPendingChanges().map(c => c.id)) : new Set();
+  document.querySelectorAll('#syncBody .sync-pick:not(:disabled)').forEach(cb => { cb.checked = on; });
+  updateSyncFooter();
+}
+function markSyncRowApplied(id){
+  syncApplied.add(id);
+  syncSelected.delete(id);
+  const row = document.querySelector('#syncBody .sync-row[data-sync-id="' + CSS.escape(id) + '"]');
+  if(!row) return;
+  row.classList.add('applied');
+  const pick = row.querySelector('.sync-pick');
+  if(pick){ pick.checked = false; pick.disabled = true; }
+  const one = row.querySelector('.sync-one-btn');
+  if(one){ one.textContent = 'Updated'; one.disabled = true; }
+}
+function updateSyncFooter(){
+  const n = syncSelected.size;
+  const pending = syncPendingChanges().length;
+  const selBtn = document.getElementById('syncApplySelBtn');
+  const allBtn = document.getElementById('syncApplyBtn');
+  if(selBtn){
+    selBtn.style.display = n ? '' : 'none';
+    selBtn.textContent = '\u2713 Apply ' + n + ' selected';
+  }
+  if(allBtn){
+    allBtn.style.display = pending ? '' : 'none';
+    allBtn.textContent = '\u2713 Apply all ' + pending;
+  }
+  const all = document.getElementById('syncPickAll');
+  if(all){
+    all.checked = pending > 0 && n === pending;
+    all.indeterminate = n > 0 && n < pending;
+  }
+}
+
 function renderSyncPreview(d){
+  syncPlanData = d;
+  syncSelected = new Set();
+  syncApplied = new Set();
   const rows = (d.changes || []).map(c => {
     const fields = (c.fields || []).map(f =>
       `<div class="sync-f"><span class="chg-field">${escapeHtml(f.field)}</span>
         <span class="chg-from">${escapeHtml(f.from || '—')}</span>
         <span class="chg-arrow">→</span>
         <span class="chg-to">${escapeHtml(f.to || '—')}</span></div>`).join('');
-    return `<div class="sync-row ${c.kind==='create'?'new':''}">
+    const sid = escapeHtml(c.id);
+    return `<div class="sync-row ${c.kind==='create'?'new':''}" data-sync-id="${sid}">
       <div class="sync-head">
-        <span class="chg-code">${escapeHtml(c.id)}</span>
+        <label class="sync-pick-l"><input type="checkbox" class="sync-pick" aria-label="Select ${sid}"
+               onchange="toggleSyncOne('${sid}', this.checked)"></label>
+        <span class="chg-code">${sid}</span>
         <span class="chg-name">${escapeHtml(c.name || '')}</span>
         <span class="sync-kind">${c.kind === 'create' ? 'NEW' : 'UPDATE'}</span>
+        <button type="button" class="sync-one-btn" onclick="applySyncOne('${sid}', this)">Update</button>
       </div>
       ${fields}
       ${c.moreFields ? `<div class="sync-more">…and ${c.moreFields} more field${c.moreFields===1?'':'s'}</div>` : ''}
@@ -1251,7 +1355,13 @@ function renderSyncPreview(d){
     ${protBlock}
     ${(d.created + d.updated) === 0
       ? `<div class="empty-mini">Everything already matches the sheet. Nothing to do.</div>`
-      : `<div class="sync-list">${rows}</div>`}`;
+      : `<div class="sync-pickbar">
+           <label class="sync-pick-l"><input type="checkbox" id="syncPickAll" onchange="toggleSyncAll(this.checked)"> Select all</label>
+           <span class="sync-pickbar-hint">Tick the ones you want, or press Update on a single property.</span>
+         </div>
+         ${(d.changesTotal || 0) > (d.changes || []).length
+            ? `<div class="sync-more">Showing ${(d.changes||[]).length} of ${d.changesTotal} changed properties &mdash; Apply all still writes every one.</div>` : ''}
+         <div class="sync-list">${rows}</div>`}`;
 }
 
 async function openSyncModal(){
@@ -1267,9 +1377,56 @@ async function openSyncModal(){
     const d = await callSync(true);
     body.innerHTML = renderSyncPreview(d);
     if((d.created + d.updated) > 0) btn.style.display = '';
+    updateSyncFooter();
   }catch(e){
     body.innerHTML = `<div class="pmodal-err show">${escapeHtml(e.message)}</div>`;
   }finally{
+    syncBusy = false;
+  }
+}
+
+// One property, from its own row. The usual case is "that one looks right,
+// take it" rather than committing to the whole sheet in a single click.
+async function applySyncOne(id, btn){
+  if(syncBusy) return;
+  const original = btn.textContent;
+  syncBusy = true;
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  try{
+    const d = await callSync(false, [id]);
+    (d.appliedIds || [id]).forEach(markSyncRowApplied);
+    updateSyncFooter();
+    showToast('\u2713 ' + id + ' updated from the sheet');
+  }catch(e){
+    btn.textContent = original;
+    btn.disabled = false;
+    showToast(e.message);
+  }finally{
+    syncBusy = false;
+  }
+}
+
+// Everything ticked, in one write.
+async function applySyncSelected(){
+  const ids = [...syncSelected];
+  if(!ids.length) return;
+  const btn = document.getElementById('syncApplySelBtn');
+  if(syncBusy) return;
+  const original = btn.textContent;
+  syncBusy = true;
+  btn.disabled = true;
+  btn.textContent = 'Syncing...';
+  try{
+    const d = await callSync(false, ids);
+    (d.appliedIds || ids).forEach(markSyncRowApplied);
+    updateSyncFooter();
+    showToast('\u2713 Synced ' + d.written + ' propert' + (d.written===1?'y':'ies'));
+  }catch(e){
+    showToast(e.message);
+  }finally{
+    btn.textContent = original;
+    btn.disabled = false;
     syncBusy = false;
   }
 }
