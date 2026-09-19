@@ -39,7 +39,7 @@ const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
 const BROCHURE_API = 'https://admin.threepin.in/api/brochure';
-const SCHEDULER_NAME = 'deliver-brochures (Mac launchd, every 30 min)';
+const SCHEDULER_NAME = 'deliver-brochures (Mac launchd, every 10 min)';
 const ALERT_RECIPIENTS = 'thirumal@threepin.in,swami@threepin.in,pradeep@threepin.in';
 // Remembers which failures have already been emailed. Without this the
 // scheduler would send the same alert 48 times a day for one stuck property
@@ -716,7 +716,7 @@ async function main() {
         console.log(`[SKIP] ${result.propertyId}: ${result.error}`);
         await logDelivery(sheetsToken, result.propertyId, 'Skipped', result.error);
         await sendAlert(result.propertyId, result.error,
-          `${result.propertyId} is marked Done in the Queue sheet but its brochure has NOT been emailed, NOT uploaded to Drive, and it does NOT appear on the admin.threepin.in dashboard. The scheduler will retry every 30 minutes, but it cannot resolve this on its own.`);
+          `${result.propertyId} is marked Done in the Queue sheet but its brochure has NOT been emailed, NOT uploaded to Drive, and it does NOT appear on the admin.threepin.in dashboard. The scheduler will retry every 10 minutes, but it cannot resolve this on its own.`);
       }
     } catch (e) {
       console.error(`[ERROR] row ${rowIndex + 1}: ${e.message || e}`);
@@ -742,7 +742,7 @@ main().catch(async (e) => {
   await sendAlert('(run-level)',
     `The scheduler run aborted before finishing: ${message}`,
     transient
-      ? 'No brochure was delivered on this run. This looks like a transient Google API error, and the next run in 30 minutes will usually recover on its own — but if this alert keeps arriving, deliveries are stalled and need looking at.'
-      : 'No brochure was delivered on this run, and every pending property stays undelivered until this is resolved. The scheduler will keep retrying every 30 minutes.');
+      ? 'No brochure was delivered on this run. This looks like a transient Google API error, and the next run in 10 minutes will usually recover on its own — but if this alert keeps arriving, deliveries are stalled and need looking at.'
+      : 'No brochure was delivered on this run, and every pending property stays undelivered until this is resolved. The scheduler will keep retrying every 10 minutes.');
   process.exit(1);
 });
