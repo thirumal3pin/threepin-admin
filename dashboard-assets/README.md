@@ -10,12 +10,45 @@ a thin shell so edits touch one small file instead of a 1000+ line page.
 |---|---|
 | `style.css` | All styling, including the login screen. |
 | `sample-data.js` | The 46 starter properties, used to seed Firestore once and to paint the page instantly on first load. |
+| `search-engine.js` | The search itself: query parsing, numeric ranges, synonyms, fuzzy names, scoring, and the facets the Advanced panel is built from. No DOM — `tests/property-search.test.mjs` runs it over a real inventory snapshot. |
+| `advanced-search.js` | The Advanced Search panel: the filter drawer, the active-filter chips and the live result count. Every filter and count comes from `search-engine.js`, nothing is hand-listed. |
 | `auth.js` | The login gate (see below). |
 | `app.js` | All dashboard logic — filters, search, cards, add/edit/delete, sold-out, notes, favorites, compare, export. |
 | `firebase-sync.js` | Connects to Firebase, handles login, seeds the database on first run, and keeps every open browser in sync in realtime. |
 
-Load order in `dashboard.html` matters: `sample-data.js` → `auth.js` →
-`app.js` → `firebase-sync.js` (the last one is a `type="module"` script).
+Load order in `dashboard.html` matters: `sample-data.js` → `search-engine.js`
+→ `advanced-search.js` → `auth.js` → `property-view.js` → `app.js` →
+`firebase-sync.js` (the last one is a `type="module"` script). The two search
+files are plain scripts on purpose, so `window.PinSearch` and
+`window.PinAdvanced` exist before `app.js` runs.
+
+## Searching
+
+Two ways in, one engine behind both.
+
+**The box** takes what an agent would say out loud. Numbers are understood as
+numbers, not as text: `1518 sqft` matches a project listing `1,250–2,000`
+because 1,518 falls inside it, and `uds 1,140` and `uds 1140` are the same
+search. `3 and 4 bhk in anna nagar and adyar` is read the way it is meant —
+"and" between two values of ONE field is an OR — and `-plot`, `not resale`,
+`under 1.5cr`, `between 1 and 2 cr`, `sqft:>2000`, `builder:sobha` and
+`"exact phrase"` all work. Misspelt localities and builders still land.
+When a search finds nothing, the whole query is retried as plain words before
+the grid is emptied.
+
+Every card in a search result carries one quiet line saying which field
+matched — the answer to "why is this one here", which matters most for the
+matches that are hardest to guess.
+
+**The Advanced panel** is for a brief with several parts. Values inside one
+filter are OR; filters are combined by the ALL/ANY switch. Every filter,
+option and count is derived from the live inventory by
+`PinSearch.buildFacets`, and the count on a chip is exactly what that chip
+returns — asserted per chip in the test suite.
+
+Run the tests with `npm run test:search`. For screenshots of the real page,
+serve the repo (`python3 -m http.server 5199`) and run
+`node tests/search-preview.mjs`.
 
 ## Logging in
 

@@ -55,6 +55,7 @@ function init(){
   setupTypeFilters();
   setupSoldOutFilter();
   setupSearch();
+  rebuildSearchIndex();
   applyFilters();
   updateStats();
 }
@@ -115,85 +116,155 @@ document.addEventListener('click', e=>{
 });
 
 // ═══════ SEARCH ═══════
-// Everything on a property is searchable, not a hand-kept list of fields.
-// The old list named 13 of them, so built-up area, UDS, land area, price,
-// possession and every extra column the sheet carries were simply unfindable —
-// and the list had to be edited by hand each time the sheet grew a column.
+// The matching itself lives in search-engine.js — parsing, numeric ranges,
+// synonyms, fuzzy names, the OR/AND rules and the scoring are all there, with
+// tests/property-search.test.mjs driving it over the real inventory. This file
+// only wires it to the page: what was typed, what the Advanced panel picked,
+// and what the grid does with the answer.
 //
-// Normalising drops whitespace AND the separators people put inside numbers,
-// so a built-up area stored as "1,131" is found by typing 1131, and a search
-// for "1,131" finds a stored 1131. Without this the two never met.
-function normalizeSearch(v){
-  return String(v == null ? '' : v).toLowerCase().replace(/[\s,\u2009\u00a0'`]/g, '');
+// The engine is given the RAW query string. The old code normalised the query
+// before storing it, which is why every multi-word search failed: spaces were
+// stripped from the query and from the haystack, so two words only matched if
+// they happened to be adjacent in one long concatenation.
+let searchResults = null;   // id → { score, reasons }, only while a query is live
+let searchGaz = null;       // gazetteer of localities/builders/names, rebuilt on data change
+
+function rebuildSearchIndex(){
+  searchGaz = PinSearch.buildGazetteer(properties);
+  if(window.PinAdvanced) PinAdvanced.build(properties, { onChange: applyFilters });
 }
 
-// URLs and bookkeeping are skipped: matching "drive" against every property
-// that happens to have a Google Drive brochure is a match that means nothing.
-const SEARCH_SKIP_KEYS = new Set([
-  'brochureLink','photosLink','mapLink','detailsLink','imageUrl','thumbnail',
-  'tenantId','createdAt','updatedAt','insertedAt','syncedAt','naFields',
-  'soldOut','favorite','interestLevel'
-]);
-
-// Built once per property object and cached. The Firestore listener hands us a
-// fresh object whenever a property changes, so a WeakMap entry becomes garbage
-// exactly when it goes stale — no invalidation to get wrong.
-const searchHaystacks = new WeakMap();
-function searchHaystack(p){
-  let hay = searchHaystacks.get(p);
-  if(hay !== undefined) return hay;
-  const parts = [];
-  const push = v => {
-    if(v == null) return;
-    const t = typeof v;
-    if(t === 'string' || t === 'number') parts.push(v);
-    else if(Array.isArray(v)) v.forEach(push);
-    // sheetExtras is where every unmapped inventory column lands, so this is
-    // exactly the "details" the search was missing. Keys as well as values:
-    // only some properties carry a given extra column, so "corpus" answering
-    // "which ones have a corpus fund noted" is a real question with a real
-    // answer — unlike a fixed schema field, where every property would match.
-    else if(t === 'object') Object.entries(v).forEach(([k, val]) => { parts.push(k); push(val); });
-  };
-  for(const k of Object.keys(p)){
-    if(SEARCH_SKIP_KEYS.has(k)) continue;
-    push(p[k]);
-  }
-  hay = normalizeSearch(parts.join(' '));
-  searchHaystacks.set(p, hay);
-  return hay;
-}
+// Everything the page needs to answer "how many would this filter return",
+// without the panel reaching into this file's state.
+window.pinAllProperties = () => properties;
 
 function setupSearch(){
   const inp = document.getElementById('searchInput');
+  let timer = null;
   inp.addEventListener('input', e => {
-    currentSearch = normalizeSearch(e.target.value);
-    document.getElementById('srchClear').classList.toggle('show', !!currentSearch);
-    applyFilters();
+    currentSearch = e.target.value;
+    document.getElementById('srchClear').classList.toggle('show', !!currentSearch.trim());
+    // Debounced because every keystroke re-scores the whole inventory. 90ms is
+    // below the threshold where typing feels laggy and well above the cost of
+    // a pass over a few hundred properties.
+    clearTimeout(timer);
+    timer = setTimeout(()=>{ applyFilters(); renderSuggestions(); }, 90);
+  });
+  inp.addEventListener('keydown', e => {
+    if(e.key === 'Escape'){ hideSuggestions(); inp.blur(); }
+    if(e.key === 'Enter'){ hideSuggestions(); }
+  });
+  inp.addEventListener('focus', renderSuggestions);
+  document.addEventListener('click', e => {
+    const wrap = document.querySelector('.srch-wrap');
+    if(wrap && !wrap.contains(e.target)) hideSuggestions();
   });
 }
-function clearSearch(){document.getElementById('searchInput').value='';currentSearch='';document.getElementById('srchClear').classList.remove('show');applyFilters();}
+
+// ── Type-ahead ──
+// Only ever suggests something that exists in THIS inventory — a locality, a
+// builder or a project — so a suggestion can never lead to an empty grid.
+function renderSuggestions(){
+  const box = document.getElementById('srchSug');
+  if(!box) return;
+  const q = (document.getElementById('searchInput').value || '');
+  const last = q.split(/[\s,]+/).pop();
+  const items = last && last.length >= 2 ? PinSearch.suggest(properties, last, searchGaz, 6) : [];
+  if(!items.length){ hideSuggestions(); return; }
+  box.innerHTML = items.map((s,i)=>
+    `<button type="button" class="srch-sug-item" onmousedown="event.preventDefault()" onclick="applySuggestion(${i})">
+       <span class="srch-sug-i">${s.icon}</span>
+       <span class="srch-sug-t">${escapeHtml(s.text)}</span>
+       <span class="srch-sug-k">${escapeHtml(s.kind)}</span>
+     </button>`).join('');
+  box.dataset.items = JSON.stringify(items.map(s=>s.text));
+  box.classList.add('show');
+}
+function hideSuggestions(){
+  const box = document.getElementById('srchSug');
+  if(box) box.classList.remove('show');
+}
+function applySuggestion(i){
+  const box = document.getElementById('srchSug');
+  const items = JSON.parse(box.dataset.items || '[]');
+  const pick = items[i];
+  if(!pick) return;
+  const inp = document.getElementById('searchInput');
+  // Replaces only the fragment being typed, so "3bhk ady" becomes
+  // "3bhk Adyar " and the rest of the query survives.
+  const parts = inp.value.split(/([\s,]+)/);
+  for(let k = parts.length - 1; k >= 0; k--){
+    if(/^[\s,]+$/.test(parts[k]) || parts[k] === '') continue;
+    parts[k] = pick; break;
+  }
+  inp.value = parts.join('') + ' ';
+  currentSearch = inp.value;
+  document.getElementById('srchClear').classList.add('show');
+  hideSuggestions();
+  inp.focus();
+  applyFilters();
+}
+
+function clearSearch(){
+  const inp = document.getElementById('searchInput');
+  inp.value=''; currentSearch='';
+  document.getElementById('srchClear').classList.remove('show');
+  hideSuggestions();
+  applyFilters();
+  inp.focus();
+}
+
+function openAdvanced(){ PinAdvanced.open(); }
+function closeAdvanced(){ PinAdvanced.close(); }
 
 function applyFilters(){
   const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
-  let res = properties.filter(p => {
+  // The quick bar at the top of the page still filters first — it is faster
+  // to read than any panel and people use it constantly.
+  let base = properties.filter(p => {
     if(currentStatus==='ready' && !isReady(p)) return false;
     if(currentStatus==='upcoming' && p.status!=='Under Construction') return false;
     if(currentType!=='all' && (norm[p.type]||p.type)!==currentType) return false;
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
-    if(currentSearch && !searchHaystack(p).includes(currentSearch)) return false;
     return true;
   });
-  if(currentSort==='price-low') res.sort((a,b)=>priceValue(a)-priceValue(b));
-  else if(currentSort==='price-high') res.sort((a,b)=>priceValue(b)-priceValue(a));
+
+  const text = (currentSearch || '').trim();
+  const advanced = window.PinAdvanced ? PinAdvanced.query() : null;
+  let res;
+  if(text || advanced){
+    if(!searchGaz) searchGaz = PinSearch.buildGazetteer(properties);
+    const hits = PinSearch.search(base, { text, advanced, gazetteer: searchGaz });
+    searchResults = new Map(hits.map(h => [h.p.id, h]));
+    res = hits.map(h => h.p);
+  } else {
+    searchResults = null;
+    res = base;
+  }
+
+  // Best match is the default the moment there is something to rank by, and
+  // reverts to the person's chosen sort as soon as the query is cleared.
+  const sortSel = document.getElementById('sortSel');
+  const relevanceOption = sortSel && sortSel.querySelector('option[value="relevance"]');
+  if(relevanceOption) relevanceOption.disabled = !text;
+  let sort = currentSort;
+  if(text && (sort === 'newest' || sort === 'relevance')) sort = 'relevance';
+  if(!text && sort === 'relevance') sort = 'newest';
+
+  if(sort==='relevance'){ /* already ordered by score */ }
+  else if(sort==='price-low') res = res.slice().sort((a,b)=>priceValue(a)-priceValue(b));
+  else if(sort==='price-high') res = res.slice().sort((a,b)=>priceValue(b)-priceValue(a));
   // String()-wrapped because the brochure pipeline only guarantees the fields
   // it computes itself — name comes through from the source JSON and can be
   // absent, which used to throw here and take the entire grid down with it.
-  else if(currentSort==='name') res.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
-  else if(currentSort==='newest') res.sort((a,b)=>insertValue(b)-insertValue(a));
-  else if(currentSort==='oldest') res.sort((a,b)=>insertValue(a)-insertValue(b));
+  else if(sort==='name') res = res.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  else if(sort==='newest') res = res.slice().sort((a,b)=>insertValue(b)-insertValue(a));
+  else if(sort==='oldest') res = res.slice().sort((a,b)=>insertValue(a)-insertValue(b));
+
+  if(sortSel && sortSel.value !== sort) sortSel.value = sort;
   filteredProperties = res;
+  if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
 }
 
@@ -204,10 +275,21 @@ function renderGrid(){
   const rCnt = document.getElementById('rCnt');
   if(filteredProperties.length===0){
     grid.innerHTML=''; noRes.style.display='block';
+    const sub = document.querySelector('.nores-s');
+    if(sub){
+      const advOn = window.PinAdvanced && PinAdvanced.isActive();
+      sub.innerHTML = advOn
+        ? 'Try removing a filter — or switch the panel to <b>ANY filter</b> to widen the search.'
+        : 'Try fewer words, or open <b>Advanced</b> to pick from what the inventory actually has.';
+    }
     rCnt.innerHTML='<b>0</b> properties'; return;
   }
   noRes.style.display='none';
-  rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`;
+  const q = (currentSearch||'').trim();
+  const advOn = window.PinAdvanced && PinAdvanced.isActive();
+  rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`
+    + (q ? ` for <b>${escapeHtml(q)}</b>` : '')
+    + (advOn ? ` with <b>${PinAdvanced.chips().length}</b> filter${PinAdvanced.chips().length===1?'':'s'}` : '');
   grid.innerHTML = filteredProperties.map(p => {
     const e = esc(p);
     const fav = favorites.includes(p.id);
@@ -245,6 +327,7 @@ function renderGrid(){
           <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${e.sqftRange||'—'}</div></div>
           <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${e.type}</div></div>
         </div>
+        ${matchWhy(p)}
         <div class="card-foot">
           <div class="card-bldr">${e.builder}</div>
           <div class="card-res" title="Brochure · Photos · Map Pin · Details">${PinPropertyView.resourceChips(p, true)}</div>
@@ -259,6 +342,18 @@ function renderGrid(){
       </div>
     </div>`;
   }).join('');
+}
+
+// One muted line per card while a query is live, naming the field that
+// matched. It is the answer to "why is this one here" — which matters most
+// for exactly the matches that are hardest to guess: a client's 1,518 sqft
+// landing inside a project's 1,250–2,000 range, a locality found in the
+// connectivity line rather than the address.
+function matchWhy(p){
+  if(!searchResults) return '';
+  const hit = searchResults.get(p.id);
+  if(!hit || !hit.reasons || !hit.reasons.length) return '';
+  return `<div class="card-why">${escapeHtml(hit.reasons.join(' · '))}</div>`;
 }
 
 // ═══════ FAVORITES ═══════
@@ -1204,6 +1299,7 @@ async function recordChanges(property, kind, diffs, extra){
 
 function refreshAfterDataChange(){
   setupTypeFilters();
+  rebuildSearchIndex();
   updateStats();
   applyFilters();
   updateMissingCount();

@@ -64,11 +64,21 @@
     <a href="crm.html" class="nav-mobile-icon" title="Lead CRM"><i class="fas fa-message"></i></a>
     <button class="hdr-menu-btn" id="hdrMenuBtn" onclick="toggleHdrMenu(event)" aria-label="Menu">☰</button>
   </div>
-  <div class="srch-wrap">
-    <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    <input id="searchInput" placeholder="Search by name, builder, location, config, amenities…">
-    <button class="srch-clear" id="srchClear" onclick="clearSearch()">×</button>
+  <div class="srch-row">
+    <div class="srch-wrap">
+      <svg class="srch-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input id="searchInput" autocomplete="off" spellcheck="false"
+             placeholder="Try: 3 or 4 BHK in Anna Nagar or Adyar · 1518 sqft · under 1.5 cr · UDS 1,140 · ADRA0001">
+      <button class="srch-clear" id="srchClear" onclick="clearSearch()" aria-label="Clear search">×</button>
+      <div class="srch-sug" id="srchSug"></div>
+    </div>
+    <button type="button" class="adv-btn" id="advBtn" onclick="openAdvanced()"
+            title="Build a search with several conditions">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
+      Advanced<span class="adv-btn-n" id="advBtnN" style="display:none"></span>
+    </button>
   </div>
+  <div class="advchips" id="advChips"></div>
   <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
   <div class="controls" id="controlsPanel">
     <div class="fgroup" id="statusFilters"></div>
@@ -78,6 +88,7 @@
       <button class="fbtn fav-toggle" id="favToggle" onclick="toggleFavView()">★ Favorites</button>
       <div class="sel-wrap">
         <select class="sortsel" id="sortSel" onchange="applySort()">
+          <option value="relevance" disabled>Sort: Best Match</option>
           <option value="newest" selected>Sort: Recently Added</option>
           <option value="default">Sort: Featured</option>
           <option value="price-low">Price: Low → High</option>
@@ -152,6 +163,26 @@
   <div class="mobile-actionbar" id="dpMobileBar">
     <a class="mab-btn mab-call" id="dpMabCall" href="#">📞 Call</a>
     <button class="mab-btn mab-share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
+  </div>
+</div>
+
+<!-- ADVANCED SEARCH PANEL -->
+<div id="advPanel" aria-label="Advanced search">
+  <div class="adv-scrim" onclick="closeAdvanced()"></div>
+  <div class="adv-sheet" role="dialog" aria-modal="true">
+    <div class="adv-hd">
+      <div>
+        <div class="adv-title">Advanced Search</div>
+        <div class="adv-sub">Pick as many values as you like. Every count is the number of properties that filter returns.</div>
+      </div>
+      <button class="adv-x" onclick="closeAdvanced()" aria-label="Close">×</button>
+    </div>
+    <div class="adv-body" id="advBody"></div>
+    <div class="adv-ftr">
+      <button type="button" class="adv-reset" onclick="PinAdvanced.reset()">↺ Reset all</button>
+      <div class="adv-count" id="advCount"></div>
+      <button type="button" class="adv-done" onclick="closeAdvanced()">Show results</button>
+    </div>
   </div>
 </div>
 
@@ -322,6 +353,8 @@
 <div id="toast"></div>
 
 <script src="dashboard-assets/sample-data.js"></script>
+<script src="dashboard-assets/search-engine.js"></script>
+<script src="dashboard-assets/advanced-search.js"></script>
 <script src="dashboard-assets/auth.js"></script>
 <script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>
