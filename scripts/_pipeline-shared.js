@@ -12,6 +12,23 @@
 // reintroduced the eight dead alt-schema field names the dashboard mapping
 // deliberately excludes.
 
+// The Queue sheet's Property ID cell holds "<ID> - <Title>" typed by hand
+// into a Google Form, and the hyphen spacing is whatever the submitter
+// happened to type — "TNAG0002 -2BHK Apartment..." (no space after the
+// hyphen) is a real submission, not a hypothetical. Splitting on the literal
+// ' - ' delimiter took that WHOLE string as the "property ID" for that row,
+// which silently mismatched the local folder and the Firestore doc: the
+// scheduler alerted "no local folder/PDF found" and kept retrying against
+// the wrong name every 10 minutes for six hours, even though the real
+// folder and PDF existed the whole time (TNAG0002, 2026-09-19). The ID
+// itself is always a single token with no whitespace, so taking the first
+// whitespace-separated word is the separator-agnostic way to read it —
+// correct whether the row was typed "ID - Title", "ID -Title", "ID- Title"
+// or "ID Title" with no hyphen at all.
+export function parseQueuePropertyId(titleCell) {
+  return String(titleCell || '').trim().split(/\s+/)[0] || '';
+}
+
 export function columnLetter(zeroBasedIndex) {
   return zeroBasedIndex < 26
     ? String.fromCharCode(65 + zeroBasedIndex)

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { rowToProperty, assertHeadersMapped } from '../api/_inventory-shared.js';
-import { columnLetter, resolveQueueColumns, mapToDashboardProperty } from './_pipeline-shared.js';
+import { columnLetter, resolveQueueColumns, mapToDashboardProperty, parseQueuePropertyId } from './_pipeline-shared.js';
 
 // Runs locally (via launchd, not on Vercel) so it has real, unrestricted
 // network access — unlike the Cowork task that generates these brochures,
@@ -287,7 +287,7 @@ async function syncInternalNotesFromQueue(rows, cols) {
   let created = 0, updated = 0, skipped = 0, failed = 0;
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] || [];
-    const propertyId = String(row[cols.idTitle] || '').split(' - ')[0].trim();
+    const propertyId = parseQueuePropertyId(row[cols.idTitle]);
     const text = row[cols.internalNotes];
     if (!propertyId || !String(text || '').trim()) continue;
     try {
@@ -503,7 +503,7 @@ function clearAlert(key) {
 }
 
 async function deliverRow(sheetsToken, rowIndex, row, cols) {
-  const propertyId = String(row[cols.idTitle] || '').split(' - ')[0].trim();
+  const propertyId = parseQueuePropertyId(row[cols.idTitle]);
   if (!propertyId) return { propertyId: '(blank)', ok: false, error: 'Could not parse Property ID from column B' };
 
   const driveFolderId = extractFolderId(row[cols.photosLink]);
@@ -720,7 +720,7 @@ async function main() {
       }
     } catch (e) {
       console.error(`[ERROR] row ${rowIndex + 1}: ${e.message || e}`);
-      await sendAlert(String(row[cols.idTitle] || `row ${rowIndex + 1}`).split(' - ')[0].trim() || `row ${rowIndex + 1}`,
+      await sendAlert(parseQueuePropertyId(row[cols.idTitle]) || `row ${rowIndex + 1}`,
         `Unexpected error during delivery: ${e.message || e}`,
         `This property's brochure was not delivered. Depending on where the error occurred it may have been partially processed (uploaded to Drive but not emailed, or emailed but not listed on the dashboard) — worth checking before re-running.`);
       await logDelivery(sheetsToken, row[cols.idTitle] || `row ${rowIndex + 1}`, 'Error', String(e.message || e));

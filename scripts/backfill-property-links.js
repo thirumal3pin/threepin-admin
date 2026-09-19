@@ -24,6 +24,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { parseQueuePropertyId } from './_pipeline-shared.js';
 
 const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
@@ -92,7 +93,7 @@ async function main() {
 
   for (let i = 1; i < rows.length; i++) { // skip header row
     const row = rows[i];
-    const propertyId = String(row[1] || '').split(' - ')[0].trim();
+    const propertyId = parseQueuePropertyId(row[1]);
     const photosLink = String(row[2] || '').trim();
     const detailsText = String(row[3] || '').trim();
     const emailedCol = String(row[5] || '').trim();

@@ -203,6 +203,19 @@ const QUEUE_FILL_COLUMNS = {
   detailsText: 'property details'
 };
 
+// Same fix, same reason, as parseQueuePropertyId() in scripts/_pipeline-
+// shared.js (that file can't be imported here — api/ and scripts/ are
+// deliberately separate deploy targets, same as this file's own header
+// comment explains for the Inventory mapping). The Queue sheet's Property ID
+// cell is hand-typed as "<ID> - <Title>" and the hyphen spacing varies by
+// submission ("TNAG0002 -2BHK Apartment..." has none), so splitting on the
+// literal ' - ' delimiter can take the WHOLE title as the "ID". The ID
+// itself never contains whitespace, so the first whitespace-separated word
+// is the separator-agnostic way to read it.
+function parseQueuePropertyId(titleCell) {
+  return String(titleCell || '').trim().split(/\s+/)[0] || '';
+}
+
 export async function readQueueFill(token){
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${QUEUE_SHEET_ID}/values/${encodeURIComponent(QUEUE_RANGE)}`,
@@ -223,7 +236,7 @@ export async function readQueueFill(token){
 
   for(let i = 1; i < rows.length; i++){
     const r = rows[i] || [];
-    const id = String(r[cols.idTitle] || '').split(' - ')[0].trim();
+    const id = parseQueuePropertyId(r[cols.idTitle]);
     if(!id) continue;
     // Later rows win — the sheet is append-ordered by submission time, so a
     // re-submitted property's newer photos/details replace the older entry.

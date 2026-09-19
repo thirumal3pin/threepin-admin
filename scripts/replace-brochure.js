@@ -49,7 +49,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { resolveQueueColumns, findColumnByHeader, columnLetter, mapToDashboardProperty } from './_pipeline-shared.js';
+import { resolveQueueColumns, findColumnByHeader, columnLetter, mapToDashboardProperty, parseQueuePropertyId } from './_pipeline-shared.js';
 
 const BROCHURE_FOLDER = '/Users/swaminathannagarajan/Downloads/Product brochure ';
 const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
@@ -268,7 +268,7 @@ async function main() {
   const queueCols = resolveQueueColumns(queueRows[0] || []);
   console.log(`Queue columns resolved: ${Object.entries(queueCols)
     .map(([k, i]) => `${k}=${i === null ? '(absent)' : columnLetter(i)}`).join(' ')}`);
-  const queueIdx = queueRows.findIndex(r => String(r[queueCols.idTitle] || '').split(' - ')[0].trim() === propertyId);
+  const queueIdx = queueRows.findIndex(r => parseQueuePropertyId(r[queueCols.idTitle]) === propertyId);
   if (queueIdx === -1) throw new Error(`No Queue sheet row found for ${propertyId}`);
   const queueRow = queueRows[queueIdx];
   const folderId = extractFolderId(queueRow[queueCols.photosLink]);
