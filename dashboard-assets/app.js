@@ -334,6 +334,8 @@ function renderDetail(id){
   document.getElementById('dpSoldOut').textContent = isSoldOut?'✓ Marked Sold Out':'🏷️ Mark Sold Out';
 
   document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
+  // The sticky mobile bar carries Call; CSS decides whether it is visible.
+  document.getElementById('dpMabCall').href = 'tel:' + (p.contactNumber || '');
 
   const overview = PinPropertyView.overviewTab(p);
   const specs = PinPropertyView.specsTab(p);

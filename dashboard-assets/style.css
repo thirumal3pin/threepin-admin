@@ -141,7 +141,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .nores-s{font-size:14px;color:var(--ink3);}
 
 /* ── DETAIL PANEL ── */
-#dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
+#dp{position:fixed;inset:0;background:var(--bg);z-index:200;overflow:hidden auto;overscroll-behavior:contain;display:none;}
 #dp.open{display:block;animation:fadeSlide .24s ease;}
 @keyframes fadeSlide{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:translateX(0)}}
 .dp-hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 0;position:sticky;top:0;z-index:10;box-shadow:0 2px 14px rgba(0,0,0,.05);}
@@ -238,12 +238,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 @media (max-width:560px){
   .pf-grid{grid-template-columns:1fr;}
 }
-.dp-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;padding-bottom:20px;}
+.dp-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;padding-bottom:20px;overflow-wrap:anywhere;min-width:0;}
 .dp-builder-tag{font-size:12px;font-weight:700;color:var(--gold);letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px;}
-.dp-title{font-family:var(--serif);font-size:32px;font-weight:700;line-height:1.15;margin-bottom:10px;}
+.dp-title{font-family:var(--serif);font-size:32px;font-weight:700;line-height:1.15;margin-bottom:10px;overflow-wrap:anywhere;}
 .dp-loc{font-size:14px;color:var(--ink2);display:flex;align-items:center;gap:6px;margin-bottom:14px;}
 .dp-price-box{text-align:right;flex-shrink:0;}
-.dp-price{font-family:var(--serif);font-size:36px;font-weight:500;line-height:1;}
+.dp-price{font-family:var(--serif);font-size:36px;font-weight:500;line-height:1;overflow-wrap:anywhere;}
 .dp-psf{font-size:13px;color:var(--ink3);margin-top:5px;}
 .dp-call{display:inline-flex;align-items:center;gap:8px;padding:11px 24px;border-radius:11px;background:var(--green);font-size:14.5px;font-weight:700;color:#fff;text-decoration:none;margin-top:14px;box-shadow:var(--shadow);transition:all .15s;}
 .dp-call:hover{background:#166534;transform:translateY(-1px);}
@@ -251,19 +251,22 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .dp-tab{font-size:14px;font-weight:600;padding:12px 22px;background:none;border:none;border-bottom:2.5px solid transparent;color:var(--ink3);cursor:pointer;transition:all .15s;margin-bottom:-1.5px;white-space:nowrap;}
 .dp-tab:hover{color:var(--ink);}
 .dp-tab.active{font-weight:700;color:var(--ink);border-bottom-color:var(--gold);}
-.dp-body{max-width:1000px;margin:0 auto;padding:30px 28px 110px;}
+.dp-body{max-width:1000px;margin:0 auto;padding:30px 28px 110px;overflow-wrap:anywhere;}
 .tab-panel{display:none;} .tab-panel.active{display:block;animation:fadeUp .3s ease;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 .sec{margin-bottom:30px;}
 .sec-title{font-size:12px;font-weight:800;color:var(--ink2);text-transform:uppercase;letter-spacing:.07em;margin-bottom:15px;display:flex;align-items:center;gap:7px;}
 .stats-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;}
 .stat-b{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:15px;text-align:center;box-shadow:var(--shadow);}
-.stat-b-v{font-family:var(--serif);font-size:19px;font-weight:700;line-height:1.2;}
+/* break-word, not anywhere: the tile's width comes from the grid track, never
+   from its content, so this only needs to rescue a word that genuinely cannot
+   fit — it should not split "Unfurnished" when it very nearly does. */
+.stat-b-v{font-family:var(--serif);font-size:19px;font-weight:700;line-height:1.2;overflow-wrap:break-word;}
 .stat-b-l{font-size:11px;color:var(--ink3);margin-top:5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;}
 .hi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;}
 .hi-item{background:var(--green-bg);border:1px solid #BBF7D0;border-radius:10px;padding:11px 14px;font-size:13px;color:#166534;font-weight:600;display:flex;align-items:center;gap:9px;}
 .am-wrap{display:flex;flex-wrap:wrap;gap:7px;}
-.am-chip{font-size:13px;font-weight:600;padding:7px 15px;border-radius:20px;background:var(--blue-bg);border:1px solid #BFDBFE;color:var(--blue);}
+.am-chip{max-width:100%;font-size:13px;font-weight:600;padding:7px 15px;border-radius:20px;background:var(--blue-bg);border:1px solid #BFDBFE;color:var(--blue);}
 .conn-wrap{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);}
 .conn-row{display:flex;gap:16px;padding:13px 17px;border-bottom:1px solid var(--border);}
 .conn-row:last-child{border-bottom:none;}
@@ -276,7 +279,8 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .sum-txt p{margin-bottom:8px;}
 .spec-t{width:100%;border-collapse:collapse;background:var(--white);border-radius:var(--r);overflow:hidden;border:1.5px solid var(--border);box-shadow:var(--shadow);}
 .spec-t tr:nth-child(even) td{background:var(--bg);}
-.spec-t td{padding:11px 17px;border-bottom:1px solid var(--border);}
+.spec-t{table-layout:fixed;}
+.spec-t td{padding:11px 17px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
 .spec-t td:first-child{font-size:11.5px;font-weight:800;color:var(--gold);width:38%;text-transform:uppercase;letter-spacing:.05em;}
 .spec-t td:last-child{font-size:14px;color:var(--ink2);}
 .interest-buttons{display:flex;gap:8px;flex-wrap:wrap;}
@@ -378,9 +382,55 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .gmeta-l{font-size:12px;}
   .card-body{padding:12px;}
   .card-name{font-size:15px;}
-  .dp-hdr{padding:12px 14px 0;} .dp-body{padding:18px 14px 90px;}
-  .dp-title{font-size:21px;} .dp-price{font-size:25px;}
-  .dp-hero{gap:12px;} .dp-price-box{text-align:left;}
+  /* ── PHONE: the header was eating the screen ──
+     Measured on a 390x844 phone, the hero ran 365px and the tabs started 505px
+     down in the dashboard panel — 60% of the screen spent on the name, the
+     price and a call button before a single fact an agent reads out on a call.
+     Everything below trims chrome, never content: the same fields are all
+     still here, just not each on its own line with 15px of air around it. */
+  .dp-hdr{padding:12px 14px 0;} .dp-body{padding:14px 14px 90px;}
+  .dp-title{font-size:19px;line-height:1.2;margin-bottom:6px;}
+  .dp-builder-tag{font-size:10.5px;letter-spacing:.05em;margin-bottom:4px;}
+  .dp-loc{font-size:13px;margin-bottom:8px;flex-wrap:wrap;gap:4px;}
+  .dp-hero{gap:8px;padding-bottom:10px;}
+  /* The price block was four stacked lines — price, per-sqft, status badge,
+     age — roughly 95px of the fold. As one wrapping row it is about 40px and
+     reads better: the number and what qualifies it sit together. */
+  .dp-price-box{text-align:left;display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px;width:100%;}
+  .dp-price{font-size:24px;}
+  .dp-psf{margin-top:0;}
+  .dp-price-box > div{margin-top:0!important;}
+  .dp-age{margin-top:0;}
+  .res-chips{margin-top:7px;gap:5px;}
+  .res-chip{font-size:10.5px;padding:3px 8px;}
+  .dp-call{margin-top:10px;padding:10px 18px;font-size:14px;}
+  /* However tall the header ends up, the tabs stay reachable once you are
+     past it — you can get to Specifications without scrolling back up. */
+  .dp-tabs{position:sticky;top:0;z-index:12;background:var(--white);margin-top:0;}
+  /* Section rhythm built for a desktop column; on a phone it is mostly air. */
+  .sec{margin-bottom:18px;}
+  .sec-title{margin-bottom:9px;}
+  /* 77px per fact tile meant six facts filled a screen. At ~52px the whole
+     key-facts block fits in the space four used to take. */
+  .stats-g{grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;}
+  .stat-b{padding:9px 8px;border-radius:10px;}
+  .stat-b-v{font-size:16px;}
+  .stat-b-l{font-size:9.5px;margin-top:2px;letter-spacing:.04em;}
+  /* A 70-character name or a price with a sentence after it is real sheet data.
+     Two lines of it is context; six lines is the whole screen — the full value
+     is still in Specifications and in the title attribute. */
+  .dp-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .dp-loc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  /* A price cell that carries a whole sentence ("excluding registration/GST,
+     call owner") is normal sheet data. Two lines of it, then it gives way —
+     the full string is still in Specifications. */
+  .dp-price{font-size:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .dp-psf{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;}
+  .dp-psf,.dp-age{font-size:11.5px;}
+  /* Nothing in the panel may widen it; long values wrap or are clipped, they
+     never turn into a sideways scroll. */
+  .dp-body,.dp-hdr,.dp-hero,.tab-panel{max-width:100%;min-width:0;}
+  .sheet-v,.conn-v,.sheetnotes,.detailstext{overflow-wrap:anywhere;}
   .dp-hdr-actions{gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;}
   .ctrl-right{margin-left:0;width:100%;}
   .dp-hact{padding:6px 10px;font-size:11.5px;gap:3px;}
@@ -548,10 +598,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 @media(max-width:680px){
   .mobile-actionbar{display:flex;}
   /* The sticky bar already carries Call, so the hero's copy is dead weight
-     pushing price and status below the fold. Scoped to .standalone because
-     the dashboard's panel has no action bar to fall back on. */
-  #dp.standalone .dp-call{display:none;}
+     pushing price and status below the fold. Both the standalone page and the
+     dashboard panel now have a bar to fall back on, so both drop it. */
+  #dp.standalone .dp-call,#dp.open .dp-call{display:none;}
 }
+/* The dashboard panel's bar belongs to the panel, not the page behind it. */
+#dpMobileBar{display:none;}
+@media(max-width:680px){ #dp.open #dpMobileBar{display:flex;} }
 
 /* ═══════ AGENT-COMPLETE DETAIL VIEW ═══════ */
 /* Resource availability chips — green = one tap away, dimmed = not on file */

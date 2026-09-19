@@ -144,6 +144,15 @@
     </div>
   </div>
   <div class="dp-body" id="dpBody"></div>
+
+  <!-- Thumb-reachable primary actions, mobile only — the same component
+       property.html uses. With Call pinned here, the hero's copy of it can be
+       dropped on a phone, which is what was pushing the price and the facts
+       off the first screen. -->
+  <div class="mobile-actionbar" id="dpMobileBar">
+    <a class="mab-btn mab-call" id="dpMabCall" href="#">📞 Call</a>
+    <button class="mab-btn mab-share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
+  </div>
 </div>
 
 <!-- SYNC FROM SHEET MODAL -->

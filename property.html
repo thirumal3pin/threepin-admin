@@ -20,7 +20,11 @@
 <style>
   /* This page IS the detail view, so the panel is always open and static
      rather than a fixed slide-over layered on top of the grid. */
-  #dp.standalone{position:static;display:block;min-height:100vh;animation:none;}
+  /* Static, so the page itself scrolls — but overflow-x:clip keeps a long
+     sheet value from turning that into a sideways scroll. clip rather than
+     hidden so it does not become a scroll container and break the sticky
+     tabs inside it. */
+  #dp.standalone{position:static;display:block;min-height:100dvh;animation:none;overflow-x:clip;}
   /* Loading skeleton — shown only until the first document read lands. */
   .sk{background:linear-gradient(90deg,var(--border) 25%,var(--bg) 50%,var(--border) 75%);
       background-size:200% 100%;animation:skwave 1.3s ease-in-out infinite;border-radius:7px;}
