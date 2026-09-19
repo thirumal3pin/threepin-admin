@@ -38,7 +38,7 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   await p.route('**/identitytoolkit**', r => r.abort());
   await p.route('**/firestore.googleapis.com/**', r => r.abort());
 
-  await p.goto('http://127.0.0.1:5199/dashboard.html', { waitUntil: 'domcontentloaded' });
+  await p.goto((process.env.PIN_BASE || 'http://127.0.0.1:5199') + '/dashboard.html', { waitUntil: 'domcontentloaded' });
   await p.waitForFunction(() => typeof window.init === 'function' && !!window.PinSearch && !!window.PinAdvanced);
   await p.evaluate(data => {
     window.dashboardFirebase = {
