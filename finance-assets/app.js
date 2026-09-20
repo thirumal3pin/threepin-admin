@@ -87,6 +87,17 @@ const SCOPED_VIEWS = new Set(['overview', 'month', 'txns', 'reports', 'books', '
 let view = 'overview';
 let ready = false;
 
+// A passcode in front of everything except Record. Firebase sign-in above is what actually
+// gates the data; this is a screen lock on top of it, for the case an already-signed-in phone
+// or laptop is picked up by someone who shouldn't be reading the books — Record stays exempt
+// because logging a payment or expense the moment it happens must never have friction, but
+// every other screen (including a direct link straight to it) should ask first. Deliberately
+// held only in memory, never in localStorage/sessionStorage: a reload, a new tab, or opening
+// the link fresh all re-lock it, every time — only staying unlocked while this exact page
+// keeps running.
+const FINANCE_PIN = '1313';
+let pinUnlocked = false;
+
 const entryNo = t => t?.no ? '#' + String(t.no).padStart(4, '0') : '—';
 
 // Event keys that earlier builds posted under, so an old entry still reads as what it was.
@@ -128,6 +139,7 @@ window.onFinanceAuthChange = (user, tenantId) => {
     }
   } else {
     ready = false;
+    pinUnlocked = false;
     app.style.display = 'none';
     login.classList.add('open');
   }
@@ -301,6 +313,13 @@ function repaint() {
     return;
   }
 
+  // Everything but Record is behind the passcode — see FINANCE_PIN above.
+  if (view !== 'record' && !pinUnlocked) {
+    main.innerHTML = pinGate();
+    document.getElementById('pinInput')?.focus();
+    return;
+  }
+
   // The books are in, and there is genuinely nothing in them.
   if (!s.settingsExists && !s.txns.length && view !== 'settings') {
     main.innerHTML = firstRun();
@@ -325,6 +344,24 @@ function repaint() {
     record: mountRecord, invoices: mountInvoices, bank: mountBank,
     settings: mountSettings, profile: mountProfile, opening: mountOpening,
   })[view]?.();
+}
+
+// ═══════ PASSCODE GATE ═══════
+
+function pinGate() {
+  return `
+    <div class="card" style="max-width:360px;margin:12vh auto 0">
+      <h1 style="margin-top:0">Enter passcode</h1>
+      <p class="lead">This part of Finance is locked. Record stays open all the time — everything else needs the passcode first.</p>
+      <div class="login-err" id="pinErr" role="alert"></div>
+      <form onsubmit="return fin.unlockPin(event)">
+        <div class="field">
+          <label for="pinInput">Passcode</label>
+          <input type="password" id="pinInput" inputmode="numeric" autocomplete="off" required>
+        </div>
+        <button class="btn primary block" type="submit">Unlock</button>
+      </form>
+    </div>`;
 }
 
 // ═══════ FIRST RUN ═══════
@@ -1655,6 +1692,22 @@ window.fin = {
 
   retryBoot: () => SY.retryBoot(),
   openSheet: () => window.AppNav?.open(),
+
+  unlockPin(e) {
+    e.preventDefault();
+    const inp = document.getElementById('pinInput');
+    if (inp.value === FINANCE_PIN) {
+      pinUnlocked = true;
+      repaint();
+    } else {
+      const err = document.getElementById('pinErr');
+      err.textContent = 'Wrong passcode.';
+      err.classList.add('show');
+      inp.value = '';
+      inp.focus();
+    }
+    return false;
+  },
 
   findAction(q, refocus) {
     findQ = String(q || '');
