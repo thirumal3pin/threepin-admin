@@ -28,8 +28,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath, not new URL(...).pathname: on Windows the latter yields
+// "/C:/Users/3Pin%20Realty/…" — a leading slash and percent-encoded spaces —
+// which path.join then turns into "C:\C:\…%20…" and nothing opens.
+const here = path.dirname(fileURLToPath(import.meta.url));
 new Function(fs.readFileSync(path.join(here, '..', 'dashboard-assets', 'search-engine.js'), 'utf8'))();
 const S = globalThis.PinSearch;
 const P = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'properties-snapshot.json'), 'utf8'));

@@ -116,32 +116,12 @@ await page.evaluate(() => {
   };
 });
 
-// ── 1. Free-text search over every detail ──
-console.log('\n── search ──');
-const search = async q => page.evaluate(async term => {
-  const inp = document.getElementById('searchInput');
-  inp.value = term;
-  inp.dispatchEvent(new Event('input', { bubbles: true }));
-  await new Promise(r => setTimeout(r, 60));
-  return filteredProperties.map(p => p.id);
-}, q);
-
-ok('built-up area is searchable',            JSON.stringify(await search('1131')) === '["ANR003"]', JSON.stringify(await search('1131')));
-ok('…and with the comma typed in',           JSON.stringify(await search('1,131')) === '["ANR003"]', JSON.stringify(await search('1,131')));
-ok('…and as it is stored, with the comma',   JSON.stringify(await search('1131')) === JSON.stringify(await search('1,131')));
-ok('UDS is searchable',                      JSON.stringify(await search('620')) === '["ANR003"]', JSON.stringify(await search('620')));
-ok('land area is searchable',                JSON.stringify(await search('1200')) === '["OMR007"]', JSON.stringify(await search('1200')));
-ok('price is searchable without commas',     JSON.stringify(await search('11000000')) === '["VLC001"]', JSON.stringify(await search('11000000')));
-ok('rate per sqft is searchable',            JSON.stringify(await search('21173')) === '["ANR003"]', JSON.stringify(await search('21173')));
-ok('possession is searchable',               JSON.stringify(await search('dec2027')) === '["ANR003"]', JSON.stringify(await search('dec 2027')));
-ok('an extra sheet column is searchable',    JSON.stringify(await search('corpus')) === '["ANR003","VLC001"]', JSON.stringify(await search('corpus')));
-ok('a value inside an extra column too',     JSON.stringify(await search('3.5 per sqft')) === '["ANR003"]', JSON.stringify(await search('3.5 per sqft')));
-ok('the old fields still work',              JSON.stringify(await search('velachery')) === '["VLC001"]', JSON.stringify(await search('velachery')));
-ok('property code still works',              JSON.stringify(await search('omr007')) === '["OMR007"]', JSON.stringify(await search('omr007')));
-// Brochure URLs are deliberately NOT searched — "drive" would match everything.
-ok('brochure URLs are not searched',         JSON.stringify(await search('drive.google')) === '[]', JSON.stringify(await search('drive.google')));
-ok('a miss really misses',                   JSON.stringify(await search('zzzznotathing')) === '[]');
-await page.evaluate(() => clearSearch());
+// Search used to be checked here against a three-property stub. It is now a
+// real engine with its own suite — tests/property-search.test.mjs, 748
+// assertions over the 131-property inventory snapshot — plus
+// tests/search-preview.mjs, which drives the live page. Keeping a thinner copy
+// of that here would only ever be the one that broke first for the wrong
+// reason. This file is now about the sheet sync alone.
 
 // ── 2. Sync from sheet, property by property ──
 console.log('\n── sync ──');
