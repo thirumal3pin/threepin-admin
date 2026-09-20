@@ -13,6 +13,8 @@ leads through conversation.
 | `style.css` | All styling — kanban board, lead detail panel, modals, login screen. |
 | `sample-leads.js` | 10 sample Chennai leads, seeded once so the board isn't empty on first login. |
 | `app.js` | All CRM logic — board rendering, list view, add/edit/delete lead, stage manager, notes, search/filter. |
+| `today.js` | The Daily task screen: today's site visits, the calls due, and the leads a colleague put your name on. Reads the leads already in memory — it has no store of its own. |
+| `nav-boot.js` | Wires this page into the shared app rail (`../shared-assets/`). Board, List, Follow-ups, Analytics and Daily task are panes of this one page, so the rail switches them without a reload. |
 | `firebase-sync.js` | Firebase Authentication + Firestore realtime sync (leads + pipeline stages). |
 | `../api/meta-webhook.js` | Vercel serverless function that receives Meta's Lead Ads webhook and writes leads into Firestore. |
 | `../api/whatsapp-bot-webhook.js` | Vercel serverless function that receives WhatsApp messages, runs them through Claude, replies, and writes/updates the lead. |

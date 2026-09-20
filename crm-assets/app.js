@@ -311,6 +311,7 @@ function applyFilters(){
   if(currentView==='kanban') renderBoard();
   else if(currentView==='list') renderList();
   else if(currentView==='followups') renderFollowups();
+  else if(currentView==='today' && window.renderTodayView) window.renderTodayView();
   updateViewsChip();
   // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
   // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
@@ -1270,73 +1271,50 @@ function renderTtSection(l){
   if(paneHasChat) renderConversationPane(l);
 }
 
-// ═══════ NAV: view switching, view dropdown, more menu ═══════
+// ═══════ NAV: view switching, more menu ═══════
+//
+// Which view is showing is the rail's job to display — the four buttons and
+// the Board/List dropdown that used to live in the header are entries in it
+// now. toggleView only has to show the right pane and tell the rail.
+const CRM_VIEWS = ['today', 'kanban', 'list', 'followups', 'dashboard'];
 function toggleView(view){
   currentView = view;
-  if(view!=='followups' && view!=='dashboard') lastBrowseView = view;
+  if(view==='kanban' || view==='list') lastBrowseView = view;
   updateNavState();
-  document.getElementById('kanbanView').style.display = view==='kanban' ? '' : 'none';
-  document.getElementById('listView').style.display = view==='list' ? '' : 'none';
-  document.getElementById('followupsView').style.display = view==='followups' ? '' : 'none';
-  document.getElementById('dashboardView').style.display = view==='dashboard' ? '' : 'none';
-  closeViewDropdown();
+  CRM_VIEWS.forEach(v=>{
+    const el = document.getElementById(v==='kanban' ? 'kanbanView' : v+'View');
+    if(el) el.style.display = view===v ? '' : 'none';
+  });
   if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
+  else if(view==='today'){ if(window.renderTodayView) window.renderTodayView(); }
   else applyFilters();
 }
 function updateNavState(){
-  document.getElementById('fuNavBtn').classList.toggle('at', currentView==='followups');
-  document.getElementById('dashNavBtn').classList.toggle('at', currentView==='dashboard');
-  document.querySelector('#viewDd .view-dd-btn').classList.toggle('at', currentView!=='followups' && currentView!=='dashboard');
-  document.getElementById('viewDdLabel').textContent = lastBrowseView==='list' ? 'List' : 'Board';
-  document.querySelectorAll('#viewDdMenu button').forEach(b=>b.classList.toggle('at', b.dataset.view===lastBrowseView && currentView!=='followups' && currentView!=='dashboard'));
-}
-function toggleViewDropdown(e){
-  if(e) e.stopPropagation();
-  document.getElementById('viewDd').classList.toggle('open');
-  document.getElementById('moreDd').classList.remove('open');
-  syncDropdownAria();
+  if(window.AppNav) window.AppNav.setActive(currentView);
+  // Search and the filter chips act on a list of leads. Daily task is a list
+  // of today, so they have nothing to act on there and only get in the way.
+  const isLeadList = currentView !== 'today';
+  document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
+  document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
 }
 // A trigger that claims aria-expanded="false" while its menu is open is worse
 // than one that says nothing, so every path that opens or closes a menu ends
 // here rather than each setting the attribute itself.
 function syncDropdownAria(){
-  const pairs = [['viewDd','.view-dd-btn'],['moreDd','.menu-btn']];
-  pairs.forEach(([id,sel])=>{
-    const dd = document.getElementById(id);
-    const btn = dd && dd.querySelector(sel);
-    if(btn) btn.setAttribute('aria-expanded', dd.classList.contains('open') ? 'true' : 'false');
-  });
-  const nav = document.getElementById('hdrNav'), navBtn = document.getElementById('hdrMenuBtn');
-  if(nav && navBtn) navBtn.setAttribute('aria-expanded', nav.classList.contains('mobile-open') ? 'true' : 'false');
-}
-function closeViewDropdown(){
-  document.getElementById('viewDd').classList.remove('open');
-  syncDropdownAria();
+  const dd = document.getElementById('moreDd');
+  const btn = dd && dd.querySelector('.menu-btn');
+  if(btn) btn.setAttribute('aria-expanded', dd.classList.contains('open') ? 'true' : 'false');
 }
 function toggleMoreMenu(e){
   if(e) e.stopPropagation();
   document.getElementById('moreDd').classList.toggle('open');
-  document.getElementById('viewDd').classList.remove('open');
+  syncDropdownAria();
 }
 function closeMoreMenu(){
   document.getElementById('moreDd').classList.remove('open');
-}
-function toggleHdrNav(e){
-  if(e) e.stopPropagation();
-  const hdrNav = document.querySelector('.hdr-nav');
-  if(hdrNav) hdrNav.classList.toggle('mobile-open');
-  document.getElementById('viewDd').classList.remove('open');
-  document.getElementById('moreDd').classList.remove('open');
   syncDropdownAria();
 }
-document.addEventListener('click', (e)=>{
-  const hdrNav = document.querySelector('.hdr-nav');
-  const menuBtn = document.querySelector('.menu-btn');
-  if(hdrNav && hdrNav.classList.contains('mobile-open') && !hdrNav.contains(e.target) && e.target !== menuBtn){
-    hdrNav.classList.remove('mobile-open');
-  }
-  closeViewDropdown(); closeMoreMenu(); closePropertyPop();
-});
+document.addEventListener('click', ()=>{ closeMoreMenu(); closePropertyPop(); });
 
 // ═══════ HELPERS ═══════
 function stageById(id){ return stages.find(s=>s.id===id); }
@@ -2361,17 +2339,10 @@ function followupBuckets(list){
 // The badge counts leads that need a person NOW (critical or high) — one number that means
 // "open the queue", instead of every follow-up due at some point today.
 function updateFollowupBadge(){
-  const badge = document.getElementById('fuBadge');
-  if(!badge) return;
   const urgent = leads.filter(l => !isBusinessLead(l) && isUrgentUi(l));
-  const critical = urgent.filter(l => { const t = topAttentionUi(l); return t && t.severity === 'critical'; }).length;
-  if(urgent.length){
-    badge.textContent = urgent.length;
-    badge.style.display='';
-    badge.classList.toggle('urgent', critical > 0);
-  } else {
-    badge.style.display='none';
-  }
+  // The count sits on Follow-ups in the rail, so it is visible from every
+  // console rather than only from this page's header.
+  if(window.AppNav) window.AppNav.setBadge('followups', urgent.length);
 }
 
 // Reasons whose time is a due time (show it); the rest carry when something last happened.
@@ -4843,10 +4814,9 @@ document.addEventListener('keydown', e => {
       fn ? fn() : top.classList.remove('open');
       return;
     }
-    // No layer open — fall through to the lightweight popups.
-    closeViewDropdown(); closeMoreMenu(); closePropertyPop();
-    const nav = document.querySelector('.hdr-nav.mobile-open');
-    if(nav) nav.classList.remove('mobile-open');
+    // No layer open — fall through to the lightweight popups. The rail
+    // handles its own Escape, in appnav.js.
+    closeMoreMenu(); closePropertyPop();
     return;
   }
   if(e.key === 'Tab'){
@@ -4943,6 +4913,7 @@ function crmLogout(){
 function renderUserProfileBadge(){
   const el = document.getElementById('hdrUserEmail');
   if(el) el.textContent = currentUserEmail ? '👤 ' + currentUserEmail : '';
+  if(window.AppNav) window.AppNav.setUser(currentUserEmail || '');
 }
 window.onCrmAuthChange = function(user){
   if(user){

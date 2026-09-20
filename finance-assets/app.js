@@ -78,47 +78,11 @@ const SCOPED_VIEWS = new Set(['overview', 'month', 'txns', 'reports', 'books', '
 
 // ═══════ NAVIGATION MODULES ═══════
 //
-// The side nav is five modules, not eighteen links. A module you can close is a module you
-// can stop thinking about, which is the whole point on a screen this dense. Two rules keep it
-// from ever hiding where you are: the module holding the current page is always open, and the
-// choice is remembered between visits rather than resetting to a designer's idea of tidy.
-const MODULES = [...new Set(NAV.map(n => n[3]))];
-const MODULE_NOTE = {
-  'Daily': 'What you touch most days',
-  'Business': 'Deals, commitments and what you expect',
-  'Money': 'Where the cash actually is',
-  'Tax & reports': 'What you file and what you read',
-  'Set up': 'Company details and how the app behaves',
-};
-const modSlug = g => 'mod-' + String(g).toLowerCase().replace(/[^a-z]+/g, '-');
-let openModules = null;
-
-// Everything is open until the owner closes something. A navigation that hides most of itself
-// on first sight is indistinguishable from one that is broken — the collapse is there to tidy
-// away what you have decided you do not need, not to make you hunt for it.
-const NAV_KEY = 'fin.nav.modules.v2';
-function modulesOpen() {
-  if (openModules) return openModules;
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(NAV_KEY) || 'null'); } catch { saved = null; }
-  openModules = new Set(Array.isArray(saved) ? saved : MODULES);
-  return openModules;
-}
-function saveModules() {
-  try { localStorage.setItem(NAV_KEY, JSON.stringify([...modulesOpen()])); } catch { /* private window */ }
-}
-let justOpened = null;
-function toggleModule(g) {
-  const open = modulesOpen();
-  if (open.has(g)) open.delete(g); else { open.add(g); justOpened = g; }
-  saveModules();
-  repaint();
-  justOpened = null;
-  // Focus stays where it was pressed, so the keyboard does not jump to the top.
-  const el = document.querySelector(`[data-mod="${CSS.escape(g)}"]`);
-  if (el) el.focus();
-}
-const moduleOf = key => (NAV.find(n => n[0] === key) || [])[3] || null;
+// The five modules that used to be rendered here now live in the app rail
+// (shared-assets/appnav.js), which draws them on every console rather than only on this
+// page. NAV above stays the authority on routing — which keys exist, what each is called
+// and which group it belongs to — and tests/appnav.test.mjs fails if the rail ever
+// disagrees with it.
 
 let view = 'overview';
 let ready = false;
@@ -130,6 +94,14 @@ const LEGACY_EVENT = { billdiscount: 'Discount on a bill' };
 
 // ═══════ BOOT ═══════
 
+// The rail is the menu for all four consoles. Here it hands finance keys straight to go(),
+// so moving between finance screens never reloads the page; anything else on it is a link.
+window.AppNav.boot({
+  console: 'finance',
+  select: key => go(key),
+  signOut: () => window.financeLogout(),
+});
+
 window.onFinanceAuthChange = (user, tenantId) => {
   const login = document.getElementById('loginScreen');
   const app = document.getElementById('appRoot');
@@ -137,6 +109,7 @@ window.onFinanceAuthChange = (user, tenantId) => {
     login.classList.remove('open');
     app.style.display = '';
     document.getElementById('whoami').textContent = user.email || '';
+    window.AppNav?.setUser(user.email || '');
     if (!tenantId) {
       document.getElementById('main').innerHTML = note(
         '<b>This account is not set up for the finance module yet.</b><br>It has no tenant assigned, so there is no data to show. Ask whoever provisioned your login to finish onboarding.');
@@ -273,10 +246,9 @@ function paintCurrency() {
 
 window.financeLogout = () => window.financeAuth.logout();
 window.financeCloseModal = closeModal;
-window.financeCloseSheet = () => document.getElementById('moreSheet').classList.remove('open');
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); window.financeCloseSheet(); window.fin?.closePreview?.(); }
+  if (e.key === 'Escape') { closeModal(); window.fin?.closePreview?.(); }
 });
 
 window.addEventListener('hashchange', routeFromHash);
@@ -291,7 +263,7 @@ function routeFromHash() {
 
 function go(next) {
   view = next;
-  window.financeCloseSheet();
+  window.AppNav?.close();
   if (location.hash.replace(/^#/, '') !== next) location.hash = next;
   else repaint();
   document.getElementById('main').focus({ preventScroll: true });
@@ -301,49 +273,22 @@ function go(next) {
 function repaint() {
   const s = getState();
 
-  const here = moduleOf(view);
-  document.getElementById('sidenav').innerHTML = MODULES.map(g => {
-    const items = NAV.filter(n => n[3] === g);
-    const holdsCurrent = g === here;
-    const open = holdsCurrent || modulesOpen().has(g);
-    return `
-    <section class="mod ${open ? 'open' : ''} ${holdsCurrent ? 'here' : ''} ${justOpened === g ? 'just-opened' : ''}">
-      <button type="button" class="mod-h" data-mod="${esc(g)}" aria-expanded="${open}" aria-controls="${modSlug(g)}"
-        title="${esc(MODULE_NOTE[g] || '')} — click to ${open ? 'close' : 'open'}"
-        onclick="fin.toggleModule('${esc(g)}')">
-        <span class="mod-name">${esc(g)}</span>
-        ${!open && holdsCurrent ? '<span class="mod-dot" aria-label="you are here"></span>' : ''}
-        <i class="ic fa-solid fa-chevron-down mod-chev" aria-hidden="true"></i>
-      </button>
-      <div class="mod-body" id="${modSlug(g)}">
-        ${items.map(([k, label, ic]) =>
-      `<button type="button" class="${view === k ? 'on' : ''}" ${view === k ? 'aria-current="page"' : ''} onclick="fin.go('${k}')">
-             <i class="ic ${esc(ic)}" aria-hidden="true"></i><span>${esc(label)}</span></button>`).join('')}
-      </div>
-    </section>`;
-  }).join('');
+  window.AppNav?.setActive(view);
 
+  // The phone tab bar: the four screens used all day, with Record as the one that creates
+  // something. "More" is the rail — the same menu the desktop shows down the left — rather
+  // than a second sheet listing the same pages in a different order.
   document.getElementById('bottomnav').innerHTML = BOTTOM.map(k => {
     if (k === 'more') {
       const on = !BOTTOM.includes(view);
       return `<button type="button" class="${on ? 'on' : ''}" onclick="fin.openSheet()">
-                <i class="ic fa-solid fa-ellipsis" aria-hidden="true"></i>More</button>`;
+                <i class="ic fa-solid fa-bars" aria-hidden="true"></i>More</button>`;
     }
     const [, label, ic] = NAV.find(n => n[0] === k);
     const isRec = k === 'record';
     return `<button type="button" class="${view === k ? 'on' : ''} ${isRec ? 'rec' : ''}" onclick="fin.go('${k}')">
               <i class="ic ${ic}" aria-hidden="true"></i>${esc(label)}</button>`;
   }).join('');
-
-  document.getElementById('sheetGrid').innerHTML = MODULES.map(g => `
-    <div class="sheet-mod">
-      <div class="sheet-mod-h">${esc(g)}${MODULE_NOTE[g] ? `<span>${esc(MODULE_NOTE[g])}</span>` : ''}</div>
-      <div class="sheet-mod-grid">
-        ${NAV.filter(n => n[3] === g).map(([k, label, ic]) =>
-    `<button type="button" class="${view === k ? 'on' : ''}" onclick="fin.go('${k}')">
-             <i class="${esc(ic)}" aria-hidden="true" style="font-size:16px"></i>${esc(label)}</button>`).join('')}
-      </div>
-    </div>`).join('');
 
   const main = document.getElementById('main');
 
@@ -1705,11 +1650,11 @@ function startEvent(key, preset = {}, label = null, id = null) {
 }
 
 window.fin = {
-  go, repaint, toggleModule,
+  go, repaint,
   explain: explainFigure, showInTxns,
 
   retryBoot: () => SY.retryBoot(),
-  openSheet: () => document.getElementById('moreSheet').classList.add('open'),
+  openSheet: () => window.AppNav?.open(),
 
   findAction(q, refocus) {
     findQ = String(q || '');

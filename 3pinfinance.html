@@ -13,6 +13,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Instrument+Serif&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="finance-assets/style.css">
+<link rel="stylesheet" href="shared-assets/appnav.css">
+<script src="shared-assets/appnav.js" defer></script>
 
 <!-- The Firebase modules are fetched on load; preconnecting shaves a round trip off a cold
      open on a phone, which is where this page is mostly used. -->
@@ -50,9 +52,12 @@
 <div id="appRoot" style="display:none">
 
   <header class="top">
+    <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"></button>
     <div class="brand"><img src="logo.jpg" alt="3 PIN Realty" width="30" height="30">3 PIN Realty <span class="small">Finance</span></div>
     <div class="spacer"></div>
-    <span class="who" id="whoami"></span>
+    <!-- Who is signed in, and Sign out, are in the rail now — one place for
+         them, the same place on every console. -->
+    <span class="who" id="whoami" hidden></span>
     <div class="cur-tog scope-tog" id="scopeTog" role="group" aria-label="Which record" title="The cash box is kept as its own record. Show both together, or read either one on its own — each is complete, with its own income, costs and receivables. Lasts for this tab.">
       <span class="lbl">Record</span>
       <button type="button" data-scope="with" class="on" aria-pressed="true" onclick="fin.setScope('with')">Both</button>
@@ -63,24 +68,19 @@
       <button type="button" data-cur="INR" class="on" aria-pressed="true" onclick="fin.setCurrency('INR')">INR</button>
       <button type="button" data-cur="USD" aria-pressed="false" onclick="fin.setCurrency('USD')">USD</button>
     </div>
-    <button class="btn ghost sm" type="button" onclick="financeLogout()">Sign out</button>
   </header>
 
+  <!-- The side nav that used to sit here is now the app rail, which carries
+       these same five groups plus the other consoles. One menu, the same one
+       on every page. -->
   <div class="shell">
-    <nav class="side" id="sidenav" aria-label="Sections"></nav>
     <main id="main" tabindex="-1"></main>
   </div>
 
+  <!-- The phone keeps its tab bar: four things done all day, and Record as the
+       one that creates something. "More" opens the rail rather than a second
+       sheet listing the same pages a different way. -->
   <nav class="bottom" id="bottomnav" aria-label="Sections"></nav>
-
-  <!-- The "More" sheet carries the tabs that do not fit across the bottom bar on a phone. -->
-  <div class="sheet" id="moreSheet" onclick="if(event.target===this) financeCloseSheet()">
-    <div class="sheet-inner" role="dialog" aria-modal="true" aria-label="More sections">
-      <div class="sheet-head"><h3>All sections</h3><button class="btn ghost sm" type="button" aria-label="Close" onclick="financeCloseSheet()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
-      <div class="sheet-grid" id="sheetGrid"></div>
-      <button class="btn ghost block sheet-signout" type="button" onclick="financeLogout()">Sign out</button>
-    </div>
-  </div>
 
   <!-- The phone's preview of what saving will do: the Record screen's preview card is moved in
        here on open and back on close, so there is exactly one preview to keep right. -->

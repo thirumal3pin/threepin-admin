@@ -191,8 +191,9 @@ a { color: var(--brand-600); text-decoration-thickness: 1px; text-underline-offs
 .cur-tog button:hover { color: var(--ink); }
 .cur-tog button.on { background: var(--es); color: var(--on-es); }
 
+/* The sections list moved out to the app rail, so the shell is one column at
+   every width now — see shared-assets/appnav.css. */
 .shell { display: block; }
-.side { display: none; }
 
 main { padding: var(--s6) var(--s4) calc(var(--tab-h) + var(--s8)); max-width: 1080px; margin: 0 auto; min-width: 0; width: 100%; }
 /* go() focuses main for screen readers; the ring is for controls, not the page. */
@@ -232,13 +233,6 @@ main > * { animation: rise .18s ease-out both; }
 .sheet.open { display: flex; }
 .sheet-inner { width: 100%; background: var(--bg); border-radius: 18px 18px 0 0; padding: var(--s4) var(--s4) calc(var(--s5) + env(safe-area-inset-bottom)); max-height: 78vh; overflow: auto; }
 .sheet-inner h3 { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; margin-bottom: var(--s3); }
-.sheet-grid { display: block; }
-.sheet-grid button {
-  border: 1px solid var(--line); background: var(--card); border-radius: var(--r-md);
-  padding: 14px 8px; font: inherit; font-size: 12.5px; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 44px; color: var(--ink-2);
-}
-.sheet-grid button.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 
 /* ═══════ CARDS & STATS ═══════ */
 
@@ -559,20 +553,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 /* ═══════ DESKTOP ═══════ */
 
 @media (min-width: 860px) {
-  .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); max-width: var(--shell-w); margin: 0 auto; }
-
-  .side { display: block; position: sticky; top: var(--nav-h); align-self: start; height: calc(100vh - var(--nav-h)); overflow-y: auto; padding: var(--s4) var(--s3) var(--s6); border-right: 1px solid var(--line); }
-  .side .eh { margin: var(--s5) 12px var(--s2); }
-  .side .eh:first-child { margin-top: var(--s2); }
-  .side button {
-    display: flex; align-items: center; width: 100%; text-align: left;
-    border: 0; background: none; font: inherit; font-size: 14.5px; color: var(--ink-2);
-    padding: 8px 12px 8px 20px; border-radius: var(--r); cursor: pointer; margin-bottom: 1px; min-height: 38px;
-    position: relative; transition: background .12s, color .12s;
-  }
-  .side button:hover { background: var(--card-2); color: var(--ink); }
-  .side button.on { color: var(--ink); font-weight: 600; background: var(--card-2); }
-  .side button.on::before { content: ''; position: absolute; left: 8px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--brand); }
+  .shell { max-width: var(--shell-w); margin: 0 auto; }
 
   .bottom { display: none; }
   main { padding: var(--s8) var(--s8) var(--s12); max-width: none; margin: 0; width: 100%; min-width: 0; }
@@ -598,7 +579,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 /* ═══════ PRINT ═══════ */
 
 @media print {
-  .top, .side, .bottom, .actions, .filters, .btn { display: none !important; }
+  .top, .bottom, .actions, .filters, .btn { display: none !important; }
   main { padding: 0; }
   .card { border: 0; padding: 0; }
   body { background: #fff; }
@@ -739,55 +720,6 @@ details.bucket > summary:hover { background: var(--hover, rgba(0,0,0,.03)); }
 details.bucket[open] > summary { border-bottom: 1px solid var(--line); }
 
 
-/* ═══════ SIDE NAV MODULES ═══════
-   Five modules instead of eighteen links. The header is a real button — bold and a size up
-   from the links beneath it, so the eye lands on the module first and the page second. The
-   module holding the current page cannot be collapsed shut; when every other module is
-   closed, that one still shows where you are. */
-
-.side .mod { margin-bottom: 2px; }
-.side .mod-h {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  border: 0; background: none; cursor: pointer; font: inherit;
-  padding: 10px 10px 10px 12px; border-radius: var(--r);
-  color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em;
-  text-align: left; min-height: 42px; transition: background .12s;
-}
-.side .mod-h:hover { background: var(--card-2); }
-.side .mod-name { flex: 1; }
-.side .mod-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); flex: none; }
-.side .mod-chev {
-  font-size: 11px; color: var(--ink-3); flex: none;
-  transition: transform .16s ease;
-}
-.side .mod.open .mod-chev { transform: rotate(180deg); }
-.side .mod-body { display: none; padding: 0 0 8px; }
-.side .mod.open .mod-body { display: block; animation: modOpen .16s ease-out both; }
-@keyframes modOpen { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
-.side .mod-note {
-  margin: 0 12px 6px 20px; font-size: 11.5px; line-height: 1.35; color: var(--ink-3);
-}
-.side .mod-body button { gap: 10px; font-size: 14px; padding-left: 20px; }
-.side .mod-body button .ic { font-size: 12.5px; width: 16px; text-align: center; color: var(--ink-3); flex: none; }
-.side .mod-body button.on .ic { color: var(--brand); }
-.side .mod-body button.on::before { left: 6px; }
-
-/* The phone sheet teaches the same map as the sidebar. */
-.sheet-mod + .sheet-mod { margin-top: var(--s5); }
-.sheet-mod { max-width: 100%; }
-.sheet-mod-h {
-  font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 8px;
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-}
-.sheet-mod-h span { font-size: 11.5px; font-weight: 400; color: var(--ink-3); flex: 1 1 100%; }
-.sheet-mod-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); }
-.sheet-mod-grid button {
-  border: 1px solid var(--line); background: var(--card); border-radius: var(--r-md);
-  padding: 12px 6px; font: inherit; font-size: 12px; line-height: 1.25; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  min-height: 68px; color: var(--ink-2); text-align: center; overflow-wrap: anywhere;
-}
-.sheet-mod-grid button.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 
 
 /* Four steps of one story: stacked on a phone, side by side once there is room. Forcing four
@@ -797,22 +729,8 @@ details.bucket[open] > summary { border-bottom: 1px solid var(--line); }
 
 
 /* The sheet is the whole navigation on a phone, so it gets the room it needs and never the
-   width it does not: nothing inside it may push the sheet sideways. */
-.sheet-inner { max-height: 86vh; }
-.sheet-inner > * { max-width: 100%; }
-.sheet-mod-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-@media (max-width: 359px) { .sheet-mod-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 
-/* Density and contrast, once every module is open by default: eighteen links and five headers
-   have to fit a laptop screen without scrolling, and a link you can barely read is not a link.
-   The description under each module header lives in its tooltip and in the phone sheet. */
-.side .mod-h { padding: 8px 10px 8px 12px; min-height: 38px; font-size: 14.5px; }
-.side .mod-body { padding-bottom: 4px; }
-.side .mod-body button { color: var(--ink-2); font-size: 14px; min-height: 34px; padding-top: 6px; padding-bottom: 6px; }
-.side .mod-body button:hover { color: var(--ink); }
-.side .mod-body button .ic { color: var(--ink-3); opacity: .85; }
-.side .mod + .mod { margin-top: 2px; border-top: 1px solid var(--line); padding-top: 2px; }
 
 
 /* ═══════ OPENABLE FIGURES ═══════
@@ -988,8 +906,6 @@ form[aria-busy="true"] { pointer-events: none; opacity: .6; }
 .sheet-inner::before { content: ''; display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--line-2); margin: 0 auto var(--s3); }
 .sheet.open .sheet-inner { animation: sheetUp var(--d3) var(--ease) both; }
 @keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-.sheet-signout { margin-top: var(--s4); }
-@media (min-width: 860px) { .sheet-signout { display: none; } }
 @media (max-width: 859px) { .top .btn.ghost.sm { display: none; } }
 
 /* ── the result ── */
@@ -1014,17 +930,6 @@ form[aria-busy="true"] { pointer-events: none; opacity: .6; }
 
 /* The bottom tab indicator in ink, so the Record button is the only orange on the bar. */
 .bottom button.on::after { background: var(--ink); }
-
-/* The sidebar fits a 900px window: nineteen links and five headers. */
-@media (min-width: 860px) {
-  .side { padding-top: var(--s2); }
-  .side .mod-h { min-height: 34px; padding-top: 6px; padding-bottom: 6px; }
-  .side .mod-body button { min-height: 32px; padding-top: 5px; padding-bottom: 5px; }
-  .side .mod + .mod { margin-top: 0; padding-top: 0; }
-  /* A module animates only when it is opened, not on every repaint. */
-  .side .mod .mod-body { animation: none; }
-  .side .mod.just-opened .mod-body { animation: modOpen .18s ease-out both; }
-}
 
 /* Owed on a phone: the document row wraps instead of painting the date over the note. */
 @media (max-width: 640px) {

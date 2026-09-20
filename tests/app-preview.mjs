@@ -85,8 +85,11 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
 
   if (name === 'phone') {
     await go('overview');
+    // "More" on the tab bar is the app rail now — the same menu the desktop
+    // shows down the left, not a finance-only sheet.
     await p.evaluate(() => window.fin.openSheet());
-    await shot('more-sheet', { wait: 300, full: false });
+    await shot('rail-drawer', { wait: 300, full: false });
+    await p.evaluate(() => window.AppNav.close());
   }
 
   await p.close();

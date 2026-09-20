@@ -36,18 +36,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .login-submit:hover{background:var(--ink2);}
 .login-home{display:block;text-align:center;margin-top:16px;font-size:13px;font-weight:600;color:var(--ink3);text-decoration:none;}
 .login-home:hover{color:var(--ink);}
-.crm-nav-btn{display:inline-flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);text-decoration:none;cursor:pointer;transition:all .15s;white-space:nowrap;}
-.crm-nav-btn:hover{border-color:var(--ink);color:var(--ink);}
-/* The one filled button on this bar: it is the only control here that
-   creates something, and a single primary is what makes a bar readable. */
-.brochure-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:700;padding:6px 13px;border-radius:20px;border:1.5px solid var(--ink);background:var(--ink);color:#fff;text-decoration:none;cursor:pointer;transition:all .15s;white-space:nowrap;}
-.brochure-nav-btn:hover{background:var(--ink2);border-color:var(--ink2);}
-@media(max-width:680px){
-  .crm-nav-btn{display:block;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;text-align:center;margin:0;border:1.5px solid var(--border);background:var(--white);}
-  .brochure-nav-btn{display:block;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;text-align:center;margin:0 0 8px;}
-}
-.logout-btn{font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border);background:transparent;color:var(--ink3);cursor:pointer;transition:all .15s;}
-.logout-btn:hover{border-color:var(--red);color:var(--red);}
 
 /* ── HEADER ── */
 #hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 14px;position:sticky;top:0;z-index:100;box-shadow:0 1px 0 var(--border),0 6px 22px rgba(0,0,0,.05);}
@@ -66,8 +54,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
    and the card that answers it are the same colour. The total is just a
    total. */
 .hstat.g .hstat-n{color:var(--green);} .hstat.a .hstat-n{color:var(--amber);} .hstat.t .hstat-n{color:var(--ink);}
-.hdr-menu-btn{display:none;}
-.nav-mobile-icon{display:none;}
 
 .srch-row{display:flex;gap:8px;align-items:stretch;margin-bottom:10px;}
 .srch-wrap{position:relative;flex:1;min-width:0;}
@@ -379,9 +365,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .brand{gap:9px;flex:1;min-width:0;}
   .brand-name{font-size:17px;white-space:nowrap;} .brand-logo{width:34px;height:34px;}
   .brand-sub{display:none;}
-  .nav-mobile-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);font-size:14px;text-decoration:none;cursor:pointer;transition:all .2s;flex-shrink:0;margin-left:auto;}
-  .nav-mobile-icon:hover{border-color:var(--ink);color:var(--ink);}
-  .hdr-menu-btn{margin-left:6px;}
+  .brand-name{font-size:16px;}
+  .brand-logo{width:30px;height:30px;}
+  .rail-toggle{width:36px;height:36px;}
   .srch-wrap{margin-bottom:8px;margin-top:-2px;}
   #searchInput{padding:9px 32px 9px 36px;font-size:13.5px;border-radius:18px;}
   .srch-ico{left:11px;width:14px;height:14px;}
@@ -454,17 +440,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .card-cta{flex-wrap:wrap;gap:6px;}
   .cta-btn{padding:8px;font-size:12px;}
 
-  /* header stats collapse into a menu popup */
-  .hdr-menu-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;border:1.5px solid var(--border);background:var(--white);font-size:18px;color:var(--ink2);cursor:pointer;flex-shrink:0;transition:all .15s;}
-  .hdr-menu-btn:hover{border-color:var(--ink);background:var(--bg);}
-  .hstats{display:none;position:absolute;top:50px;right:0;background:var(--white);border:1.5px solid var(--border);border-radius:12px;box-shadow:var(--shadow-md);padding:12px;flex-direction:column;gap:0;z-index:120;min-width:200px;}
-  .hstats.mobile-open{display:flex;}
-  .hstats .hstat{width:100%;padding:12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;border-radius:8px;}
-  .hstats .hstat:hover{background:var(--bg);}
-  .hstats .hstat:last-of-type{border-bottom:none;}
-  .hstats .brochure-nav-btn{width:100%;padding:10px 12px;text-align:center;margin:8px 0 0;border-radius:8px;font-size:13px;}
-  .hstats .crm-nav-btn{width:100%;padding:10px 12px;text-align:center;margin:8px 0;border-radius:8px;font-size:13px;}
-  .hstats .logout-btn{width:100%;border-top:1px solid var(--border);padding-top:8px;margin-top:8px;border-radius:8px;font-size:13px;padding:10px 12px;text-align:center;border:none;background:var(--red-bg);color:var(--red);border-radius:8px;}
+  /* Three counts, read at a glance. They used to be folded into a ☰ popup
+     because that menu also had to hold six buttons; those buttons are in the
+     rail now, and what is left fits the bar at 360px without hiding. */
+  .hstats{display:flex;gap:5px;flex-shrink:0;}
+  .hstats .hstat{padding:4px 8px;min-width:0;}
+  .hstats .hstat-n{font-size:16px;}
+  .hstats .hstat-l{font-size:9px;letter-spacing:.04em;}
 
   /* filters + sort collapse behind a single toggle */
   .mfilter-toggle{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px;border-radius:12px;border:1.5px solid var(--border);background:var(--white);font-family:var(--sans);font-weight:600;font-size:14px;color:var(--ink2);cursor:pointer;margin-bottom:0;}
@@ -483,8 +465,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 /* ═══════ CHANGE LOG PANEL ═══════ */
 /* The reconciliation worklist: dashboard edits that still need to be made in
    the inventory sheet by hand. Shares #dp's full-screen overlay pattern. */
-.changes-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border2);background:var(--white);color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
-.changes-nav-btn:hover{border-color:var(--ink);color:var(--ink);}
 #changesPanel{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
 #changesPanel.open{display:block;animation:fadeSlide .24s ease;}
 .chg-hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 0;position:sticky;top:0;z-index:10;box-shadow:0 2px 14px rgba(0,0,0,.05);}
@@ -523,7 +503,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .chg-body{padding:18px 16px 50px;}
   .chg-row{flex-wrap:wrap;}
   .chg-meta{flex-direction:row;width:100%;justify-content:flex-start;gap:10px;padding-left:30px;}
-  .changes-nav-btn{display:block;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;text-align:center;margin:0 0 8px;}
 }
 
 /* ═══════ INVENTORY SHEET PASSTHROUGH ═══════ */
@@ -539,8 +518,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 @media(max-width:600px){.sheet-row{grid-template-columns:1fr;}.sheet-k{border-right:none;border-bottom:1px solid var(--bg2);}}
 
 /* ═══════ SYNC FROM SHEET ═══════ */
-.sync-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
-.sync-nav-btn:hover{border-color:var(--ink);color:var(--ink);}
 #syncModal{position:fixed;inset:0;background:rgba(28,25,23,.55);z-index:400;display:none;align-items:center;justify-content:center;padding:20px;}
 #syncModal.open{display:flex;}
 .sync-box{max-width:680px;width:100%;}
@@ -583,9 +560,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .sync-more{font-size:11.5px;color:var(--ink3);padding-top:3px;}
 .sync-done{background:var(--green-bg);border:1px solid #BBF7D0;border-radius:10px;padding:16px;font-size:15px;font-weight:650;color:var(--green);text-align:center;}
 .sync-done-sub{font-size:12.5px;font-weight:500;color:var(--ink3);margin-top:5px;}
-@media(max-width:680px){
-  .sync-nav-btn{display:block;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;text-align:center;margin:0 0 8px;}
-}
 
 /* ═══════ MERGED FROM main: SHARE BUTTON + MOBILE TOUCH TARGETS ═══════
    Appended rather than interleaved into the blocks above — same selectors
@@ -669,9 +643,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .spec-t a:hover{text-decoration:underline;}
 
 /* ═══════ MISSING DATA PANEL ═══════ */
-.missing-nav-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
-.missing-nav-btn:hover{border-color:var(--ink);color:var(--ink);}
-.missing-badge{background:var(--amber-bg);color:var(--amber);font-size:10.5px;font-weight:800;border-radius:99px;padding:1px 7px;line-height:1.5;}
 #missingPanel{position:fixed;inset:0;background:var(--bg);z-index:200;overflow-y:auto;display:none;}
 #missingPanel.open{display:block;animation:fadeSlide .24s ease;}
 .md-prop{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;}
@@ -692,9 +663,6 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .md-save{padding:8px 16px;border-radius:8px;border:none;background:var(--green);color:#fff;font-weight:700;font-size:12.5px;cursor:pointer;}
 .md-na{padding:8px 13px;border-radius:8px;border:1.5px solid var(--border);background:var(--white);color:var(--ink3);font-weight:600;font-size:12px;cursor:pointer;}
 .md-na:hover{border-color:var(--ink3);color:var(--ink);}
-@media(max-width:680px){
-  .missing-nav-btn{display:flex;width:100%;padding:10px 12px;border-radius:8px;font-size:13.5px;margin:0 0 8px;}
-}
 
 /* Sync modal — protected dashboard edits */
 .sync-protected{background:var(--blue-bg);border:1px solid #BFDBFE;border-left:4px solid var(--blue);border-radius:10px;padding:12px 15px;margin-bottom:14px;}

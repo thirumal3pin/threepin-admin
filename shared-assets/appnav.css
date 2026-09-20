@@ -1,0 +1,300 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   APP RAIL — one navigation for every console
+
+   Properties, CRM, Finance and the daily list are separate pages with
+   separate stylesheets. Before this they advertised each other with loose
+   buttons in each header — a different set on every page, in a different
+   order, none of them saying where you already were. This is the one control
+   that replaces all of them.
+
+   The shape is the one Finance already taught: a section you open, holding
+   the pages that belong to it. Only one section is open at a time, so opening
+   Finance is what puts the finance pages on screen and nothing else.
+
+   ── How it borrows each console's colours ──
+   Nothing here hardcodes a palette. Each host page already declares its own
+   tokens, and the rail reads them through [data-console], so it reads as a
+   continuation of the page rather than a strip bolted to the side of it. The
+   literal fallbacks are only for a page not yet wired up.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --rail-w: 252px;
+  --rail-w-min: 66px;
+}
+
+/* The rail is laid out only once the page says it is past its login screen.
+   Until then it is not in the flow at all — a nav rail beside a login box is
+   an invitation to click something that cannot work yet. */
+#appRail { display: none; }
+body.rail-on #appRail { display: flex; }
+
+#appRail {
+  /* Surface, ink and rules, read from the host page. */
+  --rl-bg: var(--card, #fff);
+  --rl-sunk: var(--bg, #f6f5f2);
+  --rl-line: var(--border, #e4e0d8);
+  --rl-ink: var(--ink, #1c1917);
+  --rl-ink-2: var(--ink2, #44403c);
+  --rl-ink-3: var(--ink3, #78716c);
+  --rl-accent: var(--gold, #b45309);
+  --rl-hover: color-mix(in srgb, var(--rl-ink) 6%, transparent);
+  --rl-on-bg: color-mix(in srgb, var(--rl-accent) 12%, transparent);
+
+  position: fixed; inset: 0 auto 0 0; z-index: 240;
+  width: var(--rail-w);
+  flex-direction: column;
+  background: var(--rl-bg);
+  border-right: 1px solid var(--rl-line);
+  font-family: var(--sans, system-ui, sans-serif);
+  color: var(--rl-ink);
+  transition: width .18s cubic-bezier(.22,.61,.36,1), transform .22s cubic-bezier(.22,.61,.36,1);
+}
+
+/* Finance is light-only and names its rules --line, not --border. CRM carries
+   a real dark theme through light-dark(), so its tokens work in both. */
+#appRail[data-console="finance"] {
+  --rl-line: var(--line, #e7e1d7);
+  --rl-ink-2: var(--ink-2, #5a5348);
+  --rl-ink-3: var(--ink-3, #8a8174);
+  --rl-accent: var(--brand-600, #db7a05);
+  --rl-sunk: var(--card-2, #f5f2ed);
+}
+#appRail[data-console="crm"] {
+  --rl-accent: var(--brand-ink, #a85c00);
+  --rl-sunk: var(--bg2, #efede7);
+}
+
+/* ── Head: the brand, which is now the only one on the page ── */
+
+.rail-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 13px 12px 13px 14px;
+  border-bottom: 1px solid var(--rl-line);
+  min-height: 58px;
+}
+.rail-brand {
+  display: flex; align-items: center; gap: 9px;
+  text-decoration: none; color: inherit; min-width: 0; flex: 1;
+  border-radius: 9px; padding: 2px; margin: -2px;
+}
+.rail-brand img { width: 30px; height: 30px; border-radius: 8px; object-fit: cover; flex: none; display: block; }
+.rail-brand-tx { min-width: 0; line-height: 1.15; }
+.rail-brand-nm { display: block; font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.rail-brand-sb {
+  display: block; margin-top: 1px;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--rl-ink-3); white-space: nowrap;
+}
+
+/* Every entry is a real anchor, so middle-click and "open in new tab" work on
+   a console that lives on another page. That also means three host
+   stylesheets get a say in how links look, and each of them says something
+   different. The rail decides for itself. */
+#appRail a { text-decoration: none; color: inherit; }
+#appRail a:hover { text-decoration: none; }
+
+/* ── Sections ── */
+
+.rail-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; scrollbar-width: thin; }
+.rl-sec + .rl-sec { margin-top: 1px; }
+
+.rl-h {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border: 0; background: none; cursor: pointer; font: inherit; text-align: left;
+  padding: 9px 9px 9px 10px; border-radius: 9px; min-height: 40px;
+  color: var(--rl-ink); font-size: 14px; font-weight: 650; letter-spacing: -.005em;
+  transition: background .12s;
+}
+.rl-h:hover { background: var(--rl-hover); }
+/* A section with nothing inside it is its own page, so its header is the
+   thing that gets marked when you are on it. */
+.rl-h.on { background: var(--rl-on-bg); }
+.rl-h .rl-ico {
+  width: 19px; flex: none; text-align: center; font-size: 14.5px;
+  color: var(--rl-ink-3); transition: color .12s;
+}
+.rl-sec.here .rl-h .rl-ico, .rl-sec.open .rl-h .rl-ico { color: var(--rl-accent); }
+.rl-h .rl-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-h .rl-chev { font-size: 10px; color: var(--rl-ink-3); flex: none; transition: transform .18s; }
+.rl-sec.open .rl-h .rl-chev { transform: rotate(180deg); }
+
+/* You-are-here, for when the section holding the current page is shut.
+   Without it a closed rail says nothing about where you are standing. */
+.rl-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rl-accent); flex: none; }
+.rl-sec.open .rl-dot { display: none; }
+
+.rl-body { display: none; padding: 2px 0 7px; }
+.rl-sec.open .rl-body { display: block; animation: rlOpen .16s ease-out both; }
+@keyframes rlOpen { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+.rl-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  border: 0; background: none; cursor: pointer; font: inherit; text-align: left;
+  color: var(--rl-ink-2); font-size: 13.5px;
+  padding: 6px 9px 6px 20px; border-radius: 8px; min-height: 32px;
+  position: relative; transition: background .12s, color .12s;
+}
+.rl-item:hover { background: var(--rl-hover); color: var(--rl-ink); }
+.rl-item .rl-ico { width: 17px; flex: none; text-align: center; font-size: 12px; color: var(--rl-ink-3); }
+.rl-item .rl-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-item.on { color: var(--rl-ink); font-weight: 650; background: var(--rl-on-bg); }
+.rl-item.on .rl-ico { color: var(--rl-accent); }
+.rl-item.on::before {
+  content: ''; position: absolute; left: 7px; top: 50%; width: 5px; height: 5px;
+  margin-top: -2.5px; border-radius: 50%; background: var(--rl-accent);
+}
+
+/* A count earns its place only when there is something in it; render() leaves
+   the element out at zero rather than printing a grey 0. */
+.rl-badge {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--rl-accent); color: var(--rl-bg);
+  font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.rl-badge.alert { background: var(--red, #b91c1c); color: #fff; }
+
+/* Finance keeps its own five groups. Nineteen finance pages in one flat list
+   is the thing the owner already solved once — this is that solution, nested
+   one level in rather than replaced. */
+.rl-grp + .rl-grp { margin-top: 1px; }
+.rl-grp-h {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  border: 0; background: none; cursor: pointer; font: inherit; text-align: left;
+  padding: 5px 9px 5px 20px; border-radius: 8px; min-height: 28px;
+  color: var(--rl-ink-3); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase;
+  transition: background .12s, color .12s;
+}
+.rl-grp-h:hover { background: var(--rl-hover); color: var(--rl-ink-2); }
+.rl-grp-h .rl-gnm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-grp-h .rl-chev { font-size: 8.5px; flex: none; transition: transform .18s; }
+.rl-grp.open .rl-grp-h .rl-chev { transform: rotate(180deg); }
+.rl-grp-h .rl-dot { width: 5px; height: 5px; }
+.rl-grp.open .rl-grp-h .rl-dot { display: none; }
+.rl-grp-body { display: none; }
+.rl-grp.open .rl-grp-body { display: block; }
+.rl-grp .rl-item { padding-left: 30px; font-size: 13px; min-height: 30px; }
+.rl-grp .rl-item.on::before { left: 17px; }
+
+/* ── Foot ── */
+
+.rail-foot { border-top: 1px solid var(--rl-line); padding: 9px 10px calc(9px + env(safe-area-inset-bottom)); }
+.rail-who {
+  font-size: 11.5px; color: var(--rl-ink-3); padding: 2px 6px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rail-out {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  border: 0; background: none; cursor: pointer; font: inherit;
+  color: var(--rl-ink-3); font-size: 13px; padding: 7px 9px 7px 10px;
+  border-radius: 8px; min-height: 34px; transition: background .12s, color .12s;
+}
+.rail-out:hover { background: var(--rl-hover); color: var(--red, #b91c1c); }
+.rail-out .rl-ico { width: 19px; flex: none; text-align: center; font-size: 13px; }
+
+#appRail :focus-visible { outline: 2px solid var(--rl-accent); outline-offset: -2px; }
+
+/* The count pill is aria-hidden, because "3" read aloud after "Follow-ups"
+   is not a sentence. This carries the same fact in words instead. */
+#appRail .sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ═══════ THE TOGGLE, IN EACH PAGE HEADER ═══════
+   One button, two jobs that never overlap: narrow the rail on a desktop, open
+   it on a phone. Both are "show me more or less of the menu", which is why it
+   reads as one control and not two. */
+
+.rail-toggle {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 38px; height: 38px; padding: 0;
+  border: 1px solid var(--border, var(--line, #e4e0d8));
+  border-radius: 10px;
+  /* On its own on a white header a transparent chip all but disappears, and
+     the control that opens the menu is not one to go hunting for. */
+  background: var(--bg2, var(--card-2, transparent));
+  color: var(--ink2, var(--ink-2, #44403c)); cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.rail-toggle:hover { border-color: var(--ink3, var(--ink-3, #78716c)); color: var(--ink, #1c1917); }
+.rail-toggle svg { width: 17px; height: 17px; display: block; }
+
+/* ═══════ DESKTOP ═══════ */
+
+@media (min-width: 900px) {
+  body.rail-on { padding-left: var(--rail-w); transition: padding-left .18s cubic-bezier(.22,.61,.36,1); }
+  body.rail-on.rail-min { padding-left: var(--rail-w-min); }
+  #appRail { transform: none !important; }
+
+  /* Full-bleed panels — a property, a lead, the change log — are pages, not
+     dialogs. They sit beside the rail so you can leave for Finance without
+     first closing what you were reading. True modals still cover it. */
+  body.rail-on #dp, body.rail-on #changesPanel, body.rail-on #missingPanel,
+  body.rail-on #botEditorPanel, body.rail-on #msToolbar { left: var(--rail-w); }
+  body.rail-on.rail-min #dp, body.rail-on.rail-min #changesPanel,
+  body.rail-on.rail-min #missingPanel, body.rail-on.rail-min #botEditorPanel,
+  body.rail-on.rail-min #msToolbar { left: var(--rail-w-min); }
+
+  /* The rail carries the brand for the whole app, so each page copy of the
+     logo would be the second one on screen. It comes back on a phone, where
+     the rail is not showing. */
+  body.rail-on #hdr .brand, body.rail-on header.top .brand { display: none; }
+
+  /* The running count of a section belongs on its header only while what is
+     inside it is out of sight. */
+  .rl-sec.open > .rl-h .rl-sum { display: none; }
+  body.rail-min .rl-sec.open > .rl-h .rl-sum { display: block; }
+
+  /* ── Narrowed: one icon per console, and nothing else ──
+     Mixing console icons with page icons in a 66px column gives no way to
+     tell a Board from a CRM. Narrowed, the rail is the five consoles; asking
+     for one widens the rail again and opens it. */
+  body.rail-min #appRail { width: var(--rail-w-min); }
+  body.rail-min #appRail .rl-body { display: none; }
+  body.rail-min #appRail .rail-brand-tx,
+  body.rail-min #appRail .rl-nm,
+  body.rail-min #appRail .rl-chev,
+  body.rail-min #appRail .rail-who,
+  body.rail-min #appRail .rl-grp-h,
+  body.rail-min #appRail .rail-out span { display: none; }
+  body.rail-min #appRail .rail-nav { padding: 8px 9px; }
+  body.rail-min #appRail .rl-h,
+  body.rail-min #appRail .rail-out { justify-content: center; padding-left: 0; padding-right: 0; gap: 0; }
+  body.rail-min #appRail .rl-h { min-height: 42px; position: relative; }
+  body.rail-min #appRail .rl-h .rl-ico { font-size: 15px; width: auto; }
+  body.rail-min #appRail .rail-head { justify-content: center; padding-left: 12px; padding-right: 12px; }
+  /* Narrowed, a count would land on top of the glyph. It becomes a dot: still
+     "there is something here", without the arithmetic. */
+  body.rail-min #appRail .rl-badge {
+    position: absolute; top: 5px; right: 9px; min-width: 8px; width: 8px; height: 8px;
+    padding: 0; border-radius: 50%; font-size: 0; overflow: hidden;
+  }
+  .rail-scrim { display: none !important; }
+}
+
+/* ═══════ PHONE AND TABLET ═══════ */
+
+@media (max-width: 899px) {
+  #appRail { transform: translateX(-100%); width: min(288px, 86vw); z-index: 480; }
+  body.rail-open #appRail { transform: none; box-shadow: 0 20px 60px rgba(0,0,0,.28); }
+  .rail-scrim {
+    position: fixed; inset: 0; z-index: 470; background: rgba(15,14,12,.42);
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  body.rail-open .rail-scrim { opacity: 1; pointer-events: auto; }
+  body.rail-open { overflow: hidden; }
+  /* The drawer is the whole menu here, so its rows get thumb-sized targets. */
+  #appRail .rl-h { min-height: 46px; font-size: 15px; }
+  #appRail .rl-item { min-height: 42px; font-size: 14.5px; }
+  #appRail .rl-grp-h { min-height: 34px; }
+  #appRail .rail-out { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #appRail, body.rail-on, .rail-scrim, .rl-sec.open .rl-body { transition: none; animation: none; }
+}
+
+@media print { #appRail, .rail-scrim, .rail-toggle { display: none !important; } body.rail-on { padding-left: 0; } }

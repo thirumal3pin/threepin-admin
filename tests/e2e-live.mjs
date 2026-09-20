@@ -228,29 +228,32 @@ check('Analytics figures can be opened too',
   await page.evaluate(() => document.querySelectorAll('#main .stat.drill').length >= 3));
 
 // ── the navigation, on both shapes of screen ────────────────────────────────────
-section('All sections sheet at 390px');
+// "More" on the tab bar opens the app rail — the one menu shared with the CRM
+// and the property dashboard. tests/appnav-preview.mjs exercises it across all
+// three consoles; here we only check it works against the live deploy.
+section('The app rail at 390px');
 await page.evaluate(() => window.fin.openSheet());
 await page.waitForTimeout(500);
-const sheet = await page.evaluate(() => {
-  const inner = document.querySelector('.sheet-inner');
-  const names = [...document.querySelectorAll('.sheet-mod-grid button')].map(b => b.textContent.trim());
+const drawer = await page.evaluate(() => {
+  const rail = document.getElementById('appRail');
   return {
-    overflows: inner.scrollWidth > inner.clientWidth + 1,
+    open: document.body.classList.contains('rail-open'),
+    onScreen: Math.round(rail.getBoundingClientRect().left) === 0,
+    overflows: rail.scrollWidth > rail.clientWidth + 1,
     pageOverflows: document.documentElement.scrollWidth > window.innerWidth + 1,
-    modules: [...document.querySelectorAll('.sheet-mod-h')].map(h => h.firstChild.textContent.trim()),
-    count: names.length,
-    names,
-    widest: Math.max(...[...document.querySelectorAll('.sheet-mod, .sheet-mod-grid')].map(e => e.scrollWidth)),
-    inner: inner.clientWidth,
+    consoles: [...rail.querySelectorAll('.rl-sec > .rl-h .rl-nm')].map(n => n.textContent),
+    financePages: [...rail.querySelectorAll('.rl-sec .rl-body .rl-item .rl-nm')].map(n => n.textContent),
+    groups: [...rail.querySelectorAll('.rl-grp-h .rl-gnm')].map(n => n.textContent),
   };
 });
-check('The sheet does not scroll sideways', !sheet.overflows, JSON.stringify({ w: sheet.widest, inner: sheet.inner }));
-check('…and neither does the page behind it', !sheet.pageOverflows);
-check('Every module is in the sheet', sheet.modules.length === 5, sheet.modules.join(' | '));
-check('Every page is reachable from it', sheet.count >= 18, `${sheet.count}: ${sheet.names.join(', ')}`);
-check('Nothing inside is wider than the sheet', sheet.widest <= sheet.inner + 1, `${sheet.widest} vs ${sheet.inner}`);
-await page.screenshot({ path: `${SHOTS}m-sheet.png`, fullPage: false });
-await page.evaluate(() => document.getElementById('moreSheet').classList.remove('open'));
+check('"More" opens the rail', drawer.open && drawer.onScreen);
+check('It does not scroll sideways', !drawer.overflows);
+check('…and neither does the page behind it', !drawer.pageOverflows);
+check('Every console is on it', drawer.consoles.length === 5, drawer.consoles.join(' | '));
+check('Finance keeps its five groups', drawer.groups.length === 5, drawer.groups.join(' | '));
+check('Every finance page is reachable from it', drawer.financePages.length >= 19, `${drawer.financePages.length}: ${drawer.financePages.join(', ')}`);
+await page.screenshot({ path: `${SHOTS}m-rail.png`, fullPage: false });
+await page.evaluate(() => window.AppNav.close());
 
 // ── desktop sanity ──────────────────────────────────────────────────────────────
 section('Desktop 1280px');
@@ -260,38 +263,51 @@ for (const v of ['overview', 'record', 'txns', 'reports']) {
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${SHOTS}d-${v}.png`, fullPage: true });
 }
-check('Side nav shown on desktop', await page.evaluate(() => getComputedStyle(document.getElementById('sidenav')).display !== 'none'));
+check('The rail is shown on desktop', await page.evaluate(() =>
+  getComputedStyle(document.getElementById('appRail')).display !== 'none' && document.body.classList.contains('rail-on')));
 const side = await page.evaluate(() => {
-  const mods = [...document.querySelectorAll('#sidenav .mod')];
+  const secs = [...document.querySelectorAll('#appRail .rl-sec')];
+  const fin = secs.find(s => s.querySelector('.rl-h .rl-nm').textContent === 'Finance');
   return {
-    count: mods.length,
-    open: mods.filter(m => m.classList.contains('open')).length,
-    links: mods.reduce((n, m) => n + m.querySelectorAll('.mod-body button').length, 0),
-    visibleLinks: mods.reduce((n, m) => n + [...m.querySelectorAll('.mod-body button')].filter(b => b.offsetParent !== null).length, 0),
-    headers: mods.map(m => m.querySelector('.mod-name')?.textContent.trim()),
-    expanded: mods.map(m => m.querySelector('.mod-h')?.getAttribute('aria-expanded')),
+    consoles: secs.map(s => s.querySelector('.rl-h .rl-nm').textContent),
+    openCount: secs.filter(s => s.classList.contains('open')).length,
+    financeOpen: fin.classList.contains('open'),
+    links: fin.querySelectorAll('.rl-item').length,
+    visibleLinks: [...fin.querySelectorAll('.rl-item')].filter(b => b.offsetParent !== null).length,
+    groups: [...fin.querySelectorAll('.rl-grp-h .rl-gnm')].map(g => g.textContent),
   };
 });
-check('The side nav is five modules', side.count === 5, side.headers.join(' | '));
-check('Every module starts open — a menu that hides itself reads as broken', side.open === 5, JSON.stringify(side.expanded));
-check('Every page is visible in it', side.visibleLinks === side.links && side.links >= 18, `${side.visibleLinks} of ${side.links}`);
-check('Closing a module hides its pages', await page.evaluate(async () => {
-  window.fin.toggleModule('Money');
+check('Every console is on the rail', side.consoles.length === 5, side.consoles.join(' | '));
+check('Finance is the open one, and the only one', side.financeOpen && side.openCount === 1, String(side.openCount));
+check('Every finance page is visible in it', side.visibleLinks === side.links && side.links >= 19, `${side.visibleLinks} of ${side.links}`);
+check('Finance keeps its five groups', side.groups.length === 5, side.groups.join(' | '));
+check('Closing a group hides its pages', await page.evaluate(async () => {
+  const money = [...document.querySelectorAll('#appRail .rl-grp')].find(g => g.querySelector('.rl-gnm').textContent === 'Money');
+  money.querySelector('.rl-grp-h').click();
   await new Promise(r => setTimeout(r, 250));
-  const mod = [...document.querySelectorAll('#sidenav .mod')].find(m => m.querySelector('.mod-name')?.textContent.trim() === 'Money');
-  const hidden = [...mod.querySelectorAll('.mod-body button')].every(b => b.offsetParent === null);
-  window.fin.toggleModule('Money');
+  const again = [...document.querySelectorAll('#appRail .rl-grp')].find(g => g.querySelector('.rl-gnm').textContent === 'Money');
+  const hidden = [...again.querySelectorAll('.rl-item')].every(b => b.offsetParent === null);
+  again.querySelector('.rl-grp-h').click();
   return hidden;
 }));
-check('The module holding the current page cannot be left closed', await page.evaluate(async () => {
+check('The group holding the current page cannot be left closed', await page.evaluate(async () => {
   window.fin.go('reports');
+  await new Promise(r => setTimeout(r, 300));
+  const tax = () => [...document.querySelectorAll('#appRail .rl-grp')].find(g => g.querySelector('.rl-gnm').textContent === 'Tax & reports');
+  tax().querySelector('.rl-grp-h').click();
   await new Promise(r => setTimeout(r, 250));
-  window.fin.toggleModule('Tax & reports');
-  await new Promise(r => setTimeout(r, 250));
-  const mod = [...document.querySelectorAll('#sidenav .mod')].find(m => m.querySelector('.mod-name')?.textContent.trim() === 'Tax & reports');
-  const stillOpen = mod.classList.contains('open');
+  const stillOpen = tax().classList.contains('open');
   window.fin.go('overview');
   return stillOpen;
+}));
+check('Opening another console closes Finance', await page.evaluate(async () => {
+  const head = n => [...document.querySelectorAll('#appRail .rl-h')].find(h => h.querySelector('.rl-nm').textContent === n);
+  head('CRM').click();
+  await new Promise(r => setTimeout(r, 250));
+  const secs = [...document.querySelectorAll('#appRail .rl-sec')];
+  const open = secs.filter(s => s.classList.contains('open')).map(s => s.querySelector('.rl-h .rl-nm').textContent);
+  head('Finance').click();
+  return open.length === 1 && open[0] === 'CRM';
 }));
 check('Bottom bar hidden on desktop', await page.evaluate(() => getComputedStyle(document.getElementById('bottomnav')).display === 'none'));
 

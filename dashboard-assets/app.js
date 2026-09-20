@@ -99,21 +99,13 @@ function setType(t,btn){currentType=t;document.querySelectorAll('#typeFilters .f
 function applySort(){currentSort=document.getElementById('sortSel').value;applyFilters();}
 function toggleFavView(){showFavOnly=!showFavOnly;document.getElementById('favToggle').classList.toggle('at',showFavOnly);applyFilters();}
 
-// ═══════ MOBILE HEADER / FILTER TOGGLES ═══════
-function toggleHdrMenu(e){
-  if(e) e.stopPropagation();
-  document.getElementById('hstats').classList.toggle('mobile-open');
-}
+// ═══════ MOBILE FILTER TOGGLE ═══════
+// The header menu that used to hide the stats behind ☰ is gone with the
+// buttons it existed to hold — the three counts now sit in the bar itself at
+// every width, and ☰ belongs to the app rail.
 function toggleMobileFilters(){
   document.getElementById('controlsPanel').classList.toggle('mobile-open');
 }
-document.addEventListener('click', e=>{
-  const hstats = document.getElementById('hstats');
-  const menuBtn = document.getElementById('hdrMenuBtn');
-  if(hstats && hstats.classList.contains('mobile-open') && !hstats.contains(e.target) && e.target!==menuBtn){
-    hstats.classList.remove('mobile-open');
-  }
-});
 
 // ═══════ SEARCH ═══════
 // The matching itself lives in search-engine.js — parsing, numeric ranges,
@@ -1607,9 +1599,11 @@ let missingSearch = '';
 let missingOpenEditor = null; // `${propId}|${fieldKey}` of the expanded editor
 
 function updateMissingCount(){
+  const n = properties.filter(p => missingFieldsOf(p).length).length;
+  // The count lives on the rail now, beside the entry it belongs to.
+  if(window.AppNav) window.AppNav.setBadge('missing', n);
   const btn = document.getElementById('missingCountBadge');
   if(!btn) return;
-  const n = properties.filter(p => missingFieldsOf(p).length).length;
   btn.textContent = n;
   btn.style.display = n ? '' : 'none';
 }

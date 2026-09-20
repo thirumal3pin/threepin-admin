@@ -14,13 +14,16 @@ a thin shell so edits touch one small file instead of a 1000+ line page.
 | `advanced-search.js` | The Advanced Search panel: the filter drawer, the active-filter chips and the live result count. Every filter and count comes from `search-engine.js`, nothing is hand-listed. |
 | `auth.js` | The login gate (see below). |
 | `app.js` | All dashboard logic — filters, search, cards, add/edit/delete, sold-out, notes, favorites, compare, export. |
+| `nav-boot.js` | Wires this page into the shared app rail (`../shared-assets/`). All properties, Missing data and Changes are panels this page already has, so the rail toggles them rather than navigating; Sync and Create brochure open as dialogs and leave the highlight on the page underneath. |
 | `firebase-sync.js` | Connects to Firebase, handles login, seeds the database on first run, and keeps every open browser in sync in realtime. |
 
 Load order in `dashboard.html` matters: `sample-data.js` → `search-engine.js`
 → `advanced-search.js` → `auth.js` → `property-view.js` → `app.js` →
-`firebase-sync.js` (the last one is a `type="module"` script). The two search
-files are plain scripts on purpose, so `window.PinSearch` and
-`window.PinAdvanced` exist before `app.js` runs.
+`brochure-form.js` → `appnav.js` → `nav-boot.js` → `firebase-sync.js` (the
+last one is a `type="module"` script). The two search files are plain scripts
+on purpose, so `window.PinSearch` and `window.PinAdvanced` exist before
+`app.js` runs; `nav-boot.js` comes after both `app.js` and `appnav.js`
+because it wraps functions from the first and calls into the second.
 
 ## Searching
 

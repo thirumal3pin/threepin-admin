@@ -208,7 +208,9 @@ async function checkSplit(vp) {
         cls: document.getElementById('dpSplit').className,
         isSheet: document.getElementById('dpSplit').classList.contains('sheet'),
         covers: Math.abs(s.width - b.width) < 3 && s.width > 0,
-        w: Math.round(s.width), vw: innerWidth,
+        // Against the room the page actually has, not the whole window: the
+        // app rail holds the left edge on a desktop.
+        w: Math.round(s.width), vw: innerWidth - parseInt(getComputedStyle(document.body).paddingLeft, 10),
         pressed: document.getElementById('dpConvBtn').getAttribute('aria-pressed'),
         tabs: [...document.querySelectorAll('#dpTt .tt-tab')].map(t => t.textContent.trim()),
       };
@@ -238,11 +240,13 @@ async function checkWidth(vp) {
     return {
       wrap: wrap ? Math.round(wrap.getBoundingClientRect().width) : 0,
       cols: stats ? getComputedStyle(stats).gridTemplateColumns.split(' ').length : 0,
-      vw: innerWidth,
+      // The app rail takes the left edge on a desktop, so "the screen" here
+      // means the room left for the page, not the width of the window.
+      vw: innerWidth - parseInt(getComputedStyle(document.body).paddingLeft, 10),
     };
   });
   const used = w.wrap / w.vw;
-  console.log(`    ${vp.width}px → dashboard ${w.wrap}px (${Math.round(used * 100)}% of the screen), ${w.cols} stat columns`);
+  console.log(`    ${vp.width}px → dashboard ${w.wrap}px (${Math.round(used * 100)}% of the room it has), ${w.cols} stat columns`);
   // Either it is using the screen, or it has hit the deliberate upper cap —
   // past ~2400px more width stops being more information.
   ok(`${vp.width}px: the dashboard uses the screen`, used > 0.9 || w.wrap >= 2380, `${w.wrap}px = ${Math.round(used * 100)}%`);
