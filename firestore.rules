@@ -141,6 +141,28 @@ service cloud.firestore {
       allow create: if writingOwnTenantField();
     }
 
+    // propertytrack.html — a listing's journey from "owner said yes" to the
+    // brochure being out, plus the shoot in between. Same ownership model as
+    // leads and properties: a flat collection scoped by its tenantId field.
+    match /listings/{listingId} {
+      allow read, delete: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
+      allow create: if writingOwnTenantField();
+    }
+
+    // A listing's timeline. Rules never cascade into subcollections, so this
+    // match is required or every history write from the board is denied.
+    match /listings/{listingId}/history/{entryId} {
+      allow read, write: if isSignedInWithTenant() &&
+        get(/databases/$(database)/documents/listings/$(listingId)).data.tenantId == tenantId();
+    }
+
+    // The Property & Media board's own columns, one document per tenant —
+    // the same singleton shape as pipelines/{tenantId} above.
+    match /trackPipelines/{tid} {
+      allow read, write: if ownsTenantDoc(tid);
+    }
+
     // Property notes + timeline events, scoped by the PARENT property's
     // tenant exactly like leads/{leadId}/notes above — rules do not cascade
     // into subcollections, so this match is required or the dashboard's

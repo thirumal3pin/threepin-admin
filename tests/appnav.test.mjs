@@ -82,10 +82,10 @@ test('The groups are in the order Finance declares them', () => {
 
 // ── Every console the rail offers has to be somewhere to go ──
 const appnav = read('shared-assets/appnav.js');
-const pages = [...appnav.matchAll(/^\s*(property|crm|finance): \{ href: '([^']+)'/gm)].map(m => m[2]);
+const pages = [...appnav.matchAll(/^\s*(property|crm|finance|track): \{ href: '([^']+)'/gm)].map(m => m[2]);
 
 console.log('\nEvery console the rail points at exists');
-test('Three consoles, three destinations', () => assert.equal(pages.length, 3, JSON.stringify(pages)));
+test('Four consoles, four destinations', () => assert.equal(pages.length, 4, JSON.stringify(pages)));
 test('…and each one is a page in the repo', () => {
   // 3pinfinance is a rewrite to 3pinfinance.html — see vercel.json.
   const rewrites = JSON.parse(read('vercel.json')).rewrites || [];
@@ -98,7 +98,7 @@ test('…and each one is a page in the repo', () => {
 
 // ── The pages that draw the rail have to load it ──
 console.log('\nEvery console loads the rail');
-for (const [page, file] of [['Properties', 'dashboard.html'], ['CRM', 'crm.html'], ['Finance', '3pinfinance.html']]) {
+for (const [page, file] of [['Properties', 'dashboard.html'], ['CRM', 'crm.html'], ['Finance', '3pinfinance.html'], ['Property & Media', 'propertytrack.html']]) {
   const html = read(file);
   test(page + ' loads the stylesheet, the script and has a menu button', () => {
     assert.match(html, /shared-assets\/appnav\.css/, file + ' is missing appnav.css');

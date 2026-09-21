@@ -536,12 +536,14 @@ const FOCUS_FILTERS = [
   { key:'visits',   label:'Site visits',    test: l => { const v = visitAtOf(l); return !!v && v > Date.now() - 12*3600000; } },
   { key:'ai_moved', label:'Moved by AI today', test: l => !!(l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 24*3600000) },
   { key:'review',   label:'AI suggestions', test: l => attentionFor(l).some(a => a.key==='ai_suggestion') },
-  // Owners who want to sell or rent out THEIR property, not a buyer/tenant looking for one.
-  // They walk the same stage columns as a buyer (see pipeline.js) — this is the only place
-  // that separates them out. isSellerEnquiryType() is set by TailorTalk's own classifier
-  // (api/_tailortalk-shared.js) and hand-edited on the lead's Enquiry type field, same source
-  // the List view's Type column already filters on.
-  { key:'sellers',  label:'Sellers & owners', test: l => isSellerEnquiryType(l.enquiryType) }
+  // Owners who want to sell or rent out THEIR property, not a buyer/tenant looking for one —
+  // golden leads, worth erring toward showing rather than hiding. Two independent signals, either
+  // one is enough: enquiryType (isSellerEnquiryType — TailorTalk's own classifier or a hand edit,
+  // same source the List view's Type column filters on) OR the per-lead AI's read of the WHOLE
+  // conversation (l.ai.intent, api/_lead-ai.js). api/_lead-policy.js already copies a confident AI
+  // "sell"/"rent_out" verdict onto enquiryType, but never when a person locked that field to
+  // something else (ttHold) — this chip still catches that lead instead of losing it silently.
+  { key:'sellers',  label:'Sellers & owners', test: l => isSellerLead(l) }
 ];
 
 // ── Filter: Sales / TailorTalk / Other / Vendors & collabs, and within TailorTalk a status ──
@@ -2440,7 +2442,7 @@ function followupRowHtml(l, bucketKey){
       <div class="fu-name-row">
         <span class="fu-name">${escapeHtml(l.name)}</span>
         ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
-        ${isSellerEnquiryType(l.enquiryType)?`<span class="stage-pill sm fu-seller-pill">Seller</span>`:''}
+        ${isSellerLead(l)?`<span class="stage-pill sm fu-seller-pill">Seller</span>`:''}
       </div>
       <div class="fu-meta">
         ${l.phone?`<span>📞 ${escapeHtml(l.phone)}</span>`:''}
@@ -2813,6 +2815,8 @@ window.applyPropertiesSnapshot = function(list){
 };
 function isPropertyEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'property enquiry'; }
 function isSellerEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'seller listing'; }
+// Either signal is enough — see the "Sellers & owners" focus filter above for why both exist.
+function isSellerLead(l){ return isSellerEnquiryType(l.enquiryType) || !!(l.ai && (l.ai.intent==='sell' || l.ai.intent==='rent_out')); }
 function knownProperties(){
   const byKey = new Map();
   const add = (v) => {
@@ -3514,6 +3518,9 @@ function renderDetailInfo(l){
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
     <div class="info-b pl-row" id="dpPropLinks">${propertyLinksInner(l)}</div>
+    ${isSellerLead(l) ? `<div class="info-b pl-row"><div class="info-b-l">Listing</div><div class="info-b-v pl-chips">
+      <span class="pl-chip"><a href="propertytrack.html?nav=sellers" title="Track this property's details, shoot and brochure on the Property &amp; Media board">🏷️ Track this listing →</a></span>
+    </div></div>` : ''}
   `;
   // A snapshot redraw must not throw away a property search being typed.
   const plFocused = document.activeElement && document.activeElement.id === 'plInput';

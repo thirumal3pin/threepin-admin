@@ -51,12 +51,13 @@ const aiStateRef = (db, tenantId) => db.collection('aiState').doc(tenantId);
  */
 export async function runLeadAutomation(db, tenantId, leadId, { client, model = LEAD_AI_MODEL, now = Date.now(), apply = true, trigger = 'manual', force = false, gemini } = {}) {
   const ref = db.collection('leads').doc(leadId);
-  const [leadSnap, stateSnap, notesSnap, pipeSnap, aiStateSnap] = await Promise.all([
+  const [leadSnap, stateSnap, notesSnap, pipeSnap, aiStateSnap, settingsSnap] = await Promise.all([
     ref.get(),
     ref.collection('tailortalk').doc('state').get(),
     ref.collection('notes').get(),
     db.collection('pipelines').doc(tenantId).get(),
-    aiStateRef(db, tenantId).get()
+    aiStateRef(db, tenantId).get(),
+    db.collection('settings').doc(tenantId).get()
   ]);
   if (!leadSnap.exists) return { leadId, ok: false, skipped: 'no such lead' };
   const lead = leadSnap.data();
@@ -68,6 +69,9 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   const chatLen = state && Array.isArray(state.chat) ? state.chat.length : 0;
   if (!chatLen && !notes.length) return { leadId, ok: true, skipped: 'nothing to read' };
   const stages = pipeSnap.exists ? (pipeSnap.data().stages || []) : [];
+  // Same default list _tailortalk-sync.js falls back to when a tenant has never customised it.
+  const enquiryTypes = (settingsSnap.exists && Array.isArray(settingsSnap.data().enquiryTypes))
+    ? settingsSnap.data().enquiryTypes : ['Property Enquiry', 'Seller Listing', 'General'];
 
   // ── Requests that would not change anything are not made ──
   const inputKey = evidenceKey({ lead, state, notes, model });
@@ -117,7 +121,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   const candidates = codesIn(verdict.visit && verdict.visit.property, state && state.profile && state.profile.properties_discussed, lead.propertyInterest);
   const known = candidates.length ? await inventoryIds(db, tenantId, now) : new Set();
   if (!apply) {
-    const d = decideLeadChanges({ lead, verdict, stages, now, run: { model: runRecord.model, chatLen } });
+    const d = decideLeadChanges({ lead, verdict, stages, now, run: { model: runRecord.model, chatLen }, enquiryTypes });
     const { ai, ...fields } = d.patch;
     return { leadId, ok: true, preview: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, fields, links: linksToAdd(lead, candidates, known), history: d.history.map(h => h.text), usage: runRecord.usage };
   }
@@ -128,7 +132,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     const fresh = await t.get(ref);
     if (!fresh.exists) return { leadId, ok: false, skipped: 'deleted while reading' };
     const current = fresh.data();
-    const d = decideLeadChanges({ lead: current, verdict, stages, now, run: { model: runRecord.model, chatLen } });
+    const d = decideLeadChanges({ lead: current, verdict, stages, now, run: { model: runRecord.model, chatLen }, enquiryTypes });
     const patch = { ...d.patch, ai: { ...d.patch.ai, error: null, errorAt: null, inputKey } };
     const links = linksToAdd(current, candidates, known);
     if (links.length) patch.propertyCodes = [...(current.propertyCodes || []), ...links];

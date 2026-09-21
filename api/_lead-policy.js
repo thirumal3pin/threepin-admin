@@ -56,9 +56,11 @@ const humanSetter = by => !!by && by !== 'ai' && by !== 'migration' && by !== 'T
  * @param {Array}  o.stages   pipeline stages
  * @param {number} o.now
  * @param {object} [o.run]    { model, chatLen } recorded with the verdict
+ * @param {Array}  [o.enquiryTypes]  the tenant's configured enquiry types (for the Seller Listing
+ *                                    re-tag below); omitted or missing "Seller Listing" skips it
  * @returns {{ patch: object, history: Array<{type,text}>, moved: ?{from,to}, suggested: ?string, followUp: ?number, skipped: ?string }}
  */
-export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
+export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquiryTypes = [] }) {
   const prevAi = lead.ai || {};
   const history = [];
   const patch = {};
@@ -93,6 +95,23 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {} }) {
   patch.ai = ai;
 
   if (isBusinessLead(lead)) { ai.suggestion = null; result.skipped = 'vendor or collaboration'; return result; }
+
+  // ── Seller/owner leads are revenue, and the enquiryType TailorTalk sets from one line of its
+  // own "intent_and_who" summary (enquiryTypeFor() in _tailortalk-shared.js) misses real phrasing
+  // that never says "sell", "list" or "rent out" literally — "put my house up for rent", "want to
+  // give it out" — because that function reads only the first clause with a keyword regex. The
+  // verdict above read the WHOLE conversation, so when it is confident this is an owner and the
+  // record has not already caught up, correct it here too — same rule TailorTalk's own sync
+  // already follows: never touch it once a person in the CRM has set it themselves (ttHold).
+  const sellerType = (enquiryTypes || []).find(t => String(t).toLowerCase() === 'seller listing') || null;
+  const aiSaysSeller = verdict.intent === 'sell' || verdict.intent === 'rent_out';
+  const alreadySeller = String(lead.enquiryType || '').trim().toLowerCase() === 'seller listing';
+  const enquiryTypeHeld = !!(lead.ttHold && lead.ttHold.enquiryType);
+  if (sellerType && aiSaysSeller && !alreadySeller && !enquiryTypeHeld) {
+    patch.enquiryType = sellerType;
+    history.push({ type: 'field', text: `🤖 Marked as a <b>${esc(sellerType)}</b> — ${esc(verdict.evidence)}` });
+  }
+
   if (!hasKeyedPipeline(stages)) { result.skipped = 'pipeline not reworked yet'; return result; }
 
   const current = (stages || []).find(s => s.id === lead.stageId) || null;

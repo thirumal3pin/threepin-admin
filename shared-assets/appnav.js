@@ -108,6 +108,15 @@
       }),
     },
     {
+      id: 'track', label: 'Property & Media', icon: 'fa-solid fa-camera-retro', page: 'track',
+      note: 'Listings from owner yes to brochure out, and the shoots between',
+      items: [
+        { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
+        { id: 'shoots', label: 'Shoots', icon: 'fa-regular fa-calendar-check', page: 'track', nav: 'shoots' },
+        { id: 'sellers', label: 'Sellers to list', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
+      ],
+    },
+    {
       id: 'brochure', label: 'Create brochure', icon: 'fa-regular fa-file-lines', page: 'property', nav: 'brochure',
       note: 'New listing intake — Claude builds the brochure',
       apart: true,
@@ -119,6 +128,7 @@
     property: { href: 'dashboard.html', home: 'all' },
     crm: { href: 'crm.html', home: 'kanban' },
     finance: { href: '3pinfinance', home: 'overview' },
+    track: { href: 'propertytrack.html', home: 'board' },
   };
 
   var K_SECTION = 'appnav.section';
@@ -204,7 +214,9 @@
   function badgeHtml(item) {
     var n = item.badge ? badges[item.badge] : 0;
     if (!n) return '';
-    var alert = item.badge === 'followups' || item.badge === 'missing';
+    // A seller with no listing card is revenue sitting untouched — it earns
+    // the same red treatment as an overdue follow-up or a property missing data.
+    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers';
     return '<span class="rl-badge' + (alert ? ' alert' : '') + '" aria-hidden="true">' + (n > 99 ? '99+' : n) + '</span>'
       + '<span class="sr-only"> (' + n + ')</span>';
   }

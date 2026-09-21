@@ -451,6 +451,34 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   const changed = decide(acted, verdict({ next: { owner: 'team', action: 'Send the sale agreement draft', kind: 'paperwork', dueAt: null } }), NOW + 20 * 60000);
   check('A different step asks again', teamOwes({ ...acted, ai: changed.patch.ai }) !== null);
 }
+{
+  // ── Seller/owner leads re-tagged from the AI's read of the whole conversation, not just
+  // TailorTalk's one-line intent guess (see the comment above the code this tests). ──
+  const ENQ = ['Property Enquiry', 'Seller Listing', 'General'];
+  const decideEnq = (lead, vd) => decideLeadChanges({ lead, verdict: vd, stages: STAGES, now: NOW, run: {}, enquiryTypes: ENQ });
+
+  const wantsToRentOut = decideEnq(ttLead({ enquiryType: 'Property Enquiry' }), verdict({ intent: 'rent_out' }));
+  eq('An owner wanting to rent out is re-tagged Seller Listing', wantsToRentOut.patch.enquiryType, 'Seller Listing');
+  check('…with a history line naming the evidence', /Marked as a <b>Seller Listing<\/b>/.test(wantsToRentOut.history.find(h => h.type === 'field')?.text || ''));
+
+  const wantsToSell = decideEnq(ttLead({ enquiryType: null }), verdict({ intent: 'sell' }));
+  eq('An owner wanting to sell is re-tagged the same way, even with no prior type', wantsToSell.patch.enquiryType, 'Seller Listing');
+
+  const alreadyTagged = decideEnq(ttLead({ enquiryType: 'Seller Listing' }), verdict({ intent: 'sell' }));
+  check('Already Seller Listing is left alone (no redundant patch)', !('enquiryType' in alreadyTagged.patch));
+
+  const buyer = decideEnq(ttLead({ enquiryType: 'Property Enquiry' }), verdict({ intent: 'buy' }));
+  check('A buyer is never re-tagged', !('enquiryType' in buyer.patch));
+
+  const held = decideEnq(ttLead({ enquiryType: 'Property Enquiry', ttHold: { enquiryType: true } }), verdict({ intent: 'rent_out' }));
+  check('A type a person deliberately set in the CRM is never overridden, even when the AI disagrees', !('enquiryType' in held.patch));
+
+  const noSellerColumn = decideLeadChanges({ lead: ttLead({ enquiryType: 'Property Enquiry' }), verdict: verdict({ intent: 'sell' }), stages: STAGES, now: NOW, run: {}, enquiryTypes: ['Property Enquiry', 'General'] });
+  check('A tenant with no Seller Listing type configured is left alone rather than inventing one', !('enquiryType' in noSellerColumn.patch));
+
+  const vendorLead = decideLeadChanges({ lead: { ...ttLead({ enquiryType: 'Property Enquiry' }), tt: { id: 'v', category: 'others', lastMessageAt: NOW - HOUR } }, verdict: verdict({ intent: 'sell' }), stages: STAGES, now: NOW, run: {}, enquiryTypes: ENQ });
+  check('A vendor/collaboration lead is never re-tagged as a seller listing', !('enquiryType' in vendorLead.patch));
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 section('Attention: what needs a person');

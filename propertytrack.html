@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Property &amp; Media Track — 3 PIN Realty</title>
+
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="crm-assets/style.css">
+<link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="track-assets/style.css">
+
+<!-- Theme before first paint, same keys the CRM uses, so the two boards never
+     disagree about light/dark when you move between them. -->
+<script>
+  try {
+    var t = localStorage.getItem('crmTheme');
+    if (t) document.documentElement.dataset.theme = t;
+    var d = localStorage.getItem('crmDensity');
+    if (d) document.documentElement.dataset.density = d;
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<!-- ═══════ LOGIN ═══════ Same Firebase accounts as the CRM and Finance. -->
+<div class="login-screen" id="loginScreen">
+  <form class="login-box" onsubmit="return attemptLogin(event)">
+    <img src="logo.jpg" alt="" width="54" height="54" style="border-radius:12px;display:block;margin-bottom:18px">
+    <h1 style="margin:0 0 6px">Property &amp; Media Track</h1>
+    <p style="margin:0 0 20px;color:var(--ink3);font-size:13.5px">Sign in with your 3 PIN account.</p>
+    <div class="login-err" id="loginErr" role="alert"></div>
+    <label for="loginUser">Email</label>
+    <input type="email" id="loginUser" autocomplete="username" required>
+    <label for="loginPass">Password</label>
+    <input type="password" id="loginPass" autocomplete="current-password" required>
+    <button class="login-submit" type="submit">Sign in</button>
+  </form>
+</div>
+
+<!-- ═══════ APP ═══════ -->
+<div id="appRoot" style="display:none">
+
+  <header id="hdr">
+    <div class="hdr-row">
+      <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"></button>
+      <div class="brand"><img src="logo.jpg" alt="" width="28" height="28">3 PIN <span>Property &amp; Media</span></div>
+      <div class="spacer"></div>
+      <button class="tk-btn primary" type="button" onclick="openAddModal()">+ New listing</button>
+    </div>
+    <div class="srch-wrap">
+      <input type="search" id="searchInput" placeholder="Search a listing, owner, Property ID…" oninput="onSearch(this.value)" aria-label="Search listings">
+    </div>
+    <div class="tk-filterbar"><div id="tkFilterBar"></div></div>
+  </header>
+
+  <main id="main">
+    <div id="boardView"></div>
+    <div id="shootsView" style="display:none"></div>
+    <div id="sellersView" style="display:none"></div>
+  </main>
+</div>
+
+<!-- ═══════ DETAIL PANEL ═══════ full-bleed, inset by the rail (appnav.css) -->
+<div id="dp">
+  <div class="dp-hdr">
+    <button type="button" class="tk-btn ghost" onclick="closeDetail()">← Back</button>
+    <div class="dp-head-main">
+      <div class="dp-title" id="dpTitle"></div>
+      <div class="dp-sub" id="dpSub"></div>
+    </div>
+  </div>
+  <div class="dp-body" id="dpBody"></div>
+</div>
+
+<!-- ═══════ MODALS ═══════ -->
+<div class="tk-ov" id="mModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b id="mmTitle">New listing</b><button type="button" class="tk-x" onclick="closeModal()">✕</button></div>
+    <div class="tk-box-body">
+      <label for="mm_title">Title</label><input id="mm_title" type="text" placeholder="3BHK in Nungambakkam">
+      <label for="mm_propertyCode">Property ID</label><input id="mm_propertyCode" type="text" placeholder="TNAG0002 — blank if not in inventory yet">
+      <label for="mm_location">Location</label><input id="mm_location" type="text" placeholder="Nungambakkam">
+      <label for="mm_config">Configuration</label><input id="mm_config" type="text" placeholder="3 BHK">
+      <label for="mm_askingPrice">Asking price</label><input id="mm_askingPrice" type="text" placeholder="₹2.1 Cr">
+      <label for="mm_sellerName">Owner name</label><input id="mm_sellerName" type="text">
+      <label for="mm_sellerPhone">Owner phone</label><input id="mm_sellerPhone" type="tel">
+      <label for="mm_shootAssignee">Shoot assigned to</label><input id="mm_shootAssignee" type="text">
+    </div>
+    <div class="tk-box-err" id="mmErr"></div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveModal()">Save</button></div>
+  </div>
+</div>
+
+<div class="tk-ov" id="shModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Book the shoot</b><button type="button" class="tk-x" onclick="closeShootModal()">✕</button></div>
+    <div class="tk-box-body">
+      <label for="shDate">Date</label><input id="shDate" type="date">
+      <label for="shTime">Time</label><input id="shTime" type="time" value="10:00">
+      <label for="shWho">Assigned to</label><input id="shWho" type="text" placeholder="Photographer / videographer">
+      <label for="shContact">Site contact</label><input id="shContact" type="tel" placeholder="Who opens the door">
+      <p class="tk-hint">Booking a date moves the listing into <b>Shoot scheduled</b> on its own.</p>
+    </div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeShootModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveShoot()">Save</button></div>
+  </div>
+</div>
+
+<div class="tk-ov" id="mapModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Map to an inventory property</b><button type="button" class="tk-x" onclick="closeMapModal()">✕</button></div>
+    <div class="tk-box-body">
+      <input id="mapSearch" type="search" placeholder="Property ID, name or locality…" oninput="onMapSearch(this.value)">
+      <div id="mapList" class="tk-picklist"></div>
+    </div>
+  </div>
+</div>
+
+<div class="tk-ov" id="linkModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Link a CRM lead</b><button type="button" class="tk-x" onclick="closeLinkModal()">✕</button></div>
+    <div class="tk-box-body">
+      <input id="linkSearch" type="search" placeholder="Name, phone or locality…" oninput="onLinkSearch(this.value)">
+      <div id="linkList" class="tk-picklist"></div>
+    </div>
+  </div>
+</div>
+
+<div class="tk-ov" id="rsModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b id="rsTitle">Why?</b><button type="button" class="tk-x" onclick="closeReasonModal()">✕</button></div>
+    <div class="tk-box-body">
+      <label for="rsReason">Reason</label><select id="rsReason"></select>
+      <div id="rsUntilRow"><label for="rsUntil">Revisit on</label><input id="rsUntil" type="date"></div>
+    </div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeReasonModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveReason()">Save</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="shared-assets/appnav.js"></script>
+<script type="module" src="track-assets/app.js"></script>
+<script type="module" src="track-assets/firebase-sync.js"></script>
+</body>
+</html>
