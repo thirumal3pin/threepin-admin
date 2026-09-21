@@ -535,7 +535,13 @@ const FOCUS_FILTERS = [
   // Visits booked from now on, in the order they happen — the day's run sheet.
   { key:'visits',   label:'Site visits',    test: l => { const v = visitAtOf(l); return !!v && v > Date.now() - 12*3600000; } },
   { key:'ai_moved', label:'Moved by AI today', test: l => !!(l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 24*3600000) },
-  { key:'review',   label:'AI suggestions', test: l => attentionFor(l).some(a => a.key==='ai_suggestion') }
+  { key:'review',   label:'AI suggestions', test: l => attentionFor(l).some(a => a.key==='ai_suggestion') },
+  // Owners who want to sell or rent out THEIR property, not a buyer/tenant looking for one.
+  // They walk the same stage columns as a buyer (see pipeline.js) — this is the only place
+  // that separates them out. isSellerEnquiryType() is set by TailorTalk's own classifier
+  // (api/_tailortalk-shared.js) and hand-edited on the lead's Enquiry type field, same source
+  // the List view's Type column already filters on.
+  { key:'sellers',  label:'Sellers & owners', test: l => isSellerEnquiryType(l.enquiryType) }
 ];
 
 // ── Filter: Sales / TailorTalk / Other / Vendors & collabs, and within TailorTalk a status ──
@@ -2318,6 +2324,22 @@ const FU_GROUP_DEFS = [
   { key:'week', label:'🗓️ This Week' },
   { key:'later', label:'📆 Later' }
 ];
+// Which stages to show (empty = every stage — same "toggle into a Set" convention as the List
+// view's column filters) and which end of each day-bucket to read first. The buckets themselves
+// stay: they are already a coarse sort by urgency, and collapsing overdue/today/tomorrow into one
+// flat list would bury "how overdue" under "how soon" for anything not yet due.
+let fuStageFilter = new Set();
+let fuSortDesc = false;
+function passesFuStageFilter(l){ return !fuStageFilter.size || fuStageFilter.has(l.stageId); }
+function toggleFuStage(stageId){
+  if(fuStageFilter.has(stageId)) fuStageFilter.delete(stageId); else fuStageFilter.add(stageId);
+  renderFollowups();
+}
+function setFuSort(desc){
+  if(fuSortDesc === desc) return;
+  fuSortDesc = desc;
+  renderFollowups();
+}
 function followupBuckets(list){
   const now = Date.now();
   const startOfToday = new Date(new Date().setHours(0,0,0,0)).getTime();
@@ -2333,8 +2355,24 @@ function followupBuckets(list){
     else if(t < startOfNextWeek) buckets.week.push(l);
     else buckets.later.push(l);
   });
-  Object.values(buckets).forEach(arr=>arr.sort((a,b)=>a.followUpAt-b.followUpAt));
+  Object.values(buckets).forEach(arr=>arr.sort((a,b)=> fuSortDesc ? b.followUpAt-a.followUpAt : a.followUpAt-b.followUpAt));
   return buckets;
+}
+function fuControlsHtml(list){
+  const inUse = stages.filter(s => list.some(l => l.stageId === s.id));
+  if(!inUse.length) return '';
+  const stageChips = inUse.map(s=>{
+    const on = !fuStageFilter.size || fuStageFilter.has(s.id);
+    const n = list.filter(l=>l.stageId===s.id).length;
+    return `<button type="button" class="fu-fchip${on?' on':''}" style="--sc:${s.color}" onclick="toggleFuStage('${s.id}')">${escapeHtml(s.name)}<span class="fu-n">${n}</span></button>`;
+  }).join('');
+  return `<div class="fu-controls">
+    <div class="fu-fchips">${stageChips}</div>
+    <div class="fu-sortbar" role="group" aria-label="Sort follow-ups">
+      <button type="button" class="fu-sbtn${fuSortDesc?'':' on'}" aria-pressed="${!fuSortDesc}" onclick="setFuSort(false)">Most overdue first</button>
+      <button type="button" class="fu-sbtn${fuSortDesc?' on':''}" aria-pressed="${fuSortDesc}" onclick="setFuSort(true)">Least overdue first</button>
+    </div>
+  </div>`;
 }
 // The badge counts leads that need a person NOW (critical or high) — one number that means
 // "open the queue", instead of every follow-up due at some point today.
@@ -2393,20 +2431,29 @@ function followupRowHtml(l, bucketKey){
   const timeLabel = (bucketKey==='today' || bucketKey==='overdue')
     ? fuDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
     : fuDate.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  // "Overdue" on its own only ever said WHEN it was due, never how overdue it now is — the exact
+  // complaint. relativeFollowUpText already exists for the lead-detail spotlight (line ~1667);
+  // reused here rather than a second implementation of the same day/hour math.
+  const rel = relativeFollowUpText(l.followUpAt);
   return `<div class="fu-row" onclick="openDetail('${l.id}')">
     <div class="fu-row-main">
       <div class="fu-name-row">
         <span class="fu-name">${escapeHtml(l.name)}</span>
         ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
+        ${isSellerEnquiryType(l.enquiryType)?`<span class="stage-pill sm fu-seller-pill">Seller</span>`:''}
       </div>
       <div class="fu-meta">
         ${l.phone?`<span>📞 ${escapeHtml(l.phone)}</span>`:''}
         ${l.propertyInterest?`<span>🏠 ${escapeHtml(l.propertyInterest)}</span>`:''}
+        ${l.budget?`<span>💰 ${escapeHtml(l.budget)}</span>`:''}
       </div>
       <div class="fu-note ${latest?'':'empty'}">${latest ? `“${escapeHtml(latest.text)}” <span class="fu-note-time">— ${timeAgo(latest.createdAt)}</span>` : 'No notes yet'}</div>
     </div>
     <div class="fu-row-side">
-      <div class="fu-time ${bucketKey}">${timeLabel}</div>
+      <div class="fu-time-wrap">
+        <div class="fu-time ${bucketKey}">${escapeHtml(rel)}</div>
+        <div class="fu-time-exact">${timeLabel}</div>
+      </div>
       <button class="fu-action-btn done" onclick="event.stopPropagation();openFollowUpLogModal('${l.id}')" title="Log follow-up">✓</button>
       <button class="fu-action-btn remove" onclick="event.stopPropagation();removeFollowUp('${l.id}')" title="Remove follow-up">✕</button>
       ${waUrl?`<a class="fu-wa-btn" href="${waUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">💬</a>`:''}
@@ -2422,7 +2469,15 @@ function renderFollowups(){
     wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="nores"><div class="nores-i">📅</div><div class="nores-t">No follow-ups scheduled</div><div class="nores-sub">Set one from a lead\'s Notes &amp; Follow-ups section.</div></div></div>`;
     return;
   }
-  const buckets = followupBuckets(withFollowup);
+  // The stage filter is scoped to this view's own list, on top of whatever the page's own
+  // scope/focus/search bar already narrowed filteredLeads to.
+  const shown = withFollowup.filter(passesFuStageFilter);
+  const controls = fuControlsHtml(withFollowup);
+  if(!shown.length){
+    wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="q-title">Follow-up calendar</div>${controls}<div class="nores"><div class="nores-i">📅</div><div class="nores-t">No follow-ups in the selected stages</div></div></div>`;
+    return;
+  }
+  const buckets = followupBuckets(shown);
   const groupsHtml = FU_GROUP_DEFS.map(g=>{
     const arr = buckets[g.key];
     if(!arr.length) return '';
@@ -2431,7 +2486,7 @@ function renderFollowups(){
       <div class="fu-rows">${arr.map(l=>followupRowHtml(l, g.key)).join('')}</div>
     </div>`;
   }).join('');
-  wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="q-title">Follow-up calendar</div>${groupsHtml}</div>`;
+  wrap.innerHTML = `<div class="fu-wrap">${queue}<div class="q-title">Follow-up calendar</div>${controls}${groupsHtml}</div>`;
 }
 
 // A person moving a lead. Lost and On hold ask why (and until when) first — that reason is
@@ -2757,6 +2812,7 @@ window.applyPropertiesSnapshot = function(list){
   savedProperties = Array.isArray(list) ? list : [];
 };
 function isPropertyEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'property enquiry'; }
+function isSellerEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'seller listing'; }
 function knownProperties(){
   const byKey = new Map();
   const add = (v) => {

@@ -122,8 +122,8 @@
         + (item.property ? ' — <b>' + esc(item.property) + '</b>' : '') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
-        + phoneLine('Seller', seller && seller.name, seller && seller.phone)
-        + (seller ? '' : '<div class="td-f"><dt>Seller</dt><dd><span class="td-none">no owner listing on file for this property</span></dd></div>')
+        + phoneLine('Property owner', seller && seller.name, seller && seller.phone)
+        + (seller ? '' : '<div class="td-f"><dt>Property owner</dt><dd><span class="td-none">no owner listing on file for this property</span></dd></div>')
         + field('Looking for', l.propertyInterest)
         + field('Budget', l.budget)
         + field('Notes', latestNote(l));
