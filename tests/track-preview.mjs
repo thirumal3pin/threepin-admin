@@ -296,12 +296,22 @@ await page.evaluate(() => openWrapModal('l1'));
 await page.waitForTimeout(250);
 ok('The wrap-up marks what was asked for', /asked for/.test((await text(page, '#wrapModal'))[0] || ''));
 await page.check('#wrap_photos');
+await page.fill('#wrapPhotos', 'https://drive.google.com/drive/folders/abc123');
 await page.fill('#wrapNotes', 'Bedroom not shot — tenant asleep');
 await page.click('#wrapModal .tk-btn.primary');
 await page.waitForTimeout(350);
 const wrapped = await page.evaluate(() => window.__saved.filter(s => s.id === 'l1').pop());
 ok('Wrapping up records what was captured and what happened',
   wrapped.media.photos === true && /tenant asleep/.test(wrapped.shootNotes || ''), JSON.stringify(wrapped.shootNotes));
+// The whole point of asking for the link on the doorstep: the "photos not
+// uploaded" blocker was previously unclearable, because nothing could set it.
+ok('…and the Drive folder the agent pastes actually lands',
+  /drive\.google\.com\/drive\/folders\/abc123/.test(wrapped.photosLink || ''), wrapped.photosLink);
+ok('…which clears the blocker that used to be permanent',
+  await page.evaluate(() => {
+    const x = window.__saved.filter(s => s.id === 'l1').pop();
+    return !blockersFor(x).includes('photos not uploaded');
+  }));
 ok('…and what was asked for but not got stays outstanding',
   !wrapped.media.floorPlan && !wrapped.media.video);
 ok('…and the card moves to Shot', wrapped.stageId === 'shoot_done', wrapped.stageId);

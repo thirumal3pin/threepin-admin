@@ -501,6 +501,7 @@ function blockersFor(x) {
   if (key === 'live' && !x.brochureLink) out.push('no brochure');
   return out;
 }
+window.blockersFor = blockersFor;   // read by tests/track-preview.mjs
 
 // The media checklist. TWO states, not one: what this shoot is supposed to
 // capture (`need` — the brief) and what came back (`media`). A shoot agent
@@ -545,13 +546,6 @@ function mapHref(x) {
   const q = [x.address, x.location].filter(Boolean).join(', ');
   return q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : '';
 }
-function mediaSummary(x) {
-  const m = x.media || {};
-  const on = MEDIA_KEYS.filter(([k]) => m[k]);
-  if (!on.length) return '';
-  return on.map(([k, label, icon]) => `<span class="tk-m" title="${esc(label)} done">${icon}</span>`).join('');
-}
-
 // ── Drag and drop, same handlers and class names as the CRM board ──
 let draggedId = null;
 function onCardDragStart(e, id) {
@@ -737,7 +731,8 @@ function shootRow(x) {
         ${stage ? `<span class="tk-pill" style="background:${stage.color}22;color:${stage.color}">${esc(stage.name)}</span>` : ''}
         ${x.occupancy ? `<span class="tk-pill muted">${esc((OCCUPANCY[x.occupancy] || x.occupancy).split(' —')[0])}</span>` : ''}
       </div>
-      <div class="tk-addr">${x.address ? '📍 ' + esc(x.address) : '<span class="tk-miss">📍 No address — nobody can be sent</span>'}</div>
+      <div class="tk-addr">${x.address ? '📍 ' + esc(x.address)
+        : `<span class="tk-miss">📍 No address</span> <button type="button" class="tk-link" onclick="event.stopPropagation();openAccessModal('${x.id}')">add it</button>`}</div>
       <div class="tk-row-meta">
         ${x.shootAssignee ? `<span>🎥 ${esc(x.shootAssignee)}</span>` : '<span class="tk-warn">🎥 nobody assigned</span>'}
         ${x.ownerInformed ? '<span class="tk-ok">owner told ✓</span>' : '<span class="tk-warn">owner not told</span>'}
@@ -933,9 +928,9 @@ function openDetail(id) {
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Deliverables</div>
-      ${linkRow('Drive photos', x.photosLink)}
-      ${linkRow('Brochure PDF', x.brochureLink)}
-      <div class="tk-hint">Both are filled in automatically once the brochure pipeline finishes this property — see the listing workflow.</div>
+      ${linkRow('Drive photos', x.photosLink, x.id, 'photosLink')}
+      ${linkRow('Brochure PDF', x.brochureLink, x.id, 'brochureLink')}
+      <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
     </div>
 
     <div class="tk-sec">
@@ -1085,10 +1080,28 @@ function crmLeadHref(leadId, listingId) {
   return u;
 }
 
-function linkRow(label, url) {
-  return `<div class="tk-kv"><span>${esc(label)}</span>${url
-    ? `<a href="${esc(url)}" target="_blank" rel="noopener">open →</a>` : '<i>not yet</i>'}</div>`;
+// A deliverable is a link someone has to be able to PUT there, not just read.
+// It was read-only, which meant "photos not uploaded" could never be cleared
+// and a card stayed blocked for ever however much work had actually been done.
+function linkRow(label, url, id, field) {
+  return `<div class="tk-kv"><span>${esc(label)}</span>
+    <span class="tk-linkcell">
+      ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">open →</a>` : '<i>not yet</i>'}
+      <button type="button" class="tk-link" onclick="editLink('${id}','${field}')">${url ? 'change' : 'add'}</button>
+    </span></div>`;
 }
+function editLink(id, field) {
+  const x = listings.find(l => l.id === id);
+  if (!x) return;
+  const label = field === 'photosLink' ? 'Drive photo folder' : 'Brochure PDF';
+  const next = prompt(`${label} link`, x[field] || '');
+  if (next === null) return;                       // cancelled
+  const v = next.trim();
+  if (v && !/^https?:\/\//i.test(v)) { toast('That does not look like a link'); return; }
+  mutate(id, o => { o[field] = v; }, v ? `${label} set` : `${label} cleared`);
+  if (currentDetailId === id) openDetail(id);
+}
+window.editLink = editLink;
 function closeDetail() {
   document.getElementById('dp').classList.remove('open');
   closeSellerPreview();
@@ -1205,6 +1218,9 @@ function openWrapModal(id) {
   document.getElementById('wrapList').innerHTML = MEDIA_KEYS.map(([k, label, icon]) =>
     `<label class="tk-check${need[k] ? ' req' : ''}"><input type="checkbox" id="wrap_${k}" ${m[k] ? 'checked' : ''}> ${icon} ${esc(label)}${need[k] ? ' <span class="tk-req">asked for</span>' : ''}</label>`).join('');
   document.getElementById('wrapNotes').value = x.shootNotes || '';
+  // The moment the agent has the Drive folder open on their phone is the only
+  // moment they will ever paste this. Asking later means never.
+  document.getElementById('wrapPhotos').value = x.photosLink || '';
   document.getElementById('wrapModal').classList.add('open');
 }
 function closeWrapModal() { document.getElementById('wrapModal').classList.remove('open'); wrapFor = null; }
@@ -1214,7 +1230,12 @@ function saveWrap() {
   const media = {};
   for (const [k] of MEDIA_KEYS) media[k] = !!document.getElementById('wrap_' + k)?.checked;
   const notes = document.getElementById('wrapNotes').value.trim();
-  mutate(id, x => { x.media = media; x.shootNotes = notes; x.shootDoneAt = Date.now(); }, 'Shoot wrapped up');
+  const photos = document.getElementById('wrapPhotos').value.trim();
+  if (photos && !/^https?:\/\//i.test(photos)) { toast('That photo link does not look like a link'); return; }
+  mutate(id, x => {
+    x.media = media; x.shootNotes = notes; x.shootDoneAt = Date.now();
+    if (photos) x.photosLink = photos;
+  }, 'Shoot wrapped up' + (photos ? ' · photos uploaded' : ''));
   const x = listings.find(l => l.id === id);
   const shot = P.stageForKey(stages, 'shoot_done');
   if (x && shot && P.ladderIndex(P.stageKeyOf(stageById(x.stageId))) < P.ladderIndex('shoot_done')) changeStage(id, shot.id);

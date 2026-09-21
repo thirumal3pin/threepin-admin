@@ -310,3 +310,4 @@
   .tk-row-acts .tk-btn { flex: 1; justify-content: center; min-height: 42px; font-size: 13px; }
   .tk-brief-hd, .tk-brief-r { grid-template-columns: 1fr 64px 52px; }
 }
+.tk-linkcell { display: inline-flex; align-items: center; gap: 9px; }
