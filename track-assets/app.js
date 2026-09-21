@@ -467,13 +467,14 @@ function shootLine(x) {
 // Media as progress rather than five ambiguous glyphs: how many of the things
 // this listing needs are done.
 function mediaBar(x) {
+  const { done, total, req } = mediaProgress(x);
+  if (!total) return '';
   const m = x.media || {};
-  const done = MEDIA_KEYS.filter(([k]) => m[k]).length;
-  if (!done) return '';
-  const pct = Math.round(100 * done / MEDIA_KEYS.length);
-  return `<div class="tk-mbar" title="${MEDIA_KEYS.filter(([k]) => m[k]).map(k => k[1]).join(', ')}">
-    <span class="tk-mbar-t"><i style="width:${pct}%"></i></span>
-    <span class="tk-mbar-n">${done}/${MEDIA_KEYS.length} media</span>
+  const pct = Math.round(100 * done / total);
+  const missing = req.filter(([k]) => !m[k]).map(k => k[1]);
+  return `<div class="tk-mbar" title="${esc(missing.length ? 'Still needed: ' + missing.join(', ') : 'Everything asked for is in')}">
+    <span class="tk-mbar-t${done === total ? ' full' : ''}"><i style="width:${pct}%"></i></span>
+    <span class="tk-mbar-n">${done}/${total} media</span>
   </div>`;
 }
 
@@ -482,22 +483,68 @@ function mediaBar(x) {
 // without opening anything.
 function blockersFor(x) {
   const key = P.stageKeyOf(stageById(x.stageId));
-  const m = x.media || {};
   const out = [];
+  // Before the shoot: the things that make an agent's trip wasted.
+  if (['shoot_scheduled'].includes(key)) {
+    if (!x.address) out.push('no address');
+    if (!x.sellerPhone && !x.siteContact) out.push('no site contact');
+    if (!x.ownerInformed) out.push('owner not told');
+  }
+  // After it: what is still outstanding against the brief.
+  if (key === 'shoot_done') {
+    const { done, total } = mediaProgress(x);
+    if (done < total) out.push(`${total - done} of ${total} media missing`);
+    if (!x.photosLink) out.push('photos not uploaded');
+  }
   if (['brochure_queued', 'brochure_ready', 'live'].includes(key) && !x.propertyCode) out.push('not in inventory');
-  if (key === 'shoot_done' && !x.photosLink) out.push('photos not uploaded');
   if (['brochure_ready', 'live'].includes(key) && !x.ownerApproved) out.push('owner has not approved');
   if (key === 'live' && !x.brochureLink) out.push('no brochure');
-  if (key === 'shoot_done' && !m.photos) out.push('photos not ticked');
   return out;
 }
 
-// The media checklist as a row of ticks — what is needed vs what is done, in
-// the width a card can spare.
+// The media checklist. TWO states, not one: what this shoot is supposed to
+// capture (`need` — the brief) and what came back (`media`). A shoot agent
+// standing in the flat has to know whether a drone was asked for before they
+// pack up, and "3 done" means nothing to a handler without "of 4 asked for".
 const MEDIA_KEYS = [
   ['photos', 'Photos', '🖼'], ['video', 'Video', '🎬'], ['drone', 'Drone', '🚁'],
   ['floorPlan', 'Floor plan', '📐'], ['tour', 'Virtual tour', '🔄']
 ];
+// What a listing is assumed to need when nobody has said otherwise — the two
+// things every brochure in this pipeline actually uses.
+const DEFAULT_NEED = { photos: true, floorPlan: true };
+const needOf = x => (x.need && Object.keys(x.need).some(k => x.need[k])) ? x.need : DEFAULT_NEED;
+function mediaProgress(x) {
+  const need = needOf(x), done = x.media || {};
+  const req = MEDIA_KEYS.filter(([k]) => need[k]);
+  return { done: req.filter(([k]) => done[k]).length, total: req.length, req };
+}
+
+// Who can be sent on a shoot — the set actually in use, so a handler picks
+// rather than retypes. A typo in a free-text name silently splits one
+// person's day into two and neither looks wrong.
+function shootAgents() {
+  const set = new Set();
+  for (const x of listings) if (x.shootAssignee) set.add(String(x.shootAssignee).trim());
+  return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+// Where the property actually is, and how to get in. None of this existed —
+// and without it a shoot agent cannot do the job, because "Nungambakkam" is
+// a locality of fifty thousand people, not an address.
+const OCCUPANCY = {
+  vacant: 'Vacant — someone must open it',
+  owner: 'Owner living there',
+  tenant: 'Tenant living there',
+  construction: 'Under construction'
+};
+// A map link is derived from the address when nobody pasted one, because the
+// address is the thing people actually have to hand.
+function mapHref(x) {
+  if (x.mapLink) return x.mapLink;
+  const q = [x.address, x.location].filter(Boolean).join(', ');
+  return q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : '';
+}
 function mediaSummary(x) {
   const m = x.media || {};
   const on = MEDIA_KEYS.filter(([k]) => m[k]);
@@ -614,20 +661,50 @@ function addHistory(x, type, text) {
 // ═══════ SHOOTS VIEW ═══════
 // Every booked shoot in date order — missed ones first, because a shoot that
 // did not happen is the thing that stalls everything downstream.
+// Whose day to show. A handler wants everyone; an agent wants only their own
+// name, and that choice sticks on their device.
+let agentFilter = '';
+try { agentFilter = localStorage.getItem('track.agent') || ''; } catch (e) {}
+function setAgentFilter(v) {
+  agentFilter = v || '';
+  try { localStorage.setItem('track.agent', agentFilter); } catch (e) {}
+  renderShoots();
+}
+window.setAgentFilter = setAgentFilter;
+
 function renderShoots() {
   const el = document.getElementById('shootsView');
   if (!el) return;
-  const withShoot = listings.filter(x => x.shootAt && stageKindOfId(x.stageId) === 'open')
-    .sort((a, b) => a.shootAt - b.shootAt);
+  const mine = x => !agentFilter || (x.shootAssignee || '').trim() === agentFilter;
+  const open = listings.filter(x => stageKindOfId(x.stageId) === 'open' && mine(x));
+  const withShoot = open.filter(x => x.shootAt).sort((a, b) => a.shootAt - b.shootAt);
   const now = Date.now();
+  // "Missed" is judged on the brief, not on one field: a shoot whose required
+  // media is all in is done, whatever else is outstanding.
+  const unfinished = x => { const p = mediaProgress(x); return p.done < p.total; };
   const groups = [
-    ['Missed', withShoot.filter(x => x.shootAt < now && !(x.media && x.media.photos))],
+    ['Missed', withShoot.filter(x => x.shootAt < now && unfinished(x))],
     ['Today', withShoot.filter(x => x.shootAt >= now && x.shootAt < endOfToday())],
     ['Coming up', withShoot.filter(x => x.shootAt >= endOfToday())]
   ];
-  const noShoot = listings.filter(x => !x.shootAt && stageKindOfId(x.stageId) === 'open'
+  const noShoot = open.filter(x => !x.shootAt
     && ['new_listing', 'details', 'shoot_scheduled'].includes(P.stageKeyOf(stageById(x.stageId))));
+  const agents = shootAgents();
+  // What would waste a trip if nobody noticed before setting off.
+  const notReady = withShoot.filter(x => x.shootAt > now && (!x.address || !(x.siteContact || x.sellerPhone) || !x.ownerInformed));
+
   el.innerHTML = `
+    ${agents.length ? `<div class="tk-agentbar">
+      <span class="tk-lab">Whose day</span>
+      <button type="button" class="tk-sbtn${!agentFilter ? ' on' : ''}" onclick="setAgentFilter('')">Everyone</button>
+      ${agents.map(a => `<button type="button" class="tk-sbtn${agentFilter === a ? ' on' : ''}" onclick="setAgentFilter('${esc(a).replace(/'/g, "\\'")}')">${esc(a)}</button>`).join('')}
+    </div>` : ''}
+
+    ${notReady.length ? `<div class="tk-note bad">
+      <b>${notReady.length} upcoming shoot${notReady.length === 1 ? '' : 's'} ${notReady.length === 1 ? 'is' : 'are'} not ready to send.</b>
+      Missing an address, a contact who can open the door, or the owner has not been told. Each one is a wasted trip.
+    </div>` : ''}
+
     ${groups.map(([label, arr]) => arr.length ? `
       <div class="tk-group">
         <div class="tk-group-hdr${label === 'Missed' ? ' bad' : label === 'Today' ? ' warn' : ''}">${label} <span class="tk-count">${arr.length}</span></div>
@@ -635,32 +712,53 @@ function renderShoots() {
       </div>` : '').join('')}
     ${noShoot.length ? `
       <div class="tk-group">
-        <div class="tk-group-hdr">No shoot booked yet <span class="tk-count">${noShoot.length}</span></div>
+        <div class="tk-group-hdr">Waiting to be booked <span class="tk-count">${noShoot.length}</span></div>
         <div class="tk-rows">${noShoot.map(shootRow).join('')}</div>
       </div>` : ''}
-    ${!withShoot.length && !noShoot.length ? `<div class="tk-empty"><div class="tk-empty-i">📸</div><div class="tk-empty-t">No shoots to plan</div><div class="tk-empty-s">Book one from any listing on the board.</div></div>` : ''}`;
+    ${!withShoot.length && !noShoot.length ? `<div class="tk-empty"><div class="tk-empty-i">📸</div><div class="tk-empty-t">${agentFilter ? 'Nothing for ' + esc(agentFilter) : 'No shoots to plan'}</div><div class="tk-empty-s">Book one from any listing on the board.</div></div>` : ''}`;
 }
 function endOfToday() { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); }
 
+// A run sheet row: everything needed to actually turn up, with the address
+// and the two taps that matter (call whoever opens it, open the map) big
+// enough to hit on a phone standing in the street.
 function shootRow(x) {
   const stage = stageById(x.stageId);
   const late = x.shootAt && x.shootAt < Date.now();
-  return `<div class="tk-row" onclick="openDetail('${x.id}')">
-    <div class="tk-row-main">
+  const contact = x.siteContact || x.sellerPhone;
+  const { done, total, req } = mediaProgress(x);
+  const m = x.media || {};
+  const map = mapHref(x);
+  const ready = x.address && contact && x.ownerInformed;
+  return `<div class="tk-row shoot${late ? ' late' : ''}">
+    <div class="tk-row-main" onclick="openDetail('${x.id}')">
       <div class="tk-row-top">
         <span class="tk-row-title">${esc(x.title || x.propertyCode || 'Untitled')}</span>
         ${stage ? `<span class="tk-pill" style="background:${stage.color}22;color:${stage.color}">${esc(stage.name)}</span>` : ''}
+        ${x.occupancy ? `<span class="tk-pill muted">${esc((OCCUPANCY[x.occupancy] || x.occupancy).split(' —')[0])}</span>` : ''}
       </div>
+      <div class="tk-addr">${x.address ? '📍 ' + esc(x.address) : '<span class="tk-miss">📍 No address — nobody can be sent</span>'}</div>
       <div class="tk-row-meta">
-        ${x.location ? `<span>📍 ${esc(x.location)}</span>` : ''}
-        ${x.sellerPhone ? `<span>📞 ${esc(x.sellerPhone)}</span>` : ''}
-        ${x.shootAssignee ? `<span>🎥 ${esc(x.shootAssignee)}</span>` : ''}
-        ${x.ownerInformed ? '<span class="tk-ok">owner informed ✓</span>' : '<span class="tk-warn">owner not informed</span>'}
+        ${x.shootAssignee ? `<span>🎥 ${esc(x.shootAssignee)}</span>` : '<span class="tk-warn">🎥 nobody assigned</span>'}
+        ${x.ownerInformed ? '<span class="tk-ok">owner told ✓</span>' : '<span class="tk-warn">owner not told</span>'}
+        ${x.bestTime ? `<span>🕑 ${esc(x.bestTime)}</span>` : ''}
+        ${x.rescheduled ? `<span class="tk-warn">moved ${x.rescheduled}×</span>` : ''}
       </div>
+      <div class="tk-brieflist">${req.map(([k, label, icon]) =>
+        `<span class="tk-bchip${m[k] ? ' got' : ''}">${icon} ${esc(label)}${m[k] ? ' ✓' : ''}</span>`).join('')
+        || '<span class="tk-sub2">No brief set</span>'}</div>
+      ${x.accessNotes ? `<div class="tk-row-note">🔑 ${esc(x.accessNotes)}</div>` : ''}
     </div>
-    <div class="tk-row-side">
+    <div class="tk-row-side col">
       ${x.shootAt ? `<div class="tk-when${late ? ' bad' : ''}">${esc(fmtDateTime(x.shootAt))}</div><div class="tk-rel">${esc(relDays(x.shootAt))}</div>`
         : '<div class="tk-when none">not booked</div>'}
+      <div class="tk-row-acts">
+        ${contact ? `<a class="tk-btn sm primary" href="tel:${esc(telOf(contact))}">Call</a>` : ''}
+        ${map ? `<a class="tk-btn sm" href="${esc(map)}" target="_blank" rel="noopener">Map</a>` : ''}
+        ${x.shootAt && !x.shootDoneAt ? `<button class="tk-btn sm" onclick="event.stopPropagation();openWrapModal('${x.id}')">Done</button>` : ''}
+      </div>
+      ${total ? `<div class="tk-sub2">${done}/${total} captured</div>` : ''}
+      ${!ready && x.shootAt ? '<div class="tk-sub2 warn">not ready to send</div>' : ''}
     </div>
   </div>`;
 }
@@ -790,19 +888,46 @@ function openDetail(id) {
     </div>
 
     <div class="tk-sec">
-      <div class="tk-sec-hdr">Shoot</div>
-      <div class="tk-kv"><span>When</span><b>${x.shootAt ? esc(fmtDateTime(x.shootAt)) + ` <span class="tk-rel">${esc(relDays(x.shootAt))}</span>` : '—'}</b></div>
-      <div class="tk-kv"><span>Who</span>${esc(x.shootAssignee || '—')}</div>
-      <div class="tk-kv"><span>Site contact</span>${esc(x.siteContact || x.sellerPhone || '—')}</div>
-      <label class="tk-check"><input type="checkbox" ${x.ownerInformed ? 'checked' : ''} onchange="setFlag('${x.id}','ownerInformed',this.checked)"> Owner told about the shoot</label>
-      <label class="tk-check"><input type="checkbox" ${x.ownerApproved ? 'checked' : ''} onchange="setFlag('${x.id}','ownerApproved',this.checked)"> Owner approved the photos / brochure</label>
-      <button class="tk-btn" onclick="openShootModal('${x.id}')">${x.shootAt ? 'Reschedule' : 'Book the shoot'}</button>
+      <div class="tk-sec-hdr">Getting there</div>
+      <div class="tk-kv col"><span>Address</span><div>${x.address ? esc(x.address) : '<i class="tk-miss">No address — a shoot cannot be sent without one</i>'}</div></div>
+      <div class="tk-kv"><span>Who opens it</span>${esc(x.siteContact || x.sellerPhone || '—')}${
+        (x.siteContact || x.sellerPhone) ? ` <a class="tk-btn sm" href="tel:${esc(telOf(x.siteContact || x.sellerPhone))}">Call</a>` : ''}</div>
+      <div class="tk-kv"><span>Occupancy</span>${x.occupancy ? esc(OCCUPANCY[x.occupancy] || x.occupancy) : '—'}</div>
+      ${x.bestTime ? `<div class="tk-kv"><span>Best time</span>${esc(x.bestTime)}</div>` : ''}
+      ${x.accessNotes ? `<div class="tk-kv col"><span>Access notes</span><div>${esc(x.accessNotes)}</div></div>` : ''}
+      <div class="tk-btnrow">
+        ${mapHref(x) ? `<a class="tk-btn primary" href="${esc(mapHref(x))}" target="_blank" rel="noopener">Open in Maps →</a>` : ''}
+        <button class="tk-btn" onclick="openAccessModal('${x.id}')">${x.address ? 'Edit access details' : 'Add the address'}</button>
+      </div>
     </div>
 
     <div class="tk-sec">
-      <div class="tk-sec-hdr">Media checklist</div>
-      <div class="tk-checks">
-        ${MEDIA_KEYS.map(([k, label, icon]) => `<label class="tk-check"><input type="checkbox" ${m[k] ? 'checked' : ''} onchange="setMedia('${x.id}','${k}',this.checked)"> ${icon} ${esc(label)}</label>`).join('')}
+      <div class="tk-sec-hdr">Shoot</div>
+      <div class="tk-kv"><span>When</span><b>${x.shootAt ? esc(fmtDateTime(x.shootAt)) + ` <span class="tk-rel">${esc(relDays(x.shootAt))}</span>` : '—'}</b></div>
+      <div class="tk-kv"><span>Assigned to</span>${esc(x.shootAssignee || '—')}</div>
+      ${x.rescheduled ? `<div class="tk-kv"><span>Rescheduled</span>${x.rescheduled} time${x.rescheduled === 1 ? '' : 's'}${x.rescheduleReason ? ' — ' + esc(x.rescheduleReason) : ''}</div>` : ''}
+      <label class="tk-check"><input type="checkbox" ${x.ownerInformed ? 'checked' : ''} onchange="setFlag('${x.id}','ownerInformed',this.checked)"> Owner told we are coming</label>
+      <label class="tk-check"><input type="checkbox" ${x.ownerApproved ? 'checked' : ''} onchange="setFlag('${x.id}','ownerApproved',this.checked)"> Owner approved the photos / brochure</label>
+      <div class="tk-btnrow">
+        <button class="tk-btn" onclick="openShootModal('${x.id}')">${x.shootAt ? 'Reschedule' : 'Book the shoot'}</button>
+        ${x.shootAt && !x.shootDoneAt ? `<button class="tk-btn primary" onclick="openWrapModal('${x.id}')">Shoot done →</button>` : ''}
+      </div>
+      ${x.shootNotes ? `<div class="tk-kv col"><span>From the shoot</span><div>${esc(x.shootNotes)}</div></div>` : ''}
+    </div>
+
+    <div class="tk-sec">
+      <div class="tk-sec-hdr">The brief — what to capture</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Tick what this property needs on the left, and what has come back on the right. The agent sees the left column before they go.</div>
+      <div class="tk-brief">
+        <div class="tk-brief-hd"><span></span><span>Needed</span><span>Done</span></div>
+        ${MEDIA_KEYS.map(([k, label, icon]) => {
+          const need = needOf(x)[k];
+          return `<div class="tk-brief-r${need && !m[k] ? ' open' : ''}">
+            <span>${icon} ${esc(label)}</span>
+            <span><input type="checkbox" ${need ? 'checked' : ''} onchange="setNeed('${x.id}','${k}',this.checked)" aria-label="${esc(label)} needed"></span>
+            <span><input type="checkbox" ${m[k] ? 'checked' : ''} ${!need ? 'class="dim"' : ''} onchange="setMedia('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
+          </div>`;
+        }).join('')}
       </div>
     </div>
 
@@ -1026,7 +1151,79 @@ function setMedia(id, key, on) {
   mutate(id, x => { x.media = { ...(x.media || {}), [key]: !!on }; }, `${label}: ${on ? 'done' : 'not done'}`);
 }
 function setRemarks(id, v) { mutate(id, x => { x.remarks = String(v || '').trim(); }); }
-window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRemarks;
+// The brief: what this property needs shot. Changed by the handler, read by
+// the agent before they travel.
+function setNeed(id, key, on) {
+  const label = (MEDIA_KEYS.find(k => k[0] === key) || [, key])[1];
+  mutate(id, x => { x.need = { ...needOf(x), [key]: !!on }; }, `${label} ${on ? 'added to' : 'removed from'} the brief`);
+  if (currentDetailId === id) openDetail(id);
+}
+window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRemarks; window.setNeed = setNeed;
+
+// ═══════ ACCESS DETAILS ═══════
+// The block that decides whether a shoot happens at all. Kept as its own
+// dialog rather than buried in the edit form, because it is filled in by
+// whoever spoke to the owner, usually days before anyone is sent.
+let accessFor = null;
+function openAccessModal(id) {
+  const x = listings.find(l => l.id === id);
+  if (!x) return;
+  accessFor = id;
+  document.getElementById('acAddress').value = x.address || '';
+  document.getElementById('acMap').value = x.mapLink || '';
+  document.getElementById('acContact').value = x.siteContact || '';
+  document.getElementById('acOccupancy').value = x.occupancy || '';
+  document.getElementById('acBest').value = x.bestTime || '';
+  document.getElementById('acNotes').value = x.accessNotes || '';
+  document.getElementById('acModal').classList.add('open');
+}
+function closeAccessModal() { document.getElementById('acModal').classList.remove('open'); accessFor = null; }
+function saveAccess() {
+  if (!accessFor) return;
+  const id = accessFor;
+  const get = i => document.getElementById(i).value.trim();
+  mutate(id, x => {
+    x.address = get('acAddress'); x.mapLink = get('acMap'); x.siteContact = get('acContact');
+    x.occupancy = get('acOccupancy'); x.bestTime = get('acBest'); x.accessNotes = get('acNotes');
+  }, 'Access details updated');
+  closeAccessModal();
+  if (currentDetailId === id) openDetail(id);
+}
+window.openAccessModal = openAccessModal; window.closeAccessModal = closeAccessModal; window.saveAccess = saveAccess;
+
+// ═══════ WRAPPING UP A SHOOT ═══════
+// What the agent does standing in the doorway on the way out: tick what they
+// actually got, say what they could not, and move the card on in one gesture.
+// Anything missed against the brief stays visible on the board rather than
+// being discovered a week later when the brochure is built.
+let wrapFor = null;
+function openWrapModal(id) {
+  const x = listings.find(l => l.id === id);
+  if (!x) return;
+  wrapFor = id;
+  const m = x.media || {}, need = needOf(x);
+  document.getElementById('wrapList').innerHTML = MEDIA_KEYS.map(([k, label, icon]) =>
+    `<label class="tk-check${need[k] ? ' req' : ''}"><input type="checkbox" id="wrap_${k}" ${m[k] ? 'checked' : ''}> ${icon} ${esc(label)}${need[k] ? ' <span class="tk-req">asked for</span>' : ''}</label>`).join('');
+  document.getElementById('wrapNotes').value = x.shootNotes || '';
+  document.getElementById('wrapModal').classList.add('open');
+}
+function closeWrapModal() { document.getElementById('wrapModal').classList.remove('open'); wrapFor = null; }
+function saveWrap() {
+  if (!wrapFor) return;
+  const id = wrapFor;
+  const media = {};
+  for (const [k] of MEDIA_KEYS) media[k] = !!document.getElementById('wrap_' + k)?.checked;
+  const notes = document.getElementById('wrapNotes').value.trim();
+  mutate(id, x => { x.media = media; x.shootNotes = notes; x.shootDoneAt = Date.now(); }, 'Shoot wrapped up');
+  const x = listings.find(l => l.id === id);
+  const shot = P.stageForKey(stages, 'shoot_done');
+  if (x && shot && P.ladderIndex(P.stageKeyOf(stageById(x.stageId))) < P.ladderIndex('shoot_done')) changeStage(id, shot.id);
+  closeWrapModal();
+  if (currentDetailId === id) openDetail(id);
+  const { done, total } = mediaProgress(listings.find(l => l.id === id) || {});
+  toast(done < total ? `Saved — ${total - done} of ${total} still to get` : 'Shoot complete');
+}
+window.openWrapModal = openWrapModal; window.closeWrapModal = closeWrapModal; window.saveWrap = saveWrap;
 
 function deleteListing(id) {
   const x = listings.find(l => l.id === id);
@@ -1073,8 +1270,35 @@ function openShootModal(id) {
   document.getElementById('shTime').value = d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '10:00';
   document.getElementById('shWho').value = x.shootAssignee || '';
   document.getElementById('shContact').value = x.siteContact || x.sellerPhone || '';
+  // Pick from who is already being sent out, rather than retyping a name.
+  document.getElementById('shAgents').innerHTML = shootAgents().map(a => `<option value="${esc(a)}">`).join('');
+  // Moving an existing booking asks why: a shoot rescheduled three times is a
+  // problem with the owner, and only the reasons show that.
+  document.getElementById('shWhyRow').style.display = x.shootAt ? '' : 'none';
+  document.getElementById('shWhy').value = '';
+  document.getElementById('shClash').textContent = '';
   document.getElementById('shModal').classList.add('open');
+  checkClash();
 }
+
+// Two shoots, one agent, overlapping times. Warned about rather than blocked
+// — a handler sometimes genuinely double-books two flats in one building.
+function checkClash() {
+  const el = document.getElementById('shClash');
+  if (!el || !shootFor) return;
+  const date = document.getElementById('shDate').value;
+  const time = document.getElementById('shTime').value || '10:00';
+  const who = document.getElementById('shWho').value.trim().toLowerCase();
+  if (!date || !who) { el.textContent = ''; return; }
+  const at = new Date(date + 'T' + time).getTime();
+  const clash = listings.filter(l => l.id !== shootFor && l.shootAt && l.shootAssignee
+    && l.shootAssignee.trim().toLowerCase() === who
+    && Math.abs(l.shootAt - at) < 2 * 3600000);
+  el.textContent = clash.length
+    ? `Heads up: ${document.getElementById('shWho').value.trim()} is also at "${clash[0].title || 'another listing'}" around then.`
+    : '';
+}
+window.checkClash = checkClash;
 function closeShootModal() { document.getElementById('shModal').classList.remove('open'); shootFor = null; }
 function saveShoot() {
   if (!shootFor) return;
@@ -1083,9 +1307,18 @@ function saveShoot() {
   const who = document.getElementById('shWho').value.trim();
   const contact = document.getElementById('shContact').value.trim();
   const at = date ? new Date(date + 'T' + time).getTime() : null;
+  const why = document.getElementById('shWhy').value.trim();
   const id = shootFor;
-  mutate(id, x => { x.shootAt = at; x.shootAssignee = who; x.siteContact = contact; },
-    at ? `Shoot booked for <b>${esc(fmtDateTime(at))}</b>${who ? ' with ' + esc(who) : ''}` : 'Shoot date cleared');
+  const prev = listings.find(l => l.id === id);
+  const moving = !!(prev && prev.shootAt && at && prev.shootAt !== at);
+  mutate(id, x => {
+    x.shootAt = at; x.shootAssignee = who; x.siteContact = contact;
+    if (moving) { x.rescheduled = (x.rescheduled || 0) + 1; x.rescheduleReason = why || null; }
+  }, at
+    ? (moving
+        ? `Shoot moved to <b>${esc(fmtDateTime(at))}</b>${who ? ' with ' + esc(who) : ''}${why ? ' — ' + esc(why) : ''}`
+        : `Shoot booked for <b>${esc(fmtDateTime(at))}</b>${who ? ' with ' + esc(who) : ''}`)
+    : 'Shoot date cleared');
   // Booking a shoot IS the move into "Shoot scheduled" — making someone drag
   // the card as well would just be a second chance to forget.
   const x = listings.find(l => l.id === id);

@@ -264,3 +264,49 @@
   .tk-prev-panel { width: 100%; }
   .tk-filterbar { align-items: stretch; }
 }
+
+/* ═══════ ADDED: the shoot agent's half — access, the brief, the run sheet ═══════ */
+
+/* A missing address or contact is not a blank, it is a blocker — a shoot sent
+   without one is a wasted trip, so it reads as a warning rather than a dash. */
+.tk-miss { color: var(--amber, #B45309); font-style: italic; }
+.tk-opt { font-weight: 400; color: var(--ink4); text-transform: none; letter-spacing: 0; }
+
+/* The brief: needed on the left, done on the right, in one row per item so
+   "asked for and not got" is a shape you can see rather than read. */
+.tk-brief { display: flex; flex-direction: column; }
+.tk-brief-hd, .tk-brief-r { display: grid; grid-template-columns: 1fr 72px 56px; align-items: center; gap: 8px; }
+.tk-brief-hd { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink4); padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+.tk-brief-hd span + span, .tk-brief-r span + span { text-align: center; }
+.tk-brief-r { padding: 7px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+.tk-brief-r:last-child { border-bottom: none; }
+.tk-brief-r.open { color: var(--amber, #B45309); font-weight: 600; }
+.tk-brief-r input { accent-color: var(--brand); width: 16px; height: 16px; }
+.tk-brief-r input.dim { opacity: .4; }
+.tk-check.req { font-weight: 600; }
+.tk-req { font-size: 9.5px; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: .05em; }
+
+/* Run sheet */
+.tk-agentbar { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.tk-agentbar .tk-lab { margin: 0 4px 0 0; }
+.tk-agentbar .tk-sbtn { border: 1px solid var(--border); background: var(--card); }
+.tk-agentbar .tk-sbtn.on { border-color: var(--brand); color: var(--brand); background: var(--brand-soft, var(--card)); }
+.tk-row.shoot { align-items: stretch; }
+.tk-row.shoot .tk-row-main { cursor: pointer; }
+.tk-row.shoot.late { box-shadow: inset 3px 0 0 var(--red, #B91C1C); }
+.tk-addr { font-size: 12.5px; color: var(--ink2); margin: 3px 0 5px; line-height: 1.45; }
+.tk-brieflist { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tk-bchip { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--bg2); color: var(--ink3); white-space: nowrap; }
+.tk-bchip.got { background: color-mix(in srgb, var(--green, #15803D) 14%, transparent); color: var(--green, #15803D); }
+.tk-row-side.col { flex-direction: column; align-items: flex-end; gap: 5px; }
+.tk-row-acts { display: flex; gap: 5px; }
+.tk-btn.sm { font-size: 11px; padding: 5px 11px; }
+
+@media (max-width: 760px) {
+  /* On site, on a phone: the two things that matter are big and reachable. */
+  .tk-row.shoot { flex-direction: column; }
+  .tk-row-side.col { align-items: stretch; }
+  .tk-row-acts { width: 100%; }
+  .tk-row-acts .tk-btn { flex: 1; justify-content: center; min-height: 42px; font-size: 13px; }
+  .tk-brief-hd, .tk-brief-r { grid-template-columns: 1fr 64px 52px; }
+}

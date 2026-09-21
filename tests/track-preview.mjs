@@ -31,6 +31,9 @@ const LISTINGS = [
   { id: 'l1', tenantId: T, title: '3BHK in Nungambakkam', propertyCode: 'TNAG0002', location: 'Nungambakkam',
     config: '3 BHK', askingPrice: '₹2.1 Cr', sellerName: 'Meenakshi', sellerPhone: '9840011111', leadId: 'sd1',
     stageId: sid('shoot_scheduled'), shootAt: NOW + 3 * H, shootAssignee: 'Ravi', ownerInformed: true,
+    address: 'Flat 3B, Sai Apartments, 12 Wallace Garden 2nd St, Nungambakkam',
+    siteContact: '9840011111', occupancy: 'tenant', bestTime: 'Morning light', accessNotes: 'Gate code 4417',
+    need: { photos: true, floorPlan: true, video: true },
     media: {}, stageChangedAt: NOW - 2 * D, createdAt: NOW - 5 * D, updatedAt: NOW - H },
   { id: 'l2', tenantId: T, title: 'Villa, Kottivakkam', propertyCode: '', location: 'Kottivakkam',
     sellerName: 'Suresh', sellerPhone: '9840022222', stageId: sid('details'),
@@ -173,6 +176,10 @@ await page.click('#rsModal .tk-btn.primary');
 await page.waitForTimeout(200);
 ok('…then saves the move with its reason',
   await page.evaluate(() => window.__saved.some(s => s.id === 'l1' && s.stageId === 'dropped' && s.dropReason === 'price_unrealistic')));
+// Put it back: the shoot-agent checks below need this one live, and a dropped
+// listing is correctly excluded from every shoot view.
+await page.evaluate(() => changeStage('l1', 'shoot_scheduled'));
+await page.waitForTimeout(200);
 
 // ── Detail panel ──
 await page.evaluate(() => openDetail('l3'));
@@ -180,7 +187,8 @@ await page.waitForTimeout(250);
 ok('The detail panel opens', await page.$eval('#dp', e => e.classList.contains('open')));
 const body = (await text(page, '#dpBody'))[0];
 ok('…showing the owner', /Lakshmi/.test(body));
-ok('…the media checklist', /Media checklist/.test(body) && /Floor plan/.test(body));
+ok('…the brief, with what is needed and what is done', /what to capture/i.test(body) && /Floor plan/.test(body), body.slice(0, 200));
+ok('…and how to actually get there', /Getting there/.test(body));
 ok('…the shoot section', /Shoot/.test(body));
 ok('…and the deliverables', /Deliverables/.test(body));
 await shot('detail');
@@ -262,8 +270,57 @@ await page.evaluate(() => toggleView('shoots'));
 await page.waitForTimeout(250);
 const shoots = (await text(page, '#shootsView'))[0];
 ok('The shoots view separates missed from upcoming', /Missed/.test(shoots) && /Coming up/.test(shoots), shoots.slice(0, 160));
-ok('…and flags an owner who has not been told', /owner not informed/.test(shoots));
+ok('…and flags an owner who has not been told', /owner not told/.test(shoots));
+ok('An agent can see the actual address, not just a locality',
+  /Wallace Garden/.test(shoots), shoots.slice(0, 280));
+ok('…who lives there, so they know what they are walking into', /Tenant living there/.test(shoots));
+ok('…the access note they need at the gate', /4417/.test(shoots));
+ok('…and what they are meant to capture', /Floor plan/.test(shoots) && /Video/.test(shoots));
+const acts = await page.$$eval('.tk-row-acts a', els => els.map(a => a.getAttribute('href')));
+ok('Call and Map are one tap from the run sheet',
+  acts.some(h => /^tel:/.test(h)) && acts.some(h => /google\.com\/maps/.test(h)), JSON.stringify(acts.slice(0, 4)));
+ok('A trip that would be wasted is called out before anyone leaves',
+  /not ready to send/.test(shoots), shoots.slice(0, 320));
 await shot('shoots');
+
+// One agent's day.
+await page.evaluate(() => setAgentFilter('Ravi'));
+await page.waitForTimeout(250);
+const ravi = (await text(page, '#shootsView'))[0];
+ok('A handler can pull up one agent\'s day', /Nungambakkam/.test(ravi) && !/Kelambakkam/.test(ravi), ravi.slice(0, 200));
+await page.evaluate(() => setAgentFilter(''));
+await page.waitForTimeout(200);
+
+// The doorway moment.
+await page.evaluate(() => openWrapModal('l1'));
+await page.waitForTimeout(250);
+ok('The wrap-up marks what was asked for', /asked for/.test((await text(page, '#wrapModal'))[0] || ''));
+await page.check('#wrap_photos');
+await page.fill('#wrapNotes', 'Bedroom not shot — tenant asleep');
+await page.click('#wrapModal .tk-btn.primary');
+await page.waitForTimeout(350);
+const wrapped = await page.evaluate(() => window.__saved.filter(s => s.id === 'l1').pop());
+ok('Wrapping up records what was captured and what happened',
+  wrapped.media.photos === true && /tenant asleep/.test(wrapped.shootNotes || ''), JSON.stringify(wrapped.shootNotes));
+ok('…and what was asked for but not got stays outstanding',
+  !wrapped.media.floorPlan && !wrapped.media.video);
+ok('…and the card moves to Shot', wrapped.stageId === 'shoot_done', wrapped.stageId);
+
+// Two shoots, one agent, same hour.
+await page.evaluate(() => { toggleView('board'); openShootModal('l5'); });
+await page.waitForTimeout(250);
+// The same local date AND hour as l1's shoot, or there is nothing to clash with.
+const clashAt = new Date(NOW + 3 * H);
+const pad = n => String(n).padStart(2, '0');
+await page.fill('#shDate', `${clashAt.getFullYear()}-${pad(clashAt.getMonth() + 1)}-${pad(clashAt.getDate())}`);
+await page.fill('#shTime', `${pad(clashAt.getHours())}:${pad(clashAt.getMinutes())}`);
+await page.fill('#shWho', 'Ravi');
+await page.waitForTimeout(300);
+ok('Booking one agent twice at once warns rather than clashing silently',
+  /also at/.test(await page.$eval('#shClash', e => e.textContent)), await page.$eval('#shClash', e => e.textContent));
+await page.evaluate(() => closeShootModal());
+await page.evaluate(() => toggleView('shoots'));
+await page.waitForTimeout(200);
 
 // ── Live seller sync ──
 // The two untracked sellers (Gopal, and Priya whom only the AI read as an

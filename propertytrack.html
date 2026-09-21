@@ -118,11 +118,57 @@
     <div class="tk-box-body">
       <label for="shDate">Date</label><input id="shDate" type="date">
       <label for="shTime">Time</label><input id="shTime" type="time" value="10:00">
-      <label for="shWho">Assigned to</label><input id="shWho" type="text" placeholder="Photographer / videographer">
+      <label for="shWho">Assigned to</label>
+      <input id="shWho" type="text" list="shAgents" placeholder="Photographer / videographer" oninput="checkClash()">
+      <datalist id="shAgents"></datalist>
       <label for="shContact">Site contact</label><input id="shContact" type="tel" placeholder="Who opens the door">
+      <div id="shWhyRow"><label for="shWhy">Why is it moving?</label><input id="shWhy" type="text" placeholder="Owner asked to postpone, rain, tenant unavailable…"></div>
+      <p class="tk-hint bad" id="shClash"></p>
       <p class="tk-hint">Booking a date moves the listing into <b>Shoot scheduled</b> on its own.</p>
     </div>
     <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeShootModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveShoot()">Save</button></div>
+  </div>
+</div>
+
+<!-- Everything a shoot agent needs to reach the property and get inside. -->
+<div class="tk-ov" id="acModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Getting there</b><button type="button" class="tk-x" onclick="closeAccessModal()">✕</button></div>
+    <div class="tk-box-body">
+      <label for="acAddress">Full address</label>
+      <input id="acAddress" type="text" placeholder="Flat 3B, Sai Apartments, 12 Wallace Garden 2nd St, Nungambakkam">
+      <label for="acMap">Map link <span class="tk-opt">optional</span></label>
+      <input id="acMap" type="url" placeholder="Paste a Google Maps link, or leave blank to search the address">
+      <label for="acContact">Who opens it</label>
+      <input id="acContact" type="tel" placeholder="Phone of whoever has the key">
+      <label for="acOccupancy">Occupancy</label>
+      <select id="acOccupancy">
+        <option value="">Not known</option>
+        <option value="vacant">Vacant — someone must open it</option>
+        <option value="owner">Owner living there</option>
+        <option value="tenant">Tenant living there</option>
+        <option value="construction">Under construction</option>
+      </select>
+      <label for="acBest">Best time <span class="tk-opt">optional</span></label>
+      <input id="acBest" type="text" placeholder="Morning light, before 11am">
+      <label for="acNotes">Access notes <span class="tk-opt">optional</span></label>
+      <input id="acNotes" type="text" placeholder="Gate code, parking, which lift, call before arriving…">
+    </div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeAccessModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveAccess()">Save</button></div>
+  </div>
+</div>
+
+<!-- The doorway moment: what was actually captured, and what was not. -->
+<div class="tk-ov" id="wrapModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Shoot done</b><button type="button" class="tk-x" onclick="closeWrapModal()">✕</button></div>
+    <div class="tk-box-body">
+      <p class="tk-hint" style="margin-top:0">Tick what you got. Anything asked for and not ticked stays flagged on the board.</p>
+      <div id="wrapList" class="tk-checks"></div>
+      <label for="wrapNotes">Anything worth knowing?</label>
+      <input id="wrapNotes" type="text" placeholder="Bedroom not shot — tenant asleep. Terrace locked.">
+    </div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeWrapModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveWrap()">Save &amp; move to Shot</button></div>
   </div>
 </div>
 
