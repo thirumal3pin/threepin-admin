@@ -122,6 +122,16 @@ window.trackFirebase = {
     });
   },
 
+  // What the owner actually said. TailorTalk's AI writes a profile of every
+  // conversation into leads/{id}/tailortalk/state — for a SELLER that profile
+  // IS the property brief (what they are selling, where, what they want for
+  // it, what they have already been asked). Read on demand when a card is
+  // opened, never watched: it is large and only matters while reading one.
+  async getLeadConversation(leadId){
+    const snap = await getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'));
+    return snap.exists() ? snap.data() : null;
+  },
+
   // Timeline entries live in a subcollection, like a lead's history, so the
   // card document stays small no matter how long a listing runs.
   async getListingHistory(id){

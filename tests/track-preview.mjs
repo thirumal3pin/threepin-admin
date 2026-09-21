@@ -78,6 +78,20 @@ window.trackFirebase = {
   deleteListing: async id => { window.__deleted.push(id); },
   savePipeline: async () => {},
   patchLead: async (id, patch) => { window.__leadPatches.push({ id, patch }); },
+  getLeadConversation: async id => id === 'sd1' ? {
+    profile: {
+      requirement_details: 'Owner selling a 3BHK, 1450 sqft, 4th floor, north facing',
+      preferred_location: 'Nungambakkam, near the railway station',
+      budget_and_finance: 'Expecting 2.1 Cr, some room to negotiate',
+      properties_discussed: 'TNAG0002',
+      chat_summary: 'Owner wants to list; asked what photos we need.'
+    },
+    chat: [
+      { role: 'user', content: 'I want to sell my flat in Nungambakkam', at: 1 },
+      { role: 'assistant', content: 'Happy to help — can we send a photographer?', at: 2 },
+      { role: 'user', content: 'Yes, weekend works', at: 3 }
+    ]
+  } : null,
   getInventory: async () => ${JSON.stringify(INVENTORY)},
   getListingHistory: async () => window.__history.slice().reverse(),
   saveHistory: async (id, e) => { window.__history.push({ ...e, listingId: id }); }
@@ -175,6 +189,44 @@ await shot('detail');
 await page.evaluate(() => setMedia('l3', 'video', true));
 await page.waitForTimeout(150);
 ok('Ticking a media item saves it', await page.evaluate(() => window.__saved.some(s => s.id === 'l3' && s.media && s.media.video === true)));
+
+// ── What the owner told us (the conversation) ──
+await page.evaluate(() => { closeDetail(); openDetail('l1'); });
+await page.waitForTimeout(400);
+const convo = (await text(page, '#dpConvo'))[0] || '';
+ok('The detail panel shows what the owner said', /What they have/.test(convo) && /1450 sqft/.test(convo), convo.slice(0, 180));
+ok('…their price expectation', /2\.1 Cr/.test(convo));
+ok('…and the last few messages', /weekend works/.test(convo));
+await shot('detail-convo');
+
+// ── Seller preview, without leaving the board ──
+await page.evaluate(() => openSellerPreview('l1'));
+await page.waitForTimeout(400);
+ok('The seller preview opens over the board', await page.$eval('#sellerPrev', e => e.classList.contains('open')));
+const prev = (await text(page, '#sellerPrev'))[0] || '';
+ok('…showing who they are and how to reach them', /Meenakshi/.test(prev) && /Call/.test(prev), prev.slice(0, 160));
+ok('…what they said', /Nungambakkam/.test(prev));
+ok('…a way to open them fully in the CRM', (await page.$$eval('#sellerPrev a', els => els.map(a => a.getAttribute('href')))).some(h => /crm\.html\?lead=sd1&from=track/.test(h)));
+await shot('seller-preview');
+await page.evaluate(() => closeSellerPreview());
+await page.waitForTimeout(200);
+ok('Closing the preview leaves the card open underneath',
+  !(await page.$eval('#sellerPrev', e => e.classList.contains('open'))) && await page.$eval('#dp', e => e.classList.contains('open')));
+
+// ── Board ⇄ List ──
+await page.evaluate(() => { closeDetail(); setBoardMode('list'); });
+await page.waitForTimeout(300);
+ok('The list view renders every listing as a row', (await page.$$('.tk-tr:not(.tk-th)')).length >= 5);
+const listTxt = (await text(page, '.tk-table'))[0] || '';
+ok('…with stage, owner, shoot and what it needs', /Shoot/.test(listTxt) && /Owner/.test(listTxt) && /Needs/.test(listTxt), listTxt.slice(0, 200));
+ok('…and it says what is blocking a listing', /not in inventory|owner has not approved|photos not/.test(listTxt), listTxt.slice(0, 400));
+await shot('list');
+await page.selectOption('.tk-listbar select', 'shoot');
+await page.waitForTimeout(250);
+ok('The list re-sorts on demand', (await page.$$('.tk-tr:not(.tk-th)')).length >= 5);
+await page.evaluate(() => setBoardMode('board'));
+await page.waitForTimeout(250);
+ok('…and switches back to the board', (await page.$$('.tk-col')).length === 10);
 
 // ── Property mapping ──
 await page.evaluate(() => openMapProperty('l2'));

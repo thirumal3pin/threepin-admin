@@ -56,7 +56,10 @@
     <div class="srch-wrap">
       <input type="search" id="searchInput" placeholder="Search a listing, owner, Property ID…" oninput="onSearch(this.value)" aria-label="Search listings">
     </div>
-    <div class="tk-filterbar"><div id="tkFilterBar"></div></div>
+    <div class="tk-filterbar">
+      <div id="tkFilterBar"></div>
+      <div class="tk-sortbar" id="tkModeTog" role="group" aria-label="Board or list"></div>
+    </div>
   </header>
 
   <main id="main">
@@ -76,6 +79,18 @@
     </div>
   </div>
   <div class="dp-body" id="dpBody"></div>
+</div>
+
+<!-- The owner's CRM record, without leaving the board. Closing it returns you
+     exactly where you were — checking a detail must not cost your place. -->
+<div class="tk-prev" id="sellerPrev">
+  <div class="tk-prev-panel" role="dialog" aria-modal="true" aria-label="Seller preview">
+    <div class="tk-prev-bar">
+      <b>From the CRM</b>
+      <button type="button" class="tk-x" onclick="closeSellerPreview()" aria-label="Close preview">✕</button>
+    </div>
+    <div class="tk-prev-body"></div>
+  </div>
 </div>
 
 <!-- ═══════ MODALS ═══════ -->

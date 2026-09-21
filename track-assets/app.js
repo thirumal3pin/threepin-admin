@@ -45,6 +45,33 @@ let stageFilter = new Set();
 const TRACK_VIEWS = ['board', 'shoots', 'sellers'];
 const DAY = 86400000;
 
+// Board or list, remembered per device. The board is for moving work along;
+// the list is for reading across everything at once — what is unmapped, whose
+// shoot is late, which owner has not approved. Same data, same filters, two
+// ways of looking, because "where is this one" and "what is the state of
+// everything" are different questions.
+let boardMode = 'board';
+try { boardMode = localStorage.getItem('track.mode') === 'list' ? 'list' : 'board'; } catch (e) {}
+function setBoardMode(m) {
+  boardMode = m === 'list' ? 'list' : 'board';
+  try { localStorage.setItem('track.mode', boardMode); } catch (e) {}
+  renderModeToggle();
+  applyFilters();
+}
+window.setBoardMode = setBoardMode;
+function renderModeToggle() {
+  const el = document.getElementById('tkModeTog');
+  if (!el) return;
+  el.innerHTML = [['board', 'Board'], ['list', 'List']].map(([m, label]) =>
+    `<button type="button" class="tk-sbtn${boardMode === m ? ' on' : ''}" aria-pressed="${boardMode === m}" onclick="setBoardMode('${m}')">${label}</button>`).join('');
+}
+
+// The list's own sort. Default puts what needs a person first, which is the
+// same order the board's columns already imply.
+let listSort = 'urgency';
+function setListSort(k) { listSort = k; applyFilters(); }
+window.setListSort = setListSort;
+
 // ═══════ SNAPSHOT CALLBACKS ═══════
 // The sync module calls these; each ends in a re-render. Same contract as the
 // CRM's applyLeadsSnapshot / applyPipelineSnapshot.
@@ -67,7 +94,9 @@ function refreshAll() {
   try { reconcileSellers(); } catch (e) { console.error('seller sync:', e); }
   try { applyFilters(); } catch (e) { console.error(e); }
   try { renderFilterBar(); } catch (e) { console.error(e); }
+  try { renderModeToggle(); } catch (e) { console.error(e); }
   try { updateSellerBadge(); } catch (e) { console.error(e); }
+  try { openPendingListing(); } catch (e) { console.error(e); }
 }
 
 // ═══════ LIVE SELLER SYNC ═══════
@@ -184,7 +213,7 @@ function applyFilters() {
       x.askingPrice, x.shootAssignee, x.remarks].join(' ').toLowerCase();
     return hay.includes(q);
   });
-  if (currentView === 'board') renderBoard();
+  if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
   else renderSellers();
 }
@@ -268,6 +297,89 @@ function renderBoard() {
   }).join('')}</div>`;
 }
 
+// ═══════ LIST VIEW ═══════
+// Everything at once, in one scan: stage, owner, mapping, shoot, media,
+// what is blocking it. The board answers "where is this one"; this answers
+// "what is the state of all of them", which is the question asked before a
+// week is planned.
+const LIST_SORTS = [
+  ['urgency', 'Needs attention'],
+  ['stage', 'Stage'],
+  ['shoot', 'Shoot date'],
+  ['age', 'Longest in column'],
+  ['updated', 'Recently touched']
+];
+function sortForList(arr) {
+  const idx = x => stages.findIndex(s => s.id === x.stageId);
+  const copy = arr.slice();
+  switch (listSort) {
+    case 'stage': return copy.sort((a, b) => idx(a) - idx(b) || cardUrgency(b) - cardUrgency(a));
+    case 'shoot': return copy.sort((a, b) => (a.shootAt || Infinity) - (b.shootAt || Infinity));
+    case 'age': return copy.sort((a, b) => P.stageAge(b, stages, Date.now()).days - P.stageAge(a, stages, Date.now()).days);
+    case 'updated': return copy.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    default: return copy.sort((a, b) => cardUrgency(b) - cardUrgency(a) || (a.shootAt || Infinity) - (b.shootAt || Infinity));
+  }
+}
+function renderList() {
+  const host = document.getElementById('boardView');
+  if (!host) return;
+  const rows = sortForList(filtered);
+  if (!rows.length) {
+    host.innerHTML = `<div class="tk-empty"><div class="tk-empty-i">📋</div><div class="tk-empty-t">Nothing matches</div></div>`;
+    return;
+  }
+  host.innerHTML = `
+    <div class="tk-listwrap">
+      <div class="tk-listbar">
+        <span class="tk-lab">Sort</span>
+        <select class="tk-sel sm" onchange="setListSort(this.value)">
+          ${LIST_SORTS.map(([k, l]) => `<option value="${k}"${listSort === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}
+        </select>
+        <span class="tk-listcount">${rows.length} listing${rows.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="tk-table" role="table">
+        <div class="tk-tr tk-th" role="row">
+          <span role="columnheader">Property</span>
+          <span role="columnheader">Stage</span>
+          <span role="columnheader">Owner</span>
+          <span role="columnheader">Shoot</span>
+          <span role="columnheader">Media</span>
+          <span role="columnheader">Needs</span>
+        </div>
+        ${rows.map(listRowHtml).join('')}
+      </div>
+    </div>`;
+}
+function listRowHtml(x) {
+  const st = stageById(x.stageId);
+  const age = P.stageAge(x, stages, Date.now());
+  const m = x.media || {};
+  const done = MEDIA_KEYS.filter(([k]) => m[k]).length;
+  const blocked = blockersFor(x);
+  const late = x.shootAt && x.shootAt < Date.now();
+  return `<div class="tk-tr${isLate(x) ? ' late' : ''}" role="row" tabindex="0"
+      onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+    <span role="cell">
+      <b>${esc(x.title || 'Untitled')}</b>
+      <span class="tk-sub2">${[x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ') || '—'}</span>
+      ${x.propertyCode ? `<span class="tk-code">${esc(x.propertyCode)}</span>` : '<span class="tk-code none">unmapped</span>'}
+    </span>
+    <span role="cell">
+      ${st ? `<span class="tk-pill" style="background:${st.color}22;color:${st.color}">${esc(st.name)}</span>` : '—'}
+      <span class="tk-sub2${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days}d here</span>
+    </span>
+    <span role="cell">
+      ${x.sellerName ? esc(x.sellerName) : '—'}
+      ${x.sellerPhone ? `<a class="tk-sub2 link" href="tel:${esc(telOf(x.sellerPhone))}" onclick="event.stopPropagation()">${esc(x.sellerPhone)}</a>` : ''}
+    </span>
+    <span role="cell" class="${late ? 'bad' : ''}">
+      ${x.shootAt ? `${esc(fmtDate(x.shootAt))}<span class="tk-sub2">${esc(relDays(x.shootAt))}</span>` : '<span class="tk-sub2">not booked</span>'}
+    </span>
+    <span role="cell">${done}/${MEDIA_KEYS.length}${x.ownerApproved ? '<span class="tk-sub2 ok">owner ✓</span>' : ''}</span>
+    <span role="cell">${blocked.length ? blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('') : '<span class="tk-sub2">—</span>'}</span>
+  </div>`;
+}
+
 // A listing is "late" when it has sat past its stage's own target — the
 // signal that matters on this board, since every stage here is a promise to
 // someone (an owner waiting for a photographer, a brochure not yet queued).
@@ -280,31 +392,104 @@ function cardUrgency(x) {
   return score;
 }
 
+// ── What a card has to answer, in the order someone actually asks ──
+//   1. Which property is this?          title, locality · config · price
+//   2. Is it in the system?             the Property_ID chip, loud when not
+//   3. Whose is it, and can I call now?  owner + a tap-to-dial number
+//   4. What is the next physical thing?  the shoot, and whether it is late
+//   5. How far is the media along?       the checklist, as progress not icons
+//   6. Is this one stuck?                days in column, against its target
+// Everything else belongs in the detail panel. A card that tries to show
+// everything shows nothing.
 function cardHtml(x) {
   const late = isLate(x);
   const age = P.stageAge(x, stages, Date.now());
-  const shootSoon = x.shootAt && x.shootAt < Date.now() + DAY;
-  const media = mediaSummary(x);
+  const blocked = blockersFor(x);
   return `<div class="tk-card${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
+      aria-label="Open ${esc(x.title || x.propertyCode || 'listing')}"
       data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="tk-card-top">
       <span class="tk-card-title">${esc(x.title || x.propertyCode || 'Untitled listing')}</span>
       ${x.propertyCode ? `<span class="tk-code" title="Mapped to inventory ${esc(x.propertyCode)}">${esc(x.propertyCode)}</span>`
-        : `<span class="tk-code none" title="Not mapped to an inventory property yet">unmapped</span>`}
+        : `<span class="tk-code none" title="Not in the inventory yet — it cannot reach the website until it is">unmapped</span>`}
     </div>
-    ${x.location ? `<div class="tk-card-sub">${esc(x.location)}${x.config ? ' · ' + esc(x.config) : ''}</div>` : ''}
-    ${x.sellerName ? `<div class="tk-card-row">🧑 ${esc(x.sellerName)}${x.sellerPhone ? ` <a class="tk-tel" href="tel:${esc(String(x.sellerPhone).replace(/[^\d+]/g, ''))}" onclick="event.stopPropagation()">${esc(x.sellerPhone)}</a>` : ''}</div>` : ''}
-    ${x.shootAt ? `<div class="tk-card-row${shootSoon ? ' hot' : ''}">📸 ${esc(fmtDateTime(x.shootAt))} <span class="tk-rel">${esc(relDays(x.shootAt))}</span></div>` : ''}
-    ${x.shootAssignee ? `<div class="tk-card-row">🎥 ${esc(x.shootAssignee)}</div>` : ''}
-    ${media ? `<div class="tk-media">${media}</div>` : ''}
+    ${(x.location || x.config || x.askingPrice) ? `<div class="tk-card-sub">${
+      [x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+
+    ${x.sellerName || x.sellerPhone ? `<div class="tk-card-owner">
+      <span class="tk-ava" aria-hidden="true">${esc(initials(x.sellerName))}</span>
+      <span class="tk-own-nm">${esc(x.sellerName || 'Owner')}</span>
+      ${x.sellerPhone ? `<a class="tk-call" href="tel:${esc(telOf(x.sellerPhone))}" onclick="event.stopPropagation()" title="Call ${esc(x.sellerName || 'the owner')}">Call</a>` : ''}
+      ${x.leadId ? `<button type="button" class="tk-mini" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="See what they said">Chat</button>` : ''}
+    </div>` : ''}
+
+    ${shootLine(x)}
+    ${mediaBar(x)}
+
+    ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
+
     <div class="tk-card-foot">
-      <span class="tk-age${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
-      ${x.ownerApproved ? '<span class="tk-ok">owner ✓</span>' : ''}
+      <span class="tk-age${age.farOver ? ' bad' : age.over ? ' warn' : ''}"
+        title="${age.target ? 'This column should take about ' + age.target + ' days' : ''}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
+      ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
       <span class="tk-upd">${esc(timeAgo(x.updatedAt))}</span>
     </div>
   </div>`;
+}
+
+const telOf = p => String(p || '').replace(/[^\d+]/g, '');
+function initials(name) {
+  const w = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!w.length) return '?';
+  return ((w[0][0] || '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase();
+}
+
+// The one physical commitment on a card, said the way it matters: not the
+// date, but whether it has been missed.
+function shootLine(x) {
+  if (!x.shootAt) {
+    const key = P.stageKeyOf(stageById(x.stageId));
+    // Only nag about a missing shoot where one is actually the next step.
+    if (!['new_listing', 'details', 'shoot_scheduled'].includes(key)) return '';
+    return `<div class="tk-card-row muted">📸 No shoot booked</div>`;
+  }
+  const late = x.shootAt < Date.now();
+  const soon = !late && x.shootAt < Date.now() + DAY;
+  return `<div class="tk-card-row${late ? ' bad' : soon ? ' hot' : ''}">📸 ${esc(fmtDateTime(x.shootAt))}
+    <span class="tk-rel">${esc(relDays(x.shootAt))}</span>
+    ${x.shootAssignee ? `<span class="tk-who">· ${esc(x.shootAssignee)}</span>` : ''}
+    ${!x.ownerInformed ? '<span class="tk-blk sm" title="The owner has not been told we are coming">owner not told</span>' : ''}
+  </div>`;
+}
+
+// Media as progress rather than five ambiguous glyphs: how many of the things
+// this listing needs are done.
+function mediaBar(x) {
+  const m = x.media || {};
+  const done = MEDIA_KEYS.filter(([k]) => m[k]).length;
+  if (!done) return '';
+  const pct = Math.round(100 * done / MEDIA_KEYS.length);
+  return `<div class="tk-mbar" title="${MEDIA_KEYS.filter(([k]) => m[k]).map(k => k[1]).join(', ')}">
+    <span class="tk-mbar-t"><i style="width:${pct}%"></i></span>
+    <span class="tk-mbar-n">${done}/${MEDIA_KEYS.length} media</span>
+  </div>`;
+}
+
+// What is standing between this listing and the next stage. Stated on the
+// card because the whole point of a board is to see where the work is stuck
+// without opening anything.
+function blockersFor(x) {
+  const key = P.stageKeyOf(stageById(x.stageId));
+  const m = x.media || {};
+  const out = [];
+  if (['brochure_queued', 'brochure_ready', 'live'].includes(key) && !x.propertyCode) out.push('not in inventory');
+  if (key === 'shoot_done' && !x.photosLink) out.push('photos not uploaded');
+  if (['brochure_ready', 'live'].includes(key) && !x.ownerApproved) out.push('owner has not approved');
+  if (key === 'live' && !x.brochureLink) out.push('no brochure');
+  if (key === 'shoot_done' && !m.photos) out.push('photos not ticked');
+  return out;
 }
 
 // The media checklist as a row of ticks — what is needed vs what is done, in
@@ -583,11 +768,19 @@ function openDetail(id) {
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Owner</div>
-      ${lead ? `<div class="tk-kv"><span>From CRM lead</span><a href="crm.html?lead=${encodeURIComponent(lead.id)}">${esc(lead.name || lead.id)} →</a></div>` : ''}
       <div class="tk-kv"><span>Name</span><b>${esc(x.sellerName || '—')}</b></div>
-      <div class="tk-kv"><span>Phone</span>${x.sellerPhone ? `<a href="tel:${esc(String(x.sellerPhone).replace(/[^\d+]/g, ''))}">${esc(x.sellerPhone)}</a>` : '—'}</div>
-      ${!lead ? `<div class="tk-hint">Not linked to a CRM lead. <button class="tk-link" onclick="openLinkLead('${x.id}')">Link one</button></div>` : ''}
+      <div class="tk-kv"><span>Phone</span>${x.sellerPhone ? `<a href="tel:${esc(telOf(x.sellerPhone))}">${esc(x.sellerPhone)}</a>` : '—'}</div>
+      ${lead ? `<div class="tk-btnrow">
+          <button class="tk-btn" onclick="openSellerPreview('${x.id}')">Preview their CRM record</button>
+          <a class="tk-btn ghost" href="${esc(crmLeadHref(lead.id, x.id))}">Open in CRM →</a>
+        </div>`
+        : `<div class="tk-hint">Not linked to a CRM lead. <button class="tk-link" onclick="openLinkLead('${x.id}')">Link one</button></div>`}
     </div>
+
+    ${lead ? `<div class="tk-sec" id="dpConvo">
+      <div class="tk-sec-hdr">What the owner told us</div>
+      <div class="tk-hint">Reading the conversation…</div>
+    </div>` : ''}
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Inventory</div>
@@ -637,15 +830,168 @@ function openDetail(id) {
 
   document.getElementById('dp').classList.add('open');
   loadHistory(x.id);
+  if (lead) loadConversation(x.id, lead.id);
+  // A card opened from anywhere is addressable — copy the URL and it reopens.
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set('listing', x.id);
+    history.replaceState(null, '', u.pathname + u.search);
+  } catch (e) {}
 }
 window.openDetail = openDetail;
+
+// ═══════ WHAT THE OWNER TOLD US ═══════
+// TailorTalk's AI writes a profile of every conversation. For a seller that
+// profile IS the property brief — what they have, where, what they want for
+// it, what has already been discussed — and it was the one thing this board
+// could not show. Same field list and labels the CRM uses, so the two read
+// identically.
+const CONVO_FIELDS = [
+  ['requirement_details', 'What they have'],
+  ['preferred_location', 'Location'],
+  ['budget_and_finance', 'Price expectation'],
+  ['properties_discussed', 'Properties discussed'],
+  ['objections_and_blockers', 'Objections & blockers'],
+  ['activity_so_far', 'Activity so far'],
+  ['stage_and_next_action', 'Stage & next action'],
+  ['chat_summary', 'Conversation summary'],
+  ['remarks', 'Remarks']
+];
+const convoCache = new Map();
+function loadConversation(listingId, leadId) {
+  const paint = state => {
+    if (currentDetailId !== listingId) return;
+    const el = document.getElementById('dpConvo');
+    if (!el) return;
+    el.innerHTML = `<div class="tk-sec-hdr">What the owner told us</div>${convoHtml(leadId, state)}`;
+  };
+  if (convoCache.has(leadId)) return paint(convoCache.get(leadId));
+  if (!window.trackFirebase || !window.trackFirebase.getLeadConversation) return paint(null);
+  window.trackFirebase.getLeadConversation(leadId)
+    .then(state => { convoCache.set(leadId, state); paint(state); })
+    .catch(e => { console.error('conversation load failed:', e); convoCache.set(leadId, null); paint(null); });
+}
+function convoHtml(leadId, state) {
+  const lead = leadById(leadId);
+  const bits = [];
+  // The AI's one-line read of where this lead stands comes first — it is the
+  // fastest thing to act on.
+  if (lead && lead.ai && lead.ai.line) bits.push(`<div class="tk-ailine">🤖 ${esc(lead.ai.line)}</div>`);
+  const profile = (state && state.profile) || null;
+  if (profile) {
+    const cards = CONVO_FIELDS.filter(([k]) => profile[k])
+      .map(([k, label]) => `<div class="tk-kv col"><span>${esc(label)}</span><div>${esc(profile[k])}</div></div>`);
+    if (cards.length) bits.push(`<div class="tk-convo">${cards.join('')}</div>`);
+  }
+  // The last few messages, so a number can be called with the thread in mind.
+  const chat = (state && Array.isArray(state.chat)) ? state.chat.slice(-6) : [];
+  if (chat.length) {
+    bits.push(`<div class="tk-chat">${chat.map(m => `
+      <div class="tk-msg ${m.role === 'user' ? 'them' : 'us'}">
+        <span class="tk-msg-w">${m.role === 'user' ? esc((lead && lead.name) || 'Owner') : (m.role === 'human_agent' ? '3 PIN team' : '3 PIN AI')}</span>
+        <span class="tk-msg-t">${esc(String(m.content || '').slice(0, 300))}</span>
+      </div>`).join('')}</div>`);
+  }
+  if (lead && lead.lastNote && lead.lastNote.text) {
+    bits.push(`<div class="tk-kv col"><span>Latest team note</span><div>${esc(lead.lastNote.text)}</div></div>`);
+  }
+  if (!bits.length) return `<div class="tk-hint">Nothing recorded from a conversation yet — this owner was probably added by hand. Their CRM record is the place to add what they told you.</div>
+    <div class="tk-btnrow"><a class="tk-btn ghost" href="${esc(crmLeadHref(leadId, currentDetailId))}">Open in CRM →</a></div>`;
+  return bits.join('');
+}
+
+// ═══════ SELLER PREVIEW ═══════
+// Their CRM record without leaving the board: who they are, what the AI made
+// of them, what they said, and one click to the real thing. Closing it puts
+// you back exactly where you were, which is the whole point — checking a
+// detail should not cost your place.
+function openSellerPreview(listingId) {
+  const x = listings.find(l => l.id === listingId);
+  if (!x || !x.leadId) return;
+  const lead = leadById(x.leadId);
+  const el = document.getElementById('sellerPrev');
+  if (!el || !lead) return;
+  const stageName = lead.stageId || '—';
+  el.querySelector('.tk-prev-body').innerHTML = `
+    <div class="tk-prev-head">
+      <span class="tk-ava lg">${esc(initials(lead.name))}</span>
+      <div>
+        <div class="tk-prev-nm">${esc(lead.name || 'Unnamed lead')}</div>
+        <div class="tk-prev-sub">${[lead.enquiryType, lead.channel && channelName(lead.channel)].filter(Boolean).map(esc).join(' · ')}</div>
+      </div>
+    </div>
+    <div class="tk-prev-actions">
+      ${lead.phone ? `<a class="tk-btn primary" href="tel:${esc(telOf(lead.phone))}">Call ${esc(lead.phone)}</a>` : ''}
+      ${lead.phone ? `<a class="tk-btn" href="https://wa.me/${esc(telOf(lead.phone).replace(/^\+/, ''))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+    </div>
+    <div class="tk-kv"><span>Property / locality</span><b>${esc(lead.propertyInterest || '—')}</b></div>
+    <div class="tk-kv"><span>Budget</span>${esc(lead.budget || '—')}</div>
+    <div class="tk-kv"><span>Added</span>${esc(timeAgo(lead.createdAt))}</div>
+    ${lead.followUpAt ? `<div class="tk-kv"><span>Next follow-up</span>${esc(fmtDateTime(lead.followUpAt))}</div>` : ''}
+    <div id="prevConvo" class="tk-prev-convo"><div class="tk-hint">Reading the conversation…</div></div>
+    <div class="tk-btnrow">
+      <a class="tk-btn primary" href="${esc(crmLeadHref(lead.id, listingId))}">Open fully in CRM →</a>
+      <button class="tk-btn ghost" onclick="closeSellerPreview()">Close preview</button>
+    </div>`;
+  el.classList.add('open');
+  // Same cache the detail panel fills, so opening both costs one read.
+  const paint = state => {
+    const host = document.getElementById('prevConvo');
+    if (host) host.innerHTML = convoHtml(lead.id, state);
+  };
+  if (convoCache.has(lead.id)) paint(convoCache.get(lead.id));
+  else if (window.trackFirebase && window.trackFirebase.getLeadConversation) {
+    window.trackFirebase.getLeadConversation(lead.id)
+      .then(s => { convoCache.set(lead.id, s); paint(s); })
+      .catch(() => paint(null));
+  } else paint(null);
+}
+function closeSellerPreview() { document.getElementById('sellerPrev')?.classList.remove('open'); }
+window.openSellerPreview = openSellerPreview; window.closeSellerPreview = closeSellerPreview;
+
+const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website', meta: 'Meta' };
+const channelName = c => CHANNELS[c] || c;
+
+// A CRM link that opens THIS lead, and knows to offer a way back here.
+// crm.html reads ?lead= and ?from=track (see crm-assets/app.js).
+function crmLeadHref(leadId, listingId) {
+  let u = 'crm.html?lead=' + encodeURIComponent(leadId) + '&from=track';
+  if (listingId) u += '&listing=' + encodeURIComponent(listingId);
+  return u;
+}
 
 function linkRow(label, url) {
   return `<div class="tk-kv"><span>${esc(label)}</span>${url
     ? `<a href="${esc(url)}" target="_blank" rel="noopener">open →</a>` : '<i>not yet</i>'}</div>`;
 }
-function closeDetail() { document.getElementById('dp').classList.remove('open'); currentDetailId = null; }
+function closeDetail() {
+  document.getElementById('dp').classList.remove('open');
+  closeSellerPreview();
+  currentDetailId = null;
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete('listing');
+    history.replaceState(null, '', u.pathname + u.search);
+  } catch (e) {}
+}
 window.closeDetail = closeDetail;
+
+// Arriving from a CRM lead (or a copied link): open that card straight away.
+// The listings snapshot may not have landed yet, so this is retried until it
+// has, then gives up rather than looping forever.
+let pendingListing = null;
+try { pendingListing = new URLSearchParams(location.search).get('listing'); } catch (e) {}
+let pendingTries = 0;
+function openPendingListing() {
+  if (!pendingListing) return;
+  if (listings.some(l => l.id === pendingListing)) {
+    const id = pendingListing; pendingListing = null;
+    openDetail(id);
+  } else if (++pendingTries > 40) {
+    pendingListing = null;
+    toast('That listing no longer exists');
+  }
+}
 
 function loadHistory(id) {
   if (!window.trackFirebase) return;
@@ -964,7 +1310,8 @@ window.attemptLogin = attemptLogin; window.trackLogout = trackLogout;
 // Escape closes whatever is on top; overlay clicks close their own layer.
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  const open = ['mModal', 'shModal', 'mapModal', 'linkModal', 'rsModal'].find(id => {
+  // Innermost layer first, so Escape peels one thing at a time.
+  const open = ['mModal', 'shModal', 'mapModal', 'linkModal', 'rsModal', 'sellerPrev'].find(id => {
     const el = document.getElementById(id);
     return el && el.classList.contains('open');
   });

@@ -133,6 +133,7 @@ function refreshAll(){
   try{ updateStats(); } catch(e){ console.error('updateStats failed:', e); }
   try{ updateFollowupBadge(); } catch(e){ console.error('updateFollowupBadge failed:', e); }
   try{ checkFollowupNotify(false); } catch(e){ console.error('checkFollowupNotify failed:', e); }
+  try{ openPendingLead(); } catch(e){ console.error('openPendingLead failed:', e); }
 }
 
 // ═══════ INIT ═══════
@@ -3447,11 +3448,14 @@ function openDetail(id){
   if(!l) return;
   currentDetailId = id;
   document.getElementById('dpName').textContent = l.name;
-  document.getElementById('dpSub').textContent =
+  const sub =
     l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads'
     : l.source==='tailortalk' ? `Lead via TailorTalk${l.tt && l.tt.leadSource ? ' · '+ttSourceLabel(l.tt.leadSource) : ''}`
     : isTtLead(l) ? 'Manually added lead · linked to a TailorTalk conversation'
     : 'Manually added lead';
+  // A seller's lead carries its way over to the property card here, and back
+  // again if that is where we came from — the two consoles are one workflow.
+  document.getElementById('dpSub').innerHTML = escapeHtml(sub) + trackBackHtml(l);
   renderAiSummary(l);
 
   const waBtn = document.getElementById('dpWaBtn');
@@ -3644,6 +3648,43 @@ function clearPropertyFilter(){
   try{ const u = new URL(location.href); u.searchParams.delete('propertyId'); history.replaceState(null, '', u.pathname + u.search + u.hash); }catch(e){}
   renderLeadFilterBar();
   applyFilters();
+}
+
+// ── crm.html?lead=<id> — open one lead straight away ──
+// Arriving from the Property & Media board (&from=track&listing=<id>) also
+// shows a way back to the exact card you came from, because a link that
+// strands you somewhere is worse than no link. The lead may not have arrived
+// from Firestore yet, so this retries until the snapshot lands.
+let pendingLeadOpen = null, pendingLeadTries = 0;
+let cameFromTrack = null;   // { listingId } when we arrived from the board
+try{
+  const q = new URLSearchParams(location.search);
+  pendingLeadOpen = q.get('lead') || null;
+  if(q.get('from') === 'track') cameFromTrack = { listingId: q.get('listing') || null };
+}catch(e){}
+function openPendingLead(){
+  if(!pendingLeadOpen) return;
+  if(leads.some(l => l.id === pendingLeadOpen)){
+    const id = pendingLeadOpen; pendingLeadOpen = null;
+    openDetail(id);
+    // Keep ?lead= out of the URL once used, so a refresh does not fight the
+    // user's own navigation — same rule AppNav.takeNav() follows.
+    try{ const u = new URL(location.href); u.searchParams.delete('lead'); history.replaceState(null, '', u.pathname + u.search + u.hash); }catch(e){}
+  } else if(++pendingLeadTries > 40){
+    pendingLeadOpen = null;
+    showToast('That lead could not be found');
+  }
+}
+// The way back to the board, rendered into the lead panel's header.
+function trackBackHtml(l){
+  const listingId = (cameFromTrack && cameFromTrack.listingId) || l.listingId || null;
+  if(!listingId && !isSellerLead(l)) return '';
+  const href = listingId
+    ? 'propertytrack.html?listing=' + encodeURIComponent(listingId)
+    : 'propertytrack.html?nav=sellers';
+  const label = cameFromTrack ? '← Back to the property card'
+    : (listingId ? '🏷️ Open its property card' : '🏷️ Track this listing');
+  return `<a class="dp-track-link" href="${href}" title="Property &amp; Media Track">${label}</a>`;
 }
 
 // Fetch a lead's notes + history subcollections into the in-memory object and
