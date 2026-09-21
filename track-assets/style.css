@@ -345,3 +345,68 @@ body.agent-mode .tk-filterbar { display: none !important; }
 /* A missed shoot leads the header in red — being sent somewhere new while one
    is still outstanding is how a property quietly stalls for a fortnight. */
 .tk-next.missed .tk-next-lab { color: var(--red, #B91C1C); }
+
+/* ═══════ RESTRAINT PASS ═══════
+   The board had a colour on every chip, pill and dot. A colour on everything
+   is a colour on nothing: nothing could stand out because everything already
+   did. Colour now means one of three things and nothing else —
+     red    something is late or missed
+     amber  something is blocking the next step
+     brand  the one thing to do next
+   Stage identity keeps a 7px dot, which is enough to recognise a column by
+   without painting the whole interface. */
+
+/* Filter bar: one line, collapsed by default, plain chips. */
+.tk-filterbar { gap: 8px; padding-bottom: 10px; }
+.tk-filtoggle {
+  display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 12px; font-weight: 600;
+  padding: 6px 12px; border-radius: var(--r1); border: 1px solid var(--border);
+  background: var(--card); color: var(--ink2); cursor: pointer; flex-shrink: 0;
+}
+.tk-filtoggle.on { border-color: var(--ink2); color: var(--ink); }
+.tk-caret { font-size: 9px; color: var(--ink4); }
+.tk-chips { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; padding-bottom: 2px; }
+.tk-chips::-webkit-scrollbar { display: none; }
+
+/* Plain by default; the selected one is simply darker. No per-stage border. */
+.tk-chip {
+  border-color: var(--border); color: var(--ink3); background: var(--card);
+  gap: 5px; padding: 5px 10px; flex-shrink: 0;
+}
+.tk-chip.on { background: var(--ink); border-color: var(--ink); color: var(--card); }
+.tk-chip.on .tk-n { color: var(--card); opacity: .7; }
+.tk-chip.empty { opacity: .5; }
+.tk-chip.clear { border-style: dashed; color: var(--ink4); }
+.tk-cdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+
+/* Stage pills read as text with a dot, not as blocks of colour. The inline
+   background the renderers set is overridden deliberately — one rule here
+   beats editing six call sites, and it keeps the stage colour available for
+   the dot. */
+.tk-pill { background: var(--bg2) !important; color: var(--ink2) !important; font-weight: 600; }
+.tk-pill.ai { background: var(--brand-soft, var(--bg2)) !important; color: var(--brand) !important; }
+
+/* Column headers: the dot carries the stage, the text stays ink. */
+.tk-col-title { color: var(--ink); }
+
+@media (max-width: 760px) {
+  /* The whole top of the page was costing half a screen. */
+  .tk-filterbar { padding: 0 var(--pad, 14px) 9px; }
+  .tk-chips { display: none; }
+  .tk-chips.open { display: flex; }
+  .tk-filterbar { flex-wrap: wrap; }
+  .tk-filtoggle, .tk-sortbar { min-height: 36px; }
+  .srch-wrap { padding-bottom: 8px; }
+  #hdr .brand span { display: none; }      /* "Property & Media" wrapped to two lines */
+  .tk-board { padding-top: 2px; }
+  .tk-col { max-height: none; }
+}
+/* A mapped code is a quiet fact, not an alert. */
+.tk-code { background: transparent; border: 1px solid var(--border); color: var(--ink4); font-weight: 500; }
+.tk-code.none { background: var(--amber-bg, #FEF3C7); border-color: transparent; color: var(--amber, #B45309); }
+
+@media (max-width: 760px) {
+  /* The search box was a full row before a single listing. */
+  .srch-wrap input { min-height: 40px; font-size: 14px; }
+  .tk-col-rule { display: none; }   /* the stage names carry it on a phone */
+}

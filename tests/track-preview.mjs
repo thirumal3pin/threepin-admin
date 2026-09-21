@@ -45,7 +45,8 @@ const LISTINGS = [
   { id: 'l4', tenantId: T, title: 'Plot, Kelambakkam', propertyCode: '', sellerName: 'Anand',
     stageId: sid('shoot_scheduled'), shootAt: NOW - 4 * D, media: {},                            // missed shoot
     stageChangedAt: NOW - 6 * D, createdAt: NOW - 8 * D, updatedAt: NOW - 4 * D },
-  { id: 'l5', tenantId: T, title: 'Flat, Adyar', propertyCode: 'ADY001', stageId: sid('live'),
+  // Deliberately unmapped at a stage that cannot proceed without it.
+  { id: 'l5', tenantId: T, title: 'Flat, Adyar', propertyCode: '', stageId: sid('live'),
     media: { photos: true, video: true }, brochureLink: 'https://example.com/b.pdf',
     stageChangedAt: NOW - 3 * D, createdAt: NOW - 30 * D, updatedAt: NOW - 3 * D },
   { id: 'l6', tenantId: T, title: 'Old listing', stageId: sid('dropped'), dropReason: 'price_unrealistic',
@@ -68,10 +69,19 @@ const LEADS = [
     propertyInterest: 'Porur', listingSkipped: true, createdAt: NOW - 5 * D }
 ];
 
+// The live inventory is ~132 properties and the picker used to cap at 60, so
+// two thirds were invisible to anyone scrolling rather than searching. The
+// fixture is deliberately larger than that old cap, and includes the legacy
+// records that carry a numeric document id instead of a Property_ID.
 const INVENTORY = [
   { id: 'TNAG0002', propertyCode: 'TNAG0002', name: '2BHK Apartment T Nagar', location: 'T Nagar', config: '2 BHK', startingPrice: '₹2.25 Cr' },
   { id: 'VLCA002', propertyCode: 'VLCA002', name: 'Velachery 3BHK', location: 'Velachery', config: '3 BHK', startingPrice: '₹1.4 Cr' },
-  { id: 'NOL001', propertyCode: 'NOL001', name: '4BHK Individual house', location: 'Nolambur', config: '4 BHK', startingPrice: '₹3 Cr' }
+  { id: 'NOL001', propertyCode: 'NOL001', name: '4BHK Individual house', location: 'Nolambur', config: '4 BHK', startingPrice: '₹3 Cr' },
+  ...Array.from({ length: 70 }, (_, i) => ({
+    id: 'FILL' + String(i).padStart(3, '0'), propertyCode: 'FILL' + String(i).padStart(3, '0'),
+    name: 'Filler property ' + i, location: 'Chennai', config: '2 BHK', startingPrice: '₹1 Cr'
+  })),
+  { id: '7', propertyCode: '', name: 'Older listing with no Property_ID', location: 'Adyar' }
 ];
 
 const STUB = `
@@ -148,7 +158,18 @@ ok('Ten columns, in pipeline order', cols.length === 10 && cols[0] === 'New list
 ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 10);
 ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card-title'))[0] === 'Villa, Kottivakkam');
 ok('A listing past its stage target is marked late', (await page.$$('.tk-card.late')).length >= 1);
-ok('An unmapped listing says so', (await text(page, '.tk-code.none')).includes('unmapped'));
+// Unmapped is normal early on and only matters once a stage needs it, so the
+// chip is silent on a new listing and loud on one at the brochure stages.
+ok('An unmapped listing is not nagged about while that is normal',
+  await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.tk-card')].find(c => /Kottivakkam/.test(c.textContent));
+    return card && !/unmapped/.test(card.textContent);
+  }));
+ok('…but says so once the stage cannot proceed without it',
+  await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.tk-card')].find(c => /Flat, Adyar/.test(c.textContent));
+    return card && /unmapped/.test(card.textContent);
+  }));
 ok('A mapped listing shows its Property ID', (await text(page, '.tk-code')).includes('TNAG0002'));
 ok('A booked shoot shows on the card', (await text(page, '.tk-card-row')).some(t => t.includes('📸')));
 // The badge counts sellers still WAITING for a card. With the live sync
@@ -240,7 +261,14 @@ ok('…and switches back to the board', (await page.$$('.tk-col')).length === 10
 // ── Property mapping ──
 await page.evaluate(() => openMapProperty('l2'));
 await page.waitForTimeout(350);
-ok('The property picker lists the inventory', (await page.$$('.tk-pick')).length >= 3);
+// The bug this guards: a hard cap of 60 hid two thirds of a 132-property
+// inventory from anyone browsing instead of searching.
+const picks = (await page.$$('.tk-pick')).length;
+ok('The property picker lists the WHOLE inventory, not the first sixty',
+  picks >= INVENTORY.length, `${picks} shown of ${INVENTORY.length}`);
+ok('…saying how many there are', /propert(y|ies) in the inventory/.test((await text(page, '#mapList'))[0] || ''));
+ok('…and a legacy record with no Property_ID is still offered, by name',
+  /Older listing with no Property_ID/.test((await text(page, '#mapList'))[0] || ''));
 await page.fill('#mapSearch', 'NOL');
 await page.waitForTimeout(150);
 ok('…and filters as you type', (await page.$$('.tk-pick')).length === 1);

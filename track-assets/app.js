@@ -251,16 +251,41 @@ window.toggleStageFilter = toggleStageFilter;
 function clearStageFilter() { stageFilter = new Set(); renderFilterBar(); applyFilters(); }
 window.clearStageFilter = clearStageFilter;
 
+// Ten stages meant ten coloured pills wrapping over five rows on a phone —
+// half a screen of chrome before the first listing, and a rainbow that said
+// nothing, because a colour on every chip is a colour on none.
+//
+// Colour is now reserved for meaning: red is late, amber is blocked, and the
+// stage's own hue survives only as a small dot beside its name, which is
+// enough to recognise a column by. The chips themselves are plain, and the
+// selected one is simply darker. On a phone the row scrolls sideways instead
+// of wrapping, so the filter costs one line whatever the number of stages.
+//
+// The bar is also collapsed by default on a phone behind a single summary
+// button: most visits are to read the board, not to narrow it.
+let filtersOpen = false;
+function toggleFilters() { filtersOpen = !filtersOpen; renderFilterBar(); }
+window.toggleFilters = toggleFilters;
+
 function renderFilterBar() {
   const el = document.getElementById('tkFilterBar');
   if (!el) return;
   const chips = stages.map(s => {
-    const on = !stageFilter.size || stageFilter.has(s.id);
+    const on = stageFilter.has(s.id);
     const n = listings.filter(x => x.stageId === s.id).length;
-    return `<button type="button" class="tk-chip${on ? ' on' : ''}" style="--sc:${s.color}" onclick="toggleStageFilter('${s.id}')">${esc(s.name)}<span class="tk-n">${n}</span></button>`;
+    return `<button type="button" class="tk-chip${on ? ' on' : ''}${!n ? ' empty' : ''}" onclick="toggleStageFilter('${s.id}')">
+      <i class="tk-cdot" style="background:${s.color}"></i>${esc(s.name)}<span class="tk-n">${n}</span></button>`;
   }).join('');
-  const clear = stageFilter.size ? `<button type="button" class="tk-chip clear" onclick="clearStageFilter()">Show all</button>` : '';
-  el.innerHTML = chips + clear;
+  const label = stageFilter.size
+    ? `${stageFilter.size} stage${stageFilter.size === 1 ? '' : 's'}`
+    : 'All stages';
+  el.innerHTML = `
+    <button type="button" class="tk-filtoggle${stageFilter.size ? ' on' : ''}" onclick="toggleFilters()"
+      aria-expanded="${filtersOpen}">${esc(label)}<span class="tk-caret">${filtersOpen ? '▴' : '▾'}</span></button>
+    <div class="tk-chips${filtersOpen ? ' open' : ''}">
+      ${chips}
+      ${stageFilter.size ? `<button type="button" class="tk-chip clear" onclick="clearStageFilter()">Clear</button>` : ''}
+    </div>`;
 }
 
 function updateSellerBadge() {
@@ -366,7 +391,7 @@ function listRowHtml(x) {
     <span role="cell">
       <b>${esc(x.title || 'Untitled')}</b>
       <span class="tk-sub2">${[x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ') || '—'}</span>
-      ${x.propertyCode ? `<span class="tk-code">${esc(x.propertyCode)}</span>` : '<span class="tk-code none">unmapped</span>'}
+      ${codeChip(x)}
     </span>
     <span role="cell">
       ${st ? `<span class="tk-pill" style="background:${st.color}22;color:${st.color}">${esc(st.name)}</span>` : '—'}
@@ -416,8 +441,7 @@ function cardHtml(x) {
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="tk-card-top">
       <span class="tk-card-title">${esc(x.title || x.propertyCode || 'Untitled listing')}</span>
-      ${x.propertyCode ? `<span class="tk-code" title="Mapped to inventory ${esc(x.propertyCode)}">${esc(x.propertyCode)}</span>`
-        : `<span class="tk-code none" title="Not in the inventory yet — it cannot reach the website until it is">unmapped</span>`}
+      ${codeChip(x)}
     </div>
     ${(x.location || x.config || x.askingPrice) ? `<div class="tk-card-sub">${
       [x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
@@ -441,6 +465,25 @@ function cardHtml(x) {
       <span class="tk-upd">${esc(timeAgo(x.updatedAt))}</span>
     </div>
   </div>`;
+}
+
+// Being unmapped is NORMAL for a listing nobody has worked yet — it is how
+// every one of them starts. Shouting it in amber on all twenty-four made the
+// amber worthless and the board look like a wall of problems. It is silent
+// until the stage actually needs the mapping, and blockersFor() says so then.
+// A purely numeric "code" is a legacy Firestore document id, not a
+// Property_ID — the same rule propertyCodeOf() applies in crm-assets/app.js.
+// Showing "10" in a code chip tells nobody anything.
+const realCode = c => !!String(c || '').trim() && !/^\d+$/.test(String(c).trim());
+
+function codeChip(x) {
+  if (realCode(x.propertyCode)) return `<span class="tk-code" title="Inventory ${esc(x.propertyCode)}">${esc(x.propertyCode)}</span>`;
+  if (x.propertyCode) return `<span class="tk-code" title="Mapped to an older inventory record">mapped</span>`;
+  const key = P.stageKeyOf(stageById(x.stageId));
+  const needsIt = ['brochure_queued', 'brochure_ready', 'live'].includes(key);
+  return needsIt
+    ? `<span class="tk-code none" title="This stage cannot proceed without an inventory mapping">unmapped</span>`
+    : '';
 }
 
 const telOf = p => String(p || '').replace(/[^\d+]/g, '');
@@ -1424,18 +1467,33 @@ function saveShoot() {
 window.openShootModal = openShootModal; window.closeShootModal = closeShootModal; window.saveShoot = saveShoot;
 
 // ═══════ PROPERTY MAPPING ═══════
-function loadInventory() {
-  if (inventory) return Promise.resolve(inventory);
-  if (!window.trackFirebase) return Promise.resolve([]);
-  return window.trackFirebase.getInventory().then(list => { inventory = list; return list; });
+// The inventory is the same `properties` collection the Property
+// Intelligence dashboard reads — but it was fetched once per page load and
+// then cached for ever, so a property added by a sheet sync was invisible
+// here until someone reloaded. The picker is opened by a deliberate act, so
+// it re-reads then, with a short window only to stop a double fetch when the
+// dialog is reopened immediately.
+const INVENTORY_TTL = 60000;
+let inventoryAt = 0;
+function loadInventory(force) {
+  const fresh = inventory && (Date.now() - inventoryAt < INVENTORY_TTL);
+  if (fresh && !force) return Promise.resolve(inventory);
+  if (!window.trackFirebase) return Promise.resolve(inventory || []);
+  return window.trackFirebase.getInventory()
+    .then(list => { inventory = list; inventoryAt = Date.now(); return list; })
+    // A failed refresh must not empty a picker that already had something in
+    // it — better slightly stale than suddenly blank.
+    .catch(e => { console.error('inventory read failed:', e); return inventory || []; });
 }
 let mapFor = null;
 function openMapProperty(id) {
   mapFor = id;
   document.getElementById('mapSearch').value = '';
-  document.getElementById('mapList').innerHTML = '<div class="tk-hint">Loading the inventory…</div>';
+  // Show whatever is cached immediately, then refresh — a picker that is
+  // blank for a second is a picker people learn to distrust.
   document.getElementById('mapModal').classList.add('open');
-  loadInventory().then(() => renderMapList('')).catch(e => {
+  if (inventory) renderMapList(''); else document.getElementById('mapList').innerHTML = '<div class="tk-hint">Reading the inventory…</div>';
+  loadInventory().then(() => renderMapList(document.getElementById('mapSearch').value || '')).catch(e => {
     document.getElementById('mapList').innerHTML = '<div class="tk-hint bad">Could not read the inventory.</div>';
     console.error(e);
   });
@@ -1444,15 +1502,31 @@ function renderMapList(q) {
   const el = document.getElementById('mapList');
   if (!el) return;
   const needle = String(q || '').toLowerCase();
-  const list = (inventory || []).filter(p => !needle
-    || [p.propertyCode, p.name, p.location, p.config].join(' ').toLowerCase().includes(needle)).slice(0, 60);
+  const all = (inventory || []).filter(p => !needle
+    || [p.propertyCode, p.name, p.location, p.config].join(' ').toLowerCase().includes(needle));
+  // A hard cap of 60 silently hid two thirds of a 131-property inventory from
+  // anyone scrolling rather than searching. The list is capped only to keep
+  // the DOM sane, and it now SAYS when it is truncated instead of pretending
+  // the rest do not exist.
+  const CAP = 200;
+  // Real codes first and alphabetical — 48 of the 132 properties predate the
+  // Property_ID scheme and fall back to a numeric document id, which sorts
+  // meaninglessly and reads as noise beside "TNAG0002".
+  all.sort((a, b) => {
+    const ra = realCode(a.propertyCode), rb = realCode(b.propertyCode);
+    if (ra !== rb) return ra ? -1 : 1;
+    return String(ra ? a.propertyCode : a.name || '').localeCompare(String(rb ? b.propertyCode : b.name || ''));
+  });
+  const list = all.slice(0, CAP);
   const x = listings.find(l => l.id === mapFor);
   el.innerHTML = (x && x.propertyCode ? `<button type="button" class="tk-pick clear" onclick="pickProperty('')">✕ Unmap from ${esc(x.propertyCode)}</button>` : '')
     + (list.length ? list.map(p => `<button type="button" class="tk-pick" onclick="pickProperty('${esc(p.propertyCode)}')">
-        <span class="tk-code">${esc(p.propertyCode)}</span>
-        <span class="tk-pick-main"><b>${esc(p.name || '—')}</b><span>${esc([p.location, p.config, p.startingPrice].filter(Boolean).join(' · '))}</span></span>
+        ${realCode(p.propertyCode) ? `<span class="tk-code">${esc(p.propertyCode)}</span>` : ''}
+        <span class="tk-pick-main"><b>${esc(p.name || p.propertyCode || '—')}</b><span>${esc([p.location, p.config, p.startingPrice].filter(Boolean).join(' · ')) || '<i>older listing</i>'}</span></span>
         ${p.soldOut ? '<span class="tk-pill muted">sold</span>' : ''}
-      </button>`).join('') : '<div class="tk-hint">Nothing matches.</div>');
+      </button>`).join('') : '<div class="tk-hint">Nothing matches.</div>')
+    + (all.length > CAP ? `<div class="tk-hint">Showing ${CAP} of ${all.length} — type to narrow it down.</div>` : '')
+    + (all.length && !needle ? `<div class="tk-hint">${all.length} propert${all.length === 1 ? 'y' : 'ies'} in the inventory.</div>` : '');
 }
 window.onMapSearch = v => renderMapList(v);
 function pickProperty(code) {
