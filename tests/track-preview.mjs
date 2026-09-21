@@ -114,9 +114,10 @@ const browser = await chromium.launch();
 const errors = [];
 const ok = (label, cond, detail) => { if (cond) console.log('  ok  ' + label); else errors.push(label + (detail !== undefined ? ' — ' + detail : '')); };
 
-async function open(viewport) {
+async function open(viewport, seedStorage) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
   await ctx.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
+  if (seedStorage) await ctx.addInitScript(seedStorage);
   const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(`${viewport.width}px: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push(`${viewport.width}px console: ${m.text()}`); });
@@ -362,6 +363,38 @@ await page.evaluate(() => unskipSeller('sd4'));
 await page.waitForTimeout(200);
 ok('"Track again" clears the set-aside flag',
   await page.evaluate(() => window.__leadPatches.some(p => p.id === 'sd4' && p.patch.listingSkipped === false)));
+
+// ── The shoot agent's own phone ──
+// Saying "this is me" has to change what the app IS for them: their day, not
+// a ten-column board, and the next address reachable without reading a list.
+await page.evaluate(() => { toggleView('shoots'); setAgentFilter('Ravi'); });
+await page.waitForTimeout(250);
+await page.evaluate(() => setMyAgent('Ravi'));
+await page.waitForTimeout(350);
+ok('Saying "this is me" puts the agent on their own day',
+  await page.$eval('#shootsView', e => e.style.display !== 'none'));
+const day = (await text(page, '.tk-day'))[0] || '';
+ok('The day opens with what is next, not a board', /Next up/.test(day), day.slice(0, 200));
+ok('…naming the property and its address', /Kottivakkam|Nungambakkam/.test(day), day.slice(0, 220));
+const dayActs = await page.$$eval('.tk-next-acts a, .tk-next-acts button', els => els.map(e => e.textContent.trim()));
+ok('…with Call, Directions and Done as the only three things to do',
+  dayActs.length === 3 && /Call/.test(dayActs[0]), JSON.stringify(dayActs));
+ok('The stage chips and board switch are out of the way in agent mode',
+  await page.evaluate(() => document.body.classList.contains('agent-mode')));
+await shot('agent-day');
+
+// A shoot phone reopens on the day, not the board.
+const agentPage = await open({ width: 390, height: 844 }, () => {
+  try { localStorage.setItem('track.me', 'Ravi'); localStorage.setItem('track.agent', 'Ravi'); } catch (e) {}
+});
+await agentPage.waitForTimeout(400);
+ok('Reopening a shoot phone lands on the day, never the board',
+  await agentPage.$eval('#shootsView', e => e.style.display !== 'none')
+  && await agentPage.$eval('#boardView', e => e.style.display === 'none'));
+const tap = await agentPage.$$eval('.tk-next-acts .tk-btn', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
+ok('…with thumb-sized actions', tap.length && tap.every(h => h >= 44), JSON.stringify(tap));
+ok('…and no sideways scroll', !(await agentPage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
+await agentPage.screenshot({ path: `${OUT}/phone-agent-day.png`, fullPage: true });
 
 // ── Phone ──
 const phone = await open({ width: 390, height: 844 });

@@ -224,8 +224,12 @@ function toggleView(view) {
     const el = document.getElementById(v + 'View');
     if (el) el.style.display = v === currentView ? '' : 'none';
   });
+  // Stage chips and the board/list switch only mean anything on the board.
   const bar = document.querySelector('.tk-filterbar');
   if (bar) bar.style.display = currentView === 'board' ? '' : 'none';
+  // On a shoot phone the search box is chrome in the way of the day.
+  const srch = document.querySelector('.srch-wrap');
+  if (srch) srch.style.display = (myAgent && currentView === 'shoots') ? 'none' : '';
   if (window.AppNav) window.AppNav.setActive(currentView);
   applyFilters();
 }
@@ -655,16 +659,36 @@ function addHistory(x, type, text) {
 // ═══════ SHOOTS VIEW ═══════
 // Every booked shoot in date order — missed ones first, because a shoot that
 // did not happen is the thing that stalls everything downstream.
-// Whose day to show. A handler wants everyone; an agent wants only their own
-// name, and that choice sticks on their device.
-let agentFilter = '';
-try { agentFilter = localStorage.getItem('track.agent') || ''; } catch (e) {}
+// ═══════ WHOSE PHONE IS THIS ═══════
+// A shoot agent and a handler want opposite things from the same data. The
+// handler plans everyone's week and lives on the board. The agent is on a
+// scooter with three properties to reach and wants one question answered:
+// where am I going next.
+//
+// Saying "this is me" once flips the whole page for them — they land on their
+// own day instead of a ten-column board they have no use for, the board and
+// list chrome goes away, and the run sheet becomes the point of the app. It
+// is a device-level choice, not an account one, because the shoot phone is
+// the shoot phone.
+let myAgent = '';
+try { myAgent = localStorage.getItem('track.me') || ''; } catch (e) {}
+let agentFilter = myAgent;
+try { if (!myAgent) agentFilter = localStorage.getItem('track.agent') || ''; } catch (e) {}
+
 function setAgentFilter(v) {
   agentFilter = v || '';
   try { localStorage.setItem('track.agent', agentFilter); } catch (e) {}
   renderShoots();
 }
-window.setAgentFilter = setAgentFilter;
+function setMyAgent(v) {
+  myAgent = v || '';
+  agentFilter = myAgent;
+  try { localStorage.setItem('track.me', myAgent); localStorage.setItem('track.agent', myAgent); } catch (e) {}
+  document.body.classList.toggle('agent-mode', !!myAgent);
+  if (myAgent) toggleView('shoots'); else renderShoots();
+  toast(myAgent ? `Your day, ${myAgent}` : 'Back to the full board');
+}
+window.setAgentFilter = setAgentFilter; window.setMyAgent = setMyAgent;
 
 function renderShoots() {
   const el = document.getElementById('shootsView');
@@ -688,10 +712,15 @@ function renderShoots() {
   const notReady = withShoot.filter(x => x.shootAt > now && (!x.address || !(x.siteContact || x.sellerPhone) || !x.ownerInformed));
 
   el.innerHTML = `
+    ${dayHeaderHtml(groups[1][1], groups[0][1], groups[2][1])}
+
     ${agents.length ? `<div class="tk-agentbar">
       <span class="tk-lab">Whose day</span>
       <button type="button" class="tk-sbtn${!agentFilter ? ' on' : ''}" onclick="setAgentFilter('')">Everyone</button>
       ${agents.map(a => `<button type="button" class="tk-sbtn${agentFilter === a ? ' on' : ''}" onclick="setAgentFilter('${esc(a).replace(/'/g, "\\'")}')">${esc(a)}</button>`).join('')}
+      ${myAgent
+        ? `<button type="button" class="tk-link" onclick="setMyAgent('')">not ${esc(myAgent)}?</button>`
+        : (agentFilter ? `<button type="button" class="tk-link" onclick="setMyAgent('${esc(agentFilter).replace(/'/g, "\\'")}')">this is me — open here every time</button>` : '')}
     </div>` : ''}
 
     ${notReady.length ? `<div class="tk-note bad">
@@ -712,6 +741,48 @@ function renderShoots() {
     ${!withShoot.length && !noShoot.length ? `<div class="tk-empty"><div class="tk-empty-i">📸</div><div class="tk-empty-t">${agentFilter ? 'Nothing for ' + esc(agentFilter) : 'No shoots to plan'}</div><div class="tk-empty-s">Book one from any listing on the board.</div></div>` : ''}`;
 }
 function endOfToday() { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); }
+
+// The top of the run sheet answers the only question an agent has on the
+// move: where am I going next, and how do I get there — as two taps, before
+// any list. Everything else on this page is for planning; this is for doing.
+function dayHeaderHtml(today, missed, upcoming) {
+  const doneToday = today.filter(x => x.shootDoneAt).length;
+  const who = agentFilter ? esc(agentFilter) : 'the team';
+  // "Next up" is the next thing still to do, wherever it falls. Checking the
+  // phone at nine at night must not show an empty header just because
+  // midnight has passed — tomorrow's first job is the answer to the question
+  // being asked. Missed work outranks it: an agent should see the one they
+  // did not get to before being sent somewhere new.
+  const next = missed.find(x => !x.shootDoneAt)
+    || today.find(x => !x.shootDoneAt)
+    || (upcoming || []).find(x => !x.shootDoneAt)
+    || null;
+  if (!today.length && !missed.length && !next) return '';
+  const contact = next && (next.siteContact || next.sellerPhone);
+  const map = next && mapHref(next);
+  const sameDay = next && new Date(next.shootAt).toDateString() === new Date().toDateString();
+  const isMissed = next && next.shootAt < Date.now();
+  const when = next
+    ? (sameDay ? new Date(next.shootAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+               : fmtDateTime(next.shootAt))
+    : '';
+  return `<div class="tk-day">
+    <div class="tk-day-top">
+      <span class="tk-day-t">${today.length ? `${today.length} shoot${today.length === 1 ? '' : 's'} today` : 'Nothing booked today'}${doneToday ? ` · ${doneToday} done` : ''}</span>
+      <span class="tk-day-s">${myAgent ? esc(myAgent) : who}${missed.length ? ` · <b class="bad">${missed.length} missed</b>` : ''}</span>
+    </div>
+    ${next ? `<div class="tk-next${isMissed ? ' missed' : ''}">
+      <div class="tk-next-lab">${isMissed ? 'Missed · ' : 'Next up · '}${esc(when)}</div>
+      <div class="tk-next-nm">${esc(next.title || next.propertyCode || 'Untitled')}</div>
+      <div class="tk-next-ad">${next.address ? esc(next.address) : '<span class="tk-miss">No address on this one</span>'}</div>
+      <div class="tk-next-acts">
+        ${contact ? `<a class="tk-btn primary big" href="tel:${esc(telOf(contact))}">📞 Call</a>` : ''}
+        ${map ? `<a class="tk-btn big" href="${esc(map)}" target="_blank" rel="noopener">🧭 Directions</a>` : ''}
+        <button type="button" class="tk-btn big" onclick="openWrapModal('${next.id}')">✓ Done</button>
+      </div>
+    </div>` : (today.length ? '<div class="tk-day-done">Everything booked for today is done.</div>' : '')}
+  </div>`;
+}
 
 // A run sheet row: everything needed to actually turn up, with the address
 // and the two taps that matter (call whoever opens it, open the map) big
@@ -1543,7 +1614,12 @@ window.onTrackAuthChange = function (user, tenantId) {
         '<div class="tk-note bad"><b>This account has no tenant yet.</b><br>Ask whoever set up your login to finish onboarding.</div>';
       return;
     }
-    if (!trackInited) { trackInited = true; toggleView('board'); }
+    if (!trackInited) {
+      trackInited = true;
+      // A shoot phone opens on its own day. Everyone else gets the board.
+      document.body.classList.toggle('agent-mode', !!myAgent);
+      toggleView(myAgent ? 'shoots' : 'board');
+    }
   } else {
     currentUserEmail = null;
     root.style.display = 'none';

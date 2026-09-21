@@ -311,3 +311,37 @@
   .tk-brief-hd, .tk-brief-r { grid-template-columns: 1fr 64px 52px; }
 }
 .tk-linkcell { display: inline-flex; align-items: center; gap: 9px; }
+
+/* ═══════ THE SHOOT PHONE ═══════
+   An agent reads this one-handed, in sunlight, between properties. The top of
+   the run sheet is the whole app for them: where next, and the two taps that
+   get them there. Sized for a thumb, not a mouse. */
+.tk-day { background: var(--card); border: 1px solid var(--border); border-radius: var(--r2); padding: 14px 16px; margin-bottom: 4px; }
+.tk-day-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tk-day-t { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+.tk-day-s { font-size: 12px; color: var(--ink4); }
+.tk-day-s .bad { color: var(--red, #B91C1C); }
+.tk-day-done { margin-top: 10px; font-size: 13px; color: var(--green, #15803D); font-weight: 600; }
+
+.tk-next { margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--border); }
+.tk-next-lab { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--brand); }
+.tk-next-nm { font-size: 19px; font-weight: 700; letter-spacing: -.02em; margin-top: 3px; }
+.tk-next-ad { font-size: 13.5px; color: var(--ink2); line-height: 1.45; margin-top: 3px; }
+.tk-next-acts { display: flex; gap: 8px; margin-top: 13px; flex-wrap: wrap; }
+.tk-btn.big { min-height: 46px; font-size: 14px; padding: 0 18px; flex: 1; justify-content: center; min-width: 116px; }
+
+/* Agent mode: the board, the list and the stage chips are somebody else's
+   job. What is left is the day. */
+body.agent-mode .tk-filterbar { display: none !important; }
+
+@media (max-width: 760px) {
+  .tk-day { padding: 15px 15px 17px; }
+  .tk-next-nm { font-size: 21px; }
+  .tk-next-ad { font-size: 15px; }
+  .tk-next-acts .tk-btn.big { min-height: 52px; font-size: 15px; flex-basis: 100%; }
+  .tk-agentbar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .tk-agentbar .tk-sbtn { white-space: nowrap; min-height: 38px; }
+}
+/* A missed shoot leads the header in red — being sent somewhere new while one
+   is still outstanding is how a property quietly stalls for a fortnight. */
+.tk-next.missed .tk-next-lab { color: var(--red, #B91C1C); }
