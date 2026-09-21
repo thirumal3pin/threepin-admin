@@ -89,6 +89,19 @@ window.trackFirebase = {
     await deleteDoc(doc(db, 'listings', id));
   },
 
+  // The ONLY write this page makes to a lead, and deliberately a narrow one:
+  // the link back to its listing, the property code once mapped, and the
+  // skip tombstone. Everything else on a lead belongs to the CRM. Whitelisted
+  // by field name so a future bug here cannot reach the rest of the document.
+  async patchLead(leadId, patch){
+    if(!currentTenantId) throw new Error('No tenant');
+    const allowed = ['listingId', 'propertyCodes', 'listingSkipped'];
+    const safe = {};
+    for(const k of allowed) if(k in patch) safe[k] = patch[k];
+    if(!Object.keys(safe).length) return;
+    await setDoc(doc(db, 'leads', leadId), safe, { merge: true });
+  },
+
   async savePipeline(stages){
     if(!currentTenantId) throw new Error('No tenant');
     await setDoc(pipelineRef(currentTenantId), { stages });

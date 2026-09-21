@@ -59,7 +59,10 @@ const LEADS = [
     propertyInterest: 'T Nagar', createdAt: NOW - D,
     ai: { intent: 'rent_out', line: 'Owner wants to give out her flat on rent' } },   // AI-only seller
   { id: 'b1', tenantId: T, name: 'Karthik (buyer)', phone: '9840055555', enquiryType: 'Property Enquiry',
-    propertyInterest: 'Velachery', createdAt: NOW - 3 * D }
+    propertyInterest: 'Velachery', createdAt: NOW - 3 * D },
+  // Deliberately set aside — must never be given a card by the reconcile.
+  { id: 'sd4', tenantId: T, name: 'Ravi (set aside)', phone: '9840066666', enquiryType: 'Seller Listing',
+    propertyInterest: 'Porur', listingSkipped: true, createdAt: NOW - 5 * D }
 ];
 
 const INVENTORY = [
@@ -69,11 +72,12 @@ const INVENTORY = [
 ];
 
 const STUB = `
-window.__saved = []; window.__deleted = []; window.__history = [];
+window.__saved = []; window.__deleted = []; window.__history = []; window.__leadPatches = [];
 window.trackFirebase = {
   saveListing: async l => { window.__saved.push(JSON.parse(JSON.stringify(l))); },
   deleteListing: async id => { window.__deleted.push(id); },
   savePipeline: async () => {},
+  patchLead: async (id, patch) => { window.__leadPatches.push({ id, patch }); },
   getInventory: async () => ${JSON.stringify(INVENTORY)},
   getListingHistory: async () => window.__history.slice().reverse(),
   saveHistory: async (id, e) => { window.__history.push({ ...e, listingId: id }); }
@@ -129,8 +133,12 @@ ok('A listing past its stage target is marked late', (await page.$$('.tk-card.la
 ok('An unmapped listing says so', (await text(page, '.tk-code.none')).includes('unmapped'));
 ok('A mapped listing shows its Property ID', (await text(page, '.tk-code')).includes('TNAG0002'));
 ok('A booked shoot shows on the card', (await text(page, '.tk-card-row')).some(t => t.includes('📸')));
-ok('Sellers-to-list badge counts the gap, not every seller',
-  (await text(page, '.rl-badge')).includes('2'), JSON.stringify(await text(page, '.rl-badge')));
+// The badge counts sellers still WAITING for a card. With the live sync
+// running that should settle at zero, and a zero badge renders nothing — so a
+// badge appearing here means the sync has stopped keeping up, which is
+// exactly what it is now for.
+ok('The sellers badge settles at nothing once the sync has caught up',
+  !(await text(page, '.rl-badge')).length, JSON.stringify(await text(page, '.rl-badge')));
 await shot('board');
 
 // ── Stage move ──
@@ -205,25 +213,36 @@ ok('The shoots view separates missed from upcoming', /Missed/.test(shoots) && /C
 ok('…and flags an owner who has not been told', /owner not informed/.test(shoots));
 await shot('shoots');
 
-// ── Sellers view ──
+// ── Live seller sync ──
+// The two untracked sellers (Gopal, and Priya whom only the AI read as an
+// owner) must have been given cards automatically by the reconcile, without
+// anyone pressing anything.
+const autoMade = await page.evaluate(() => window.__saved.filter(s => s.source === 'seller-sync'));
+ok('Untracked sellers get a card automatically', autoMade.length === 2, JSON.stringify(autoMade.map(s => s.sellerName)));
+ok('…carrying the owner\'s details across',
+  autoMade.some(s => s.sellerName === 'Gopal' && s.sellerPhone === '9840033333' && s.askingPrice === '85 L'),
+  JSON.stringify(autoMade.map(s => [s.sellerName, s.sellerPhone, s.askingPrice])));
+ok('…including one only the AI read as an owner', autoMade.some(s => s.sellerName === 'Priya'));
+ok('…and never a buyer', !autoMade.some(s => /Karthik/.test(s.sellerName || '')));
+ok('…and never one deliberately set aside', !autoMade.some(s => /Ravi/.test(s.sellerName || '')));
+ok('Each new card is linked back on its lead',
+  (await page.evaluate(() => window.__leadPatches.filter(p => p.patch.listingId).length)) >= 2);
+
+// ── Sellers view is now a status view ──
 await page.evaluate(() => toggleView('sellers'));
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 const sellers = (await text(page, '#sellersView'))[0];
-ok('Sellers with no listing are listed', /Gopal/.test(sellers) && /Priya/.test(sellers), sellers.slice(0, 200));
-ok('…including one only the AI read as an owner', /renting out/.test(sellers));
-ok('…and a seller already on the board is not repeated', !/Meenakshi/.test(sellers));
-ok('…and a buyer is never listed', !/Karthik/.test(sellers));
+ok('It reports how many sellers are tracked', /of \d+ seller/.test(sellers), sellers.slice(0, 140));
+ok('…nothing is left waiting once the sync has run', !/Waiting to be added/.test(sellers), sellers.slice(0, 220));
+ok('…and a seller set aside is shown as such, not silently gone',
+  /Set aside/.test(sellers) && /Ravi/.test(sellers), sellers.slice(0, 260));
 await shot('sellers');
 
-// Creating a listing from a seller lead.
-await page.evaluate(() => createFromLead('sd2'));
-await page.waitForTimeout(250);
-const created = await page.evaluate(() => window.__saved.filter(s => s.leadId === 'sd2').pop());
-ok('Creating a listing from a seller carries their details over',
-  !!created && created.sellerName === 'Gopal' && created.sellerPhone === '9840033333' && created.askingPrice === '85 L');
-await page.evaluate(() => { closeDetail(); toggleView('sellers'); });
-await page.waitForTimeout(250);
-ok('…and they leave the list once tracked', !/Gopal/.test((await text(page, '#sellersView'))[0]));
+// Putting one back must be one click, and must clear the tombstone.
+await page.evaluate(() => unskipSeller('sd4'));
+await page.waitForTimeout(200);
+ok('"Track again" clears the set-aside flag',
+  await page.evaluate(() => window.__leadPatches.some(p => p.id === 'sd4' && p.patch.listingSkipped === false)));
 
 // ── Phone ──
 const phone = await open({ width: 390, height: 844 });

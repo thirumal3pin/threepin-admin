@@ -25,6 +25,7 @@
 // board, they are on that list.
 
 import * as P from './track-pipeline.js';
+import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -49,6 +50,7 @@ const DAY = 86400000;
 // CRM's applyLeadsSnapshot / applyPipelineSnapshot.
 window.applyListingsSnapshot = function (list) {
   listings = Array.isArray(list) ? list : [];
+  seenListings = true;
   refreshAll();
 };
 window.applyTrackPipelineSnapshot = function (list) {
@@ -57,13 +59,64 @@ window.applyTrackPipelineSnapshot = function (list) {
 };
 window.applyTrackLeadsSnapshot = function (list) {
   leads = Array.isArray(list) ? list : [];
+  seenLeads = true;
   refreshAll();
 };
 
 function refreshAll() {
+  try { reconcileSellers(); } catch (e) { console.error('seller sync:', e); }
   try { applyFilters(); } catch (e) { console.error(e); }
   try { renderFilterBar(); } catch (e) { console.error(e); }
   try { updateSellerBadge(); } catch (e) { console.error(e); }
+}
+
+// ═══════ LIVE SELLER SYNC ═══════
+// Both collections are watched, so any change on either side lands here within
+// a second and is reconciled by the shared rules in seller-sync.js — a seller
+// added in the CRM gets a card, a corrected phone number follows onto it, a
+// property mapped here is linked back on the lead.
+//
+// Deliberately client-side: this app has no server process, and the two
+// snapshot listeners are already open. The cost is that it only runs while
+// someone has the board open, which is why scripts/sync-seller-listings.mjs
+// exists to do the identical reconcile server-side, on demand or on a
+// schedule. Both call planSync(), so they cannot disagree.
+//
+// autoCreate is off until the first snapshot of BOTH collections has arrived:
+// reconciling against a half-loaded listings array would create duplicates for
+// every seller whose card simply had not downloaded yet.
+let seenListings = false, seenLeads = false;
+let syncing = false;
+function reconcileSellers() {
+  if (!seenListings || !seenLeads || syncing) return;
+  if (!stages.length || !window.trackFirebase) return;
+  const plan = planSync(leads, listings, stages[0], Date.now(), currentUserEmail || 'sync');
+  if (!plan.create.length && !plan.updateListings.length && !plan.updateLeads.length) return;
+
+  syncing = true;   // a write triggers a snapshot, which re-enters here; one pass at a time
+  const done = () => { syncing = false; };
+  const jobs = [];
+
+  for (const { lead, listing } of plan.create) {
+    listings.push(listing);
+    jobs.push(window.trackFirebase.saveListing(listing));
+    addHistory(listing, 'created', `Created automatically from the CRM seller lead <b>${esc(lead.name || lead.id)}</b>`);
+  }
+  for (const { id, patch } of plan.updateListings) {
+    const x = listings.find(l => l.id === id);
+    if (!x) continue;
+    Object.assign(x, patch, { updatedAt: Date.now() });
+    jobs.push(window.trackFirebase.saveListing(x));
+  }
+  for (const { id, patch } of plan.updateLeads) {
+    jobs.push(window.trackFirebase.patchLead(id, patch));
+  }
+  Promise.allSettled(jobs).then(results => {
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length) console.error('seller sync: ' + failed.length + ' write(s) failed', failed[0].reason);
+    else if (plan.create.length) toast(`${plan.create.length} seller${plan.create.length === 1 ? '' : 's'} added to the board`);
+    done();
+  });
 }
 
 // ═══════ HELPERS ═══════
@@ -106,16 +159,18 @@ function relDays(ts) {
 // enquiry type a person or TailorTalk set, OR the per-lead AI's read of the
 // whole conversation. Either is enough — a seller missed here is revenue lost,
 // so this errs toward including.
-function isSellerLead(l) {
-  const t = String(l.enquiryType || '').trim().toLowerCase();
-  return t === 'seller listing' || !!(l.ai && (l.ai.intent === 'sell' || l.ai.intent === 'rent_out'));
-}
+const isSellerLead = isSeller;   // the shared rule, so the board and the sync agree by construction
 function sellerLeads() { return leads.filter(isSellerLead); }
 // Sellers with no card on this board yet — the gap this page exists to close.
 function unlistedSellers() {
   const linked = new Set(listings.map(x => x.leadId).filter(Boolean));
-  return sellerLeads().filter(l => !linked.has(l.id))
+  return sellerLeads().filter(l => !linked.has(l.id) && l.listingSkipped !== true)
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+// Sellers deliberately set aside — kept visible and reversible, never silently gone.
+function skippedSellers() {
+  const linked = new Set(listings.map(x => x.leadId).filter(Boolean));
+  return sellerLeads().filter(l => !linked.has(l.id) && l.listingSkipped === true);
 }
 function leadById(id) { return leads.find(l => l.id === id) || null; }
 
@@ -430,18 +485,31 @@ function shootRow(x) {
 function renderSellers() {
   const el = document.getElementById('sellersView');
   if (!el) return;
-  const missing = unlistedSellers();
-  const linked = listings.filter(x => x.leadId).length;
+  const missing = unlistedSellers();     // normally empty — the sync creates these
+  const aside = skippedSellers();
+  const tracked = listings.filter(x => x.leadId).length;
+  const total = sellerLeads().length;
   el.innerHTML = `
     <div class="tk-note">
-      <b>${missing.length}</b> seller${missing.length === 1 ? '' : 's'} in the CRM ${missing.length === 1 ? 'has' : 'have'} no listing on this board yet.
-      ${linked ? `${linked} ${linked === 1 ? 'is' : 'are'} already tracked.` : ''}
-      A seller counts here if the CRM marked them a Seller Listing <i>or</i> the AI read the conversation as selling or renting out.
+      <b>${tracked}</b> of <b>${total}</b> seller${total === 1 ? '' : 's'} in the CRM ${tracked === 1 ? 'is' : 'are'} on this board.
+      New sellers are added here automatically, and their name and number follow any correction made in the CRM.
+      A seller counts if the CRM marked them a Seller Listing <i>or</i> the AI read the conversation as selling or renting out.
     </div>
-    ${missing.length ? `<div class="tk-rows">${missing.map(sellerRow).join('')}</div>`
-      : `<div class="tk-empty"><div class="tk-empty-i">✅</div><div class="tk-empty-t">Every seller is on the board</div><div class="tk-empty-s">Nothing has slipped through.</div></div>`}`;
+    ${missing.length ? `
+      <div class="tk-group">
+        <div class="tk-group-hdr warn">Waiting to be added <span class="tk-count">${missing.length}</span></div>
+        <div class="tk-hint" style="margin:-4px 0 9px">These appear for a moment before the sync picks them up. If one stays here, something is blocking the write.</div>
+        <div class="tk-rows">${missing.map(l => sellerRow(l, 'pending')).join('')}</div>
+      </div>` : ''}
+    ${!missing.length && !aside.length ? `<div class="tk-empty"><div class="tk-empty-i">✅</div><div class="tk-empty-t">Every seller is on the board</div><div class="tk-empty-s">Nothing has slipped through.</div></div>` : ''}
+    ${aside.length ? `
+      <div class="tk-group">
+        <div class="tk-group-hdr">Set aside <span class="tk-count">${aside.length}</span></div>
+        <div class="tk-hint" style="margin:-4px 0 9px">Deliberately not tracked — a deleted card or a skip. They are never re-added on their own.</div>
+        <div class="tk-rows">${aside.map(l => sellerRow(l, 'aside')).join('')}</div>
+      </div>` : ''}`;
 }
-function sellerRow(l) {
+function sellerRow(l, mode) {
   return `<div class="tk-row">
     <div class="tk-row-main">
       <div class="tk-row-top">
@@ -458,7 +526,10 @@ function sellerRow(l) {
       ${l.ai && l.ai.line ? `<div class="tk-row-note">${esc(l.ai.line)}</div>` : ''}
     </div>
     <div class="tk-row-side">
-      <button class="tk-btn primary" onclick="createFromLead('${l.id}')">Create listing</button>
+      ${mode === 'aside'
+        ? `<button class="tk-btn" onclick="unskipSeller('${l.id}')">Track again</button>`
+        : `<button class="tk-btn primary" onclick="createFromLead('${l.id}')">Create now</button>
+           <button class="tk-btn ghost" onclick="skipSeller('${l.id}')" title="Do not track this one">Set aside</button>`}
       <a class="tk-btn ghost" href="crm.html?lead=${encodeURIComponent(l.id)}" onclick="event.stopPropagation()">Open lead</a>
     </div>
   </div>`;
@@ -471,25 +542,14 @@ function createFromLead(leadId) {
   if (!l) return;
   const first = stages[0];
   if (!first) { toast('The board is still loading'); return; }
-  const now = Date.now();
-  const x = {
-    id: newId('lst_'),
-    stageId: first.id,
-    leadId: l.id,
-    sellerName: l.name || '',
-    sellerPhone: l.phone || '',
-    title: l.propertyInterest || l.name || 'New listing',
-    location: l.propertyInterest || '',
-    askingPrice: l.budget || '',
-    propertyCode: (l.propertyCodes && l.propertyCodes[0]) || '',
-    media: {}, ownerInformed: false, ownerApproved: false,
-    stageChangedAt: now, stageChangedBy: currentUserEmail || 'team',
-    reached: { [P.stageKeyOf(first) || 'new_listing']: now },
-    createdAt: now, createdBy: currentUserEmail || 'team', updatedAt: now, updatedBy: currentUserEmail || null
-  };
+  // The same builder the automatic sync uses, so a card made by hand and one
+  // made for you are the same document.
+  const x = newListingFor(l, first, Date.now(), currentUserEmail || 'team');
   listings.push(x);
   addHistory(x, 'created', `Listing created from the CRM lead <b>${esc(l.name || l.id)}</b>`);
   persist(x);
+  // Creating by hand also clears a previous "set aside", and links the lead.
+  if (window.trackFirebase) window.trackFirebase.patchLead(l.id, { listingId: x.id, listingSkipped: false }).catch(e => console.error(e));
   refreshAll();
   toast('Listing created');
   openDetail(x.id);
@@ -625,14 +685,36 @@ window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRem
 function deleteListing(id) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
-  if (!confirm(`Delete "${x.title || x.propertyCode || 'this listing'}"? The CRM lead is not touched.`)) return;
+  if (!confirm(`Delete "${x.title || x.propertyCode || 'this listing'}"? The CRM lead is not touched, and the seller will not be re-added automatically.`)) return;
   listings = listings.filter(l => l.id !== id);
-  if (window.trackFirebase) window.trackFirebase.deleteListing(id).catch(e => console.error(e));
+  if (window.trackFirebase) {
+    window.trackFirebase.deleteListing(id).catch(e => console.error(e));
+    // Without this tombstone the live sync would create the card again on the
+    // very next snapshot — the most infuriating bug this design could have.
+    if (x.leadId) window.trackFirebase.patchLead(x.leadId, { listingSkipped: true, listingId: null }).catch(e => console.error(e));
+  }
   closeDetail();
   refreshAll();
   toast('Listing deleted');
 }
 window.deleteListing = deleteListing;
+
+// Set a seller aside without making a card — reversible, and they stay
+// visible under "Set aside" rather than vanishing.
+function skipSeller(leadId) {
+  if (!window.trackFirebase) return;
+  const l = leadById(leadId);
+  window.trackFirebase.patchLead(leadId, { listingSkipped: true })
+    .then(() => toast(`${(l && l.name) || 'Seller'} set aside`))
+    .catch(e => { console.error(e); toast('Could not save'); });
+}
+function unskipSeller(leadId) {
+  if (!window.trackFirebase) return;
+  window.trackFirebase.patchLead(leadId, { listingSkipped: false })
+    .then(() => toast('Back on the list'))
+    .catch(e => { console.error(e); toast('Could not save'); });
+}
+window.skipSeller = skipSeller; window.unskipSeller = unskipSeller;
 
 // ═══════ SHOOT MODAL ═══════
 let shootFor = null;
@@ -800,7 +882,17 @@ function saveModal() {
   }
   const now = Date.now();
   if (mModalMode === 'edit') {
-    mutate(mModalEditId, x => Object.assign(x, form), 'Details edited');
+    mutate(mModalEditId, x => {
+      // Editing the owner's name or phone HERE claims that field: the live
+      // sync stops pushing the CRM's value over it from now on (see the
+      // OVERRIDES note in seller-sync.js). Silently reverting someone's
+      // correction on the next snapshot would be the worst thing this could do.
+      const own = { ...(x.own || {}) };
+      for (const f of ['sellerName', 'sellerPhone']) {
+        if ((form[f] || '') !== (x[f] || '')) own[f] = true;
+      }
+      Object.assign(x, form, { own });
+    }, 'Details edited');
     closeModal();
     if (currentDetailId === mModalEditId) openDetail(mModalEditId);
     toast('Saved');
