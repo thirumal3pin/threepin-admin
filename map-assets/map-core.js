@@ -67,6 +67,34 @@
   // exactly that reason.
   let gm = null;
 
+  // ═══════ 'maps' IS NOT THE ONLY LIBRARY ═══════
+  //
+  // importLibrary('maps') returns Map, OverlayView and MapTypeControlStyle —
+  // and nothing else. LatLng, LatLngBounds, ControlPosition and event live in
+  // the SEPARATE 'core' library, and nine of this file's thirteen uses are
+  // core members. Importing only 'maps' therefore left ControlPosition
+  // undefined and the map died on `g.ControlPosition.TOP_RIGHT` before it
+  // drew anything.
+  //
+  // Both are imported and merged into one handle. The two lists below are the
+  // guard: every member this file actually reads is named, so a future use of
+  // something neither library carries fails at load with a sentence saying
+  // which one is missing, rather than as a property access on undefined.
+  const NEED_CORE = ['LatLng', 'LatLngBounds', 'ControlPosition', 'event'];
+  const NEED_MAPS = ['Map', 'OverlayView', 'MapTypeControlStyle'];
+
+  async function importLibs() {
+    const [maps, core] = await Promise.all([
+      root.google.maps.importLibrary('maps'),
+      root.google.maps.importLibrary('core')
+    ]);
+    const lib = Object.assign({}, core || {}, maps || {});
+    const missing = NEED_CORE.filter(k => !lib[k]).map(k => k + ' (core)')
+      .concat(NEED_MAPS.filter(k => !lib[k]).map(k => k + ' (maps)'));
+    if (missing.length) throw new Error('the Maps libraries arrived without ' + missing.join(', '));
+    return lib;
+  }
+
   function load(key, opts) {
     apiKey = key || '';
     if (loadPromise) return loadPromise;
@@ -84,15 +112,13 @@
       // before any class is touched.
       if (root.google && root.google.maps) {
         if (gm) return resolve({ ok: true });
-        return root.google.maps.importLibrary('maps')
-          .then(lib => {
-            gm = lib;
-            resolve(gm && gm.OverlayView ? { ok: true } : {
-              ok: false, reason: 'library', message: 'The Maps library is missing OverlayView.',
-              fix: 'Reload the page. If it persists, the Maps JavaScript API may not be enabled for this key.'
-            });
-          })
-          .catch(e => resolve({ ok: false, reason: 'library', message: 'Could not load the Maps library.', fix: (e && e.message) || '' }));
+        return importLibs()
+          .then(lib => { gm = lib; resolve({ ok: true }); })
+          .catch(e => resolve({
+            ok: false, reason: 'library',
+            message: 'Google Maps is on the page but its libraries did not load.',
+            fix: 'Reload the page. If it persists, the Maps JavaScript API may not be enabled for this key. ' + ((e && e.message) || '')
+          }));
       }
 
       // Google reports key and billing problems through this global rather
@@ -133,13 +159,12 @@
           // THE step that loading=async requires. Without it Map, OverlayView
           // and LatLng are all undefined however long you wait, and
           // `class extends OverlayView` throws before the map ever appears.
-          gm = await root.google.maps.importLibrary('maps');
-          if (!gm || !gm.OverlayView || !gm.Map) throw new Error('the maps library arrived without Map and OverlayView');
+          gm = await importLibs();
           resolve({ ok: true });
         } catch (e) {
           resolve({
             ok: false, reason: 'library',
-            message: 'Google Maps loaded but its maps library did not.',
+            message: 'Google Maps loaded but its libraries did not.',
             fix: 'Usually the Maps JavaScript API is not enabled for this key, or the key is restricted to another domain. ' + ((e && e.message) || '')
           });
         }

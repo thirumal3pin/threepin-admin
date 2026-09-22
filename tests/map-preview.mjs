@@ -215,25 +215,36 @@ const MAPS_STUB = `
   // So the classes now live behind importLibrary and nowhere else. Any code
   // that reaches for google.maps.Map before importing will fail HERE, in a
   // test, instead of in front of an agent.
-  const LIB = {
-    Map, LatLng, LatLngBounds, OverlayView,
-    event: {
-      addListenerOnce: (obj, name, fn) => { if (obj.addListener) return obj.addListener(name, fn); },
-      trigger: (obj, name) => { if (obj.__fire) obj.__fire(name); }
-    },
+  // Split the way Google really splits them. The first version of this stub
+  // returned EVERYTHING from importLibrary('maps'), so map-core could read
+  // ControlPosition off the maps library in a test and pass, while in
+  // production that is undefined and the map died on
+  // read of g.ControlPosition.TOP_RIGHT. A stub more generous than the real API
+  // does not test the code, it tests the stub.
+  const EVENT = {
+    addListenerOnce: (obj, name, fn) => { if (obj.addListener) return obj.addListener(name, fn); },
+    trigger: (obj, name) => { if (obj.__fire) obj.__fire(name); }
+  };
+  const CORE_LIB = {
+    LatLng, LatLngBounds,
     ControlPosition: { TOP_RIGHT: 1, RIGHT_BOTTOM: 2 },
+    event: EVENT
+  };
+  const MAPS_LIB = {
+    Map, OverlayView,
     MapTypeControlStyle: { DROPDOWN_MENU: 1 }
   };
   window.__imported = [];
   window.google = { maps: {
     importLibrary: async name => {
       window.__imported.push(name);
-      if (name === 'maps') return LIB;
+      if (name === 'maps') return MAPS_LIB;
+      if (name === 'core') return CORE_LIB;
       if (name === 'places') return { Place };
       return {};
     },
     // Only what the real core namespace carries before an import.
-    event: LIB.event
+    event: EVENT
   } };
 })();
 `;
@@ -416,6 +427,17 @@ console.log('The map view');
   const page = await open({ width: 1500, height: 1000 }, true);
   await page.click('#mapModeSwitch .mv-mode:nth-child(2)');
   await page.waitForTimeout(700);
+
+  // Both libraries, by name. Nine of map-core's thirteen library reads are
+  // core members (LatLng, LatLngBounds, ControlPosition, event) and only
+  // three are maps members. Importing 'maps' alone left ControlPosition
+  // undefined and killed the map in production twice; asserting the import
+  // list is what stops a third time.
+  {
+    const libs = await page.evaluate(() => window.__imported || []);
+    ok('the map imports the core library, not just maps', libs.includes('core'), JSON.stringify(libs));
+    ok('...and the maps library', libs.includes('maps'), JSON.stringify(libs));
+  }
 
   ok('the map canvas is created', await page.$eval('#mapPane .mv-canvas', e => !!e));
   ok('and the modules all loaded',
