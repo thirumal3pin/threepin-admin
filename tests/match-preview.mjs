@@ -305,6 +305,72 @@ for (const vp of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// 1b. THE AREA MAP — the model's working, auditable
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Driven over the REAL 131-property inventory rather than the fixture above:
+// this panel exists to show what was learned from a messy sheet, and five
+// clean rows learn nothing worth looking at.
+
+console.log('');
+console.log('Properties console — Area map');
+{
+  const REAL = JSON.parse(readFileSync(join(ROOT, 'tests/fixtures/properties-snapshot.json'), 'utf8'))
+    .map(p => ({ ...p, tenantId: T }));
+  const stub = DASH_STUB.replace(/window\.applyPropertiesSnapshot\([\s\S]*?\);/, 'window.applyPropertiesSnapshot(' + J(REAL) + ');');
+  const page = await open('dash.local', 'dashboard.html', '/dashboard-assets/firebase-sync.js', stub, { width: 1440, height: 1100 });
+
+  await page.evaluate(() => window.openAreaMap());
+  await page.waitForTimeout(700);
+  const body = await page.$eval('#amBody', e => e.textContent.replace(/\s+/g, ' '));
+  const count = await page.$eval('#amCount', e => e.textContent.replace(/\s+/g, ' '));
+
+  ok('the area map opens', await page.$eval('#areaMapPanel', e => e.classList.contains('open')));
+  // A full-bleed panel is a page, not a dialog: it has to sit BESIDE the app
+  // rail, not under it. Every such panel needs adding to the inset rule in
+  // shared-assets/appnav.css, and forgetting hides its left 250px.
+  const inset = await page.evaluate(() => {
+    const p = document.getElementById('areaMapPanel');
+    const rail = document.getElementById('appRail');
+    if (!p || !rail || getComputedStyle(rail).display === 'none') return { skip: true };
+    return { panel: p.getBoundingClientRect().left, rail: rail.getBoundingClientRect().right };
+  });
+  ok('and sits beside the app rail, not underneath it',
+    inset.skip || inset.panel >= inset.rail - 1, JSON.stringify(inset));
+  ok('it reports how many areas it knows', /\d+ areas/.test(count), count);
+  ok('it separates localities from streets and blocks', /streets & blocks|streets &amp; blocks/.test(body), body.slice(0, 200));
+  ok('it says what it learned each fact from', /containment|stated distances/.test(body), body.slice(0, 400));
+
+  // The two claims that matter most, because they are the ones that keep the
+  // model honest: what it could not place, and what contradicted it.
+  ok('it lists the contradictions it found', /disagree with the map/.test(body), body.slice(0, 600));
+  ok('and says it has stopped trusting them', /stopped trusting/.test(body));
+  ok('it owns up to what it cannot place', /cannot place/.test(body));
+  ok('and states that unplaced means unknown, not far',
+    /never as far away/.test(body), body.slice(0, 900));
+
+  // The learned hierarchy has to be visible, name by name — this is the
+  // answer to "I cannot map the areas".
+  ok('a street shows the locality it sits inside',
+    /inside Anna Nagar East|inside Korattur|inside Adyar/.test(body), body.slice(0, 1200));
+  ok('an area worked out rather than known says so', /worked out/.test(body), body.slice(0, 1400));
+
+  await page.evaluate(() => { const el = document.getElementById('areaMapPanel'); el.scrollTop = el.scrollHeight * 0.45; });
+  await page.waitForTimeout(200);
+  await shot(page, 'dash-areamap-list');
+  await page.evaluate(() => { document.getElementById('areaMapPanel').scrollTop = 0; });
+  await page.waitForTimeout(200);
+  await shot(page, 'dash-areamap');
+
+  // Search narrows it.
+  await page.fill('#amSearch', 'anna nagar');
+  await page.waitForTimeout(250);
+  const filtered = await page.$eval('#amBody .am-list', e => e.textContent.replace(/\s+/g, ' '));
+  ok('searching an area narrows the list', /Anna Nagar/.test(filtered) && !/Mylapore/.test(filtered), filtered.slice(0, 200));
+  await page.context().close();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // 2. CRM — "what do we show them?"
 // ═══════════════════════════════════════════════════════════════════════
 

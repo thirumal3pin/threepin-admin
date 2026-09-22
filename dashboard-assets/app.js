@@ -674,6 +674,118 @@ function renderDetail(id){
   return true;
 }
 
+// ═══════ AREA MAP ═══════
+//
+// The model's own working, on screen. It exists because the alternative to
+// showing it is asking the team to trust a geography nobody can see — and
+// because a coordinate table for Chennai's 144 location segments is not
+// something anybody can maintain by hand, which is the whole reason the model
+// is derived rather than typed.
+//
+// Three things are worth reading here, and the third is the useful one:
+//
+//   1. What it knows        every area, its parent, how many properties.
+//   2. What it cannot place an honest list, not a silent gap. An area here is
+//                           treated as UNKNOWN in matching, never as far.
+//   3. What disagrees       claims in the sheet that the anchors contradict.
+//                           Each is either an ambiguous name or a real data
+//                           error, and each is a cell worth a human's minute.
+let amSearch = '';
+
+function openAreaMap(){
+  document.getElementById('areaMapPanel').classList.add('open');
+  renderAreaMap();
+}
+function closeAreaMap(){
+  document.getElementById('areaMapPanel').classList.remove('open');
+}
+function onAreaMapSearch(v){ amSearch = v.toLowerCase().trim(); renderAreaMap(); }
+
+function areaModel(){
+  if(!window.PinAreaModel || !properties.length) return null;
+  try { return PinAreaModel.forList(properties); } catch(e){ return null; }
+}
+
+function renderAreaMap(){
+  const body = document.getElementById('amBody');
+  const panel = document.getElementById('areaMapPanel');
+  if(!body || !panel || !panel.classList.contains('open')) return;
+  const m = areaModel();
+  if(!m){
+    body.innerHTML = '<div class="am-empty">The inventory has not loaded yet.</div>';
+    return;
+  }
+  const s = m.stats;
+  document.getElementById('amCount').innerHTML =
+    `<b>${s.areas}</b> areas · <b>${s.placed}</b> placed`;
+
+  const rows = m.areaMap().filter(a => !amSearch
+    || a.label.toLowerCase().includes(amSearch)
+    || (a.parent || '').toLowerCase().includes(amSearch));
+
+  const unplaced = m.areaMap().filter(a => !a.placed);
+
+  // How it knows what it knows — counted from the graph, not asserted.
+  const basis = s.byBasis || {};
+  const bRow = (k, label, why) => basis[k]
+    ? `<div class="am-b"><b>${basis[k]}</b><span>${escapeHtml(label)}</span><i>${escapeHtml(why)}</i></div>` : '';
+
+  body.innerHTML = `
+    <div class="am-top">
+      <div class="am-stats">
+        <div class="am-s"><b>${s.localities}</b><span>localities</span></div>
+        <div class="am-s"><b>${s.subAreas}</b><span>streets &amp; blocks</span></div>
+        <div class="am-s"><b>${s.anchored}</b><span>known outright</span></div>
+        <div class="am-s"><b>${s.estimated}</b><span>worked out</span></div>
+        <div class="am-s ${s.unplaced ? 'warn' : ''}"><b>${s.unplaced}</b><span>cannot place</span></div>
+      </div>
+      <div class="am-ev">
+        <div class="am-ev-t">What it learned this from</div>
+        ${bRow('contains', 'containment', 'a block written inside its locality')}
+        ${bRow('measured', 'stated distances', 'a distance in the landmark column')}
+        ${bRow('timed', 'quoted drive times', 'weaker — a brochure’s claim, not a measurement')}
+        ${bRow('adjacent', 'adjacency', '“Next to Neelankarai” in the Location column')}
+        ${bRow('nearby', 'nearby mentions', 'an area listed as nearby, with no distance')}
+        ${bRow('cocell', 'two areas in one cell', '“Gerugambakkam / Porur”')}
+        ${bRow('landmark', 'shared landmarks', 'two properties citing the same school or hospital')}
+        ${bRow('corridor', 'corridors', 'both on OMR, ECR or GST')}
+        ${bRow('zone', 'zones', 'the weakest — same side of the city, nothing more')}
+      </div>
+    </div>
+
+    ${m.warnings.length ? `<div class="am-warn">
+      <div class="am-warn-t">⚠ ${m.warnings.length} thing${m.warnings.length === 1 ? '' : 's'} in the sheet disagree with the map</div>
+      <div class="am-warn-s">The model checked every claim it could against the areas it already knows, and these did not hold.
+        It has stopped trusting them — each one is either a name that means two places, or a Location cell worth correcting.</div>
+      ${m.warnings.map(w => `<div class="am-warn-r"><b>${escapeHtml(w.from)} ↔ ${escapeHtml(w.to)}</b><span>${escapeHtml(w.why)}</span></div>`).join('')}
+    </div>` : ''}
+
+    ${unplaced.length && !amSearch ? `<div class="am-un">
+      <div class="am-un-t">${unplaced.length} area${unplaced.length === 1 ? '' : 's'} it cannot place</div>
+      <div class="am-un-s">Treated as <b>unknown</b> when matching — never as far away, which would quietly hide these properties
+        from the buyers who want them. Naming one of these in a Location cell alongside a known area, or in a landmark with a
+        distance, is all it takes to place it.</div>
+      <div class="am-un-l">${unplaced.map(a => `<span class="am-chip">${escapeHtml(a.label)}</span>`).join('')}</div>
+    </div>` : ''}
+
+    <div class="am-list">
+      ${rows.length ? rows.map(a => `
+        <div class="am-row${a.placed ? '' : ' unplaced'}">
+          <div class="am-nm">${escapeHtml(a.label)}
+            ${a.kind === 'street' ? '<i class="am-k">street</i>' : a.kind === 'sub' ? '<i class="am-k">colony</i>' : ''}
+          </div>
+          <div class="am-pa">${a.parent ? 'inside ' + escapeHtml(a.parent) : '<span class="am-dim">—</span>'}</div>
+          <div class="am-pr">${a.properties ? a.properties + (a.properties === 1 ? ' property' : ' properties') : '<span class="am-dim">—</span>'}</div>
+          <div class="am-st">${a.anchored
+            ? '<span class="am-ok">known</span>'
+            : a.placed
+              ? `<span class="am-est">worked out${a.placedVia ? ' via ' + escapeHtml(a.placedVia) : ''}${a.confidence ? ' · ' + Math.round(a.confidence * 100) + '%' : ''}</span>`
+              : '<span class="am-no">not placed</span>'}</div>
+        </div>`).join('')
+        : '<div class="am-empty">No area matches that.</div>'}
+    </div>`;
+}
+
 // ═══════ MATCHING BUYERS ═══════
 //
 // "Who wants this?" — asked of a property, answered from the lead database.

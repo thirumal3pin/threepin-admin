@@ -11,11 +11,12 @@
 (function () {
   'use strict';
 
-  var panel = 'all';   // the page underneath: all | missing | changes
+  var panel = 'all';   // the page underneath: all | missing | changes | areamap
 
   function showAll() {
     if (typeof closeMissing === 'function') closeMissing();
     if (typeof closeChanges === 'function') closeChanges();
+    if (typeof closeAreaMap === 'function') closeAreaMap();
     if (typeof closeDetail === 'function') closeDetail();
   }
 
@@ -23,6 +24,7 @@
     switch (nav) {
       case 'missing': showAll(); if (typeof openMissing === 'function') openMissing(); panel = 'missing'; break;
       case 'changes': showAll(); if (typeof openChanges === 'function') openChanges(); panel = 'changes'; break;
+      case 'areamap': showAll(); if (typeof openAreaMap === 'function') openAreaMap(); panel = 'areamap'; break;
       case 'sync': if (typeof openSyncModal === 'function') openSyncModal(); break;
       case 'brochure': if (typeof openBrochureModal === 'function') openBrochureModal(); break;
       default: showAll(); panel = 'all';
@@ -39,7 +41,7 @@
 
   // Closing a panel from its own back button has to move the rail too,
   // otherwise the highlight claims you are still inside it.
-  ['closeMissing', 'closeChanges'].forEach(function (fn) {
+  ['closeMissing', 'closeChanges', 'closeAreaMap'].forEach(function (fn) {
     var original = window[fn];
     if (typeof original !== 'function') return;
     window[fn] = function () {
