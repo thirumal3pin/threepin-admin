@@ -3471,6 +3471,10 @@ function openDetail(id){
   renderStandSection(l);
   renderFollowUpSpotlight(l);
   renderDetailInfo(l);
+  // Scored from the lead document straight away, then again in
+  // loadLeadThreads() once the notes arrive — the notes carry the objections,
+  // which move the answer more than any stored field does.
+  renderMatchingProperties(l);
   ttChatExpanded.delete(id);
   tlExpanded.delete(id);
   renderTtSection(l);
@@ -3708,10 +3712,82 @@ async function loadLeadThreads(l){
       renderHistory(l);
       renderFollowUpSpotlight(l);
       if(isTtLead(l)) renderTtSection(l);
+      // The notes have only just arrived, and they are where the objections
+      // live — "said the price is high", "too far from his office". Those
+      // change the matching more than any field on the lead does, so the
+      // match list is scored again now that they are here.
+      renderMatchingProperties(l);
     }
   } catch(e){
     console.error('loadLeadThreads failed:', e);
   }
+}
+
+// ═══════ MATCHING PROPERTIES ═══════
+//
+// "What do we show them?" — the reverse of the Properties console's Matching
+// Buyers tab, and deliberately the same engine and the same panel, so the two
+// screens can never disagree about a pair.
+//
+// Sellers and vendors are skipped: this section answers a BUYER's question.
+// A seller's own listing work belongs on the Property & Media board, which is
+// where the Lead Info block already points them.
+function renderMatchingProperties(l){
+  const sec = document.getElementById('dpMatchSec');
+  const el = document.getElementById('dpMatch');
+  if(!sec || !el || !window.PinMatch || !window.PinMatchPanel) return;
+
+  if(!window.PinMatch.isBuyerLead(l) || isSellerLead(l)){ sec.hidden = true; return; }
+  sec.hidden = false;
+  PinMatchPanel.busy(el, 'Scoring the inventory against this requirement…');
+
+  loadInventory().then(list => {
+    if(currentDetailId !== l.id) return;       // moved on while the read was in flight
+    if(!list.length){
+      el.classList.add('pm');
+      el.innerHTML = '<div class="pm-empty">The inventory has not loaded yet.</div>';
+      return;
+    }
+    const req = PinMatch.requirementProfile(l, { inventory: list, notes: l.notes });
+    // Nothing to go on. Say which field would unlock it rather than showing
+    // an empty list — the fix is thirty seconds of typing, and this is the
+    // one moment the person who can do it is looking at the record.
+    if(!req.budget && !req.localities && !req.bhk && !req.types){
+      el.classList.add('pm');
+      el.innerHTML = '<div class="pm-empty">Nothing to match on yet. Fill in <b>Property / Locality</b> or <b>Budget</b> above'
+        + ' — an area, a budget or "3BHK" is enough to rank the whole inventory against this buyer.</div>';
+      return;
+    }
+    const matches = PinMatch.propertiesFor(req, list, {
+      includeVetoed: true, includeSeen: true, minPct: 40, limit: 40
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    PinMatchPanel.render(el, matches, {
+      title: live === 1 ? '1 property worth sending' : `${live} properties worth sending`,
+      subtitle: `out of ${list.length} in the inventory`,
+      empty: 'Nothing in the inventory fits this requirement yet. The ruled-out list below says why for each one'
+        + ' — which is also the brief to go sourcing against.',
+      shape: m => ({
+        code: m.property.code || '',
+        name: m.p.name || m.p.id,
+        sub: [
+          m.p.location, m.p.config,
+          m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice,
+          m.alreadyShared ? '· already shared with them' : ''
+        ].filter(Boolean).join(' · '),
+        actions: [
+          { id:'open', key:m.p.id, label:'Open property →', href:'property.html?id=' + encodeURIComponent(m.p.id), blank:true, primary:true },
+          m.alreadyShared ? null : { id:'link', key:m.p.id, label:'Link to this lead' }
+        ].filter(Boolean)
+      }),
+      onAction: (act, key) => {
+        // Reuses the existing link path, so a property linked from here is
+        // indistinguishable from one linked by hand — same history entry,
+        // same automation rules.
+        if(act === 'link' && typeof linkProperty === 'function') linkProperty(l.id, key);
+      }
+    });
+  });
 }
 function renderDetailStageRow(l){
   const sel = document.getElementById('dpStageSel');

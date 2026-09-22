@@ -1,0 +1,221 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   MATCH PANEL — one list of matches, three consoles
+
+   Properties, CRM and the Property & Media board all have to show the same
+   thing: a ranked list of matches, each with a score and the reasons behind
+   it. One renderer, so a score cannot be presented two different ways in two
+   places — which is how a team stops trusting it.
+
+   ── How it borrows each console's colours ──
+   Nothing here hardcodes a palette, exactly as appnav.css does not. Each
+   host page declares its own tokens and this reads them, so the panel is a
+   continuation of the page rather than a component dropped onto it. The
+   literal fallbacks cover a page not yet wired up. The CRM and the Track
+   board declare their tokens through light-dark(), so reading the tokens is
+   also what makes this work in dark mode for free.
+
+   ── The one idea worth explaining ──
+   The score bar is not decoration and it is not a progress bar. Each segment
+   is one attribute, its WIDTH is that attribute's weight and its FILL is how
+   much of it the property earned. So "92%" and "the budget is the weak part
+   of that 92%" are the same glance. A donut or a plain bar would show the
+   first and hide the second, and the second is the one that tells an agent
+   what to say on the call.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.pm {
+  --pm-card: var(--card, #fff);
+  --pm-sunk: var(--bg2, #efede8);
+  --pm-line: var(--border, #e4e0d8);
+  --pm-ink: var(--ink, #1c1917);
+  --pm-ink-2: var(--ink2, #44403c);
+  --pm-ink-3: var(--ink3, #78716c);
+  --pm-accent: var(--gold, #b45309);
+  --pm-good: var(--green, #15803d);
+  --pm-warn: var(--amber, #b45309);
+  --pm-bad: var(--red, #b91c1c);
+  --pm-blue: var(--blue, #1d4ed8);
+  --pm-r: var(--r, 12px);
+  font-family: var(--sans, system-ui, sans-serif);
+  color: var(--pm-ink);
+}
+
+/* ═══════ HEADER ═══════ */
+
+.pm-hdr {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
+  margin: 0 0 10px;
+}
+.pm-hdr-n { font-weight: 700; font-size: 14px; }
+.pm-hdr-sub { color: var(--pm-ink-3); font-size: 12px; }
+.pm-hdr-sp { flex: 1 1 auto; }
+
+.pm-link {
+  background: none; border: 0; padding: 0;
+  color: var(--pm-accent); font: inherit; font-size: 12px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.pm-link:hover { opacity: .8; }
+
+/* ═══════ A MATCH ═══════ */
+
+.pm-row {
+  border: 1px solid var(--pm-line);
+  border-radius: var(--pm-r);
+  background: var(--pm-card);
+  padding: 11px 13px;
+  margin-bottom: 8px;
+}
+.pm-row.out { opacity: .72; }
+
+.pm-r1 { display: flex; align-items: flex-start; gap: 11px; }
+
+/* The score. Tabular figures so a column of them lines up, and the band
+   underneath because "92%" means nothing to somebody reading it for the
+   first time while "Strong match" does. */
+.pm-sc { flex: 0 0 auto; text-align: center; min-width: 54px; }
+.pm-sc-n {
+  font-family: var(--serif, Georgia, serif);
+  font-size: 23px; font-weight: 600; line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.pm-sc-b { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--pm-ink-3); margin-top: 2px; }
+
+.pm-row.strong  .pm-sc-n { color: var(--pm-good); }
+.pm-row.good    .pm-sc-n { color: var(--pm-blue); }
+.pm-row.partial .pm-sc-n { color: var(--pm-warn); }
+.pm-row.weak    .pm-sc-n { color: var(--pm-ink-3); }
+.pm-row.out     .pm-sc-n { color: var(--pm-ink-3); font-size: 15px; padding-top: 4px; }
+
+.pm-main { flex: 1 1 auto; min-width: 0; }
+.pm-name {
+  font-weight: 650; font-size: 13.5px; line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.pm-code {
+  font-family: var(--mono, 'IBM Plex Mono', ui-monospace, monospace);
+  font-size: 10.5px; font-weight: 600;
+  background: var(--pm-sunk); border-radius: 4px;
+  padding: 1px 5px; margin-right: 5px;
+  color: var(--pm-ink-2);
+}
+.pm-sub { font-size: 11.5px; color: var(--pm-ink-3); margin-top: 2px; overflow-wrap: anywhere; }
+
+/* ═══════ THE SCORE BAR ═══════ */
+
+.pm-bars {
+  display: flex; gap: 2px; height: 5px;
+  margin: 9px 0 0; border-radius: 3px; overflow: hidden;
+}
+.pm-seg { background: var(--pm-sunk); border-radius: 2px; overflow: hidden; position: relative; }
+.pm-seg i {
+  display: block; height: 100%;
+  background: var(--pm-good);
+  border-radius: 2px;
+}
+.pm-seg.mid i { background: var(--pm-warn); }
+.pm-seg.low i { background: var(--pm-bad); }
+.pm-bars-k {
+  display: flex; flex-wrap: wrap; gap: 3px 9px;
+  margin-top: 6px; font-size: 10px; color: var(--pm-ink-3);
+}
+.pm-bars-k b { font-weight: 600; color: var(--pm-ink-2); }
+
+/* ═══════ REASONS ═══════ */
+
+.pm-why { list-style: none; margin: 9px 0 0; padding: 0; }
+.pm-why li {
+  display: flex; gap: 7px; align-items: baseline;
+  font-size: 12px; line-height: 1.45; color: var(--pm-ink-2);
+  padding: 1.5px 0;
+}
+.pm-why li::before { content: '+'; color: var(--pm-good); font-weight: 700; flex: 0 0 auto; }
+.pm-why li.neg::before { content: '−'; color: var(--pm-bad); }
+.pm-why li.veto::before { content: '✕'; color: var(--pm-bad); }
+.pm-pts {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums;
+  font-size: 10.5px; color: var(--pm-ink-3);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.pm-why q { font-style: italic; color: var(--pm-ink-3); }
+
+/* ═══════ ACTIONS ═══════ */
+
+.pm-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pm-btn {
+  font: inherit; font-size: 11.5px; font-weight: 550;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--pm-line); background: var(--pm-card);
+  color: var(--pm-ink-2); cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.pm-btn:hover { background: var(--pm-sunk); }
+.pm-btn.primary {
+  background: color-mix(in srgb, var(--pm-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--pm-accent) 40%, transparent);
+  color: var(--pm-accent);
+}
+
+/* ═══════ CONFIDENCE ═══════ */
+
+/* Deliberately quiet. It qualifies the score, it is not a second score —
+   and a buyer we know little about is still a buyer worth calling. */
+.pm-conf {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--pm-ink-3); margin-top: 7px;
+}
+.pm-conf-t { display: flex; gap: 1.5px; }
+.pm-conf-t i { width: 11px; height: 3px; border-radius: 2px; background: var(--pm-line); }
+.pm-conf-t i.on { background: var(--pm-ink-3); }
+
+/* ═══════ RULED OUT ═══════ */
+
+/* Collapsed, but never hidden. An agent has to be able to answer "did it
+   miss someone?" — and the answer is a list with a stated reason against
+   each name, not a shorter list. */
+.pm-out-hd {
+  width: 100%; text-align: left;
+  font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--pm-ink-3); cursor: pointer;
+  background: none; border: 0; border-top: 1px dashed var(--pm-line);
+  padding: 11px 0 9px; margin-top: 4px;
+  display: flex; align-items: center; gap: 7px;
+}
+.pm-out-hd:hover { color: var(--pm-ink); }
+.pm-out-hd .pm-chev { transition: transform .16s ease; }
+.pm-out-hd[aria-expanded="true"] .pm-chev { transform: rotate(90deg); }
+
+/* ═══════ EMPTY / BUSY ═══════ */
+
+.pm-empty {
+  border: 1px dashed var(--pm-line); border-radius: var(--pm-r);
+  padding: 20px 16px; text-align: center;
+  color: var(--pm-ink-3); font-size: 12.5px; line-height: 1.55;
+}
+.pm-empty b { color: var(--pm-ink-2); }
+.pm-busy { color: var(--pm-ink-3); font-size: 12.5px; padding: 14px 0; }
+
+/* ═══════ HOW IT SCORES ═══════ */
+
+.pm-note {
+  background: var(--pm-sunk); border-radius: var(--pm-r);
+  padding: 11px 13px; margin: 0 0 10px;
+  font-size: 11.5px; line-height: 1.6; color: var(--pm-ink-2);
+}
+.pm-note h4 { margin: 0 0 5px; font-size: 11.5px; font-weight: 700; color: var(--pm-ink); }
+.pm-note ul { margin: 6px 0 0; padding-left: 17px; }
+.pm-note li { margin: 2px 0; }
+.pm-note code {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px;
+  background: var(--pm-card); border-radius: 3px; padding: 1px 4px;
+}
+
+/* ═══════ NARROW ═══════ */
+
+@media (max-width: 460px) {
+  .pm-r1 { gap: 9px; }
+  .pm-sc { min-width: 44px; }
+  .pm-sc-n { font-size: 19px; }
+  .pm-bars-k { font-size: 9.5px; }
+  .pm-acts .pm-btn { flex: 1 1 auto; justify-content: center; }
+}

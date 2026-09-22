@@ -520,10 +520,13 @@ function renderDetail(id){
       </div>
     </div>`;
 
-  document.getElementById('dpBody').innerHTML = overview + specs + pitch + crm + internal;
+  // Order MUST match DETAIL_TABS — showTab() looks the panel up by index.
+  const matches = `<div class="tab-panel"><div class="sec"><div id="dpMatches"></div></div></div>`;
+  document.getElementById('dpBody').innerHTML = overview + matches + specs + pitch + crm + internal;
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  renderMatchingBuyers(id);
   // Notes live in a subcollection, so they arrive after the panel paints —
   // repaintNotes() checks currentDetailId before writing, so a slow response
   // for a property the user already navigated away from is discarded.
@@ -536,9 +539,96 @@ function renderDetail(id){
   return true;
 }
 
+// ═══════ MATCHING BUYERS ═══════
+//
+// "Who wants this?" — asked of a property, answered from the lead database.
+// The scoring is all in shared-assets/match-engine.js; this file only fetches
+// the leads, calls it, and hands the result to the shared panel.
+//
+// ── Why the leads are cached for the session ──
+// The grid already keeps a live listener on every property. Adding a second
+// live listener on every lead would double this page's standing read cost to
+// keep a panel fresh that is open for seconds at a time. So leads are read
+// ONCE, on the first property anyone opens, and reused after that: opening
+// ten properties in a row costs one collection read, not ten. A stale-by-
+// minutes lead list is the right trade for a matching panel — it changes the
+// score by nothing an agent would notice, and the CRM is one click away for
+// the live record.
+let matchLeads = null;         // null = never fetched, [] = fetched and empty
+let matchLeadsPromise = null;
+
+function loadMatchLeads(){
+  if(matchLeads) return Promise.resolve(matchLeads);
+  if(matchLeadsPromise) return matchLeadsPromise;
+  if(!window.dashboardFirebase || !window.dashboardFirebase.getLeads){
+    // No Firebase on this page (the sample-data path). Not an error state —
+    // there is simply nobody to match against yet.
+    matchLeads = [];
+    return Promise.resolve(matchLeads);
+  }
+  matchLeadsPromise = window.dashboardFirebase.getLeads()
+    .then(list => { matchLeads = list || []; return matchLeads; })
+    .catch(() => { matchLeads = []; return matchLeads; });
+  return matchLeadsPromise;
+}
+
+// The CRM's own stage keys, so a Won or Lost lead is not offered as a live
+// buyer. Read off the lead rather than the pipeline document, because this
+// page does not load the pipeline and does not need to: a lead that has
+// reached either of those carries the key on its milestone record.
+function matchStageKeyOf(lead){
+  if(!lead) return null;
+  if(lead.lostReason || /closed_lost|^lost$/.test(String(lead.stageId||''))) return 'lost';
+  if(/closed_won|^won$/.test(String(lead.stageId||''))) return 'won';
+  return null;
+}
+
+function renderMatchingBuyers(id){
+  const el = document.getElementById('dpMatches');
+  if(!el || !window.PinMatch || !window.PinMatchPanel) return;
+  const p = properties.find(x => x.id === id);
+  if(!p) return;
+  PinMatchPanel.busy(el, 'Reading the lead database…');
+  loadMatchLeads().then(leads => {
+    // The panel may have been closed, or moved on to another property,
+    // while the read was in flight.
+    if(currentDetailId !== id) return;
+    const matches = PinMatch.buyersFor(p, leads, {
+      inventory: properties,
+      stageKeyOf: matchStageKeyOf,
+      includeVetoed: true,
+      minPct: 40,
+      limit: 40
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    PinMatchPanel.render(el, matches, {
+      title: live === 1 ? '1 buyer worth calling' : `${live} buyers worth calling`,
+      subtitle: `out of ${leads.length} in the CRM`,
+      empty: leads.length
+        ? 'No buyer on the CRM is looking for anything like this yet. The ruled-out list below says why for each one.'
+        : 'No leads in the CRM yet — once buyers are in, they will be matched here automatically.',
+      shape: m => ({
+        name: m.lead.name || '(no name)',
+        sub: [
+          m.lead.propertyInterest,
+          m.lead.budget ? 'budget ' + m.lead.budget : '',
+          m.lead.phone
+        ].filter(Boolean).join(' · '),
+        actions: [
+          { id:'crm', key:m.lead.id, label:'Open in CRM →', primary:true },
+          m.lead.phone ? { id:'call', key:m.lead.id, label:'Call', href:'tel:'+m.lead.phone } : null
+        ].filter(Boolean)
+      }),
+      onAction: (act, key) => {
+        if(act === 'crm') window.open('crm.html?lead=' + encodeURIComponent(key), '_blank', 'noopener');
+      }
+    });
+  });
+}
+
 // Panel order here must match the .tab-panel order built in renderDetail —
 // the lookup is positional, so appending a tab means appending its name.
-const DETAIL_TABS = ['overview','specs','pitch','notes','internal'];
+const DETAIL_TABS = ['overview','matches','specs','pitch','notes','internal'];
 function showTab(name,btn){
   document.querySelectorAll('.dp-tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
