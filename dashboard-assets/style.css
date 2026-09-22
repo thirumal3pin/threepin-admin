@@ -916,7 +916,36 @@ body.adv-open{overflow:hidden;}
    controls end up in there: past that height the header scrolls internally
    instead of growing. 38vh leaves the majority of any screen for the
    properties, which is what the page is for. */
-#hdr { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; }
+/* A ceiling alone was the wrong answer: it stopped the header eating the
+   screen and gave it an internal scrollbar instead, which is worse - two
+   scrollbars on one page, and filters that scroll away from the results they
+   filter. The real problem is that this inventory has TEN property types, so
+   the type row wrapped to three lines. It is now ONE row that scrolls
+   sideways, which is how a long row of chips should behave, and the header
+   goes back to a fixed, predictable height. */
+#hdr { max-height: none; overflow: visible; }
+
+.fgroup {
+  display: flex; gap: 8px; align-items: center;
+  flex-wrap: nowrap; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin; padding-bottom: 2px;
+}
+.fgroup::-webkit-scrollbar { height: 4px; }
+.fgroup::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+.fgroup .fbtn { flex: 0 0 auto; }
+
+/* Filters take the room that is left; the view switch and the actions keep
+   theirs. */
+.controls { flex-wrap: nowrap; align-items: center; }
+#statusFilters { flex: 0 0 auto; }
+#typeFilters { flex: 1 1 auto; min-width: 0; }
+.ctrl-right { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
+
+@media (max-width: 1100px) {
+  .controls { flex-wrap: wrap; }
+  #typeFilters { flex: 1 1 100%; order: 3; }
+}
 
 /* The brief box now sits in the scrolling content, so it needs the content
    column's own rhythm rather than the header's. */

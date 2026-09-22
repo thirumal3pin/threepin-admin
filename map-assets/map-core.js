@@ -48,9 +48,24 @@
   // nearby" tools and `geometry` for spherical distance — both are needed by
   // module 3, and asking for them here avoids a second script load later.
   let loadPromise = null;
-  // Kept because the Routes API is REST-only — there is no JS SDK wrapper for
-  // it — so map-nearby.js has to sign its own fetch. See the note there.
+  // Kept because every Google call in map-nearby.js is REST — Routes, Places,
+  // Geocoding, Elevation, Street View — and REST needs the key in a header.
   let apiKey = '';
+
+  // ═══════ THE LIBRARY HANDLE ═══════
+  //
+  // `gm` is where the Maps classes come from, and it is NOT a synonym for
+  // google.maps.
+  //
+  // With `loading=async` — which is how this loads, because the alternative
+  // blocks rendering — Google does not populate the google.maps namespace when
+  // the script arrives. It populates it only when importLibrary() is called.
+  // So `class extends google.maps.OverlayView` ran against `undefined` and
+  // threw "extends value undefined is not a constructor", which took the
+  // whole map down in production while a permissive test stub said it was
+  // fine. The stub now refuses to answer until importLibrary is called, for
+  // exactly that reason.
+  let gm = null;
 
   function load(key, opts) {
     apiKey = key || '';
@@ -65,7 +80,20 @@
       return loadPromise;
     }
     loadPromise = new Promise(resolve => {
-      if (root.google && root.google.maps) return resolve({ ok: true });
+      // Already loaded by someone else: still has to import the library
+      // before any class is touched.
+      if (root.google && root.google.maps) {
+        if (gm) return resolve({ ok: true });
+        return root.google.maps.importLibrary('maps')
+          .then(lib => {
+            gm = lib;
+            resolve(gm && gm.OverlayView ? { ok: true } : {
+              ok: false, reason: 'library', message: 'The Maps library is missing OverlayView.',
+              fix: 'Reload the page. If it persists, the Maps JavaScript API may not be enabled for this key.'
+            });
+          })
+          .catch(e => resolve({ ok: false, reason: 'library', message: 'Could not load the Maps library.', fix: (e && e.message) || '' }));
+      }
 
       // Google reports key and billing problems through this global rather
       // than through the script's onerror, so it is the only way to tell
@@ -81,21 +109,40 @@
       };
 
       const s = document.createElement('script');
-      const libs = o.libraries || 'places,geometry';
-      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=${libs}&loading=async&v=quarterly`;
+      // `places` is no longer asked for: map-nearby.js calls Places over REST,
+      // so loading the library too would be a second download for nothing.
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&loading=async&v=quarterly`;
       s.async = true;
       s.onerror = () => resolve({
         ok: false, reason: 'network',
         message: 'The Google Maps script could not be loaded.',
         fix: 'Check the connection, and that no extension or network policy is blocking maps.googleapis.com.'
       });
-      s.onload = () => {
-        // onload fires before the auth check completes, so give
-        // gm_authFailure a tick to win the race if it is going to.
-        setTimeout(() => resolve(root.google && root.google.maps ? { ok: true } : {
-          ok: false, reason: 'auth', message: 'Google Maps loaded but did not initialise.',
-          fix: 'Usually a key restriction or a disabled API. Check the browser console for Google’s own message.'
-        }), 120);
+      s.onload = async () => {
+        // onload fires before the auth check completes, so give gm_authFailure
+        // a tick to win the race if it is going to.
+        await new Promise(r => setTimeout(r, 120));
+        if (!root.google || !root.google.maps) {
+          return resolve({
+            ok: false, reason: 'auth',
+            message: 'Google Maps loaded but did not initialise.',
+            fix: 'Usually a key restriction or a disabled API. Check the browser console for the message Google itself prints.'
+          });
+        }
+        try {
+          // THE step that loading=async requires. Without it Map, OverlayView
+          // and LatLng are all undefined however long you wait, and
+          // `class extends OverlayView` throws before the map ever appears.
+          gm = await root.google.maps.importLibrary('maps');
+          if (!gm || !gm.OverlayView || !gm.Map) throw new Error('the maps library arrived without Map and OverlayView');
+          resolve({ ok: true });
+        } catch (e) {
+          resolve({
+            ok: false, reason: 'library',
+            message: 'Google Maps loaded but its maps library did not.',
+            fix: 'Usually the Maps JavaScript API is not enabled for this key, or the key is restricted to another domain. ' + ((e && e.message) || '')
+          });
+        }
       };
       document.head.appendChild(s);
     });
@@ -180,7 +227,8 @@
 
   function defineOverlay() {
     if (Overlay) return Overlay;
-    const g = root.google.maps;
+    const g = gm;
+    if (!g || !g.OverlayView) throw new Error('the Maps library is not loaded');
 
     class HtmlMarker extends g.OverlayView {
       constructor(position, html, opts) {
@@ -240,7 +288,8 @@
    */
   function create(el, opts) {
     const o = opts || {};
-    const g = root.google.maps;
+    const g = gm;
+    if (!g) throw new Error('PinMapCore.create called before load() resolved ok');
     defineOverlay();
 
     const map = new g.Map(el, {
@@ -348,7 +397,7 @@
   }
 
   function drawClusters(state, o, items) {
-    const g = root.google.maps;
+    const g = gm;
     const groups = groupByArea(items, state.areaOf);
     for (const grp of groups) {
       // A single property is drawn as itself — a cluster of one is a lie
@@ -403,7 +452,7 @@
   }
 
   function drawPins(state, o, items) {
-    const g = root.google.maps;
+    const g = gm;
     for (const node of spider(items)) {
       const it = node.it;
       const p = it.p;
@@ -449,7 +498,7 @@
 
   function fit(state, items, opts) {
     const o = opts || {};
-    const g = root.google.maps;
+    const g = gm;
     const pts = (items || []).filter(x => x.pos);
     if (!pts.length) return;
     if (pts.length === 1) {
@@ -484,7 +533,7 @@
   // A draggable marker shown while placing a pin, so the agent sees where it
   // will land before committing.
   function ghostPin(state, pos) {
-    const g = root.google.maps;
+    const g = gm;
     if (state.pinGhost) { state.pinGhost.setMap(null); state.pinGhost = null; }
     if (!pos) return;
     const m = new Overlay(new g.LatLng(pos.lat, pos.lng), '<span class="gm-p-l">New pin</span>', { className: 'gm-prop ghost' });
@@ -528,7 +577,13 @@
     return 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
   }
 
-  const api = { load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI, priceLabel, priceRange, pitchFor, whatsappUrl, esc, apiKey: () => apiKey };
+  // `lib()` so map-view can trigger a resize without reaching for the
+  // namespace either.
+  const api = {
+    load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI,
+    priceLabel, priceRange, pitchFor, whatsappUrl, esc,
+    apiKey: () => apiKey, lib: () => gm
+  };
   root.PinMapCore = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

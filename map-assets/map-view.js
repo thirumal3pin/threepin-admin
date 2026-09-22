@@ -117,7 +117,7 @@
     // the moment it becomes visible.
     if (S.mapApi && S.mode !== 'list') {
       setTimeout(() => {
-        root.google.maps.event.trigger(S.mapApi.map, 'resize');
+        resizeMap();
         if (S.mode === 'map' || !S.selectedId) S.mapApi.fit(S.items);
       }, 60);
     }
@@ -128,6 +128,16 @@
   // the chip row all wrap at different widths, so the guess was ~90px out at
   // 1500px and the property card fell below the fold. Measured instead, and
   // re-measured on resize.
+  // The one place that nudges the map after a layout change. Goes through
+  // PinMapCore.lib() rather than google.maps, which with loading=async is not
+  // populated until importLibrary has run.
+  function resizeMap() {
+    if (!S.mapApi) return;
+    const lib = root.PinMapCore.lib && root.PinMapCore.lib();
+    const ev = (lib && lib.event) || (root.google && root.google.maps && root.google.maps.event);
+    if (ev && ev.trigger) ev.trigger(S.mapApi.map, 'resize');
+  }
+
   function sizeShell() {
     const shell = document.getElementById('mapShell');
     if (!shell || shell.hidden) return;
@@ -145,7 +155,7 @@
       clearTimeout(t);
       t = setTimeout(() => {
         sizeShell();
-        if (S.mapApi) root.google.maps.event.trigger(S.mapApi.map, 'resize');
+        if (S.mapApi) resizeMap();
       }, 120);
     });
   }
@@ -222,15 +232,14 @@
     const pane = document.getElementById('mapCanvasHost');
     if (!pane) return;
     const placed = S.located ? S.located.counts : null;
-    pane.innerHTML = `<div class="mv-problem">
-      <div class="mv-problem-i">🗺️</div>
+    pane.innerHTML = `<div class="mv-problem"><div class="mv-problem-in">
       <h3>The map cannot load yet</h3>
       <p>${esc(st.message || 'Google Maps did not start.')}</p>
-      <p class="mv-fix"><b>To fix it:</b> ${esc(st.fix || '')}</p>
-      ${placed ? `<p class="mv-still">Everything else already works: <b>${placed.exact + placed.approx}</b> of
-        <b>${placed.total}</b> properties have a position worked out from the area map, so the moment the key is in
-        they appear without anybody entering a coordinate.</p>` : ''}
-    </div>`;
+      <p class="mv-fix"><b>What to do:</b> ${esc(st.fix || 'Tell the office - the map needs switching on.')}</p>
+      ${placed ? `<p class="mv-still"><b>Everything else still works.</b> ${placed.exact + placed.approx} of
+        ${placed.total} properties already have a position, so the list, the distances and the pin report on the
+        left are all live - only the map picture is missing.</p>` : ''}
+    </div></div>`;
   }
 
   // ═══════ DATA ═══════
@@ -614,6 +623,7 @@
     try {
       const res = await root.PinMapNearby.withinMinutes(it, S.items, 30);
       if (!stillAsking(seq)) return;
+      if (res.error) { S.answer = { kind: 'near30', error: res.error }; renderAnswer(); return; }
       S.answer = { kind: 'near30', list: res.list, truncated: res.truncated, priced: true };
     } catch (e) {
       if (!stillAsking(seq)) return;
@@ -632,7 +642,7 @@
     try {
       const res = await root.PinMapNearby.placesNear(it.pos, key, { radius: 3000, limit: 8 });
       if (!stillAsking(seq)) return;
-      S.answer = { kind: 'places', cat: key, list: res.list || [], error: res.error, via: res.via };
+      S.answer = { kind: 'places', cat: key, list: res.list || [], error: res.error, via: res.via, relaxed: res.relaxed };
     } catch (e) {
       if (!stillAsking(seq)) return;
       S.answer = { kind: 'places', cat: key, error: e.message || 'Places request failed' };
@@ -730,6 +740,8 @@
                 <span class="mv-a-n">${esc(x.name)}${x.kind ? `<i>${esc(x.kind)}</i>` : ''}</span>
                 <span class="mv-a-p">${x.rating ? '\u2605 ' + x.rating + (x.ratingCount ? ` (${x.ratingCount})` : '') : ''}</span>
               </div>`).join('')}</div>
+             ${a.relaxed ? `<div class="mv-a-note warn">Nothing well-known of that kind nearby — these are the closest listed,
+               and may be small practices rather than what the client has in mind.</div>` : ''}
              <div class="mv-a-note">Straight-line distance, nearest first.${it && it.pos.accuracyKm
                ? ` Measured from ${esc(it.pos.via || it.pos.area || 'the locality')}, so a closer one on the other side of it may be missing \u2014
                    <button type="button" class="mv-link" data-act="pin">drop the exact pin</button> to be sure.` : ''}</div>`
@@ -798,7 +810,9 @@
           ${r.drive && r.drive.km != null ? `<span><b>${Math.round(r.drive.km * 10) / 10} km</b><i>by road</i></span>` : ''}
           <span><b>${esc(r.say)}</b><i>straight line</i></span>
         </div>
-        ${!r.drive ? '<div class="mv-a-note">No route came back for that mode — the straight-line distance still stands.</div>' : ''}
+        ${!r.drive ? `<div class="mv-a-note">${r.routeError
+          ? 'Google could not route that: ' + esc(r.routeError)
+          : 'No route came back for that mode - the straight-line distance still stands.'}</div>` : ''}
         ${r.note ? `<div class="mv-a-note">Worth knowing: ${esc(r.note)}.</div>` : ''}
         <a class="mv-link" href="${esc(N.directionsUrl(null, r.to, r.mode))}"
            target="_blank" rel="noopener">Open the route in Google Maps ↗</a>
@@ -1014,7 +1028,7 @@
       dragging = false;
       document.body.classList.remove('mv-dragging');
       try { localStorage.setItem(LS_SPLIT, String(S.split)); } catch (e) {}
-      if (S.mapApi) root.google.maps.event.trigger(S.mapApi.map, 'resize');
+      if (S.mapApi) resizeMap();
     };
     bar.addEventListener('pointerup', end);
     bar.addEventListener('pointercancel', end);
@@ -1027,7 +1041,7 @@
       ev.preventDefault();
       shell.style.setProperty('--split', S.split + '%');
       try { localStorage.setItem(LS_SPLIT, String(S.split)); } catch (e) {}
-      if (S.mapApi) root.google.maps.event.trigger(S.mapApi.map, 'resize');
+      if (S.mapApi) resizeMap();
     });
   }
 

@@ -203,17 +203,37 @@ const MAPS_STUB = `
     }
   };
 
-  window.google = { maps: {
-    Map, LatLng, LatLngBounds, OverlayView, DistanceMatrixService, Geocoder,
-    places: { Place },
+  // ── The loading=async contract, honestly reproduced ──
+  //
+  // This stub used to hang Map, LatLng and OverlayView straight onto
+  // google.maps, which is NOT what Google does when the script is loaded with
+  // loading=async: the namespace stays empty until importLibrary() is called.
+  // Because the stub was more permissive than the real API, the tests passed
+  // while production threw "extends value undefined is not a constructor" and
+  // showed no map at all.
+  //
+  // So the classes now live behind importLibrary and nowhere else. Any code
+  // that reaches for google.maps.Map before importing will fail HERE, in a
+  // test, instead of in front of an agent.
+  const LIB = {
+    Map, LatLng, LatLngBounds, OverlayView,
     event: {
       addListenerOnce: (obj, name, fn) => { if (obj.addListener) return obj.addListener(name, fn); },
       trigger: (obj, name) => { if (obj.__fire) obj.__fire(name); }
     },
     ControlPosition: { TOP_RIGHT: 1, RIGHT_BOTTOM: 2 },
-    MapTypeControlStyle: { DROPDOWN_MENU: 1 },
-    TravelMode: { DRIVING: 'DRIVING' },
-    UnitSystem: { METRIC: 0 }
+    MapTypeControlStyle: { DROPDOWN_MENU: 1 }
+  };
+  window.__imported = [];
+  window.google = { maps: {
+    importLibrary: async name => {
+      window.__imported.push(name);
+      if (name === 'maps') return LIB;
+      if (name === 'places') return { Place };
+      return {};
+    },
+    // Only what the real core namespace carries before an import.
+    event: LIB.event
   } };
 })();
 `;
@@ -241,7 +261,7 @@ setTimeout(() => {
 
 const browser = await chromium.launch();
 let routeCalls = 0, lastRouteDests = 0, lastRouteMode = null;
-let acCalls = 0, elevCalls = 0, svImageCalls = 0;
+let acCalls = 0, elevCalls = 0, svImageCalls = 0, placeCalls = 0, geocodeCalls = 0, lastPlaceReq = null;
 const errors = [];
 const ok = (label, cond, detail) => {
   if (cond) console.log('  ok   ' + label);
@@ -287,6 +307,37 @@ async function open(viewport, withMaps) {
         });
       }
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(rows) });
+    }
+    if (url.hostname === 'places.googleapis.com' && /(searchNearby|searchText)/.test(url.pathname)) {
+      placeCalls++;
+      const body = JSON.parse(route.request().postData() || '{}');
+      lastPlaceReq = { text: body.textQuery || null, types: body.includedTypes || body.includedType };
+      const names = body.textQuery
+        ? ['PSBB Millennium School', 'DAV Public School', 'Velammal Vidyalaya']
+        : ['Apollo Hospital', 'Kauvery Hospital', 'MIOT International'];
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        places: names.map((n, i) => ({
+          displayName: { text: n },
+          primaryTypeDisplayName: { text: body.textQuery ? 'School' : 'Hospital' },
+          rating: 4.5 - i * 0.2, userRatingCount: 320 - i * 40,
+          formattedAddress: n + ', Chennai',
+          location: { latitude: 13.0851 + 0.004 * (i + 1), longitude: 80.2102 + 0.003 * (i + 1) }
+        }))
+      }) });
+    }
+    if (url.hostname === 'maps.googleapis.com' && /geocode/.test(url.pathname)) {
+      geocodeCalls++;
+      const addr = url.searchParams.get('address') || '';
+      if (/nowhere|zzzz/i.test(addr)) {
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ status: 'ZERO_RESULTS', results: [] }) });
+      }
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        status: 'OK',
+        results: [{
+          geometry: { location: { lat: 13.0102, lng: 80.2123 }, location_type: 'ROOFTOP' },
+          formatted_address: 'Guindy, Chennai, Tamil Nadu 600032, India'
+        }]
+      }) });
     }
     if (url.hostname === 'places.googleapis.com' && /autocomplete/.test(url.pathname)) {
       acCalls++;
@@ -346,7 +397,7 @@ console.log('With no Maps key configured');
   const body = await txt(page, '#mapPane');
   ok('the map explains itself instead of showing a grey box', /cannot load yet/.test(body), body.slice(0, 120));
   ok('it names the exact fix', /GOOGLE_MAPS_BROWSER_KEY/.test(body), body.slice(0, 220));
-  ok('and says what already works without it', /already works/.test(body), body.slice(0, 300));
+  ok('and says what already works without it', /Everything else still works/.test(body), body.slice(0, 300));
   // The list half must still be fully usable — the positions are computed
   // locally, so losing the key loses the tiles and nothing else.
   const rows = await page.$$eval('#mapList .mv-row', e => e.length);
@@ -478,8 +529,9 @@ console.log('The map view');
   const places = await txt(page, '#mapAnswer');
   ok('schools come back with distances', /PSBB/.test(places) && /km|metres/.test(places), places.slice(0, 260));
   ok('and with ratings', /★/.test(places), places.slice(0, 300));
-  ok('the NEW Places API was used, not the legacy one',
-    (await page.evaluate(() => window.__placeCalls || 0)) >= 1);
+  ok('the NEW Places API was used, over REST, not the legacy SDK', placeCalls >= 1, String(placeCalls));
+  ok('and the school search is sharpened by a text query',
+    !!(lastPlaceReq && lastPlaceReq.text && /matriculation|CBSE/i.test(lastPlaceReq.text)), JSON.stringify(lastPlaceReq));
   await shot(page, 'map-places');
 
   // ── Street View and ground height, both newly possible ──

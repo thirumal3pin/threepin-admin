@@ -165,10 +165,19 @@ body.mv-dragging #mapPane { pointer-events: none; }
 #mapCanvasHost { position: absolute; inset: 0; }
 .mv-canvas { position: absolute; inset: 0; }
 .mv-canvas.pin-mode { cursor: crosshair; }
+/* A column flex box with align-items:center shrinks each child to its own
+   content width, and inside an absolutely positioned parent that collapsed the
+   whole message into a ~90px ribbon reading one word per line. The inner
+   wrapper owns the width instead. */
 .mv-load, .mv-problem {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 7px;
-  padding: 30px; text-align: center; color: var(--ink3); font-size: 13px;
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  padding: 24px; text-align: center; color: var(--ink3); font-size: 13px;
+}
+.mv-problem > div, .mv-problem > h3, .mv-problem > p { max-width: 100%; }
+.mv-problem-in {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: min(460px, 100%);
 }
 .mv-problem-i { font-size: 30px; opacity: .5; }
 .mv-problem h3 { margin: 0; font-family: var(--serif); font-size: 19px; color: var(--ink); font-weight: 600; }
@@ -578,3 +587,13 @@ body.mv-dragging #mapPane { pointer-events: none; }
    be given first, so an agent read out the least useful number of the three. */
 .mv-dist-n span.lead { flex: 1 1 100%; background: var(--gold-lt); }
 .mv-dist-n span.lead b { font-size: 21px; }
+
+/* A caveat the agent has to notice before quoting the row above it. */
+.mv-a-note.warn {
+  background: var(--amber-bg, #FDF0D5);
+  color: var(--amber, #8A4B00);
+  border-left: 2px solid currentColor;
+  padding: 6px 9px;
+  border-radius: 0 4px 4px 0;
+  margin: 6px 0;
+}

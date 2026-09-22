@@ -28,20 +28,38 @@
 //
 // ── THE API GENERATION MATTERS ────────────────────────────────────────────
 //
-// Places is called through `google.maps.places.Place.searchNearby` — the new
-// Places API — and NOT through the legacy PlacesService. That is not
-// stylistic: Google stopped granting legacy Places access to keys created
-// after March 2025, so a key this team creates today would silently return
-// nothing from the old call. The legacy path is kept only as a fallback for
-// an older existing key, and says which one it used.
+// Two of the APIs this module needs were RETIRED for new Google Cloud
+// projects, and both fail silently rather than loudly. Verified against this
+// deployment's own key:
+//
+//   · Legacy Places is refused to keys created after March 2025, so
+//     PlacesService returns nothing at all. Places API (New) is used instead.
+//   · Distance Matrix is refused outright — "You are calling a legacy API,
+//     which is not enabled for your project. Switch to the Places API (New)
+//     or Routes API." The Routes API is used instead, and is better anyway:
+//     live traffic, transit and walking in the same call shape, and a far
+//     higher per-request destination limit.
+//
+// Everything here is therefore REST: Routes, Places, Geocoding, Elevation and
+// Street View. Nothing needs the Maps JavaScript SDK. Two of them never had
+// an SDK wrapper, so the module was already half REST; the other half could
+// only run inside a browser, which meant two code paths and no way to test
+// the important one. One path means the whole module runs in node against the
+// real key — and the agent still gets answers even if the map tiles fail.
 
 (function (root) {
   'use strict';
 
-  function G() {
-    if (!root.google || !root.google.maps) throw new Error('Maps is not loaded');
-    return root.google.maps;
-  }
+  // Every Google call in this module is REST now — Routes, Places, Geocoding,
+  // Elevation and Street View. Nothing here needs the Maps JavaScript SDK.
+  //
+  // That is not incidental. Two of these had no SDK wrapper (Routes,
+  // Elevation), so the module was already half REST; leaving Places and
+  // Geocoding on the SDK meant two code paths, and the half that used the SDK
+  // could only be exercised inside a browser. One path means the whole module
+  // runs and is testable in node against the real key, and the agent's
+  // answers keep working even if the map tiles themselves fail to load.
+  const keyOf = () => (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
   const R = () => root.PinGeoResolve;
 
   // ═══════ NEARBY PROPERTIES — free, from what we already hold ═══════
@@ -155,7 +173,8 @@
       + '|' + list.map(t => t.id).join(',');
     if (matrixCache.has(ck)) return matrixCache.get(ck);
 
-    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    const key = keyOf();
+    const mode = o.mode || 'DRIVE';
     const map = new Map();
     if (!key) { matrixCache.set(ck, map); return map; }
 
@@ -169,18 +188,36 @@
           // as much as the response shape. Nothing here is unused.
           'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,condition'
         },
-        body: JSON.stringify({
+        body: JSON.stringify(Object.assign({
           origins: [{ waypoint: { location: { latLng: { latitude: from.lat, longitude: from.lng } } } }],
           destinations: list.map(t => ({ waypoint: { location: { latLng: { latitude: t.pos.lat, longitude: t.pos.lng } } } })),
-          travelMode: o.mode || 'DRIVE',
-          // Live traffic. A free-flow number is useless in Chennai — it is
-          // the whole reason a client asks "how long".
-          routingPreference: 'TRAFFIC_AWARE',
+          travelMode: mode,
           units: 'METRIC'
-        })
+        },
+        // routingPreference is accepted ONLY for the motorised modes. Sending
+        // it with TRANSIT or WALK returns HTTP 200 carrying a 400 in the body
+        // — "Routing preference cannot be set for TRANSIT travel mode" — and
+        // because the reply is still an array with no ROUTE_EXISTS row, that
+        // read as "no route available" rather than as a bad request. Metro and
+        // walking simply never answered, silently. Live traffic still matters
+        // for driving: a free-flow number is useless in Chennai, which is the
+        // whole reason a client asks how long.
+        (mode === 'DRIVE' || mode === 'TWO_WHEELER') ? { routingPreference: 'TRAFFIC_AWARE' } : {}))
       });
       if (!res.ok) { matrixCache.set(ck, map); return map; }
       const rows = await res.json();
+
+      // Routes reports a REQUEST error inside a 200 response, as an array
+      // whose rows carry `error` instead of a route. Left unread, a
+      // mis-shaped request is indistinguishable from "nowhere is reachable"
+      // — which is exactly how the transit mode failed unnoticed. Surfaced on
+      // the map so the next one cannot hide.
+      const bad = (Array.isArray(rows) ? rows : []).find(r => r && r.error);
+      if (bad) {
+        map.error = (bad.error.message || 'Routes rejected the request') + ' (' + mode + ')';
+        matrixCache.set(ck, map);
+        return map;
+      }
 
       // Routes answers with a FLAT array carrying its own indices, and in no
       // guaranteed order — unlike Distance Matrix's positional rows. Reading
@@ -222,6 +259,8 @@
     const candidates = nearbyProperties(anchor, items, { km: straightKm, limit: MATRIX_MAX, includeSold: o.includeSold, maxPrice: o.maxPrice });
     if (!candidates.length) return { list: [], truncated: false, priced: false };
     const times = await travelTimes(anchor.pos, candidates.map(c => ({ id: c.p.id, pos: c.pos })), o);
+    // A refusal is not an empty neighbourhood, and must not be reported as one.
+    if (times.error) return { list: [], truncated: false, priced: true, error: times.error };
     const list = candidates
       .map(c => Object.assign({}, c, times.get(c.p.id) || {}))
       .filter(c => c.mins != null && c.mins <= mins)
@@ -252,10 +291,53 @@
     // sharpens exactly those two.
     { key: 'school', label: 'Schools', types: ['school', 'primary_school', 'secondary_school'],
       keyword: 'matriculation CBSE ICSE international school' },
-    { key: 'hospital', label: 'Hospitals', types: ['hospital'], keyword: 'multi speciality hospital' },
-    // Buses and share autos are how most of this city commutes, so the bus
-    // stand belongs with the metro rather than nowhere.
-    { key: 'transit', label: 'Metro, rail & bus', types: ['subway_station', 'train_station', 'transit_station', 'bus_station'] },
+    // NO keyword. A text search for "multi speciality hospital" matched
+    // business NAMES and came back with three results all literally called
+    // "Best Multispeciality Hospital in Chennai" — SEO copy, not hospitals an
+    // agent can name to a client. The `hospital` place type, ranked by
+    // distance, returns the real ones.
+    // Google's 'hospital' type also returns dental surgeries, eye clinics
+    // and single-doctor practices, which came back as 'Bashyam Dental Care'
+    // when a client had asked about a hospital. excludedTypes is the new
+    // Places API answer to exactly that.
+    { key: 'hospital', label: 'Hospitals', types: ['hospital'],
+      exclude: ['dentist', 'doctor', 'pharmacy', 'physiotherapist', 'wellness_center', 'beauty_salon', 'veterinary_care', 'medical_lab'],
+      // Three filters, because ranking type=hospital by distance in a dense
+      // part of Chennai returns every one-room practice on the street:
+      // 'SS CLINIC and Diagnostic Centre', 'STR Weight Reduction Clinic',
+      // 'Nagavardhini seo'. None of those is an answer to "is there a
+      // hospital nearby", and the agent would have to read the small grey
+      // type under each name to find that out.
+      //
+      // requireKind  - Google's own label has to say hospital.
+      // rejectName   - and the NAME has to not say clinic, because the name is
+      //                what the agent reads out loud to the client.
+      // minRatings   - and it has to be somewhere the public has actually
+      //                been. A hospital worth naming has hundreds of reviews;
+      //                a nameplate practice has none.
+      //
+      // If all three together leave nothing, placesNear falls back to the
+      // unfiltered list and says so, rather than claiming there is no
+      // hospital nearby.
+      requireKind: /hospital|medical cent/i,
+      rejectName: /\bclinics?\b|\bdental\b|diagnostic|weight (reduction|loss)|physiothe|\blabs?\b|polyclinic|\bscan\b|\bseo\b/i,
+      minRatings: 25 },
+    // Metro and bus are SEPARATE chips, and that is not tidiness.
+    //
+    // One combined chip ranked by distance answered 'is the metro close?'
+    // with three bus stops, because a bus stop is on every corner and a metro
+    // station is not. The agent then had to read the small grey type under
+    // each name to work out that none of them was a metro. Asking about the
+    // metro now returns metro and suburban rail only: three stations, or an
+    // honest nothing, which is itself the answer a client needs.
+    //
+    // 'transit_station' is deliberately left out of the rail list — Google
+    // applies it to bus stops too, which is how they got in.
+    { key: 'transit', label: 'Metro & rail', types: ['subway_station', 'light_rail_station', 'train_station'],
+      exclude: ['bus_station', 'bus_stop'] },
+    // Buses and share autos are how most of this city actually commutes, so
+    // the bus stand keeps its own chip rather than disappearing.
+    { key: 'bus', label: 'Bus', types: ['bus_station', 'bus_stop'] },
     // Asked before restaurants, genuinely. CONCEPTS.devotional in the
     // matcher already knew this mattered; the map did not offer it.
     { key: 'temple', label: 'Temples', types: ['hindu_temple', 'place_of_worship'] },
@@ -286,107 +368,100 @@
     const ck = `${pos.lat.toFixed(4)},${pos.lng.toFixed(4)}|${key}|${radius}`;
     if (placeCache.has(ck)) return placeCache.get(ck);
 
-    let res;
+    const apiKey = keyOf();
+    if (!apiKey) return { list: [], error: 'no maps key' };
+
+    // searchNearby takes TYPES and has no keyword parameter; searchText takes
+    // a phrase. Categories that must be narrowed — "multi speciality
+    // hospital", not every clinic — go through the second one.
+    const useText = !!cat.keyword;
+    const url = 'https://places.googleapis.com/v1/places:' + (useText ? 'searchText' : 'searchNearby');
+    const body = useText
+      ? {
+        textQuery: cat.keyword,
+        locationBias: { circle: { center: { latitude: pos.lat, longitude: pos.lng }, radius } },
+        includedType: cat.types[0],
+        maxResultCount: Math.min(20, (o.limit || 8) * 2)
+      }
+      : Object.assign({
+        includedTypes: cat.types,
+        locationRestriction: { circle: { center: { latitude: pos.lat, longitude: pos.lng }, radius } },
+        // Asked for generously, because the de-duplication and exclusions
+        // below trim it back and a short list would come out shorter still.
+        maxResultCount: (cat.requireKind || cat.minRatings) ? 20 : Math.min(20, Math.max(10, (o.limit || 8) * 3)),
+        // Candidates chosen by PROMINENCE for the filtered categories, then
+        // sorted by distance for display. Choosing candidates by distance
+        // instead meant the twenty nearest places filled up with nameplate
+        // practices and a 600-bed hospital 2 km away never entered the list at
+        // all — one survivor out of twenty. Prominence picks the twenty places
+        // people have actually heard of inside the radius; the sort below
+        // still shows the agent the closest one first.
+        rankPreference: (cat.requireKind || cat.minRatings) ? 'POPULARITY' : 'DISTANCE'
+      }, cat.exclude ? { excludedTypes: cat.exclude } : {});
+
+    let res = { list: [] };
     try {
-      res = await searchNew(pos, cat, radius, o);
-      if (!res || res.error) {
-        const legacy = await searchLegacy(pos, cat, radius, o);
-        if (legacy && !legacy.error) res = legacy;
+      const r = await (o.fetchImpl || fetch)(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          // Billed by what is asked for, so the mask is the cost control as
+          // much as the response shape.
+          'X-Goog-FieldMask': 'places.displayName,places.location,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.formattedAddress'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        res = { list: [], error: 'places ' + r.status + (/API_KEY|not enabled|PERMISSION/i.test(t) ? ' — check Places API (New) is enabled for this key' : '') };
+      } else {
+        const d = await r.json();
+        res = {
+          list: (d.places || []).map(x => ({
+            name: (x.displayName && x.displayName.text) || 'Unnamed',
+            kind: (x.primaryTypeDisplayName && x.primaryTypeDisplayName.text) || cat.label,
+            rating: x.rating || null,
+            ratingCount: x.userRatingCount || null,
+            address: x.formattedAddress || null,
+            pos: { lat: x.location.latitude, lng: x.location.longitude }
+          }))
+        };
       }
     } catch (e) {
       res = { list: [], error: (e && e.message) || 'places failed' };
     }
 
     const geo = R();
-    if (res && res.list) {
-      res.list = res.list
+    if (res.list && res.list.length) {
+      const seen = new Set();
+      const all = res.list
         .map(x => Object.assign(x, {
           km: geo.haversine(pos, x.pos),
           say: geo.sayDistance(geo.haversine(pos, x.pos), pos.accuracyKm, 0)
         }))
         .sort((a, b) => a.km - b.km)
-        .slice(0, o.limit == null ? 8 : o.limit);
+        // One name, once. Chennai has two bus stops of the same name on one
+        // road, and three rows showing two of them is two rows wasted.
+        .filter(x => {
+          const k = x.name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+          if (seen.has(k)) return false;
+          seen.add(k); return true;
+        });
+
+      const good = all.filter(x =>
+        (!cat.requireKind || cat.requireKind.test(x.kind || '')) &&
+        (!cat.rejectName || !cat.rejectName.test(x.name || '')) &&
+        (!cat.minRatings || (x.ratingCount || 0) >= cat.minRatings));
+
+      // Prefer the credible ones; fall back rather than answer "none", and
+      // flag the fallback so the panel can be honest about what it is showing.
+      const chosen = good.length ? good : all;
+      res.relaxed = !good.length && all.length > 0 && !!(cat.requireKind || cat.minRatings);
+      res.list = chosen.slice(0, o.limit == null ? 8 : o.limit);
     }
     placeCache.set(ck, res);
     return res;
-  }
-
-  // The new Places API. Two calls, chosen by whether the category needs
-  // sharpening: `searchNearby` takes types and has NO keyword parameter, so a
-  // category that must be narrowed ("multi speciality hospital", not every
-  // clinic) goes through `searchByText`, which does. Passing a keyword to
-  // searchNearby would have been silently ignored.
-  const FIELDS = ['displayName', 'location', 'primaryTypeDisplayName', 'rating', 'userRatingCount', 'formattedAddress'];
-
-  async function searchNew(pos, cat, radius, o) {
-    const g = G();
-    const Place = g.places && g.places.Place;
-    if (!Place) return { error: 'no new places' };
-    const max = Math.min(20, (o.limit || 8) * 2);
-    const center = new g.LatLng(pos.lat, pos.lng);
-    let places;
-    if (cat.keyword && typeof Place.searchByText === 'function') {
-      const res = await Place.searchByText({
-        fields: FIELDS,
-        textQuery: cat.keyword,
-        locationBias: { center, radius },
-        includedType: cat.types[0],
-        maxResultCount: max,
-        rankPreference: 'DISTANCE'
-      });
-      places = res.places;
-    } else {
-      if (typeof Place.searchNearby !== 'function') return { error: 'no new places' };
-      const res = await Place.searchNearby({
-        fields: FIELDS,
-        locationRestriction: { center, radius },
-        includedTypes: cat.types,
-        maxResultCount: max,
-        rankPreference: 'DISTANCE'
-      });
-      places = res.places;
-    }
-    return {
-      via: 'new',
-      list: (places || []).map(p => ({
-        name: (p.displayName && (p.displayName.text || p.displayName)) || 'Unnamed',
-        kind: (p.primaryTypeDisplayName && (p.primaryTypeDisplayName.text || p.primaryTypeDisplayName)) || cat.label,
-        rating: p.rating || null,
-        ratingCount: p.userRatingCount || null,
-        address: p.formattedAddress || null,
-        pos: { lat: p.location.lat(), lng: p.location.lng() }
-      }))
-    };
-  }
-
-  // Kept only for an older key that still has legacy Places enabled. A key
-  // created after March 2025 will not, which is why it is the fallback and
-  // not the primary.
-  function searchLegacy(pos, cat, radius, o) {
-    const g = G();
-    if (!g.places || !g.places.PlacesService) return Promise.resolve({ error: 'no legacy places' });
-    const svc = new g.places.PlacesService(document.createElement('div'));
-    return new Promise(resolve => {
-      svc.nearbySearch({
-        location: new g.LatLng(pos.lat, pos.lng),
-        radius,
-        type: cat.types[0],
-        keyword: cat.keyword || undefined
-      }, (results, status) => {
-        if (status !== 'OK' || !results) return resolve({ error: 'legacy: ' + status });
-        resolve({
-          via: 'legacy',
-          list: results.map(p => ({
-            name: p.name || 'Unnamed',
-            kind: cat.label,
-            rating: p.rating || null,
-            ratingCount: p.user_ratings_total || null,
-            address: p.vicinity || null,
-            pos: { lat: p.geometry.location.lat(), lng: p.geometry.location.lng() }
-          }))
-        });
-      });
-    });
   }
 
   // ═══════ "HOW FAR IS IT FROM …" ═══════
@@ -401,36 +476,48 @@
     const q = String(text || '').trim();
     if (!q) return null;
     if (geocodeCache.has(q)) return geocodeCache.get(q);
-    const g = G();
-    const gc = new g.Geocoder();
+    const apiKey = keyOf();
+    if (!apiKey) return null;
+
     const bounds = R().BOUNDS;
-    const answer = await new Promise(resolve => {
-      gc.geocode({
-        address: /chennai|tamil\s*nadu/i.test(q) ? q : q + ', Chennai, Tamil Nadu, India',
-        componentRestrictions: { country: 'IN' },
-        bounds: new g.LatLngBounds(
-          new g.LatLng(bounds.south, bounds.west),
-          new g.LatLng(bounds.north, bounds.east)
-        )
-      }, (res, status) => {
-        if (status !== 'OK' || !res || !res.length) return resolve(null);
-        const r = res[0];
-        resolve({
-          lat: r.geometry.location.lat(),
-          lng: r.geometry.location.lng(),
-          formatted: r.formatted_address,
-          precise: /ROOFTOP|RANGE_INTERPOLATED/.test(r.geometry.location_type || ''),
-          accuracyKm: /ROOFTOP|RANGE_INTERPOLATED/.test(r.geometry.location_type || '') ? 0 : 1.2
-        });
-      });
-    });
+    // Bounded to Chennai and pinned to India, or "Anna Nagar" resolves to a
+    // street of that name in another state.
+    const address = /chennai|tamil\s*nadu/i.test(q) ? q : q + ', Chennai, Tamil Nadu, India';
+    const url = 'https://maps.googleapis.com/maps/api/geocode/json'
+      + '?address=' + encodeURIComponent(address)
+      + '&components=country:IN'
+      + `&bounds=${bounds.south},${bounds.west}|${bounds.north},${bounds.east}`
+      + '&key=' + encodeURIComponent(apiKey);
+
+    let answer = null;
+    try {
+      const r = await (o.fetchImpl || fetch)(url);
+      if (r.ok) {
+        const d = await r.json();
+        const first = d.status === 'OK' && d.results && d.results[0];
+        if (first) {
+          const loc = first.geometry.location;
+          // ROOFTOP and RANGE_INTERPOLATED are a building. GEOMETRIC_CENTER
+          // and APPROXIMATE are a road or a locality, and must not be
+          // promoted to "exact" — a distance quoted from one is a distance
+          // from the middle of an area.
+          const precise = /ROOFTOP|RANGE_INTERPOLATED/.test(first.geometry.location_type || '');
+          answer = {
+            lat: loc.lat, lng: loc.lng,
+            formatted: first.formatted_address,
+            precise,
+            accuracyKm: precise ? 0 : 1.2
+          };
+        }
+      }
+    } catch (e) { answer = null; }
     geocodeCache.set(q, answer);
     return answer;
   }
 
   // The three ways a Chennai client actually travels. Routes serves all of
-  // them from one call shape, so offering only DRIVE was leaving the metro
-  // question — the commonest one after price — unanswerable.
+  // them from one call shape, so offering only DRIVE left the metro question
+  // — the commonest one after price — unanswerable.
   const MODES = [
     { key: 'DRIVE', label: 'Driving', verb: 'driving' },
     { key: 'TRANSIT', label: 'Metro & bus', verb: 'by metro or bus' },
@@ -451,6 +538,7 @@
     const mode = o.mode || 'DRIVE';
     const times = await travelTimes(fromPos, [{ id: 'q', pos: dest }], Object.assign({}, o, { mode }));
     const drive = times.get('q') || null;
+    const routeError = times.error || null;
 
     // The caveat travels with the answer. If the property is only placed at
     // its locality, a drive time from it is a drive time from the middle of
@@ -465,7 +553,7 @@
       to: { formatted: dest.formatted, lat: dest.lat, lng: dest.lng },
       straightKm: straight,
       say: geo.sayDistance(straight, fromPos.accuracyKm, dest.accuracyKm),
-      drive, mode,
+      drive, mode, routeError,
       modeVerb: (MODES.find(m => m.key === mode) || MODES[0]).verb,
       note: notes.length ? notes.join('; ') : null
     };
@@ -484,7 +572,7 @@
     const q = String(input || '').trim();
     if (q.length < 3) return [];
     if (acCache.has(q)) return acCache.get(q);
-    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    const key = keyOf();
     if (!key) return [];
     let out = [];
     try {
@@ -536,19 +624,28 @@
   // is what makes them mean anything here: the metro runs from roughly 2 m on
   // the coast to 50 m inland, and the difference between 8 m and 30 m is the
   // difference every buyer who lived through 2015 is asking about.
+  // Calibrated against measured ground in this city, not against sea level in
+  // the abstract. The first cut had 20 m as "higher ground", which put
+  // Velachery at 21 m in the same band as Anna Nagar at 31 m and told an
+  // agent both were high — useless, and actively wrong about the one locality
+  // a client asking this question is most likely to name.
+  //
+  // Chennai runs from about 2 m on the coast to 50 m and above inland, and
+  // most of the built-up middle sits between 10 and 25 m.
   function elevationBand(m) {
     if (m == null) return null;
-    if (m < 6) return { key: 'low', say: 'very low-lying for Chennai' };
-    if (m < 12) return { key: 'lowish', say: 'low-lying by Chennai standards' };
-    if (m < 20) return { key: 'mid', say: 'around the middle of the city\u2019s range' };
-    return { key: 'high', say: 'on the higher ground for Chennai' };
+    if (m < 8) return { key: 'low', say: 'very low-lying, even for Chennai' };
+    if (m < 15) return { key: 'lowish', say: 'low-lying by Chennai standards' };
+    if (m < 25) return { key: 'mid', say: 'mid-range for Chennai' };
+    if (m < 40) return { key: 'high', say: 'on the higher ground for Chennai' };
+    return { key: 'high', say: 'well above most of the city' };
   }
 
   async function elevationOf(pos, opts) {
     const o = opts || {};
     const ck = pos.lat.toFixed(4) + ',' + pos.lng.toFixed(4);
     if (elevCache.has(ck)) return elevCache.get(ck);
-    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    const key = keyOf();
     if (!key) return null;
     let answer = null;
     try {
@@ -573,7 +670,7 @@
   // and charge for it.
   async function streetView(pos, opts) {
     const o = opts || {};
-    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    const key = keyOf();
     if (!key) return null;
     try {
       const res = await (o.fetchImpl || fetch)(
@@ -613,7 +710,7 @@
   const api = {
     KM_PER_MIN_ROAD, ROAD_TO_STRAIGHT, ROUTES_URL, MODES,
     nearbyProperties, withinMinutes, travelTimes,
-    placesNear, CATEGORIES,
+    placesNear, CATEGORIES, keyOf,
     autocomplete, elevationOf, elevationBand, streetView,
     geocodeText, distanceTo, directionsUrl,
     MATRIX_MAX,
