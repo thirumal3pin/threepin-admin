@@ -357,7 +357,15 @@
 
   // Negations that make a match a non-objection: "price is not high",
   // "no issue with the location".
-  const NEGATED = /\b(?:not|no|never|without|isn'?t|wasn'?t|don'?t|doesn'?t|didn'?t)\s+(?:\w+\s+){0,2}$/;
+  const NEGATED = /\b(?:not|no|never|without|isn'?t|wasn'?t|don'?t|doesn'?t|didn'?t)\s+(?:\w+\s+){0,3}$/;
+
+  // And the same thing said the other way round. Indian English and Tamil put
+  // the negation AFTER the complaint — "price high illa", "problem illa",
+  // "issue edhuvum illa", "not a problem at all" — so a backward-only check
+  // read every one of those as a live objection. That is the worst possible
+  // direction to be wrong in: it blacklists inventory on the exact sentences
+  // that say there is nothing wrong.
+  const NEGATED_AFTER = /^\s*(?:\w+\s+){0,4}(?:illa|illai|kidaiyathu|no issue|not an issue|no problem|not a problem|is fine|was fine|ok\b|okay\b)/;
 
   const SENTENCE_SPLIT = /(?<=[.!?;\n])\s+|\s*[•·]\s*/;
 
@@ -563,15 +571,51 @@
       }
       return keys.length ? { keys, src } : null;
     };
+    // A named corridor ("anywhere on OMR", "ECR side") is a different kind of
+    // answer from a locality and has to survive as one — the alias table
+    // resolves it to a single representative point, which is right for
+    // placing a property and wrong for reading a brief.
+    const CORRIDOR_SAID = [
+      ['OMR', /\b(?:omr|old\s*mahabalipuram\s*road|rajiv\s*gandhi\s*salai|it\s*(?:corridor|highway))\b/],
+      ['ECR', /\b(?:ecr|east\s*coast\s*road)\b/],
+      ['GST', /\b(?:gst\s*road|gst\b|grand\s*southern\s*trunk|nh\s*?45)\b/],
+      ['Radial Road', /\bradial\s*road\b/],
+      ['Mount-Poonamallee', /\bmount\s*-?\s*poonamallee\b/],
+      ['Velachery-Tambaram', /\bvelachery\s*-?\s*tambaram\b/]
+    ];
+    const allText = fold(joinTexts(texts));
+    const corridors = CORRIDOR_SAID.filter(([, re]) => re.test(allText)).map(([k]) => k);
+
     const firm = scan(texts.filter(t => REQ.test(t.src)));
-    if (firm) return { keys: firm.keys, firm: true, src: firm.src };
+    if (firm) return { keys: firm.keys, firm: true, src: firm.src, corridors };
     const loose = scan(texts);
-    return loose ? { keys: loose.keys, firm: false, src: loose.src } : null;
+    if (loose) return { keys: loose.keys, firm: false, src: loose.src, corridors };
+    // A brief that names ONLY a corridor still states a location.
+    if (corridors.length) {
+      const geo = G();
+      const keys = corridors.flatMap(c => (geo.CORRIDOR_MEMBERS[c] || []).slice(0, 1));
+      return { keys, firm: false, src: 'corridor', corridors };
+    }
+    return null;
   }
 
   // Built-up area, when a buyer states one. Guarded to plausible home sizes
   // so a price or a pincode cannot arrive here as a size.
   function readSize(texts) {
+    // Land in Chennai is quoted in grounds and cents, not square feet — "3
+    // grounds", "6 cents", "2 acres" — and the sqft guard below silently
+    // dropped every one of them, which is most plot and independent-house
+    // briefs in the city. PinSearch already knows the conversions
+    // (1 ground = 2,400 sqft, 1 cent = 435.6).
+    for (const t of texts) {
+      if (/\b(?:ground|grounds|cent|cents|acre|acres)\b/i.test(t.text)) {
+        const land = S().parseLandSqft(t.text).filter(n => n >= 400 && n <= 500000);
+        if (land.length) {
+          const lo = Math.min.apply(null, land), hi = Math.max.apply(null, land);
+          return { min: lo, max: hi > lo ? hi : Math.round(lo * 1.25), src: t.src, unit: 'land' };
+        }
+      }
+    }
     for (const t of texts) {
       if (!/\b(?:sq\.?\s*ft|sqft|sft|square\s*feet|built\s*up|builtup|carpet|area)\b/i.test(t.text)) continue;
       const p = S().parseRanges(t.text);
@@ -666,12 +710,15 @@
           const m = def.re.exec(s);
           if (!m) continue;
           // "price is not high" — the negation belongs to this match.
-          const before = s.slice(Math.max(0, m.index - 24), m.index);
+          const before = s.slice(Math.max(0, m.index - 32), m.index);
           if (NEGATED.test(before)) continue;
+          const after = s.slice(m.index + m[0].length);
+          if (NEGATED_AFTER.test(after)) continue;
           if (def.kind === 'price_high' && CAPACITY_CUE.test(s)) continue;
           const weight = recency(t.at, now);
           const o = {
             kind: def.kind, label: def.label, penalty: def.penalty,
+            authority: t.authority == null ? 1 : t.authority,
             quote: sentence.length > 160 ? sentence.slice(0, 157) + '…' : sentence,
             at: t.at, src: t.src, weight, anchor: null, anchorFrom: null
           };
@@ -714,9 +761,23 @@
     }
 
     // Cleared by something said afterwards.
+    //
+    // `>` alone was not enough. Every fragment of TailorTalk's AI profile
+    // carries the SAME timestamp (the conversation's last-message time), so a
+    // profile reading "was worried about price, now confirmed budget 1.2 Cr"
+    // could never clear its own objection: the clearing sentence was never
+    // LATER than the objection, only equal. The result was a stale price veto
+    // quietly hiding good inventory — the exact failure this file's header
+    // warns about. Equal timestamps now fall back to authority, and a
+    // clearing cue in the same text as the objection clears it.
     const clearing = texts.filter(t => CLEARED_CUE.test(fold(t.text)));
     for (const o of found) {
-      const after = clearing.find(c => c.at && o.at && c.at > o.at);
+      const after = clearing.find(c => {
+        if (!c.at || !o.at) return false;
+        if (c.at > o.at) return true;
+        if (c.at !== o.at) return false;
+        return c.authority >= o.authority || c.src === o.src;
+      });
       if (after) { o.cleared = true; o.clearedBy = after.src; o.weight = 0; }
     }
 
@@ -1041,23 +1102,47 @@
 
         const over = price / max;
         const pct = Math.round((over - 1) * 100);
-        // Calibrated to the judgement an agent makes on the phone: ~17% over
-        // is still a call worth making (the owner's own reference case), ~30%
-        // over is a stretch worth mentioning, and past ~45% it is a different
-        // buyer's property. Price-sensitive buyers — the ones who have
-        // already called something expensive — get a hard stop at 25%.
-        const s = over <= 1.02 ? 0.98
-          : over <= 1.05 ? 0.95
-            : over <= 1.10 ? 0.88
-              : over <= 1.20 ? 0.78
-                : over <= 1.30 ? 0.55
-                  : over <= 1.45 ? 0.30
+
+        // ── How far a buyer can stretch depends on the segment, not on a
+        //    percentage ──
+        //
+        // A flat 20% band was materially wrong at both ends. A ₹50 L buyer
+        // stretching 17% has to find ₹8.5 L in cash they do not have, because
+        // their loan is already at the eligibility ceiling — that is a wall,
+        // not a preference, and it is where this market's volume is. A ₹8 Cr
+        // buyer stretching 17% is often one phone call. So tolerance is read
+        // off the bracket and the curve is expressed in multiples of it,
+        // which leaves the reference case (₹3 Cr budget, ₹3.5 Cr property,
+        // 17% over → 0.78) exactly where it was.
+        const tol = max < 75 * LAKH ? 0.08
+          : max < 2 * CR ? 0.12
+            : max < 5 * CR ? 0.20
+              : 0.28;
+        const stretch = (over - 1) / tol;      // 1.0 = at the edge of it
+
+        const s = stretch <= 0.15 ? 0.98
+          : stretch <= 0.30 ? 0.95
+            : stretch <= 0.55 ? 0.88
+              : stretch <= 0.85 ? 0.78
+                : stretch <= 1.20 ? 0.55
+                  : stretch <= 1.80 ? 0.30
                     : 0.08;
-        if (priceSensitive && over > 1.25) {
-          return { s, veto: `${pct}% over the ${r.budget.stated} budget, and they have already called a property too expensive` };
+
+        const band = max < 75 * LAKH ? 'at this budget a loan is already at its ceiling, so there is little room to stretch' : null;
+        // The anchor rule in applyObjections() already sets the real ceiling
+        // from the property they actually called expensive, and that is the
+        // better instrument — so this blanket stop now only applies to a
+        // buyer who has said it more than once.
+        const saidTwice = r.objections.filter(o => o.kind === 'price_high').length > 1;
+        if (priceSensitive && saidTwice && stretch > 1.2) {
+          return { s, veto: `${pct}% over the ${r.budget.stated} budget, and they have called a property too expensive more than once` };
         }
-        if (over > 1.6) return { s, veto: `${fmtMoney(price)} is ${pct}% over the ${r.budget.stated} budget` };
-        return { s, why: `${fmtMoney(price)} — ${pct}% over the ${r.budget.stated} budget${s >= 0.78 ? ', close enough to put to them' : ''}` };
+        if (stretch > 2.2) return { s, veto: `${fmtMoney(price)} is ${pct}% over the ${r.budget.stated} budget` };
+        return {
+          s,
+          why: `${fmtMoney(price)} — ${pct}% over the ${r.budget.stated} budget`
+            + (s >= 0.78 ? ', close enough to put to them' : (band ? ` — ${band}` : ''))
+        };
       }
     },
 
@@ -1076,6 +1161,31 @@
         const want = r.localities.keys;
         const heres = p.localities.length ? p.localities : (p.locationText ? [p.locationText] : []);
         if (!heres.length) return { s: 0.08, why: 'no location recorded on this property' };
+
+        // ── A corridor is a whole answer, not a point ──
+        //
+        // "Anywhere on OMR" is the commonest brief in this market, and it was
+        // scored as straight-line distance from Sholinganallur — because the
+        // alias table collapses 'omr' onto one representative locality, and
+        // the corridor fallback below only ran when the gazetteer FAILED.
+        // Both sides resolved fine, so it never ran: Perungudi (8 km) scored
+        // 0.48 and Kelambakkam (13 km) scored 0.3, when both are exactly what
+        // that buyer asked for. Anything on a corridor the buyer named is a
+        // full match, and only the length of the stretch separates them.
+        if (r.localities.corridors && r.localities.corridors.length) {
+          const geo2 = G();
+          for (const c of r.localities.corridors) {
+            const members = geo2.CORRIDOR_MEMBERS[c] || [];
+            const hit = heres.find(h => members.includes(geo2.resolve(h)));
+            if (hit) {
+              // Name the property's OWN locality, not whichever member of the
+              // corridor happened to match — "Sholinganallur, on OMR" for a
+              // Kelambakkam property is true and useless.
+              const own = p.localities[0] ? geo2.label(p.localities[0]) : geo2.label(geo2.resolve(hit));
+              return { s: 1, why: `${own}, on ${c} — the stretch they asked for` };
+            }
+          }
+        }
 
         // Best pairing over everywhere the buyer named × everywhere the
         // property can be said to be.

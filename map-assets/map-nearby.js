@@ -65,22 +65,36 @@
     if (!anchor || !anchor.pos) return [];
     const geo = R();
     const out = [];
+    let sold = 0, overBudget = 0;
     for (const it of items || []) {
       if (!it.pos || it.p.id === anchor.p.id) continue;
-      if (!o.includeSold && it.p.soldOut) continue;
-      const d = geo.haversine(anchor.pos, it.pos);
-      // The slop on both ends widens the net, so a property that COULD be
-      // inside the radius is not excluded by a centroid's error.
-      const slop = (anchor.pos.accuracyKm || 0) + (it.pos.accuracyKm || 0);
-      if (d - slop > km) continue;
+      const d0 = geo.haversine(anchor.pos, it.pos);
+      const slop0 = (anchor.pos.accuracyKm || 0) + (it.pos.accuracyKm || 0);
+      const inRange = d0 - slop0 <= km;
+      // Counted, not silently dropped: "nothing within 5 km" next to a
+      // visible Sold marker reads as a bug, and a hidden price cap reads as
+      // a missing property.
+      if (it.p.soldOut) { if (inRange) sold++; if (!o.includeSold) continue; }
+      if (o.maxPrice != null && it.priceLo != null && it.priceLo > o.maxPrice) { if (inRange) overBudget++; continue; }
+      if (!inRange) continue;
       out.push(Object.assign({}, it, {
-        km: d,
-        certain: slop === 0,
-        say: geo.sayDistance(d, anchor.pos.accuracyKm, it.pos.accuracyKm)
+        km: d0,
+        certain: slop0 === 0,
+        // The widest honest reading of this row's distance, so a caller can
+        // tell whether the headline radius is really true of everything in
+        // the list.
+        maxKm: d0 + slop0,
+        say: geo.sayDistance(d0, anchor.pos.accuracyKm, it.pos.accuracyKm)
       }));
     }
     out.sort((a, b) => a.km - b.km);
-    return o.limit ? out.slice(0, o.limit) : out;
+    const list = o.limit ? out.slice(0, o.limit) : out;
+    // Attached rather than returned separately, so every existing caller
+    // keeps working with an array.
+    list.excluded = { sold, overBudget };
+    list.allCertain = list.every(x => x.maxKm <= km);
+    list.widestKm = list.length ? Math.max.apply(null, list.map(x => x.maxKm)) : 0;
+    return list;
   }
 
   // ═══════ DRIVING TIME — the only paid part of "nearby" ═══════
@@ -88,6 +102,19 @@
   // Distance Matrix: 25 destinations per request, billed per element. The
   // pre-filter is what keeps "within 30 minutes" to a single request.
   const MATRIX_MAX = 24;
+
+  // ── Chennai traffic, stated once ──
+  //
+  // 0.35 km per minute is ~21 km/h, which is the honest peak-hours average
+  // once Kathipara, Madhya Kailash, the OMR toll stretch and GST at
+  // Chromepet are counted. ROAD distance also runs about 1.3× straight-line
+  // here, so the two have to be applied in the right order — the previous
+  // code multiplied minutes by 0.45 and then filtered on STRAIGHT-LINE km,
+  // which happened to land in roughly the right place because the optimism
+  // and the missing detour factor cancelled out. It worked by luck and would
+  // have broken the moment somebody corrected either half.
+  const KM_PER_MIN_ROAD = 0.35;
+  const ROAD_TO_STRAIGHT = 1 / 1.3;
   const matrixCache = new Map();
 
   /**
@@ -148,11 +175,12 @@
    */
   async function withinMinutes(anchor, items, mins, opts) {
     const o = opts || {};
-    // A generous straight-line net first: at Chennai's ~24 km/h average,
-    // 30 minutes is ~12 km of road, which is ~9 km straight. Over-fetching
-    // the net slightly is free; under-fetching loses real answers.
-    const roadKm = mins * 0.45;
-    const candidates = nearbyProperties(anchor, items, { km: roadKm, limit: MATRIX_MAX, includeSold: o.includeSold });
+    // Road kilometres first, then converted to the straight-line radius the
+    // filter actually works in, with a little slack: over-fetching the net is
+    // free, under-fetching silently loses real answers.
+    const roadKm = mins * KM_PER_MIN_ROAD;
+    const straightKm = roadKm * ROAD_TO_STRAIGHT * 1.15;
+    const candidates = nearbyProperties(anchor, items, { km: straightKm, limit: MATRIX_MAX, includeSold: o.includeSold, maxPrice: o.maxPrice });
     if (!candidates.length) return { list: [], truncated: false, priced: false };
     const times = await travelTimes(anchor.pos, candidates.map(c => ({ id: c.p.id, pos: c.pos })), o);
     const list = candidates
@@ -173,15 +201,32 @@
   // The categories a Chennai buyer actually asks about, in the order they ask.
   // `types` are Google place types; `keyword` sharpens the ones where the type
   // alone is too broad to be useful.
+  // No icons. The console's own chrome is 14px stroked SVG, and eight
+  // multi-colour emoji in a warm-grey card did more to make this read as an
+  // internal tool than anything else on screen — they cannot be tinted,
+  // weighted or baseline-aligned, and they render as each platform's cartoon
+  // set. Eight clean labels beat eight cartoons.
   const CATEGORIES = [
-    { key: 'school', label: 'Schools', icon: '🎓', types: ['school', 'primary_school', 'secondary_school'] },
-    { key: 'hospital', label: 'Hospitals', icon: '🏥', types: ['hospital'] },
-    { key: 'transit', label: 'Metro & rail', icon: '🚇', types: ['subway_station', 'train_station', 'transit_station'] },
-    { key: 'shopping', label: 'Shopping', icon: '🛍️', types: ['shopping_mall', 'supermarket'] },
-    { key: 'college', label: 'Colleges', icon: '🏛️', types: ['university'] },
-    { key: 'park', label: 'Parks', icon: '🌳', types: ['park'] },
-    { key: 'bank', label: 'Banks & ATMs', icon: '🏦', types: ['bank', 'atm'] },
-    { key: 'restaurant', label: 'Places to eat', icon: '🍽️', types: ['restaurant'] }
+    // A bare `school` type returns tuition centres and playschools ahead of
+    // the schools people actually buy a house for, and a bare `hospital`
+    // returns clinics when the client means multi-speciality. `keyword`
+    // sharpens exactly those two.
+    { key: 'school', label: 'Schools', types: ['school', 'primary_school', 'secondary_school'],
+      keyword: 'matriculation CBSE ICSE international school' },
+    { key: 'hospital', label: 'Hospitals', types: ['hospital'], keyword: 'multi speciality hospital' },
+    // Buses and share autos are how most of this city commutes, so the bus
+    // stand belongs with the metro rather than nowhere.
+    { key: 'transit', label: 'Metro, rail & bus', types: ['subway_station', 'train_station', 'transit_station', 'bus_station'] },
+    // Asked before restaurants, genuinely. CONCEPTS.devotional in the
+    // matcher already knew this mattered; the map did not offer it.
+    { key: 'temple', label: 'Temples', types: ['hindu_temple', 'place_of_worship'] },
+    { key: 'shopping', label: 'Shops & markets', types: ['shopping_mall', 'supermarket', 'market'] },
+    { key: 'pharmacy', label: 'Pharmacy', types: ['pharmacy', 'drugstore'] },
+    { key: 'itpark', label: 'IT & tech parks', types: ['corporate_office'], keyword: 'IT park tech park SEZ' },
+    { key: 'college', label: 'Colleges', types: ['university'] },
+    { key: 'park', label: 'Parks', types: ['park'] },
+    { key: 'bank', label: 'Banks & ATMs', types: ['bank', 'atm'] },
+    { key: 'restaurant', label: 'Places to eat', types: ['restaurant'] }
   ];
 
   const placeCache = new Map();
@@ -227,19 +272,41 @@
     return res;
   }
 
-  // The new Places API. `searchNearby` is a static on Place and returns
-  // { places }, each a Place with the fields that were requested.
+  // The new Places API. Two calls, chosen by whether the category needs
+  // sharpening: `searchNearby` takes types and has NO keyword parameter, so a
+  // category that must be narrowed ("multi speciality hospital", not every
+  // clinic) goes through `searchByText`, which does. Passing a keyword to
+  // searchNearby would have been silently ignored.
+  const FIELDS = ['displayName', 'location', 'primaryTypeDisplayName', 'rating', 'userRatingCount', 'formattedAddress'];
+
   async function searchNew(pos, cat, radius, o) {
     const g = G();
     const Place = g.places && g.places.Place;
-    if (!Place || typeof Place.searchNearby !== 'function') return { error: 'no new places' };
-    const { places } = await Place.searchNearby({
-      fields: ['displayName', 'location', 'primaryTypeDisplayName', 'rating', 'userRatingCount', 'formattedAddress'],
-      locationRestriction: { center: new g.LatLng(pos.lat, pos.lng), radius },
-      includedTypes: cat.types,
-      maxResultCount: Math.min(20, (o.limit || 8) * 2),
-      rankPreference: 'DISTANCE'
-    });
+    if (!Place) return { error: 'no new places' };
+    const max = Math.min(20, (o.limit || 8) * 2);
+    const center = new g.LatLng(pos.lat, pos.lng);
+    let places;
+    if (cat.keyword && typeof Place.searchByText === 'function') {
+      const res = await Place.searchByText({
+        fields: FIELDS,
+        textQuery: cat.keyword,
+        locationBias: { center, radius },
+        includedType: cat.types[0],
+        maxResultCount: max,
+        rankPreference: 'DISTANCE'
+      });
+      places = res.places;
+    } else {
+      if (typeof Place.searchNearby !== 'function') return { error: 'no new places' };
+      const res = await Place.searchNearby({
+        fields: FIELDS,
+        locationRestriction: { center, radius },
+        includedTypes: cat.types,
+        maxResultCount: max,
+        rankPreference: 'DISTANCE'
+      });
+      places = res.places;
+    }
     return {
       via: 'new',
       list: (places || []).map(p => ({
@@ -264,7 +331,8 @@
       svc.nearbySearch({
         location: new g.LatLng(pos.lat, pos.lng),
         radius,
-        type: cat.types[0]
+        type: cat.types[0],
+        keyword: cat.keyword || undefined
       }, (results, status) => {
         if (status !== 'OK' || !results) return resolve({ error: 'legacy: ' + status });
         resolve({
@@ -355,13 +423,19 @@
   // A Google Maps directions URL, for when the agent wants to send it to the
   // client or open the real thing. Cheaper and better than reimplementing
   // turn-by-turn.
-  function directionsUrl(from, to) {
-    const o = `${from.lat},${from.lng}`;
+  // A null `from` deliberately omits the origin, which makes Google route
+  // from the DEVICE's location — the only origin an agent standing in the
+  // street actually wants. Passing the property as both ends produced a
+  // zero-length route, which is what the Directions button used to do.
+  function directionsUrl(from, to, mode) {
     const d = typeof to === 'string' ? to : `${to.lat},${to.lng}`;
-    return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}&travelmode=driving`;
+    const parts = ['api=1', 'destination=' + encodeURIComponent(d), 'travelmode=' + (mode || 'driving')];
+    if (from && from.lat != null) parts.unshift('origin=' + encodeURIComponent(`${from.lat},${from.lng}`));
+    return 'https://www.google.com/maps/dir/?' + parts.join('&');
   }
 
   const api = {
+    KM_PER_MIN_ROAD, ROAD_TO_STRAIGHT,
     nearbyProperties, withinMinutes, travelTimes,
     placesNear, CATEGORIES,
     geocodeText, distanceTo, directionsUrl,

@@ -94,7 +94,13 @@
     if (S.host && S.host.onModeChange) S.host.onModeChange(mode);
   }
 
+  const NARROW = () => root.matchMedia && root.matchMedia('(max-width: 860px)').matches;
+
   function applyMode() {
+    // There is no room for two panes on a phone. Split silently became a
+    // stacked 108vh shell with the map below the fold, so a tapped row
+    // produced no visible response.
+    if (S.mode === 'split' && NARROW()) S.mode = 'map';
     const shell = document.getElementById('mapShell');
     const grid = document.getElementById('pgrid');
     const gmeta = document.querySelector('.gmeta');
@@ -147,6 +153,12 @@
   function renderModeSwitch() {
     const el = document.getElementById('mapModeSwitch');
     if (!el) return;
+    if (NARROW()) {
+      const b2 = (k, label) => `<button type="button" class="mv-mode${S.mode === k ? ' on' : ''}"
+        onclick="PinMapView.setMode('${k}')" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
+      el.innerHTML = b2('list', 'List') + b2('map', 'Map');
+      return;
+    }
     const b = (k, label, title) => `<button type="button" class="mv-mode${S.mode === k ? ' on' : ''}"
       onclick="PinMapView.setMode('${k}')" title="${esc(title)}" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
     el.innerHTML = b('list', 'List', 'Cards only — the view for scanning and comparing')
@@ -257,7 +269,15 @@
     }
     renderList();
     renderPinBar();
-    if (S.selectedId && !S.items.some(i => i.p.id === S.selectedId)) select(null);
+    if (S.selectedId && !S.items.some(i => i.p.id === S.selectedId)) { select(null); return; }
+    // A filter change invalidates any open property list: the answer on
+    // screen was computed against the OLD set, and leaving it there is how an
+    // agent reads out a property the filter has just excluded. The card is
+    // redrawn too — it used to keep whatever it had.
+    if (S.answer && (S.answer.kind === 'near5' || S.answer.kind === 'near30')) {
+      S.answer = { kind: S.answer.kind, stale: true };
+    }
+    renderCard();
   }
 
   const itemOf = id => S.items.find(i => i.p.id === id) || null;
@@ -292,7 +312,7 @@
           <span class="mv-pr">${esc(core.priceRange(it.priceLo, it.priceHi))}</span>
         </div>
         <div class="mv-row-2">
-          <span class="mv-loc">${esc(p.location || '—')}</span>
+          <span class="mv-loc">${esc(shortLoc(p.location) || '—')}</span>
           ${p.config ? `<span class="mv-cfg">${esc(p.config)}</span>` : ''}
           ${approx ? `<span class="mv-ax" title="Placed at ${esc(it.pos.via || 'its locality')} — within about ${it.pos.accuracyKm} km, not the exact address">~${it.pos.accuracyKm}km</span>`
             : '<span class="mv-ex" title="Exact pin">pinned</span>'}
@@ -346,32 +366,91 @@
     const approx = it.pos.precision === 'approx';
     el.hidden = false;
     el.innerHTML = `
-      <button type="button" class="mv-card-x" onclick="PinMapView.select(null)" aria-label="Close">✕</button>
+      <button type="button" class="mv-card-x" data-act="close" aria-label="Close this property">✕</button>
       <div class="mv-card-hd">
         ${p.propertyCode ? `<span class="mv-code">${esc(p.propertyCode)}</span>` : ''}
         <b>${esc(p.name || p.id)}</b>
         ${p.soldOut ? '<span class="mv-sold">Sold out</span>' : ''}
       </div>
-      <div class="mv-card-sub">${esc([p.location, p.config].filter(Boolean).join(' · '))}</div>
+      <div class="mv-card-sub">${esc([shortLoc(p.location), p.config].filter(Boolean).join(' · '))}</div>
       <div class="mv-card-price">${esc(core.priceRange(it.priceLo, it.priceHi))}
-        ${p.pricePerSqft ? `<i>${esc(p.pricePerSqft)}</i>` : ''}</div>
+        ${p.pricePerSqft ? `<i>· ${esc(String(p.pricePerSqft).replace(/sqft/i, 'sq ft'))}</i>` : ''}</div>
+      <div class="mv-facts">
+        ${fact(readyOf(p), /^Ready/.test(readyOf(p) || '') ? 'ok' : 'warn')}
+        ${fact(p.sqftRange ? String(p.sqftRange).replace(/\s*sq\.?\s*ft\.?/i, ' sq ft') : null)}
+        ${fact(p.builder)}
+        ${fact(p.facing ? p.facing + ' facing' : null)}
+      </div>
       <div class="mv-prec ${approx ? 'ax' : 'ex'}">
         ${approx
-          ? `Shown at <b>${esc(it.pos.via || 'its locality')}</b> — within about ${it.pos.accuracyKm} km of the real address.
-             <button type="button" class="mv-link" onclick="PinMapView.startPin('${esc(p.id)}')">Drop the exact pin</button>`
-          : `Exact pin${it.pos.source === 'pin' ? ' placed by the team' : ''}.
-             <button type="button" class="mv-link" onclick="PinMapView.startPin('${esc(p.id)}')">Move it</button>`}
+          ? `Shown at <b>${esc(it.pos.via || it.pos.area || 'its locality')}</b> — within about ${it.pos.accuracyKm} km of the real address,
+             so do not quote a distance from it.
+             <button type="button" class="mv-link" data-act="pin">Drop the exact pin</button>`
+          : `Exact pin${it.pos.source === 'pin' ? ', placed by the team' : ''}.
+             <button type="button" class="mv-link" data-act="pin">Move it</button>`}
       </div>
       <div class="mv-acts">
-        <button type="button" class="mv-btn primary" onclick="PinMapView.openProperty('${esc(p.id)}')">Open property →</button>
-        <button type="button" class="mv-btn" onclick="PinMapView.ask('near5')">Within 5 km</button>
-        <button type="button" class="mv-btn" onclick="PinMapView.ask('near30')">Within 30 min</button>
-        <button type="button" class="mv-btn" onclick="PinMapView.ask('places')">What is nearby</button>
-        <button type="button" class="mv-btn" onclick="PinMapView.ask('distance')">Distance to…</button>
-        <a class="mv-btn ghost" href="${esc(root.PinMapNearby.directionsUrl(it.pos, it.pos))}" target="_blank" rel="noopener">Directions ↗</a>
+        <button type="button" class="mv-btn primary" data-act="open">Open property →</button>
+        <a class="mv-btn send" href="${esc(core.whatsappUrl(pitch(it), null))}" target="_blank" rel="noopener"
+           title="Opens WhatsApp with the property written out — you pick who to send it to">Send on WhatsApp</a>
+        ${p.contactNumber ? `<a class="mv-btn" href="tel:${esc(String(p.contactNumber).replace(/[^\d+]/g, ''))}">Call site</a>` : ''}
+        <!-- No origin, so Google routes from the DEVICE — what an agent in the
+             street wants. Passing the property as both ends, as this did,
+             opened a zero-length route. -->
+        <a class="mv-btn ghost" href="${esc(root.PinMapNearby.directionsUrl(null, it.pos))}" target="_blank" rel="noopener">Directions ↗</a>
       </div>
-      <div class="mv-answer" id="mapAnswer"></div>`;
+      <div class="mv-asks">
+        <span class="mv-asks-l">Answer a question</span>
+        <button type="button" class="mv-chip" data-ask="near5">Nearby, 5 km</button>
+        <button type="button" class="mv-chip" data-ask="near30" title="Asks Google for live drive times">Nearby, 30 min drive</button>
+        <button type="button" class="mv-chip" data-ask="places">Schools, hospitals, metro</button>
+        <button type="button" class="mv-chip" data-ask="distance">Distance to…</button>
+      </div>
+      <div class="mv-answer" id="mapAnswer" role="region" aria-live="polite" aria-label="Answer"></div>`;
+    wireCard(el);
     if (S.answer) renderAnswer();
+  }
+
+  // Possession is the fact most expensive to omit: an agent quoting a price
+  // without knowing it is a 2028 handover has wasted everybody's afternoon.
+  function readyOf(p) {
+    if (/ready\s*to\s*move/i.test(String(p.status || ''))) return 'Ready to move';
+    if (p.possession) return 'Possession ' + p.possession;
+    return p.status || null;
+  }
+  const fact = (v, tone) => v ? `<span class="mv-fact${tone ? ' ' + tone : ''}">${esc(v)}</span>` : '';
+
+  // Every property is in Chennai, so printing it on all of them costs about
+  // 45% of the row and pushes the part that differs out of view.
+  const shortLoc = v => String(v == null ? '' : v)
+    .replace(/,?\s*(?:chennai|tamil\s*nadu|india)\b\.?/gi, '')
+    .replace(/,?\s*\b6\d{2}\s?\d{3}\b/g, '')
+    .replace(/\s*,\s*$/, '').replace(/\s+/g, ' ').trim();
+
+  function pitch(it) {
+    let url = null;
+    try { url = new URL('property.html?id=' + encodeURIComponent(it.p.id), location.href).href; } catch (e) {}
+    return root.PinMapCore.pitchFor(it.p, { priceLo: it.priceLo, priceHi: it.priceHi, url });
+  }
+
+  // The card's controls are wired by delegation rather than by writing the
+  // property id into an inline onclick. esc() turns an apostrophe into
+  // &#39;, the browser decodes the attribute BEFORE the JS parses it, and an
+  // id containing one produced a syntax error and a dead control. Inventory
+  // ids come from a hand-edited sheet, so that is a real input.
+  function wireCard(el) {
+    if (!el || el.__wired) return;
+    el.__wired = true;
+    el.addEventListener('click', ev => {
+      const ask = ev.target.closest('[data-ask]');
+      if (ask) { api.ask(ask.getAttribute('data-ask')); return; }
+      const act = ev.target.closest('[data-act]');
+      if (!act) return;
+      const what = act.getAttribute('data-act');
+      if (what === 'open') openProperty(S.selectedId);
+      else if (what === 'close') select(null);
+      else if (what === 'pin') startPin(S.selectedId);
+    });
   }
 
   function openProperty(id) {
@@ -392,11 +471,11 @@
     const it = itemOf(S.selectedId);
     if (!it) return;
     // Free: straight-line, from coordinates already held. No API call.
-    S.answer = {
-      kind: 'near5',
-      list: root.PinMapNearby.nearbyProperties(it, S.items, { km: 5, limit: 12 }),
-      priced: false
-    };
+    // The price cap is whatever the agent already set in Advanced — "what
+    // else near here under 3 crore" was otherwise left to their eye.
+    const cap = S.host.priceCap ? S.host.priceCap() : null;
+    const list = root.PinMapNearby.nearbyProperties(it, S.items, { km: 5, limit: 12, maxPrice: cap });
+    S.answer = { kind: 'near5', list, cap, priced: false };
     renderAnswer();
   }
 
@@ -455,15 +534,33 @@
     if (a.error) { el.innerHTML = `<div class="mv-a-err">${esc(a.error)}</div>`; return; }
 
     if (a.kind === 'near5' || a.kind === 'near30') {
+      if (a.stale) {
+        el.innerHTML = '<div class="mv-a-note">The filters changed, so this list is out of date — ask again.</div>';
+        return;
+      }
       const unit = a.kind === 'near30' ? 'drive' : 'straight line';
       if (!a.list.length) {
         el.innerHTML = `<div class="mv-a-hd">Nothing else ${a.kind === 'near30' ? 'within 30 minutes' : 'within 5 km'}</div>
           <div class="mv-a-note">Worth saying plainly to a client — it means this one is on its own in the area.</div>`;
         return;
       }
-      el.innerHTML = `<div class="mv-a-hd">${a.list.length} ${a.list.length === 1 ? 'property' : 'properties'}
-          ${a.kind === 'near30' ? 'within a 30-minute drive' : 'within 5 km'}</div>
+      // Widening the net for centroid error meant a row reading "roughly
+      // 5–11 km" could sit under a heading that said "within 5 km". The
+      // agent reads the heading, so the heading has to be the honest one.
+      const n = a.list.length, word = n === 1 ? 'property' : 'properties';
+      const head = a.kind === 'near30'
+        ? `${n} ${word} within a 30-minute drive`
+        : (a.list.allCertain
+          ? `${n} ${word} within 5 km`
+          : `${n} ${word} nearby — 5 km, or up to ${Math.round(a.list.widestKm)} km on the widest reading`);
+      const ex = a.list.excluded || {};
+      const exNote = [
+        ex.sold ? `${ex.sold} sold-out nearby, not counted` : '',
+        ex.overBudget ? `${ex.overBudget} over the ${root.PinMapCore.priceRange(a.cap, null)} filter` : ''
+      ].filter(Boolean).join(' · ');
+      el.innerHTML = `<div class="mv-a-hd">${esc(head)}${a.cap ? ' under ' + esc(root.PinMapCore.priceRange(a.cap, null)) : ''}</div>
         ${a.truncated ? '<div class="mv-a-note">The nearest 24 were checked — there may be more further out.</div>' : ''}
+        ${exNote ? `<div class="mv-a-note">${esc(exNote)}.</div>` : ''}
         <div class="mv-a-list">${a.list.map(n => `
           <button type="button" class="mv-a-row" onclick="PinMapView.select('${esc(n.p.id)}','list')">
             <span class="mv-a-d">${esc(a.kind === 'near30' ? (n.text || n.mins + ' min') : n.say)}</span>
@@ -477,7 +574,7 @@
     if (a.kind === 'places') {
       const cats = root.PinMapNearby.CATEGORIES;
       const chips = cats.map(c => `<button type="button" class="mv-chip${a.cat === c.key ? ' on' : ''}"
-        onclick="PinMapView.pickCategory('${c.key}')">${c.icon} ${esc(c.label)}</button>`).join('');
+        onclick="PinMapView.pickCategory('${c.key}')">${esc(c.label)}</button>`).join('');
       let body = '<div class="mv-a-note">Pick what the client asked about.</div>';
       if (a.cat) {
         const cat = cats.find(c => c.key === a.cat);
@@ -488,7 +585,9 @@
                 <span class="mv-a-n">${esc(x.name)}${x.kind ? `<i>${esc(x.kind)}</i>` : ''}</span>
                 <span class="mv-a-p">${x.rating ? '★ ' + x.rating + (x.ratingCount ? ` (${x.ratingCount})` : '') : ''}</span>
               </div>`).join('')}</div>
-             <div class="mv-a-note">Straight-line distance${it && it.pos.accuracyKm ? ` from ${esc(it.pos.via || 'the locality')}` : ''}. Nearest first.</div>`
+             <div class="mv-a-note">Straight-line distance, nearest first.${it && it.pos.accuracyKm
+               ? ` Measured from ${esc(it.pos.via || it.pos.area || 'the locality')}, so a closer one on the other side of it may be missing —
+                   <button type="button" class="mv-link" data-act="pin">drop the exact pin</button> to be sure.` : ''}</div>`
           : `<div class="mv-a-note">No ${esc((cat || {}).label || 'places').toLowerCase()} found within 3 km.</div>`;
       }
       el.innerHTML = `<div class="mv-a-hd">What is around this property</div><div class="mv-chips">${chips}</div>${body}`;
@@ -536,13 +635,15 @@
       el.innerHTML = `<span class="mv-pb-ok">All ${c.exact} properties are pinned exactly.</span>`;
       return;
     }
-    el.innerHTML = `
-      <span class="mv-pb-n"><b>${c.exact + c.approx}</b> on the map</span>
-      ${approx ? `<button type="button" class="mv-pb-b warn" onclick="PinMapView.openPinList('approx')"
-          title="These sit at their locality centre, not their address">${approx} approximate</button>` : ''}
-      ${needs ? `<button type="button" class="mv-pb-b bad" onclick="PinMapView.openPinList('missing')"
-          title="These are not on the map at all">${needs} with no pin</button>` : ''}
-      ${c.snoozed ? `<button type="button" class="mv-pb-b" onclick="PinMapView.openPinList('snoozed')">${c.snoozed} snoozed</button>` : ''}`;
+    // One line, not four coloured pills. This is a coordinate-quality report
+    // and it was sitting in the most valuable position on the page, shouting
+    // in red about something that is not wrong — while duplicating the rail is
+    // own "Missing data" count. Only the part that needs a person is a link.
+    const bits = [`<span class="mv-pb-n"><b>${c.exact + c.approx}</b> of ${c.total} on the map</span>`];
+    if (needs) bits.push(`<button type="button" class="mv-pb-b" onclick="PinMapView.openPinList('missing')">${needs} need a pin</button>`);
+    if (approx) bits.push(`<button type="button" class="mv-pb-b quiet" onclick="PinMapView.openPinList('approx')">${approx} placed by locality</button>`);
+    if (c.snoozed) bits.push(`<button type="button" class="mv-pb-b quiet" onclick="PinMapView.openPinList('snoozed')">${c.snoozed} snoozed</button>`);
+    el.innerHTML = bits.join('<span class="mv-pb-sep">·</span>');
   }
 
   function openPinList(which) {
@@ -596,6 +697,10 @@
     if (!p) return;
     if (S.mode === 'list') setMode('split');
     closePinList();
+    // The open card belongs to a DIFFERENT property, and leaving it up while
+    // the banner says "Placing the pin for UNK0001" is how somebody pins the
+    // wrong building.
+    if (S.selectedId && S.selectedId !== id) select(null);
     S.pinFor = p;
     S.pendingPin = null;
     if (S.mapApi) {
@@ -620,10 +725,12 @@
     const p = S.pinFor;
     el.hidden = false;
     el.innerHTML = `
-      <div class="mv-pm-t">Placing the pin for <b>${esc(p.propertyCode || p.name || p.id)}</b></div>
+      <div class="mv-pm-t">Placing the pin for
+        <b>${esc([p.name, p.propertyCode].filter(Boolean).join(' · ') || p.id)}</b></div>
+      ${p.location ? `<div class="mv-pm-l">${esc(shortLoc(p.location))}</div>` : ''}
       <div class="mv-pm-s">${S.pendingPin
-        ? `Pin at ${S.pendingPin.lat.toFixed(5)}, ${S.pendingPin.lng.toFixed(5)}. Click again to move it.`
-        : 'Click the map where the property actually is. Zoom in first — a pin is only worth placing if it is right.'}</div>
+        ? 'Pin placed. Click again to move it, or save it.'
+        : 'Click the map where the property actually is. Zoom right in first — a pin is only worth placing if it is right.'}</div>
       <div class="mv-pm-a">
         <button type="button" class="mv-btn primary" ${S.pendingPin ? '' : 'disabled'} onclick="PinMapView.savePin()">Save this pin</button>
         <button type="button" class="mv-btn" onclick="PinMapView.cancelPin()">Cancel</button>
@@ -639,7 +746,14 @@
   function savePin() {
     if (!S.pinFor || !S.pendingPin) return;
     const patch = root.PinGeoResolve.pinPatch(S.pendingPin.lat, S.pendingPin.lng, S.host.user ? S.host.user() : null);
-    if (!patch) { alert('That point is outside Chennai — check the pin.'); return; }
+    if (!patch) {
+      const el = document.getElementById('mapPinMode');
+      if (el) el.insertAdjacentHTML('beforeend',
+        '<div class="mv-a-err">That point is outside Chennai — zoom in and click the property itself.</div>');
+      S.pendingPin = null;
+      if (S.mapApi) S.mapApi.ghostPin(null);
+      return;
+    }
     const id = S.pinFor.id;
     S.host.savePatch(id, patch);
     cancelPin();

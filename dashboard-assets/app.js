@@ -306,6 +306,17 @@ function bootMapView(){
     properties: () => properties,
     filtered: () => filteredProperties,
     user: () => signedInEmail,
+    // Whatever price ceiling the agent already set in Advanced Search, so
+    // "what else is near here under 3 crore" does not have to be eyeballed
+    // off the list.
+    priceCap: () => {
+      try {
+        const q = window.PinAdvanced && PinAdvanced.query();
+        const rule = q && (q.rules || []).find(r => r.field === 'price' && r.max !== '' && r.max != null);
+        const v = rule ? Number(rule.max) : NaN;
+        return isFinite(v) && v > 0 ? v : null;
+      } catch (e) { return null; }
+    },
     onOpenProperty: id => openDetail(id),
     // A dropped pin is a normal property edit: the same merge-save every
     // other field uses, so it lands in the change log and cannot be undone

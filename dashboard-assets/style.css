@@ -4,7 +4,11 @@
   --ink:#1C1917; --ink2:#44403C; --ink3:#78716C; --ink4:#847E77;
   --gold:#B45309; --gold-bg:#FEF3C7; --gold-lt:#FFFBEB;
   --green:#15803D; --green-bg:#DCFCE7;
-  --amber:#B45309; --amber-bg:#FEF3C7;
+  /* --amber was byte-identical to --gold, which made "you selected this" and
+     "we are not sure where this is" the same signal — on the map they were
+     literally one colour doing two jobs. Darkened and shifted off the accent
+     hue, which also takes it from 4.47:1 to AA on --amber-bg. */
+  --amber:#8A4B00; --amber-bg:#FDF0D5;
   --blue:#1D4ED8; --blue-bg:#EFF6FF;
   --purple:#6D28D9; --purple-bg:#F3E8FF;
   --red:#B91C1C; --red-bg:#FEF2F2;
@@ -14,6 +18,7 @@
   --shadow-lg:0 18px 50px rgba(0,0,0,.16),0 4px 12px rgba(0,0,0,.08);
   --serif:'Fraunces',Georgia,serif;
   --sans:'Inter',system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html{scroll-behavior:smooth;}

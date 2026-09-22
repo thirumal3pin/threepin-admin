@@ -110,13 +110,46 @@
     'kelambakkam': [12.786, 80.221], 'thiruporur': [12.722, 80.191],
     'taramani': [12.987, 80.243], 'thiruvanmiyur': [12.983, 80.259],
 
+    // ── Central, the rest of it ──
+    'r a puram': [13.017, 80.262], 'raja annamalai puram': [13.017, 80.262],
+    'mandaveli': [13.026, 80.268], 'nandanam': [13.034, 80.239],
+    'kotturpuram': [13.014, 80.244], 'saidapet': [13.022, 80.223],
+    'west mambalam': [13.039, 80.219], 'mambalam': [13.039, 80.222],
+    'choolaimedu': [13.060, 80.222], 'virugambakkam': [13.054, 80.190],
+    'alwarthirunagar': [13.048, 80.184], 'thirumangalam': [13.085, 80.196],
+    'boat club': [13.030, 80.250], 'vepery': [13.083, 80.263],
+    'sowcarpet': [13.093, 80.278], 'washermanpet': [13.115, 80.285],
+    'tondiarpet': [13.130, 80.290], 'royapuram': [13.108, 80.294],
+    'alandur': [13.003, 80.203], 'st thomas mount': [12.995, 80.196],
+    'nerkundram': [13.065, 80.178],
+
+    // ── South, the OMR hinterland a buyer names by village ──
+    'thalambur': [12.855, 80.222], 'egattur': [12.836, 80.224],
+    'semmancheri': [12.878, 80.225], 'kazhipattur': [12.833, 80.226],
+    'pudupakkam': [12.796, 80.212], 'nanmangalam': [12.925, 80.169],
+    'kovilambakkam': [12.945, 80.197], 'sithalapakkam': [12.900, 80.181],
+    'jalladianpet': [12.940, 80.190], 'perumbakkam': [12.905, 80.197],
+
+    // ── GST, including the SRM belt ──
+    'urapakkam': [12.865, 80.070], 'potheri': [12.823, 80.043],
+    'kattankulathur': [12.820, 80.038], 'chitlapakkam': [12.938, 80.135],
+    'selaiyur': [12.917, 80.138], 'rajakilpakkam': [12.923, 80.144],
+    'hasthinapuram': [12.945, 80.132],
+
+    // ── West and north ──
+    'moulivakkam': [13.018, 80.152], 'thiruverkadu': [13.070, 80.108],
+    'ayanambakkam': [13.075, 80.155], 'thirumullaivoyal': [13.125, 80.120],
+    'retteri': [13.120, 80.196], 'padi': [13.100, 80.185],
+    'karambakkam': [13.040, 80.163],
+
     // ── Coastal, along ECR ──
     'adyar': [13.006, 80.257], 'besant nagar': [13.000, 80.267],
     'kottivakkam': [12.963, 80.257], 'palavakkam': [12.955, 80.258],
     'neelankarai': [12.947, 80.258], 'akkarai': [12.937, 80.254],
     'vettuvankeni': [12.933, 80.253], 'injambakkam': [12.925, 80.251],
     'kanathur': [12.858, 80.242], 'muttukadu': [12.826, 80.243],
-    'kovalam': [12.788, 80.254], 'mahabalipuram': [12.626, 80.192]
+    'kovalam': [12.788, 80.254], 'mahabalipuram': [12.626, 80.192],
+    'uthandi': [12.875, 80.248], 'panaiyur': [12.892, 80.244]
   };
 
   // ═══════ ALIASES ═══════
@@ -137,10 +170,23 @@
     'vengaivaasal': 'vengaivasal', 'anagakaputhur': 'anakaputhur',
     'iyyapanthangal': 'iyyappanthangal', 'nanganalloor': 'nanganallur',
     'mogappair west': 'mogappair', 'mogappair east': 'mogappair',
-    'mogappair - nolambur': 'nolambur', 'pallikarnai': 'pallikaranai',
+    'mogappair-nolambur': 'nolambur', 'mogappair - nolambur': 'nolambur',
+    'pallikarnai': 'pallikaranai',
     'thiruvanmyur': 'thiruvanmiyur', 'tiruvanmiyur': 'thiruvanmiyur',
     'besantnagar': 'besant nagar', 'elliots beach': 'besant nagar',
     'chrompet': 'chromepet', 'kelambakam': 'kelambakkam',
+    // The commonest variant of Velachery of all, and it was the one missing.
+    'velacheri': 'velachery',
+    'ekkaduthangal': 'ekkatuthangal', 'ekkatuthangal': 'ekkatuthangal',
+    // The official name on the signboards and in the documents.
+    'mamallapuram': 'mahabalipuram',
+    'tiruporur': 'thiruporur', 'ayapakkam': 'ayyapakkam',
+    'thuraipakkam': 'thoraipakkam', 'thoraippakkam': 'thoraipakkam',
+    'redhills': 'red hills', 'covelong': 'kovalam',
+    'tiruvottiyur': 'thiruvottiyur', 'thiruvotriyur': 'thiruvottiyur',
+    'purasaiwakkam': 'purasawalkam', 'purasawakkam': 'purasawalkam',
+    'r.a. puram': 'r a puram', 'ra puram': 'r a puram',
+    'mount': 'st thomas mount',
     // Corridors named as a place.
     'omr': 'sholinganallur', 'rajiv gandhi salai': 'sholinganallur',
     'old mahabalipuram road': 'sholinganallur',
@@ -156,6 +202,14 @@
     'college road': 'nungambakkam', 'sivasamy salai': 'mylapore',
     'kalakshetra road': 'thiruvanmiyur', 'tidel park': 'taramani',
     'siruseri it park': 'siruseri',
+    // The corridor synonyms a brief actually uses. CONCEPTS.it_corridor in
+    // match-engine.js already understood "IT corridor" while the resolver
+    // did not, so the engine knew what the buyer meant and could not place it.
+    'it corridor': 'sholinganallur', 'it highway': 'sholinganallur',
+    'nh 45': 'tambaram', 'nh45': 'tambaram',
+    'orr': 'vandalur', 'outer ring road': 'vandalur',
+    'lb road': 'thiruvanmiyur', 'lattice bridge road': 'thiruvanmiyur',
+    'beach road': 'besant nagar',
     'guindy industrial estate': 'guindy', 'nazarethpet': 'nazarathpet'
     // Deliberately NOT aliased: "SIPCOT". There is a SIPCOT at Siruseri and
     // another at Sriperumbudur, 45 km apart. Aliasing it to either one put a
@@ -172,12 +226,17 @@
   // the whole stretch rather than collapsing onto the one representative
   // point ALIASES resolves it to.
   const CORRIDOR_MEMBERS = {
-    OMR: ['taramani', 'perungudi', 'thoraipakkam', 'karapakkam', 'sholinganallur', 'navalur', 'siruseri', 'padur', 'kelambakkam', 'thiruporur'],
-    ECR: ['besant nagar', 'thiruvanmiyur', 'kottivakkam', 'palavakkam', 'neelankarai', 'akkarai', 'vettuvankeni', 'injambakkam', 'kanathur', 'muttukadu', 'kovalam'],
-    GST: ['pallavaram', 'chromepet', 'tambaram', 'perungalathur', 'vandalur', 'guduvanchery', 'maraimalai nagar', 'singaperumal koil', 'chengalpattu'],
+    // Thiruvanmiyur is on BOTH: OMR begins at Madhya Kailash and runs past
+    // it, and LB Road/ECR runs through it.
+    OMR: ['taramani', 'thiruvanmiyur', 'perungudi', 'thoraipakkam', 'karapakkam', 'sholinganallur', 'semmancheri', 'navalur', 'thalambur', 'egattur', 'siruseri', 'padur', 'kelambakkam', 'thiruporur'],
+    ECR: ['besant nagar', 'thiruvanmiyur', 'kottivakkam', 'palavakkam', 'neelankarai', 'akkarai', 'vettuvankeni', 'injambakkam', 'panaiyur', 'uthandi', 'kanathur', 'muttukadu', 'kovalam', 'mahabalipuram'],
+    GST: ['pallavaram', 'chromepet', 'tambaram', 'perungalathur', 'vandalur', 'urapakkam', 'guduvanchery', 'potheri', 'kattankulathur', 'maraimalai nagar', 'singaperumal koil', 'chengalpattu'],
     'Radial Road': ['thoraipakkam', 'pallikaranai', 'medavakkam', 'perumbakkam'],
     'Mount-Poonamallee': ['porur', 'manapakkam', 'mugalivakkam', 'iyyappanthangal', 'kattupakkam', 'poonamallee'],
-    'Velachery-Tambaram': ['velachery', 'pallikaranai', 'medavakkam', 'keelkattalai', 'madipakkam', 'chromepet', 'tambaram']
+    'Velachery-Tambaram': ['velachery', 'pallikaranai', 'medavakkam', 'keelkattalai', 'madipakkam', 'chromepet', 'tambaram'],
+    // The Outer Ring Road — the fastest-moving industrial and residential
+    // axis in the metro, and absent until now.
+    ORR: ['vandalur', 'perungalathur', 'thirumazhisai', 'nazarathpet', 'poonamallee', 'vanagaram', 'ambattur', 'thiruverkadu', 'thirumullaivoyal']
   };
 
   // ═══════ ZONES ═══════
@@ -190,8 +249,8 @@
   const ZONE_MEMBERS = {
     'Chennai Central': ['anna nagar', 'anna nagar west', 'anna nagar east', 'anna nagar west extension', 'shenoy nagar', 'aminjikarai', 'kilpauk', 'kilpauk garden colony', 'ayanavaram', 'purasawalkam', 'egmore', 'chetpet', 'nungambakkam', 'mahalingapuram', 'kamdar nagar', 'sterling road', 't nagar', 'kodambakkam', 'vadapalani', 'ashok nagar', 'cit nagar', 'teynampet', 'gopalapuram', 'poes garden', 'alwarpet', 'abhiramapuram', 'mylapore', 'royapettah', 'mount road', 'anna salai', 'chintadripet', 'triplicane', 'koyambedu', 'arumbakkam'],
     'Chennai North': ['madhavaram', 'korattur', 'ambattur', 'mogappair', 'nolambur', 'ayyapakkam', 'perambur', 'kolathur', 'villivakkam', 'thiruvottiyur', 'red hills', 'avadi'],
-    'Chennai West': ['vanagaram', 'maduravoyal', 'valasaravakkam', 'saligramam', 'nesapakkam', 'k k nagar', 'ramapuram', 'dlf ramapuram', 'manapakkam', 'mugalivakkam', 'porur', 'iyyappanthangal', 'kattupakkam', 'gerugambakkam', 'kolapakkam', 'mangadu', 'poonamallee', 'nazarathpet', 'kundrathur', 'kovur', 'sriperumbudur', 'valarpuram', 'oragadam', 'ikkadu', 'thirumazhisai', 'mevalurkuppam'],
-    'Chennai South': ['ekkatuthangal', 'guindy', 'nanganallur', 'adambakkam', 'madipakkam', 'keelkattalai', 'pallavaram', 'pozhichalur', 'anakaputhur', 'chromepet', 'tambaram', 'mudichur', 'perungalathur', 'vandalur', 'guduvanchery', 'koluthuvancheri', 'maraimalai nagar', 'singaperumal koil', 'chengalpattu', 'velachery', 'pallikaranai', 'perumbakkam', 'medavakkam', 'mambakkam', 'vengaivasal', 'ottiyambakkam', 'ponmar', 'melakottaiyur', 'perungudi', 'thoraipakkam', 'karapakkam', 'sholinganallur', 'navalur', 'siruseri', 'padur', 'kelambakkam', 'thiruporur', 'taramani', 'thiruvanmiyur', 'adyar', 'besant nagar', 'kottivakkam', 'palavakkam', 'neelankarai', 'akkarai', 'vettuvankeni', 'injambakkam', 'kanathur', 'muttukadu', 'kovalam', 'mahabalipuram']
+    'Chennai West': ['vanagaram', 'maduravoyal', 'valasaravakkam', 'saligramam', 'nesapakkam', 'k k nagar', 'ramapuram', 'dlf ramapuram', 'manapakkam', 'mugalivakkam', 'porur', 'iyyappanthangal', 'kattupakkam', 'gerugambakkam', 'kolapakkam', 'mangadu', 'poonamallee', 'nazarathpet', 'kundrathur', 'kovur', 'sriperumbudur', 'valarpuram', 'oragadam', 'thirumazhisai', 'mevalurkuppam', 'moulivakkam', 'thiruverkadu', 'ayanambakkam', 'karambakkam', 'nerkundram', 'virugambakkam', 'alwarthirunagar'],
+    'Chennai South': ['ekkatuthangal', 'guindy', 'nanganallur', 'adambakkam', 'madipakkam', 'keelkattalai', 'pallavaram', 'pozhichalur', 'anakaputhur', 'chromepet', 'tambaram', 'mudichur', 'perungalathur', 'vandalur', 'guduvanchery', 'maraimalai nagar', 'singaperumal koil', 'chengalpattu', 'velachery', 'pallikaranai', 'perumbakkam', 'medavakkam', 'mambakkam', 'vengaivasal', 'ottiyambakkam', 'ponmar', 'melakottaiyur', 'perungudi', 'thoraipakkam', 'karapakkam', 'sholinganallur', 'navalur', 'siruseri', 'padur', 'kelambakkam', 'thiruporur', 'taramani', 'thiruvanmiyur', 'adyar', 'besant nagar', 'kottivakkam', 'palavakkam', 'neelankarai', 'akkarai', 'vettuvankeni', 'injambakkam', 'kanathur', 'muttukadu', 'kovalam', 'mahabalipuram']
   };
 
   const ZONE_OF = (() => {

@@ -140,12 +140,15 @@
     <button type="button" id="mapResizer" role="separator" aria-orientation="vertical"
             aria-label="Drag to resize the list and map, or use the arrow keys" tabindex="0"></button>
     <div id="mapPane">
-      <!-- The map canvas gets its own host: the three panels below are
-           siblings of it, so rebuilding the canvas never deletes them. -->
+      <!-- The panels come BEFORE the canvas in the DOM. Every marker is a
+           focusable control, so with the card last a keyboard user tabbed
+           through all 130 markers before reaching the actions for the one
+           they had just selected. The canvas gets its own host so rebuilding
+           the map never deletes these three. -->
+      <div id="mapCard" role="dialog" aria-label="Selected property" hidden></div>
+      <div id="mapPinList" role="dialog" aria-label="Properties needing a pin" hidden></div>
+      <div id="mapPinMode" role="dialog" aria-label="Placing a pin" hidden></div>
       <div id="mapCanvasHost"></div>
-      <div id="mapCard" hidden></div>
-      <div id="mapPinList" hidden></div>
-      <div id="mapPinMode" hidden></div>
     </div>
   </div>
 

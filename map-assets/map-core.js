@@ -488,7 +488,43 @@
     state.pinGhost = m;
   }
 
-  const api = { load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI, priceLabel, priceRange, esc };
+  // ═══════ SENDING ONE ═══════
+  //
+  // The panel said "3 properties worth sending" and gave an agent no way to
+  // send them: they were opening the property in a new tab, copying a share
+  // link, switching to WhatsApp and pasting, once per property. This composes
+  // the lines an agent would type anyway — and only facts we hold, in the
+  // order a client reads them.
+  function pitchFor(p, opts) {
+    const o = opts || {};
+    const L = [];
+    L.push([p.propertyCode, p.name].filter(Boolean).join(' — '));
+    if (p.location) L.push('📍 ' + p.location);
+    const spec = [p.config, p.sqftRange ? p.sqftRange.replace(/\s*sq\.?\s*ft\.?/i, ' sqft') : null]
+      .filter(Boolean).join(' · ');
+    if (spec) L.push('🏠 ' + spec);
+    const price = o.priceLo != null ? priceRange(o.priceLo, o.priceHi) : (p.startingPrice || null);
+    if (price) L.push('💰 ' + price + (p.pricePerSqft ? ' (' + p.pricePerSqft + ')' : ''));
+    // Possession is the fact most often missed and most expensive to miss:
+    // a client who assumes "ready" of a 2028 handover is a wasted visit.
+    const ready = /ready\s*to\s*move/i.test(String(p.status || ''));
+    if (ready) L.push('✅ Ready to move');
+    else if (p.possession) L.push('🗓️ Possession ' + p.possession);
+    else if (p.status) L.push('🏗️ ' + p.status);
+    if (p.highlights) L.push('✨ ' + String(p.highlights).split(',').slice(0, 3).map(x => x.trim()).join(', '));
+    if (o.url) L.push('', o.url);
+    return L.join(String.fromCharCode(10));
+  }
+
+  // No number: WhatsApp asks who to send it to, which is right when the
+  // agent has the client in a chat already. With one, it opens that chat.
+  function whatsappUrl(text, phone) {
+    const digits = String(phone || '').replace(/\D/g, '');
+    const to = digits.length >= 10 ? (digits.length === 10 ? '91' + digits : digits) : '';
+    return 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
+  }
+
+  const api = { load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI, priceLabel, priceRange, pitchFor, whatsappUrl, esc };
   root.PinMapCore = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

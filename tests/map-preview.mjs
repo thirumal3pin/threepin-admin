@@ -283,7 +283,7 @@ console.log('With no Maps key configured');
   // locally, so losing the key loses the tiles and nothing else.
   const rows = await page.$$eval('#mapList .mv-row', e => e.length);
   ok('the list still shows every positioned property', rows === 7, String(rows));
-  ok('the pin bar still reports what needs attention', /no pin/.test(await txt(page, '#mapPinBar')), await txt(page, '#mapPinBar'));
+  ok('the pin bar still reports what needs attention', /need a pin/.test(await txt(page, '#mapPinBar')), await txt(page, '#mapPinBar'));
   await shot(page, 'map-nokey');
   await page.context().close();
 }
@@ -339,13 +339,43 @@ console.log('The map view');
   ok('an approximate property says where it is really placed',
     /Shown at/.test(approxCard) && /km of the real address/.test(approxCard), approxCard.slice(0, 300));
   ok('and offers to fix it', /Drop the exact pin/.test(approxCard));
+  ok('and warns against quoting a distance from it',
+    /do not quote a distance/.test(approxCard), approxCard.slice(0, 340));
+
+  // The facts an agent reads out loud — all of them were on the grid card
+  // this replaces, and none of them were here.
+  await page.click('#mapList .mv-row[data-id="p1"]');
+  await page.waitForTimeout(250);
+  const card1 = await txt(page, '#mapCard');
+  ok('the card states possession', /Ready to move|Possession/.test(card1), card1.slice(0, 260));
+  const facts = await page.$$eval('#mapCard .mv-fact', e => e.map(x => x.textContent.trim()));
+  ok('and the size', facts.some(f => /sq ft/.test(f)), JSON.stringify(facts));
+
+  // The single thing the reviewer called the highest-value gap: the panel
+  // said "worth sending" and gave no way to send.
+  ok('there is a way to SEND it', await page.$eval('#mapCard .mv-btn.send', e => /wa\.me/.test(e.href)));
+  const waText = await page.$eval('#mapCard .mv-btn.send',
+    e => decodeURIComponent((e.href.split('text=')[1] || '')));
+  ok('the message carries the code, the price and the possession',
+    /ANR0099/.test(waText) && /3\.5 Cr/.test(waText) && /Ready to move/.test(waText), waText.slice(0, 170));
+  ok('and a link back to the property', /property\.html\?id=/.test(waText));
+
+  ok('Directions routes from the device, not property-to-itself',
+    await page.$eval('#mapCard .mv-btn.ghost', e => !/origin=/.test(e.href) && /destination=/.test(e.href)),
+    await page.$eval('#mapCard .mv-btn.ghost', e => e.href));
+
+  // An id containing an apostrophe used to kill the control outright: esc()
+  // writes &#39;, the browser decodes the attribute BEFORE the JS parses it,
+  // and the inline onclick became a syntax error.
+  ok('no control quotes the property id into an inline onclick',
+    await page.$eval('#mapCard .mv-btn.primary', e => !/onclick/i.test(e.outerHTML)));
   await shot(page, 'map-split');
 
   // ── "within 5 km" — free, no API call ──
   const beforeMatrix = await page.evaluate(() => window.__matrixCalls || 0);
   await page.click('#mapList .mv-row[data-id="p1"]');
   await page.waitForTimeout(200);
-  await page.click('#mapCard .mv-btn:has-text("Within 5 km")');
+  await page.click('#mapCard [data-ask="near5"]');
   await page.waitForTimeout(300);
   const near = await txt(page, '#mapAnswer');
   ok('"within 5 km" answers', /within 5 km/.test(near), near.slice(0, 160));
@@ -355,7 +385,7 @@ console.log('The map view');
   ok('and says the distance is a straight line', /straight line/.test(near), near.slice(-160));
 
   // ── "within 30 minutes" — one request, not one per property ──
-  await page.click('#mapCard .mv-btn:has-text("Within 30 min")');
+  await page.click('#mapCard [data-ask="near30"]');
   await page.waitForTimeout(600);
   const mins = await txt(page, '#mapAnswer');
   ok('"within 30 min" answers with drive times', /30-minute drive|within a 30/.test(mins), mins.slice(0, 200));
@@ -365,7 +395,7 @@ console.log('The map view');
   ok('and the destinations are capped at 24', dests <= 24, String(dests));
 
   // ── "what is nearby" — the new Places API ──
-  await page.click('#mapCard .mv-btn:has-text("What is nearby")');
+  await page.click('#mapCard [data-ask="places"]');
   await page.waitForTimeout(250);
   ok('the categories an agent gets asked about are offered',
     /Schools/.test(await txt(page, '#mapAnswer')) && /Hospitals/.test(await txt(page, '#mapAnswer')));
@@ -379,7 +409,7 @@ console.log('The map view');
   await shot(page, 'map-places');
 
   // ── "distance to …" ──
-  await page.click('#mapCard .mv-btn:has-text("Distance to")');
+  await page.click('#mapCard [data-ask="distance"]');
   await page.waitForTimeout(200);
   await page.fill('#mvDistInput', 'Guindy');
   await page.click('#mapAnswer .mv-btn.primary');
@@ -398,7 +428,7 @@ console.log('The map view');
   ok('an unfindable place fails clearly, not silently', /Could not find/.test(bad), bad.slice(0, 160));
 
   // ── pins: the missing one, and dropping it ──
-  await page.click('#mapPinBar .mv-pb-b.bad');
+  await page.click('#mapPinBar .mv-pb-b:not(.quiet)');
   await page.waitForTimeout(250);
   const pinList = await txt(page, '#mapPinList');
   ok('the no-pin list opens', /no usable pin/i.test(pinList), pinList.slice(0, 140));
@@ -410,7 +440,9 @@ console.log('The map view');
   await page.click('#mapPinList .mv-btn:has-text("Drop the pin")');
   await page.waitForTimeout(300);
   ok('pin mode starts', await page.$eval('#mapPinMode', e => !e.hidden));
-  ok('and tells the agent to zoom in first', /Zoom in first/.test(await txt(page, '#mapPinMode')));
+  ok('and tells the agent to zoom in first', /Zoom right in first/.test(await txt(page, '#mapPinMode')));
+  ok('and names the property, not only its code',
+    /Unmapped Heights/.test(await txt(page, '#mapPinMode')), await txt(page, '#mapPinMode'));
   ok('saving is disabled until a point is chosen',
     await page.$eval('#mapPinMode .mv-btn.primary', e => e.disabled));
 
@@ -420,7 +452,12 @@ console.log('The map view');
     m.__fire('click', { latLng: { lat: () => 13.0500, lng: () => 80.2200 } });
   });
   await page.waitForTimeout(250);
-  ok('a dropped point is shown before it is saved', /Pin at 13\.05/.test(await txt(page, '#mapPinMode')));
+  // Raw 5-decimal coordinates were agent-facing copy; ~1 m of precision is
+  // not information anybody on a call can use.
+  ok('a dropped point is confirmed before it is saved',
+    /Pin placed/.test(await txt(page, '#mapPinMode')), await txt(page, '#mapPinMode'));
+  ok('without reading out raw coordinates',
+    !/13\.0\d{4}/.test(await txt(page, '#mapPinMode')), await txt(page, '#mapPinMode'));
   ok('a ghost marker appears', await page.$$eval('.gm-prop.ghost', e => e.length) === 1);
   ok('and saving is now possible', await page.$eval('#mapPinMode .mv-btn.primary', e => !e.disabled));
   await shot(page, 'map-pinmode');
@@ -433,7 +470,7 @@ console.log('The map view');
   ok('and the property joins the map immediately',
     (await page.$$eval('#mapList .mv-row', e => e.length)) === 8,
     String(await page.$$eval('#mapList .mv-row', e => e.length)));
-  ok('so the no-pin warning clears', !/no pin/.test(await txt(page, '#mapPinBar')), await txt(page, '#mapPinBar'));
+  ok('so the needs-a-pin prompt clears', !/need a pin/.test(await txt(page, '#mapPinBar')), await txt(page, '#mapPinBar'));
 
   // ── snooze ──
   await page.click('#mapPinBar .mv-pb-b:has-text("snoozed")');
@@ -444,6 +481,30 @@ console.log('The map view');
   await page.waitForTimeout(350);
   ok('un-snoozing writes it back',
     (await page.evaluate(() => window.__saved)).some(s => s.id === 'p9' && s.mapPinSnoozed === false));
+
+  // ── a heading may not contradict the rows underneath it ──
+  await page.click('#mapList .mv-row[data-id="p1"]');
+  await page.waitForTimeout(200);
+  await page.click('#mapCard [data-ask="near5"]');
+  await page.waitForTimeout(350);
+  const head5 = await page.$eval('#mapAnswer .mv-a-hd', e => e.textContent.replace(/\s+/g, ' '));
+  const rows5 = await page.$$eval('#mapAnswer .mv-a-row .mv-a-d', e => e.map(x => x.textContent.trim()));
+  const claimsFive = /within 5 km/.test(head5);
+  const anyWider = rows5.some(r => /[-\u2013]|to /.test(r) && /(?:[6-9]|1\d)/.test(r));
+  ok('"within 5 km" is only claimed when every row really is',
+    !(claimsFive && anyWider), head5 + ' | ' + JSON.stringify(rows5));
+
+  // ── an open list must not survive a filter change ──
+  await page.fill('#searchInput', 'mangadu');
+  await page.waitForTimeout(600);
+  const afterFilter = await page.evaluate(() => {
+    const el = document.getElementById('mapAnswer');
+    return el ? el.textContent.replace(/\s+/g, ' ') : '(card gone)';
+  });
+  ok('a stale property list is retired rather than left on screen',
+    /out of date|\(card gone\)/.test(afterFilter), afterFilter.slice(0, 150));
+  await page.fill('#searchInput', '');
+  await page.waitForTimeout(450);
 
   // ── filters drive the map ──
   await page.fill('#searchInput', 'anna nagar');
@@ -488,18 +549,35 @@ console.log('');
 console.log('On a phone');
 {
   const page = await open({ width: 390, height: 844 }, true);
-  await page.click('#mapModeSwitch .mv-mode:nth-child(2)');
-  await page.waitForTimeout(700);
-  ok('the shell stacks instead of splitting',
-    await page.$eval('#mapShell', e => getComputedStyle(e).gridTemplateColumns.split(' ').length === 1));
+  // Split is not offered on a phone. Stacking a 46vh list over a 62vh map put
+  // the map below the fold, and because the card renders inside the map pane,
+  // tapping a row produced no visible response whatsoever.
+  const modes = await page.$$eval('#mapModeSwitch .mv-mode', e => e.map(x => x.textContent.trim()));
+  ok('the phone gets a genuine either/or, not a broken split',
+    JSON.stringify(modes) === JSON.stringify(['List', 'Map']), JSON.stringify(modes));
   ok('the divider is gone', await page.$eval('#mapResizer', e => getComputedStyle(e).display === 'none'));
-  ok('the list still renders', (await page.$$eval('#mapList .mv-row', e => e.length)) > 0);
+  ok('the list renders', (await page.$$eval('#mapList .mv-row', e => e.length)) > 0);
   ok('nothing overflows sideways',
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
-  await page.click('#mapList .mv-row[data-id="p1"]');
-  await page.waitForTimeout(250);
-  ok('the card fits the screen',
-    await page.$eval('#mapCard', e => e.getBoundingClientRect().width <= window.innerWidth - 8));
+
+  await page.click('#mapModeSwitch .mv-mode:nth-child(2)');   // Map
+  await page.waitForTimeout(700);
+  await page.click('.gm-prop');
+  await page.waitForTimeout(350);
+  ok('tapping a marker opens the card as a bottom sheet on the viewport',
+    await page.$eval('#mapCard', e => {
+      const r = e.getBoundingClientRect();
+      return !e.hidden && getComputedStyle(e).position === 'fixed'
+        && r.bottom <= window.innerHeight + 2 && r.width <= window.innerWidth + 2;
+    }));
+  // The price is usually the question, and it was the column being dropped.
+  await page.click('#mapCard [data-ask="near5"]');
+  await page.waitForTimeout(350);
+  const phoneRows = await page.$$eval('#mapAnswer .mv-a-row', e => e.length);
+  const phonePrices = await page.$$eval('#mapAnswer .mv-a-p',
+    e => e.filter(x => getComputedStyle(x).display !== 'none').length);
+  ok('and the price column survives on a phone',
+    phoneRows === 0 || phonePrices > 0, phonePrices + ' of ' + phoneRows);
   await shot(page, 'map-phone');
   await page.context().close();
 }
