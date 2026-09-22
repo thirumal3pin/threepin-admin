@@ -274,6 +274,55 @@ function applyFilters(){
   if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
   renderNearMisses(base, text, res);
+  // The map shows exactly what the grid shows — one filter state, two
+  // renderings of it. A map with its own idea of which properties count
+  // would be a second source of truth on the same screen.
+  if(window.PinMapView && PinMapView.state.booted) PinMapView.refresh();
+}
+
+// ═══════ MAP VIEW ═══════
+//
+// The page's side of map-assets/map-view.js: it owns the data and the
+// persistence, the view owns the drawing. Booted once, after the first
+// snapshot lands, because a map of nothing is a map nobody can read.
+let mapViewBooted = false;
+
+// Who placed a pin is worth recording, and the only place the email arrives
+// is the auth callback. auth.js defines it, nav-boot.js wraps it after this
+// file loads, so chaining here is safe and both wrappers still run.
+let signedInEmail = null;
+(function captureUser(){
+  const prior = window.onDashboardAuthChange;
+  window.onDashboardAuthChange = function(user){
+    signedInEmail = (user && user.email) || null;
+    return typeof prior === 'function' ? prior.apply(this, arguments) : undefined;
+  };
+})();
+
+function bootMapView(){
+  if(mapViewBooted || !window.PinMapView || !properties.length) return;
+  mapViewBooted = true;
+  PinMapView.boot({
+    properties: () => properties,
+    filtered: () => filteredProperties,
+    user: () => signedInEmail,
+    onOpenProperty: id => openDetail(id),
+    // A dropped pin is a normal property edit: the same merge-save every
+    // other field uses, so it lands in the change log and cannot be undone
+    // by a Sync from Sheet (the sheet has no column for `geo`).
+    savePatch: (id, patch) => {
+      const p = properties.find(x => x.id === id);
+      if(!p) return;
+      Object.assign(p, patch);
+      if(window.dashboardFirebase && window.dashboardFirebase.saveProperty){
+        window.dashboardFirebase.saveProperty(Object.assign({ id }, patch))
+          .catch(e => { console.error('pin save failed:', e); showToast && showToast('Could not save the pin — it is on screen but not stored.'); });
+      }
+    }
+  });
+  PinMapView.initResizer();
+  PinMapView.applyMode();
+  PinMapView.refresh();
 }
 
 // ═══════ CLOSE MATCHES ═══════
@@ -1633,6 +1682,9 @@ function refreshAfterDataChange(){
   applyFilters();
   updateMissingCount();
   renderMissing();
+  // After applyFilters, so the map's first render has a filtered list to
+  // draw rather than an empty one.
+  bootMapView();
 }
 
 window.applyPropertiesSnapshot = function(list){

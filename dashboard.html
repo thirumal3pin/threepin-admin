@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="dashboard-assets/style.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
 <link rel="stylesheet" href="shared-assets/match-panel.css">
+<link rel="stylesheet" href="map-assets/style.css">
 </head>
 <body>
 
@@ -94,6 +95,7 @@
       </div>
     </div>
   </div>
+  <div class="mv-modes" id="mapModeSwitch" role="group" aria-label="How to view the properties"></div>
   <div class="advchips" id="advChips"></div>
   <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
   <div class="controls" id="controlsPanel">
@@ -126,6 +128,27 @@
   <!-- Client-brief results: the whole inventory ranked against one sentence,
        rendered by the shared match panel so a property scored here looks
        exactly like a property scored from a lead record. -->
+  <!-- ═══════ MAP VIEW ═══════
+       List, a draggable divider and the map. The panels inside #mapPane float
+       over the map rather than pushing it, because the map IS the context
+       they describe. Drawn by map-assets/map-view.js. -->
+  <div id="mapShell" hidden data-mode="split">
+    <div id="mapListPane">
+      <div id="mapPinBar"></div>
+      <div id="mapList"></div>
+    </div>
+    <button type="button" id="mapResizer" role="separator" aria-orientation="vertical"
+            aria-label="Drag to resize the list and map, or use the arrow keys" tabindex="0"></button>
+    <div id="mapPane">
+      <!-- The map canvas gets its own host: the three panels below are
+           siblings of it, so rebuilding the canvas never deletes them. -->
+      <div id="mapCanvasHost"></div>
+      <div id="mapCard" hidden></div>
+      <div id="mapPinList" hidden></div>
+      <div id="mapPinMode" hidden></div>
+    </div>
+  </div>
+
   <div id="briefResults" hidden></div>
   <div class="grid" id="pgrid"></div>
   <!-- Properties that satisfy MOST of the query. Kept out of the grid above
@@ -411,6 +434,10 @@
 <script src="shared-assets/area-model.js"></script>
 <script src="shared-assets/match-engine.js"></script>
 <script src="shared-assets/match-panel.js"></script>
+<script src="map-assets/geo-resolve.js"></script>
+<script src="map-assets/map-core.js"></script>
+<script src="map-assets/map-nearby.js"></script>
+<script src="map-assets/map-view.js"></script>
 <script src="dashboard-assets/auth.js"></script>
 <script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>

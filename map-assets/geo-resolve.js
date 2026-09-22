@@ -113,6 +113,28 @@
 
   // ═══════ THE LADDER ═══════
 
+  // The locality a property belongs to, independent of how it was placed.
+  // Resolved from the location text, so an exact pin has one too.
+  function areaOf(p, area) {
+    const geo = root.PinGeo;
+    if (!geo) return null;
+    const text = String(p.location || '');
+    if (area && area.nodeFor) {
+      for (const seg of text.split(/[,\/]/)) {
+        const node = area.nodeFor(seg.trim());
+        if (!node) continue;
+        // Name the locality, never the street inside it.
+        if ((node.kind === 'street' || node.kind === 'sub') && node.parent) {
+          const parent = area.nodes.get(node.parent);
+          if (parent) return parent.label;
+        }
+        return node.label;
+      }
+    }
+    const keys = geo.resolveAll([text, p.name].filter(Boolean).join(' , '));
+    return keys.length ? geo.label(keys[0]) : null;
+  }
+
   /**
    * Where a property is, and how sure we are.
    *
@@ -126,12 +148,15 @@
    *   source:'pin'|'geocoded'|'maplink'|'locality',
    *   label:string,           what to tell the user this position IS
    *   accuracyKm:number|null, how wrong it could be
-   *   via:string|null         the area it was placed through, for rung 3
+   *   via:string|null,        the sub-area it was found through, if any
+   *   area:string|null        the LOCALITY it belongs to — on every rung, so
+   *                           the map has one stable key to group by
    * } | null}
    */
   function positionOf(p, opts) {
     const o = opts || {};
     if (!p) return null;
+    const area = areaOf(p, o.area);
 
     // ── 1. A stored position. An agent put it there, or a geocode did. ──
     const g = p.geo;
@@ -148,7 +173,7 @@
           ? 'Pin placed by the team'
           : (approx ? 'Geocoded to the locality only' : 'Geocoded from the address'),
         accuracyKm: approx ? 1.5 : null,
-        via: null
+        via: null, area
       };
     }
 
@@ -159,13 +184,13 @@
         lat: fromLink.lat, lng: fromLink.lng,
         precision: 'exact', source: 'maplink',
         label: 'From the Location Pin link',
-        accuracyKm: null, via: null
+        accuracyKm: null, via: null, area
       };
     }
 
     // ── 3. The locality, from the area model. ──
     const approx = localityPosition(p, o.area);
-    if (approx) return approx;
+    if (approx) { approx.area = approx.area || area; return approx; }
 
     // ── 4. Genuinely unknown. Never guessed. ──
     return null;
@@ -193,7 +218,8 @@
           precision: 'approx', source: 'locality',
           label: pos.via ? `Placed at ${pos.label} (via ${pos.via})` : `Placed at ${pos.label}`,
           accuracyKm: pos.accuracyKm,
-          via: pos.via || pos.label
+          via: pos.via || null,
+          area: pos.label
         };
       }
     }
@@ -206,7 +232,7 @@
         lat: c[0], lng: c[1],
         precision: 'approx', source: 'locality',
         label: `Placed at ${geo.label(key)}`,
-        accuracyKm: 1.5, via: geo.label(key)
+        accuracyKm: 1.5, via: null, area: geo.label(key)
       };
     }
     return null;
@@ -464,7 +490,7 @@
   }
 
   const api = {
-    positionOf, pinState, pinAdvice, locate,
+    positionOf, areaOf, pinState, pinAdvice, locate,
     coordsFromMapLink, isShortMapLink, looksLikeUrl,
     pinPatch, geocodedPatch, snoozePatch, unsnoozePatch,
     geocodeProperty, addressFor,

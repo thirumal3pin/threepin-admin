@@ -12,7 +12,8 @@
     "test:search": "node tests/property-search.test.mjs",
     "test:match": "node tests/area-model.test.mjs && node tests/match-engine.test.mjs",
     "test:map": "node tests/map-geo.test.mjs",
-    "preview:match": "node tests/match-preview.mjs"
+    "preview:match": "node tests/match-preview.mjs",
+    "preview:map": "node tests/map-preview.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.2",
