@@ -323,8 +323,12 @@
     defineOverlay();
 
     const map = new g.Map(el, {
-      center: CHENNAI,
-      zoom: 11,
+      // Honoured, not ignored. These were hardcoded while the signature
+      // advertised an options object, so a caller that asked to open on a
+      // locality got the whole of Chennai at zoom 11 and every property
+      // collapsed into one cluster.
+      center: o.center || CHENNAI,
+      zoom: o.zoom || 11,
       styles: MAP_STYLE,
       // The default control set is a lot of chrome on a panel this size.
       // Zoom and a map-type switch are the two anybody uses.
@@ -376,7 +380,8 @@
       setPinMode: on => { state.pinMode = !!on; el.classList.toggle('pin-mode', !!on); },
       ghostPin: pos => ghostPin(state, pos),
       clear: () => clearMarkers(state),
-      zoomToArea: key => zoomToArea(state, key)
+      zoomToArea: key => zoomToArea(state, key),
+      clearOf: (id, rect) => clearOf(state, id, rect)
     };
   }
 
@@ -492,9 +497,14 @@
       if (p.soldOut) cls.push('sold');
       if (it.matchPct != null) cls.push('scored');
 
+      // "₹—" is not a price. A row with no figure on it reads as broken
+      // rather than as one where the builder has not published one, and 28
+      // of the 131 live rows are in exactly that state.
       const label = it.matchPct != null
         ? `${it.matchPct}%`
-        : (p.soldOut ? 'Sold' : '₹' + priceLabel(it.priceLo));
+        : p.soldOut ? 'Sold'
+          : it.priceLo == null ? 'On ask'
+            : '₹' + priceLabel(it.priceLo);
 
       // The approximate flag is its own chip, not a character trailing the
       // price: "₹2.9 Cr ~" reads as a price qualifier, which is the one
@@ -560,6 +570,32 @@
     if (!it || !it.pos) return;
     state.map.panTo({ lat: it.pos.lat, lng: it.pos.lng });
     if (state.map.getZoom() < SPLIT_ZOOM) state.map.setZoom(15);
+  }
+
+  // ═══════ KEEP THE SELECTED PIN OUT FROM UNDER THE CARD ═══════
+  //
+  // Opening a property puts a 340px card over the map, and the pin it
+  // describes was landing behind it — the agent clicked a marker and the
+  // marker vanished under the panel explaining it. Every real map does this:
+  // when a panel opens, the view shifts so the thing you selected stays in
+  // sight.
+  //
+  // Measured off the marker's own box rather than through the projection,
+  // because the marker is already an HTML element in the DOM and its rect is
+  // the truth about where it is on screen.
+  function clearOf(state, id, rect) {
+    const m = state.markers.get(id);
+    if (!m || !m.div || !rect || !state.map.panBy) return;
+    const r = m.div.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const pad = 14;
+    const hitsX = r.right > rect.left - pad && r.left < rect.right + pad;
+    const hitsY = r.bottom > rect.top - pad && r.top < rect.bottom + pad;
+    if (!hitsX || !hitsY) return;
+    // How far it intrudes, plus a margin. Positive panBy moves the map
+    // content right, which carries the marker left, clear of the card.
+    const dx = (r.right + pad) - rect.left;
+    if (dx > 0) state.map.panBy(dx, 0);
   }
 
   function zoomToArea(state, key) {

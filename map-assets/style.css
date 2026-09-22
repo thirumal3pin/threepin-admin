@@ -217,11 +217,20 @@ body.mv-dragging #mapPane { pointer-events: none; }
   background: var(--card); border: 1px solid var(--border);
   border-radius: 15px; box-shadow: var(--shadow-lg);
 }
+/* Bottom RIGHT, not bottom left.
+   On the left it opened flush against the property list, and between the two
+   of them there was no map left to look at — which is most of the point of
+   being in Split view. Against the far edge the map stays visible in the
+   middle, where the pins are, and the card sits where the reference
+   dashboards put it. */
 #mapCard {
-  left: 14px; bottom: 14px; width: min(370px, calc(100% - 28px));
+  right: 14px; bottom: 14px; width: min(340px, calc(100% - 28px));
   max-height: calc(100% - 28px); overflow-y: auto; padding: 14px 16px 15px;
 }
+/* Above the card, because both now live on the right and this one is a
+   report the agent opens, reads and dismisses. */
 #mapPinList {
+  z-index: 6;
   right: 14px; top: 14px; width: min(400px, calc(100% - 28px));
   max-height: calc(100% - 28px); overflow-y: auto; padding: 13px 15px 14px;
 }
@@ -685,5 +694,8 @@ body.mv-dragging #mapPane { pointer-events: none; }
 }
 .mv-stat-v {
   margin-top: 3px; font-size: 13px; font-weight: 650; color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Wraps rather than ellipsising. "1750-1900 sq ft" does not fit one line of
+     a third of the card, and "1750-1900 ..." is a worse answer than two
+     lines — the number is the whole reason the box is there. */
+  overflow-wrap: anywhere; line-height: 1.3;
 }

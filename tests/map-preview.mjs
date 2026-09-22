@@ -96,6 +96,7 @@ const MAPS_STUB = `
 
   function Map(el, opts) {
     this._el = el;
+    window.__stubMap = this;
     this._zoom = (opts && opts.zoom) || 11;
     this._center = (opts && opts.center) || { lat: 13.02, lng: 80.2 };
     this._opts = opts || {};
@@ -124,6 +125,17 @@ const MAPS_STUB = `
   Map.prototype.getCenter = function () { return new LatLng(this._center.lat, this._center.lng); };
   Map.prototype.setCenter = function (c) { this._center = c; };
   Map.prototype.panTo = function (c) { this._center = c; };
+  // panBy shifts the view by pixels. The stub's projection is a linear
+  // lat/lng -> pixel transform over a fixed window, so the inverse is exact.
+  Map.prototype.panBy = function (x, y) {
+    const el = this._el, w = el.clientWidth || 800, h = el.clientHeight || 600;
+    this._center = {
+      lat: this._center.lat + (y / h) * (WIN.n - WIN.s),
+      lng: this._center.lng + (x / w) * (WIN.e - WIN.w)
+    };
+    this.__panned = (this.__panned || 0) + Math.abs(x) + Math.abs(y);
+    this.__fire('idle');
+  };
   Map.prototype.getDiv = function () { return this._el; };
   Map.prototype.fitBounds = function (b) {
     const c = b.getCenter();
@@ -502,6 +514,21 @@ console.log('The map view');
       })
       .map(e => e.querySelector('.gm-p-n').textContent.trim()));
     ok('the selected pin wears its name', shown.length >= 1, JSON.stringify(shown));
+
+    // The card is 340px of panel over the map, and the pin it describes was
+    // landing underneath it. The stub's projection is a fixed window so the
+    // markers do not visibly move here — what is checked is that the map was
+    // asked to pan, and by how much, which is the part that can regress.
+    const panned = await page.evaluate(() => {
+      const el = document.querySelector('#mapCard');
+      const pin = [...document.querySelectorAll('.gm-prop.sel')][0];
+      if (!el || !pin) return { no: true };
+      const r = pin.getBoundingClientRect(), c = el.getBoundingClientRect();
+      return { overlapped: r.right > c.left && r.left < c.right && r.bottom > c.top && r.top < c.bottom,
+        pannedBy: (window.__stubMap && window.__stubMap.__panned) || 0 };
+    });
+    ok('a pin under the card makes the map move out from under it',
+      !panned.overlapped || panned.pannedBy > 0, JSON.stringify(panned));
     ok('...and it is the only one that does', shown.length === 1, JSON.stringify(shown));
     ok('the name is the property, not its price', !/^₹/.test(shown[0] || ''), JSON.stringify(shown));
   }

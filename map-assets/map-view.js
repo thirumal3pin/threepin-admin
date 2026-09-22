@@ -422,6 +422,15 @@
     const p = it.p, core = root.PinMapCore;
     const approx = it.pos.precision === 'approx';
     el.hidden = false;
+    // Once the card is laid out, shift the map if this property's pin has
+    // ended up underneath it. Next frame, because the card's height is not
+    // known until it has been painted.
+    if (S.mapApi && S.mapApi.clearOf) {
+      requestAnimationFrame(() => {
+        if (el.hidden || S.selectedId !== it.p.id) return;
+        S.mapApi.clearOf(it.p.id, el.getBoundingClientRect());
+      });
+    }
     el.innerHTML = `
       <button type="button" class="mv-card-x" data-act="close" aria-label="Close this property">✕</button>
       <div class="mv-card-hd">
