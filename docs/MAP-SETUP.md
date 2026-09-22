@@ -20,15 +20,27 @@ blank grey rectangle.
 ## 1. Create the key
 
 1. <https://console.cloud.google.com> → pick (or create) a project.
-2. **APIs & Services → Library** → enable exactly these three:
+2. **APIs & Services → Library** → enable these six:
    - **Maps JavaScript API** — the map itself
-   - **Places API (New)** — nearby schools, hospitals, metro
-   - **Distance Matrix API** — drive times
+   - **Places API (New)** — nearby schools, hospitals, metro, and the
+     type-ahead on "Distance to…"
+   - **Routes API** — travel times and road distances
+   - **Geocoding API** — turning a typed place into a point
+   - **Elevation API** — ground height on the property card
+   - **Street View Static API** — the street photo on the property card
 
-   > Enable **Places API (New)**, not the old "Places API". Google stopped
-   > granting legacy Places access to keys created after March 2025, and the
-   > code calls the new one for exactly that reason. A key with only the
-   > legacy API enabled will return no places and no error anybody sees.
+   > Two of those are the NEW generation, and it matters. Google refuses
+   > **legacy Places** and the **Distance Matrix API** to Cloud projects
+   > created after March 2025 — they cannot even be switched on. Verified
+   > against this deployment's own key, which answers Distance Matrix with:
+   >
+   > > "You're calling a legacy API, which is not enabled for your project.
+   > > To get newer features and more functionality, switch to the Places API
+   > > (New) or Routes API."
+   >
+   > So the code calls **Places API (New)** and the **Routes API**. Enable the
+   > old ones instead and every nearby search and every travel time returns
+   > nothing, with no error anybody sees.
 
 3. **APIs & Services → Credentials → Create credentials → API key.**
 
@@ -46,14 +58,19 @@ On the key's page:
   ```
   Add `http://localhost:*/*` too if you want the map while developing.
 
-- **API restrictions → Restrict key**, and tick only the three APIs above.
+- **API restrictions → Restrict key**, and tick only the six APIs above.
 
 An unrestricted key on a public page is somebody else's map bill on your
 card. This is the one step worth double-checking.
 
 ## 3. Put it in Vercel
 
-Vercel project → **Settings → Environment Variables**:
+**Already done** — `GOOGLE_MAPS_BROWSER_KEY` is set on the project for
+Production, Preview and Development. Step 2 (the referrer restriction) is the
+one still worth checking, and the key should be rotated once the map is
+confirmed working, since it has been shared in plain text.
+
+To change it later: Vercel project → **Settings → Environment Variables**:
 
 | Name | Value | Environments |
 |---|---|---|
@@ -86,7 +103,10 @@ build is deliberately frugal, because the cheap path was also the better one:
 | Positions for all 131 properties | **Never** | Worked out locally from the Location column and the area model. |
 | Map tiles | Once per map load | One "dynamic map" load per page view, not per pan or zoom. |
 | "Within 5 km" | **Never** | Straight-line, from coordinates already held. |
-| "Within 30 minutes" | One request | Candidates are filtered by straight line first and capped at the 24 nearest — the API's own per-request limit. Never one request per property. |
+| "Within 30 minutes" | One Routes request | Candidates are filtered by straight line first and capped at the 24 nearest. Never one request per property. |
+| "Distance to…" type-ahead | One per pause in typing | Debounced 220 ms and cached, so a nine-letter place name is not nine requests. |
+| Street View photo | One per property, cached | The FREE metadata endpoint is checked first, so the billed image is only requested when a panorama actually exists. |
+| Ground height | One per property, cached | Elevation. Shown as height and context, never as a flood verdict. |
 | "What is nearby" | One request per category you click | Cached for the rest of the page's life, so clicking back is free. |
 | "Distance to…" | One geocode + one route | Cached per typed place. |
 | Dropping a pin | **Never** | It is a click on the map. |

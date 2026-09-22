@@ -98,9 +98,27 @@
   }
 
   // ═══════ DRIVING TIME — the only paid part of "nearby" ═══════
+  //
+  // Through the ROUTES API, not Distance Matrix. Distance Matrix is a legacy
+  // API and Google refuses it to keys created after March 2025 — verified
+  // against this deployment's own key, which answers:
+  //
+  //   "You're calling a legacy API, which is not enabled for your project.
+  //    To get newer features and more functionality, switch to the Places
+  //    API (New) or Routes API."
+  //
+  // So every drive time would have failed silently, exactly as legacy Places
+  // would have. Routes has no JS SDK wrapper — it is REST only — so this
+  // signs its own fetch with the key map-core.js kept from load(). Google
+  // serves it with CORS for the calling origin, which is what makes a browser
+  // call legitimate rather than a workaround.
+  const ROUTES_URL = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 
-  // Distance Matrix: 25 destinations per request, billed per element. The
-  // pre-filter is what keeps "within 30 minutes" to a single request.
+  // TRAFFIC_AWARE caps a matrix at 100 elements. With one origin that is 100
+  // destinations — four times what Distance Matrix allowed — but the cap
+  // stays low on purpose: it is billed per element, and 24 candidates
+  // pre-filtered by straight-line distance answers "within 30 minutes" as
+  // well as 100 would.
   const MATRIX_MAX = 24;
 
   // ── Chennai traffic, stated once ──
@@ -129,42 +147,63 @@
     const list = (tos || []).filter(t => t && t.pos).slice(0, MATRIX_MAX);
     if (!list.length) return new Map();
 
-    const key = from.lat.toFixed(4) + ',' + from.lng.toFixed(4) + '|' + list.map(t => t.id).join(',');
-    if (matrixCache.has(key)) return matrixCache.get(key);
+    // The MODE is part of the key. Without it, asking "how long by metro"
+    // after "how long by car" returned the cached driving answer and never
+    // called Routes at all — the panel switched its label to Metro and kept
+    // the car's number underneath it.
+    const ck = (o.mode || 'DRIVE') + '|' + from.lat.toFixed(4) + ',' + from.lng.toFixed(4)
+      + '|' + list.map(t => t.id).join(',');
+    if (matrixCache.has(ck)) return matrixCache.get(ck);
 
-    const g = G();
-    const svc = new g.DistanceMatrixService();
-    const result = await new Promise(resolve => {
-      svc.getDistanceMatrix({
-        origins: [new g.LatLng(from.lat, from.lng)],
-        destinations: list.map(t => new g.LatLng(t.pos.lat, t.pos.lng)),
-        travelMode: o.mode || g.TravelMode.DRIVING,
-        // Chennai traffic is the whole reason a client asks "how long", so a
-        // free-flow number would be useless. `bestguess` needs a future
-        // departure time; now+1min satisfies that without pretending to
-        // predict a specific trip.
-        drivingOptions: { departureTime: new Date(Date.now() + 60000), trafficModel: 'bestguess' },
-        unitSystem: g.UnitSystem.METRIC
-      }, (res, status) => {
-        if (status !== 'OK' || !res || !res.rows || !res.rows[0]) return resolve(null);
-        resolve(res.rows[0].elements);
-      });
-    });
-
+    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
     const map = new Map();
-    if (result) {
-      result.forEach((el, i) => {
-        if (!el || el.status !== 'OK') return;
-        const secs = (el.duration_in_traffic || el.duration || {}).value;
-        map.set(list[i].id, {
-          km: el.distance ? el.distance.value / 1000 : null,
-          mins: secs != null ? Math.round(secs / 60) : null,
-          text: el.duration_in_traffic ? el.duration_in_traffic.text : (el.duration || {}).text || null,
-          inTraffic: !!el.duration_in_traffic
-        });
+    if (!key) { matrixCache.set(ck, map); return map; }
+
+    try {
+      const res = await (o.fetchImpl || fetch)(ROUTES_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': key,
+          // Routes bills by what you ASK for, so the mask is the cost control
+          // as much as the response shape. Nothing here is unused.
+          'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,condition'
+        },
+        body: JSON.stringify({
+          origins: [{ waypoint: { location: { latLng: { latitude: from.lat, longitude: from.lng } } } }],
+          destinations: list.map(t => ({ waypoint: { location: { latLng: { latitude: t.pos.lat, longitude: t.pos.lng } } } })),
+          travelMode: o.mode || 'DRIVE',
+          // Live traffic. A free-flow number is useless in Chennai — it is
+          // the whole reason a client asks "how long".
+          routingPreference: 'TRAFFIC_AWARE',
+          units: 'METRIC'
+        })
       });
+      if (!res.ok) { matrixCache.set(ck, map); return map; }
+      const rows = await res.json();
+
+      // Routes answers with a FLAT array carrying its own indices, and in no
+      // guaranteed order — unlike Distance Matrix's positional rows. Reading
+      // it positionally would silently attribute one property's drive time to
+      // another, which is worse than no answer at all.
+      for (const row of (Array.isArray(rows) ? rows : [])) {
+        if (!row || row.condition !== 'ROUTE_EXISTS') continue;
+        const t = list[row.destinationIndex];
+        if (!t) continue;
+        const secs = typeof row.duration === 'string' ? parseInt(row.duration, 10) : null;
+        const mins = secs != null && isFinite(secs) ? Math.round(secs / 60) : null;
+        map.set(t.id, {
+          km: row.distanceMeters != null ? row.distanceMeters / 1000 : null,
+          mins,
+          text: mins == null ? null : (mins >= 60 ? Math.floor(mins / 60) + ' hr ' + (mins % 60) + ' min' : mins + ' min'),
+          inTraffic: true
+        });
+      }
+    } catch (e) {
+      // A failed route is not an error state for the panel — it reports "no
+      // drive time" and the free straight-line answer still stands.
     }
-    matrixCache.set(key, map);
+    matrixCache.set(ck, map);
     return map;
   }
 
@@ -389,17 +428,28 @@
     return answer;
   }
 
+  // The three ways a Chennai client actually travels. Routes serves all of
+  // them from one call shape, so offering only DRIVE was leaving the metro
+  // question — the commonest one after price — unanswerable.
+  const MODES = [
+    { key: 'DRIVE', label: 'Driving', verb: 'driving' },
+    { key: 'TRANSIT', label: 'Metro & bus', verb: 'by metro or bus' },
+    { key: 'WALK', label: 'Walking', verb: 'on foot' }
+  ];
+
   /**
-   * Distance and drive time from a property to anything the agent types.
+   * Distance and travel time from a property to anything the agent types.
    *
-   * @returns { ok, to:{formatted,lat,lng}, straightKm, say, drive:{km,mins,text}|null, note }
+   * @returns { ok, to:{formatted,lat,lng}, straightKm, say, drive:{km,mins,text}|null, mode, note }
    */
   async function distanceTo(fromPos, text, opts) {
-    const dest = await geocodeText(text, opts);
+    const o = opts || {};
+    const dest = await geocodeText(text, o);
     if (!dest) return { ok: false, error: `Could not find “${text}” near Chennai.` };
     const geo = R();
     const straight = geo.haversine(fromPos, dest);
-    const times = await travelTimes(fromPos, [{ id: 'q', pos: dest }], opts);
+    const mode = o.mode || 'DRIVE';
+    const times = await travelTimes(fromPos, [{ id: 'q', pos: dest }], Object.assign({}, o, { mode }));
     const drive = times.get('q') || null;
 
     // The caveat travels with the answer. If the property is only placed at
@@ -415,9 +465,132 @@
       to: { formatted: dest.formatted, lat: dest.lat, lng: dest.lng },
       straightKm: straight,
       say: geo.sayDistance(straight, fromPos.accuracyKm, dest.accuracyKm),
-      drive,
+      drive, mode,
+      modeVerb: (MODES.find(m => m.key === mode) || MODES[0]).verb,
       note: notes.length ? notes.join('; ') : null
     };
+  }
+
+  // ═══════ TYPE-AHEAD ═══════
+  //
+  // The "distance to…" box was blind typing: an agent spelled a landmark, got
+  // "could not find", and tried again while a client waited. Autocomplete
+  // (New) biased to Chennai turns that into two keystrokes and a pick — and
+  // it is the same API family the nearby search already uses.
+  const acCache = new Map();
+
+  async function autocomplete(input, opts) {
+    const o = opts || {};
+    const q = String(input || '').trim();
+    if (q.length < 3) return [];
+    if (acCache.has(q)) return acCache.get(q);
+    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    if (!key) return [];
+    let out = [];
+    try {
+      const res = await (o.fetchImpl || fetch)('https://places.googleapis.com/v1/places:autocomplete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key },
+        body: JSON.stringify({
+          input: q,
+          // Biased, not restricted: a client's office may sit just outside
+          // any box we draw, and a hard restriction would hide it.
+          locationBias: { circle: { center: { latitude: (o.near && o.near.lat) || 13.05, longitude: (o.near && o.near.lng) || 80.22 }, radius: 40000 } },
+          includedRegionCodes: ['in']
+        })
+      });
+      if (res.ok) {
+        const d = await res.json();
+        out = (d.suggestions || [])
+          .filter(x => x.placePrediction)
+          .slice(0, 6)
+          .map(x => ({
+            text: x.placePrediction.text && x.placePrediction.text.text,
+            main: (x.placePrediction.structuredFormat && x.placePrediction.structuredFormat.mainText
+              && x.placePrediction.structuredFormat.mainText.text) || null,
+            sub: (x.placePrediction.structuredFormat && x.placePrediction.structuredFormat.secondaryText
+              && x.placePrediction.structuredFormat.secondaryText.text) || null
+          }))
+          .filter(x => x.text);
+      }
+    } catch (e) { out = []; }
+    acCache.set(q, out);
+    return out;
+  }
+
+  // ═══════ GROUND HEIGHT ═══════
+  //
+  // The SME's largest finding was that flooding is absent from the whole
+  // engine, and that marking named localities as flood-prone is a claim only
+  // the owner can make. Elevation is the part that is NOT a claim: it is
+  // measured, it comes from Google, and in this city it is the single most
+  // informative number nobody has been looking at. Anna Nagar sits at ~33 m;
+  // Velachery, 11 km away, at ~21 m.
+  //
+  // It is deliberately reported as height and context, NEVER as "this
+  // floods": drainage decides that, not altitude alone, and an agent telling
+  // a client a property is safe would be far worse than telling them nothing.
+  const elevCache = new Map();
+
+  // Bands read off Chennai's own spread rather than absolute sea level, which
+  // is what makes them mean anything here: the metro runs from roughly 2 m on
+  // the coast to 50 m inland, and the difference between 8 m and 30 m is the
+  // difference every buyer who lived through 2015 is asking about.
+  function elevationBand(m) {
+    if (m == null) return null;
+    if (m < 6) return { key: 'low', say: 'very low-lying for Chennai' };
+    if (m < 12) return { key: 'lowish', say: 'low-lying by Chennai standards' };
+    if (m < 20) return { key: 'mid', say: 'around the middle of the city\u2019s range' };
+    return { key: 'high', say: 'on the higher ground for Chennai' };
+  }
+
+  async function elevationOf(pos, opts) {
+    const o = opts || {};
+    const ck = pos.lat.toFixed(4) + ',' + pos.lng.toFixed(4);
+    if (elevCache.has(ck)) return elevCache.get(ck);
+    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    if (!key) return null;
+    let answer = null;
+    try {
+      const res = await (o.fetchImpl || fetch)(
+        `https://maps.googleapis.com/maps/api/elevation/json?locations=${pos.lat},${pos.lng}&key=${encodeURIComponent(key)}`);
+      if (res.ok) {
+        const d = await res.json();
+        const m = d.status === 'OK' && d.results && d.results[0] ? d.results[0].elevation : null;
+        if (m != null) answer = { metres: Math.round(m * 10) / 10, band: elevationBand(m) };
+      }
+    } catch (e) { answer = null; }
+    elevCache.set(ck, answer);
+    return answer;
+  }
+
+  // ═══════ STREET VIEW ═══════
+  //
+  // "What does the road look like?" is asked on almost every call, and the
+  // answer was another tab. The metadata endpoint is FREE, so it is checked
+  // first and the billed image is only requested when a panorama actually
+  // exists — otherwise the card would show Google's grey "no imagery" tile
+  // and charge for it.
+  async function streetView(pos, opts) {
+    const o = opts || {};
+    const key = (root.PinMapCore && root.PinMapCore.apiKey && root.PinMapCore.apiKey()) || '';
+    if (!key) return null;
+    try {
+      const res = await (o.fetchImpl || fetch)(
+        `https://maps.googleapis.com/maps/api/streetview/metadata?location=${pos.lat},${pos.lng}&key=${encodeURIComponent(key)}`);
+      if (!res.ok) return null;
+      const d = await res.json();
+      if (d.status !== 'OK') return null;
+      const size = o.size || '336x150';
+      return {
+        // `date` is why this is worth showing rather than just linking: an
+        // agent should know whether they are describing a 2026 street or a
+        // 2014 one.
+        date: d.date || null,
+        img: `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${pos.lat},${pos.lng}&fov=80&pitch=6&key=${encodeURIComponent(key)}`,
+        open: `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${pos.lat},${pos.lng}`
+      };
+    } catch (e) { return null; }
   }
 
   // A Google Maps directions URL, for when the agent wants to send it to the
@@ -427,21 +600,25 @@
   // from the DEVICE's location — the only origin an agent standing in the
   // street actually wants. Passing the property as both ends produced a
   // zero-length route, which is what the Directions button used to do.
+  const GMAPS_MODE = { DRIVE: 'driving', TRANSIT: 'transit', WALK: 'walking' };
+
   function directionsUrl(from, to, mode) {
     const d = typeof to === 'string' ? to : `${to.lat},${to.lng}`;
-    const parts = ['api=1', 'destination=' + encodeURIComponent(d), 'travelmode=' + (mode || 'driving')];
+    const m = GMAPS_MODE[mode] || mode || 'driving';
+    const parts = ['api=1', 'destination=' + encodeURIComponent(d), 'travelmode=' + m];
     if (from && from.lat != null) parts.unshift('origin=' + encodeURIComponent(`${from.lat},${from.lng}`));
     return 'https://www.google.com/maps/dir/?' + parts.join('&');
   }
 
   const api = {
-    KM_PER_MIN_ROAD, ROAD_TO_STRAIGHT,
+    KM_PER_MIN_ROAD, ROAD_TO_STRAIGHT, ROUTES_URL, MODES,
     nearbyProperties, withinMinutes, travelTimes,
     placesNear, CATEGORIES,
+    autocomplete, elevationOf, elevationBand, streetView,
     geocodeText, distanceTo, directionsUrl,
     MATRIX_MAX,
     // for tests and for a cache-clear on a data refresh
-    _caches: { matrixCache, placeCache, geocodeCache }
+    _caches: { matrixCache, placeCache, geocodeCache, acCache, elevCache }
   };
   root.PinMapNearby = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;

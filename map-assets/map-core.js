@@ -48,8 +48,12 @@
   // nearby" tools and `geometry` for spherical distance — both are needed by
   // module 3, and asking for them here avoids a second script load later.
   let loadPromise = null;
+  // Kept because the Routes API is REST-only — there is no JS SDK wrapper for
+  // it — so map-nearby.js has to sign its own fetch. See the note there.
+  let apiKey = '';
 
   function load(key, opts) {
+    apiKey = key || '';
     if (loadPromise) return loadPromise;
     const o = opts || {};
     if (!key) {
@@ -524,7 +528,7 @@
     return 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
   }
 
-  const api = { load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI, priceLabel, priceRange, pitchFor, whatsappUrl, esc };
+  const api = { load, create, MAP_STYLE, SPLIT_ZOOM, CHENNAI, priceLabel, priceRange, pitchFor, whatsappUrl, esc, apiKey: () => apiKey };
   root.PinMapCore = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -171,6 +171,22 @@ const MAPS_STUB = `
   };
 
   const Place = {
+    // Categories that must be narrowed (schools, hospitals) go through
+    // searchByText, because searchNearby has no keyword parameter.
+    searchByText: async function (req) {
+      window.__placeCalls = (window.__placeCalls || 0) + 1;
+      window.__lastPlaceReq = { text: req.textQuery, via: 'searchByText' };
+      const c = req.locationBias.center;
+      const names = ['PSBB Millennium School', 'DAV Public School', 'Velammal Vidyalaya'];
+      return { places: names.map((n, i) => ({
+        displayName: { text: n },
+        primaryTypeDisplayName: { text: 'School' },
+        rating: 4.5 - i * 0.2,
+        userRatingCount: 320 - i * 40,
+        formattedAddress: n + ', Chennai',
+        location: new LatLng(c.lat() + 0.004 * (i + 1), c.lng() + 0.003 * (i + 1))
+      })) };
+    },
     searchNearby: async function (req) {
       window.__placeCalls = (window.__placeCalls || 0) + 1;
       window.__lastPlaceReq = { types: req.includedTypes, radius: req.locationRestriction.radius };
@@ -224,6 +240,8 @@ setTimeout(() => {
 `;
 
 const browser = await chromium.launch();
+let routeCalls = 0, lastRouteDests = 0, lastRouteMode = null;
+let acCalls = 0, elevCalls = 0, svImageCalls = 0;
 const errors = [];
 const ok = (label, cond, detail) => {
   if (cond) console.log('  ok   ' + label);
@@ -245,6 +263,56 @@ async function open(viewport, withMaps) {
   page.on('dialog', d => d.accept());
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
+
+    // ── The REST APIs the map now calls directly ──
+    //
+    // Routes replaced Distance Matrix (a legacy API that new Cloud projects
+    // cannot enable at all), and autocomplete, elevation and Street View have
+    // no JS SDK wrapper either. Answered here with canned data so the real
+    // code path runs without a key, a network call or a bill.
+    if (url.hostname === 'routes.googleapis.com') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      const n = (body.destinations || []).length;
+      routeCalls++; lastRouteDests = n; lastRouteMode = body.travelMode;
+      // Returned deliberately OUT of index order, and one row short, because
+      // Routes really does both — and reading the array positionally would
+      // attribute one property's drive time to another.
+      const rows = [];
+      for (let i = n - 1; i >= 0; i--) {
+        if (i === 2) continue;                      // no route for this one
+        rows.push({
+          originIndex: 0, destinationIndex: i, condition: 'ROUTE_EXISTS',
+          distanceMeters: 2200 + i * 1500,
+          duration: (600 + i * 300) + 's'
+        });
+      }
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(rows) });
+    }
+    if (url.hostname === 'places.googleapis.com' && /autocomplete/.test(url.pathname)) {
+      acCalls++;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ suggestions: [
+        { placePrediction: { text: { text: 'Guindy, Chennai, Tamil Nadu, India' },
+          structuredFormat: { mainText: { text: 'Guindy' }, secondaryText: { text: 'Chennai, Tamil Nadu, India' } } } },
+        { placePrediction: { text: { text: 'Guindy Railway Station, Chennai' },
+          structuredFormat: { mainText: { text: 'Guindy Railway Station' }, secondaryText: { text: 'Chennai' } } } }
+      ] }) });
+    }
+    if (url.hostname === 'maps.googleapis.com' && /elevation/.test(url.pathname)) {
+      elevCalls++;
+      return route.fulfill({ contentType: 'application/json',
+        body: JSON.stringify({ status: 'OK', results: [{ elevation: 9.4 }] }) });
+    }
+    if (url.hostname === 'maps.googleapis.com' && /streetview\/metadata/.test(url.pathname)) {
+      return route.fulfill({ contentType: 'application/json',
+        body: JSON.stringify({ status: 'OK', date: '2026-04', location: { lat: 13.0851, lng: 80.2102 } }) });
+    }
+    if (url.hostname === 'maps.googleapis.com' && /streetview/.test(url.pathname)) {
+      svImageCalls++;
+      // A 1x1 grey PNG is enough to prove the <img> was requested and shown.
+      return route.fulfill({ contentType: 'image/png',
+        body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64') });
+    }
+
     if (url.hostname !== 'dash.local') return route.abort();
     if (url.pathname === '/dashboard-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: FIREBASE_STUB });
     // The key is served as present so map-core takes the real load path; the
@@ -372,34 +440,40 @@ console.log('The map view');
   await shot(page, 'map-split');
 
   // ── "within 5 km" — free, no API call ──
-  const beforeMatrix = await page.evaluate(() => window.__matrixCalls || 0);
+  const beforeMatrix = routeCalls;
   await page.click('#mapList .mv-row[data-id="p1"]');
   await page.waitForTimeout(200);
   await page.click('#mapCard [data-ask="near5"]');
   await page.waitForTimeout(300);
   const near = await txt(page, '#mapAnswer');
   ok('"within 5 km" answers', /within 5 km/.test(near), near.slice(0, 160));
-  ok('and costs no API call', (await page.evaluate(() => window.__matrixCalls || 0)) === beforeMatrix,
-    'matrix calls: ' + (await page.evaluate(() => window.__matrixCalls || 0)));
+  ok('and costs no API call', routeCalls === beforeMatrix, 'route calls: ' + (routeCalls - beforeMatrix));
   ok('it names the other Anna Nagar properties', /ANR00(42|55|77)/.test(near), near.slice(0, 300));
   ok('and says the distance is a straight line', /straight line/.test(near), near.slice(-160));
 
   // ── "within 30 minutes" — one request, not one per property ──
   await page.click('#mapCard [data-ask="near30"]');
-  await page.waitForTimeout(600);
+  await page.waitForFunction(() => {
+    const a = window.PinMapView.state.answer;
+    return a && a.kind === 'near30' && !a.loading;
+  }, null, { timeout: 10000 });
+  await page.waitForTimeout(120);
   const mins = await txt(page, '#mapAnswer');
   ok('"within 30 min" answers with drive times', /30-minute drive|within a 30/.test(mins), mins.slice(0, 200));
-  const calls = await page.evaluate(() => window.__matrixCalls || 0);
-  const dests = await page.evaluate(() => (window.__lastMatrix || {}).destinations || 0);
-  ok('one Distance Matrix request, not one per property', calls - beforeMatrix === 1, `${calls - beforeMatrix} calls`);
-  ok('and the destinations are capped at 24', dests <= 24, String(dests));
+  ok('one Routes request, not one per property', routeCalls - beforeMatrix === 1, `${routeCalls - beforeMatrix} calls`);
+  ok('and the destinations are capped', lastRouteDests <= 24, String(lastRouteDests));
+  ok('it asks Routes for driving', lastRouteMode === 'DRIVE', String(lastRouteMode));
+  // Routes answers out of order and can omit a destination entirely. Reading
+  // it positionally would give one property another's drive time.
+  ok('an out-of-order, incomplete Routes reply is matched by index, not position',
+    !/NaN|undefined/.test(mins), mins.slice(0, 200));
 
   // ── "what is nearby" — the new Places API ──
   await page.click('#mapCard [data-ask="places"]');
   await page.waitForTimeout(250);
   ok('the categories an agent gets asked about are offered',
     /Schools/.test(await txt(page, '#mapAnswer')) && /Hospitals/.test(await txt(page, '#mapAnswer')));
-  await page.click('#mapAnswer .mv-chip:has-text("Schools")');
+  await page.click('#mapAnswer [data-cat="school"]');
   await page.waitForTimeout(400);
   const places = await txt(page, '#mapAnswer');
   ok('schools come back with distances', /PSBB/.test(places) && /km|metres/.test(places), places.slice(0, 260));
@@ -408,12 +482,24 @@ console.log('The map view');
     (await page.evaluate(() => window.__placeCalls || 0)) >= 1);
   await shot(page, 'map-places');
 
+  // ── Street View and ground height, both newly possible ──
+  await page.click('#mapList .mv-row[data-id="p1"]');
+  await page.waitForTimeout(600);
+  const ctx = await page.$eval('#mapContext', e => e.innerHTML);
+  ok('the card shows Street View', /mv-sv/.test(ctx) && svImageCalls > 0, `imgs: ${svImageCalls}`);
+  ok('and dates it, so nobody describes a 2014 street',
+    /2026-04/.test(await txt(page, '#mapContext')), await txt(page, '#mapContext'));
+  ok('ground height is shown', /9\.4 m/.test(await txt(page, '#mapContext')) && elevCalls > 0);
+  ok('as height and context, never as a flood verdict',
+    /does not say whether the area drains/.test(await txt(page, '#mapContext')),
+    await txt(page, '#mapContext'));
+
   // ── "distance to …" ──
   await page.click('#mapCard [data-ask="distance"]');
   await page.waitForTimeout(200);
   await page.fill('#mvDistInput', 'Guindy');
   await page.click('#mapAnswer .mv-btn.primary');
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(600);
   const dist = await txt(page, '#mapAnswer');
   ok('a typed place is found and measured', /Guindy/.test(dist), dist.slice(0, 200));
   ok('with a straight line and a drive time', /straight line/.test(dist) && /driving/.test(dist), dist.slice(0, 320));
@@ -426,6 +512,28 @@ console.log('The map view');
     return document.getElementById('mapAnswer').textContent;
   });
   ok('an unfindable place fails clearly, not silently', /Could not find/.test(bad), bad.slice(0, 160));
+
+  // ── Type-ahead, so a place name is picked rather than spelled blind ──
+  await page.click('#mapCard [data-ask="distance"]');
+  await page.waitForTimeout(200);
+  await page.fill('#mvDistInput', 'guin');
+  await page.waitForTimeout(500);
+  ok('suggestions appear as you type', await page.$eval('#mvAc', e => !e.hidden && /Guindy/.test(e.textContent)));
+  ok('and it is one request per pause, not per keystroke', acCalls <= 3, String(acCalls));
+  await page.click('#mvAc .mv-ac-i');
+  await page.waitForTimeout(600);
+  const picked = await txt(page, '#mapAnswer');
+  ok('picking one runs the distance straight away', /Guindy/.test(picked) && /by road|straight line/.test(picked), picked.slice(0, 180));
+  ok('the travel time leads, not the straight line',
+    await page.$eval('#mapAnswer .mv-dist-n span', e => e.classList.contains('lead')));
+
+  // ── "How long by metro" — the standard Chennai question ──
+  await page.click('#mapAnswer [data-travel="TRANSIT"]');
+  await page.waitForTimeout(700);
+  ok('metro and bus is offered as a mode', lastRouteMode === 'TRANSIT', String(lastRouteMode));
+  ok('and the answer says which mode it is',
+    /metro or bus/.test(await txt(page, '#mapAnswer')), (await txt(page, '#mapAnswer')).slice(0, 220));
+  await shot(page, 'map-distance-modes');
 
   // ── pins: the missing one, and dropping it ──
   await page.click('#mapPinBar .mv-pb-b:not(.quiet)');

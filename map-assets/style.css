@@ -520,3 +520,61 @@ body.mv-dragging #mapPane { pointer-events: none; }
 /* A marker is tapped on a phone map, where a 24px pill is under target. */
 .gm-pin::before { content: ''; position: absolute; inset: -9px; }
 .gm-prop, .gm-cluster { position: relative; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CONTEXT — Street View and ground height
+   Two questions an agent used to leave the page for.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.mv-context:not(:empty) { margin-top: 11px; display: flex; flex-direction: column; gap: 8px; }
+
+.mv-sv { display: block; position: relative; border-radius: 11px; overflow: hidden; text-decoration: none; }
+/* A fixed aspect, not height:auto. Street View is requested at 336x150, but
+   an unexpected reply (or a placeholder) at any other ratio then sized itself
+   off its own width and turned the card into one enormous block. */
+.mv-sv img {
+  display: block; width: 100%; aspect-ratio: 336 / 150; height: auto;
+  object-fit: cover; background: var(--bg2);
+}
+.mv-sv-t {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 12px 10px 6px; font-size: 10.5px; color: #fff;
+  background: linear-gradient(transparent, rgba(0,0,0,.62));
+}
+.mv-sv:hover img { filter: brightness(1.04); }
+
+/* Ground height. Deliberately not a red/green risk badge: altitude is
+   measured, flood risk is not, and a colour-coded verdict would be read as
+   one. */
+.mv-elev {
+  font-size: 11.5px; line-height: 1.55; color: var(--ink2);
+  background: var(--bg2); border-radius: 10px; padding: 8px 11px;
+}
+.mv-elev b { color: var(--ink); font-family: var(--serif); font-size: 14px; }
+.mv-elev i { display: block; font-style: normal; font-size: 10.5px; color: var(--ink3); margin-top: 2px; }
+.mv-elev.low, .mv-elev.lowish { border-left: 3px solid var(--amber); }
+
+/* ═══════ TYPE-AHEAD ═══════ */
+
+.mv-ac {
+  margin-top: 5px; border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; background: var(--card); box-shadow: var(--shadow);
+  max-height: 210px; overflow-y: auto;
+}
+.mv-ac-i {
+  display: block; width: 100%; text-align: left; font: inherit;
+  background: none; border: 0; border-bottom: 1px solid var(--border);
+  padding: 7px 11px; cursor: pointer;
+}
+.mv-ac-i:last-child { border-bottom: 0; }
+.mv-ac-i:hover, .mv-ac-i:focus-visible { background: var(--bg2); }
+.mv-ac-i b { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.mv-ac-i i { display: block; font-style: normal; font-size: 11px; color: var(--ink3); margin-top: 1px; }
+
+.mv-modes-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+.mv-chip.sm { font-size: 10.5px; padding: 3px 9px; }
+
+/* The travel time is the answer; the straight line is a footnote. It used to
+   be given first, so an agent read out the least useful number of the three. */
+.mv-dist-n span.lead { flex: 1 1 100%; background: var(--gold-lt); }
+.mv-dist-n span.lead b { font-size: 21px; }

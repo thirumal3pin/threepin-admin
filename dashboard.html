@@ -84,18 +84,6 @@
       Advanced<span class="adv-btn-n" id="advBtnN" style="display:none"></span>
     </button>
   </div>
-  <div class="brief-bar" id="briefBar" hidden>
-    <label class="brief-lab" for="briefText">What did the client ask for? Their words are fine.</label>
-    <div class="brief-row">
-      <textarea id="briefText" rows="2" spellcheck="false"
-        placeholder="3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a school for the kids and a gated community — he said the Kilpauk one was too expensive"></textarea>
-      <div class="brief-acts">
-        <button type="button" class="brief-go" onclick="runBrief()">Rank the inventory</button>
-        <button type="button" class="brief-x" onclick="closeBrief()">Cancel</button>
-      </div>
-    </div>
-  </div>
-  <div class="mv-modes" id="mapModeSwitch" role="group" aria-label="How to view the properties"></div>
   <div class="advchips" id="advChips"></div>
   <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
   <div class="controls" id="controlsPanel">
@@ -103,6 +91,10 @@
     <div class="fdiv"></div>
     <div class="fgroup" id="typeFilters"></div>
     <div class="ctrl-right">
+      <!-- In the existing controls row on purpose. As its own block this was a
+           whole extra row inside a position:sticky header, which pinned ~40px
+           of chrome to the top of every screen for ever. -->
+      <div class="mv-modes" id="mapModeSwitch" role="group" aria-label="How to view the properties"></div>
       <button class="fbtn fav-toggle" id="favToggle" onclick="toggleFavView()">★ Favorites</button>
       <div class="sel-wrap">
         <select class="sortsel" id="sortSel" onchange="applySort()">
@@ -122,6 +114,21 @@
 
 <!-- MAIN GRID -->
 <div id="main">
+  <!-- The Client-brief box lives HERE, not in the header. #hdr is
+       position:sticky, so a 100px panel opened inside it pinned itself to the
+       top of the viewport and pushed the results off the screen. It belongs
+       with the content it produces. -->
+  <div class="brief-bar" id="briefBar" hidden>
+    <label class="brief-lab" for="briefText">What did the client ask for? Their words are fine.</label>
+    <div class="brief-row">
+      <textarea id="briefText" rows="2" spellcheck="false"
+        placeholder="3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a school for the kids and a gated community — he said the Kilpauk one was too expensive"></textarea>
+      <div class="brief-acts">
+        <button type="button" class="brief-go" onclick="runBrief()">Rank the inventory</button>
+        <button type="button" class="brief-x" onclick="closeBrief()">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div class="gmeta">
     <div class="gmeta-l" id="rCnt"></div>
   </div>

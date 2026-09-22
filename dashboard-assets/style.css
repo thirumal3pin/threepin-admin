@@ -905,3 +905,47 @@ body.adv-open{overflow:hidden;}
   .am-row{grid-template-columns:1fr auto;gap:4px 10px;}
   .am-pa{grid-column:1/2;} .am-pr{grid-column:2/3;text-align:right;} .am-st{grid-column:1/3;}
 }
+
+/* ═══════ THE STICKY HEADER MUST NOT EAT THE SCREEN ═══════
+   #hdr is position:sticky, so every row added to it is pinned to the top of
+   the viewport for ever. Two rows were added for the map view and on a
+   1366x768 laptop the chrome reached about half the height, with the results
+   below the fold and nothing scrolling it away.
+
+   A ceiling in viewport units, so it cannot happen again however many
+   controls end up in there: past that height the header scrolls internally
+   instead of growing. 38vh leaves the majority of any screen for the
+   properties, which is what the page is for. */
+#hdr { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; }
+
+/* The brief box now sits in the scrolling content, so it needs the content
+   column's own rhythm rather than the header's. */
+#main > .brief-bar { margin: 0 0 14px; }
+
+/* The mode switch sits inside .ctrl-right — keep it from being squeezed when
+   that row wraps on a narrow window. */
+.ctrl-right .mv-modes { flex: 0 0 auto; }
+@media (max-width: 560px) {
+  .ctrl-right .mv-modes { order: -1; }
+}
+
+/* ═══════ THE VIEW SWITCH MUST NEVER HIDE ═══════
+   List / Split / Map sits in .ctrl-right so it costs no extra row in the
+   sticky header on desktop. On a phone .controls collapses behind
+   "⚙️ Filters & Sort", which buried it — an agent could not get to the map
+   without first opening a filter panel they did not want.
+
+   So when the panel is collapsed, .controls still lays out but shows ONLY
+   the view switch. Opening Filters reveals the rest as before. */
+@media (max-width: 720px) {
+  .controls:not(.mobile-open) {
+    display: flex;
+    margin-top: 10px;
+    justify-content: flex-end;
+  }
+  .controls:not(.mobile-open) > :not(.ctrl-right) { display: none; }
+  .controls:not(.mobile-open) .ctrl-right { width: 100%; justify-content: flex-end; }
+  .controls:not(.mobile-open) .ctrl-right > :not(.mv-modes) { display: none; }
+  /* The toggle keeps its own row above it. */
+  .mfilter-toggle { margin-bottom: 0; }
+}
