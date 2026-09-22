@@ -499,7 +499,14 @@
       // The approximate flag is its own chip, not a character trailing the
       // price: "₹2.9 Cr ~" reads as a price qualifier, which is the one
       // thing it must not mean. What is approximate is the POSITION.
-      const html = `<span class="gm-p-l">${esc(label)}</span>`
+      // The NAME rides above the price, but only on the pin being pointed at
+      // or selected. Labelling all 130 permanently is what the reference
+      // dashboards avoid by only ever having four or five properties on
+      // screen; at this inventory it would be a wall of overlapping text.
+      // Pointing at one is the moment the agent wants its name.
+      const nameFor = p.name || p.propertyCode || '';
+      const html = (nameFor ? `<span class="gm-p-n">${esc(nameFor)}</span>` : '')
+        + `<span class="gm-p-l">${esc(label)}</span>`
         + (approx ? `<span class="gm-p-a" title="Approximate — placed at ${esc(it.pos.via || it.pos.area || 'the locality')}, within about ${it.pos.accuracyKm} km of the real address" aria-hidden="true">◍</span>` : '');
 
       const m = new Overlay(new g.LatLng(node.lat, node.lng), html, {

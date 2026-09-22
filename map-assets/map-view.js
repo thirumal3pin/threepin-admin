@@ -395,6 +395,25 @@
   //
   // The tile the brief asked for, and the launchpad for every question an
   // agent gets asked next. Everything on it is one click from an answer.
+  // The boxed stats the agent reads out first. Built from whatever this
+  // property actually has rather than from a fixed Bedrooms/Bathrooms/Area
+  // trio: bathrooms is filled on 29 of 131 rows, so a fixed set would show an
+  // empty box on most of the inventory. Three boxes, always full.
+  function statBoxes(p) {
+    const area = p.sqftRange || p.builtupArea || p.carpetArea;
+    const all = [
+      p.config ? { k: 'Config', v: p.config } : null,
+      p.bathrooms ? { k: 'Bathrooms', v: p.bathrooms } : null,
+      area ? { k: 'Area', v: String(area).replace(/\s*sq\.?\s*ft\.?/i, '') + ' sq ft' } : null,
+      p.parking ? { k: 'Parking', v: p.parking } : null,
+      p.facing ? { k: 'Facing', v: p.facing } : null,
+      p.totalFloors ? { k: 'Floors', v: p.totalFloors } : null
+    ].filter(Boolean).slice(0, 3);
+    if (!all.length) return '';
+    return `<div class="mv-stats">${all.map(x =>
+      `<div class="mv-stat"><div class="mv-stat-k">${esc(x.k)}</div><div class="mv-stat-v">${esc(x.v)}</div></div>`).join('')}</div>`;
+  }
+
   function renderCard() {
     const el = document.getElementById('mapCard');
     if (!el) return;
@@ -413,11 +432,10 @@
       <div class="mv-card-sub">${esc([shortLoc(p.location), p.config].filter(Boolean).join(' · '))}</div>
       <div class="mv-card-price">${esc(core.priceRange(it.priceLo, it.priceHi))}
         ${p.pricePerSqft ? `<i>· ${esc(String(p.pricePerSqft).replace(/sqft/i, 'sq ft'))}</i>` : ''}</div>
+      ${statBoxes(p)}
       <div class="mv-facts">
         ${fact(readyOf(p), /^Ready/.test(readyOf(p) || '') ? 'ok' : 'warn')}
-        ${fact(p.sqftRange ? String(p.sqftRange).replace(/\s*sq\.?\s*ft\.?/i, ' sq ft') : null)}
         ${fact(p.builder)}
-        ${fact(p.facing ? p.facing + ' facing' : null)}
       </div>
       <div class="mv-prec ${approx ? 'ax' : 'ex'}">
         ${approx

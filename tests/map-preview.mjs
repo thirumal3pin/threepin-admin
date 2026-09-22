@@ -492,9 +492,29 @@ console.log('The map view');
   await page.click('#mapList .mv-row[data-id="p1"]');
   await page.waitForTimeout(250);
   const card1 = await txt(page, '#mapCard');
+  {
+    // The name rides on the pin being pointed at, and ONLY that one — 130
+    // permanent labels is a wall of text, not a map.
+    const shown = await page.$$eval('.gm-prop', els => els
+      .filter(e => {
+        const n = e.querySelector('.gm-p-n');
+        return n && getComputedStyle(n).display !== 'none';
+      })
+      .map(e => e.querySelector('.gm-p-n').textContent.trim()));
+    ok('the selected pin wears its name', shown.length >= 1, JSON.stringify(shown));
+    ok('...and it is the only one that does', shown.length === 1, JSON.stringify(shown));
+    ok('the name is the property, not its price', !/^₹/.test(shown[0] || ''), JSON.stringify(shown));
+  }
   ok('the card states possession', /Ready to move|Possession/.test(card1), card1.slice(0, 260));
   const facts = await page.$$eval('#mapCard .mv-fact', e => e.map(x => x.textContent.trim()));
-  ok('and the size', facts.some(f => /sq ft/.test(f)), JSON.stringify(facts));
+  // The size moved out of the run-on fact chips and into the boxed stats,
+  // which is where an agent scans for it first.
+  const stats = await page.$$eval('#mapCard .mv-stat', e => e.map(x => x.textContent.replace(/\s+/g, ' ').trim()));
+  ok('and the size', stats.some(f => /sq ft/.test(f)), JSON.stringify(stats));
+  ok('the config is boxed with it', stats.some(f => /BHK/i.test(f)), JSON.stringify(stats));
+  ok('at most three boxes, so they stay scannable', stats.length <= 3, stats.length + '');
+  ok('and no box is empty', stats.every(f => f.replace(/^(Config|Bathrooms|Area|Parking|Facing|Floors)\s*/i, '').trim().length > 0),
+    JSON.stringify(stats));
 
   // The single thing the reviewer called the highest-value gap: the panel
   // said "worth sending" and gave no way to send.

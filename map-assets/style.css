@@ -619,3 +619,71 @@ body.mv-dragging #mapPane { pointer-events: none; }
   border-radius: 0 4px 4px 0;
   margin: 6px 0;
 }
+
+/* ═══════ THE NAME, ON THE PIN BEING POINTED AT ═══════
+   A price pill tells an agent what a property costs but not which one it is,
+   and clicking every pin to find out is the thing that sends them back to
+   another window. The name sits above the pill as a dark tab with a pointer
+   — only while that pin is hovered or selected, because 130 of these on
+   screen at once is a wall of overlapping text, not a map.
+
+   position:absolute against the marker, so it adds no width to the pill and
+   cannot push neighbouring markers around. */
+.gm-p-n {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 220px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: var(--ink, #1C1917);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 3px 10px rgba(0,0,0,.24);
+  pointer-events: none;
+}
+/* The little pointer down to the pill. */
+.gm-p-n::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--ink, #1C1917);
+}
+.gm-prop.sel .gm-p-n,
+.gm-prop.hot .gm-p-n { display: block; }
+
+/* ═══════ THE BOXED STATS ON THE CARD ═══════
+   The three facts an agent reads out before anything else. Boxes rather than
+   a run-on line because they are scanned, not read. */
+.mv-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 10px 0 2px;
+}
+.mv-stats:has(.mv-stat:only-child) { grid-template-columns: minmax(0, 1fr); }
+.mv-stat {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+}
+.mv-stat-k {
+  font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink3, #655E59);
+}
+.mv-stat-v {
+  margin-top: 3px; font-size: 13px; font-weight: 650; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
