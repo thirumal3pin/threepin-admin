@@ -248,7 +248,15 @@ const MAP_PROBE = () => {
       && list.scrollHeight > list.clientHeight + 2),
     listFitsShell: !!(list && r && lr.height <= r.height + 2),
     listH: lr ? Math.round(lr.height) : 0,
-    listHidden: !!(list && (getComputedStyle(list).display === 'none' || !lr.height)),
+    // "Hidden" means the agent can neither see it nor tab into it — which
+    // covers display:none, visibility:hidden, and a zero-width track. Testing
+    // only for display:none was testing one implementation of hiding rather
+    // than the thing that matters.
+    listHidden: !!(list && (() => {
+      const cs = getComputedStyle(list);
+      return cs.display === 'none' || cs.visibility === 'hidden' || !lr.height || !lr.width;
+    })()),
+    canvasW: 0, canvasH: 0, paneW: 0, paneH: 0,
     clipped: []
   };
   for (const el of document.querySelectorAll('#mapShell button, #mapShell input, #mapShell select, #mapModeSwitch button')) {
@@ -267,6 +275,18 @@ const MAP_PROBE = () => {
       n = n.parentElement;
     }
   }
+  // The map's own canvas, and the pane it is meant to fill. A map that is
+  // laid out at the width it had in the PREVIOUS mode leaves the rest of the
+  // pane grey, which is what "map view is not working" looks like.
+  const pane = document.querySelector('#mapPane') || document.querySelector('#mapCanvasHost');
+  // #mapCanvasHost, not .mv-canvas: the canvas is only created once a key
+  // loads a real map, and this harness deliberately runs without one. The
+  // host is what must have size either way — a map cannot be drawn into a
+  // box of zero width whether or not the key is present.
+  const canvas = document.querySelector('#mapCanvasHost');
+  if (pane) { const pr2 = pane.getBoundingClientRect(); out.paneW = Math.round(pr2.width); out.paneH = Math.round(pr2.height); }
+  if (canvas) { const cr = canvas.getBoundingClientRect(); out.canvasW = Math.round(cr.width); out.canvasH = Math.round(cr.height); }
+
   return out;
 };
 
@@ -328,27 +348,48 @@ for (const v of VIEWS) {
   // audit had never opened it, which is how a 420px empty shell shipped.
   const hasMap = await page.$('#mapModeSwitch');
   if (hasMap) {
-    const mapMode = v.viewport.width <= 720 ? 2 : 2;   // Split on desktop, Map on phone
-    await page.click(`#mapModeSwitch .mv-mode:nth-child(${mapMode})`);
-    await page.waitForTimeout(650);
-    const mm = await page.evaluate(MAP_PROBE);
-    ok('the map shell is actually on screen in map view', mm.shellVisible && mm.shellH > 200,
-      JSON.stringify({ visible: mm.shellVisible, h: mm.shellH }));
-    // Its HEIGHT, not its top edge. On a short screen the header scrolls
-    // away and the shell legitimately begins below the fold; what must never
-    // happen is a map taller than the screen, which cannot be seen whole
-    // however far the agent scrolls.
-    ok('the map fits on the screen it is being shown on',
-      mm.shellH <= mm.vh + 2, 'a ' + mm.shellH + 'px map on a ' + mm.vh + 'px screen');
-    ok('map view does not overflow sideways', mm.overflowX === 0, mm.overflowX + 'px');
-    ok('the property list beside the map really scrolls, rather than being cut off',
-      mm.listScrolls || mm.listHidden, JSON.stringify({ scrolls: mm.listScrolls, hidden: mm.listHidden }));
-    ok('...and is laid out inside the shell, not spilling past it',
-      mm.listFitsShell || mm.listHidden, 'list ' + mm.listH + 'px in a ' + mm.shellH + 'px shell');
-    ok('no map control is clipped', mm.clipped.length === 0,
-      mm.clipped.slice(0, 3).map(c => '"' + c.text + '" by ' + c.by).join('; '));
-    await page.screenshot({ path: join(OUT, v.name + '-map.png'), fullPage: false });
-    report[v.name].map = mm;
+    // BOTH map modes. This said `width <= 720 ? 2 : 2`, which is Split every
+    // time — map-only mode had never once been opened by a test, which is
+    // how it shipped broken while Split worked.
+    // By NAME, not by position: the narrow switch renders only List and Map,
+    // so nth-child(3) does not exist on a phone.
+    for (const modeName of ['split', 'map-only']) {
+      const want = modeName === 'split' ? 'split' : 'map';
+      const btn = await page.$(`#mapModeSwitch [data-view="${want}"]`);
+      if (!btn) continue;               // Split genuinely does not exist when narrow
+      await btn.click();
+      await page.waitForTimeout(750);
+      const mm = await page.evaluate(MAP_PROBE);
+      report[v.name] = report[v.name] || {};
+      report[v.name]['map_' + modeName] = mm;
+      const tag = ' [' + modeName + ']';
+      ok('the map shell is on screen' + tag, mm.shellVisible && mm.shellH > 200,
+        JSON.stringify({ visible: mm.shellVisible, h: mm.shellH }));
+      ok('the map has a box with real width to draw into' + tag,
+        mm.canvasW > 120 && mm.canvasH > 120,
+        'canvas host ' + mm.canvasW + 'x' + mm.canvasH + ' in a pane of ' + mm.paneW + 'x' + mm.paneH);
+      ok('the map pane is as wide as the shell allows' + tag,
+        mm.paneW > 120, 'pane ' + mm.paneW + 'px');
+      ok('the map fits the screen' + tag, mm.shellH <= mm.vh + 2,
+        'a ' + mm.shellH + 'px map on a ' + mm.vh + 'px screen');
+      ok('no sideways overflow' + tag, mm.overflowX === 0, mm.overflowX + 'px');
+      ok('no map control is clipped' + tag, mm.clipped.length === 0,
+        mm.clipped.slice(0, 3).map(c => '"' + c.text + '" by ' + c.by).join('; '));
+      if (modeName === 'split') {
+        ok('the list beside the map really scrolls' + tag,
+          mm.listScrolls || mm.listHidden, JSON.stringify({ scrolls: mm.listScrolls, hidden: mm.listHidden }));
+        ok('...and sits inside the shell' + tag,
+          mm.listFitsShell || mm.listHidden, 'list ' + mm.listH + 'px in a ' + mm.shellH + 'px shell');
+      } else {
+        ok('map-only really hides the list' + tag, mm.listHidden || !mm.listH,
+          'list is ' + mm.listH + 'px tall');
+      }
+      await page.screenshot({ path: join(OUT, v.name + '-' + modeName + '.png'), fullPage: false });
+    }
+    {
+      const mm = report[v.name].map_split;
+      void mm;
+    }
     // Back to the list for the scrolled shot below.
     await page.click('#mapModeSwitch .mv-mode:nth-child(1)');
     await page.waitForTimeout(350);

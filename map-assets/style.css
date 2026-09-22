@@ -23,8 +23,13 @@
 
 #mapShell {
   --split: 42%;
+  --divider: 9px;
   display: grid;
-  grid-template-columns: var(--split) 9px minmax(0, 1fr);
+  /* ONE track declaration, used by every mode. The map pane is always the
+     third track; a mode only changes how wide the first two are. Map-only
+     sets both to zero (below) rather than declaring a different number of
+     tracks, so the pane cannot end up in the wrong one. */
+  grid-template-columns: var(--split) var(--divider) minmax(0, 1fr);
   height: calc(100vh - 300px);   /* replaced by a measured height in map-view.js */
   /* 420px is a good floor on a laptop and taller than the entire screen of a
      phone held sideways, where it hung 351px below the fold. Bounded by the
@@ -37,9 +42,27 @@
   background: var(--card);
   box-shadow: var(--shadow);
 }
-#mapShell[data-mode="map"] { grid-template-columns: 0 0 minmax(0, 1fr); }
+/* Map-only narrows the first two tracks to nothing. It does NOT declare a
+   different grid, and it does NOT use display:none.
+
+   That distinction was the bug. A grid item with display:none is removed
+   from the grid flow, so with three tracks declared and the first two items
+   hidden, #mapPane slid up into the FIRST track — and that track was 0px.
+   The map was there, tiles and markers and all, drawn into a pane with no
+   width. Split worked because all three items were present and the pane
+   really was the third track. One view worked and the other did not, from
+   the same JavaScript, because the two modes were described by two different
+   pieces of CSS that had drifted apart.
+
+   visibility:hidden keeps them in the flow and out of the tab order, and a
+   zero-width track means they occupy nothing. Both modes are now the same
+   three tracks and the same code, differing only in one number. */
+/* The widths come from applySplit() in map-view.js, which is the one place
+   that knows the mode. Declaring them here as well is how the two drifted
+   apart in the first place, so this rule now only takes the hidden pane out
+   of sight and out of the tab order. */
 #mapShell[data-mode="map"] #mapListPane,
-#mapShell[data-mode="map"] #mapResizer { display: none; }
+#mapShell[data-mode="map"] #mapResizer { visibility: hidden; }
 
 /* While dragging the divider the map must not receive the pointer, or it
    swallows the gesture the moment the cursor crosses it. */

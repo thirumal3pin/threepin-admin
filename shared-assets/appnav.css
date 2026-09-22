@@ -137,7 +137,16 @@ body.rail-on #appRail { display: flex; }
 }
 .rl-item:hover { background: var(--rl-hover); color: var(--rl-ink); }
 .rl-item .rl-ico { width: 17px; flex: none; text-align: center; font-size: 12px; color: var(--rl-ink-3); }
-.rl-item .rl-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A page name may wrap to two lines rather than being cut off. One line and
+   an ellipsis turned "Property Intelligence Dashboard" into "Property
+   Intelligence Das...", which tells an agent less than the full name does
+   and looks like a fault. Two lines is the ceiling: past that the rail stops
+   being a list. */
+.rl-item .rl-nm {
+  flex: 1; min-width: 0; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: normal; line-height: 1.25;
+}
 .rl-item.on { color: var(--rl-ink); font-weight: 650; background: var(--rl-on-bg); }
 .rl-item.on .rl-ico { color: var(--rl-accent); }
 .rl-item.on::before {

@@ -329,8 +329,8 @@ console.log('\nProperties — desktop');
   ok('The same rail, with the same sections', JSON.stringify(s.secs.map(x => x.name)) === JSON.stringify(SECTIONS), JSON.stringify(s.secs.map(x => x.name)));
   const prop = s.secs.find(x => x.name === 'Properties');
   ok('Properties is the open one here', prop.open && prop.here);
-  ok('…listing this console\'s own pages', JSON.stringify(prop.items) === JSON.stringify(['All properties', 'Missing data', 'Changes to apply', 'Area map', 'Sync from sheet']), JSON.stringify(prop.items));
-  ok('…with All properties current', s.current === 'All properties', String(s.current));
+  ok('…listing this console\'s own pages', JSON.stringify(prop.items) === JSON.stringify(['Property Intelligence Dashboard', 'Missing data', 'Changes to apply', 'Area map', 'Sync from sheet']), JSON.stringify(prop.items));
+  ok('…with the properties dashboard current', s.current === 'Property Intelligence Dashboard', String(s.current));
   await page.screenshot({ path: join(OUT, 'prop-01-all.png') });
 
   await clickItem(page, 'Missing data');
@@ -349,7 +349,7 @@ console.log('\nProperties — desktop');
   await page.evaluate(() => closeMissing());
   await page.waitForTimeout(200);
   s = await railState(page);
-  ok('Closing it from the panel returns the rail to All properties', s.current === 'All properties', String(s.current));
+  ok('Closing it from the panel returns the rail to the properties dashboard', s.current === 'Property Intelligence Dashboard', String(s.current));
 
   // Create brochure is an action, so it must not steal the highlight.
   await clickSection(page, 'Create brochure');
@@ -357,7 +357,7 @@ console.log('\nProperties — desktop');
   s = await railState(page);
   const modal = await page.evaluate(() => getComputedStyle(document.getElementById('brochureModal')).display !== 'none');
   ok('Create brochure opens the intake form', modal);
-  ok('…and leaves the rail pointing at the page underneath', s.current === 'All properties', String(s.current));
+  ok('…and leaves the rail pointing at the page underneath', s.current === 'Property Intelligence Dashboard', String(s.current));
   await page.screenshot({ path: join(OUT, 'prop-03-brochure.png') });
   await page.evaluate(() => closeBrochureModal());
 

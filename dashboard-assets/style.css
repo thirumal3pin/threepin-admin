@@ -66,24 +66,29 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .login-home:hover{color:var(--ink);}
 
 /* ── HEADER ── */
-#hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:16px 28px 14px;position:sticky;top:0;z-index:100;box-shadow:0 1px 0 var(--border),0 6px 22px rgba(0,0,0,.05);}
-.hdr-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:14px;}
+#hdr{background:var(--white);border-bottom:1.5px solid var(--border);padding:10px 28px 10px;position:sticky;top:0;z-index:100;box-shadow:0 1px 0 var(--border),0 6px 22px rgba(0,0,0,.05);}
+.hdr-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:9px;}
 .brand{display:flex;align-items:center;gap:13px;}
 .brand-mark{width:44px;height:44px;background:linear-gradient(135deg,#1C1917,#44403C);border-radius:12px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:15px;font-weight:700;color:#fff;letter-spacing:.5px;flex-shrink:0;box-shadow:var(--shadow);}
 .brand-logo{height:44px;width:44px;object-fit:cover;border-radius:12px;flex-shrink:0;box-shadow:var(--shadow);}
 .brand-name{font-family:var(--serif);font-size:25px;font-weight:700;letter-spacing:.01em;line-height:1;}
 .brand-sub{font-size:11.5px;color:var(--ink3);font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-top:3px;}
 .hstats{display:flex;gap:9px;}
-.hstat{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:9px 18px;text-align:center;min-width:66px;transition:transform .15s;}
+/* Inline, not stacked. The number above its label made a 66px row out of
+   "56 READY  75 UPCOMING  131 TOTAL" — a fifth of a laptop header spent on
+   three figures that are also printed under the filters as "Showing 131 of
+   131". Side by side they read identically at half the height. */
+.hstat{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:5px 12px;
+  display:flex;align-items:baseline;gap:6px;transition:transform .15s;}
 .hstat:hover{transform:translateY(-2px);}
-.hstat-n{font-family:var(--serif);font-size:25px;font-weight:700;line-height:1;}
-.hstat-l{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-top:3px;}
+.hstat-n{font-family:var(--serif);font-size:18px;font-weight:700;line-height:1.1;}
+.hstat-l{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-top:0;}
 /* Ready and Upcoming keep the two status hues the cards use, so the counter
    and the card that answers it are the same colour. The total is just a
    total. */
 .hstat.g .hstat-n{color:var(--green);} .hstat.a .hstat-n{color:var(--amber);} .hstat.t .hstat-n{color:var(--ink);}
 
-.srch-row{display:flex;gap:8px;align-items:stretch;margin-bottom:10px;}
+.srch-row{display:flex;gap:8px;align-items:stretch;margin-bottom:8px;}
 .srch-wrap{position:relative;flex:1;min-width:0;}
 .srch-ico{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--ink3);pointer-events:none;}
 #searchInput{width:100%;padding:12px 40px 12px 42px;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;color:var(--ink);font-family:var(--sans);font-size:15px;outline:none;transition:border-color .18s,box-shadow .18s,background .18s;}
@@ -1018,8 +1023,17 @@ body.adv-open{overflow:hidden;}
    where it does not. No breakpoint to guess at, and nothing ever leaves the
    page. */
 .controls { flex-wrap: wrap; align-items: center; }
-#statusFilters { flex: 0 1 auto; }
-#typeFilters { flex: 1 1 300px; min-width: 0; }
+/* The status group keeps its natural width; only the type row shrinks.
+
+   Letting BOTH shrink did save a 42px row, but it bought that row by cutting
+   "Ready" and "Commercial" off mid-word and running the chips straight into
+   the view switch. At 1440, with the rail taking 288px, there is genuinely
+   not room for two filter groups AND four action controls on one line, and
+   pretending otherwise just makes the filters unreadable. The actions wrap
+   to their own line where they must and share one where they fit — which at
+   1920 they do. */
+#statusFilters { flex: 0 0 auto; }
+#typeFilters { flex: 1 1 200px; min-width: 0; }
 .ctrl-right { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; margin-left: auto; }
 
 /* The brief box now sits in the scrolling content, so it needs the content

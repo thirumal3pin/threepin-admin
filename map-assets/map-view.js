@@ -96,6 +96,26 @@
 
   const NARROW = () => root.matchMedia && root.matchMedia('(max-width: 860px)').matches;
 
+  // ═══════ HOW WIDE THE LIST IS — decided in exactly one place ═══════
+  //
+  // Three separate lines used to write --split: the mode switch, the divider
+  // drag and the divider's arrow keys. Each wrote S.split unconditionally,
+  // and an inline custom property beats the stylesheet — so the CSS rule that
+  // zeroed the track in map-only mode was silently overridden and the hidden
+  // list went on reserving 42% of the shell.
+  //
+  // That is the same shape of fault as the grid itself: one view worked and
+  // the other did not, from the same JavaScript, because the two modes were
+  // described in two places that drifted apart. Map-only is not a different
+  // layout. It is this layout with a split of zero.
+  function applySplit(shell) {
+    const el = shell || document.getElementById('mapShell');
+    if (!el) return;
+    const mapOnly = S.mode === 'map';
+    el.style.setProperty('--split', (mapOnly ? 0 : S.split) + '%');
+    el.style.setProperty('--divider', mapOnly ? '0px' : '9px');
+  }
+
   function applyMode() {
     // There is no room for two panes on a phone. Split silently became a
     // stacked 108vh shell with the map below the fold, so a tapped row
@@ -110,7 +130,7 @@
     shell.dataset.mode = S.mode;
     if (grid) grid.style.display = S.mode === 'list' ? '' : 'none';
     if (gmeta) gmeta.style.display = S.mode === 'map' ? 'none' : '';
-    shell.style.setProperty('--split', S.split + '%');
+    applySplit(shell);
     sizeShell();
     renderModeSwitch();
     // The map cannot lay itself out while it is display:none, so it is told
@@ -171,12 +191,12 @@
     if (!el) return;
     if (NARROW()) {
       const b2 = (k, label) => `<button type="button" class="mv-mode${S.mode === k ? ' on' : ''}"
-        onclick="PinMapView.setMode('${k}')" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
+        data-view="${k}" onclick="PinMapView.setMode('${k}')" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
       el.innerHTML = b2('list', 'List') + b2('map', 'Map');
       return;
     }
     const b = (k, label, title) => `<button type="button" class="mv-mode${S.mode === k ? ' on' : ''}"
-      onclick="PinMapView.setMode('${k}')" title="${esc(title)}" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
+      data-view="${k}" onclick="PinMapView.setMode('${k}')" title="${esc(title)}" aria-pressed="${S.mode === k}">${esc(label)}</button>`;
     el.innerHTML = b('list', 'List', 'Cards only — the view for scanning and comparing')
       + b('split', 'Split', 'Cards and map together — the working view')
       + b('map', 'Map', 'Map only — for showing a client the area');
@@ -1071,7 +1091,7 @@
       const r = shell.getBoundingClientRect();
       const pct = Math.min(78, Math.max(22, ((clientX - r.left) / r.width) * 100));
       S.split = Math.round(pct * 10) / 10;
-      shell.style.setProperty('--split', S.split + '%');
+      applySplit(shell);
     };
     bar.addEventListener('pointerdown', ev => {
       dragging = true;
@@ -1095,7 +1115,7 @@
       else if (ev.key === 'ArrowRight') S.split = Math.min(78, S.split + step);
       else return;
       ev.preventDefault();
-      shell.style.setProperty('--split', S.split + '%');
+      applySplit(shell);
       try { localStorage.setItem(LS_SPLIT, String(S.split)); } catch (e) {}
       if (S.mapApi) resizeMap();
     });

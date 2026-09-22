@@ -751,7 +751,21 @@ console.log('The map view');
   // ── modes and the divider ──
   await page.click('#mapModeSwitch .mv-mode:nth-child(3)');   // Map
   await page.waitForTimeout(350);
-  ok('map-only hides the list', await page.$eval('#mapListPane', e => getComputedStyle(e).display === 'none'));
+  // Not "is display:none" — is it actually gone from the agent's view and
+  // out of their reach. The list is hidden by narrowing its grid track to
+  // zero and setting visibility:hidden, because removing it from the grid
+  // flow with display:none is what pushed #mapPane into the wrong track and
+  // laid the map out 0px wide.
+  ok('map-only hides the list', await page.$eval('#mapListPane', e => {
+    const cs = getComputedStyle(e), r = e.getBoundingClientRect();
+    return cs.display === 'none' || cs.visibility === 'hidden' || !r.width;
+  }));
+  // ...and the map really does get the room.
+  ok('...and the map pane takes the whole shell', await page.evaluate(() => {
+    const pane = document.querySelector('#mapPane'), shell = document.querySelector('#mapShell');
+    if (!pane || !shell) return false;
+    return pane.getBoundingClientRect().width > shell.getBoundingClientRect().width - 24;
+  }));
   ok('and hides the grid too', await page.$eval('#pgrid', e => e.style.display === 'none'));
   await shot(page, 'map-full');
 
