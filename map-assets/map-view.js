@@ -196,7 +196,20 @@
     pane.innerHTML = '<div class="mv-load">Loading the map…</div>';
 
     mapBooting = fetchKey()
-      .then(key => root.PinMapCore.load(key))
+      .then(res => {
+        // A config that could not be FETCHED is not a config that says there
+        // is no key. Reported separately, or the panel sends whoever reads it
+        // to go and set an environment variable that is already set.
+        if (res.failed) {
+          return {
+            ok: false, reason: 'config',
+            message: 'Could not reach this site to ask which Maps key to use.',
+            fix: 'Usually the connection dropped, or the page is running from an old cached copy. '
+              + 'Pull down to refresh, or close the tab and open it again.'
+          };
+        }
+        return root.PinMapCore.load(res.key);
+      })
       .then(st => {
         S.loadState = st;
         if (!st.ok) { renderMapProblem(st); return null; }
@@ -220,15 +233,25 @@
   let keyPromise = null;
   function fetchKey() {
     if (keyPromise) return keyPromise;
-    // publicConfig may already be on the page (dashboard pre-fetches it).
+    // publicConfig may already be on the page (some consoles pre-fetch it).
     if (root.publicConfig && root.publicConfig.googleMapsApiKey != null) {
-      keyPromise = Promise.resolve(root.publicConfig.googleMapsApiKey);
+      keyPromise = Promise.resolve({ key: root.publicConfig.googleMapsApiKey });
       return keyPromise;
     }
-    keyPromise = fetch('/api/public-config')
-      .then(r => r.json())
-      .then(c => c.googleMapsApiKey || '')
-      .catch(() => '');
+    // no-store, because the one thing worse than asking again is being handed
+    // a copy of this answer from before the key was configured.
+    keyPromise = fetch('/api/public-config', { cache: 'no-store' })
+      .then(r => {
+        if (!r.ok) throw new Error('config responded ' + r.status);
+        return r.json();
+      })
+      // Returns an OBJECT, not a bare string. `.catch(() => '')` collapsed a
+      // failed request into the same value as a deployment with no key set,
+      // so an offline phone was told "No Google Maps key is configured for
+      // this deployment" and its owner went to check Vercel, where the key
+      // was sitting correctly all along.
+      .then(c => ({ key: (c && c.googleMapsApiKey) || '' }))
+      .catch(e => ({ failed: true, why: (e && e.message) || 'request failed' }));
     return keyPromise;
   }
 

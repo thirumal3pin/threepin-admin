@@ -282,7 +282,7 @@ const ok = (label, cond, detail) => {
 async function open(viewport, withMaps) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
   await ctx.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
-  if (withMaps) await ctx.addInitScript(MAPS_STUB);
+  if (withMaps === true) await ctx.addInitScript(MAPS_STUB);
   const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(`${viewport.width}px pageerror: ${e.message}`));
   page.on('console', m => {
@@ -380,7 +380,11 @@ async function open(viewport, withMaps) {
     // The key is served as present so map-core takes the real load path; the
     // stub above means no script is actually fetched from Google.
     if (url.pathname === '/api/public-config') {
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ googleMapsApiKey: withMaps ? 'STUB-KEY' : '' }) });
+      // Three states, not two: a key, no key, and unreachable. The third used
+      // to collapse into the second, and told an owner with a perfectly good
+      // key that none was configured.
+      if (withMaps === 'config-down') return route.fulfill({ status: 503, body: 'upstream down' });
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ googleMapsApiKey: withMaps === true ? 'STUB-KEY' : '' }) });
     }
     const file = join(ROOT, decodeURIComponent(url.pathname));
     if (!existsSync(file)) return route.fulfill({ status: 404, body: '' });
@@ -767,6 +771,22 @@ console.log('On a phone');
   ok('and the price column survives on a phone',
     phoneRows === 0 || phonePrices > 0, phonePrices + ' of ' + phoneRows);
   await shot(page, 'map-phone');
+  await page.context().close();
+}
+
+console.log('');
+console.log('When the page cannot reach its own config');
+{
+  const page = await open({ width: 1400, height: 900 }, 'config-down');
+  await page.click('#mapModeSwitch .mv-mode:nth-child(2)');
+  await page.waitForTimeout(700);
+  const t = await page.$eval('#mapCanvasHost', e => e.textContent.replace(/\s+/g, ' ').trim());
+  ok('it does not claim the key is missing when it never got to ask',
+    !/No Google Maps key is configured/.test(t), t.slice(0, 120));
+  ok('it says the request itself failed', /Could not reach this site/.test(t), t.slice(0, 120));
+  ok('...and names the thing that usually fixes it',
+    /refresh|open it again/i.test(t), t.slice(0, 160));
+  ok('the list beside it still works', await page.$eval('#mapList', e => e.children.length > 0));
   await page.context().close();
 }
 
