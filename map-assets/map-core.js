@@ -237,6 +237,11 @@
   }
   function priceRange(lo, hi) {
     if (lo == null) return 'Price on request';
+    // Ordered here rather than trusting the caller. Every caller today passes
+    // min and max, but this string is read out to a buyer, and "4 Cr - 3 Cr"
+    // is the kind of nonsense that gets noticed on the client's side of the
+    // table rather than ours.
+    if (hi != null && hi < lo) { const t = lo; lo = hi; hi = t; }
     if (hi == null || Math.abs(hi - lo) / lo < 0.02) return '₹' + priceLabel(lo);
     return '₹' + priceLabel(lo) + '–' + priceLabel(hi);
   }

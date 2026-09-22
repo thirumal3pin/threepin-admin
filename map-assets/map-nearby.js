@@ -151,6 +151,18 @@
   // have broken the moment somebody corrected either half.
   const KM_PER_MIN_ROAD = 0.35;
   const ROAD_TO_STRAIGHT = 1 / 1.3;
+  // ═══════ WHAT MAY BE CACHED ═══════
+  //
+  // A DEFINITIVE answer may be cached: a result, or a well-formed reply that
+  // says there is nothing there. Google will say the same thing next time, so
+  // asking again only costs money.
+  //
+  // A TRANSIENT failure may not: an HTTP error, a thrown fetch, a rate limit.
+  // These caches had been storing those too, which on a phone on Chennai
+  // mobile data meant one dropped request killed the feature for the whole
+  // session — no drive times, no schools, no geocoding, and no error either,
+  // because the empty result came back instantly from cache and never asked
+  // again. Not caching a transient failure costs one retry and heals itself.
   const matrixCache = new Map();
 
   /**
@@ -176,7 +188,13 @@
     const key = keyOf();
     const mode = o.mode || 'DRIVE';
     const map = new Map();
-    if (!key) { matrixCache.set(ck, map); return map; }
+    // NOT cached. The key is fetched from /api/public-config after the page
+    // starts, so anything asked in that window sees no key — and the cache
+    // key says nothing about whether there was one. Storing the empty result
+    // meant every later ask was served that emptiness from cache and Routes
+    // was never called again: no drive times for the rest of the session,
+    // and no error to explain why.
+    if (!key) return map;
 
     try {
       const res = await (o.fetchImpl || fetch)(ROUTES_URL, {
@@ -204,7 +222,8 @@
         // whole reason a client asks how long.
         (mode === 'DRIVE' || mode === 'TWO_WHEELER') ? { routingPreference: 'TRAFFIC_AWARE' } : {}))
       });
-      if (!res.ok) { matrixCache.set(ck, map); return map; }
+      // Not cached: a 429 or a 503 is a "try again", not an answer.
+      if (!res.ok) return map;
       const rows = await res.json();
 
       // Routes reports a REQUEST error inside a 200 response, as an array
@@ -238,7 +257,9 @@
       }
     } catch (e) {
       // A failed route is not an error state for the panel — it reports "no
-      // drive time" and the free straight-line answer still stands.
+      // drive time" and the free straight-line answer still stands. But it is
+      // not an answer either, so it is returned without being cached.
+      return map;
     }
     matrixCache.set(ck, map);
     return map;
@@ -414,7 +435,13 @@
       });
       if (!r.ok) {
         const t = await r.text().catch(() => '');
-        res = { list: [], error: 'places ' + r.status + (/API_KEY|not enabled|PERMISSION/i.test(t) ? ' — check Places API (New) is enabled for this key' : '') };
+        // Google's own words for a disabled API are "has not been used in
+        // project ... before or it is disabled" with status SERVICE_DISABLED
+        // or PERMISSION_DENIED. The first cut matched on "not enabled", which
+        // is a phrase Google does not use, so the one error where an
+        // actionable hint exists was the one that printed bare.
+        const disabled = /API_KEY|PERMISSION|SERVICE_DISABLED|has not been used|is disabled|not authorized/i.test(t);
+        res = { list: [], error: 'places ' + r.status + (disabled ? ' — check Places API (New) is enabled for this key' : '') };
       } else {
         const d = await r.json();
         res = {
@@ -460,7 +487,9 @@
       res.relaxed = !good.length && all.length > 0 && !!(cat.requireKind || cat.minRatings);
       res.list = chosen.slice(0, o.limit == null ? 8 : o.limit);
     }
-    placeCache.set(ck, res);
+    // An empty list is a real answer about a real neighbourhood and is
+    // cached. An error is not an answer.
+    if (!res.error) placeCache.set(ck, res);
     return res;
   }
 
@@ -490,9 +519,11 @@
       + '&key=' + encodeURIComponent(apiKey);
 
     let answer = null;
+    let settled = false;
     try {
       const r = await (o.fetchImpl || fetch)(url);
       if (r.ok) {
+        settled = true;
         const d = await r.json();
         const first = d.status === 'OK' && d.results && d.results[0];
         if (first) {
@@ -510,8 +541,11 @@
           };
         }
       }
-    } catch (e) { answer = null; }
-    geocodeCache.set(q, answer);
+    } catch (e) { answer = null; settled = false; }
+    // ZERO_RESULTS is settled — that place does not exist and will not start
+    // existing. A dropped request is not, and caching the null meant one blip
+    // made an address permanently unfindable for the session.
+    if (settled) geocodeCache.set(q, answer);
     return answer;
   }
 
@@ -575,6 +609,7 @@
     const key = keyOf();
     if (!key) return [];
     let out = [];
+    let settled = false;
     try {
       const res = await (o.fetchImpl || fetch)('https://places.googleapis.com/v1/places:autocomplete', {
         method: 'POST',
@@ -588,6 +623,7 @@
         })
       });
       if (res.ok) {
+        settled = true;
         const d = await res.json();
         out = (d.suggestions || [])
           .filter(x => x.placePrediction)
@@ -601,8 +637,8 @@
           }))
           .filter(x => x.text);
       }
-    } catch (e) { out = []; }
-    acCache.set(q, out);
+    } catch (e) { out = []; settled = false; }
+    if (settled) acCache.set(q, out);
     return out;
   }
 
@@ -648,16 +684,18 @@
     const key = keyOf();
     if (!key) return null;
     let answer = null;
+    let settled = false;
     try {
       const res = await (o.fetchImpl || fetch)(
         `https://maps.googleapis.com/maps/api/elevation/json?locations=${pos.lat},${pos.lng}&key=${encodeURIComponent(key)}`);
       if (res.ok) {
+        settled = true;
         const d = await res.json();
         const m = d.status === 'OK' && d.results && d.results[0] ? d.results[0].elevation : null;
         if (m != null) answer = { metres: Math.round(m * 10) / 10, band: elevationBand(m) };
       }
-    } catch (e) { answer = null; }
-    elevCache.set(ck, answer);
+    } catch (e) { answer = null; settled = false; }
+    if (settled) elevCache.set(ck, answer);
     return answer;
   }
 
