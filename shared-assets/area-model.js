@@ -981,7 +981,7 @@
           // confidence off a single "11 km from Mambakkam": a long hop tells
           // you the radius and nothing about the bearing, so placing the node
           // on top of its neighbour is ~11 km wrong while looking certain.
-          reaches.push(c * (nb.seeded ? 1 : nb.posConfidence * 0.9));
+          reaches.push({ r: c * (nb.seeded ? 1 : nb.posConfidence * 0.9), basis: e.basis });
         }
         if (!tw) continue;
         const next = [lat / tw, lng / tw];
@@ -994,20 +994,28 @@
     }
   }
 
-  // One constraint fixes a radius, not a point — so a node held by a single
-  // neighbour can never be more than half-confident however strong that one
+  // One constraint fixes a RADIUS, not a point — so a node held by a single
+  // distance can never be more than half-confident however strong that one
   // edge is. A second independent neighbour genuinely triangulates, and is
   // what earns the higher band.
+  //
+  // Containment is the exception, and it matters: a street inside Korattur is
+  // IN Korattur. That is not a radius, it is a location, and one such edge
+  // settles the position as well as ten would. Without this exception every
+  // street and colony in the sheet — 30 of them — carried the single-
+  // constraint cap and reported ±3.5 km when it was really within the
+  // locality it is named after.
   //
   // Ten weak links still do not make a strong one: this reads the best two
   // reaches, never the sum.
   function confidenceFrom(reaches) {
     if (!reaches.length) return 0;
-    reaches.sort((a, b) => b - a);
+    reaches.sort((a, b) => b.r - a.r);
     const best = reaches[0];
-    if (reaches.length === 1) return Math.min(0.5, best);
+    if (best.basis === 'contains') return Math.min(0.95, best.r);
+    if (reaches.length === 1) return Math.min(0.5, best.r);
     const second = reaches[1];
-    return Math.min(0.95, best * (1 + 0.3 * Math.min(1, second / (best || 1))));
+    return Math.min(0.95, best.r * (1 + 0.3 * Math.min(1, second.r / (best.r || 1))));
   }
 
   // ═══════ CACHED ENTRY POINT ═══════
