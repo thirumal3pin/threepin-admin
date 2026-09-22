@@ -222,11 +222,66 @@ const PROBE = () => {
   return out;
 };
 
+// The screens this is actually used on, plus the two that break layouts:
+// the smallest phone still in service, and a phone turned sideways, where
+// the viewport is shorter than any header wants to be.
+// Measured with the map open. The list probe above runs on the card grid and
+// would never have seen any of this.
+const MAP_PROBE = () => {
+  const vw = innerWidth, vh = innerHeight;
+  const nameOf = n => (n.id ? '#' + n.id : (typeof n.className === 'string' && n.className ? '.' + n.className.split(/\s+/)[0] : n.tagName));
+  const shell = document.querySelector('#mapShell');
+  const r = shell ? shell.getBoundingClientRect() : null;
+  const list = document.querySelector('#mapList');
+  const lr = list ? list.getBoundingClientRect() : null;
+  const out = {
+    shellVisible: !!(shell && !shell.hidden && getComputedStyle(shell).display !== 'none' && r.height > 0),
+    shellH: r ? Math.round(r.height) : 0,
+    shellBottomOver: r ? Math.round(Math.max(0, r.bottom - vh)) : 0,
+    vh,
+    overflowX: Math.max(0, document.documentElement.scrollWidth - vw),
+    // Not "does the CSS say auto" — does it ACTUALLY scroll, and does it fit
+    // inside the shell. A list declaring overflow-y:auto while laid out at
+    // its full 8929px inside a 570px shell satisfies the first and fails the
+    // second, and showed three of 130 properties.
+    listScrolls: !!(list && /auto|scroll/.test(getComputedStyle(list).overflowY)
+      && list.scrollHeight > list.clientHeight + 2),
+    listFitsShell: !!(list && r && lr.height <= r.height + 2),
+    listH: lr ? Math.round(lr.height) : 0,
+    listHidden: !!(list && (getComputedStyle(list).display === 'none' || !lr.height)),
+    clipped: []
+  };
+  for (const el of document.querySelectorAll('#mapShell button, #mapShell input, #mapShell select, #mapModeSwitch button')) {
+    const b = el.getBoundingClientRect();
+    if (!b.width || !b.height) continue;
+    let n = el.parentElement;
+    while (n && n !== document.body) {
+      const cs = getComputedStyle(n);
+      const pr = n.getBoundingClientRect();
+      const scrolls = /auto|scroll/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 2;
+      if (scrolls) break;
+      if (cs.overflowY === 'hidden' && (b.bottom > pr.bottom + 1.5 || b.top < pr.top - 1.5)) {
+        out.clipped.push({ text: (el.textContent || nameOf(el)).trim().slice(0, 24), by: nameOf(n) });
+        break;
+      }
+      n = n.parentElement;
+    }
+  }
+  return out;
+};
+
 const VIEWS = [
+  { name: 'phone-360', viewport: { width: 360, height: 740 } },
+  { name: 'phone-390', viewport: { width: 390, height: 844 } },
+  { name: 'phone-landscape-844', viewport: { width: 844, height: 390 }, shortScreen: true },
+  { name: 'tablet-768', viewport: { width: 768, height: 1024 } },
+  { name: 'tablet-1024', viewport: { width: 1024, height: 768 } },
+  { name: 'laptop-1280', viewport: { width: 1280, height: 800 } },
   { name: 'laptop-1366', viewport: { width: 1366, height: 768 } },
+  { name: 'laptop-1440', viewport: { width: 1440, height: 900 } },
   { name: 'laptop-1536', viewport: { width: 1536, height: 864 } },
   { name: 'desktop-1920', viewport: { width: 1920, height: 950 } },
-  { name: 'phone-390', viewport: { width: 390, height: 844 } }
+  { name: 'desktop-2560', viewport: { width: 2560, height: 1329 } }
 ];
 
 const report = {};
@@ -245,8 +300,14 @@ for (const v of VIEWS) {
 
   // The owner's complaint, as a number. A header over a third of the screen
   // IS "half the page for title and filters".
-  ok('the header leaves most of the screen for properties', m.headerPct !== null && m.headerPct <= 32,
-    m.headerPct + '% of the viewport is chrome');
+  // A 390px-tall viewport cannot give a search box, filters and a view
+  // switch the same share as a 950px one, so the budget is a share of the
+  // screen OR a hard pixel ceiling — whichever is kinder. What must not
+  // happen at any height is the header eating the results entirely.
+  const headerBudget = v.shortScreen ? 55 : 32;
+  ok('the header leaves most of the screen for properties',
+    m.headerPct !== null && (m.headerPct <= headerBudget || m.headerH <= 260),
+    m.headerPct + '% of the viewport (' + m.headerH + 'px)');
   ok('a result is visible without scrolling', m.firstResultY !== null && m.firstResultY < m.vh - 80,
     'first card starts at ' + m.firstResultY + 'px of ' + m.vh);
   ok('no control is clipped by its container', m.clipped.length === 0,
@@ -261,6 +322,37 @@ for (const v of VIEWS) {
     m.lowContrast.length + ' failing, worst: ' + m.lowContrast.slice(0, 4).map(c => c.ratio + ':1 "' + c.t + '"').join(', '));
 
   await page.screenshot({ path: join(OUT, v.name + '.png'), fullPage: false });
+
+  // ── THE MAP VIEW, at this same size ──
+  // Everything above tested the list. The map is half the feature and the
+  // audit had never opened it, which is how a 420px empty shell shipped.
+  const hasMap = await page.$('#mapModeSwitch');
+  if (hasMap) {
+    const mapMode = v.viewport.width <= 720 ? 2 : 2;   // Split on desktop, Map on phone
+    await page.click(`#mapModeSwitch .mv-mode:nth-child(${mapMode})`);
+    await page.waitForTimeout(650);
+    const mm = await page.evaluate(MAP_PROBE);
+    ok('the map shell is actually on screen in map view', mm.shellVisible && mm.shellH > 200,
+      JSON.stringify({ visible: mm.shellVisible, h: mm.shellH }));
+    // Its HEIGHT, not its top edge. On a short screen the header scrolls
+    // away and the shell legitimately begins below the fold; what must never
+    // happen is a map taller than the screen, which cannot be seen whole
+    // however far the agent scrolls.
+    ok('the map fits on the screen it is being shown on',
+      mm.shellH <= mm.vh + 2, 'a ' + mm.shellH + 'px map on a ' + mm.vh + 'px screen');
+    ok('map view does not overflow sideways', mm.overflowX === 0, mm.overflowX + 'px');
+    ok('the property list beside the map really scrolls, rather than being cut off',
+      mm.listScrolls || mm.listHidden, JSON.stringify({ scrolls: mm.listScrolls, hidden: mm.listHidden }));
+    ok('...and is laid out inside the shell, not spilling past it',
+      mm.listFitsShell || mm.listHidden, 'list ' + mm.listH + 'px in a ' + mm.shellH + 'px shell');
+    ok('no map control is clipped', mm.clipped.length === 0,
+      mm.clipped.slice(0, 3).map(c => '"' + c.text + '" by ' + c.by).join('; '));
+    await page.screenshot({ path: join(OUT, v.name + '-map.png'), fullPage: false });
+    report[v.name].map = mm;
+    // Back to the list for the scrolled shot below.
+    await page.click('#mapModeSwitch .mv-mode:nth-child(1)');
+    await page.waitForTimeout(350);
+  }
   // Scrolled too, because "it is fixed, not moving when scrolled down" was
   // half of what the owner reported.
   await page.evaluate(() => window.scrollTo(0, 600));

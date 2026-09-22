@@ -142,7 +142,13 @@
     const shell = document.getElementById('mapShell');
     if (!shell || shell.hidden) return;
     const top = shell.getBoundingClientRect().top;
-    const h = Math.max(420, window.innerHeight - top - 20);
+    // The floor has to be bounded by the screen it is on. A flat 420 is a good
+    // minimum on a laptop and taller than the whole viewport of a phone held
+    // sideways (390px), where it made a map that could never be seen in one
+    // piece however far you scrolled. This also overrode the CSS min-height,
+    // so fixing only the stylesheet changed nothing.
+    const floor = Math.min(420, Math.round(window.innerHeight * 0.6));
+    const h = Math.max(floor, window.innerHeight - top - 20);
     shell.style.height = h + 'px';
   }
 

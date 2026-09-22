@@ -26,7 +26,10 @@
   display: grid;
   grid-template-columns: var(--split) 9px minmax(0, 1fr);
   height: calc(100vh - 300px);   /* replaced by a measured height in map-view.js */
-  min-height: 420px;
+  /* 420px is a good floor on a laptop and taller than the entire screen of a
+     phone held sideways, where it hung 351px below the fold. Bounded by the
+     viewport so the floor can never exceed it. */
+  min-height: min(420px, 60vh);
   margin: 4px 0 18px;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -63,8 +66,23 @@ body.mv-dragging #mapPane { pointer-events: none; }
 
 /* ═══════ LIST PANE ═══════ */
 
+/* min-height:0 is doing real work here, not tidying.
+
+   A grid item and a flex item both default to min-height:auto, which means
+   "never shrink below your content". So this pane grew to the full height of
+   every row in the list — 8968px for the live 130 — and #mapShell, which is
+   570px with overflow:hidden, simply cut it off. #mapList declared
+   overflow-y:auto and never scrolled, because scrollHeight and clientHeight
+   were both 8929: there was nothing to scroll, the content was all laid out
+   and the clipping happened two levels up.
+
+   The visible result was a list showing the first three properties with no
+   way to reach the other 127, in both Split and Map view.
+
+   The map preview did not catch it because its fixture is a handful of rows
+   that fit inside the shell. tests/ui-audit.mjs runs the real 130. */
 #mapListPane {
-  display: flex; flex-direction: column; min-width: 0;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   border-right: 1px solid var(--border); background: var(--card);
 }
 /* Was a filled band of four coloured pills — a coordinate-quality audit in
@@ -93,7 +111,7 @@ body.mv-dragging #mapPane { pointer-events: none; }
 .mv-pb-b.quiet { color: var(--ink3); text-decoration-color: var(--border2); }
 .mv-pb-sep { color: var(--border2); }
 
-#mapList { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+#mapList { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
 
 .mv-row {
   display: block; width: 100%; text-align: left;

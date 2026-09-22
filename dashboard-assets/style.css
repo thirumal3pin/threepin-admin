@@ -123,6 +123,11 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .card-bar.uc{background:var(--amber);}
 .card-body{padding:16px 17px 14px;flex:1;display:flex;flex-direction:column;cursor:pointer;}
 .card-r1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
+/* Without this the name column cannot shrink below its text, so on a narrow
+   card — three columns at 1280 gives each about 320px — it pushed the share
+   and favourite buttons past the card's edge, where overflow:hidden cut them
+   in half. */
+.card-r1 > :first-child{min-width:0;}
 .card-code-inline{font-family:'IBM Plex Mono','SF Mono',Menlo,monospace;font-size:0.88em;font-weight:700;letter-spacing:.04em;color:var(--ink3);}
 .card-name{font-family:var(--serif);font-size:18px;font-weight:700;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .card-loc{font-size:12.5px;color:var(--ink3);margin-top:4px;display:flex;align-items:center;gap:4px;}
@@ -980,21 +985,42 @@ body.adv-open{overflow:hidden;}
   overflow-x: auto; overflow-y: hidden;
   scrollbar-width: thin; padding-bottom: 2px;
 }
+/* Scroll shadows, so a chip cut off at the edge reads as "there is more this
+   way" instead of as a broken layout. Two fixed shading gradients pinned to
+   the ends, and two solid covers that scroll WITH the content and hide them:
+   at the start of the scroll the left cover sits over the left shading, and
+   at the end the right cover sits over the right. The shading is only ever
+   visible on the side there is genuinely more content on, and it costs no
+   JavaScript and no scroll listener. */
+.fgroup {
+  background:
+    linear-gradient(to right, var(--bg) 30%, rgba(247,246,243,0)) left center,
+    linear-gradient(to left, var(--bg) 30%, rgba(247,246,243,0)) right center,
+    radial-gradient(farthest-side at 0 50%, rgba(28,25,23,.14), transparent) left center,
+    radial-gradient(farthest-side at 100% 50%, rgba(28,25,23,.14), transparent) right center;
+  background-repeat: no-repeat;
+  background-size: 26px 100%, 26px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
 .fgroup::-webkit-scrollbar { height: 4px; }
 .fgroup::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 .fgroup .fbtn { flex: 0 0 auto; }
 
-/* Filters take the room that is left; the view switch and the actions keep
-   theirs. */
-.controls { flex-wrap: nowrap; align-items: center; }
-#statusFilters { flex: 0 0 auto; }
-#typeFilters { flex: 1 1 auto; min-width: 0; }
-.ctrl-right { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
+/* The controls row.
+   nowrap was wrong. The right-hand group — view switch, Favourites, Sort, Add
+   Property — is 592px and cannot shrink, so at 1280 it was pushed to start at
+   716px and ran 28px off the side of the page, giving the whole dashboard a
+   horizontal scrollbar. It only looked right on the wide monitor it was
+   written on.
 
-@media (max-width: 1100px) {
-  .controls { flex-wrap: wrap; }
-  #typeFilters { flex: 1 1 100%; order: 3; }
-}
+   Wrapping instead, with a flex-basis on the type row, lets flexbox decide:
+   one line wherever it fits, the right-hand group dropping to its own line
+   where it does not. No breakpoint to guess at, and nothing ever leaves the
+   page. */
+.controls { flex-wrap: wrap; align-items: center; }
+#statusFilters { flex: 0 1 auto; }
+#typeFilters { flex: 1 1 300px; min-width: 0; }
+.ctrl-right { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; margin-left: auto; }
 
 /* The brief box now sits in the scrolling content, so it needs the content
    column's own rhythm rather than the header's. */
@@ -1076,4 +1102,72 @@ body.adv-open{overflow:hidden;}
   .hstats .hstat-l { font-size: 11.5px; letter-spacing: 0; margin-top: 0; }
 }
 }
+}
+
+/* ═══════ A SHORT VIEWPORT — a phone turned sideways ═══════
+   844x390. A sticky header is a reasonable trade at 800px tall and an absurd
+   one at 390: it held 295px of the 390, and the first property started 352px
+   down, below the fold on a screen with no fold to spare.
+
+   On a short screen the header scrolls away like anything else. The agent
+   scrolls up to search, which costs one gesture, instead of losing three
+   quarters of the screen permanently. */
+@media (max-height: 560px) {
+  #hdr { position: static; }
+  .hdr-top { margin-bottom: 8px; }
+  .brand-logo { width: 34px; height: 34px; }
+  .brand-name { font-size: 18px; }
+  .brand-sub { display: none; }
+  .hstats .hstat { padding: 5px 10px; }
+  .hstats .hstat-n { font-size: 17px; }
+}
+
+/* ═══════ MEDIUM SCREENS — a tablet, or a small laptop ═══════
+   Between about 720 and 1200 the controls wrapped to THREE rows — status
+   chips, type chips, then the view switch and actions — 128px of a 768px
+   tablet, which with the rest put the header at 38% of the screen.
+
+   The two chip groups belong on one line: the status group is short and
+   fixed, and the type group already scrolls sideways inside itself, so it
+   can take whatever is left and keep its own overflow. The actions take the
+   line below, at full width, where they stay reachable without any sideways
+   scrolling. Three rows become two, and 128px becomes 84. */
+@media (min-width: 721px) and (max-width: 1200px) {
+  #statusFilters { flex: 0 0 auto; }
+  #typeFilters { flex: 1 1 0; min-width: 0; }
+  .ctrl-right { flex: 1 1 100%; margin-left: 0; justify-content: flex-end; }
+
+  /* The masthead can give a little too — the logo and the strapline are the
+     least load-bearing things on the screen. */
+  .brand-logo { width: 38px; height: 38px; }
+  .brand-name { font-size: 22px; }
+}
+
+/* A short screen gets the same treatment a narrow one does: the filters go
+   behind the toggle that already exists for phones, and the view switch
+   stays out where it can be reached without opening them. On a 390px-tall
+   viewport the filter rows were 84px — more than a fifth of the screen,
+   permanently, for controls an agent touches once a session. */
+@media (max-height: 560px) {
+  .mfilter-toggle {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 14px; border-radius: 10px;
+    border: 1.5px solid var(--border); background: var(--white);
+    font-family: var(--sans); font-weight: 600; font-size: 13px;
+    color: var(--ink2); cursor: pointer; width: auto; margin: 0;
+  }
+  #hdr { display: flex; flex-wrap: wrap; align-items: center; }
+  #hdr > * { flex: 1 1 100%; min-width: 0; }
+  #hdr > .mfilter-toggle { flex: 0 0 auto; margin-top: 8px; }
+
+  /* #hdr > * above is an id selector and outranks a plain class, so these
+     have to be written against #hdr too or the switch drops to its own row
+     and the saving is lost. */
+  #hdr > .controls:not(.mobile-open) {
+    flex: 1 1 auto; display: flex; margin-top: 8px; justify-content: flex-end;
+  }
+  #hdr > .controls:not(.mobile-open) > :not(.ctrl-right) { display: none; }
+  #hdr > .controls:not(.mobile-open) .ctrl-right { width: auto; flex: 0 0 auto; margin-left: auto; }
+  #hdr > .controls:not(.mobile-open) .ctrl-right > :not(.mv-modes) { display: none; }
+  #hdr > .controls.mobile-open { flex: 1 1 100%; }
 }
