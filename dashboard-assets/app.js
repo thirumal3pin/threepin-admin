@@ -484,7 +484,9 @@ function renderGrid(){
   noRes.style.display='none';
   const q = (currentSearch||'').trim();
   const advOn = window.PinAdvanced && PinAdvanced.isActive();
+  const dupN = duplicateRecords.length;
   rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`
+    + (dupN ? ` <button type="button" class="dup-note" onclick="showDuplicates()" title="Records that look like the same property entered twice. Nothing has been hidden — open this to check them.">${dupN} possible duplicate${dupN > 1 ? 's' : ''}</button>` : '')
     + (q ? ` for <b>${escapeHtml(q)}</b>` : '')
     + (advOn ? ` with <b>${PinAdvanced.chips().length}</b> filter${PinAdvanced.chips().length===1?'':'s'}` : '');
   grid.innerHTML = filteredProperties.map(p => {
@@ -1709,10 +1711,83 @@ function refreshAfterDataChange(){
   bootMapView();
 }
 
+// Duplicates are REPORTED, never hidden.
+//
+// The same property is in the inventory twice — a sheet-synced record with a
+// code, and an earlier import or a manually added one without. On the map
+// that showed as two pins at one place with one price, which is how it was
+// spotted.
+//
+// An earlier version of this filtered them out of every view automatically.
+// That was wrong: it is a standing rule applied to the owner's data for the
+// life of the product, and the day it judges wrongly it hides a real property
+// and costs a sale, silently. Clearing out duplicate records is a one-time
+// job on the data itself.
+//
+// So every record stays visible, the detector only points at pairs worth
+// looking at, and the owner deletes the spare one — which goes to the
+// append-only change log and stays recoverable.
+let duplicateRecords = [];
 window.applyPropertiesSnapshot = function(list){
-  properties = list;
+  properties = list || [];
+  duplicateRecords = window.PinDedupe ? window.PinDedupe.findDuplicates(properties).pairs : [];
   refreshAfterDataChange();
   migrateLegacyInterests();
+};
+window.getDuplicateRecords = () => duplicateRecords;
+
+// What was merged, and on what evidence. Hiding a record without being able
+// to say which one and why would be worse than showing the duplicate: the
+// owner has to be able to check the call and remove the loser at source.
+window.showDuplicates = function(){
+  const pairs = duplicateRecords;
+  if(!pairs.length) return;
+  const rows = pairs.map(x => `
+    <div class="dup-row">
+      <div class="dup-keep"><span class="dup-tag keep">From the sheet</span>
+        <b>${escapeHtml(x.keep.propertyCode || x.keep.id)}</b> ${escapeHtml(x.keep.name || '')}
+        <i>${escapeHtml(x.keep.location || '')}</i></div>
+      <div class="dup-drop"><span class="dup-tag drop">The spare</span>
+        <b>${escapeHtml(x.drop.propertyCode || x.drop.id)}</b> ${escapeHtml(x.drop.name || '')}
+        <i>${escapeHtml(x.drop.location || '')}</i></div>
+      <div class="dup-why">These look like one property: ${escapeHtml(x.why)}.</div>
+      <div class="dup-act">
+        <button type="button" class="dup-del" data-del="${escapeHtml(String(x.drop.id))}">Delete the spare record</button>
+        <span class="dup-hint">The sheet record is kept. A delete is logged and can be undone from Changes.</span>
+      </div>
+    </div>`).join('');
+  const el = document.createElement('div');
+  el.className = 'dup-sheet';
+  el.innerHTML = `
+    <div class="dup-box" role="dialog" aria-label="Duplicate records">
+      <div class="dup-hd">
+        <div><b>${pairs.length} propert${pairs.length > 1 ? 'ies look like they are' : 'y looks like it is'} in the inventory twice</b>
+          <div class="dup-sub">Everything is still showing — nothing has been hidden or changed. Check each pair,
+            and delete the spare record where you agree. This is a one-off tidy-up of the data, not a rule that
+            keeps running.</div></div>
+        <button type="button" class="dup-x" aria-label="Close">✕</button>
+      </div>
+      <div class="dup-body">${rows}</div>
+    </div>`;
+  const close = () => el.remove();
+  el.addEventListener('click', async ev => {
+    if(ev.target === el || ev.target.closest('.dup-x')) return close();
+    const del = ev.target.closest('.dup-del');
+    if(!del) return;
+    const id = del.getAttribute('data-del');
+    del.disabled = true;
+    // deleteProperty asks for confirmation itself and writes the whole
+    // document to the append-only change log on its way out.
+    await deleteProperty(id);
+    const row = del.closest('.dup-row');
+    if(row && !properties.some(p => p.id === id)) row.remove();
+    else del.disabled = false;
+    if(!el.querySelector('.dup-row')) close();
+  });
+  document.addEventListener('keydown', function esc(ev){
+    if(ev.key === 'Escape'){ close(); document.removeEventListener('keydown', esc); }
+  });
+  document.body.appendChild(el);
 };
 
 // One-time lift of interest levels out of the old per-browser store and onto
