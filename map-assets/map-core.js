@@ -56,7 +56,7 @@
       loadPromise = Promise.resolve({
         ok: false, reason: 'no-key',
         message: 'No Google Maps key is configured for this deployment.',
-        fix: 'Set GOOGLE_MAPS_BROWSER_KEY in the Vercel project, restricted by HTTP referrer to this domain, then redeploy.'
+        fix: 'Set GOOGLE_MAPS_BROWSER_KEY in the Vercel project, restricted by HTTP referrer to this domain, then redeploy. The full recipe is in docs/MAP-SETUP.md.'
       });
       return loadPromise;
     }
@@ -72,7 +72,7 @@
         resolve({
           ok: false, reason: 'auth',
           message: 'Google rejected the Maps key for this site.',
-          fix: 'Check the key’s HTTP-referrer restriction covers this domain, that Maps JavaScript API and Places API are enabled, and that billing is on.'
+          fix: 'Check the key’s HTTP-referrer restriction covers this domain, that Maps JavaScript API, Places API (New) and Distance Matrix are enabled, and that billing is on. See docs/MAP-SETUP.md.'
         });
       };
 
