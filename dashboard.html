@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="dashboard-assets/style.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/match-panel.css">
 </head>
 <body>
 
@@ -71,11 +72,27 @@
       <button class="srch-clear" id="srchClear" onclick="clearSearch()" aria-label="Clear search">×</button>
       <div class="srch-sug" id="srchSug"></div>
     </div>
+    <button type="button" class="adv-btn" id="briefBtn" onclick="openBrief()"
+            title="Paste what a client asked for, in their words, and rank the whole inventory against it">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+      Client brief
+    </button>
     <button type="button" class="adv-btn" id="advBtn" onclick="openAdvanced()"
             title="Build a search with several conditions">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
       Advanced<span class="adv-btn-n" id="advBtnN" style="display:none"></span>
     </button>
+  </div>
+  <div class="brief-bar" id="briefBar" hidden>
+    <label class="brief-lab" for="briefText">What did the client ask for? Their words are fine.</label>
+    <div class="brief-row">
+      <textarea id="briefText" rows="2" spellcheck="false"
+        placeholder="3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a school for the kids and a gated community — he said the Kilpauk one was too expensive"></textarea>
+      <div class="brief-acts">
+        <button type="button" class="brief-go" onclick="runBrief()">Rank the inventory</button>
+        <button type="button" class="brief-x" onclick="closeBrief()">Cancel</button>
+      </div>
+    </div>
   </div>
   <div class="advchips" id="advChips"></div>
   <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
@@ -106,7 +123,15 @@
   <div class="gmeta">
     <div class="gmeta-l" id="rCnt"></div>
   </div>
+  <!-- Client-brief results: the whole inventory ranked against one sentence,
+       rendered by the shared match panel so a property scored here looks
+       exactly like a property scored from a lead record. -->
+  <div id="briefResults" hidden></div>
   <div class="grid" id="pgrid"></div>
+  <!-- Properties that satisfy MOST of the query. Kept out of the grid above
+       and clearly labelled: widening a filter an agent set, silently, is how
+       a search stops being trusted. -->
+  <div id="nearMisses" hidden></div>
   <div class="nores" id="noRes" style="display:none">
     <div class="nores-i">🏡</div>
     <div class="nores-t">No properties match your search</div>
@@ -147,6 +172,7 @@
     <div class="dp-hero" id="dpHero"></div>
     <div class="dp-tabs">
       <button class="dp-tab active" onclick="showTab('overview',this)">Overview</button>
+      <button class="dp-tab" onclick="showTab('matches',this)">Matching Buyers</button>
       <button class="dp-tab" onclick="showTab('specs',this)">Specifications</button>
       <button class="dp-tab" onclick="showTab('pitch',this)">Sales Pitch</button>
       <button class="dp-tab" onclick="showTab('notes',this)">Notes & CRM</button>
@@ -225,6 +251,33 @@
     </div>
   </div>
   <div class="chg-body" id="missingBody"></div>
+</div>
+
+<!-- AREA MAP PANEL -->
+<!-- What the area model learned from the Location and landmark columns: every
+     area, its parent, whether it could be placed, and the contradictions it
+     found. Here so the map is auditable — the alternative is trusting a
+     geography nobody can see. -->
+<div id="areaMapPanel">
+  <div class="chg-hdr">
+    <div class="dp-hdr-nav">
+      <button class="dp-back" onclick="closeAreaMap()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Properties
+      </button>
+    </div>
+    <div class="chg-title-row">
+      <div>
+        <h1 class="chg-title">Area map</h1>
+        <div class="chg-sub">Nobody types this in. It is worked out from the Location column — which is written narrow to broad, so "10th Street, I&nbsp;Block, Anna Nagar East" says that I&nbsp;Block is inside Anna Nagar East — and from the distances in the landmark columns. It is what answers "or somewhere nearby" when a buyer says it.</div>
+      </div>
+      <div class="chg-count" id="amCount"></div>
+    </div>
+    <div class="chg-controls">
+      <input class="chg-search" id="amSearch" placeholder="Search an area…" oninput="onAreaMapSearch(this.value)">
+    </div>
+  </div>
+  <div class="chg-body" id="amBody"></div>
 </div>
 
 <!-- CHANGE LOG PANEL -->
@@ -354,6 +407,10 @@
 <script src="dashboard-assets/sample-data.js"></script>
 <script src="dashboard-assets/search-engine.js"></script>
 <script src="dashboard-assets/advanced-search.js"></script>
+<script src="shared-assets/chennai-geo.js"></script>
+<script src="shared-assets/area-model.js"></script>
+<script src="shared-assets/match-engine.js"></script>
+<script src="shared-assets/match-panel.js"></script>
 <script src="dashboard-assets/auth.js"></script>
 <script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>

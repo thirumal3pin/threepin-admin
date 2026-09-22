@@ -233,9 +233,11 @@ body.rail-on #appRail { display: flex; }
      dialogs. They sit beside the rail so you can leave for Finance without
      first closing what you were reading. True modals still cover it. */
   body.rail-on #dp, body.rail-on #changesPanel, body.rail-on #missingPanel,
-  body.rail-on #botEditorPanel, body.rail-on #msToolbar { left: var(--rail-w); }
+  body.rail-on #areaMapPanel, body.rail-on #botEditorPanel,
+  body.rail-on #msToolbar { left: var(--rail-w); }
   body.rail-on.rail-min #dp, body.rail-on.rail-min #changesPanel,
-  body.rail-on.rail-min #missingPanel, body.rail-on.rail-min #botEditorPanel,
+  body.rail-on.rail-min #missingPanel, body.rail-on.rail-min #areaMapPanel,
+  body.rail-on.rail-min #botEditorPanel,
   body.rail-on.rail-min #msToolbar { left: var(--rail-w-min); }
 
   /* The rail carries the brand for the whole app, so each page copy of the

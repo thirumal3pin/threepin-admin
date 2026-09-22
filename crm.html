@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="crm-assets/style.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/match-panel.css">
 <script>
 // Theme + density are applied before first paint. Left to DOMContentLoaded the
 // page renders light, then repaints dark — a flash on every single load.
@@ -368,6 +369,14 @@ function toggleDensity(){
         <div class="sec-title">📇 Lead Info</div>
         <div class="info-grid" id="dpInfo"></div>
         <div class="dp-meta-row" id="dpMeta"></div>
+      </div>
+
+      <!-- Matching properties, scored against this lead's stated requirement and
+           their own objections. Drawn by renderMatchingProperties() in app.js;
+           all the scoring lives in shared-assets/match-engine.js. -->
+      <div class="sec" id="dpMatchSec" hidden>
+        <div class="sec-title">🎯 Properties for this buyer</div>
+        <div id="dpMatch"></div>
       </div>
 
       <!-- TailorTalk: what needs a person, the lead at a glance, then Overview · Activity ·
@@ -797,6 +806,11 @@ function toggleDensity(){
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   }
 </script>
+<script src="dashboard-assets/search-engine.js"></script>
+<script src="shared-assets/chennai-geo.js"></script>
+<script src="shared-assets/area-model.js"></script>
+<script src="shared-assets/match-engine.js"></script>
+<script src="shared-assets/match-panel.js"></script>
 <script src="crm-assets/sample-leads.js"></script>
 <script src="crm-assets/app.js"></script>
 <!-- dashboardMetrics.js is an ES module (also imported directly, unmodified,

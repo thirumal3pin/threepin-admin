@@ -82,6 +82,7 @@
         { id: 'all', label: 'All properties', icon: 'fa-solid fa-list', page: 'property', nav: 'all' },
         { id: 'missing', label: 'Missing data', icon: 'fa-solid fa-triangle-exclamation', page: 'property', nav: 'missing', badge: 'missing' },
         { id: 'changes', label: 'Changes to apply', icon: 'fa-regular fa-clock', page: 'property', nav: 'changes' },
+        { id: 'areamap', label: 'Area map', icon: 'fa-solid fa-map-location-dot', page: 'property', nav: 'areamap' },
         { id: 'sync', label: 'Sync from sheet', icon: 'fa-solid fa-rotate', page: 'property', nav: 'sync' },
       ],
     },

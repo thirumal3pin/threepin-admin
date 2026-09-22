@@ -3471,6 +3471,10 @@ function openDetail(id){
   renderStandSection(l);
   renderFollowUpSpotlight(l);
   renderDetailInfo(l);
+  // Scored from the lead document straight away, then again in
+  // loadLeadThreads() once the notes arrive — the notes carry the objections,
+  // which move the answer more than any stored field does.
+  renderMatchingProperties(l);
   ttChatExpanded.delete(id);
   tlExpanded.delete(id);
   renderTtSection(l);
@@ -3708,11 +3712,156 @@ async function loadLeadThreads(l){
       renderHistory(l);
       renderFollowUpSpotlight(l);
       if(isTtLead(l)) renderTtSection(l);
+      // The notes have only just arrived, and they are where the objections
+      // live — "said the price is high", "too far from his office". Those
+      // change the matching more than any field on the lead does, so the
+      // match list is scored again now that they are here.
+      renderMatchingProperties(l);
     }
   } catch(e){
     console.error('loadLeadThreads failed:', e);
   }
 }
+
+// ═══════ MATCHING PROPERTIES ═══════
+//
+// "What do we show them?" — the reverse of the Properties console's Matching
+// Buyers tab, and deliberately the same engine and the same panel, so the two
+// screens can never disagree about a pair.
+//
+// Sellers and vendors are skipped: this section answers a BUYER's question.
+// A seller's own listing work belongs on the Property & Media board, which is
+// where the Lead Info block already points them.
+function renderMatchingProperties(l){
+  const sec = document.getElementById('dpMatchSec');
+  const el = document.getElementById('dpMatch');
+  if(!sec || !el || !window.PinMatch || !window.PinMatchPanel) return;
+
+  // A seller is never matched to properties — they are not buying one, and
+  // every field on their record means the opposite of a buyer's. The useful
+  // question runs the other way, so it is asked the other way: who is
+  // already waiting for what this owner is selling? That is the sentence
+  // that wins a listing.
+  if(isSellerLead(l)){ renderWaitingBuyersForOwner(l); return; }
+  // A vendor or a collaboration is neither, and gets no section at all.
+  if(!window.PinMatch.isBuyerLead(l)){ sec.hidden = true; return; }
+  sec.hidden = false;
+  setMatchSectionTitle('🎯 Properties for this buyer');
+  PinMatchPanel.busy(el, 'Scoring the inventory against this requirement…');
+
+  loadInventory().then(list => {
+    if(currentDetailId !== l.id) return;       // moved on while the read was in flight
+    if(!list.length){
+      el.classList.add('pm');
+      el.innerHTML = '<div class="pm-empty">The inventory has not loaded yet.</div>';
+      return;
+    }
+    const req = PinMatch.requirementProfile(l, { inventory: list, notes: l.notes });
+    // Nothing to go on. Say which field would unlock it rather than showing
+    // an empty list — the fix is thirty seconds of typing, and this is the
+    // one moment the person who can do it is looking at the record.
+    if(!req.budget && !req.localities && !req.bhk && !req.types){
+      el.classList.add('pm');
+      el.innerHTML = '<div class="pm-empty">Nothing to match on yet. Fill in <b>Property / Locality</b> or <b>Budget</b> above'
+        + ' — an area, a budget or "3BHK" is enough to rank the whole inventory against this buyer.</div>';
+      return;
+    }
+    const matches = PinMatch.propertiesFor(req, list, {
+      includeVetoed: true, includeSeen: true, minPct: 40, limit: 40
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    PinMatchPanel.render(el, matches, {
+      title: live === 1 ? '1 property worth sending' : `${live} properties worth sending`,
+      subtitle: `out of ${list.length} in the inventory`,
+      empty: 'Nothing in the inventory fits this requirement yet. The ruled-out list below says why for each one'
+        + ' — which is also the brief to go sourcing against.',
+      shape: m => ({
+        code: m.property.code || '',
+        name: m.p.name || m.p.id,
+        sub: [
+          m.p.location, m.p.config,
+          m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice,
+          m.alreadyShared ? '· already shared with them' : ''
+        ].filter(Boolean).join(' · '),
+        actions: [
+          { id:'open', key:m.p.id, label:'Open property →', href:'property.html?id=' + encodeURIComponent(m.p.id), blank:true, primary:true },
+          m.alreadyShared ? null : { id:'link', key:m.p.id, label:'Link to this lead' }
+        ].filter(Boolean)
+      }),
+      onAction: (act, key) => {
+        // Reuses the existing link path, so a property linked from here is
+        // indistinguishable from one linked by hand — same history entry,
+        // same automation rules.
+        if(act === 'link' && typeof linkProperty === 'function') linkProperty(l.id, key);
+      }
+    });
+  });
+}
+
+// The section heading changes with the question being answered, so the same
+// box never says "Properties for this buyer" above a list of people.
+function setMatchSectionTitle(text){
+  const t = document.querySelector('#dpMatchSec .sec-title');
+  if(t) t.textContent = text;
+}
+
+// ═══════ BUYERS WAITING FOR AN OWNER'S PROPERTY ═══════
+//
+// The seller half of matching, and the one with the clearest commercial
+// value: before you pitch an owner for their listing, know how many buyers
+// are already looking for exactly what they have.
+//
+// Scored from the owner's own description of their property — which for a
+// TailorTalk seller is usually the only description that exists — against
+// every buyer in the CRM, through the same engine and the same panel as
+// everywhere else.
+function renderWaitingBuyersForOwner(l){
+  const sec = document.getElementById('dpMatchSec');
+  const el = document.getElementById('dpMatch');
+  if(!sec || !el) return;
+  sec.hidden = false;
+  setMatchSectionTitle('🙋 Buyers waiting for a property like this');
+
+  const owner = PinMatch.ownerPropertyProfile(l);
+  // Nothing usable about the property yet. Say what would unlock it — for a
+  // seller that is the locality, the configuration and the asking price.
+  if(!owner.localities.length && owner.priceLo == null && !owner.bhk.length){
+    el.classList.add('pm');
+    el.innerHTML = '<div class="pm-empty">Nothing about the property yet. Once <b>Property / Locality</b> says'
+      + ' what they are selling and roughly where — "3BHK in Anna Nagar" is enough —'
+      + ' every buyer in the CRM will be scored against it.</div>';
+    return;
+  }
+
+  PinMatchPanel.busy(el, 'Scoring every buyer against this property…');
+  loadInventory().then(list => {
+    if(currentDetailId !== l.id) return;
+    const matches = PinMatch.buyersFor(owner, leads, {
+      inventory: list,
+      stageKeyOf: crmStageKeyOf,
+      includeVetoed: true, minPct: 40, limit: 30
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    PinMatchPanel.render(el, matches, {
+      title: live === 0 ? 'No buyer is waiting for this yet'
+        : live === 1 ? '1 buyer is already waiting' : `${live} buyers are already waiting`,
+      subtitle: live ? 'worth saying out loud when you pitch for the listing' : '',
+      empty: 'No buyer on the CRM is looking for anything like this yet — worth knowing before promising the owner a quick sale.',
+      shape: m => ({
+        name: m.lead.name || '(no name)',
+        sub: [m.lead.propertyInterest, m.lead.budget ? 'budget ' + m.lead.budget : ''].filter(Boolean).join(' · '),
+        actions: [{ id:'open', key:m.lead.id, label:'Open this buyer →', primary:true }]
+      }),
+      onAction: (act, key) => { if(act === 'open') openDetail(key); }
+    });
+  });
+}
+
+// The pipeline's own stage key for a lead, so a Won or Lost buyer is not
+// offered as somebody still waiting. Reuses stageKeyOfId() above rather than
+// reading lead.stageId directly — the board's columns are tenant-configured,
+// and only the pipeline knows which of them means "won".
+const crmStageKeyOf = lead => stageKeyOfId(lead && lead.stageId);
 function renderDetailStageRow(l){
   const sel = document.getElementById('dpStageSel');
   sel.innerHTML = stages.map(s=>`<option value="${s.id}" ${s.id===l.stageId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');

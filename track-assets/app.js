@@ -989,6 +989,13 @@ function openDetail(id) {
       <div class="tk-hint">Reading the conversation…</div>
     </div>` : ''}
 
+    <div class="tk-sec" id="dpBuyers">
+      <div class="tk-sec-hdr">Who is already waiting for this</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Scored against every buyer in the CRM — before the shoot, not after.
+        A property three people are waiting for is worth photographing today.</div>
+      <div id="dpBuyersList"></div>
+    </div>
+
     <div class="tk-sec">
       <div class="tk-sec-hdr">Inventory</div>
       <div class="tk-kv"><span>Property ID</span>${x.propertyCode ? `<b>${esc(x.propertyCode)}</b>` : '<i>not mapped</i>'}</div>
@@ -1065,6 +1072,7 @@ function openDetail(id) {
   document.getElementById('dp').classList.add('open');
   loadHistory(x.id);
   if (lead) loadConversation(x.id, lead.id);
+  renderWaitingBuyers(x, lead);
   // A card opened from anywhere is addressable — copy the URL and it reopens.
   try {
     const u = new URL(location.href);
@@ -1073,6 +1081,70 @@ function openDetail(id) {
   } catch (e) {}
 }
 window.openDetail = openDetail;
+
+// ═══════ WHO IS ALREADY WAITING ═══════
+//
+// The question this board exists to answer earlier than anyone else can: a
+// shoot costs money and a day, so which listing is worth doing first? The
+// answer is how many buyers are already waiting for it — and that is knowable
+// the moment the owner says yes, long before there are photos, a brochure or
+// an inventory row.
+//
+// Everything needed is already on this page: `leads` is the live lead set the
+// board keeps for its Sellers view, and the matcher can profile a LISTING
+// rather than an inventory property (PinMatch.listingProfile), folding in the
+// owner's own TailorTalk conversation — which for a brand-new listing is
+// usually the only description of the property that exists anywhere.
+function renderWaitingBuyers(x, lead) {
+  const el = document.getElementById('dpBuyersList');
+  if (!el || !window.PinMatch || !window.PinMatchPanel) return;
+
+  const prof = window.PinMatch.listingProfile(x, { lead });
+  // Nothing to score against. Name the two fields that would fix it, because
+  // the person reading this is the one who can.
+  if (!prof.localities.length && prof.priceLo == null && !prof.bhk.length) {
+    el.classList.add('pm');
+    el.innerHTML = '<div class="pm-empty">Not enough on this listing yet to match anyone.'
+      + ' Add a <b>Location</b>, <b>Configuration</b> or <b>Asking price</b> and every buyer in the CRM'
+      + ' will be scored against it.</div>';
+    return;
+  }
+
+  window.PinMatchPanel.busy(el, 'Scoring every buyer in the CRM against this listing…');
+  // The inventory is what the area model and the IDF corpus are built from,
+  // and it is fetched lazily on this board. The listing itself is passed to
+  // the model as `extra` inside buyersFor, so a brand-new area is placed the
+  // day its first listing is created.
+  loadInventory().then(inv => {
+    if (currentDetailId !== x.id) return;
+    const matches = window.PinMatch.buyersFor(prof, leads, {
+      inventory: inv,
+      includeVetoed: true,
+      minPct: 40,
+      limit: 30
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    window.PinMatchPanel.render(el, matches, {
+      title: live === 0 ? 'Nobody is waiting for this yet'
+        : live === 1 ? '1 buyer is already waiting' : `${live} buyers are already waiting`,
+      subtitle: prof.provisional ? 'scored on the listing alone — it is not in the inventory yet' : '',
+      empty: 'No buyer on the CRM is looking for anything like this yet.'
+        + ' That is worth knowing before the shoot, not after it.',
+      shape: m => ({
+        name: m.lead.name || '(no name)',
+        sub: [m.lead.propertyInterest, m.lead.budget ? 'budget ' + m.lead.budget : ''].filter(Boolean).join(' · '),
+        actions: [
+          { id: 'crm', key: m.lead.id, label: 'Open in CRM →', href: crmLeadHref(m.lead.id, x.id), primary: true },
+          m.lead.phone ? { id: 'call', key: m.lead.id, label: 'Call', href: 'tel:' + telOf(m.lead.phone) } : null
+        ].filter(Boolean)
+      })
+    });
+  });
+}
+
+// Reuses loadInventory() further down this file — the same TTL-cached read
+// the map-to-property picker uses. A second loader here would mean two
+// caches of one collection disagreeing about what the inventory contains.
 
 // ═══════ WHAT THE OWNER TOLD US ═══════
 // TailorTalk's AI writes a profile of every conversation. For a seller that

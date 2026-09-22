@@ -92,6 +92,27 @@ window.dashboardFirebase = {
     err => { console.error('Firestore property sync error:', err); if (onError) onError(err); }
   ),
 
+  // ── Leads, for the Matches tab ──
+  //
+  // The mirror image of getInventory() in crm-assets/firebase-sync.js: that
+  // page holds leads and reads properties once; this one holds properties and
+  // reads leads once. Both exist so the two halves of a match can be scored
+  // on one screen.
+  //
+  // A one-shot getDocs, NOT an onSnapshot. The grid already keeps a live
+  // listener on every property document; a second live listener on every lead
+  // would double the page's standing read cost to keep a panel fresh that is
+  // only open for a few seconds at a time. The caller caches the result for
+  // the session (see loadLeads in app.js) — so opening ten properties in a
+  // row costs one read of the lead collection, not ten.
+  //
+  // firestore.rules already allows this: `leads` is readable by any signed-in
+  // user of the owning tenant, and dashboard.html shares the CRM's Firebase
+  // Auth and tenantId model. No rules change is needed.
+  getLeads: () => getDocs(query(collection(db, 'leads'), where('tenantId', '==', currentTenantId)))
+    .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+    .catch(e => { console.error('Firestore leads read error:', e); return []; }),
+
   // ── Notes / events subcollection ──
   // Kept OUT of the property document on purpose, mirroring the CRM's
   // per-lead notes subcollection (crm-assets/firebase-sync.js): the grid's

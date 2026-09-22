@@ -227,7 +227,22 @@ function applyFilters(){
   let res;
   if(text || advanced){
     if(!searchGaz) searchGaz = PinSearch.buildGazetteer(properties);
-    const hits = PinSearch.search(base, { text, advanced, gazetteer: searchGaz });
+    let hits = PinSearch.search(base, { text, advanced, gazetteer: searchGaz });
+    // ── The hybrid layer ──
+    //
+    // PinSearch decides WHICH properties answer the query and its contract is
+    // untouched: every clause must still hold, so a filter an agent set is
+    // never quietly widened. What it cannot do is order what it has already
+    // decided to keep by how well the property reads against the whole
+    // sentence. PinMatch.fuse re-ranks that same set by Reciprocal Rank
+    // Fusion of the lexical order with a concept-vector order — which
+    // combines two rankings without needing their scores on one scale, and
+    // is why no magic multiplier appears here.
+    //
+    // Recall is handled separately and visibly, by renderNearMisses below.
+    if(text && window.PinMatch){
+      try { hits = PinMatch.fuse(hits, base, text); } catch(e) { /* ranking is a bonus, never a blocker */ }
+    }
     searchResults = new Map(hits.map(h => [h.p.id, h]));
     res = hits.map(h => h.p);
   } else {
@@ -258,6 +273,126 @@ function applyFilters(){
   filteredProperties = res;
   if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
+  renderNearMisses(base, text, res);
+}
+
+// ═══════ CLOSE MATCHES ═══════
+//
+// The honest answer to "nothing found", and the more useful answer to "six
+// found": a property that satisfies four of a client's five conditions is
+// exactly the one an agent wants to see, with the fifth named so they know
+// what they are conceding before they pick up the phone.
+//
+// Deliberately BELOW the grid and never mixed into it. A near-miss is a
+// different claim from a hit, and a search that silently relaxes a filter
+// somebody set is a search people stop believing.
+function renderNearMisses(base, text, shown){
+  const el = document.getElementById('nearMisses');
+  if(!el) return;
+  if(!text || !window.PinMatch || base.length < 2){ el.hidden = true; el.innerHTML = ''; return; }
+  let near = [];
+  try {
+    near = PinMatch.nearMisses(base, text, { gazetteer: searchGaz, exclude: shown, limit: 8 });
+  } catch(e) { near = []; }
+  if(!near.length){ el.hidden = true; el.innerHTML = ''; return; }
+
+  el.hidden = false;
+  const heading = shown.length
+    ? `${near.length} more almost match`
+    : `Nothing has all of that — but ${near.length} come close`;
+  el.innerHTML = `<div class="nm">
+    <div class="nm-hd">${escapeHtml(heading)}</div>
+    <div class="nm-sub">Each of these meets most of what you typed. What it is missing is named against it.</div>
+    <div class="nm-list">${near.map(n => `
+      <button type="button" class="nm-row" onclick="openDetail('${esc(n.p).id}')">
+        <span class="nm-met">${n.met}/${n.of}</span>
+        <span class="nm-nm">${esc(n.p).propertyCode ? esc(n.p).propertyCode + ' — ' : ''}${esc(n.p).name}</span>
+        <span class="nm-miss">missing <b>${escapeHtml(n.missing.join(' · '))}</b></span>
+      </button>`).join('')}</div>
+  </div>`;
+}
+
+// ═══════ CLIENT BRIEF ═══════
+//
+// The search box takes what an agent can say in one line. Advanced Search
+// takes a brief with several parts. This takes what the CLIENT said, in the
+// client's words, and ranks the whole inventory against it — the same engine,
+// the same weights and the same explanations as the lead panel in the CRM,
+// so a brief typed here and a lead stored there cannot disagree about a
+// property.
+//
+// It is a ranking, not a filter: nothing is excluded for missing one thing,
+// it just scores lower and says why. That is the difference between "no
+// results" and "here are the four nearest, and what each one costs you".
+let briefOn = false;
+
+function openBrief(){
+  const bar = document.getElementById('briefBar');
+  if(!bar) return;
+  bar.hidden = false;
+  const t = document.getElementById('briefText');
+  if(t) t.focus();
+}
+function closeBrief(){
+  const bar = document.getElementById('briefBar');
+  if(bar) bar.hidden = true;
+  clearBrief();
+}
+function clearBrief(){
+  briefOn = false;
+  const r = document.getElementById('briefResults');
+  if(r){ r.hidden = true; r.innerHTML = ''; }
+  document.getElementById('pgrid').style.display = '';
+  const meta = document.querySelector('.gmeta');
+  if(meta) meta.style.display = '';
+  applyFilters();
+}
+
+function runBrief(){
+  const t = document.getElementById('briefText');
+  const text = t ? t.value.trim() : '';
+  if(!text || !window.PinMatch || !window.PinMatchPanel) return;
+  const el = document.getElementById('briefResults');
+  if(!el) return;
+
+  briefOn = true;
+  // The ranked list replaces the grid rather than sitting beside it: two
+  // result sets on one screen, ordered differently, is a way to misread both.
+  document.getElementById('pgrid').style.display = 'none';
+  document.getElementById('noRes').style.display = 'none';
+  const nm = document.getElementById('nearMisses');
+  if(nm){ nm.hidden = true; nm.innerHTML = ''; }
+  const meta = document.querySelector('.gmeta');
+  if(meta) meta.style.display = 'none';
+  el.hidden = false;
+
+  const req = PinMatch.briefProfile(text, { inventory: properties });
+  const matches = PinMatch.propertiesFor(req, properties, {
+    includeVetoed: true, minPct: 35, limit: 40
+  });
+  const live = matches.filter(m => !m.vetoed).length;
+
+  el.innerHTML = `<div class="brief-on">
+      <span class="brief-on-l">Matching</span>
+      <span class="brief-on-t">${escapeHtml(text)}</span>
+      <button type="button" class="pm-link" onclick="clearBrief()">Clear</button>
+    </div><div id="briefList"></div>`;
+
+  PinMatchPanel.render(document.getElementById('briefList'), matches, {
+    title: live === 1 ? '1 property worth sending' : `${live} properties worth sending`,
+    subtitle: `out of ${properties.length} in the inventory`,
+    empty: 'Nothing in the inventory answers this brief. The ruled-out list below says why for each one'
+      + ' — which is the brief to go sourcing against.',
+    shape: m => ({
+      code: m.property.code || '',
+      name: m.p.name || m.p.id,
+      sub: [m.p.location, m.p.config,
+        m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice
+      ].filter(Boolean).join(' · '),
+      actions: [{ id:'open', key:m.p.id, label:'Open property →', primary:true }]
+    }),
+    onAction: (act, key) => { if(act === 'open') openDetail(key); }
+  });
 }
 
 // ═══════ GRID ═══════
@@ -520,10 +655,13 @@ function renderDetail(id){
       </div>
     </div>`;
 
-  document.getElementById('dpBody').innerHTML = overview + specs + pitch + crm + internal;
+  // Order MUST match DETAIL_TABS — showTab() looks the panel up by index.
+  const matches = `<div class="tab-panel"><div class="sec"><div id="dpMatches"></div></div></div>`;
+  document.getElementById('dpBody').innerHTML = overview + matches + specs + pitch + crm + internal;
   document.getElementById('dp').classList.add('open');
   // reset tabs
   document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  renderMatchingBuyers(id);
   // Notes live in a subcollection, so they arrive after the panel paints —
   // repaintNotes() checks currentDetailId before writing, so a slow response
   // for a property the user already navigated away from is discarded.
@@ -536,9 +674,208 @@ function renderDetail(id){
   return true;
 }
 
+// ═══════ AREA MAP ═══════
+//
+// The model's own working, on screen. It exists because the alternative to
+// showing it is asking the team to trust a geography nobody can see — and
+// because a coordinate table for Chennai's 144 location segments is not
+// something anybody can maintain by hand, which is the whole reason the model
+// is derived rather than typed.
+//
+// Three things are worth reading here, and the third is the useful one:
+//
+//   1. What it knows        every area, its parent, how many properties.
+//   2. What it cannot place an honest list, not a silent gap. An area here is
+//                           treated as UNKNOWN in matching, never as far.
+//   3. What disagrees       claims in the sheet that the anchors contradict.
+//                           Each is either an ambiguous name or a real data
+//                           error, and each is a cell worth a human's minute.
+let amSearch = '';
+
+function openAreaMap(){
+  document.getElementById('areaMapPanel').classList.add('open');
+  renderAreaMap();
+}
+function closeAreaMap(){
+  document.getElementById('areaMapPanel').classList.remove('open');
+}
+function onAreaMapSearch(v){ amSearch = v.toLowerCase().trim(); renderAreaMap(); }
+
+function areaModel(){
+  if(!window.PinAreaModel || !properties.length) return null;
+  try { return PinAreaModel.forList(properties); } catch(e){ return null; }
+}
+
+function renderAreaMap(){
+  const body = document.getElementById('amBody');
+  const panel = document.getElementById('areaMapPanel');
+  if(!body || !panel || !panel.classList.contains('open')) return;
+  const m = areaModel();
+  if(!m){
+    body.innerHTML = '<div class="am-empty">The inventory has not loaded yet.</div>';
+    return;
+  }
+  const s = m.stats;
+  document.getElementById('amCount').innerHTML =
+    `<b>${s.areas}</b> areas · <b>${s.placed}</b> placed`;
+
+  const rows = m.areaMap().filter(a => !amSearch
+    || a.label.toLowerCase().includes(amSearch)
+    || (a.parent || '').toLowerCase().includes(amSearch));
+
+  const unplaced = m.areaMap().filter(a => !a.placed);
+
+  // How it knows what it knows — counted from the graph, not asserted.
+  const basis = s.byBasis || {};
+  const bRow = (k, label, why) => basis[k]
+    ? `<div class="am-b"><b>${basis[k]}</b><span>${escapeHtml(label)}</span><i>${escapeHtml(why)}</i></div>` : '';
+
+  body.innerHTML = `
+    <div class="am-top">
+      <div class="am-stats">
+        <div class="am-s"><b>${s.localities}</b><span>localities</span></div>
+        <div class="am-s"><b>${s.subAreas}</b><span>streets &amp; blocks</span></div>
+        <div class="am-s"><b>${s.anchored}</b><span>known outright</span></div>
+        <div class="am-s"><b>${s.estimated}</b><span>worked out</span></div>
+        <div class="am-s ${s.unplaced ? 'warn' : ''}"><b>${s.unplaced}</b><span>cannot place</span></div>
+      </div>
+      <div class="am-ev">
+        <div class="am-ev-t">What it learned this from</div>
+        ${bRow('contains', 'containment', 'a block written inside its locality')}
+        ${bRow('measured', 'stated distances', 'a distance in the landmark column')}
+        ${bRow('timed', 'quoted drive times', 'weaker — a brochure’s claim, not a measurement')}
+        ${bRow('adjacent', 'adjacency', '“Next to Neelankarai” in the Location column')}
+        ${bRow('nearby', 'nearby mentions', 'an area listed as nearby, with no distance')}
+        ${bRow('cocell', 'two areas in one cell', '“Gerugambakkam / Porur”')}
+        ${bRow('landmark', 'shared landmarks', 'two properties citing the same school or hospital')}
+        ${bRow('corridor', 'corridors', 'both on OMR, ECR or GST')}
+        ${bRow('zone', 'zones', 'the weakest — same side of the city, nothing more')}
+      </div>
+    </div>
+
+    ${m.warnings.length ? `<div class="am-warn">
+      <div class="am-warn-t">⚠ ${m.warnings.length} thing${m.warnings.length === 1 ? '' : 's'} in the sheet disagree with the map</div>
+      <div class="am-warn-s">The model checked every claim it could against the areas it already knows, and these did not hold.
+        It has stopped trusting them — each one is either a name that means two places, or a Location cell worth correcting.</div>
+      ${m.warnings.map(w => `<div class="am-warn-r"><b>${escapeHtml(w.from)} ↔ ${escapeHtml(w.to)}</b><span>${escapeHtml(w.why)}</span></div>`).join('')}
+    </div>` : ''}
+
+    ${unplaced.length && !amSearch ? `<div class="am-un">
+      <div class="am-un-t">${unplaced.length} area${unplaced.length === 1 ? '' : 's'} it cannot place</div>
+      <div class="am-un-s">Treated as <b>unknown</b> when matching — never as far away, which would quietly hide these properties
+        from the buyers who want them. Naming one of these in a Location cell alongside a known area, or in a landmark with a
+        distance, is all it takes to place it.</div>
+      <div class="am-un-l">${unplaced.map(a => `<span class="am-chip">${escapeHtml(a.label)}</span>`).join('')}</div>
+    </div>` : ''}
+
+    <div class="am-list">
+      ${rows.length ? rows.map(a => `
+        <div class="am-row${a.placed ? '' : ' unplaced'}">
+          <div class="am-nm">${escapeHtml(a.label)}
+            ${a.kind === 'street' ? '<i class="am-k">street</i>' : a.kind === 'sub' ? '<i class="am-k">colony</i>' : ''}
+          </div>
+          <div class="am-pa">${a.parent ? 'inside ' + escapeHtml(a.parent) : '<span class="am-dim">—</span>'}</div>
+          <div class="am-pr">${a.properties ? a.properties + (a.properties === 1 ? ' property' : ' properties') : '<span class="am-dim">—</span>'}</div>
+          <div class="am-st">${a.anchored
+            ? '<span class="am-ok">known</span>'
+            : a.placed
+              ? `<span class="am-est">worked out${a.placedVia ? ' via ' + escapeHtml(a.placedVia) : ''}${a.confidence ? ' · ' + Math.round(a.confidence * 100) + '%' : ''}</span>`
+              : '<span class="am-no">not placed</span>'}</div>
+        </div>`).join('')
+        : '<div class="am-empty">No area matches that.</div>'}
+    </div>`;
+}
+
+// ═══════ MATCHING BUYERS ═══════
+//
+// "Who wants this?" — asked of a property, answered from the lead database.
+// The scoring is all in shared-assets/match-engine.js; this file only fetches
+// the leads, calls it, and hands the result to the shared panel.
+//
+// ── Why the leads are cached for the session ──
+// The grid already keeps a live listener on every property. Adding a second
+// live listener on every lead would double this page's standing read cost to
+// keep a panel fresh that is open for seconds at a time. So leads are read
+// ONCE, on the first property anyone opens, and reused after that: opening
+// ten properties in a row costs one collection read, not ten. A stale-by-
+// minutes lead list is the right trade for a matching panel — it changes the
+// score by nothing an agent would notice, and the CRM is one click away for
+// the live record.
+let matchLeads = null;         // null = never fetched, [] = fetched and empty
+let matchLeadsPromise = null;
+
+function loadMatchLeads(){
+  if(matchLeads) return Promise.resolve(matchLeads);
+  if(matchLeadsPromise) return matchLeadsPromise;
+  if(!window.dashboardFirebase || !window.dashboardFirebase.getLeads){
+    // No Firebase on this page (the sample-data path). Not an error state —
+    // there is simply nobody to match against yet.
+    matchLeads = [];
+    return Promise.resolve(matchLeads);
+  }
+  matchLeadsPromise = window.dashboardFirebase.getLeads()
+    .then(list => { matchLeads = list || []; return matchLeads; })
+    .catch(() => { matchLeads = []; return matchLeads; });
+  return matchLeadsPromise;
+}
+
+// The CRM's own stage keys, so a Won or Lost lead is not offered as a live
+// buyer. Read off the lead rather than the pipeline document, because this
+// page does not load the pipeline and does not need to: a lead that has
+// reached either of those carries the key on its milestone record.
+function matchStageKeyOf(lead){
+  if(!lead) return null;
+  if(lead.lostReason || /closed_lost|^lost$/.test(String(lead.stageId||''))) return 'lost';
+  if(/closed_won|^won$/.test(String(lead.stageId||''))) return 'won';
+  return null;
+}
+
+function renderMatchingBuyers(id){
+  const el = document.getElementById('dpMatches');
+  if(!el || !window.PinMatch || !window.PinMatchPanel) return;
+  const p = properties.find(x => x.id === id);
+  if(!p) return;
+  PinMatchPanel.busy(el, 'Reading the lead database…');
+  loadMatchLeads().then(leads => {
+    // The panel may have been closed, or moved on to another property,
+    // while the read was in flight.
+    if(currentDetailId !== id) return;
+    const matches = PinMatch.buyersFor(p, leads, {
+      inventory: properties,
+      stageKeyOf: matchStageKeyOf,
+      includeVetoed: true,
+      minPct: 40,
+      limit: 40
+    });
+    const live = matches.filter(m => !m.vetoed).length;
+    PinMatchPanel.render(el, matches, {
+      title: live === 1 ? '1 buyer worth calling' : `${live} buyers worth calling`,
+      subtitle: `out of ${leads.length} in the CRM`,
+      empty: leads.length
+        ? 'No buyer on the CRM is looking for anything like this yet. The ruled-out list below says why for each one.'
+        : 'No leads in the CRM yet — once buyers are in, they will be matched here automatically.',
+      shape: m => ({
+        name: m.lead.name || '(no name)',
+        sub: [
+          m.lead.propertyInterest,
+          m.lead.budget ? 'budget ' + m.lead.budget : '',
+          m.lead.phone
+        ].filter(Boolean).join(' · '),
+        actions: [
+          { id:'crm', key:m.lead.id, label:'Open in CRM →', primary:true },
+          m.lead.phone ? { id:'call', key:m.lead.id, label:'Call', href:'tel:'+m.lead.phone } : null
+        ].filter(Boolean)
+      }),
+      onAction: (act, key) => {
+        if(act === 'crm') window.open('crm.html?lead=' + encodeURIComponent(key), '_blank', 'noopener');
+      }
+    });
+  });
+}
+
 // Panel order here must match the .tab-panel order built in renderDetail —
 // the lookup is positional, so appending a tab means appending its name.
-const DETAIL_TABS = ['overview','specs','pitch','notes','internal'];
+const DETAIL_TABS = ['overview','matches','specs','pitch','notes','internal'];
 function showTab(name,btn){
   document.querySelectorAll('.dp-tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
