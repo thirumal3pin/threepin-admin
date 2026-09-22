@@ -938,6 +938,65 @@
     return prof;
   }
 
+  // ── The seller's own property ──
+  //
+  // A seller is never matched to properties: they are not buying one. But the
+  // question worth asking of a seller is the reverse, and it is the most
+  // commercially useful screen in the product — "how many buyers are already
+  // waiting for what this owner is selling?" Walking into a listing pitch
+  // able to say "six people are looking for exactly this" is worth more than
+  // any brochure.
+  //
+  // The catch is that a seller's record means the OPPOSITE of a buyer's, field
+  // for field. `propertyInterest` is not what they want, it is what they
+  // have. `budget` is not their ceiling, it is their asking price.
+  // TailorTalk's `requirement_details` describes their flat, not their
+  // requirement. Reading a seller with requirementProfile() gets every one of
+  // those backwards, which is exactly why isBuyerLead() refuses to.
+  //
+  // So this maps a seller lead onto the PROPERTY side instead, and hands it
+  // to the same buyersFor() the Properties console and the Track board use.
+  function ownerPropertyProfile(lead, opts) {
+    const o = opts || {};
+    const tt = (lead && lead.tt) || {};
+    const prof = tt.profile || {};
+    // What the owner told us about the property, richest source first.
+    const described = [
+      lead.propertyInterest,
+      prof.requirement_details,
+      prof.preferred_location,
+      (tt.values && tt.values.propertyInterest) || ''
+    ].filter(Boolean).join(' , ');
+    // The asking price, from the field if it is filled in and otherwise out
+    // of the owner's own sentence — "selling my 3BHK in Anna Nagar, asking
+    // 3.4 Cr" is how an owner writes in, and reading only the Budget field
+    // threw that figure away and left the price unscored entirely.
+    let asking = [lead.budget, prof.budget_and_finance, (tt.values && tt.values.budget) || '']
+      .filter(Boolean)[0] || '';
+    if (!moneySpans(asking).length) {
+      const fromText = moneySpans(described).filter(r => r[1] >= 5 * LAKH && r[0] <= 500 * CR);
+      if (fromText.length) asking = fmtMoney(Math.min.apply(null, fromText.map(r => r[0])));
+    }
+
+    const asProperty = {
+      id: 'owner:' + (lead.id || ''),
+      propertyCode: (lead.propertyCodes || [])[0] || null,
+      name: described ? described.slice(0, 80) : (lead.name ? lead.name + '’s property' : 'Owner listing'),
+      location: described,
+      config: described,
+      startingPrice: asking,
+      type: guessType({ title: described, config: described, remarks: prof.remarks }, described),
+      highlights: [prof.remarks, prof.activity_so_far].filter(Boolean).join(' | '),
+      detailsText: [described, prof.chat_summary, lead.aiSummary, lead.lastNote && lead.lastNote.text]
+        .filter(Boolean).join(' \n ')
+    };
+    const p = propertyProfile(asProperty);
+    p.kind = 'owner';
+    p.provisional = true;
+    p.lead = lead;
+    return p;
+  }
+
   function guessType(listing, extra) {
     const s = fold([listing.title, listing.config, listing.remarks, extra].filter(Boolean).join(' '));
     for (const w of TYPE_WORDS) if (w.re.test(s)) return w.type;
@@ -1105,6 +1164,14 @@
       key: 'type', label: 'Property type', weight: 14, core: true,
       score(r, p) {
         if (!r.types || !r.types.values.length) return null;
+        // 'Other' is what normType() returns for a blank or unrecognised type
+        // column — which means "we do not know", not "it is something else".
+        // Scoring it as a 0.2 mismatch cost 11 of 14 points for no reason,
+        // and it showed up worst exactly where the data is thinnest: an
+        // owner's own description of their flat rarely contains the word
+        // "apartment", so a seller's buyers were all being marked down ~14%
+        // against a property nobody had said anything wrong about.
+        if (p.type === 'Other') return null;
         const want = r.types.values;
         if (want.includes(p.type)) {
           // A BHK with no type named tells us "a home" and nothing more, so
@@ -1776,9 +1843,17 @@
         else missing.push(clauseLabel(c));
       }
       if (blocked) continue;
-      const ratio = met / clauses.filter(c => !c.negate).length;
-      // Two thirds is the line where a near-miss is still worth a glance.
-      if (ratio >= 0.66 && missing.length) out.push({ p, met, of: clauses.length, ratio, missing });
+      const wanted = clauses.filter(c => !c.negate).length;
+      const ratio = wanted ? met / wanted : 0;
+      // "Missing at most two things", not a ratio alone. A two-thirds ratio
+      // reads fine on a five-part query and silently excludes the case
+      // near-misses exist FOR: a query so specific that NOTHING meets it,
+      // where every candidate is missing two. Both conditions are kept — the
+      // count alone would let a two-clause query offer a property that met
+      // only one of them.
+      if (missing.length && missing.length <= 2 && ratio >= 0.5) {
+        out.push({ p, met, of: wanted, ratio, missing });
+      }
     }
     out.sort((a, b) => b.ratio - a.ratio || a.missing.length - b.missing.length);
     return o.limit ? out.slice(0, o.limit) : out;
@@ -1814,15 +1889,61 @@
     return hit.length ? 1 : 0;
   }
 
+  // What a clause is CALLED when we have to tell somebody it was not met.
+  //
+  // This reads off the leaf's facet and value rather than its `text`, because
+  // `text` is the engine's internal spelling — the normalised token that
+  // VALUE_MAP matched. Using it put "eastfacing" and "readytomove" in front
+  // of an agent, and "BHK 3" where they say "3 BHK".
   function clauseLabel(c) {
     const l = c.leaves[0] || {};
-    if (l.kind === 'facet') return String(l.text || l.value);
+
+    if (l.kind === 'facet') {
+      const v = l.value;
+      switch (l.facet) {
+        case 'facing': return v + ' facing';
+        case 'status': return v === 'ready' ? 'ready to move' : 'under construction';
+        case 'vastu': return 'Vastu';
+        case 'type': return S().TYPE_LABEL[v] || String(v);
+        case 'saleType': return String(v);
+        case 'furnishing': return String(v);
+        case 'parkingKind': return v + ' parking';
+        case 'availability': return String(v);
+        case 'approvals': return v + ' approval';
+        case 'corridor': return String(v);
+        case 'bhk': return v + ' BHK';
+        case 'hasBrochure': return 'a brochure';
+        case 'hasPhotos': return 'photos';
+        case 'amenityTags': return (S().AMENITY_TAGS.find(t => t.key === v) || {}).label || String(v);
+        default: return String(l.text || v);
+      }
+    }
+
     if (l.kind === 'gaz') return (l.entry && l.entry.raw) || l.text;
+
     if (l.kind === 'num') {
       const f = l.field || 'value';
-      const LBL = { price: 'budget', bhk: 'BHK', sqft: 'size', psf: 'rate', land: 'land area' };
-      return `${LBL[f] || f} ${l.label || ''}`.trim();
+      if (f === 'bhk') {
+        // Every value in the clause, since same-field leaves are ORed:
+        // "3 or 4 BHK" is one clause and one label.
+        const vals = c.leaves.filter(x => x.kind === 'num').map(x => x.lo);
+        return [...new Set(vals)].join(' or ') + ' BHK';
+      }
+      const LBL = { price: 'budget', sqft: 'size', superb: 'super built-up', carpet: 'carpet area', psf: 'rate', land: 'land area', floors: 'floors', bath: 'bathrooms', parking: 'parking', units: 'units', uds: 'UDS' };
+      const name = LBL[f] || f;
+      if (f === 'price') {
+        if (l.cmp === 'lt') return `a budget under ${fmtMoney(l.hi)}`;
+        if (l.cmp === 'gt') return `a budget over ${fmtMoney(l.lo)}`;
+        if (l.cmp === 'range') return `a budget of ${fmtMoney(l.lo)}–${fmtMoney(l.hi)}`;
+        return `a budget of ${fmtMoney(l.lo)}`;
+      }
+      if (l.cmp === 'lt') return `${name} under ${Math.round(l.hi).toLocaleString('en-IN')}`;
+      if (l.cmp === 'gt') return `${name} over ${Math.round(l.lo).toLocaleString('en-IN')}`;
+      if (l.cmp === 'range') return `${name} of ${Math.round(l.lo).toLocaleString('en-IN')}–${Math.round(l.hi).toLocaleString('en-IN')}`;
+      return `${name} of ${Math.round(l.lo).toLocaleString('en-IN')}`;
     }
+
+    if (l.kind === 'scoped') return `${l.field}: ${l.text}`;
     return String(l.text || 'one term');
   }
 
@@ -1861,7 +1982,7 @@
     // the three directions
     buyersFor, propertiesFor, score,
     // profiles
-    requirementProfile, briefProfile, propertyProfile, listingProfile,
+    requirementProfile, briefProfile, propertyProfile, listingProfile, ownerPropertyProfile,
     // the hybrid search layer
     fuse, semanticRank, nearMisses,
     // geography

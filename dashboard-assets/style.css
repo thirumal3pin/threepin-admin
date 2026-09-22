@@ -776,3 +776,68 @@ body.adv-open{overflow:hidden;}
   .adv-ftr{padding:11px 16px;padding-bottom:calc(11px + env(safe-area-inset-bottom));}
   .adv-count{font-size:12.5px;}
 }
+
+/* ═══════ CLIENT BRIEF ═══════
+   Advanced Search narrows a list; this ranks the whole inventory against one
+   sentence. Different question, so its own control rather than a third mode
+   buried in the same panel. */
+.brief-bar{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--r);
+  padding:13px 15px; margin:10px 0 0; box-shadow:var(--shadow);
+}
+.brief-lab{ display:block; font-size:12px; font-weight:600; color:var(--ink2); margin-bottom:7px; }
+.brief-row{ display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+.brief-row textarea{
+  flex:1 1 320px; min-width:0; resize:vertical;
+  font:inherit; font-size:13.5px; line-height:1.5; color:var(--ink);
+  background:var(--bg); border:1px solid var(--border2); border-radius:10px;
+  padding:9px 11px;
+}
+.brief-row textarea:focus{ outline:2px solid var(--gold); outline-offset:1px; border-color:var(--gold); }
+.brief-acts{ display:flex; gap:7px; flex:0 0 auto; }
+.brief-go,.brief-x{
+  font:inherit; font-size:13px; font-weight:600; padding:9px 15px;
+  border-radius:999px; cursor:pointer; border:1px solid var(--border2);
+  background:var(--card); color:var(--ink2);
+}
+.brief-go{ background:var(--gold); border-color:var(--gold); color:#fff; }
+.brief-go:hover{ filter:brightness(1.07); }
+.brief-x:hover{ background:var(--bg2); }
+
+/* The banner that says what is being matched, above the ranked list. */
+.brief-on{
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+  background:var(--gold-lt); border:1px solid var(--gold-bg); border-radius:var(--r);
+  padding:11px 14px; margin:0 0 14px;
+}
+.brief-on-l{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--gold); font-weight:700; }
+.brief-on-t{ flex:1 1 220px; min-width:0; font-size:13px; color:var(--ink); font-style:italic; }
+
+/* ═══════ CLOSE MATCHES ═══════
+   Never mixed into the grid. A near-miss is a different claim from a hit and
+   has to look like one. */
+.nm{ margin:22px 0 0; }
+.nm-hd{
+  font-size:13px; font-weight:700; color:var(--ink2);
+  padding:0 0 3px; border-top:1px dashed var(--border2); padding-top:16px;
+}
+.nm-sub{ font-size:12px; color:var(--ink3); margin:0 0 10px; }
+.nm-list{ display:flex; flex-direction:column; gap:7px; }
+.nm-row{
+  display:flex; align-items:baseline; gap:11px; flex-wrap:wrap;
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:9px 12px; cursor:pointer; text-align:left; width:100%;
+  font:inherit; color:var(--ink);
+}
+.nm-row:hover{ border-color:var(--border2); background:var(--bg2); }
+.nm-met{
+  flex:0 0 auto; font-size:11px; font-weight:700; color:var(--green);
+  font-family:var(--mono,ui-monospace,monospace);
+}
+.nm-nm{ flex:1 1 180px; min-width:0; font-size:13px; font-weight:600; }
+.nm-miss{ flex:0 0 auto; font-size:11.5px; color:var(--red); }
+.nm-miss b{ font-weight:600; }
+@media(max-width:600px){
+  .brief-acts{ width:100%; }
+  .brief-acts button{ flex:1 1 auto; }
+}

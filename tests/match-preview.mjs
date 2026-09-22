@@ -95,10 +95,15 @@ const LEADS = [
   { id: 'ld5', tenantId: T, name: 'Anonymous enquiry', phone: '98765 43219',
     enquiryType: 'Buyer', stageId: 'new', createdAt: NOW - D, updatedAt: NOW - D },
 
-  // A seller — must never appear as a buyer anywhere.
+  // A seller — never matched TO properties; matched the other way instead.
   { id: 'ld6', tenantId: T, name: 'Meena Krishnan', phone: '98765 43218',
-    enquiryType: 'Seller Listing', propertyInterest: 'want to sell my flat in Anna Nagar',
-    stageId: 'new', createdAt: NOW - 6 * D, updatedAt: NOW - 2 * D }
+    enquiryType: 'Seller Listing', propertyInterest: 'selling my 3 BHK in Anna Nagar, asking 3.4 Cr',
+    stageId: 'new', createdAt: NOW - 6 * D, updatedAt: NOW - 2 * D },
+
+  // A vendor is neither a buyer nor a seller and gets no matching at all.
+  { id: 'ld7', tenantId: T, name: 'Vendor Co', phone: '98765 43220',
+    enquiryType: 'Vendor', propertyInterest: 'photography and drone services',
+    stageId: 'new', createdAt: NOW - 2 * D, updatedAt: NOW - 2 * D }
 ];
 
 const STAGES = [
@@ -204,6 +209,7 @@ for (const vp of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     ok('the rich brief is offered too', /Divya/.test(body));
     ok('and it scores in the nineties', /9\d%/.test(body), (body.match(/\d+%/g) || []).join(','));
     ok('the seller is never offered as a buyer', !/Meena/.test(body));
+    ok('nor is the vendor', !/Vendor Co/.test(body));
     ok('the price-objecting buyer is not in the live list',
       !rows.slice(0, 2).some(r => /Suresh/.test(r)), J(rows.map(r => r.slice(0, 40))));
     ok('there is a ruled-out section', /ruled out/.test(body), body.slice(-200));
@@ -227,6 +233,65 @@ for (const vp of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     ok('the "how is this scored" note opens', /How the score is worked out/.test(how));
     ok('and names the real weights', /Budget 28|Location 22/.test(how), how.slice(0, 260));
     await shot(page, 'dash-matches-desktop');
+
+    // ── The search bar's two new halves ──
+    await page.evaluate(() => window.closeDetail ? window.closeDetail() : document.getElementById('dp').classList.remove('open'));
+    await page.waitForTimeout(150);
+
+    // Close matches: a query with five conditions that nothing satisfies in
+    // full. The old answer was "No properties match your search"; the useful
+    // answer names what each near-miss is missing.
+    await page.fill('#searchInput', '3 bhk in anna nagar ready to move vastu east facing');
+    await page.waitForTimeout(400);
+    const nmVisible = await page.evaluate(() => {
+      const el = document.getElementById('nearMisses');
+      return el && !el.hidden ? el.textContent.replace(/\s+/g, ' ') : '';
+    });
+    ok('close matches appear for an over-specified query', /almost match|come close/.test(nmVisible), nmVisible.slice(0, 180) || '(nothing)');
+    ok('and each one names what it is missing', /missing /.test(nmVisible), nmVisible.slice(0, 240));
+    // The label has to be the agent's spelling, not the engine's internal
+    // token: "East facing", never "eastfacing"; "3 BHK", never "BHK 3".
+    ok('in the words an agent uses, not the internal token',
+      !/eastfacing|readytomove|BHK 3/.test(nmVisible), nmVisible.slice(0, 240));
+
+    // Hybrid ranking must not change WHICH properties come back — only their
+    // order. That is the contract that keeps the 748-assertion search suite
+    // meaningful.
+    const fusedIds = await page.evaluate(() => {
+      const t = '3 bhk in anna nagar';
+      const base = window.pinAllProperties();
+      const lex = window.PinSearch.search(base, { text: t });
+      const fused = window.PinMatch.fuse(lex, base, t);
+      return { lex: lex.map(h => h.p.id).sort(), fused: fused.map(h => h.p.id).sort() };
+    });
+    ok('fusion re-orders the result set without changing it',
+      JSON.stringify(fusedIds.lex) === JSON.stringify(fusedIds.fused), JSON.stringify(fusedIds));
+
+    // Client brief: a whole sentence, including an objection, ranked.
+    await page.fill('#searchInput', '');
+    await page.waitForTimeout(250);
+    await page.click('#briefBtn');
+    await page.fill('#briefText', '3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a good school for the kids and a gated community');
+    await page.click('.brief-go');
+    await page.waitForFunction(() => {
+      const el = document.getElementById('briefResults');
+      return el && !el.hidden && /worth sending|Nothing in the inventory/.test(el.textContent || '');
+    }, null, { timeout: 10000 });
+    await page.waitForTimeout(250);
+    const brief = await page.$eval('#briefResults', e => e.textContent.replace(/\s+/g, ' '));
+    ok('a client brief ranks the inventory', /worth sending/.test(brief), brief.slice(0, 160));
+    ok('the brief is echoed back so it can be checked', /near Anna Nagar/.test(brief));
+    ok('it offers the Anna Nagar flat first', /Kanaka|ANR0099/.test(brief.slice(0, 700)), brief.slice(0, 400));
+    ok('the school/gated wording is credited in the reasons',
+      /schools and family life|gated security/.test(brief), brief.slice(0, 900));
+    ok('the grid is hidden while a brief is being matched',
+      await page.$eval('#pgrid', e => e.style.display === 'none'));
+    await shot(page, 'dash-brief-desktop');
+
+    await page.click('#briefResults .pm-link');   // Clear
+    await page.waitForTimeout(300);
+    ok('clearing the brief brings the grid back',
+      await page.$eval('#pgrid', e => e.style.display !== 'none'));
   } else {
     ok('phone: matches still render', rows.length > 0, String(rows.length));
     const wide = await page.evaluate(() => {
@@ -287,10 +352,29 @@ for (const vp of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     ok('and the plot is ruled out for a 3BHK buyer', /ruled out/.test(body));
     await shot(page, 'crm-matches-desktop');
 
-    // A seller must not get this section at all.
+    // ── The seller flip ──
+    // A seller must never be matched TO properties: they are not buying one,
+    // and every field on their record means the opposite of a buyer's. The
+    // question runs the other way instead — who is already waiting for what
+    // this owner is selling — which is the sentence that wins a listing.
     await page.evaluate(() => window.openDetail('ld6'));
-    await page.waitForTimeout(400);
-    ok('a seller gets no buyer-matching section', await page.$eval('#dpMatchSec', e => e.hidden));
+    await page.waitForFunction(() => {
+      const el = document.getElementById('dpMatch');
+      return el && /waiting|Nothing about the property/i.test(el.textContent || '');
+    }, null, { timeout: 10000 });
+    await page.waitForTimeout(300);
+    const sellerTitle = await page.$eval('#dpMatchSec .sec-title', e => e.textContent.trim());
+    const sellerBody = await page.$eval('#dpMatch', e => e.textContent.replace(/\s+/g, ' '));
+    ok('a seller gets buyers, not properties', /Buyers waiting/.test(sellerTitle), sellerTitle);
+    ok('and it is buyers that are listed', /waiting/i.test(sellerBody), sellerBody.slice(0, 160));
+    ok('the buyers for their Anna Nagar flat are found', /Karthik|Divya/.test(sellerBody), sellerBody.slice(0, 300));
+    ok('no property is offered to the seller', !/Kanaka|ANR0099|Sterling Grand/.test(sellerBody), sellerBody.slice(0, 300));
+    await shot(page, 'crm-seller-buyers');
+
+    // A vendor is neither, and gets nothing.
+    await page.evaluate(() => window.openDetail('ld7'));
+    await page.waitForTimeout(500);
+    ok('a vendor gets no matching section at all', await page.$eval('#dpMatchSec', e => e.hidden));
 
     // A lead with nothing on it names the field to fill in.
     await page.evaluate(() => window.openDetail('ld5'));

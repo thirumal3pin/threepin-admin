@@ -227,7 +227,22 @@ function applyFilters(){
   let res;
   if(text || advanced){
     if(!searchGaz) searchGaz = PinSearch.buildGazetteer(properties);
-    const hits = PinSearch.search(base, { text, advanced, gazetteer: searchGaz });
+    let hits = PinSearch.search(base, { text, advanced, gazetteer: searchGaz });
+    // ── The hybrid layer ──
+    //
+    // PinSearch decides WHICH properties answer the query and its contract is
+    // untouched: every clause must still hold, so a filter an agent set is
+    // never quietly widened. What it cannot do is order what it has already
+    // decided to keep by how well the property reads against the whole
+    // sentence. PinMatch.fuse re-ranks that same set by Reciprocal Rank
+    // Fusion of the lexical order with a concept-vector order — which
+    // combines two rankings without needing their scores on one scale, and
+    // is why no magic multiplier appears here.
+    //
+    // Recall is handled separately and visibly, by renderNearMisses below.
+    if(text && window.PinMatch){
+      try { hits = PinMatch.fuse(hits, base, text); } catch(e) { /* ranking is a bonus, never a blocker */ }
+    }
     searchResults = new Map(hits.map(h => [h.p.id, h]));
     res = hits.map(h => h.p);
   } else {
@@ -258,6 +273,126 @@ function applyFilters(){
   filteredProperties = res;
   if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
+  renderNearMisses(base, text, res);
+}
+
+// ═══════ CLOSE MATCHES ═══════
+//
+// The honest answer to "nothing found", and the more useful answer to "six
+// found": a property that satisfies four of a client's five conditions is
+// exactly the one an agent wants to see, with the fifth named so they know
+// what they are conceding before they pick up the phone.
+//
+// Deliberately BELOW the grid and never mixed into it. A near-miss is a
+// different claim from a hit, and a search that silently relaxes a filter
+// somebody set is a search people stop believing.
+function renderNearMisses(base, text, shown){
+  const el = document.getElementById('nearMisses');
+  if(!el) return;
+  if(!text || !window.PinMatch || base.length < 2){ el.hidden = true; el.innerHTML = ''; return; }
+  let near = [];
+  try {
+    near = PinMatch.nearMisses(base, text, { gazetteer: searchGaz, exclude: shown, limit: 8 });
+  } catch(e) { near = []; }
+  if(!near.length){ el.hidden = true; el.innerHTML = ''; return; }
+
+  el.hidden = false;
+  const heading = shown.length
+    ? `${near.length} more almost match`
+    : `Nothing has all of that — but ${near.length} come close`;
+  el.innerHTML = `<div class="nm">
+    <div class="nm-hd">${escapeHtml(heading)}</div>
+    <div class="nm-sub">Each of these meets most of what you typed. What it is missing is named against it.</div>
+    <div class="nm-list">${near.map(n => `
+      <button type="button" class="nm-row" onclick="openDetail('${esc(n.p).id}')">
+        <span class="nm-met">${n.met}/${n.of}</span>
+        <span class="nm-nm">${esc(n.p).propertyCode ? esc(n.p).propertyCode + ' — ' : ''}${esc(n.p).name}</span>
+        <span class="nm-miss">missing <b>${escapeHtml(n.missing.join(' · '))}</b></span>
+      </button>`).join('')}</div>
+  </div>`;
+}
+
+// ═══════ CLIENT BRIEF ═══════
+//
+// The search box takes what an agent can say in one line. Advanced Search
+// takes a brief with several parts. This takes what the CLIENT said, in the
+// client's words, and ranks the whole inventory against it — the same engine,
+// the same weights and the same explanations as the lead panel in the CRM,
+// so a brief typed here and a lead stored there cannot disagree about a
+// property.
+//
+// It is a ranking, not a filter: nothing is excluded for missing one thing,
+// it just scores lower and says why. That is the difference between "no
+// results" and "here are the four nearest, and what each one costs you".
+let briefOn = false;
+
+function openBrief(){
+  const bar = document.getElementById('briefBar');
+  if(!bar) return;
+  bar.hidden = false;
+  const t = document.getElementById('briefText');
+  if(t) t.focus();
+}
+function closeBrief(){
+  const bar = document.getElementById('briefBar');
+  if(bar) bar.hidden = true;
+  clearBrief();
+}
+function clearBrief(){
+  briefOn = false;
+  const r = document.getElementById('briefResults');
+  if(r){ r.hidden = true; r.innerHTML = ''; }
+  document.getElementById('pgrid').style.display = '';
+  const meta = document.querySelector('.gmeta');
+  if(meta) meta.style.display = '';
+  applyFilters();
+}
+
+function runBrief(){
+  const t = document.getElementById('briefText');
+  const text = t ? t.value.trim() : '';
+  if(!text || !window.PinMatch || !window.PinMatchPanel) return;
+  const el = document.getElementById('briefResults');
+  if(!el) return;
+
+  briefOn = true;
+  // The ranked list replaces the grid rather than sitting beside it: two
+  // result sets on one screen, ordered differently, is a way to misread both.
+  document.getElementById('pgrid').style.display = 'none';
+  document.getElementById('noRes').style.display = 'none';
+  const nm = document.getElementById('nearMisses');
+  if(nm){ nm.hidden = true; nm.innerHTML = ''; }
+  const meta = document.querySelector('.gmeta');
+  if(meta) meta.style.display = 'none';
+  el.hidden = false;
+
+  const req = PinMatch.briefProfile(text, { inventory: properties });
+  const matches = PinMatch.propertiesFor(req, properties, {
+    includeVetoed: true, minPct: 35, limit: 40
+  });
+  const live = matches.filter(m => !m.vetoed).length;
+
+  el.innerHTML = `<div class="brief-on">
+      <span class="brief-on-l">Matching</span>
+      <span class="brief-on-t">${escapeHtml(text)}</span>
+      <button type="button" class="pm-link" onclick="clearBrief()">Clear</button>
+    </div><div id="briefList"></div>`;
+
+  PinMatchPanel.render(document.getElementById('briefList'), matches, {
+    title: live === 1 ? '1 property worth sending' : `${live} properties worth sending`,
+    subtitle: `out of ${properties.length} in the inventory`,
+    empty: 'Nothing in the inventory answers this brief. The ruled-out list below says why for each one'
+      + ' — which is the brief to go sourcing against.',
+    shape: m => ({
+      code: m.property.code || '',
+      name: m.p.name || m.p.id,
+      sub: [m.p.location, m.p.config,
+        m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice
+      ].filter(Boolean).join(' · '),
+      actions: [{ id:'open', key:m.p.id, label:'Open property →', primary:true }]
+    }),
+    onAction: (act, key) => { if(act === 'open') openDetail(key); }
+  });
 }
 
 // ═══════ GRID ═══════

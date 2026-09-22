@@ -72,11 +72,27 @@
       <button class="srch-clear" id="srchClear" onclick="clearSearch()" aria-label="Clear search">×</button>
       <div class="srch-sug" id="srchSug"></div>
     </div>
+    <button type="button" class="adv-btn" id="briefBtn" onclick="openBrief()"
+            title="Paste what a client asked for, in their words, and rank the whole inventory against it">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+      Client brief
+    </button>
     <button type="button" class="adv-btn" id="advBtn" onclick="openAdvanced()"
             title="Build a search with several conditions">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
       Advanced<span class="adv-btn-n" id="advBtnN" style="display:none"></span>
     </button>
+  </div>
+  <div class="brief-bar" id="briefBar" hidden>
+    <label class="brief-lab" for="briefText">What did the client ask for? Their words are fine.</label>
+    <div class="brief-row">
+      <textarea id="briefText" rows="2" spellcheck="false"
+        placeholder="3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a school for the kids and a gated community — he said the Kilpauk one was too expensive"></textarea>
+      <div class="brief-acts">
+        <button type="button" class="brief-go" onclick="runBrief()">Rank the inventory</button>
+        <button type="button" class="brief-x" onclick="closeBrief()">Cancel</button>
+      </div>
+    </div>
   </div>
   <div class="advchips" id="advChips"></div>
   <button class="mfilter-toggle" id="mfilterToggle" onclick="toggleMobileFilters()">⚙️ Filters & Sort</button>
@@ -107,7 +123,15 @@
   <div class="gmeta">
     <div class="gmeta-l" id="rCnt"></div>
   </div>
+  <!-- Client-brief results: the whole inventory ranked against one sentence,
+       rendered by the shared match panel so a property scored here looks
+       exactly like a property scored from a lead record. -->
+  <div id="briefResults" hidden></div>
   <div class="grid" id="pgrid"></div>
+  <!-- Properties that satisfy MOST of the query. Kept out of the grid above
+       and clearly labelled: widening a filter an agent set, silently, is how
+       a search stops being trusted. -->
+  <div id="nearMisses" hidden></div>
   <div class="nores" id="noRes" style="display:none">
     <div class="nores-i">🏡</div>
     <div class="nores-t">No properties match your search</div>

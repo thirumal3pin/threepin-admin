@@ -56,6 +56,7 @@ function check(label, cond, detail) {
   return false;
 }
 const eq = (label, got, want) => check(label, got === want, `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+const J = v => JSON.stringify(v);
 const between = (label, got, lo, hi) => check(label, got >= lo && got <= hi, `got ${got}, want ${lo}–${hi}`);
 const section = t => console.log('\n' + t);
 
@@ -367,6 +368,47 @@ const waiting = M.buyersFor(lp, [keen, burned], { inventory: INVENTORY, now: NOW
 check('buyers can be counted before the shoot', waiting.length >= 1, waiting.length);
 check('and the price-objecting buyer is still excluded at 3.2 Cr',
   !waiting.some(b => b.lead.id === 'L2') || waiting.find(b => b.lead.id === 'L2').pct >= 0);
+
+// ═══════ 6b. A SELLER IS MATCHED THE OTHER WAY ROUND ═══════
+//
+// A seller is never matched TO properties: they are not buying one, and every
+// field on their record means the opposite of a buyer's — propertyInterest is
+// what they HAVE, budget is what they are ASKING. Reading a seller with
+// requirementProfile() gets all of it backwards, which is why isBuyerLead()
+// refuses to. The useful question runs the other way.
+section('A seller is never offered properties');
+const seller = lead({
+  id: 'L_SELL', name: 'Owner', enquiryType: 'Seller Listing',
+  propertyInterest: 'selling my 3 BHK in Anna Nagar, asking 3.4 Cr'
+});
+eq('a seller is not a buyer', M.isBuyerLead(seller), false);
+check('and never appears in the buyer list of a property',
+  !M.buyersFor(ANNA_35, [seller], { inventory: REF_INV, now: NOW, minPct: 0 }).some(b => b.lead.id === 'L_SELL'));
+
+section('Instead, their property is matched to buyers');
+const owner = M.ownerPropertyProfile(seller);
+eq('the locality of the owner is read', owner.localities[0], 'anna nagar');
+check('the configuration is read', owner.bhk.includes(3), J(owner.bhk));
+// The asking price is in the sentence, not in the Budget field — reading only
+// the field threw the figure away and left the price unscored entirely.
+eq('the asking price is read out of their own sentence', owner.priceLo, 34000000);
+check('it is flagged as not being an inventory row', owner.provisional === true);
+
+const ownerBuyers = M.buyersFor(owner, [keen, lead({ id: 'L_SMALL', propertyInterest: '2BHK in Porur', budget: '1.2 Cr' })], { inventory: REF_INV, now: NOW, minPct: 0, includeVetoed: true });
+check('a matching buyer is found for the owner', ownerBuyers.some(w => w.lead.id === 'L1' && !w.vetoed), J(ownerBuyers.map(w => [w.lead.id, w.pct, w.vetoed])));
+check('and a buyer far under the asking price is ruled out',
+  ownerBuyers.some(w => w.lead.id === 'L_SMALL' && w.vetoed));
+
+section('Unknown is not the same as mismatched');
+// normType() returns 'Other' for a blank or unrecognised type column, which
+// means "we do not know". Scoring it as a mismatch cost 11 of 14 points
+// against a property nobody had said anything wrong about — and it bit worst
+// on owner descriptions, which rarely contain the word "apartment".
+const noType = M.propertyProfile(prop({ id: 'P_NOTYPE', location: 'Anna Nagar', config: '3BHK', startingPrice: '₹3 Cr', type: '' }));
+eq('a blank type column reads as Other', noType.type, 'Other');
+const nt = M.score(profileOf(keen), noType, {});
+check('and is not scored at all', !nt.breakdown.some(b => b.key === 'type'), J(nt.breakdown.map(b => b.key)));
+check('so it is not held against the property', nt.pct >= 90, nt.pct);
 
 // ═══════ 7. PATHOLOGICAL INPUT ═══════
 
