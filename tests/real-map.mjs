@@ -84,8 +84,19 @@ window.addEventListener('error', e => window.__log.push('ERROR ' + e.message));
 })();
 </script></body></html>`;
 
+// Desktop AND phone. A map that works at 1200px and not at 390 is still a
+// map an agent cannot use, and they are on a phone in front of the client.
+const VIEWS = [
+  { name: 'desktop', viewport: { width: 1200, height: 760 } },
+  { name: 'phone', viewport: { width: 390, height: 844 },
+    isMobile: true, hasTouch: true, deviceScaleFactor: 3,
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' }
+];
+
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 1200, height: 760 } });
+let bad = 0;
+for (const V of VIEWS) {
+const ctx = await browser.newContext(V);
 const page = await ctx.newPage();
 const netFail = [];
 page.on('pageerror', e => netFail.push('pageerror: ' + e.message));
@@ -118,12 +129,25 @@ const out = await page.evaluate(() => ({
   names: [...document.querySelectorAll('.gm-p-n')].map(e => e.textContent),
   gmInner: (document.querySelector('#host') || {}).childElementCount || 0
 }));
+console.log('');
+console.log('─'.repeat(58));
+console.log('  ' + V.name + '  ' + V.viewport.width + 'x' + V.viewport.height);
+console.log('─'.repeat(58));
 console.log('load state :', JSON.stringify(out.load));
 console.log('page log   :', JSON.stringify(out.log));
 console.log('tile <img> :', out.tiles);
-console.log('our markers:', out.markers, JSON.stringify(out.names));
+console.log('our markers:', out.markers, '| e.g. ' + JSON.stringify(out.names.slice(0, 3)));
 console.log('host kids  :', out.gmInner);
 if (netFail.length) { console.log('failures   :'); netFail.slice(0, 8).forEach(x => console.log('   ' + x)); }
-await page.screenshot({ path: join(ROOT, 'tests/out/real-map.png') });
-console.log('screenshot -> tests/out/real-map.png');
+// The two things that decide whether this works at all.
+if (!out.load || out.load.ok !== true) { console.log('   !! the map did not load'); bad++; }
+if (!(out.tiles > 10)) { console.log('   !! no map tiles reached the page'); bad++; }
+if (!(out.markers > 100)) { console.log('   !! our markers did not render'); bad++; }
+await page.screenshot({ path: join(ROOT, 'tests/out/real-map-' + V.name + '.png') });
+console.log('screenshot -> tests/out/real-map-' + V.name + '.png');
+await ctx.close();
+}
 await browser.close();
+if (bad) { console.log(''); console.log(bad + ' problem(s).'); process.exit(1); }
+console.log('');
+console.log('Both views: the real map loaded, tiled and took our markers.');

@@ -817,6 +817,17 @@ console.log('On a phone');
   await page.waitForTimeout(700);
   await page.click('.gm-prop');
   await page.waitForTimeout(350);
+  // The sheet must not swallow the map. A phone's map pane is about 620px of
+  // an 844px screen, and the sheet was allowed 72vh — 608 — so opening a
+  // property hid every other pin and any sense of where this one is.
+  ok('...and still leaves a strip of map above it', await page.evaluate(() => {
+    const card = document.querySelector('#mapCard');
+    const pane = document.querySelector('#mapPane');
+    if (!card || !pane || card.hidden) return false;
+    const c = card.getBoundingClientRect(), p = pane.getBoundingClientRect();
+    const visible = Math.max(0, Math.min(c.top, window.innerHeight) - Math.max(p.top, 0));
+    return visible >= 80;
+  }));
   ok('tapping a marker opens the card as a bottom sheet on the viewport',
     await page.$eval('#mapCard', e => {
       const r = e.getBoundingClientRect();
@@ -831,6 +842,61 @@ console.log('On a phone');
     e => e.filter(x => getComputedStyle(x).display !== 'none').length);
   ok('and the price column survives on a phone',
     phoneRows === 0 || phonePrices > 0, phonePrices + ' of ' + phoneRows);
+
+  // ── EVERYTHING AN AGENT TAPS, AT THE SIZE THEY TAP IT ──
+  // This is the screen used standing in front of a client, and none of it had
+  // ever been measured at phone width with a property open.
+  {
+    const tap = await page.evaluate(() => {
+      const small = [];
+      for (const el of document.querySelectorAll('#mapCard button, #mapCard a, #mapAnswer button, #mapAnswer a, #mapAnswer input')) {
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const cs = getComputedStyle(el);
+        // WCAG 2.5.8 exempts a link sitting inline in a sentence.
+        if (cs.display === 'inline' && cs.borderStyle === 'none') continue;
+        if (r.height < 30 || r.width < 24) {
+          small.push(((el.textContent || '').trim() || el.className).slice(0, 22) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+        }
+      }
+      return small;
+    });
+    ok('every control in the open card is big enough to tap', tap.length === 0,
+      tap.slice(0, 5).join(', '));
+  }
+  ok('the open card does not push the page sideways',
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
+  ok('nothing inside the card spills out of it', await page.evaluate(() => {
+    const card = document.querySelector('#mapCard');
+    if (!card) return true;
+    const c = card.getBoundingClientRect();
+    return [...card.querySelectorAll('*')].every(el => {
+      const r = el.getBoundingClientRect();
+      return !r.width || (r.left >= c.left - 2 && r.right <= c.right + 2);
+    });
+  }));
+  // The answer panel is the part an agent reads OUT to the client, so it has
+  // to be legible, not merely present.
+  {
+    const tiny = await page.evaluate(() => {
+      const out = [];
+      for (const el of document.querySelectorAll('#mapAnswer *, #mapCard *')) {
+        if (el.children.length || (el.textContent || '').trim().length < 3) continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const fs = parseFloat(getComputedStyle(el).fontSize);
+        if (fs < 11.5) out.push(fs + 'px "' + el.textContent.trim().slice(0, 18) + '"');
+      }
+      return [...new Set(out)];
+    });
+    ok('no text in the card or answer is below 11.5px on a phone', tiny.length === 0,
+      tiny.slice(0, 5).join(', '));
+  }
+  // Closing it must give the map back.
+  await page.click('#mapCard [data-act="close"]');
+  await page.waitForTimeout(300);
+  ok('closing the sheet returns the whole map', await page.$eval('#mapCard', e => e.hidden));
+
   await shot(page, 'map-phone');
   await page.context().close();
 }
