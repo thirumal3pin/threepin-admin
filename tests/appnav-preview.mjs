@@ -182,7 +182,7 @@ const clickItem = (page, name) => page.evaluate(n => {
   if (i) i.click();
 }, name);
 
-const SECTIONS = ['Daily task', 'Properties', 'CRM', 'Finance', 'Create brochure'];
+const SECTIONS = ['Daily task', 'Properties', 'CRM', 'Finance', 'Property & Media', 'Create brochure'];
 
 // ═══════ CRM ═══════
 console.log('\nCRM — desktop');
@@ -265,7 +265,7 @@ console.log('\nCRM — desktop');
     return [...r.querySelectorAll('.td-f')].map(f => f.querySelector('dt').textContent + ': ' + f.querySelector('dd').textContent.replace(/\s+/g, ' ').trim());
   });
   ok('A visit opens to the client number', opened.some(x => /^Client: Rajesh Kumar 98400 12345/.test(x)), JSON.stringify(opened));
-  ok('…and the seller, found from the owner listing on the same property', opened.some(x => /^Seller: Mrs Lakshmi 98400 44444/.test(x)), JSON.stringify(opened));
+  ok('…and the property owner, found from the owner listing on the same property', opened.some(x => /^Property owner: Mrs Lakshmi 98400 44444/.test(x)), JSON.stringify(opened));
   ok('…and the note explaining it', opened.some(x => /^Notes:/.test(x)), JSON.stringify(opened));
 
   const ask = await page.evaluate(() => {
@@ -329,7 +329,7 @@ console.log('\nProperties — desktop');
   ok('The same rail, with the same sections', JSON.stringify(s.secs.map(x => x.name)) === JSON.stringify(SECTIONS), JSON.stringify(s.secs.map(x => x.name)));
   const prop = s.secs.find(x => x.name === 'Properties');
   ok('Properties is the open one here', prop.open && prop.here);
-  ok('…listing this console\'s own pages', JSON.stringify(prop.items) === JSON.stringify(['All properties', 'Missing data', 'Changes to apply', 'Sync from sheet']), JSON.stringify(prop.items));
+  ok('…listing this console\'s own pages', JSON.stringify(prop.items) === JSON.stringify(['All properties', 'Missing data', 'Changes to apply', 'Area map', 'Sync from sheet']), JSON.stringify(prop.items));
   ok('…with All properties current', s.current === 'All properties', String(s.current));
   await page.screenshot({ path: join(OUT, 'prop-01-all.png') });
 

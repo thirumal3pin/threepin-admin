@@ -697,7 +697,13 @@ console.log('The map view');
   await page.click('#mapModeSwitch .mv-mode:nth-child(1)');   // List
   await page.waitForTimeout(250);
   ok('going back to List restores the card grid', await page.$eval('#pgrid', e => e.style.display !== 'none'));
-  ok('and hides the map shell', await page.$eval('#mapShell', e => e.hidden));
+  // COMPUTED display, not the attribute. Asserting e.hidden only proved the
+  // attribute had been set — which it always had. The id rule
+  // `#mapShell { display: grid }` outranks the UA default that `hidden`
+  // relies on, so the shell stayed laid out as a 420px empty white panel in
+  // List view and this test still passed. Assert what the agent sees.
+  ok('and hides the map shell', await page.$eval('#mapShell',
+    e => e.hidden && getComputedStyle(e).display === 'none' && e.getBoundingClientRect().height === 0));
 
   await page.context().close();
 }

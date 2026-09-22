@@ -1,7 +1,18 @@
 :root{
   --bg:#F7F6F3; --bg2:#EFEDE8; --white:#FFFFFF; --card:#FFFFFF;
   --border:#E4E0D8; --border2:#D4CFC5;
-  --ink:#1C1917; --ink2:#44403C; --ink3:#78716C; --ink4:#847E77;
+  /* Measured, not eyeballed, against the three grounds these sit on
+     (#FFFFFF, --bg #F7F6F3, --bg2 #EFEDE8):
+
+       was  --ink3 #78716C -> 4.80 / 4.44 / 4.10   fails AA on both greys
+       was  --ink4 #847E77 -> 4.01 / 3.71 / 3.43   fails AA on all three
+       now  --ink3 #655E59 -> 6.37 / 5.89 / 5.44
+       now  --ink4 #6E6762 -> 5.56 / 5.14 / 4.75
+
+     --ink4 alone is used 92 times in the CRM, so the old value meant most
+     secondary text in the CRM was below AA. Both stay the same warm grey and
+     keep the same step between them; they are simply dark enough now. */
+  --ink:#1C1917; --ink2:#44403C; --ink3:#655E59; --ink4:#6E6762;
   --gold:#B45309; --gold-bg:#FEF3C7; --gold-lt:#FFFBEB;
   --green:#15803D; --green-bg:#DCFCE7;
   /* --amber was byte-identical to --gold, which made "you selected this" and
@@ -20,6 +31,18 @@
   --sans:'Inter',system-ui,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
+/* ═══════ hidden MEANS HIDDEN ═══════
+   The `hidden` attribute is only a default of display:none in the UA
+   stylesheet, so ANY author rule that sets display beats it — and an id
+   selector beats it comfortably. #mapShell is declared `display: grid` and
+   carries `hidden` in the markup, which meant that in List view the map shell
+   was laid out anyway: a 420px empty white panel between the filters and the
+   properties, pushing the inventory below the fold. That is the blank box in
+   the owner's report, and it read as "where is the map".
+   One !important here is worth more than remembering to pair every id rule
+   with its own [hidden] twin. */
+[hidden] { display: none !important; }
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html{scroll-behavior:smooth;}
 body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;min-height:100vh;-webkit-font-smoothing:antialiased;}
@@ -54,7 +77,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .hstat{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:9px 18px;text-align:center;min-width:66px;transition:transform .15s;}
 .hstat:hover{transform:translateY(-2px);}
 .hstat-n{font-family:var(--serif);font-size:25px;font-weight:700;line-height:1;}
-.hstat-l{font-size:10.5px;color:var(--ink3);font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-top:3px;}
+.hstat-l{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-top:3px;}
 /* Ready and Upcoming keep the two status hues the cards use, so the counter
    and the card that answers it are the same colour. The total is just a
    total. */
@@ -73,7 +96,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .mfilter-toggle{display:none;}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 .fgroup{display:flex;gap:6px;flex-wrap:wrap;}
-.fbtn{font-size:12.5px;font-weight:600;padding:6px 15px;border-radius:20px;border:1.5px solid var(--border);background:transparent;color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
+.fbtn{font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:20px;border:1.5px solid var(--border);background:transparent;color:var(--ink2);cursor:pointer;transition:all .15s;white-space:nowrap;}
 .fbtn:hover{border-color:var(--ink);color:var(--ink);}
 .fbtn.at{border-color:var(--ink);background:var(--ink);color:#fff;}
 .fbtn.srtm.at{border-color:var(--green);background:var(--green);color:#fff;}
@@ -82,7 +105,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .fdiv{width:1px;height:20px;background:var(--border);margin:0 4px;flex-shrink:0;}
 .ctrl-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .sel-wrap{position:relative;}
-.sortsel{appearance:none;-webkit-appearance:none;font-family:var(--sans);font-size:12.5px;font-weight:600;padding:7px 30px 7px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2378716C' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;}
+.sortsel{appearance:none;-webkit-appearance:none;font-family:var(--sans);font-size:12.5px;font-weight:600;padding:8px 30px 8px 13px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);color:var(--ink2);cursor:pointer;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2378716C' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;}
 .sortsel:focus{border-color:var(--ink);}
 
 /* ── GRID ── */
@@ -100,7 +123,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .card-bar.uc{background:var(--amber);}
 .card-body{padding:16px 17px 14px;flex:1;display:flex;flex-direction:column;cursor:pointer;}
 .card-r1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
-.card-code-inline{font-family:'IBM Plex Mono','SF Mono',Menlo,monospace;font-size:0.82em;font-weight:700;letter-spacing:.04em;color:var(--ink3);}
+.card-code-inline{font-family:'IBM Plex Mono','SF Mono',Menlo,monospace;font-size:0.88em;font-weight:700;letter-spacing:.04em;color:var(--ink3);}
 .card-name{font-family:var(--serif);font-size:18px;font-weight:700;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .card-loc{font-size:12.5px;color:var(--ink3);margin-top:4px;display:flex;align-items:center;gap:4px;}
 .card-actions{display:flex;gap:5px;flex-shrink:0;}
@@ -108,26 +131,39 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .card-action-btn:hover{border-color:var(--ink);color:var(--ink);transform:scale(1.08);}
 .card-star.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold);}
 .badges{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;}
-.badge{font-weight:700;font-size:11px;padding:3px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;}
+.badge{font-weight:700;font-size:11.5px;padding:3px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;}
 /* Status is the one coloured signal on a card. */
 .bg{background:var(--green-bg);color:var(--green);} .ba{background:var(--amber-bg);color:var(--amber);}
 /* The configuration badge used to be blue for flats, purple for villas and
    grey for plots — three hues encoding something the badge next to it already
    spells out. All three are now the same neutral pill. */
 .bb,.bp,.bs{background:var(--bg);color:var(--ink2);border:1px solid var(--border);}
-.price-row{display:flex;justify-content:space-between;align-items:flex-end;gap:8px;margin-bottom:12px;padding:11px 13px;background:var(--bg);border:1px solid var(--border);border-radius:10px;}
+.price-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:12px;padding:11px 13px;background:var(--bg);border:1px solid var(--border);border-radius:10px;}
 .price-main{font-family:var(--serif);font-size:21px;font-weight:600;color:var(--ink);line-height:1;}
-.price-lbl{font-size:10.5px;color:var(--ink3);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px;}
-.price-psf{font-size:11.5px;color:var(--ink2);text-align:right;font-weight:600;}
+/* A multi-tier price is a paragraph, not a headline. Set as one it took five
+   lines of 21px serif and dragged every card in the row to its height. */
+.price-main.long{font-size:14px;line-height:1.35;font-weight:600;
+  display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.price-main-wrap{min-width:0;flex:1 1 auto;}
+.price-lbl{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px;}
+/* "8,899" on its own said nothing — it sat unlabelled in the corner of the
+   price box and read like a stray figure. The values are too varied to
+   normalise (they include "GF-5275" and "5000-5300"), so the field is
+   labelled instead of rewritten. */
+.price-psf{font-size:12.5px;color:var(--ink2);text-align:right;font-weight:600;flex:0 0 auto;white-space:nowrap;}
+.price-psf .price-lbl{margin-bottom:2px;}
 .card-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
 .cst{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:7px 10px;}
-.cst-l{font-size:10px;color:var(--ink3);font-weight:700;letter-spacing:.05em;text-transform:uppercase;}
+.cst-l{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.05em;text-transform:uppercase;}
 .cst-v{font-size:13px;color:var(--ink2);font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .card-foot{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;align-items:center;margin-top:auto;}
 .card-bldr{font-size:12px;color:var(--ink3);font-weight:600;display:flex;align-items:center;gap:5px;}
 .card-bldr::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--border2);}
 .card-cmp{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink3);font-weight:600;cursor:pointer;user-select:none;}
-.card-cmp input{cursor:pointer;width:15px;height:15px;accent-color:var(--gold);}
+.card-cmp input{cursor:pointer;width:18px;height:18px;accent-color:var(--gold);}
+/* The label is the target, so give it enough vertical room to be tapped
+   without magnifying the card. */
+.card-cmp{min-height:30px;}
 .card-cta{display:flex;gap:7px;padding:0 17px 15px;}
 .cta-btn{flex:1;padding:9px;border-radius:9px;font-size:12.5px;font-weight:700;cursor:pointer;text-decoration:none;text-align:center;transition:all .15s;border:1.5px solid transparent;display:flex;align-items:center;justify-content:center;gap:5px;}
 .cta-call{background:var(--ink);color:#fff;}
@@ -415,7 +451,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .stats-g{grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;}
   .stat-b{padding:9px 8px;border-radius:10px;}
   .stat-b-v{font-size:16px;}
-  .stat-b-l{font-size:9.5px;margin-top:2px;letter-spacing:.04em;}
+  .stat-b-l{font-size:10.5px;margin-top:2px;letter-spacing:.04em;}
   /* A 70-character name or a price with a sentence after it is real sheet data.
      Two lines of it is context; six lines is the whole screen — the full value
      is still in Specifications and in the title attribute. */
@@ -451,7 +487,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
   .hstats{display:flex;gap:5px;flex-shrink:0;}
   .hstats .hstat{padding:4px 8px;min-width:0;}
   .hstats .hstat-n{font-size:16px;}
-  .hstats .hstat-l{font-size:9px;letter-spacing:.04em;}
+  /* The letter-spacing goes rather than the size: READY / UPCOMING / TOTAL
+     still fit their pills at 11.5px without it. */
+  .hstats .hstat-l{font-size:11.5px;letter-spacing:0;}
 
   /* filters + sort collapse behind a single toggle */
   .mfilter-toggle{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px;border-radius:12px;border:1.5px solid var(--border);background:var(--white);font-family:var(--sans);font-weight:600;font-size:14px;color:var(--ink2);cursor:pointer;margin-bottom:0;}
@@ -625,7 +663,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .res-chip.have{background:var(--green-bg);color:var(--green);border-color:#BBF7D0;}
 .res-chip.miss{background:var(--bg);color:var(--ink4);border-color:var(--border);opacity:.65;}
 .card-res{display:flex;gap:3px;}
-.card-res .res-chip{font-size:10.5px;padding:2px 5px;border-radius:6px;filter:grayscale(1);}
+.card-res .res-chip{font-size:12px;padding:2px 5px;border-radius:6px;filter:grayscale(1);}
 .card-res .res-chip.have{background:var(--bg);color:var(--ink2);border-color:var(--border2);opacity:1;}
 .card-res .res-chip.miss{opacity:.4;}
 .dp-maplink{font-size:12.5px;font-weight:700;color:var(--blue);text-decoration:none;white-space:nowrap;}
@@ -774,7 +812,18 @@ body.adv-open{overflow:hidden;}
 
 @media(max-width:700px){
   .srch-row{flex-wrap:wrap;}
-  .adv-btn{width:100%;justify-content:center;padding:10px;}
+  /* Was width:100%, which put "Client brief" and "Advanced" on a row each
+     and made the search block 138px tall on a 390px screen. They are two
+     short labels and they fit side by side on one row.
+
+     But they have to share that row with EACH OTHER, not with the search
+     box: letting all three flex on one line squeezed the input down to about
+     105px, showing "Try: 3" and nothing else. The search field is the main
+     control on this page, so it keeps a full line of its own and the two
+     buttons split the one below it. */
+  .srch-row{flex-wrap:wrap;}
+  .srch-row .srch-wrap{flex:1 1 100%;}
+  .adv-btn{flex:1 1 0;min-width:0;justify-content:center;padding:10px;}
   .adv-sheet{width:100%;top:6vh;border-radius:18px 18px 0 0;}
   .adv-hd{padding:16px 16px 12px;border-radius:18px 18px 0 0;}
   .adv-body{padding:14px 16px 18px;}
@@ -977,4 +1026,54 @@ body.adv-open{overflow:hidden;}
   .controls:not(.mobile-open) .ctrl-right > :not(.mv-modes) { display: none; }
   /* The toggle keeps its own row above it. */
   .mfilter-toggle { margin-bottom: 0; }
+}
+
+/* ═══════ PHONE: THE TOGGLE AND THE VIEW SWITCH SHARE A ROW ═══════
+   "Filters & Sort" had a row and the collapsed List/Map switch had another,
+   41px + 42px of a 844px screen for two controls with a screen's width of
+   space between them. Laying the header out as a wrapping flex row lets them
+   sit on one line: filters left, view right, which is also the order an agent
+   reads them in.
+
+   Everything else in the header still takes a full line — declared as the
+   default here so a new header row does not have to remember to. */
+@media (max-width: 720px) {
+  #hdr { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  #hdr > * { flex: 1 1 100%; min-width: 0; }
+  #hdr > .mfilter-toggle { flex: 1 1 auto; width: auto; margin-top: 10px; }
+  #hdr > .controls:not(.mobile-open) { flex: 0 0 auto; width: auto; margin-top: 10px; margin-left: 8px; }
+  #hdr > .controls:not(.mobile-open) .ctrl-right { width: auto; }
+  /* Opening the filters puts them back on their own full-width line. */
+  #hdr > .controls.mobile-open { flex: 1 1 100%; }
+}
+
+/* ═══════ PHONE: THE HEADER BLOCK GETS TWO LINES ═══════
+   At 390px there is not room for the logo, "3 PIN Realty" and three count
+   pills on one line. Squeezing them produced "3 PIN Rea" with a pill sitting
+   on top of the name, and forcing the name wide with nowrap pushed the page
+   6px into a sideways scroll. Both were attempts to win an argument about
+   space that cannot be won, so the row becomes two.
+
+   The counts then go from stacked pills to one slim strip — number beside
+   label instead of above it. Stacked, that second line cost 93px; inline it
+   costs 28px, for exactly the same three numbers. */
+@media (max-width: 430px) {
+  .hdr-top { flex-wrap: wrap; gap: 9px; }
+  /* `auto`, not 100%: at 100% the brand claimed the whole line and left the
+     menu button sitting by itself on the row above it, which cost 45px and
+     looked like a mistake. Toggle and brand together are about 214px. */
+  .brand { flex: 1 1 auto; gap: 10px; }
+  .brand-name { font-size: 20px; white-space: nowrap; }
+  .brand-sub { font-size: 10.5px; letter-spacing: .04em; }
+
+  .hstats { flex: 1 1 100%; display: flex; gap: 7px; }
+  .hstats .hstat {
+    flex: 1 1 0; min-width: 0;
+    display: flex; align-items: baseline; justify-content: center; gap: 5px;
+    padding: 5px 6px; border-radius: 9px;
+  }
+  .hstats .hstat-n { font-size: 15px; line-height: 1.1; }
+  .hstats .hstat-l { font-size: 11.5px; letter-spacing: 0; margin-top: 0; }
+}
+}
 }

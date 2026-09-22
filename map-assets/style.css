@@ -51,8 +51,12 @@ body.mv-dragging #mapPane { pointer-events: none; }
 }
 .mv-mode {
   font: inherit; font-size: 12.5px; font-weight: 600;
-  padding: 6px 15px; border: 0; border-radius: 999px;
-  background: transparent; color: var(--ink3); cursor: pointer;
+  /* 8px to stand 32px tall, matching the filter chips it sits beside. */
+  padding: 8px 15px; border: 0; border-radius: 999px;
+  /* --ink2, not --ink3: this is the unselected half of a two-state control,
+     and on --bg2 the muted grey came to 4.1:1. An agent has to be able to
+     read the view they are NOT currently in. */
+  background: transparent; color: var(--ink2); cursor: pointer;
 }
 .mv-mode:hover { color: var(--ink); }
 .mv-mode.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.07); }
@@ -76,7 +80,7 @@ body.mv-dragging #mapPane { pointer-events: none; }
 .mv-pb-n b { color: var(--ink); font-weight: 700; }
 .mv-pb-ok { color: var(--green); font-weight: 600; }
 .mv-pb-b {
-  font: inherit; font-size: 11px; font-weight: 600;
+  font: inherit; font-size: 12px; font-weight: 600;
   padding: 3px 9px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border2); background: var(--card); color: var(--ink2);
 }
@@ -427,7 +431,7 @@ body.mv-dragging #mapPane { pointer-events: none; }
 .gm-cl-t b { font-size: 11.5px; font-weight: 650; color: var(--ink, #1c1917); white-space: nowrap; }
 .gm-cl-t i {
   font-family: var(--serif, Georgia, serif); font-style: normal;
-  font-size: 10.5px; color: var(--ink3, #78716c); white-space: nowrap;
+  font-size: 11.5px; color: var(--ink3, #655E59); white-space: nowrap;
 }
 
 /* ═══════ NARROW ═══════

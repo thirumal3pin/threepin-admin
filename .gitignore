@@ -11,3 +11,14 @@ backups/
 
 # Screenshot output from tests/*-preview.mjs — regenerated on demand.
 tests/out/
+
+# Preview screenshot folders. Most previews take an out-dir argument and
+# default to tests/out/, but a few default to the repo root — ignored here
+# rather than leaving them to be committed by accident.
+attio-preview/
+conv-out/
+dash-out/
+pipeline-preview/
+property-mobile/
+scroll-out/
+tailortalk-preview/

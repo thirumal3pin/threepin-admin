@@ -456,6 +456,16 @@ function runBrief(){
 }
 
 // ═══════ GRID ═══════
+// Areas arrive from the sheet both ways — "2505 Sq.Ft" and a bare "1161-2960"
+// — so the column disagreed with itself. A value that is nothing but digits,
+// separators and a range dash gets the unit; anything else (already has one,
+// or says "GF-5275") is left exactly as the sheet has it, because guessing at
+// those would be inventing a unit for data that means something else.
+function withSqft(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (!t) return '—';
+  return /^[\d.,]+(?:\s*[-–—to]+\s*[\d.,]+)?$/i.test(t) ? t + ' Sq.Ft.' : t;
+}
 function renderGrid(){
   const grid = document.getElementById('pgrid');
   const noRes = document.getElementById('noRes');
@@ -482,6 +492,7 @@ function renderGrid(){
     const fav = favorites.includes(p.id);
     const sel = selectedProperties.has(p.id);
     const isSoldOut = !!p.soldOut;
+    const priceLong = String(p.startingPrice || '').length > 28;
     const pType = p.type||'';
     const typeBadge = pType.includes('Plot')?'bs':pType.includes('Villa')||pType.includes('House')?'bp':'bb';
     return `
@@ -491,7 +502,7 @@ function renderGrid(){
       <div class="card-body" onclick="openDetail('${e.id}')">
         <div class="card-r1">
           <div>
-            <div class="card-name">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
+            <div class="card-name" title="${e.name}">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
             <div class="card-loc">📍 ${e.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
@@ -504,14 +515,14 @@ function renderGrid(){
           <span class="badge ${typeBadge}">${e.config}</span>
         </div>
         <div class="price-row">
-          <div>
+          <div class="price-main-wrap">
             <div class="price-lbl">Starting Price</div>
-            <div class="price-main">${e.startingPrice}</div>
+            <div class="price-main${priceLong?' long':''}"${priceLong?` title="${e.startingPrice}"`:''}>${e.startingPrice}</div>
           </div>
-          ${e.pricePerSqft?`<div class="price-psf">${e.pricePerSqft}</div>`:''}
+          ${e.pricePerSqft?`<div class="price-psf"><div class="price-lbl">Per SqFt</div>${e.pricePerSqft}</div>`:''}
         </div>
         <div class="card-stats">
-          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${e.sqftRange||'—'}</div></div>
+          <div class="cst"><div class="cst-l">Area</div><div class="cst-v">${withSqft(e.sqftRange)}</div></div>
           <div class="cst"><div class="cst-l">Type</div><div class="cst-v">${e.type}</div></div>
         </div>
         ${matchWhy(p)}

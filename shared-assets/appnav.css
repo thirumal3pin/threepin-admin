@@ -36,7 +36,7 @@ body.rail-on #appRail { display: flex; }
   --rl-line: var(--border, #e4e0d8);
   --rl-ink: var(--ink, #1c1917);
   --rl-ink-2: var(--ink2, #44403c);
-  --rl-ink-3: var(--ink3, #78716c);
+  --rl-ink-3: var(--ink3, #655E59);
   --rl-accent: var(--gold, #b45309);
   --rl-hover: color-mix(in srgb, var(--rl-ink) 6%, transparent);
   --rl-on-bg: color-mix(in srgb, var(--rl-accent) 12%, transparent);
@@ -219,7 +219,7 @@ body.rail-on #appRail { display: flex; }
   color: var(--ink2, var(--ink-2, #44403c)); cursor: pointer;
   transition: background .12s, border-color .12s, color .12s;
 }
-.rail-toggle:hover { border-color: var(--ink3, var(--ink-3, #78716c)); color: var(--ink, #1c1917); }
+.rail-toggle:hover { border-color: var(--ink3, var(--ink-3, #655E59)); color: var(--ink, #1c1917); }
 .rail-toggle svg { width: 17px; height: 17px; display: block; }
 
 /* ═══════ DESKTOP ═══════ */
