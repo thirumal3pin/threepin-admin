@@ -323,7 +323,7 @@
           onmouseleave="PinMapView.hover(null,'list')">
         <div class="mv-row-1">
           ${p.propertyCode ? `<span class="mv-code">${esc(p.propertyCode)}</span>` : ''}
-          <span class="mv-nm">${esc(p.name || p.id)}</span>
+          <span class="mv-nm">${esc(p.name || p.location || 'Untitled property')}</span>
           <span class="mv-pr">${esc(core.priceRange(it.priceLo, it.priceHi))}</span>
         </div>
         <div class="mv-row-2">
