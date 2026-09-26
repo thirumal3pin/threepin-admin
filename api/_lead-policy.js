@@ -16,7 +16,7 @@
 //   • Vendors, collaborations and unknown custom columns are never touched.
 //   • Nothing here touches updatedAt: that field means "a person last worked this lead".
 
-import { stageKeyOf, stageKindOf, stageForKey, stageDef, hasKeyedPipeline, reachedUpdate, LADDER, LOST_REASONS, HOLD_REASONS } from '../crm-assets/pipeline.js';
+import { stageKeyOf, stageKindOf, stageForKey, stageDef, hasKeyedPipeline, reachedUpdate, visitOf, VISIT_STATUS, LADDER, LOST_REASONS, HOLD_REASONS } from '../crm-assets/pipeline.js';
 import { isBusinessLead } from '../crm-assets/leadAttention.js';
 
 const MIN = 60000;
@@ -66,7 +66,7 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
   const prevAi = lead.ai || {};
   const history = [];
   const patch = {};
-  const result = { patch, history, moved: null, suggested: null, followUp: null, skipped: null };
+  const result = { patch, history, moved: null, suggested: null, followUp: null, siteVisit: null, skipped: null };
 
   // ── The verdict itself, always recorded ──
   const prevNext = prevAi.next || null;
@@ -227,6 +227,47 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
     history.push({ type: 'stage', text: `🤖 Moved from <b>${esc(fromName)}</b> to <b>${esc(toStage.name)}</b>${esc(reason)} — ${esc(verdict.evidence)}` });
   }
 
+  // ── The site visit ──
+  //
+  // Its own date, kept apart from the follow-up: the follow-up is when we ring,
+  // the visit is when everyone stands on the property, and they are rarely the
+  // same day. Written from the verdict, so a rescheduling in the chat — or in a
+  // team note, which the case file carries — moves the VIEWING and not merely
+  // the call about it.
+  //
+  // A date a PERSON set stands until the lead says something new: the same rule
+  // the column follows, for the same reason. An agent who takes a call and
+  // types in Saturday 11:00 must not lose it to the next reading of a chat that
+  // never mentioned Saturday.
+  const nv = verdict.visit || {};
+  const visitHeld = humanSetter(lead.siteVisitBy) && (lead.siteVisitSetAt || 0) >= lastLeadMsg;
+  if (!visitHeld) {
+    // No new date is not the same as no date. The AI often reports a visit as
+    // still "requested" without repeating a time it has already given us, and
+    // wiping the day off the lead every time it did that would be worse than
+    // having no field at all. Only a cancellation clears the date.
+    const at = nv.at || (nv.status === 'cancelled' ? null : (lead.siteVisitAt || null));
+    const status = nv.status || 'none';
+    const property = nv.property || lead.siteVisitProperty || null;
+    const wasAt = lead.siteVisitAt || null;
+    const wasStatus = lead.siteVisitStatus || 'none';
+    if (at !== wasAt || status !== wasStatus || property !== (lead.siteVisitProperty || null)) {
+      Object.assign(patch, { siteVisitAt: at, siteVisitStatus: status, siteVisitProperty: property, siteVisitBy: 'ai', siteVisitSetAt: now });
+      result.siteVisit = at;
+      // Only the date and the standing are worth a line on the timeline — a
+      // property code arriving late is bookkeeping, not news.
+      if (at !== wasAt || status !== wasStatus) {
+        const said = VISIT_STATUS[status] ? VISIT_STATUS[status].toLowerCase() : 'not planned';
+        const when = at ? ` — <b>${esc(fmtIst(at))}</b>` : '';
+        const from = wasAt && at && wasAt !== at ? ` (was ${esc(fmtIst(wasAt))})` : '';
+        history.push({ type: 'visit', text: `🤖 Site visit ${esc(said)}${when}${from}${property ? ' · ' + esc(property) : ''}` });
+      }
+    }
+  }
+  // What the visit is once this run's own decision is folded in — including a
+  // person's date, when this run left it alone.
+  const visit = visitOf({ ...lead, ...patch });
+
   // ── The follow-up ──
   const finalKey = moveTo || curKey;
   const finalKind = finalKey ? stageDef(finalKey) && stageDef(finalKey).kind : curKind;
@@ -236,8 +277,11 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
       const due = ai.next.dueAt || defaultDue(ai.next.kind, now);
       candidates.push({ at: due, note: ai.next.action });
     }
-    if (ai.visit && ai.visit.at && ['requested', 'scheduled'].includes(ai.visit.status) && ai.visit.at > now + 30 * MIN) {
-      candidates.push({ at: Math.max(ai.visit.at - 2 * HOUR, now + 15 * MIN), note: `Confirm the site visit${ai.visit.property ? ' to ' + ai.visit.property : ''} at ${fmtIst(ai.visit.at)}` });
+    // Two hours before the viewing, to confirm it — read from the visit field, so
+    // a date an agent fixed by hand raises the reminder call just as one the AI
+    // read out of the chat does.
+    if (visit.at && ['requested', 'scheduled'].includes(visit.status) && visit.at > now + 30 * MIN) {
+      candidates.push({ at: Math.max(visit.at - 2 * HOUR, now + 15 * MIN), note: `Confirm the site visit${visit.property ? ' to ' + visit.property : ''} at ${fmtIst(visit.at)}` });
     }
     if (finalKey === 'on_hold' && (patch.holdUntil || lead.holdUntil)) {
       candidates.push({ at: patch.holdUntil || lead.holdUntil, note: 'Revisit — the lead asked to be contacted around now' });

@@ -161,6 +161,68 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('the note saves', saved.notes === 1);
   ok('...with the follow-up set for later the same day', saved.future && saved.sameDay, JSON.stringify(saved));
 
+  // ── THE SITE VISIT, WHICH IS NOT THE FOLLOW-UP ──
+  //
+  // The viewing used to live inside the AI's verdict: no person could edit it,
+  // and every AI run rewrote it. On the live board that left 76 leads carrying a
+  // visit, 22 of them with a day that had already passed and was still open, and
+  // not one visit anywhere in the future. A date nobody can move is a date that
+  // rots where the AI last left it.
+  const row = await page.evaluate(() => {
+    const r = document.querySelector('.st-row.sv');
+    return { there: !!r, text: r ? r.textContent.replace(/\s+/g, ' ').trim() : '',
+      btn: r ? (r.querySelector('button') || {}).textContent : null };
+  });
+  ok('the lead has a site-visit row of its own', row.there, row.text);
+  ok('...offering a way to set one when there is none', /Set a date/.test(row.btn || ''), row.btn);
+
+  await page.click('.st-row.sv button');
+  await page.waitForTimeout(250);
+  const editor = await page.evaluate(() => {
+    const ids = ['svDate', 'svTime', 'svStatus', 'svProp'];
+    const missing = ids.filter(i => !document.getElementById(i));
+    const box = document.querySelector('.st-row.sv .sv-edit');
+    const b = box ? box.getBoundingClientRect() : null;
+    return { missing, fits: b ? b.right <= innerWidth + 2 : false,
+      taps: ids.map(i => { const e = document.getElementById(i); return e ? Math.round(e.getBoundingClientRect().height) : 0; }) };
+  });
+  ok('...which opens a date, a time, where it stands and the property', editor.missing.length === 0, editor.missing.join(','));
+  ok('...without spilling off the side', editor.fits);
+  ok('...with controls big enough to tap', Math.min(...editor.taps) >= 32, editor.taps.join(','));
+
+  // A day with no time is refused for a fixed visit, because a viewing nobody
+  // has a time for is a viewing nobody turns up to.
+  const refused = await page.evaluate(() => {
+    document.getElementById('svStatus').value = 'scheduled';
+    document.getElementById('svDate').value = '';
+    saveVisitEdit('B1');
+    const e = document.getElementById('svErr');
+    return { shown: !!(e && e.classList.contains('show')), saved: !!(leads.find(x => x.id === 'B1').siteVisitAt) };
+  });
+  ok('a fixed visit with no day is refused, and says why', refused.shown && !refused.saved, JSON.stringify(refused));
+
+  const fixed = await page.evaluate(() => {
+    const d = new Date(Date.now() + 3 * 86400000);
+    const pad = n => String(n).padStart(2, '0');
+    document.getElementById('svDate').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    document.getElementById('svTime').value = '11:00';
+    document.getElementById('svStatus').value = 'scheduled';
+    document.getElementById('svProp').value = 'TNAG0001';
+    saveVisitEdit('B1');
+    const l = leads.find(x => x.id === 'B1');
+    const w = window.__saved[window.__saved.length - 1];
+    return { at: l.siteVisitAt, status: l.siteVisitStatus, prop: l.siteVisitProperty, by: l.siteVisitBy,
+      persisted: !!(w && w.siteVisitAt), followUpAt: l.followUpAt || null,
+      shown: (document.querySelector('.st-row.sv .sv-val') || {}).textContent || '' };
+  });
+  ok('an agent can fix the visit date by hand', !!fixed.at && fixed.status === 'scheduled', JSON.stringify(fixed));
+  ok('...recorded as theirs, so the AI leaves it alone', /@/.test(fixed.by || ''), fixed.by);
+  ok('...and it reaches the database', fixed.persisted);
+  ok('...shown on the row afterwards', /TNAG0001/.test(fixed.shown), fixed.shown);
+  // The whole point of the field: it is a different date from the follow-up.
+  ok('...and it did NOT become the follow-up date', fixed.followUpAt !== fixed.at,
+    `visit ${fixed.at} vs call ${fixed.followUpAt}`);
+
   await page.screenshot({ path: join(OUT, (viewport.width === 390 ? 'phone' : 'laptop') + '.png') });
   await page.context().close();
 }

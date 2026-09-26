@@ -4,7 +4,7 @@
 // the DAY: the visits that are booked, the calls that are due, and the things
 // a colleague has asked of you, in the order they come at you.
 //
-// Nothing here is a new store. A visit is lead.ai.visit, a call due is
+// Nothing here is a new store. A visit is the lead's site-visit field, a call due is
 // lead.followUpAt, and "someone asked you for this" is an open @mention on a
 // lead — all of it already synced, already live, already kept right by the
 // automation. That is deliberate: a daily list built on a second copy of the
@@ -30,6 +30,10 @@
     var M = window.crmMentions;
     return M && email ? M.displayName(email) : (email || '');
   }
+  // The lead's own site-visit field, falling back to the older AI verdict for
+  // leads not re-read since the field existed. This file is a plain script, so
+  // the shared module reaches it through the bridge crm.html sets up.
+  function visitOf(l) { return window.crmPipeline.visitOf(l); }
   function closedLead(l) {
     var key = typeof stageKeyOfId === 'function' ? stageKeyOfId(l.stageId) : null;
     return key === 'won' || key === 'lost';
@@ -40,10 +44,11 @@
   function visitsToday() {
     var from = startOfToday(), to = endOfToday();
     return (leads || []).filter(function (l) {
-      var v = l.ai && l.ai.visit;
-      return v && v.at && v.at >= from && v.at <= to && v.status !== 'done' && v.status !== 'cancelled' && !closedLead(l);
+      var v = visitOf(l);
+      return v.at && v.at >= from && v.at <= to && v.status !== 'done' && v.status !== 'cancelled' && !closedLead(l);
     }).map(function (l) {
-      return { kind: 'visit', lead: l, at: l.ai.visit.at, property: l.ai.visit.property || '' };
+      var v = visitOf(l);
+      return { kind: 'visit', lead: l, at: v.at, property: v.property || '' };
     }).sort(function (a, b) { return a.at - b.at; });
   }
 

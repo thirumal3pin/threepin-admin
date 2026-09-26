@@ -486,6 +486,25 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .st-step .st-due{font-weight:500;}
 .st-step.team{border-color:var(--blue-line);}
 .st-step.overdue{border-color:var(--red-line);background:var(--red-bg);color:var(--red);font-weight:600;}
+/* ── The site visit row: a value, who last moved it, and a way to move it ── */
+.st-row.sv{grid-template-columns:92px minmax(0,1fr) auto;align-items:center;}
+.sv-val{min-width:0;}
+.sv-val.none{color:var(--ink4);}
+.sv-by{display:block;font-size:11px;color:var(--ink4);margin-top:1px;}
+/* Editing takes the full width of the row rather than squeezing four controls
+   into the value column, where the date input alone would be clipped. */
+.st-row.sv.editing{grid-template-columns:92px minmax(0,1fr);align-items:start;}
+.sv-edit{display:flex;flex-direction:column;gap:8px;min-width:0;}
+.sv-fields{display:flex;flex-wrap:wrap;gap:6px;}
+.sv-fields input,.sv-fields select{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r2);background:var(--bg);color:var(--ink);min-height:34px;}
+.sv-fields input[type=date]{flex:0 0 auto;}
+.sv-fields input[type=time]{flex:0 0 auto;}
+.sv-fields select{flex:0 0 auto;}
+.sv-fields input[type=text]{flex:1 1 120px;min-width:0;}
+.sv-acts{display:flex;gap:6px;flex-wrap:wrap;}
+.sv-acts .tt-btn{margin-top:0;}
+.sv-err{display:none;font-size:12px;color:var(--red);}
+.sv-err.show{display:block;}
 .st-attn{display:flex;flex-direction:column;gap:6px;margin:10px 0;}
 .st-item{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:9px 12px;border-radius:var(--r2);background:var(--card);border:1px solid var(--border);box-shadow:inset 3px 0 0 var(--ink4);}
 .st-item.critical{background:var(--red-bg);border-color:var(--red-line);box-shadow:inset 3px 0 0 var(--red);}
@@ -1418,6 +1437,11 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   .tt-msg{max-width:90%;}
   .tt-ev{grid-template-columns:1fr;gap:1px;}
   .st-step,.st-row,.st-step.with-acts{grid-template-columns:minmax(0,1fr);gap:6px;align-items:start;}
+  /* On a phone every control gets its own full-width line — a date and a time
+     side by side leave neither wide enough to read what is in it. */
+  .st-row.sv,.st-row.sv.editing{grid-template-columns:minmax(0,1fr);}
+  .sv-fields{flex-direction:column;}
+  .sv-fields input,.sv-fields select{width:100%;min-height:38px;}
   .st-step .st-item-acts{justify-content:flex-start;width:100%;}
   .kcol-rule{display:none;}
   .tt-tab{padding:9px 10px 10px;font-size:12.5px;}

@@ -14,7 +14,7 @@
 // and the AI never move it.
 // ═══════════════════════════════════════════════════════════════════════
 
-import { stageKeyOf, stageKindOf, stageDef } from './pipeline.js';
+import { stageKeyOf, stageKindOf, stageDef, visitOf } from './pipeline.js';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -132,7 +132,9 @@ export function computeAttention(lead, ctx = {}) {
   // ── Stage-specific checks, the way a sales manager reviews a board ──
   const inStageSince = lead.stageChangedAt || lead.createdAt || 0;
   const lastActivity = Math.max(touched, (tt && tt.lastMessageAt) || 0, (tt && tt.lastReplyAt) || 0, lead.stageChangedAt || 0);
-  const visit = ai && ai.visit;
+  // The visit is the lead's own field now, not a corner of the AI's verdict, so a date an
+  // agent fixed by hand raises these the same as one the AI read out of the chat.
+  const visit = visitOf(lead);
 
   if (key === 'visit_pending') {
     if (visit && visit.at && visit.at < now - 3 * HOUR && touched < visit.at) {

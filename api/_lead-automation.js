@@ -123,7 +123,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   if (!apply) {
     const d = decideLeadChanges({ lead, verdict, stages, now, run: { model: runRecord.model, chatLen }, enquiryTypes });
     const { ai, ...fields } = d.patch;
-    return { leadId, ok: true, preview: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, fields, links: linksToAdd(lead, candidates, known), history: d.history.map(h => h.text), usage: runRecord.usage };
+    return { leadId, ok: true, preview: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped, fields, links: linksToAdd(lead, candidates, known), history: d.history.map(h => h.text), usage: runRecord.usage };
   }
 
   // Decide again against the lead as it is at write time: a person may have moved it while the
@@ -144,9 +144,9 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     t.set(ref.collection('aiRuns').doc(rid), {
       ...runRecord, ok: true,
       verdict: { stage: verdict.stage, confidence: verdict.confidence, intent: verdict.intent, evidence: verdict.evidence, next: verdict.next, visit: verdict.visit, line: verdict.line },
-      moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped
+      moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped
     });
-    return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, skipped: d.skipped, links, usage: runRecord.usage };
+    return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped, links, usage: runRecord.usage };
   });
   return summary;
 }

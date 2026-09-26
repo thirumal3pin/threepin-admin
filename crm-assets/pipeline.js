@@ -244,3 +244,56 @@ export function planPipelineMigration(stages, leads) {
   const removed = oldStages.filter(s => !keptIds.has(s.id)).map(s => ({ id: s.id, name: s.name }));
   return { stages: newStages, moves, removed };
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// THE SITE VISIT, WHICH IS NOT THE FOLLOW-UP
+//
+// Two dates that were one. The follow-up is when WE ring; the site visit is
+// when everyone stands on the property. They are rarely the same day — you
+// call on Thursday to confirm a Saturday viewing — and the CRM only ever had
+// the calling date. The viewing lived inside the AI's own verdict, at
+// lead.ai.visit, which no person could edit and every AI run rewrote whole.
+//
+// It is the lead's own field now — siteVisitAt, siteVisitStatus,
+// siteVisitProperty — with siteVisitBy and siteVisitSetAt recording who last
+// moved it. That is what lets the AI reschedule it from the conversation or a
+// team note, and an agent reschedule it by hand, without either wiping the
+// other: the policy leaves a person's date alone until the lead says
+// something new, the same rule the column follows.
+//
+// ai.visit is still READ, for leads the AI last looked at before the field
+// existed. Nothing writes it any more.
+// ═══════════════════════════════════════════════════════════════════════
+
+export const VISIT_STATUS = {
+  requested: 'Asked for',
+  scheduled: 'Agreed',
+  done: 'Done',
+  cancelled: 'Cancelled'
+};
+
+const NO_VISIT = { at: null, status: 'none', property: null, by: null, setAt: 0 };
+
+/** The lead's site visit: its own fields when they exist, else the AI's older verdict. */
+export function visitOf(lead) {
+  if (!lead) return { ...NO_VISIT };
+  if (lead.siteVisitAt || lead.siteVisitStatus || lead.siteVisitBy) {
+    return {
+      at: lead.siteVisitAt || null,
+      // A date with no status is a visit somebody fixed a time for.
+      status: lead.siteVisitStatus || (lead.siteVisitAt ? 'scheduled' : 'none'),
+      property: lead.siteVisitProperty || null,
+      by: lead.siteVisitBy || null,
+      setAt: lead.siteVisitSetAt || 0
+    };
+  }
+  const v = (lead.ai && lead.ai.visit) || null;
+  if (!v) return { ...NO_VISIT };
+  return { at: v.at || null, status: v.status || 'none', property: v.property || null,
+    by: 'ai', setAt: (lead.ai && lead.ai.at) || 0 };
+}
+
+/** Is this visit still ahead of everyone — something to turn up to, rather than a record? */
+export function visitIsOpen(v) {
+  return !!(v && v.at && v.status !== 'done' && v.status !== 'cancelled');
+}

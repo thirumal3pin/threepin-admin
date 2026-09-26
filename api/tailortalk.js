@@ -267,8 +267,12 @@ async function aiLeadPost(request) {
   const db = getDb();
   const auto = await automationSettings(db, user.tenantId);
   try {
-    // A person asked for a fresh read, so it is made even if nothing new has been said.
-    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: claude(), model: auto.model, force: true, trigger: `recheck:${(user.email || '').split('@')[0]}` });
+    // The Re-check button asks for a fresh read, so it is made even if nothing new has been
+    // said. A note asks with force:false — the evidence key already covers the team's notes,
+    // so a note that says something new costs one read and a note that repeats costs nothing.
+    const force = body.force !== false;
+    const who = (user.email || '').split('@')[0];
+    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: claude(), model: auto.model, force, trigger: `${force ? 'recheck' : 'note'}:${who}` });
     return json({ ok: r.ok !== false, ...r });
   } catch (e) {
     console.error('ai-lead failed:', e);

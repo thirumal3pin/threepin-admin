@@ -1545,7 +1545,11 @@ function logNote(l, note){
   l.notes.push(note);
   l.noteCount = l.notes.length;
   l.lastNote = { text: note.text, createdAt: note.createdAt, by: note.by || null };
-  if(window.crmFirebase && window.crmFirebase.saveNote) window.crmFirebase.saveNote(l.id, note);
+  // Returned so a caller can wait for the note to LAND before asking the AI to
+  // re-read the lead: the server reads the notes subcollection, and a read that
+  // overtook the write would look at the lead without the note in it.
+  return (window.crmFirebase && window.crmFirebase.saveNote)
+    ? Promise.resolve(window.crmFirebase.saveNote(l.id, note)) : Promise.resolve();
 }
 function recomputeNoteMeta(l){
   const notes = (l.notes || []).slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -1681,7 +1685,7 @@ function addHistory(l, type, text){
   return event;
 }
 function historyIcon(type){
-  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬' }[type] || '•';
+  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', visit:'📍', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬' }[type] || '•';
 }
 
 // ═══════ TIMELINE — everything that happened to a lead, in one feed ═══════
@@ -1717,7 +1721,7 @@ function historyTags(h){
   if(h.by === 'AI' || text.startsWith('🤖')) tags.push('ai');
   if(h.by === 'TailorTalk' || h.type === 'tailortalk') tags.push('tailortalk');
   if(h.type === 'stage') tags.push('stage');
-  if(h.type === 'followup' || h.type === 'followup-removed' || h.type === 'followed-up') tags.push('followups');
+  if(h.type === 'followup' || h.type === 'followup-removed' || h.type === 'followed-up' || h.type === 'visit') tags.push('followups');
   if(!tags.length) tags.push('edits');
   return tags;
 }
@@ -1895,7 +1899,7 @@ function renderFollowUpSpotlight(l){
 // Two different dates, and the difference matters: when the visit is BOOKED
 // for, versus when the lead first asked for one. A visit asked for nine days
 // ago and still unbooked is the thing that goes cold.
-function visitAtOf(l){ return (l && l.ai && l.ai.visit && l.ai.visit.at) || null; }
+function visitAtOf(l){ return window.crmPipeline.visitOf(l).at; }
 function visitAskedAtOf(l){
   if(!l) return null;
   const sig = l.tt && l.tt.signals && l.tt.signals.site_visit;
@@ -2875,6 +2879,43 @@ async function recheckLead(id){
     if(cur && currentDetailId===id) renderStandSection(cur);
   }
 }
+// ═══════ A NOTE IS EVIDENCE, SO IT GETS READ ═══════
+//
+// The AI's case file has always carried the team's last eight notes. Nothing
+// ever ASKED it to look again. Every run was started by TailorTalk — a webhook,
+// the nightly sync, or somebody pressing Re-check — so an agent who took a
+// call and typed "he wants Saturday instead of Thursday" changed nothing at
+// all until the lead happened to send a WhatsApp message. For a lead typed in
+// by hand, that is never.
+//
+// Every note asks for a read now. Deliberately NOT forced: the evidence key in
+// _lead-ai.js already covers the notes, so a note that says something new costs
+// one read and a note that repeats what is known costs nothing.
+async function nudgeAiAfterNote(leadId){
+  const l = leads.find(x => x.id === leadId);
+  if(!l || isBusinessLead(l) || recheckingIds.has(leadId)) return;
+  recheckingIds.add(leadId);
+  if(currentDetailId === leadId) renderStandSection(l);
+  try{
+    const idToken = await window.crmAuth.getIdToken();
+    const res = await fetch('/api/tailortalk?action=ai-lead', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken }, body: JSON.stringify({ leadId, force: false }) });
+    const data = await res.json().catch(()=>({}));
+    // Quiet by design: they asked to save a note, not to run the AI. Only a real
+    // change to the lead is worth interrupting the work they were doing.
+    if(res.ok && data.ok !== false){
+      if(data.moved) showToast(`🤖 Moved to ${(window.crmPipeline.stageDef(data.moved.to)||{}).name} from your note`);
+      else if(data.siteVisit) showToast('🤖 Site visit updated from your note');
+      else if(data.followUp) showToast('🤖 Follow-up updated from your note');
+    }
+  } catch(e){
+    // The note is saved either way. A read that did not happen is not worth an
+    // error box over what they were actually doing.
+  } finally {
+    recheckingIds.delete(leadId);
+    const cur = leads.find(x => x.id === leadId);
+    if(cur && currentDetailId === leadId) renderStandSection(cur);
+  }
+}
 function markHandledUi(id, what){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
@@ -2888,8 +2929,132 @@ function markHandledUi(id, what){
   showToast('✓ Marked handled');
 }
 function markVisitedUi(id){
+  const l = leads.find(x => x.id === id);
   const stageId = stageIdForKey('visit_done');
   if(stageId) changeStage(id, stageId);
+  // Close the visit out as well. Moving the lead to Visit done while its visit
+  // row still reads "Agreed - 20 Sept" is the CRM contradicting itself on the
+  // same screen, and it leaves the attention rule asking "did the site visit
+  // happen?" about a visit somebody has just said happened.
+  if(l){
+    const v = window.crmPipeline.visitOf(l);
+    if(v.status !== 'done') writeVisit(l, v.at || Date.now(), 'done', v.property);
+  }
+}
+
+// ═══════ THE SITE VISIT — ITS OWN DATE, AND RESCHEDULABLE ═══════
+//
+// The follow-up is when WE ring. The site visit is when everyone stands on the
+// property. They are rarely the same day — you call on Thursday to confirm a
+// Saturday viewing — and until now only the calling date could be edited: the
+// viewing lived inside the AI's verdict, where no person could touch it and
+// every AI run rewrote it whole.
+//
+// Both ends work now. The AI moves it from the conversation or from a team
+// note, an agent moves it by hand here, and whoever moved it last is recorded,
+// so the policy can leave a person's date alone until the lead says something
+// new. "He rang and asked for Saturday instead" is one edit, not a note and a
+// hope that somebody reads it.
+//
+// There is deliberately no future-date rule, unlike the follow-up: a visit is
+// very often recorded AFTER it happened, which is the whole point of Done.
+let visitEditId = null;
+
+function visitRowHtml(l){
+  const P = window.crmPipeline;
+  const v = P.visitOf(l);
+  const said = [P.VISIT_STATUS[v.status] || '', v.property, v.at && fmtDue(v.at)].filter(Boolean).join(' · ');
+
+  if(visitEditId !== l.id){
+    const who = !said ? '' : v.by === 'ai' ? 'set by the AI' : v.by ? 'set by ' + (window.crmMentions.displayName(v.by) || v.by) : '';
+    return `<div class="st-row sv"><span class="st-label">Site visit</span>
+      <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}${who ? `<span class="sv-by">${escapeHtml(who)}</span>` : ''}</span>
+      <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Set a date'}</button></span></div>`;
+  }
+
+  const d = v.at ? new Date(v.at) : null;
+  const dv = d ? `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}` : '';
+  const tv = d ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '';
+  const opts = ['requested','scheduled','done','cancelled']
+    .map(k => `<option value="${k}"${v.status === k ? ' selected' : ''}>${escapeHtml(P.VISIT_STATUS[k])}</option>`).join('');
+  return `<div class="st-row sv editing"><span class="st-label">Site visit</span>
+    <div class="sv-edit">
+      <div class="sv-fields">
+        <input type="date" id="svDate" value="${dv}" aria-label="Site visit date">
+        <input type="time" id="svTime" value="${tv}" aria-label="Site visit time">
+        <select id="svStatus" aria-label="Where the visit stands">${opts}</select>
+        <input type="text" id="svProp" value="${escapeHtml(v.property || '')}" placeholder="Property code" aria-label="Property">
+      </div>
+      <div class="sv-acts">
+        <button type="button" class="tt-btn" onclick="saveVisitEdit('${l.id}')">Save</button>
+        ${v.at ? `<button type="button" class="tt-btn quiet" onclick="cancelVisit('${l.id}')">Cancel the visit</button>` : ''}
+        <button type="button" class="tt-btn quiet" onclick="closeVisitEditor()">Close</button>
+      </div>
+      <div class="sv-err" id="svErr"></div>
+    </div></div>`;
+}
+function openVisitEditor(id){
+  visitEditId = id;
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  renderStandSection(l);
+  const el = document.getElementById('svDate');
+  if(el) el.focus();
+}
+function closeVisitEditor(){
+  const id = visitEditId;
+  visitEditId = null;
+  const l = leads.find(x => x.id === id);
+  if(l) renderStandSection(l);
+}
+function writeVisit(l, at, status, property){
+  const P = window.crmPipeline;
+  const before = P.visitOf(l);
+  const now = Date.now();
+  l.siteVisitAt = at;
+  l.siteVisitStatus = status;
+  l.siteVisitProperty = property || null;
+  // Who moved it last is what tells the policy to leave this date alone until
+  // the lead says something new — see the site-visit block in _lead-policy.js.
+  l.siteVisitBy = currentUserEmail || 'team';
+  l.siteVisitSetAt = now;
+  l.updatedAt = now;
+  l.updatedBy = currentUserEmail || l.updatedBy || null;
+  if(at !== before.at || status !== before.status){
+    const said = (P.VISIT_STATUS[status] || 'not planned').toLowerCase();
+    const when = at ? ` — <b>${escapeHtml(fmtDue(at))}</b>` : '';
+    const was = before.at && at && before.at !== at ? ` (was ${escapeHtml(fmtDue(before.at))})` : '';
+    addHistory(l, 'visit', `Site visit ${escapeHtml(said)}${when}${was}`);
+  }
+  visitEditId = null;
+  renderStandSection(l);
+  renderHistory(l);
+  applyFilters();
+  persistLead(l);
+}
+function saveVisitEdit(id){
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  const status = document.getElementById('svStatus').value;
+  const property = document.getElementById('svProp').value.trim();
+  const at = parseFollowUpRaw(document.getElementById('svDate').value, document.getElementById('svTime').value);
+  // A viewing with no day is a viewing nobody turns up to. "Asked for" is the
+  // one standing that legitimately has no date yet — they have said yes and the
+  // time is still to be agreed — and a cancelled one needs no date at all.
+  if(!at && status !== 'requested' && status !== 'cancelled'){
+    const err = document.getElementById('svErr');
+    err.textContent = 'Pick a day for the visit, or set it to "Asked for" until a time is agreed.';
+    err.classList.add('show');
+    return;
+  }
+  writeVisit(l, at, status, property);
+  showToast(at ? `Site visit ${fmtDue(at)}` : 'Site visit updated');
+}
+function cancelVisit(id){
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  writeVisit(l, null, 'cancelled', window.crmPipeline.visitOf(l).property);
+  showToast('Site visit cancelled');
 }
 
 // ── "Where this lead stands" on the lead page ──
@@ -2928,10 +3093,7 @@ function renderStandSection(l){
   const step = nextStepOf(l);
   const stepIsTeam = step && (step.cls === 'team' || step.cls === 'overdue');
   if(step) parts.push(`<div class="st-step ${step.cls}${stepIsTeam ? ' with-acts' : ''}"><span class="st-label">Next step</span><span>${escapeHtml(step.text)}${step.due ? `<span class="st-due"> · ${escapeHtml(fmtDue(step.due))}</span>` : ''}</span>${stepIsTeam ? `<span class="st-item-acts"><button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button><button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(step.text))})">Done</button></span>` : ''}</div>`);
-  if(ai.visit && (ai.visit.at || ai.visit.status !== 'none')){
-    const vs = { requested:'Asked for', scheduled:'Agreed', done:'Done', cancelled:'Cancelled', none:'' }[ai.visit.status] || '';
-    parts.push(`<div class="st-row"><span class="st-label">Site visit</span><span>${escapeHtml([vs, ai.visit.property, ai.visit.at && fmtDue(ai.visit.at)].filter(Boolean).join(' · '))}</span></div>`);
-  }
+  if(kind !== 'won' && kind !== 'lost') parts.push(visitRowHtml(l));
 
   // Everything that needs a person, with the action that settles it.
   const attn = attentionFor(l).filter(a => a.key !== 'ai_suggestion' && !(stepIsTeam && STEP_KEYS.has(a.key)));
@@ -4243,7 +4405,7 @@ function saveFollowUpLog(){
     : followUpAt
       ? ` · next <b>${new Date(followUpAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</b>`
       : ' · no follow-up from here';
-  if(noteText) logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null });
+  const landed = noteText ? logNote(l, { id:'n'+now, text: noteText, createdAt: now, by: currentUserEmail || null }) : null;
   addHistory(l, dateChanged && !followUpAt ? 'followup-removed' : 'followed-up',
     `Followed up${nextBit}`);
   l.followUpAt = followUpAt;
@@ -4255,6 +4417,9 @@ function saveFollowUpLog(){
   closeFollowUpLogModal();
   refreshAll();
   showToast(followUpAt ? '✓ Logged — next follow-up set' : '✓ Logged — no further follow-up');
+  // What was said on the call is evidence too, so the AI reads it the same way
+  // it reads a note typed into the lead.
+  if(landed) landed.then(() => nudgeAiAfterNote(l.id));
   if(currentDetailId===l.id){ renderNotes(l); renderNoteFollowUpFields(l); renderFollowUpSpotlight(l); renderHistory(l); }
 }
 function removeFollowUp(leadId){
@@ -4302,7 +4467,7 @@ function addNote(){
   const mentioned = M ? M.mentionedEmails(text, teamRoster(), currentUserEmail) : [];
   const note = { id:'n'+now, text, createdAt: now, by: currentUserEmail || null };
   if(mentioned.length) note.mentions = mentioned;
-  logNote(l, note);
+  const landed = logNote(l, note);
   if(mentioned.length){
     // The latest mention of each person, on the lead itself — what their filter, card and digest read.
     l.mentions = { ...(l.mentions || {}) };
@@ -4330,6 +4495,7 @@ function addNote(){
   renderHistory(l);
   applyFilters();
   persistLead(l);
+  landed.then(() => nudgeAiAfterNote(l.id));
 }
 // ═══════ @MENTIONS (crm-assets/mentions.js) ═══════
 // The team is the list in settings/{tenant}.team — set by the owner, never guessed from lead data

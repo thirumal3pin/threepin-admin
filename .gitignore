@@ -26,3 +26,7 @@ tailortalk-preview/
 # Production lead data pulled locally to answer a question. Real customers,
 # real phone numbers - never in the repo.
 .leads-cache.json
+
+# Production conversation state pulled locally to study real scenarios.
+# Real customers and real phone numbers - never in the repo.
+.chats-cache.json

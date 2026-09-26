@@ -8,7 +8,7 @@
 
 import {
   planPipelineMigration, stageKeyOf, stageKindOf, hasKeyedPipeline, stageForKey, STAGE_DEFS,
-  reachedUpdate, furthestStep, stageAge, LADDER
+  reachedUpdate, furthestStep, stageAge, visitOf, LADDER
 } from '../crm-assets/pipeline.js';
 import { computeDashboardMetrics } from '../crm-assets/dashboardMetrics.js';
 import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
@@ -466,6 +466,70 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   const personMissed = decide(ttLead({ followUpAt: MISSED, followUpBy: 'agent.a@example.com', followUpSetAt: MISSED }), verdict());
   eq('A follow-up a person missed is re-dated by newer messages too', personMissed.patch.followUpAt, Date.parse('2026-09-14T17:00:00+05:30'));
 
+  // ── THE SITE VISIT IS NOT THE FOLLOW-UP ──
+  //
+  // Two dates. The follow-up is when WE ring; the visit is when everyone stands
+  // on the property. In the live data 17 of the 24 leads carrying both have them
+  // on DIFFERENT days, and not one pair falls within an hour of the other — so
+  // one field could never have held both.
+  //
+  // The viewing used to live inside the AI's verdict, where no person could edit
+  // it and every run rewrote it whole. The result, on the live board: 76 leads
+  // carry a visit, 22 have a day that has already passed and is still open, and
+  // NOT ONE visit anywhere is in the future. A date nobody can move is a date
+  // that rots where the AI last left it.
+  const VISIT = Date.parse('2026-09-19T11:00:00+05:30');
+  const visitV = verdict({ next: { owner: 'none', action: null, dueAt: null },
+    visit: { status: 'scheduled', at: VISIT, property: 'TNAG0001' } });
+  const booked = decide(ttLead(), visitV);
+  eq('The visit gets its own date on the lead', booked.patch.siteVisitAt, VISIT);
+  eq('…with where it stands and which property', [booked.patch.siteVisitStatus, booked.patch.siteVisitProperty], ['scheduled', 'TNAG0001']);
+  eq('…recorded as the AI\u2019s, so a person can still take it over', booked.patch.siteVisitBy, 'ai');
+  // The call to confirm it is a DIFFERENT time on a different day, derived from it.
+  eq('…and the call to confirm it is two hours before, not the same moment', booked.patch.followUpAt, VISIT - 2 * HOUR);
+  check('…so the two dates are never the same field', booked.patch.followUpAt !== booked.patch.siteVisitAt);
+  check('…and the timeline gets a line of its own',
+    /Site visit agreed — <b>[^<]*19 Sep/.test(booked.history.map(h => h.text).join(' ')),
+    booked.history.map(h => h.text).join(' | '));
+
+  // ── RESCHEDULED BY HAND ──
+  // An agent takes a call and types in Saturday. The next reading of a chat that
+  // never mentioned Saturday must not quietly undo them.
+  const SAT = Date.parse('2026-09-26T11:00:00+05:30');
+  const byHand = ttLead({ siteVisitAt: SAT, siteVisitStatus: 'scheduled', siteVisitProperty: 'TNAG0001',
+    siteVisitBy: 'agent.a@example.com', siteVisitSetAt: NOW - 10 * 60000 });
+  check('A visit an agent fixed by hand survives the next AI read',
+    !('siteVisitAt' in decide(byHand, visitV).patch), JSON.stringify(decide(byHand, visitV).patch.siteVisitAt));
+  eq('…and it is that date the confirming call is built from', decide(byHand, visitV).patch.followUpAt, SAT - 2 * HOUR);
+
+  // …until the lead themselves says something newer.
+  const spokeSince = { ...byHand, siteVisitSetAt: NOW - 3 * HOUR, tt: { ...byHand.tt, lastMessageAt: NOW - HOUR } };
+  eq('…but the lead saying something new moves it again', decide(spokeSince, visitV).patch.siteVisitAt, VISIT);
+
+  // ── SILENCE IS NOT A CANCELLATION ──
+  // The AI often reports a visit still "requested" without repeating a time it
+  // has already given us. 34 of the 76 live visits are exactly that shape. If a
+  // missing time wiped the day, the date would vanish on the next message.
+  const quietV = verdict({ next: { owner: 'none', action: null, dueAt: null },
+    visit: { status: 'requested', at: null, property: null } });
+  const held = decide(ttLead({ siteVisitAt: VISIT, siteVisitStatus: 'scheduled', siteVisitBy: 'ai', siteVisitSetAt: NOW - 2 * DAY }), quietV);
+  eq('A reading that repeats no time keeps the day it already had', held.patch.siteVisitAt, VISIT);
+  // A cancellation is the one thing that does clear it.
+  const killV = verdict({ next: { owner: 'none', action: null, dueAt: null },
+    visit: { status: 'cancelled', at: null, property: null } });
+  const killed = decide(ttLead({ siteVisitAt: VISIT, siteVisitStatus: 'scheduled', siteVisitBy: 'ai', siteVisitSetAt: NOW - 2 * DAY }), killV);
+  eq('A cancelled visit clears the day', [killed.patch.siteVisitAt, killed.patch.siteVisitStatus], [null, 'cancelled']);
+  check('…and no confirming call is left booked for it',
+    killed.patch.followUpAt !== VISIT - 2 * HOUR);
+
+  // ── THE LEADS THE AI HAD ALREADY READ ──
+  // 76 leads carry a visit under the old shape. They must keep working until the
+  // AI next reads them, or the board loses every viewing it knows about.
+  const legacy = { id: 'LG', tenantId: T, stageId: sid('visit_pending'),
+    ai: { at: NOW - DAY, visit: { status: 'scheduled', at: VISIT, property: 'ANRL001' } } };
+  eq('A visit stored the old way is still read', [visitOf(legacy).at, visitOf(legacy).property], [VISIT, 'ANRL001']);
+  eq('…and the new field wins once it exists', visitOf({ ...legacy, siteVisitAt: SAT }).at, SAT);
+
   // ...and the guard still does its job while the time is genuinely ahead.
   const aiSooner = decide(ttLead({ followUpAt: NOW + 30 * 60000, followUpBy: 'ai', followUpSetAt: NOW - 2 * HOUR }), postponed);
   check('A follow-up still ahead of us is left alone, even the AI’s own', !('followUpAt' in aiSooner.patch), JSON.stringify(aiSooner.patch.followUpAt));
@@ -564,7 +628,11 @@ section('Runs on Firestore: apply, audit, debounce');
   const r = await runLeadAutomation(db, T, 'L1', { client, model: 'claude-haiku-4-5', now: NOW, trigger: 'test' });
   check('Apply moves the lead', r.ok && db._get('leads/L1').stageId === sid('visit_pending'));
   check('The AI verdict is stored on the lead', db._get('leads/L1').ai.line === 'Wants to see TNAG0001 Sat; confirm time');
-  eq('History entries by the AI', db._list('leads/L1/history').map(p => db._get(p).by), ['AI', 'AI']);
+  eq('History entries by the AI', db._list('leads/L1/history').map(p => db._get(p).by), ['AI', 'AI', 'AI']);
+  // The move, the site visit and the follow-up are three separate lines because they are three
+  // separate facts: where the lead is, when everyone stands on the property, and when we ring.
+  eq('…one each for the move, the visit and the call',
+    db._list('leads/L1/history').map(p => db._get(p).type).sort(), ['followup', 'stage', 'visit']);
   const runs = db._list('leads/L1/aiRuns');
   eq('One run logged', runs.length, 1);
   const run = db._get(runs[0]);
