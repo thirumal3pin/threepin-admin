@@ -1598,3 +1598,33 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 }
 .note-fu-quick button:hover { border-color: var(--ink, #1C1917); color: var(--ink, #1C1917); }
 @media (max-width: 720px) { .note-fu-quick button { min-height: 36px; padding: 9px 13px; } }
+
+/* ═══════ SORT THE WHOLE BOARD ═══════
+   Beside the filters rather than inside a column, because it is a statement
+   about the board and not about one stage. Each column's own menu still
+   overrides it, and says so. */
+/* The filter bar beside this one scrolls sideways, so a half-cut chip can end
+   up flush against the button. A rule and a little air say where the filters
+   stop and the board's own order begins. */
+.lf-sortctl {
+  flex: 0 0 auto; display: flex; align-items: center;
+  padding-left: 10px; margin-left: 2px;
+  border-left: 1px solid var(--border, #E4E0D8);
+}
+.lf-sortctl:empty { border-left: 0; padding-left: 0; }
+.lf-bsort { position: relative; display: inline-flex; align-items: center; }
+.lf-bsort-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 6px 12px; min-height: 32px; border-radius: 999px; cursor: pointer;
+  border: 1.5px solid var(--border, #E4E0D8); background: var(--white, #fff); color: var(--ink2, #44403C);
+}
+.lf-bsort-btn:hover { border-color: var(--ink, #1C1917); color: var(--ink, #1C1917); }
+.lf-bsort.set .lf-bsort-btn { border-color: var(--ink, #1C1917); background: var(--ink, #1C1917); color: #fff; }
+.lf-bsort-v { font-weight: 700; opacity: .82; }
+.lf-bsort-pop { right: auto; left: 0; top: calc(100% + 6px); }
+.lf-bsort-note {
+  padding: 8px 11px; font-size: 11.5px; line-height: 1.45;
+  color: var(--ink3, #655E59); max-width: 240px;
+}
+@media (max-width: 720px) { .lf-bsort-btn { min-height: 36px; } }

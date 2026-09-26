@@ -639,8 +639,40 @@ function renderLeadFilterBar(){
       + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
   el.innerHTML = html;
+  renderBoardSortCtl();
   if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
   updateViewsChip();
+}
+
+// ── Sort the whole board ──
+// Only on the board: the list has its own column sorting, and Today and
+// Follow-ups are already ordered by the thing they are about.
+let openBoardSortAll = false;
+function boardSortCtlHtml(){
+  if(currentView !== 'kanban') return '';
+  const active = boardSortAllActive();
+  const set = !!boardSortAll;
+  const overrides = Object.keys(boardSort).length;
+  return `<div class="lf-bsort${set ? ' set' : ''}">
+        <button type="button" class="lf-bsort-btn" aria-haspopup="true" aria-expanded="${openBoardSortAll}"
+          title="Sort every column on the board" onclick="toggleBoardSortAll(event)">
+          ⇅ Sort board<span class="lf-bsort-v">${escapeHtml(active.label)}</span></button>
+        ${openBoardSortAll ? `<div class="kcol-sort-pop lf-bsort-pop" role="menu" onclick="event.stopPropagation()">
+          ${BOARD_SORTS.map(o => `<button type="button" role="menuitemradio" aria-checked="${o.key===active.key}"
+            class="kcol-sort-opt${o.key===active.key?' at':''}" onclick="setBoardSortAll('${o.key}')">${escapeHtml(o.label)}</button>`).join('')}
+          ${overrides ? `<div class="dd-sep"></div><div class="lf-bsort-note">${overrides} column${overrides>1?'s have':' has'} its own sort — choosing here clears ${overrides>1?'them':'it'}.</div>` : ''}
+        </div>` : ''}
+      </div>`;
+}
+function renderBoardSortCtl(){
+  const el = document.getElementById('boardSortCtl');
+  if(!el) return;
+  el.innerHTML = boardSortCtlHtml();
+}
+function toggleBoardSortAll(ev){
+  if(ev) ev.stopPropagation();
+  openBoardSortAll = !openBoardSortAll;
+  renderBoardSortCtl();
 }
 
 // ═══════ SAVED TEAM VIEWS ═══════
@@ -1290,6 +1322,10 @@ function toggleView(view){
   currentView = view;
   if(view==='kanban' || view==='list') lastBrowseView = view;
   updateNavState();
+  // The board-wide sort control belongs to the board, so the filter bar has
+  // to be redrawn when the view changes. applyFilters() below does not touch
+  // it, and the dashboard and Today paths do not reach applyFilters at all.
+  try{ renderBoardSortCtl(); }catch(e){}
   CRM_VIEWS.forEach(v=>{
     const el = document.getElementById(v==='kanban' ? 'kanbanView' : v+'View');
     if(el) el.style.display = view===v ? '' : 'none';
@@ -1761,18 +1797,56 @@ const BOARD_SORTS = [
   { key:'name',    label:'Name A–Z',         meta:null, val:l => (l.name || '').toLowerCase() }
 ];
 const BOARD_SORT_KEY = 'crmBoardSort';
+const BOARD_SORT_ALL_KEY = 'crmBoardSortAll';
 let boardSort = {};
 try{ boardSort = JSON.parse(localStorage.getItem(BOARD_SORT_KEY) || '{}') || {}; }catch(e){ boardSort = {}; }
+// One sort for the whole board. The per-column menus answer "how do I want to
+// read THIS column"; this answers "put the entire board in this order", which
+// is the question you ask when you are working down every column the same way
+// — newest first thing in the morning, follow-up due before a calling session.
+// Setting it column by column meant opening eight menus to ask one question.
+let boardSortAll = null;
+try{ boardSortAll = localStorage.getItem(BOARD_SORT_ALL_KEY) || null; }catch(e){ boardSortAll = null; }
 let openSortCol = null;
 
+// A column's own choice wins, then the board-wide one, then Most urgent.
 function boardSortOf(stageId){
-  return BOARD_SORTS.find(s => s.key === boardSort[stageId]) || BOARD_SORTS[0];
+  return BOARD_SORTS.find(s => s.key === boardSort[stageId])
+    || BOARD_SORTS.find(s => s.key === boardSortAll)
+    || BOARD_SORTS[0];
 }
+// Is this column following the board, or overriding it?
+function columnOverridesBoard(stageId){ return !!boardSort[stageId]; }
+
 function setBoardSort(stageId, key){
-  if(key === 'smart') delete boardSort[stageId]; else boardSort[stageId] = key;
+  // A stage id that is not on the board would write a key nothing ever reads
+  // and leave a stale entry in the saved overrides.
+  if(!stageId || !stages.some(st => st.id === stageId)) return;
+  // "Match the board" — clear the override and follow whatever the board says.
+  if(key === '__inherit') delete boardSort[stageId];
+  else if(key === 'smart' && !boardSortAll) delete boardSort[stageId];
+  else boardSort[stageId] = key;
   openSortCol = null;
   try{ localStorage.setItem(BOARD_SORT_KEY, JSON.stringify(boardSort)); }catch(e){}
   renderBoard();
+}
+// Sorting the whole board CLEARS the per-column overrides. Leaving them would
+// mean picking "Name A-Z" for the board and watching two columns ignore it,
+// with nothing on screen to explain why.
+function setBoardSortAll(key){
+  boardSortAll = key === 'smart' ? null : key;
+  boardSort = {};
+  openSortCol = null;
+  try{
+    if(boardSortAll) localStorage.setItem(BOARD_SORT_ALL_KEY, boardSortAll);
+    else localStorage.removeItem(BOARD_SORT_ALL_KEY);
+    localStorage.removeItem(BOARD_SORT_KEY);
+  }catch(e){}
+  renderBoard();
+  renderBoardSortCtl();
+}
+function boardSortAllActive(){
+  return BOARD_SORTS.find(s => s.key === boardSortAll) || BOARD_SORTS[0];
 }
 function toggleSortMenu(stageId, ev){
   if(ev) ev.stopPropagation();
@@ -1782,12 +1856,17 @@ function toggleSortMenu(stageId, ev){
 // Reset every column at once — eight menus is a lot to undo one at a time.
 function resetAllBoardSorts(){
   boardSort = {};
+  boardSortAll = null;
   openSortCol = null;
-  try{ localStorage.removeItem(BOARD_SORT_KEY); }catch(e){}
+  try{ localStorage.removeItem(BOARD_SORT_KEY); localStorage.removeItem(BOARD_SORT_ALL_KEY); }catch(e){}
   renderBoard();
-  showToast('Every column back to Most urgent');
+  renderBoardSortCtl();
+  showToast('Whole board back to Most urgent');
 }
-document.addEventListener('click', () => { if(openSortCol){ openSortCol = null; renderBoard(); } });
+document.addEventListener('click', () => {
+  if(openSortCol){ openSortCol = null; renderBoard(); }
+  if(openBoardSortAll){ openBoardSortAll = false; renderBoardSortCtl(); }
+});
 
 function sortColumnLeads(list, sort){
   if(sort.key === 'smart'){
@@ -1816,9 +1895,22 @@ function sortColumnLeads(list, sort){
 
 function sortMenuHtml(stage, active){
   if(openSortCol !== stage.id) return '';
+  const overriding = columnOverridesBoard(stage.id);
+  // When the board has its own order, the first entry is "go back to it"
+  // rather than a silent default — otherwise a column that is following the
+  // board looks identical to one that chose the same sort by hand.
+  const inherit = boardSortAll
+    ? `<button type="button" role="menuitemradio" aria-checked="${!overriding}" class="kcol-sort-opt${!overriding?' at':''}"
+        onclick="setBoardSort('${stage.id}','__inherit')">Match the board <i>(${escapeHtml(boardSortAllActive().label)})</i></button>
+       <div class="dd-sep"></div>`
+    : '';
   return `<div class="kcol-sort-pop" role="menu" onclick="event.stopPropagation()">
-    ${BOARD_SORTS.map(s => `<button type="button" role="menuitemradio" aria-checked="${s.key===active.key}" class="kcol-sort-opt${s.key===active.key?' at':''}" onclick="setBoardSort('${stage.id}','${s.key}')">${escapeHtml(s.label)}</button>`).join('')}
-    ${Object.keys(boardSort).length ? '<div class="dd-sep"></div><button type="button" role="menuitem" class="kcol-sort-opt reset" onclick="resetAllBoardSorts()">Reset every column</button>' : ''}
+    ${inherit}
+    ${BOARD_SORTS.map(s => {
+      const on = overriding ? s.key === active.key : (!boardSortAll && s.key === active.key);
+      return `<button type="button" role="menuitemradio" aria-checked="${on}" class="kcol-sort-opt${on?' at':''}" onclick="setBoardSort('${stage.id}','${s.key}')">${escapeHtml(s.label)}</button>`;
+    }).join('')}
+    ${(Object.keys(boardSort).length || boardSortAll) ? '<div class="dd-sep"></div><button type="button" role="menuitem" class="kcol-sort-opt reset" onclick="resetAllBoardSorts()">Reset the whole board</button>' : ''}
   </div>`;
 }
 
@@ -1837,7 +1929,7 @@ function renderBoard(){
     const rule = stageRuleOf(stage);
     const kind = window.crmPipeline ? window.crmPipeline.stageKindOf(stage) : null;
     return `
-    <div class="kcol${kind==='lost'||kind==='won'||kind==='hold' ? ' kcol-side kcol-'+kind : ''}">
+    <div class="kcol${kind==='lost'||kind==='won'||kind==='hold' ? ' kcol-side kcol-'+kind : ''}" data-stage="${escapeHtml(stage.id)}">
       <div class="kcol-hdr">
         <div class="kcol-head">
           <div class="kcol-title"><span class="kcol-dot" style="background:${stage.color}"></span>${escapeHtml(stage.name)}</div>

@@ -293,6 +293,85 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.close();
 }
 
+// ── Sorting the WHOLE board ──
+// Each column has always had its own sort. What was missing was the question
+// you ask when you are working down every column the same way — newest first
+// thing in the morning, follow-up due before a calling session — which took
+// eight separate menus to express.
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  // The fixture above puts one lead in each column, and one lead cannot be in
+  // the wrong order. Two columns of three, deliberately not alphabetical.
+  await page.evaluate(seed => { window.applyLeadsSnapshot(seed); }, [
+    ...LEADS,
+    { id: 'S1', tenantId: T, name: 'Zara Q', stageId: sid('new'), createdAt: NOW - 5 * D, updatedAt: NOW - D, reached: { new: NOW - 5 * D } },
+    { id: 'S2', tenantId: T, name: 'Arun B', stageId: sid('new'), createdAt: NOW - 1 * D, updatedAt: NOW - D, reached: { new: NOW - D } },
+    { id: 'S3', tenantId: T, name: 'Meena C', stageId: sid('new'), createdAt: NOW - 3 * D, updatedAt: NOW - D, reached: { new: NOW - 3 * D } },
+    { id: 'S4', tenantId: T, name: 'Yusuf D', stageId: sid('options'), createdAt: NOW - 6 * D, updatedAt: NOW - D, reached: { new: NOW - 6 * D } },
+    { id: 'S5', tenantId: T, name: 'Bala E', stageId: sid('options'), createdAt: NOW - 2 * D, updatedAt: NOW - D, reached: { new: NOW - 2 * D } }
+  ]);
+  await page.waitForTimeout(300);
+  const names = () => page.evaluate(() => [...document.querySelectorAll('.kcol')]
+    .map(c => [...c.querySelectorAll('.lcard-name')].map(n => n.textContent.trim()))
+    .filter(a => a.length > 1));
+
+  ok('The board has a sort of its own, beside the filters',
+    await page.evaluate(() => !!document.querySelector('.lf-bsort-btn')));
+  // Being in the DOM is not the same as being on screen. Appended to the
+  // filter bar it landed at x=1772 inside a 1035px sideways scroller —
+  // present, and invisible at every width.
+  ok('…and it is actually on screen, not off the end of the filter strip',
+    await page.evaluate(() => {
+      const r = document.querySelector('.lf-bsort-btn').getBoundingClientRect();
+      return r.width > 0 && r.left >= -1 && r.right <= innerWidth + 1;
+    }));
+
+  await page.evaluate(() => setBoardSortAll('name'));
+  await page.waitForTimeout(250);
+  const sorted = await names();
+  ok('Sorting the board sorts EVERY column, not just one',
+    sorted.length > 0 && sorted.every(col => JSON.stringify(col) === JSON.stringify([...col].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())))),
+    JSON.stringify(sorted));
+  ok('…and the control says which order it is in',
+    /Name/.test(await page.$eval('.lf-bsort-btn', e => e.textContent)));
+
+  // A column may still disagree with the board, and must say so rather than
+  // looking identical to one that is simply following it.
+  const stage = await page.evaluate(() => document.querySelector('.kcol').getAttribute('data-stage'));
+  await page.evaluate(s => setBoardSort(s, 'created'), stage);
+  await page.waitForTimeout(200);
+  ok('A single column can still overrule the board',
+    await page.evaluate(s => columnOverridesBoard(s), stage));
+  await page.evaluate(s => { openSortCol = s; renderBoard(); }, stage);
+  await page.waitForTimeout(150);
+  ok('…and its menu offers a way back to the board order',
+    await page.evaluate(() => /Match the board/.test(document.querySelector('.kcol-sort-pop').textContent)));
+
+  // Choosing a board order clears the overrides, so "Name A-Z" cannot mean
+  // "Name A-Z except those two columns, silently".
+  await page.evaluate(() => setBoardSortAll('created'));
+  await page.waitForTimeout(200);
+  ok('Choosing a board order clears the per-column overrides',
+    await page.evaluate(s => !columnOverridesBoard(s), stage));
+
+  await page.evaluate(() => toggleView('list'));
+  await page.waitForTimeout(250);
+  ok('The board sort is not offered on the list, which sorts by column',
+    await page.evaluate(() => !document.querySelector('.lf-bsort-btn')));
+  await page.evaluate(() => toggleView('kanban'));
+  await page.waitForTimeout(250);
+  ok('…and comes back with the board',
+    await page.evaluate(() => !!document.querySelector('.lf-bsort-btn')));
+
+  await page.evaluate(() => resetAllBoardSorts());
+  await page.waitForTimeout(200);
+  ok('Reset puts the whole board back to Most urgent', await page.evaluate(() =>
+    !localStorage.getItem('crmBoardSortAll') && !localStorage.getItem('crmBoardSort')));
+
+  await page.screenshot({ path: join(OUT, '60-board-sort.png') });
+  await page.context().close();
+}
+
 await browser.close();
 if (errors.length) { console.log('ERRORS:\n' + errors.join('\n')); process.exit(1); }
 console.log('No page errors');

@@ -170,6 +170,10 @@ function toggleDensity(){
     <div class="lf-row">
       <div class="lf-views" id="viewsCtl"></div>
       <div class="lf-bar" id="leadFilterBar" role="toolbar" aria-label="Filter leads"></div>
+      <!-- Sorting the whole board. Kept out of #leadFilterBar because that is a
+           sideways-scrolling strip of filter chips, and this is neither a
+           filter nor something an agent should have to scroll to find. -->
+      <div class="lf-sortctl" id="boardSortCtl"></div>
     </div>
   </div>
 
