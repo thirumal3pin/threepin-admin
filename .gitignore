@@ -22,3 +22,7 @@ pipeline-preview/
 property-mobile/
 scroll-out/
 tailortalk-preview/
+
+# Production lead data pulled locally to answer a question. Real customers,
+# real phone numbers - never in the repo.
+.leads-cache.json

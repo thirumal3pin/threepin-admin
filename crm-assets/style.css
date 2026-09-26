@@ -543,6 +543,11 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .tt-stat{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:11px 13px;min-width:0;}
 .tt-stat.alert{background:var(--red-bg);border-color:var(--red-line);}
 .tt-stat.good{background:var(--green-bg);border-color:var(--green-line);}
+/* For something true and worth showing that is NOT an outcome of ours.
+   TailorTalk's "converted" wore the green win treatment and read as a closed
+   deal; it marks a completed site visit. */
+.tt-stat.note{background:var(--bg2,#EFEDE8);border-color:var(--border2,#D4CFC5);}
+.tt-stat.note .tt-stat-s{color:var(--ink3,#655E59);}
 .tt-stat-l{font-family:var(--mono);letter-spacing:.04em;font-size:9.5px;font-weight:600;color:var(--ink4);text-transform:uppercase;}
 .tt-stat-v{font-size:13.5px;font-weight:600;margin-top:4px;word-break:break-word;}
 .tt-stat-s{font-size:11.5px;color:var(--ink3);margin-top:3px;word-break:break-word;}

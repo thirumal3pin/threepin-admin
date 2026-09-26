@@ -330,7 +330,10 @@ const TT_STATUS = {
   warm:      { label:'Warm',      icon:'🌤️' },
   cold:      { label:'Cold',      icon:'❄️' },
   dead:      { label:'Dead',      icon:'⚫' },
-  converted: { label:'Converted', icon:'✅' }
+  // TailorTalk's own milestone, kept under TailorTalk's own name. It has
+  // marked completed site visits on this account, not sales — see the note on
+  // the Converted tile in renderTtSection.
+  converted: { label:'Converted in TailorTalk', icon:'✅' }
 };
 const TT_SOURCES = { whatsapp_ad:'WhatsApp ad', whatsapp_dm:'WhatsApp', whatsapp_campaign:'WhatsApp campaign', instagram_dm:'Instagram', instagram_ad:'Instagram ad', web_chat:'Website chat' };
 const TT_PROFILE = [
@@ -563,7 +566,9 @@ const TT_STATUS_FILTERS = [
   { key:'cold',      label:'Cold',      test:l=>l.tt.status==='cold' },
   { key:'dead',      label:'Dead',      test:l=>l.tt.status==='dead' },
   { key:'paused',    label:'AI paused', test:l=>l.tt.locked===true },
-  { key:'converted', label:'Converted', test:l=>l.tt.converted===true }
+  // TailorTalk's own milestone. See the note on the Converted tile in
+  // renderTtSection: it has marked completed site visits, not sales.
+  { key:'converted', label:'Converted in TailorTalk', test:l=>l.tt.converted===true }
 ];
 
 function inScope(l, scope, status){
@@ -804,7 +809,8 @@ function ttCardHtml(l){
   if(alerts.some(a => a.key==='waiting')) bits.push('<span class="tt-chip action" title="The AI left the lead\'s latest message for the team">⏳ Waiting for team</span>');
   if(TT_STATUS[t.status]) bits.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
   else if(t.status) bits.push(`<span class="tt-chip">${escapeHtml(ttStatusLabel(t.status))}</span>`);
-  if(t.converted && t.status!=='converted') bits.push('<span class="tt-chip converted">✅ Converted</span>');
+  // Attributed on the card too, or a glance at the board reads it as a sale.
+  if(t.converted && t.status!=='converted') bits.push('<span class="tt-chip converted" title="TailorTalk marked this converted. On this account that has meant a completed site visit, not a sale.">✅ Converted in TailorTalk</span>');
   if(t.escalated){
     const fresh = alerts.some(a => a.key==='escalated');
     bits.push(`<span class="tt-chip ${fresh?'alert':'muted'}" title="${escapeHtml(t.escalatedTo ? 'Escalated to '+t.escalatedTo : 'Escalated in TailorTalk')}">${fresh?'🚨 ':''}Escalated</span>`);
@@ -955,15 +961,10 @@ function moveTtLeadToStage(id, stageId){
   showToast(`Moved to ${stage.name}`);
   renderTtSection(l);
 }
-function moveTtLeadToWon(id){
-  const l = leads.find(x=>x.id===id);
-  const won = wonStage();
-  if(!l || !won) return;
-  if(!confirm(`TailorTalk marked ${l.name} as converted. Move this lead to "${won.name}"?`)) return;
-  changeStage(id, won.id);
-  showToast(`✓ Moved to ${won.name}`);
-  renderTtSection(l);
-}
+// (moveTtLeadToWon lived here. It offered one click from TailorTalk's
+// "converted" flag straight to the Won stage, and that flag turns out to mark
+// a completed site visit rather than a sale. Won is reached through the stage
+// picker, which is where a decision that bills a client belongs.)
 // Clears everything open on the lead (signals, a new escalation, a message waiting for the team)
 // in one logged step, for when reading it was the whole job.
 const TT_ALERT_TITLES = { escalated:'New escalation', flagged:'New flag', waiting:'Message waiting for the team' };
@@ -1274,9 +1275,28 @@ function renderTtSection(l){
   const ad = t.adTitle ? (t.adUrl ? `<a href="${escapeHtml(t.adUrl)}" target="_blank" rel="noopener">${escapeHtml(t.adTitle)}</a>` : escapeHtml(t.adTitle)) : '';
   stats.push(ttStat('Came from', escapeHtml(origin || '—'), ad || (t.createdAt ? 'first message '+fmtDay(t.createdAt) : '')));
   if(t.converted){
-    const won = wonStage();
-    const btn = won && l.stageId!==won.id ? `<button type="button" class="tt-btn" onclick="moveTtLeadToWon('${l.id}')">Move to ${escapeHtml(won.name)}</button>` : '';
-    stats.push(ttStat('Converted', '✅ Yes', (t.convertedAt ? fmtWhen(t.convertedAt) : '') + btn, 'good'));
+    // "Converted" is TAILORTALK'S word, for TailorTalk's funnel, and it does
+    // not mean a sale.
+    //
+    // Both leads carrying it on this account were marked converted minutes
+    // after they turned up for a site visit — one on "I reached sir" — with no
+    // booking and no payment recorded, and TailorTalk's OWN summary for both
+    // still reading "Actively looking. Next step: feedback after site visit."
+    //
+    // This tile used to render a green "Converted - Yes" beside a "Move to
+    // Won" button that asked "TailorTalk marked them as converted. Move this
+    // lead to Won?" — which invites closing a deal that has not happened, on
+    // a bot's funnel metric. Deals are billed per closed side in Finance, so
+    // that is a wrong invoice waiting to be raised.
+    //
+    // The flag is still shown, because it is real and it is theirs. It is no
+    // longer dressed up as our outcome, and the shortcut is gone: moving a
+    // lead to Won goes through the stage picker like every other stage, where
+    // it is a decision rather than a suggestion.
+    stats.push(ttStat('Converted in TailorTalk', '✅ Yes',
+      (t.convertedAt ? fmtWhen(t.convertedAt) + ' — ' : '')
+      + 'their milestone, not a sale — on this account it has fired at the site visit. Read the chat before closing.',
+      'note'));
   }
   if(t.escalated && !ttOpenAlerts(l).some(a=>a.key==='escalated')) stats.push(ttStat('Escalated', escapeHtml(t.escalatedTo || 'Yes'), t.escalatedAt ? fmtWhen(t.escalatedAt) : 'before it reached the CRM'));
   if(t.flagged && !ttOpenAlerts(l).some(a=>a.key==='flagged')) stats.push(ttStat('Flagged', escapeHtml(t.flagDetails || 'Yes')));
