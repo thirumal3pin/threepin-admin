@@ -10,7 +10,9 @@
 //   • Lost and On hold need a stated reason; a lead who writes again after either is re-opened.
 //     Only the lead's own words close or park a lead, and never while the team still owes them.
 //   • What the AI moved and a person undid is not repeated until the lead says something new.
-//   • The team's due step becomes the follow-up — unless a person already has an earlier one.
+//   • The team's due step becomes the follow-up — unless someone already has an earlier one
+//     STILL AHEAD. A follow-up whose hour has gone by is missed, not earlier, so fresh words
+//     from the lead re-date it: "I'm in Kerala till the 5th" moves the call to the 5th.
 //   • Vendors, collaborations and unknown custom columns are never touched.
 //   • Nothing here touches updatedAt: that field means "a person last worked this lead".
 
@@ -247,15 +249,26 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
       const existing = lead.followUpAt || null;
       const setByPerson = humanSetter(lead.followUpBy) || (!lead.followUpBy && !!existing);
       const personSetAt = lead.followUpSetAt || lead.updatedAt || 0;
-        // Same rule as the column above: a note the team wrote itself does not
-    // make the team's own follow-up stale.
-    const personStillCurrent = setByPerson && personSetAt >= lastLeadMsg;
-      const earlierAlready = existing && existing <= pick.at + 30 * MIN;
+      // Same rule as the column above: a note the team wrote itself does not
+      // make the team's own follow-up stale.
+      const personStillCurrent = setByPerson && personSetAt >= lastLeadMsg;
+      // "We are already chasing them sooner" only holds while that time is still ahead of us.
+      // A follow-up whose hour has passed is not an earlier plan, it is a missed one — and we
+      // are only in here because the lead has just said something that changes when to ring.
+      // Without the `existing > now`, a lead who postpones stays pinned to the date they have
+      // just moved: "I'm travelling to Kerala, back by the 5th" parked the lead until the 5th
+      // and left the follow-up a week overdue, still noted as a site visit he had cancelled.
+      // TailorTalk's own sync has always taken the future date over a passed one
+      // (_tailortalk-shared.js, `!followUpAt || followUpAt < now`); this is that rule.
+      const earlierAlready = existing && existing > now && existing <= pick.at + 30 * MIN;
       const same = existing && Math.abs(existing - pick.at) < 15 * MIN;
       if (!same && !earlierAlready && !personStillCurrent) {
         Object.assign(patch, { followUpAt: pick.at, followUpBy: 'ai', followUpSetAt: now, followUpNote: pick.note });
         result.followUp = pick.at;
-        history.push({ type: 'followup', text: `🤖 Follow-up set for <b>${esc(fmtIst(pick.at))}</b> — ${esc(pick.note)}` });
+        // When it displaces a follow-up that was already missed, say so: a lead leaving the
+        // overdue queue should be explained on the lead's own timeline, not just disappear.
+        const was = existing && existing <= now ? ` (was ${esc(fmtIst(existing))}, missed)` : '';
+        history.push({ type: 'followup', text: `🤖 Follow-up set for <b>${esc(fmtIst(pick.at))}</b>${was} — ${esc(pick.note)}` });
       }
     }
   }

@@ -441,6 +441,34 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   eq('Default due times respect working hours', new Date(withinWorkingHours(night + 2 * HOUR)).toISOString(), '2026-09-15T04:00:00.000Z');
   const visitSoon = decide(ttLead(), verdict({ next: { owner: 'lead', action: 'Confirm the time', kind: 'other', dueAt: null }, visit: { status: 'scheduled', at: NOW + 6 * HOUR } }));
   eq('A scheduled visit sets a confirmation two hours before', visitSoon.patch.followUpAt, NOW + 4 * HOUR);
+
+  // ── A FOLLOW-UP WHOSE HOUR HAS PASSED IS MISSED, NOT "EARLIER" ──
+  //
+  // The live case. Sriram had a follow-up on 19 Sept to confirm a site visit,
+  // then wrote "Really sorry. Forgot to inform you that I am travelling to
+  // Kerala. Will be back by the 5 th." He was parked until 5 Oct correctly —
+  // and the follow-up stayed on the 19th, a week overdue, still noted as the
+  // visit he had just cancelled. The guard that kept it there was reading a
+  // date in the PAST as "we are already chasing them sooner".
+  const BACK = Date.parse('2026-10-05T10:00:00+05:30');
+  const MISSED = Date.parse('2026-09-07T11:00:00+05:30');
+  const postponed = verdict({ stage: 'on_hold', confidence: 'high', holdReason: 'postponed', holdUntil: BACK,
+    next: { owner: 'none', action: null, dueAt: null }, visit: { status: 'cancelled', at: null } });
+  const stranded = decide(ttLead({ stageId: sid('visit_pending'), followUpAt: MISSED, followUpBy: 'ai',
+    followUpSetAt: MISSED, followUpNote: 'Confirm property and schedule visit for TNAG0001' }), postponed);
+  eq('A lead who postpones moves the follow-up to the day they said they are back', stranded.patch.followUpAt, BACK);
+  eq('…and the note stops chasing the visit they just cancelled', stranded.patch.followUpNote, 'Revisit — the lead asked to be contacted around now');
+  check('…and the timeline says it replaced a missed one, so the queue emptying is explained',
+    /Follow-up set for .*5 Oct.*\(was .*7 Sep.*, missed\)/.test(stranded.history.map(h => h.text).join(' ')),
+    stranded.history.map(h => h.text).join(' | '));
+
+  // The same for a date a PERSON set and let slip: overtaken by the lead's own words.
+  const personMissed = decide(ttLead({ followUpAt: MISSED, followUpBy: 'agent.a@example.com', followUpSetAt: MISSED }), verdict());
+  eq('A follow-up a person missed is re-dated by newer messages too', personMissed.patch.followUpAt, Date.parse('2026-09-14T17:00:00+05:30'));
+
+  // ...and the guard still does its job while the time is genuinely ahead.
+  const aiSooner = decide(ttLead({ followUpAt: NOW + 30 * 60000, followUpBy: 'ai', followUpSetAt: NOW - 2 * HOUR }), postponed);
+  check('A follow-up still ahead of us is left alone, even the AI’s own', !('followUpAt' in aiSooner.patch), JSON.stringify(aiSooner.patch.followUpAt));
 }
 {
   const first = decide(ttLead(), verdict());
