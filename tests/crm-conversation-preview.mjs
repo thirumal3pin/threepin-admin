@@ -39,6 +39,27 @@ const CHAT = Array.from({ length: 40 }, (_, i) => ({
   at: NOW - (40 - i) * 3600000,
 }));
 
+// The things a client actually sends, in the shapes TailorTalk really stores
+// them (taken from live data). All plain text before, which is exactly why
+// the CRM rendering "[object Object]" for a brochure went unnoticed.
+CHAT.push(
+  { role:'user', at: NOW - 5 * 3600000, content:'<User share a voice note with transcribed text: ...>',
+    meta:{ type:'audio', transcription:'என் பையன் பேங்க் ஆபீஸ்க்கு வீடு 50,000 வாடகைக்கு இடம் தேவை.',
+           url:'https://storage.googleapis.com/leads-2da42.appspot.com/user-media/eysevmeajx' } },
+  { role:'user', at: NOW - 4 * 3600000, content:'[object Object]',
+    meta:{ type:'document', filename:'NOL002_brochure.pdf',
+           url:'https://storage.googleapis.com/leads-2da42.appspot.com/user-media/bnluzrtyky' } },
+  { role:'user', at: NOW - 3.5 * 3600000, content:'<User shared location: ...>',
+    meta:{ type:'location', latitude:12.955371856689, longitude:80.239395141602 } },
+  { role:'user', at: NOW - 3.2 * 3600000, content:'',
+    meta:{ type:'image', url:'https://storage.googleapis.com/leads-2da42.appspot.com/user-media/imgxxxxxxx' } },
+  { role:'assistant', at: NOW - 3 * 3600000, content:'A whatsapp template message was sent to user.',
+    meta:{ type:'template', template_name:'post_visit_feedback',
+           template_params:{ property_name:'anna nagar I block', name:'Thirumal', property_code:'-' } } },
+  { role:'assistant', at: NOW - 2.5 * 3600000, content:'How did your visit go?',
+    meta:{ type:'reply', user_message:"I didn't visit anything", text:'How did your visit go?' } }
+);
+
 const STUB = `
 const LEADS = ${JSON.stringify(LEADS)};
 const STAGES = ${JSON.stringify(STAGES)};
@@ -120,6 +141,47 @@ async function run(engine, name, viewport) {
   }, sel);
   console.log('   ', JSON.stringify(g));
   ok('the conversation rendered', g && g.msgs > 5, JSON.stringify(g));
+
+  // ── What the client sent, not a word in brackets ──
+  // Every one of these was already synced and rendered as a placeholder, so
+  // checking a photo or a brochure meant opening TailorTalk. This is the
+  // reason the chat is in the CRM at all.
+  {
+    const media = await page.evaluate(() => {
+      const box = document.querySelector('#dpTtChatScroll');
+      if (!box) return { none: true };
+      const t = box.textContent;
+      return {
+        transcription: /பேங்க் ஆபீஸ்/.test(t),
+        audioPlayer: !!box.querySelector('audio[src^="https://"]'),
+        docName: /NOL002_brochure\.pdf/.test(t),
+        docLink: !!box.querySelector('.tt-m-file[href^="https://"]'),
+        // The fixture URL is deliberately dead, so this exercises the
+        // fallback: the link is always there, and a photo that will not load
+        // says so instead of leaving a broken-image icon.
+        imageLink: !!box.querySelector('.tt-m-imgwrap[href^="https://"]'),
+        imageFellBack: !!box.querySelector('.tt-m-imgwrap.gone'),
+        imageSaysSo: /no longer on TailorTalk/.test(t),
+        locLink: !!box.querySelector('.tt-m-loc[href*="maps"]'),
+        templateName: /post_visit_feedback/.test(t),
+        quoted: !!box.querySelector('.tt-m-quote'),
+        // The bug an agent would actually report.
+        noObjectObject: !/\[object Object\]/.test(t),
+        noBarePlaceholder: !/\[audio\]|\[document\]|\[location\]|\[image\]/.test(t)
+      };
+    });
+    ok('a voice note shows its transcription, not the word audio', media.transcription, JSON.stringify(media));
+    ok('...with the recording there to play', media.audioPlayer);
+    ok('a brochure shows its filename', media.docName && media.docLink, JSON.stringify(media));
+    ok('...and never renders as [object Object]', media.noObjectObject);
+    ok('a photo is a real image link, not a description', media.imageLink, JSON.stringify(media));
+    ok('...and one that will not load says so rather than showing a broken icon',
+      media.imageFellBack && media.imageSaysSo, JSON.stringify(media));
+    ok('a shared location opens on a map', media.locLink);
+    ok('a template says which template went out', media.templateName);
+    ok('a reply quotes what it answered', media.quoted);
+    ok('nothing is left as a bare placeholder', media.noBarePlaceholder, JSON.stringify(media));
+  }
 
   // ── Where a reply goes ──
   // The CRM cannot send: its TailorTalk API reads leads, and the stored Meta

@@ -1083,6 +1083,78 @@ function ttOverviewHtml(l, st){
   return html;
 }
 
+// ═══════ WHAT IS ACTUALLY IN A MESSAGE ═══════
+//
+// This used to print `m.content`, falling back to "[image]" or "[audio]" —
+// so a voice note the client left showed as the word audio, a brochure they
+// sent showed as "[object Object]", and a pinned location showed as nothing
+// useful. That is the reason to go and open TailorTalk: not to reply, but to
+// SEE what was sent.
+//
+// All of it is already synced and sitting in the message. The media lives on
+// public Google storage URLs (checked: an ogg voice note and a 2.2MB PDF both
+// serve 200), TailorTalk transcribes voice notes, and a shared location
+// arrives as real coordinates. Rendering what we hold is the difference
+// between a summary of the chat and the chat.
+const TT_SAFE_URL = u => /^https:\/\/[\w.-]+\//.test(String(u || '')) ? String(u) : '';
+
+function ttMsgBody(m){
+  const meta = m.meta || {};
+  const type = meta.type || '';
+  const url = TT_SAFE_URL(meta.url);
+  const say = t => escapeHtml(String(t == null ? '' : t));
+
+  if(type === 'audio'){
+    // The transcription is the point — an agent scanning the chat needs to
+    // read it, not play it. The player is there for tone and for the words
+    // the transcriber got wrong, which with Tamil it often does.
+    return (meta.transcription ? `<div class="tt-m-tr">${say(meta.transcription)}</div>` : '<i>Voice note</i>')
+      + (url ? `<audio class="tt-m-audio" controls preload="none" src="${escapeHtml(url)}"></audio>` : '');
+  }
+  if(type === 'image'){
+    // Media on their storage can expire or be pulled. A broken-image icon
+    // tells an agent nothing; this falls back to a line that says so, and
+    // the link still opens if the file is merely slow.
+    return (url ? `<a class="tt-m-imgwrap" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img class="tt-m-img" src="${escapeHtml(url)}" alt="Photo sent in the chat" loading="lazy" onerror="this.closest('.tt-m-imgwrap').classList.add('gone');this.remove();"><span class="tt-m-imggone">Photo — no longer on TailorTalk’s storage</span></a>` : '<i>Photo</i>')
+      + (m.content && !/^\s*<|object Object/.test(m.content) ? `<div>${say(m.content)}</div>` : '');
+  }
+  if(type === 'video'){
+    return url ? `<video class="tt-m-vid" controls preload="none" src="${escapeHtml(url)}"></video>` : '<i>Video</i>';
+  }
+  if(type === 'document'){
+    // content is literally "[object Object]" on these — the filename is the
+    // only readable thing TailorTalk gives us, and it is usually the property
+    // code, which is exactly what an agent is looking for.
+    const name = meta.filename || 'Document';
+    return url
+      ? `<a class="tt-m-file" href="${escapeHtml(url)}" target="_blank" rel="noopener">\u{1F4CE} ${say(name)}</a>`
+      : `<i>\u{1F4CE} ${say(name)}</i>`;
+  }
+  if(type === 'location' && meta.latitude != null && meta.longitude != null){
+    const q = `${meta.latitude},${meta.longitude}`;
+    return `<a class="tt-m-loc" href="https://www.google.com/maps?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">\u{1F4CD} Location they shared</a>`
+      + `<div class="tt-m-sub">${say(q)}</div>`;
+  }
+  if(type === 'template'){
+    // Which template went out, and what was filled into it — otherwise the
+    // agent sees a message they did not write and cannot tell what it said.
+    const params = meta.template_params && typeof meta.template_params === 'object'
+      ? Object.entries(meta.template_params).filter(([, v]) => v && v !== '-').map(([k, v]) => `${k}: ${v}`).join(' \u00b7 ')
+      : '';
+    return `<div class="tt-m-tpl">Template sent \u2014 <b>${say(meta.template_name || 'unnamed')}</b></div>`
+      + (params ? `<div class="tt-m-sub">${say(params)}</div>` : '');
+  }
+
+  // A reply carries what it was replying to. Quoting it is how every chat app
+  // shows this, and without it the answer reads as a non-sequitur.
+  const quoted = type === 'reply' && meta.user_message ? `<div class="tt-m-quote">${say(meta.user_message)}</div>` : '';
+  const text = m.content || meta.text || meta.message || '';
+  // Some content arrives as TailorTalk's own angle-bracket narration
+  // ("<User shared a video: video.mp4>"); when a typed type has already been
+  // rendered above we never reach here, so what is left is worth showing.
+  return quoted + say(text) || quoted + (type ? `<i>${say(type)}</i>` : '');
+}
+
 function ttConversationHtml(l, st){
   const chat = st.chat || [];
   if(!chat.length) return '<div class="empty-mini">No messages stored yet.</div>';
@@ -1097,7 +1169,7 @@ function ttConversationHtml(l, st){
     if(k && k!==lastDay){ sep = `<div class="tt-chat-day"><span>${fmtDay(m.at)}</span></div>`; lastDay = k; }
     if(isNoReplyMarker(m)) return `${sep}<div class="tt-chat-sys">AI didn’t reply — left for the team${m.at?' · '+fmtClock(m.at):''}</div>`;
     const cls = m.role==='user' ? 'user' : m.role==='assistant' ? 'assistant' : 'team';
-    return `${sep}<div class="tt-msg ${cls}"><div class="tt-msg-meta">${who(m)}${m.at?' · '+fmtClock(m.at):''}</div><div class="tt-msg-text">${escapeHtml(m.content || (m.meta && m.meta.type ? '['+m.meta.type+']' : ''))}</div></div>`;
+    return `${sep}<div class="tt-msg ${cls}"><div class="tt-msg-meta">${who(m)}${m.at?' · '+fmtClock(m.at):''}</div><div class="tt-msg-text">${ttMsgBody(m)}</div></div>`;
   }).join('');
   const more = hiddenCount > 0
     ? `<button type="button" class="tt-btn tt-chat-more" onclick="ttChatExpanded.add('${l.id}');renderTtSection(leads.find(x=>x.id==='${l.id}'))">Show ${hiddenCount} earlier message${hiddenCount===1?'':'s'}</button>`

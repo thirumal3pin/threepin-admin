@@ -1659,3 +1659,51 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   color: var(--ink3, #655E59); text-align: center;
 }
 .dp-act.tt { white-space: nowrap; }
+
+/* ═══════ WHAT THE CLIENT ACTUALLY SENT ═══════
+   Photos, brochures, voice notes and pinned locations were all rendering as
+   a word in brackets — or, for documents, as "[object Object]". They are the
+   reason an agent opened TailorTalk, and every one of them was already
+   synced and sitting unused in the message. */
+.tt-m-img {
+  display: block; max-width: 220px; max-height: 260px; width: auto; height: auto;
+  margin: 4px 0; border-radius: 10px; border: 1px solid var(--border, #E4E0D8);
+  background: var(--bg2, #EFEDE8);
+}
+.tt-m-vid { display: block; max-width: 240px; margin: 4px 0; border-radius: 10px; }
+.tt-m-imgwrap { display: inline-block; text-decoration: none; }
+.tt-m-imggone { display: none; }
+.tt-m-imgwrap.gone .tt-m-imggone {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 11px; min-height: 32px; border-radius: 9px;
+  border: 1px dashed var(--border2, #D4CFC5); background: var(--bg2, #EFEDE8);
+  color: var(--ink3, #655E59); font-size: 12px; font-weight: 600;
+}
+.tt-m-audio { display: block; width: 100%; max-width: 240px; margin: 5px 0 1px; height: 34px; }
+
+/* The transcription leads, because it is the part that can be read at a
+   glance while someone is on the phone. */
+.tt-m-tr { font-style: italic; }
+
+.tt-m-file, .tt-m-loc {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 2px 0; padding: 7px 11px; min-height: 32px;
+  border-radius: 9px; text-decoration: none;
+  border: 1px solid var(--border, #E4E0D8); background: var(--white, #fff);
+  color: var(--ink, #1C1917); font-weight: 600; font-size: 12.5px;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.tt-m-file:hover, .tt-m-loc:hover { border-color: var(--ink, #1C1917); }
+
+.tt-m-tpl { font-weight: 600; }
+.tt-m-sub { margin-top: 3px; font-size: 11.5px; color: var(--ink3, #655E59); overflow-wrap: anywhere; }
+
+/* The message being replied to, quoted the way every chat app quotes it —
+   without it the answer reads as a non-sequitur. */
+.tt-m-quote {
+  margin-bottom: 5px; padding: 5px 9px;
+  border-left: 3px solid var(--border2, #D4CFC5);
+  background: rgba(0,0,0,.035); border-radius: 0 7px 7px 0;
+  font-size: 11.5px; color: var(--ink3, #655E59);
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
