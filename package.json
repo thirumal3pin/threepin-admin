@@ -14,6 +14,7 @@
     "test:map": "node tests/map-geo.test.mjs && node tests/map-core.test.mjs && node tests/map-nearby.test.mjs",
     "preview:match": "node tests/match-preview.mjs",
     "preview:map": "node tests/map-preview.mjs",
+    "preview:brief": "node tests/brief-preview.mjs",
     "audit:ui": "node tests/ui-audit.mjs",
     "check:realmap": "node tests/real-map.mjs"
   },

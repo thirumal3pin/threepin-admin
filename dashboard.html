@@ -122,12 +122,16 @@
     <label class="brief-lab" for="briefText">What did the client ask for? Their words are fine.</label>
     <div class="brief-row">
       <textarea id="briefText" rows="2" spellcheck="false"
+        onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')runBrief();if(event.key==='Escape')closeBrief();"
         placeholder="3 BHK somewhere near Anna Nagar, budget around 3 crore, needs a school for the kids and a gated community — he said the Kilpauk one was too expensive"></textarea>
       <div class="brief-acts">
         <button type="button" class="brief-go" onclick="runBrief()">Rank the inventory</button>
         <button type="button" class="brief-x" onclick="closeBrief()">Cancel</button>
       </div>
     </div>
+    <!-- Pressing Rank with an empty box used to do nothing at all, with no
+         hint that the button had even registered. -->
+    <div class="brief-msg" id="briefMsg" role="status" hidden></div>
   </div>
   <div class="gmeta">
     <div class="gmeta-l" id="rCnt"></div>

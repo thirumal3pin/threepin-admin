@@ -1243,3 +1243,12 @@ body.adv-open{overflow:hidden;}
   .dup-note { margin-left: 0; margin-top: 6px; display: inline-block; min-height: 30px; padding: 6px 11px; }
   .dup-box { max-height: 88vh; }
 }
+
+/* Why the Rank button appeared to do nothing. An empty box and a broken
+   matching engine both used to return silently from runBrief(), which is
+   indistinguishable from a dead button. */
+.brief-msg {
+  margin-top: 9px; padding: 9px 12px;
+  border-radius: 9px; font-size: 12.5px; line-height: 1.5;
+  border: 1px solid var(--amber); background: var(--amber-bg); color: var(--amber);
+}

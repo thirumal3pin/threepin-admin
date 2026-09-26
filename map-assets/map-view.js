@@ -1123,6 +1123,9 @@
 
   const api = {
     boot, setMode, refresh, select, hover, ask, pickCategory, runDistance,
+    // Which view is showing. The Client brief needs it so that clearing the
+    // brief puts back the view it interrupted rather than guessing.
+    mode: () => S.mode,
     openProperty, openPinList, closePinList, startPin, savePin, cancelPin,
     snooze, unsnooze, initResizer, applyMode, renderModeSwitch,
     state: S

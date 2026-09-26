@@ -389,31 +389,81 @@ let briefOn = false;
 function openBrief(){
   const bar = document.getElementById('briefBar');
   if(!bar) return;
+  const wasOpen = !bar.hidden;
   bar.hidden = false;
+  briefSay('');
+  // The button is in a sticky header that stays put however far down the
+  // page you are, but the box it opens is in the content — so pressing it
+  // after scrolling opened a panel somewhere above the viewport and looked
+  // like nothing had happened. Bring it to where the agent is looking.
+  bar.scrollIntoView({ block: 'center', behavior: wasOpen ? 'auto' : 'smooth' });
   const t = document.getElementById('briefText');
-  if(t) t.focus();
+  if(t) t.focus({ preventScroll: true });
 }
 function closeBrief(){
   const bar = document.getElementById('briefBar');
   if(bar) bar.hidden = true;
   clearBrief();
 }
+// Whatever view the brief interrupted, put it back.
+let briefRestoreMode = null;
 function clearBrief(){
   briefOn = false;
+  briefSay('');
   const r = document.getElementById('briefResults');
   if(r){ r.hidden = true; r.innerHTML = ''; }
-  document.getElementById('pgrid').style.display = '';
   const meta = document.querySelector('.gmeta');
   if(meta) meta.style.display = '';
+  // The map view owns whether the card grid is shown — setting pgrid's
+  // display straight from here put the grid back UNDERNEATH a map that was
+  // still open, which is the same two-result-sets problem in reverse.
+  if(briefRestoreMode && window.PinMapView && typeof PinMapView.setMode === 'function'){
+    const back = briefRestoreMode; briefRestoreMode = null;
+    PinMapView.setMode(back);
+  } else {
+    document.getElementById('pgrid').style.display = '';
+  }
   applyFilters();
+}
+
+// Nothing happening when a button is pressed is the worst outcome available:
+// the agent cannot tell an empty box from a broken feature, and both used to
+// return silently from here.
+function briefSay(msg){
+  const m = document.getElementById('briefMsg');
+  if(!m) return;
+  m.hidden = !msg;
+  m.textContent = msg || '';
 }
 
 function runBrief(){
   const t = document.getElementById('briefText');
   const text = t ? t.value.trim() : '';
-  if(!text || !window.PinMatch || !window.PinMatchPanel) return;
+  if(!text){
+    briefSay('Type what the client asked for first — an area, a budget or "3BHK" is enough to rank the whole inventory.');
+    if(t) t.focus();
+    return;
+  }
+  if(!window.PinMatch || !window.PinMatchPanel){
+    briefSay('The matching engine has not loaded. Reload the page and try again.');
+    return;
+  }
   const el = document.getElementById('briefResults');
   if(!el) return;
+  briefSay('');
+
+  // One set of results on screen, not two.
+  //
+  // This hid the card grid and said so in a comment — "two result sets on one
+  // screen, ordered differently, is a way to misread both" — but it never
+  // hid the MAP. Run a brief with Split or Map open and the map stayed put
+  // with the ranked list stacked underneath it, each showing a different set
+  // in a different order. The brief is a ranked list, so it switches to the
+  // list view and the map goes away until it is cleared.
+  if(window.PinMapView && typeof PinMapView.setMode === 'function'){
+    const shell = document.getElementById('mapShell');
+    if(shell && !shell.hidden){ briefRestoreMode = (window.PinMapView.mode && PinMapView.mode()) || 'split'; PinMapView.setMode('list'); }
+  }
 
   briefOn = true;
   // The ranked list replaces the grid rather than sitting beside it: two
