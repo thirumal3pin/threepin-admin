@@ -146,8 +146,28 @@ async function run(engine, name, viewport) {
       /dashboard\.tailortalk\.ai\/.+\/leads\?lead_id=.+/.test(r.href || ''), r.href);
     ok('...sits at the foot of the pane, where a compose box would', r.atFoot, JSON.stringify(r));
     ok('...is big enough to tap', r.tall >= 36, r.tall + 'px');
-    ok('...and says the reply is sent from TailorTalk, not from here',
+    ok('...and says the reply is typed in TailorTalk, not here',
       /TailorTalk/.test(r.text || ''), r.text);
+
+    // The owner asked for a mini window rather than a trip to another tab.
+    // An iframe is impossible — dashboard.tailortalk.ai answers with
+    // x-frame-options: DENY and frame-ancestors 'none' — so the button opens
+    // a sized popup beside the CRM, which keeps this tab exactly where it is.
+    const popped = await page.evaluate(() => {
+      const calls = [];
+      const real = window.open;
+      window.open = (u, name, feat) => { calls.push({ u, name, feat }); return { focus() {} }; };
+      document.querySelector('.dp-reply-btn').click();
+      window.open = real;
+      return calls;
+    });
+    ok('...and opens a window rather than navigating away', popped.length === 1, JSON.stringify(popped));
+    ok('...sized, and positioned beside this one',
+      /width=\d+/.test(popped[0].feat || '') && /left=\d+/.test(popped[0].feat || ''), popped[0].feat);
+    ok('...named, so a second lead reuses the same window',
+      popped[0].name === 'tailortalkChat', popped[0].name);
+    ok('...carrying this lead', /lead_id=/.test(popped[0].u || ''), popped[0].u);
+    ok('...and this page did not move', page.url().includes('crm.local'), page.url());
   }
 
   // Exactly one box may be the scroller, and it must have somewhere to go.

@@ -1180,11 +1180,11 @@ function renderConversationReply(l){
   // once the agent gets there.
   const closed = l.tt && l.tt.lastMessageAt && (Date.now() - l.tt.lastMessageAt) > 24*3600000;
   el.innerHTML = `
-    <a class="dp-reply-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener">
-      ↪ Reply in TailorTalk</a>
+    <a class="dp-reply-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener"
+       onclick="openTtChat('${l.id}', event)">↪ Reply in TailorTalk</a>
     <div class="dp-reply-note">${closed
-      ? 'Opens this same chat. The 24-hour window has closed, so TailorTalk will need a template.'
-      : 'Opens this same chat, already on this lead. Replies are sent from TailorTalk, not from here.'}</div>`;
+      ? 'Opens in a window beside this one, already on this chat. The 24-hour window has closed, so TailorTalk will need a template.'
+      : 'Opens in a window beside this one, already on this chat. TailorTalk will not let its dashboard be embedded here, so the reply is typed there — this page stays where it is.'}</div>`;
 }
 
 // In the side pane the pane itself scrolls; inline it is the chat box. Scroll
@@ -3603,7 +3603,7 @@ function openDetail(id){
   if(ttBtn){
     const ttUrl = ttChatUrl(l);
     ttBtn.hidden = !ttUrl;
-    if(ttUrl) ttBtn.href = ttUrl;
+    if(ttUrl){ ttBtn.href = ttUrl; ttBtn.onclick = ev => openTtChat(l.id, ev); }
   }
   waBtn.title = isTtLead(l) ? 'Opens WhatsApp on this device. It is not sent from the business number and will not appear in the TailorTalk chat.' : '';
 
@@ -4265,6 +4265,44 @@ window.applyTtWorkspaceSnapshot = function(slug){
     if(l) renderTtSection(l);
   }
 };
+// ═══════ WHY THIS IS NOT AN IFRAME ═══════
+//
+// The obvious build is to embed the TailorTalk page in a panel here. It
+// cannot be done, by their choice and not for want of trying: every response
+// from dashboard.tailortalk.ai carries
+//
+//     x-frame-options: DENY
+//     content-security-policy: frame-ancestors 'none'
+//
+// which instructs the browser that no site may frame it. An iframe renders
+// blank and no attribute on our side overrides it — the browser enforces it,
+// not the page. Their login cookie is SameSite=lax too, so even if framing
+// were allowed a cross-site frame would show a login screen. It is the right
+// setting for a dashboard that can message clients: it is what stops another
+// page hijacking those clicks.
+//
+// A sized popup is the closest thing that actually works. It is a real
+// browser window, so it carries the agent's TailorTalk session, and the CRM
+// tab stays exactly where it was — which is the point of the request. Opened
+// from a click so pop-up blockers allow it, reusing one named window so a
+// second lead replaces the chat rather than littering the desktop, and
+// falling back to a normal tab if a blocker refuses anyway.
+function openTtChat(id, ev){
+  if(ev) ev.preventDefault();
+  const l = leads.find(x => x.id === id);
+  const url = ttChatUrl(l);
+  if(!url) return;
+  const w = Math.min(560, Math.max(380, Math.round(screen.availWidth * 0.32)));
+  const h = Math.max(560, Math.round(screen.availHeight * 0.88));
+  // Against the right edge, so it sits beside the CRM rather than over it.
+  const left = Math.max(0, screen.availWidth - w - 24);
+  const top = Math.max(0, Math.round((screen.availHeight - h) / 2));
+  const win = window.open(url, 'tailortalkChat',
+    `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+  if(win){ win.focus(); return; }
+  window.open(url, '_blank', 'noopener');   // blocked — a tab is better than nothing
+}
+
 function ttChatUrl(l){
   if(!l || !l.tt || !l.tt.id) return '';
   const ws = ttWorkspace || TT_WORKSPACE_FALLBACK;
