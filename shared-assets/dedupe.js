@@ -29,8 +29,22 @@
 //
 // That last branch is what catches the pairs whose titles were rewritten, and
 // the price condition is what stops it catching two different flats in one
-// building. Nothing is ever deleted: the losing record is hidden from the
-// views and reported, so the owner can merge or remove it at source.
+// building.
+//
+// ═══════ IT NEVER MERGES ANYTHING ═══════
+//
+// This started out hiding the losing record automatically. The owner stopped
+// that: "this merging is only one time process. Here after don't merge
+// automatically." A rule that quietly removes a listing is a rule that can
+// quietly lose a sale, and the owner is the one who knows which of two
+// records the seller actually rang about.
+//
+// So findDuplicates() — the only entry point the app calls — POINTS, and
+// nothing more. Every property stays in every view, on the map and in
+// matching, and the pairs are listed in the review panel with the reason and
+// a Delete beside each, for a person to action. dedupe() still returns a
+// filtered list, but only the tests and any future one-off clean-up use it;
+// no view is built from it.
 (function (root) {
   'use strict';
 
@@ -135,10 +149,11 @@
   }
 
   /**
-   * Finds every duplicate pair in a list.
-   * Returns { pairs, hide } where `hide` is a Set of the ids to leave out of
-   * the views. The coded record is always the one kept: it is the one the
-   * sheet will keep re-syncing, and the one whose code an agent quotes.
+   * Finds every duplicate pair in a list. Reports only — see the header.
+   * Returns { pairs, hide }; `hide` names the record each pair would lose if
+   * somebody chose to act on it, and is not applied to anything here. The
+   * coded record is always the one nominated to keep: it is the one the sheet
+   * will keep re-syncing, and the one whose code an agent quotes.
    */
   function findDuplicates(list) {
     const items = Array.isArray(list) ? list : [];
@@ -159,7 +174,11 @@
     return { pairs, hide };
   }
 
-  /** The list with the duplicate records left out, plus what was left out. */
+  /**
+   * The list with the duplicate records left out, plus what was left out.
+   * NOT used to build any view — see the header. Kept for the tests and for a
+   * deliberate one-off clean-up.
+   */
   function dedupe(list) {
     const { pairs, hide } = findDuplicates(list);
     if (!hide.size) return { list: Array.isArray(list) ? list : [], pairs, hide };
