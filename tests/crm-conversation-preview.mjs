@@ -211,24 +211,23 @@ async function run(engine, name, viewport) {
     ok('...and says the reply is typed in TailorTalk, not here',
       /TailorTalk/.test(r.text || ''), r.text);
 
-    // The owner asked for a mini window rather than a trip to another tab.
-    // An iframe is impossible — dashboard.tailortalk.ai answers with
-    // x-frame-options: DENY and frame-ancestors 'none' — so the button opens
-    // a sized popup beside the CRM, which keeps this tab exactly where it is.
-    const popped = await page.evaluate(() => {
-      const calls = [];
-      const real = window.open;
-      window.open = (u, name, feat) => { calls.push({ u, name, feat }); return { focus() {} }; };
-      document.querySelector('.dp-reply-btn').click();
-      window.open = real;
-      return calls;
+    // A TAB, not a popup window — the owner asked for that specifically. A
+    // named target means it is a new tab the first time and the SAME tab for
+    // every lead after, rather than a row of them building up.
+    const tab = await page.evaluate(() => {
+      const a = document.querySelector('.dp-reply-btn');
+      const hdr = document.querySelector('#dpTtBtn');
+      return { target: a.getAttribute('target'), rel: a.getAttribute('rel'),
+        inlineHandler: !!a.getAttribute('onclick'),
+        href: a.getAttribute('href'),
+        headerTarget: hdr ? hdr.getAttribute('target') : null };
     });
-    ok('...and opens a window rather than navigating away', popped.length === 1, JSON.stringify(popped));
-    ok('...sized, and positioned beside this one',
-      /width=\d+/.test(popped[0].feat || '') && /left=\d+/.test(popped[0].feat || ''), popped[0].feat);
-    ok('...named, so a second lead reuses the same window',
-      popped[0].name === 'tailortalkChat', popped[0].name);
-    ok('...carrying this lead', /lead_id=/.test(popped[0].u || ''), popped[0].u);
+    ok('...in a tab, not a popup window', tab.target === 'tailortalkChat', JSON.stringify(tab));
+    ok('...with no script intercepting the click, so ctrl-click still works',
+      !tab.inlineHandler, JSON.stringify(tab));
+    ok('...and the header link goes to the same tab',
+      tab.headerTarget === 'tailortalkChat', tab.headerTarget);
+    ok('...carrying this lead', /lead_id=/.test(tab.href || ''), tab.href);
     ok('...and this page did not move', page.url().includes('crm.local'), page.url());
   }
 
