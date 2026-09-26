@@ -339,6 +339,11 @@ function toggleDensity(){
              no TailorTalk chat — see syncConversationPane(). -->
         <button class="dp-act conv" id="dpConvBtn" onclick="toggleConversationPane()" aria-pressed="false" hidden>💬 Conversation</button>
         <a class="dp-act wa" id="dpWaBtn" href="#" target="_blank" rel="noopener">💬 WhatsApp</a>
+        <!-- The business number's thread, in TailorTalk. The WhatsApp button
+             beside this one opens the agent's OWN WhatsApp, which the client
+             sees arriving from a different number. -->
+        <a class="dp-act tt" id="dpTtBtn" href="#" target="_blank" rel="noopener" hidden
+           title="Open this conversation in TailorTalk, on the business number">↪ TailorTalk</a>
         <button class="dp-act" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
         <button class="dp-act danger" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
       </div>
@@ -453,6 +458,10 @@ function toggleDensity(){
           <button type="button" class="dp-side-x" aria-label="Close the conversation panel" onclick="toggleConversationPane()">×</button>
         </div>
         <div class="dp-side-body" id="dpSideBody"></div>
+        <!-- Where a compose box would be. Replying from here is not possible:
+             the TailorTalk API this CRM holds is read-only, so this opens the
+             same conversation in TailorTalk rather than pretending to send. -->
+        <div class="dp-side-reply" id="dpSideReply"></div>
       </aside>
     </div>
   </div>

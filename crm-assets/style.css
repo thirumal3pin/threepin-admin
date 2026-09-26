@@ -1633,3 +1633,29 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   color: var(--ink3, #655E59); max-width: 240px;
 }
 @media (max-width: 720px) { .lf-bsort-btn { min-height: 36px; } }
+
+/* ═══════ HANDING OVER TO TAILORTALK ═══════
+   Where a compose box would be if we could send. We cannot: the TailorTalk
+   API this CRM holds reads leads and does not send messages, and the Meta
+   WhatsApp credentials stored for this tenant are dead. A box that looked
+   like a reply field and quietly failed would be worse than an honest link,
+   so this says where the reply happens and takes the agent there in one
+   click, already on the right conversation. */
+.dp-side-reply {
+  flex: 0 0 auto; padding: 11px 14px 13px;
+  border-top: 1px solid var(--border, #E4E0D8); background: var(--white, #fff);
+}
+.dp-side-reply:empty { display: none; }
+.dp-reply-btn {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; min-height: 40px; padding: 10px 14px;
+  border-radius: 10px; text-decoration: none;
+  font-size: 13.5px; font-weight: 650;
+  background: var(--ink, #1C1917); color: #fff;
+}
+.dp-reply-btn:hover { opacity: .9; }
+.dp-reply-note {
+  margin-top: 7px; font-size: 11.5px; line-height: 1.45;
+  color: var(--ink3, #655E59); text-align: center;
+}
+.dp-act.tt { white-space: nowrap; }

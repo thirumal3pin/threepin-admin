@@ -112,6 +112,10 @@ function subscribeToData(tenantId){
         if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
         if (window.applyViewsSnapshot) window.applyViewsSnapshot(data.views || {});
         if (window.applyTeamSnapshot) window.applyTeamSnapshot(data.team || {});
+        // The slug in TailorTalk's own dashboard URL
+        // (dashboard.tailortalk.ai/<workspace>/leads). TailorTalk does not send
+        // it with a lead, so it is configuration rather than data.
+        if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
       }, (err) => console.error('Firestore settings sync error:', err));
     });
 }

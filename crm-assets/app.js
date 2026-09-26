@@ -1163,7 +1163,28 @@ function renderConversationPane(l){
   else if(cached.error) box.innerHTML = '<div class="empty-mini">Couldn\'t load the conversation — check your connection.</div>';
   else if(!st) box.innerHTML = '<div class="empty-mini">No conversation yet — it arrives with the next update.</div>';
   else box.innerHTML = ttConversationHtml(l, st);
+  renderConversationReply(l);
   scrollConversationToLatest(l);
+}
+
+// The reply bar. It does not send — see the note on ttChatUrl — so it says so
+// and hands over in one click, carrying the lead id TailorTalk uses in its own
+// URL. Every TailorTalk lead on this account has one, so it always works.
+function renderConversationReply(l){
+  const el = document.getElementById('dpSideReply');
+  if(!el) return;
+  const url = ttChatUrl(l);
+  if(!url){ el.innerHTML = ''; return; }
+  // The 24-hour window is WhatsApp's, and it governs TailorTalk too — worth
+  // saying here, because it decides whether a free reply is even possible
+  // once the agent gets there.
+  const closed = l.tt && l.tt.lastMessageAt && (Date.now() - l.tt.lastMessageAt) > 24*3600000;
+  el.innerHTML = `
+    <a class="dp-reply-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener">
+      ↪ Reply in TailorTalk</a>
+    <div class="dp-reply-note">${closed
+      ? 'Opens this same chat. The 24-hour window has closed, so TailorTalk will need a template.'
+      : 'Opens this same chat, already on this lead. Replies are sent from TailorTalk, not from here.'}</div>`;
 }
 
 // In the side pane the pane itself scrolls; inline it is the chat box. Scroll
@@ -3577,6 +3598,13 @@ function openDetail(id){
   // For a TailorTalk lead this opens the agent's OWN WhatsApp, not the business number the
   // lead has been chatting with — say so, because the message won't be in TailorTalk's chat.
   waBtn.innerHTML = isTtLead(l) ? '💬 WhatsApp<span class="dp-wa-mine"> from my phone</span>' : '💬 WhatsApp';
+  // The business number's own thread, which the button above is NOT.
+  const ttBtn = document.getElementById('dpTtBtn');
+  if(ttBtn){
+    const ttUrl = ttChatUrl(l);
+    ttBtn.hidden = !ttUrl;
+    if(ttUrl) ttBtn.href = ttUrl;
+  }
   waBtn.title = isTtLead(l) ? 'Opens WhatsApp on this device. It is not sent from the business number and will not appear in the TailorTalk chat.' : '';
 
   renderDetailStageRow(l);
@@ -4215,6 +4243,34 @@ function addNote(){
 // The team is the list in settings/{tenant}.team — set by the owner, never guessed from lead data
 // and never added to on login.
 let team = {};
+// ═══════ OPENING THE CONVERSATION IN TAILORTALK ═══════
+//
+// Replying from here is not possible today, and saying so is more useful than
+// a box that silently fails. The TailorTalk API this CRM uses is get_leads,
+// which reads; there is no documented endpoint for sending a message. The
+// other route, Meta's WhatsApp Cloud API, is connected in botConfigs but its
+// stored token is dead — Graph answers "Application has been deleted" — and
+// even with a live one, a message sent around TailorTalk would not appear in
+// its chat log and its AI would carry on replying without knowing about it.
+//
+// So this does the reachable half: one click from the lead to that exact
+// conversation, instead of opening the dashboard and hunting for the name.
+// tt.id is the lead_id in their URL.
+const TT_WORKSPACE_FALLBACK = 'iwriqpyzv';
+let ttWorkspace = null;
+window.applyTtWorkspaceSnapshot = function(slug){
+  ttWorkspace = (slug && String(slug).trim()) || null;
+  if(currentDetailId){
+    const l = leads.find(x => x.id === currentDetailId);
+    if(l) renderTtSection(l);
+  }
+};
+function ttChatUrl(l){
+  if(!l || !l.tt || !l.tt.id) return '';
+  const ws = ttWorkspace || TT_WORKSPACE_FALLBACK;
+  return `https://dashboard.tailortalk.ai/${encodeURIComponent(ws)}/leads?lead_id=${encodeURIComponent(l.tt.id)}`;
+}
+
 window.applyTeamSnapshot = function(map){
   team = map && typeof map === 'object' ? map : {};
 };

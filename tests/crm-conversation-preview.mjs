@@ -121,6 +121,35 @@ async function run(engine, name, viewport) {
   console.log('   ', JSON.stringify(g));
   ok('the conversation rendered', g && g.msgs > 5, JSON.stringify(g));
 
+  // ── Where a reply goes ──
+  // The CRM cannot send: its TailorTalk API reads leads, and the stored Meta
+  // WhatsApp credentials are dead. What it can do is hand over to the right
+  // conversation in one click, which is worth more than a compose box that
+  // silently fails.
+  if (wide) {
+    const r = await page.evaluate(() => {
+      const bar = document.querySelector('#dpSideReply');
+      const btn = bar && bar.querySelector('.dp-reply-btn');
+      if (!btn) return { none: true };
+      const br = bar.getBoundingClientRect(), side = document.querySelector('#dpSide').getBoundingClientRect();
+      return {
+        href: btn.getAttribute('href'),
+        text: bar.textContent.replace(/\s+/g, ' ').trim().slice(0, 130),
+        // It sits at the foot of the pane, where a compose box belongs.
+        atFoot: Math.abs(br.bottom - side.bottom) < 4,
+        onScreen: br.width > 0 && br.right <= innerWidth + 1,
+        tall: Math.round(btn.getBoundingClientRect().height)
+      };
+    });
+    ok('the conversation offers a way to reply', !r.none, JSON.stringify(r));
+    ok('...which carries the TailorTalk lead id, so it opens THIS chat',
+      /dashboard\.tailortalk\.ai\/.+\/leads\?lead_id=.+/.test(r.href || ''), r.href);
+    ok('...sits at the foot of the pane, where a compose box would', r.atFoot, JSON.stringify(r));
+    ok('...is big enough to tap', r.tall >= 36, r.tall + 'px');
+    ok('...and says the reply is sent from TailorTalk, not from here',
+      /TailorTalk/.test(r.text || ''), r.text);
+  }
+
   // Exactly one box may be the scroller, and it must have somewhere to go.
   const boxScrolls = g.boxScrollH > g.boxClientH + 4;
   const chatScrolls = g.chatScrollH > g.chatClientH + 4;
