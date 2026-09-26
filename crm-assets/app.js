@@ -3952,17 +3952,39 @@ function closeFollowUpLogModal(){
   document.getElementById('fuLogModal').classList.remove('open');
   fuLogLeadId = null;
 }
-// Real-estate follow-up cadence — tomorrow/3-day/week/fortnight covers the
-// common "still deciding," "post-site-visit," and "nurture" cases without
-// making the agent operate a date picker for every single lead.
-function setFuLogPreset(days){
-  const dateInp = document.getElementById('fuLogDate');
-  const timeInp = document.getElementById('fuLogTime');
-  if(days===null){ dateInp.value=''; timeInp.value=''; return; }
+// Real-estate follow-up cadence. The day presets cover "still deciding,"
+// "post-site-visit" and "nurture"; the HOUR presets cover the commonest case
+// of the lot, which the day presets could not express at all: "he is calling
+// me back after lunch."
+//
+// Every preset here used to set a date and leave the time empty, and a date
+// alone is rejected when it is today — so "later today" meant typing a time
+// by hand, and the shortest follow-up the buttons could offer was tomorrow.
+// An hour preset sets BOTH fields, which is what makes today reachable.
+function setFuIn(dateId, timeId, spec){
+  const dateInp = document.getElementById(dateId);
+  const timeInp = document.getElementById(timeId);
+  if(!dateInp || !timeInp) return;
+  if(spec===null){ dateInp.value=''; timeInp.value=''; return; }
   const d = new Date();
-  d.setDate(d.getDate()+days);
+  if(spec.hours){
+    d.setTime(d.getTime() + spec.hours*3600000);
+    // To the next five minutes, so the chip reads "4:35" and not "4:37".
+    d.setMinutes(Math.ceil(d.getMinutes()/5)*5, 0, 0);
+    dateInp.value = toDateInputValue(d);
+    timeInp.value = toTimeInputValue(d);
+    return;
+  }
+  d.setDate(d.getDate() + (spec.days||0));
   dateInp.value = toDateInputValue(d);
+  // A day preset leaves the time alone: "next week" has no hour in it, and
+  // overwriting a time the agent already chose would be rude.
 }
+function setFuLogPreset(days){ setFuIn('fuLogDate','fuLogTime', days===null ? null : { days }); }
+function setFuLogHours(hours){ setFuIn('fuLogDate','fuLogTime', { hours }); }
+// The same presets on the note row, where most follow-ups are actually set.
+function setNoteFuPreset(days){ setFuIn('noteFollowUpDate','noteFollowUpTime', days===null ? null : { days }); }
+function setNoteFuHours(hours){ setFuIn('noteFollowUpDate','noteFollowUpTime', { hours }); }
 function saveFollowUpLog(){
   const l = leads.find(x=>x.id===fuLogLeadId);
   if(!l) return;

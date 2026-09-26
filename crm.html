@@ -356,6 +356,44 @@ function toggleDensity(){
         </div>
       </div>
 
+      <!-- Logging what just happened is the commonest reason to open a lead,
+           so the box for it is the first thing under the header rather than
+           the last thing on the page. It used to sit below the matching
+           properties, and against the real inventory that section ran to
+           thousands of pixels — the note box was eight screens down and was
+           reported, fairly, as missing. The history itself stays in the
+           timeline at the bottom. -->
+      <div class="sec note-sec">
+        <div class="sec-title">✍️ Log a note</div>
+        <div class="note-add">
+          <input type="text" class="note-input" id="noteInput" autocomplete="off" placeholder="Log a call, follow-up, or update… type @ to mention a teammate" onkeydown="if(event.key==='Enter' && !mentionMenuOpen())addNote()">
+          <button class="note-btn" onclick="addNote()">Add</button>
+          <div class="mention-menu" id="mentionMenu" role="listbox" aria-label="Mention a teammate" hidden></div>
+        </div>
+        <div class="note-fu-row">
+          <div class="field">
+            <label for="noteFollowUpDate">Next Follow-up Date</label>
+            <input type="date" id="noteFollowUpDate">
+          </div>
+          <div class="field">
+            <label for="noteFollowUpTime">Time</label>
+            <input type="time" id="noteFollowUpTime">
+          </div>
+          <div class="note-fu-actions" id="noteFuActions">
+            <button type="button" class="note-fu-btn done" onclick="openFollowUpLogModal(currentDetailId)">✓ Followed Up</button>
+            <button type="button" class="note-fu-btn remove" onclick="removeFollowUp(currentDetailId)">✕ Remove</button>
+          </div>
+          <div class="note-fu-quick">
+            <button type="button" onclick="setNoteFuHours(2)">+2 hours</button>
+            <button type="button" onclick="setNoteFuHours(4)">+4 hours</button>
+            <button type="button" onclick="setNoteFuPreset(1)">Tomorrow</button>
+            <button type="button" onclick="setNoteFuPreset(3)">+3 days</button>
+            <button type="button" onclick="setNoteFuPreset(7)">+1 week</button>
+          </div>
+          <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
+        </div>
+      </div>
+
       <!-- Where this lead stands: column, next step, what needs a person, AI suggestion/undo.
            Drawn by renderStandSection() in app.js. -->
       <div class="sec st-sec" id="dpStandSec" hidden>
@@ -396,26 +434,6 @@ function toggleDensity(){
            and updates) and edits, filterable. Drawn by renderTimeline() in app.js. -->
       <div class="sec" id="dpTimelineSec">
         <div class="sec-title">🕓 Timeline</div>
-        <div class="note-add">
-          <input type="text" class="note-input" id="noteInput" autocomplete="off" placeholder="Log a call, follow-up, or update… type @ to mention a teammate" onkeydown="if(event.key==='Enter' && !mentionMenuOpen())addNote()">
-          <button class="note-btn" onclick="addNote()">Add</button>
-          <div class="mention-menu" id="mentionMenu" role="listbox" aria-label="Mention a teammate" hidden></div>
-        </div>
-        <div class="note-fu-row">
-          <div class="field">
-            <label for="noteFollowUpDate">Next Follow-up Date</label>
-            <input type="date" id="noteFollowUpDate">
-          </div>
-          <div class="field">
-            <label for="noteFollowUpTime">Time</label>
-            <input type="time" id="noteFollowUpTime">
-          </div>
-          <div class="note-fu-actions" id="noteFuActions">
-            <button type="button" class="note-fu-btn done" onclick="openFollowUpLogModal(currentDetailId)">✓ Followed Up</button>
-            <button type="button" class="note-fu-btn remove" onclick="removeFollowUp(currentDetailId)">✕ Remove</button>
-          </div>
-          <div class="note-fu-hint">Leave as-is to keep the current follow-up, or change it before saving a note.</div>
-        </div>
         <div class="tl-filters" id="tlFilters" role="toolbar" aria-label="Filter the timeline"></div>
         <div class="timeline" id="timelinePanel"></div>
       </div>
@@ -605,6 +623,8 @@ function toggleDensity(){
         <div class="field">
           <label>Next Follow-up</label>
           <div class="fu-log-presets">
+            <button type="button" onclick="setFuLogHours(2)">+2 hours</button>
+            <button type="button" onclick="setFuLogHours(4)">+4 hours</button>
             <button type="button" onclick="setFuLogPreset(1)">Tomorrow</button>
             <button type="button" onclick="setFuLogPreset(3)">+3 days</button>
             <button type="button" onclick="setFuLogPreset(7)">+1 week</button>

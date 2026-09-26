@@ -234,7 +234,10 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.keyboard.type('Please call @agent');
   await page.waitForTimeout(100);
   ok('Typing @ suggests teammates', /Agent B\s*@agent\.b/.test((await text(page, '#mentionMenu button')).join(' ')), (await text(page, '#mentionMenu')).join(' '));
-  await page.locator('#dpTimelineSec .note-add').screenshot({ path: join(OUT, '50-mention-picker.png') });
+  // The note box moved out of the timeline and up to the top of the panel:
+  // below the matching properties it sat thousands of pixels down the page
+  // and was reported as missing. The timeline still holds the history.
+  await page.locator('.note-sec .note-add').screenshot({ path: join(OUT, '50-mention-picker.png') });
   await page.keyboard.press('Enter');
   ok('Enter picks the teammate instead of saving the note', await page.inputValue('#noteInput') === 'Please call @agent.b ' && await page.evaluate(() => !(leads.find(l => l.id === 'A3').notes || []).length));
   await page.keyboard.type('today about the Kilpauk villa');

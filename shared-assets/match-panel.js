@@ -177,6 +177,10 @@
    *   onAction(id, key, match)   a data-pm-act button was clicked
    *   showHow      start with the explainer open
    */
+  // How many matches to show before asking. A shortlist an agent would
+  // actually send, rather than the entire ranked inventory.
+  const CAP = 5;
+
   function render(el, matches, opts) {
     if (!el) return;
     const o = opts || {};
@@ -184,7 +188,7 @@
     const live = matches.filter(m => !m.vetoed);
     const out = matches.filter(m => m.vetoed);
 
-    const state = el.__pmState || (el.__pmState = { how: !!o.showHow, out: false });
+    const state = el.__pmState || (el.__pmState = { how: !!o.showHow, out: false, more: false });
 
     const head = `<div class="pm-hdr">
       <span class="pm-hdr-n">${esc(o.title || 'Matches')}</span>
@@ -197,7 +201,23 @@
     if (!live.length && !out.length) {
       body = `<div class="pm-empty">${o.empty || 'Nothing matches yet.'}</div>`;
     } else {
-      body = live.map(m => row(m, shape)).join('');
+      // ═══════ A SHORTLIST, NOT THE WHOLE RANKING ═══════
+      //
+      // Every match used to render in full. Against the live inventory that
+      // was 28 rows and 7,177px of panel inside a lead page — and the Notes
+      // box sits BELOW it, so an agent had to scroll roughly eight thousand
+      // pixels past the matches to log a call. They reported the notes
+      // section as missing, which is exactly what that is.
+      //
+      // Five is what an agent actually sends a client. The rest are one
+      // click away and nothing is dropped.
+      const shown = state.more ? live : live.slice(0, CAP);
+      body = shown.map(m => row(m, shape)).join('');
+      if (live.length > CAP) {
+        body += `<button type="button" class="pm-more" data-pm-toggle="more" aria-expanded="${state.more}">`
+          + (state.more ? 'Show the top ' + CAP + ' only' : 'Show all ' + live.length + ' matches')
+          + '</button>';
+      }
       if (!live.length) body = `<div class="pm-empty">${o.empty || 'Nothing clears the bar yet.'}</div>`;
       if (out.length) {
         body += `<button type="button" class="pm-out-hd" data-pm-toggle="out" aria-expanded="${state.out}">

@@ -219,3 +219,15 @@
   .pm-bars-k { font-size: 9.5px; }
   .pm-acts .pm-btn { flex: 1 1 auto; justify-content: center; }
 }
+
+/* The "show all" under a capped match list. Reads as a continuation of the
+   list rather than as an action on a property, so it is a full-width quiet
+   row like the ruled-out header above it. */
+.pm .pm-more {
+  display: block; width: 100%; margin-top: 8px;
+  font: inherit; font-size: 12.5px; font-weight: 650;
+  padding: 9px 12px; min-height: 36px;
+  border: 1px dashed var(--pm-border, #D4CFC5); border-radius: 9px;
+  background: transparent; color: var(--pm-ink-2, #44403C); cursor: pointer;
+}
+.pm .pm-more:hover { border-style: solid; color: var(--pm-ink, #1C1917); }
