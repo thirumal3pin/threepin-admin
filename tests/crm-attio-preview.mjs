@@ -37,7 +37,13 @@ const LEADS = [
     createdAt: NOW - 30 * D, updatedAt: NOW - 2 * D, updatedBy: 'agent.a@example.com', stageChangedAt: NOW - 3 * D, reached: { new: NOW - 30 * D, visit_done: NOW - 10 * D, negotiation: NOW - 3 * D },
     mentions: { agent_b_example_com: { email: 'agent.b@example.com', by: 'agent.a@example.com', at: NOW - 2 * D, noteId: 'n0', text: '@agent.b she wants 82 L — can the owner do it?', doneAt: null } } },
   { id: 'A5', tenantId: T, name: 'Won Deal', source: 'manual', stageId: sid('won'), propertyInterest: 'T Nagar', createdAt: NOW - 60 * D, updatedAt: NOW - 10 * D, reached: { new: NOW - 60 * D, won: NOW - 12 * D } },
-  { id: 'A6', tenantId: T, name: 'Divya Sundaram', phone: '98765 43216', source: 'manual', stageId: sid('lost'), lostReason: 'not_interested', createdAt: NOW - 40 * D, updatedAt: NOW - 5 * D, reached: { new: NOW - 40 * D, options: NOW - 35 * D } }
+  { id: 'A6', tenantId: T, name: 'Divya Sundaram', phone: '98765 43216', source: 'manual', stageId: sid('lost'), lostReason: 'not_interested', createdAt: NOW - 40 * D, updatedAt: NOW - 5 * D, reached: { new: NOW - 40 * D, options: NOW - 35 * D } },
+  // Escalated the way the live ones are: the flag set, no escalatedAt, so it
+  // is a standing job rather than a fresh alarm. 198 of 405 look like this,
+  // and the card was showing none of them.
+  { id: 'A7', tenantId: T, name: 'Escalated Ravi', phone: '98765 43217', source: 'tailortalk', stageId: sid('options'),
+    propertyInterest: 'Adyar 3 BHK', createdAt: NOW - 4 * D, updatedAt: NOW - D, reached: { new: NOW - 4 * D },
+    tt: tt({ status: 'warm', escalated: true, escalatedTo: 'Swaminathan' }) }
 ];
 
 const STUB = `
@@ -117,8 +123,10 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   await page.evaluate(() => toggleView('dashboard'));
   await page.waitForTimeout(400);
   const funnel = (await text(page, '.dash-funnel')).join(' ');
-  // Arun was just moved to Options sent; the lost lead had reached it; Won and Negotiating skipped past it.
-  ok('The dashboard funnel counts milestones ever reached', /Enquiries\s*6.*Options sent\s*6.*Visit planned\s*3.*Visited\s*2.*Negotiating\s*2.*Won\s*1/.test(funnel), funnel.slice(0, 400));
+  // Arun was just moved to Options sent; the lost lead had reached it; Won and
+  // Negotiating skipped past it. Seven enquiries since the escalated lead was
+  // added to the fixture below.
+  ok('The dashboard funnel counts milestones ever reached', /Enquiries\s*7.*Options sent\s*7.*Visit planned\s*3.*Visited\s*2.*Negotiating\s*2.*Won\s*1/.test(funnel), funnel.slice(0, 400));
   await page.screenshot({ path: join(OUT, '03-dashboard-funnel.png'), fullPage: false });
   await page.close();
 }
@@ -369,6 +377,52 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
     !localStorage.getItem('crmBoardSortAll') && !localStorage.getItem('crmBoardSort')));
 
   await page.screenshot({ path: join(OUT, '60-board-sort.png') });
+  await page.context().close();
+}
+
+// ── Escalated, on the card and as a filter ──
+// The board built its own chip list inline and left Escalated out, while a
+// fuller builder that had it sat unused. On this account that hid the tag on
+// 198 of 405 leads — the tag the owner follows up from.
+{
+  const page = await openPage({ width: 1440, height: 900 });
+  const card = await page.evaluate(() => {
+    const c = [...document.querySelectorAll('.lcard')].find(x => /Escalated Ravi/.test(x.textContent));
+    if (!c) return { missing: true };
+    const chips = [...c.querySelectorAll('.tt-chip')].map(x => x.textContent.trim());
+    const esc = c.querySelector('.tt-chip.esc');
+    return { chips, hasEsc: !!esc, escText: esc ? esc.textContent.trim() : null,
+      escTitle: esc ? esc.getAttribute('title') : null,
+      phone: (c.querySelector('.lcard-phone a') || {}).textContent || null,
+      tel: (c.querySelector('.lcard-phone a') || {}).getAttribute ? c.querySelector('.lcard-phone a').getAttribute('href') : null };
+  });
+  ok('An escalated lead says so on its card', card.hasEsc, JSON.stringify(card));
+  ok('…and names who it went to', /Swaminathan/.test(card.escTitle || ''), card.escTitle);
+  ok('…and survives the card trimming its chips', (card.chips || []).some(c => /Escalated/.test(c)), JSON.stringify(card.chips));
+
+  // The number, so ringing a lead does not mean opening it first.
+  ok('The card carries the phone number', /98765 43217/.test(card.phone || ''), card.phone);
+  ok('…as something you can actually dial', /^tel:/.test(card.tel || ''), card.tel);
+
+  // The filter, which never existed.
+  const filters = await page.evaluate(() => [...document.querySelectorAll('.lf-chip')].map(c => c.textContent.replace(/\s*\d+\s*$/, '').trim()));
+  ok('There is an Escalated filter', filters.some(f => /^Escalated$/.test(f)), JSON.stringify(filters));
+  // The filter strip scrolls sideways; at the end of it this was off screen at
+  // every width, which for the filter the owner follows up from is the same as
+  // not having it.
+  ok('…and it is on screen without scrolling the strip', await page.evaluate(() => {
+    const c = [...document.querySelectorAll('.lf-chip')].find(x => /^Escalated/.test(x.textContent.trim()));
+    if(!c) return false;
+    const r = c.getBoundingClientRect(), bar = c.closest('.lf-bar').getBoundingClientRect();
+    return r.width > 0 && r.left >= bar.left - 1 && r.right <= bar.right + 1;
+  }));
+  await page.evaluate(() => setLeadFocus('escalated'));
+  await page.waitForTimeout(300);
+  const filtered = await page.evaluate(() => [...document.querySelectorAll('.lcard-name')].map(n => n.textContent.trim()));
+  ok('…and it shows the escalated lead', filtered.includes('Escalated Ravi'), JSON.stringify(filtered));
+  ok('…and only that one', filtered.length === 1, JSON.stringify(filtered));
+
+  await page.screenshot({ path: join(OUT, '70-escalated.png') });
   await page.context().close();
 }
 

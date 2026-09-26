@@ -526,6 +526,10 @@ const FOCUS_FILTERS = [
   { key:'mentions', label:'@ Mentioned me', test: l => !!myOpenMention(l), tone:'warn', onlyWhenAny: true },
   { key:'action',   label:'Needs action',   test: l => needsActionUi(l), tone:'warn' },
   { key:'overdue',  label:'Overdue',        test: l => isOverdueUi(l), tone:'bad' },
+  // Leads where the chat asked for a person. No onlyWhenAny on this one: the
+  // owner follows up from it, and a filter that disappears on the days it is
+  // empty is a filter you stop trusting.
+  { key:'escalated', label:'Escalated', test: l => !!(isTtLead(l) && l.tt.escalated), tone:'warn' },
   // Everything a person has to get through before going home: anything due by
   // the end of today, overdue included, since an overdue one is still today's.
   { key:'today',    label:'Due today',      test: l => {
@@ -797,32 +801,48 @@ function applySavedView(id){
 }
 
 // ── Board card ──
-function ttCardHtml(l){
-  if(!isTtLead(l)) return '';
-  const t = l.tt, bits = [];
-  ttOpenSignals(l).forEach(([key, s]) => {
+// ═══════ THE CHIPS ON A LEAD CARD ═══════
+//
+// There were two of these. This one carried Escalated, Flagged, Waiting for
+// team and the custom signals, and nothing called it — the board built its
+// own shorter list inline with only status, AI paused and last message, and
+// showed the first two. So a lead escalated in TailorTalk looked exactly like
+// one that was not, across 198 of the 405 TailorTalk leads, and the owner
+// noticed the tag they follow up on had gone.
+//
+// One list now, in the order an agent needs to read it, so that when the card
+// trims it the thing that survives is the thing that matters. Escalated ranks
+// above status and above the clock: somebody asked for a person, which counts
+// for more than knowing the chat is warm.
+function ttChips(l){
+  if(!isTtLead(l)) return [];
+  const t = l.tt, alerts = ttOpenAlerts(l), bits = [];
+
+  ttOpenSignals(l).forEach(([key, sig]) => {
     const m = ttSignalMeta(key);
-    const q = ttSignalQuote(key, s);
+    const q = ttSignalQuote(key, sig);
     bits.push(`<span class="tt-chip ${m.tone==='lost'?'lost':m.tone==='alert'?'alert':'action'}" title="${escapeHtml(m.title + (q ? ' — “' + q + '”' : ''))}">${m.icon} ${escapeHtml(m.chip)}</span>`);
   });
-  const alerts = ttOpenAlerts(l);
-  if(alerts.some(a => a.key==='waiting')) bits.push('<span class="tt-chip action" title="The AI left the lead\'s latest message for the team">⏳ Waiting for team</span>');
-  if(TT_STATUS[t.status]) bits.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
-  else if(t.status) bits.push(`<span class="tt-chip">${escapeHtml(ttStatusLabel(t.status))}</span>`);
-  // Attributed on the card too, or a glance at the board reads it as a sale.
-  if(t.converted && t.status!=='converted') bits.push('<span class="tt-chip converted" title="TailorTalk marked this converted. On this account that has meant a completed site visit, not a sale.">✅ Converted in TailorTalk</span>');
+  if(alerts.some(a => a.key==='waiting')) bits.push('<span class="tt-chip action" title="The AI left the lead&#39;s latest message for the team">⏳ Waiting for team</span>');
   if(t.escalated){
+    // `fresh` needs an escalatedAt inside the look-back window, and every
+    // escalated lead on this account arrived without one — so they all read
+    // as the quieter historical form, which is right, and still visible.
     const fresh = alerts.some(a => a.key==='escalated');
-    bits.push(`<span class="tt-chip ${fresh?'alert':'muted'}" title="${escapeHtml(t.escalatedTo ? 'Escalated to '+t.escalatedTo : 'Escalated in TailorTalk')}">${fresh?'🚨 ':''}Escalated</span>`);
+    bits.push(`<span class="tt-chip ${fresh?'alert':'esc'}" title="${escapeHtml(t.escalatedTo ? 'Escalated to '+t.escalatedTo+' in TailorTalk' : 'Escalated in TailorTalk — the chat asked for a person')}">${fresh?'🚨 ':'↗ '}Escalated</span>`);
   }
   if(t.flagged){
     const fresh = alerts.some(a => a.key==='flagged');
     bits.push(`<span class="tt-chip ${fresh?'alert':'muted'}" title="${escapeHtml(t.flagDetails || 'Flagged in TailorTalk')}">${fresh?'🚩 ':''}Flagged</span>`);
   }
+  if(TT_STATUS[t.status]) bits.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
+  else if(t.status) bits.push(`<span class="tt-chip">${escapeHtml(ttStatusLabel(t.status))}</span>`);
+  if(t.converted && t.status!=='converted') bits.push('<span class="tt-chip converted" title="TailorTalk marked this converted. On this account that has meant a completed site visit, not a sale.">✅ Converted in TailorTalk</span>');
   if(t.locked) bits.push('<span class="tt-chip paused" title="The AI is paused on this chat in TailorTalk">🔒 AI paused</span>');
   if(t.lastMessageAt) bits.push(`<span class="tt-chip time" title="Last message from the lead">💬 ${timeAgo(t.lastMessageAt)}</span>`);
-  return bits.length ? `<div class="lcard-tt">${bits.join('')}</div>` : '';
+  return bits;
 }
+
 function sourceBadge(l){
   if(l.source==='tailortalk') return { cls:'tailortalk', text:'TailorTalk' };
   if(l.source==='meta') return { cls:'meta', text:'Meta' };
@@ -2159,12 +2179,7 @@ function leadCardHtml(l, sort){
   const chips = [];
   const mention = myOpenMention(l);
   if(mention) chips.push(`<span class="tt-chip mention" title="${escapeHtml((window.crmMentions.displayName(mention.by || '') || 'Someone') + ': ' + (mention.text || ''))}">@ you</span>`);
-  if(isTtLead(l)){
-    const t = l.tt;
-    if(TT_STATUS[t.status]) chips.push(`<span class="tt-chip ${t.status}">${TT_STATUS[t.status].icon} ${TT_STATUS[t.status].label}</span>`);
-    if(t.locked) chips.push('<span class="tt-chip paused" title="The AI is paused on this chat in TailorTalk">🔒 AI paused</span>');
-    if(t.lastMessageAt) chips.push(`<span class="tt-chip time" title="Last message from the lead">💬 ${timeAgo(t.lastMessageAt)}</span>`);
-  }
+  chips.push(...ttChips(l));
   // The step line already says what the team owes; the alert line says the NEXT different thing.
   const attn = attentionFor(l);
   const coveredByStep = a => step && STEP_KEYS.has(a.key);
@@ -2182,11 +2197,17 @@ function leadCardHtml(l, sort){
       <div class="lcard-name">${escapeHtml(l.name)}</div>
       <div class="lcard-src ${src.cls}">${src.text}</div>
     </div>
+    ${l.phone ? `<div class="lcard-phone">
+      <a href="tel:${escapeHtml(String(l.phone).replace(/[^0-9+]/g,''))}" onclick="event.stopPropagation()"
+         title="Call ${escapeHtml(l.name || '')}">${escapeHtml(l.phone)}</a>
+      ${waHref(l.phone) ? `<a class="lcard-wa" href="${escapeHtml(waHref(l.phone))}" target="_blank" rel="noopener"
+         onclick="event.stopPropagation()" title="WhatsApp from this device" aria-label="WhatsApp">●</a>` : ''}
+    </div>` : ''}
     ${what ? `<div class="lcard-what">${what}</div>` : (l.enquiryType ? `<div class="lcard-what">${escapeHtml(l.enquiryType)}</div>` : '')}
     ${step ? `<div class="lcard-step ${step.cls}"><span class="lcard-step-t">${escapeHtml(step.text)}</span>${step.due ? `<span class="lcard-step-due">${escapeHtml(fmtDue(step.due))}</span>` : ''}</div>` : ''}
     ${alertItem ? `<div class="lcard-alert ${OVERDUE_KEYS.has(alertItem.key) ? 'overdue' : 'note'}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
     ${sortMeta ? `<div class="lcard-sortmeta">${escapeHtml(sortMeta)}</div>` : ''}
-    ${chips.length ? `<div class="lcard-tt">${chips.slice(0,2).join('')}</div>` : ''}
+    ${chips.length ? `<div class="lcard-tt">${chips.slice(0,3).join('')}${chips.length>3?`<span class="tt-chip more" title="${chips.length-3} more">+${chips.length-3}</span>`:''}</div>` : ''}
     <div class="lcard-foot">
       <div class="lcard-time">${stageAgeHtml(l)}${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
       ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}

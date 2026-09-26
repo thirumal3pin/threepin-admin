@@ -1707,3 +1707,43 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   font-size: 11.5px; color: var(--ink3, #655E59);
   display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+
+/* ═══════ ESCALATED, ON THE CARD ═══════
+   Somebody asked for a person. It reads as its own thing rather than as one
+   more grey pill — the owner follows up from this tag, and it was invisible
+   on 198 leads because the card was building its own shorter chip list and
+   never included it. Not the red of an overdue item: an escalation that has
+   been sitting a fortnight is a job, not an emergency. */
+.tt-chip.esc {
+  background: var(--amber-bg, #FDF0D5);
+  color: var(--amber, #8A4B00);
+  box-shadow: inset 0 0 0 1px var(--amber, #8A4B00);
+  font-weight: 700;
+}
+/* What did not fit. Three chips is what a card can carry without becoming a
+   list of chips. */
+.tt-chip.more { background: transparent; color: var(--ink3, #655E59); box-shadow: inset 0 0 0 1px var(--border, #E4E0D8); }
+
+/* ═══════ THE NUMBER, ON THE CARD ═══════
+   Ringing a lead meant opening it first. tel: on a phone dials; on a desktop
+   it hands off to whatever the machine uses. The dot beside it is WhatsApp,
+   from this device — the same thing the lead page's green button does. Both
+   stop the click reaching the card, or the panel opens behind the call. */
+.lcard-phone {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 3px; font-size: 12px; line-height: 1.3;
+}
+.lcard-phone a {
+  color: var(--ink2, #44403C); text-decoration: none;
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+  padding: 3px 0; min-height: 22px; display: inline-flex; align-items: center;
+}
+.lcard-phone a:hover { color: var(--ink, #1C1917); text-decoration: underline; }
+.lcard-wa {
+  color: var(--green, #15803D) !important; font-size: 15px; line-height: 1;
+  padding: 3px 5px !important; border-radius: 6px;
+}
+.lcard-wa:hover { background: var(--green-bg, #DCFCE7); text-decoration: none !important; }
+@media (max-width: 720px) {
+  .lcard-phone a { min-height: 30px; }
+}
