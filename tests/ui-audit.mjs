@@ -134,6 +134,39 @@ const PROBE = () => {
     return { el: nameOf(c), h: Math.round(r.height), visible: r.height > 0 };
   }).filter(x => x.visible) : [];
 
+  // ── 1c. DOES THE PAGE USE THE MONITOR IT IS ON? ──
+  // #main was capped at 1480px, so a 2560 screen showed the same four columns
+  // as a 1920 one with about 1,100px of empty margin beside them. And because
+  // a grid row is as tall as its tallest card with the footer pinned to the
+  // bottom, any unclamped line on one card became a hole above the footer on
+  // every other card in that row.
+  const grid = document.querySelector('#pgrid');
+  const cards = grid ? [...grid.querySelectorAll('.card')] : [];
+  out.grid = null;
+  if (grid && cards.length) {
+    const gr = grid.getBoundingClientRect();
+    const tops = new Map();
+    cards.forEach(c => { const t = Math.round(c.getBoundingClientRect().top); tops.set(t, (tops.get(t) || 0) + 1); });
+    const voids = [];
+    for (const c of cards.slice(0, 24)) {
+      const st = c.querySelector('.card-stats'), ft = c.querySelector('.card-foot');
+      if (st && ft) voids.push(Math.round(ft.getBoundingClientRect().top - st.getBoundingClientRect().bottom));
+    }
+    voids.sort((a, b) => a - b);
+    out.grid = {
+      perRow: Math.max(...tops.values()),
+      cardW: Math.round(cards[0].getBoundingClientRect().width),
+      unusedRight: Math.round(vw - gr.right),
+      voidMax: voids.length ? voids[voids.length - 1] : 0,
+      // Content escaping its own card — a grid item that will not shrink
+      // below its content pushes the box beside it past the card edge.
+      spill: cards.slice(0, 40).filter(c => {
+        const cr = c.getBoundingClientRect();
+        return [...c.querySelectorAll('*')].some(x => { const b = x.getBoundingClientRect(); return b.width && b.right > cr.right + 1; });
+      }).length
+    };
+  }
+
   // ── 2. Clipped controls ──
   // An interactive element whose box escapes a clipping ancestor. This is what
   // made the List / Split / Map row render as half-height letters.
@@ -340,6 +373,18 @@ for (const v of VIEWS) {
     m.tiny.slice(0, 6).map(t => t.px + 'px "' + t.t + '"').join(', '));
   ok('all text meets WCAG AA contrast', m.lowContrast.length === 0,
     m.lowContrast.length + ' failing, worst: ' + m.lowContrast.slice(0, 4).map(c => c.ratio + ':1 "' + c.t + '"').join(', '));
+
+  if (m.grid) {
+    note('property grid', m.grid.perRow + ' per row, cards ' + m.grid.cardW + 'px, '
+      + m.grid.unusedRight + 'px unused at the right, worst card gap ' + m.grid.voidMax + 'px');
+    // A wide monitor should show more properties, not the same four with a
+    // margin either side.
+    ok('the grid uses the width of the screen', m.grid.unusedRight <= 140,
+      m.grid.unusedRight + 'px of the viewport is unused beside the grid');
+    ok('nothing spills out of a card', m.grid.spill === 0, m.grid.spill + ' card(s)');
+    ok('no card carries a large empty gap', m.grid.voidMax <= 80,
+      m.grid.voidMax + 'px between the stats and the footer');
+  }
 
   await page.screenshot({ path: join(OUT, v.name + '.png'), fullPage: false });
 

@@ -114,7 +114,15 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .sortsel:focus{border-color:var(--ink);}
 
 /* ── GRID ── */
-#main{max-width:1480px;margin:0 auto;padding:22px 24px 90px;}
+/* The cap was 1480px, which on a 2560 monitor left about 1,100 pixels of
+   empty margin and held the grid at four columns whether the screen was 1920
+   or 2560 wide. A reading column wants a cap — a line of prose is unreadable
+   at 2000px — but this is a grid of cards, and more width means more
+   properties on screen, which is the whole job of the page.
+
+   So the shell is free and the things that ARE reading columns keep their own
+   cap below. */
+#main{max-width:2200px;margin:0 auto;padding:22px 24px 90px;}
 .gmeta{margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}
 .gmeta-l{font-size:13px;color:var(--ink3);font-weight:500;}
 .gmeta-l b{color:var(--ink);font-weight:700;}
@@ -135,7 +143,19 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .card-r1 > :first-child{min-width:0;}
 .card-code-inline{font-family:'IBM Plex Mono','SF Mono',Menlo,monospace;font-size:0.88em;font-weight:700;letter-spacing:.04em;color:var(--ink3);}
 .card-name{font-family:var(--serif);font-size:18px;font-weight:700;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
-.card-loc{font-size:12.5px;color:var(--ink3);margin-top:4px;display:flex;align-items:center;gap:4px;}
+/* Two lines, like the name above it.
+   A grid row is as tall as its tallest card, so every card in the row grows
+   to fit the worst one and the rest are left with a hole above their footer.
+   Measured at 1920: this line alone ran from 20px to 80px — sixty of the
+   seventy-pixel gap — because it was the only text on the card with no limit
+   on it. "Beemasena Garden, Off P.S. Sivasamy Salai, Mylapore" is four lines
+   in a 311px card and the locality is legible in the first two; the whole
+   address is on hover and on the property page. */
+.card-loc{
+  font-size:12.5px;color:var(--ink3);margin-top:4px;
+  display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;line-height:1.4;
+}
 .card-actions{display:flex;gap:5px;flex-shrink:0;}
 .card-action-btn{width:30px;height:30px;border-radius:8px;border:1.5px solid var(--border);background:var(--white);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;color:var(--ink3);line-height:1;}
 .card-action-btn:hover{border-color:var(--ink);color:var(--ink);transform:scale(1.08);}
@@ -153,7 +173,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 /* A multi-tier price is a paragraph, not a headline. Set as one it took five
    lines of 21px serif and dragged every card in the row to its height. */
 .price-main.long{font-size:14px;line-height:1.35;font-weight:600;
-  display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .price-main-wrap{min-width:0;flex:1 1 auto;}
 .price-lbl{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px;}
 /* "8,899" on its own said nothing — it sat unlabelled in the corner of the
@@ -163,7 +183,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .price-psf{font-size:12.5px;color:var(--ink2);text-align:right;font-weight:600;flex:0 0 auto;white-space:nowrap;}
 .price-psf .price-lbl{margin-bottom:2px;}
 .card-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
-.cst{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:7px 10px;}
+/* min-width:0, or the ellipsis on .cst-v never gets a chance.
+   A grid item will not shrink below its content by default, so a value like
+   "Option 1 - 1.56 Grounds (3,762 Sq.ft); Option 2 - 6.3 Grounds" pushed its
+   column wider than the 1fr it was given and shoved the TYPE box out past the
+   edge of the card. Visible as "TYPE Apar" cut off mid-word once the cards
+   narrowed to six across. */
+.cst{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:7px 10px;min-width:0;}
 .cst-l{font-size:11.5px;color:var(--ink3);font-weight:700;letter-spacing:.05em;text-transform:uppercase;}
 .cst-v{font-size:13px;color:var(--ink2);font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .card-foot{border-top:1px solid var(--border);padding-top:11px;display:flex;justify-content:space-between;align-items:center;margin-top:auto;}
@@ -1252,3 +1278,29 @@ body.adv-open{overflow:hidden;}
   border-radius: 9px; font-size: 12.5px; line-height: 1.5;
   border: 1px solid var(--amber); background: var(--amber-bg); color: var(--amber);
 }
+
+/* ═══════ WHAT STILL WANTS A NARROW COLUMN ═══════
+   Letting #main run to 2200px is right for the card grid and wrong for
+   anything read line by line — a match reason or a brief stretched across
+   two thousand pixels is a worse read, not a better one. These keep a
+   sentence-length measure and sit at the left, lined up with the grid above
+   them rather than floating in the middle. */
+#briefResults, #nearMisses, #noRes { max-width: 1480px; }
+.brief-bar { max-width: 1100px; }
+
+/* ═══════ KEEPING THE CARDS THE SAME HEIGHT ═══════
+   A grid row is as tall as its tallest card and the footer is pinned to the
+   bottom, so every unclamped line on one card becomes a hole above the
+   footer on the other four. Measured at 1920 on a 311px card, the spread was:
+   locality 60px, price 38, badges 30, name 22 — which is the whole gap.
+
+   Name, locality and price are clamped elsewhere. This is the badge row: a
+   configuration like "3 BHK / 4 BHK / Penthouse-Duplex" wrapped it to two
+   lines and cost every card in the row thirty pixels. One line, and the long
+   one is trimmed with the whole value on hover. */
+.badges { flex-wrap: nowrap; overflow: hidden; }
+.badges .badge {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; max-width: 100%;
+}
+.badges .badge:first-child { flex: 0 0 auto; }

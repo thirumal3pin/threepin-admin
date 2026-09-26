@@ -555,7 +555,7 @@ function renderGrid(){
         <div class="card-r1">
           <div>
             <div class="card-name" title="${e.name}">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
-            <div class="card-loc">📍 ${e.location}</div>
+            <div class="card-loc" title="${e.location}">📍 ${e.location}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
             <button class="card-action-btn card-share" onclick="sharePropertyLink('${e.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
@@ -564,7 +564,7 @@ function renderGrid(){
         </div>
         <div class="badges">
           <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+e.possession}</span>
-          <span class="badge ${typeBadge}">${e.config}</span>
+          <span class="badge ${typeBadge}" title="${e.config}">${e.config}</span>
         </div>
         <div class="price-row">
           <div class="price-main-wrap">
