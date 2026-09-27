@@ -528,7 +528,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cal-ev{position:absolute;box-sizing:border-box;padding:3px 5px;border-radius:4px;overflow:hidden;
   background:var(--blue-bg,#EFF4FF);border:1px solid var(--blue-line,#C7D7FE);
   font-size:11px;line-height:1.25;cursor:default;}
-.cal-ev b{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-ev-h{display:flex;align-items:baseline;gap:4px;min-width:0;}
+.cal-ev b{font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* The answers never get squeezed out by a long title. */
+.cal-rsvp{flex:0 0 auto;}
 .cal-ev-t{display:block;color:var(--ink3);font-size:10px;}
 /* A site visit is the one block here that is 3 PIN's own work, and the one
    worth clicking: it opens the lead. */
@@ -537,6 +540,13 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cal-ev.meet{background:var(--purple-bg,#F3EEFF);border-color:var(--purple-line,#D6C7FB);}
 /* Marked free in Google — a birthday, a reminder. Present, but not a wall. */
 .cal-ev.free{background:transparent;border-style:dashed;color:var(--ink3);}
+/* Who said yes. Amber while anybody is still silent, because a meeting with
+   unanswered invitations is the one worth chasing before the day arrives. */
+.cal-rsvp{display:inline-block;margin-left:5px;font-family:var(--mono);font-size:9.5px;
+  padding:0 3px;border-radius:3px;background:var(--bg);color:var(--ink3);}
+.cal-rsvp.yes{color:var(--green,#15803D);}
+.cal-rsvp.waiting{color:var(--amber,#B45309);}
+.cal-rsvp.no{color:var(--red,#B91C1C);}
 .cal-now{position:absolute;left:0;right:0;height:2px;background:var(--red,#B91C1C);opacity:.75;pointer-events:none;}
 .cal-now::before{content:'';position:absolute;left:-1px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--red,#B91C1C);}
 

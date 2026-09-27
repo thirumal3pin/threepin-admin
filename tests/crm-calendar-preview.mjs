@@ -47,7 +47,14 @@ const PEOPLE = [
     { id: 'early', title: 'Early site visit', start: iso(at - 5 * H), end: iso(at - 4 * H), busy: true, allDay: false }
   ] },
   { person: 'admin@threepin.in', events: [
-    { id: 'f', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H), busy: true, allDay: false, meetingId: '1', meet: 'https://meet.google.com/abc' }
+    // A meeting where one person has said yes, one has said no and one has not
+    // answered at all. Booking from the CRM is only worth doing if the answers
+    // come back to the CRM.
+    { id: 'f', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H), busy: true, allDay: false,
+      meetingId: '1', meet: 'https://meet.google.com/abc',
+      attendees: [{ email: 'swami@threepin.in', status: 'accepted' },
+                  { email: 'pradeep@threepin.in', status: 'declined' },
+                  { email: 'sales@threepin.in', status: 'needsAction' }] }
   ] },
   { person: 'thirumal@threepin.in', events: [], error: 'calendar unreadable' }
 ];
@@ -130,6 +137,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       visits: document.querySelectorAll('.cal-ev.visit').length,
       free: document.querySelectorAll('.cal-ev.free').length,
       nowLine: !!document.querySelector('.cal-now'),
+      rsvp: (document.querySelector('.cal-ev.meet .cal-rsvp') || {}).textContent || null,
+      rsvpTitle: (document.querySelector('.cal-ev.meet') || {}).title || null,
       earlyShown: [...document.querySelectorAll('.cal-ev')].some(e => /Early site visit/.test(e.textContent)),
       hours: [...document.querySelectorAll('.cal-hr')].map(h => h.textContent),
       overlap: (() => {
@@ -153,6 +162,13 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('a site visit is marked as the CRM’s own work', grid.visits === 1, String(grid.visits));
   ok('...and an event marked free is drawn differently', grid.free === 1, String(grid.free));
   ok('the current time is marked', grid.nowLine);
+  // The question the owner asked: do their replies come back? They do, and
+  // until now the CRM fetched them and threw them away.
+  ok('a meeting shows how many have accepted, out of how many were asked',
+    /1\/3/.test(grid.rsvp || ''), JSON.stringify(grid.rsvp));
+  ok('...and flags that somebody declined', /2|✗/.test(grid.rsvp || ''), JSON.stringify(grid.rsvp));
+  ok('...naming who is coming and who has not replied, on hover',
+    /Coming: .*Not coming: .*No reply yet: /s.test(grid.rsvpTitle || ''), JSON.stringify(grid.rsvpTitle));
   // The grid stretches rather than cropping: an appointment the page does not
   // draw is one nobody turns up to.
   ok('an appointment outside working hours is still drawn',

@@ -143,14 +143,58 @@
     return lanes(out);
   }
 
+  // ── Who said yes ──
+  //
+  // Scheduling sends a normal Google invitation, so everyone gets the usual
+  // Yes / No / Maybe in their mail and on their phone. Their answers come back
+  // on the event, and the whole point of booking from here rather than from
+  // Google is to see them here: a meeting two people have not answered is a
+  // meeting that may not happen, and that is worth knowing before you drive to
+  // it.
+  function rsvpOf(e) {
+    var list = e.attendees || [];
+    if (!list.length) return null;
+    var yes = 0, no = 0, waiting = 0;
+    list.forEach(function (a) {
+      if (a.status === 'accepted') yes++;
+      else if (a.status === 'declined') no++;
+      else waiting++;
+    });
+    var say = function (label, arr) {
+      return arr.length ? label + ': ' + arr.map(function (a) { return who(a.email); }).join(', ') : null;
+    };
+    var detail = [
+      say('Coming', list.filter(function (a) { return a.status === 'accepted'; })),
+      say('Not coming', list.filter(function (a) { return a.status === 'declined'; })),
+      say('Maybe', list.filter(function (a) { return a.status === 'tentative'; })),
+      say('No reply yet', list.filter(function (a) { return a.status === 'needsAction'; }))
+    ].filter(Boolean).join(' · ');
+    return { yes: yes, no: no, waiting: waiting, total: list.length, detail: detail };
+  }
+
+  function rsvpHtml(r) {
+    if (!r) return '';
+    // How many are actually coming, out of how many were asked. A bare tick
+    // would say nothing about the three who have gone quiet.
+    var cls = r.no ? 'no' : r.waiting ? 'waiting' : 'yes';
+    return '<span class="cal-rsvp ' + cls + '">✓' + r.yes + '/' + r.total
+      + (r.no ? ' ✗' + r.no : '') + '</span>';
+  }
+
   function blockHtml(b, dayStart) {
     var e = b.ev;
     var top = (b.from - (dayStart + OPEN * HOUR)) / HOUR * PX_PER_HOUR;
     var h = Math.max(18, (b.to - b.from) / HOUR * PX_PER_HOUR - 2);
     var w = 100 / b.lanes;
     var cls = e.leadId ? 'cal-ev visit' : e.meetingId ? 'cal-ev meet' : !e.busy ? 'cal-ev free' : 'cal-ev';
-    var title = clock(b.realFrom) + '–' + clock(b.realTo) + ' · ' + e.title + (e.where ? ' · ' + e.where : '');
-    var inner = '<b>' + esc(e.title) + '</b>'
+    var r = rsvpOf(e);
+    var title = clock(b.realFrom) + '–' + clock(b.realTo) + ' · ' + e.title + (e.where ? ' · ' + e.where : '')
+      + (r ? '\n' + r.detail : '');
+    // The badge sits beside the title rather than on the detail line, because
+    // the detail line only appears on tall blocks — and a 30-minute meeting,
+    // which is the common one, is not tall. Hiding the answers on exactly the
+    // meetings people book most would defeat the point of showing them.
+    var inner = '<span class="cal-ev-h"><b>' + esc(e.title) + '</b>' + rsvpHtml(r) + '</span>'
       + (h > 30 ? '<span class="cal-ev-t">' + esc(clock(b.realFrom)) + (e.where ? ' · ' + esc(e.where) : '') + '</span>' : '');
     // A site visit opens the lead it belongs to; that is the whole reason for
     // showing it here rather than leaving people in Google Calendar.
