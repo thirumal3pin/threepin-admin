@@ -513,6 +513,31 @@ section('THE WAY BACK TO THE LEAD');
   ok('...and a lead with no booking finds none', none === null, String(none));
 }
 
+// ══════════════════════════════════════════════════════════════════════
+section('PROVING WHO WE ARE, ONCE');
+// ══════════════════════════════════════════════════════════════════════
+//
+// A token is minted per PERSON, which is unavoidable — delegation impersonates
+// one named mailbox and swami's token cannot read pradeep's calendar. Minting
+// them again on every request is very avoidable, and was most of the wait:
+// 1,169ms rebuilt against 496ms reused, measured against the live Workspace.
+{
+  const made = [];
+  const g = fakeGoogle({ 'a@x': {}, 'b@x': {} });
+  const counting = (subject, key) => { made.push(subject); return g.make(subject, key); };
+  await teamCalendar(['a@x', 'b@x'], AT, AT + 3600000, { key: KEY, makeClient: counting });
+  ok('one client per person, not one per request', made.length === 2, JSON.stringify(made));
+
+  // The guard that matters when a client is REUSED: a cached client must still
+  // be the right person's. Handing swami's client to pradeep's calendar would
+  // read the wrong diary and answer invitations as the wrong agent.
+  const seen = [];
+  const bySubject = (subject, key) => { seen.push(subject); return g.make(subject, key); };
+  await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP, key: KEY, makeClient: bySubject });
+  ok('...and every call asks for the subject it means', seen.every(x => x === 'sales@threepin.in'), JSON.stringify(seen));
+}
+
 console.log('');
 console.log('─'.repeat(64));
 if (fails.length) {

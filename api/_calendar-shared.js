@@ -48,12 +48,31 @@ function serviceKey() {
 // Acting AS a person, which is what domain-wide delegation buys. Each subject
 // needs its own client: the token is minted for that one mailbox.
 //
+// KEPT, not rebuilt. A JWT holds its access token for an hour, and a new one
+// has to buy a fresh token from Google before it can ask anything — about
+// 200ms, paid per person, before the calendar call even starts. Reading six
+// calendars was doing that six times: measured at 1,169ms rebuilt against
+// 496ms reused, so well over half the wait was spent proving who we are.
+//
+// Serverless instances are reused between requests, so on a warm one this is
+// free after the first read. Capped because a Map that only grows is a leak,
+// though at six mailboxes that is theory rather than practice.
+const clients = new Map();
+const MAX_CLIENTS = 64;
+function realClient(subject, key) {
+  const id = subject + '|' + key.client_email;
+  let c = clients.get(id);
+  if (!c) {
+    if (clients.size >= MAX_CLIENTS) clients.clear();
+    c = new JWT({ email: key.client_email, key: key.private_key, scopes: [SCOPE], subject });
+    clients.set(id, c);
+  }
+  return c;
+}
+
 // Injectable, and not only for convenience: the guard below is the one piece
 // of this file that must never regress, and a rule about what the CRM REFUSES
 // to touch can only be proved against a transport that records what was asked.
-function realClient(subject, key) {
-  return new JWT({ email: key.client_email, key: key.private_key, scopes: [SCOPE], subject });
-}
 
 function explain(e) {
   const d = (e && e.response && e.response.data) || {};

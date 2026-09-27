@@ -346,10 +346,18 @@ async function adminAiPost(request) {
 //
 // The team is settings/{tenant}.team, the same list that backs @mentions. A
 // calendar nobody has been added to is simply not read.
+// Held for a minute per instance. The team changes when somebody runs
+// set-team.mjs, which is roughly never, and every calendar call was spending a
+// Firestore read on it \u2014 on a project whose daily read quota keeps running out.
+const teamCache = new Map();
+const TEAM_TTL_MS = 60000;
 async function teamEmails(db, tenantId) {
+  const hit = teamCache.get(tenantId);
+  if (hit && Date.now() - hit.at < TEAM_TTL_MS) return hit.team;
   const snap = await db.collection('settings').doc(tenantId).get();
-  const team = (snap.exists && snap.data().team) || {};
-  return Object.values(team).map(m => m && m.email).filter(Boolean);
+  const team = Object.values((snap.exists && snap.data().team) || {}).map(m => m && m.email).filter(Boolean);
+  teamCache.set(tenantId, { at: Date.now(), team });
+  return team;
 }
 
 async function calendarPost(request) {
