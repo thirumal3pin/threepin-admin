@@ -494,7 +494,12 @@ async function calendarPost(request) {
     if (to - from > 31 * 24 * 3600000) return json({ ok: false, error: 'at most a month at a time' }, 400);
     const team = await teamEmails(db, user.tenantId);
     if (!team.length) return json({ ok: true, people: [], note: 'No team is set up yet \u2014 see Settings.' });
-    return json({ ok: true, people: await teamCalendar(team, from, to) });
+    // A month of one person's calendar is one call; a month of everybody's is
+    // six. The page asks for the subset it is actually going to draw.
+    const only = Array.isArray(body.people) && body.people.length
+      ? new Set(body.people.map(e => String(e).toLowerCase())) : null;
+    const asked = only ? team.filter(e => only.has(String(e).toLowerCase())) : team;
+    return json({ ok: true, people: await teamCalendar(asked.length ? asked : team, from, to) });
   } catch (e) {
     // Setup that has not been done yet is not an outage, and must not read
     // like one: the CRM shows the hint rather than a red error.

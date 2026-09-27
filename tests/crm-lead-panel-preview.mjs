@@ -201,9 +201,15 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   // them to know — and a real invitation the agents answer.
   const row = await page.evaluate(() => {
     const r = document.querySelector('.st-row.sv');
-    return { there: !!r, btn: r ? (r.querySelector('button') || {}).textContent : null };
+    const sec = document.getElementById('dpVisitSec');
+    const note = document.querySelector('.note-sec');
+    return { there: !!r, btn: r ? (r.querySelector('button') || {}).textContent : null,
+      boxed: !!(sec && !sec.hidden),
+      aboveNote: !!(sec && note && sec.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING) };
   });
   ok('the lead has a site-visit row of its own', row.there);
+  // The thing people open a lead to DO should not be four screens down.
+  ok('...in its own box near the top, above the note', row.aboveNote, JSON.stringify(row));
   ok('...offering to schedule one', /Schedule/.test(row.btn || ''), row.btn);
 
   await page.click('.st-row.sv button');

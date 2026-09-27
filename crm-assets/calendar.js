@@ -30,22 +30,30 @@
 
   // Widen the window so nothing falls off it. Whole hours, so the labels stay
   // on the lines.
-  function fitWindow(people, dayStart) {
+  function fitWindow(people, from, to) {
     var open = DAY_OPEN, close = DAY_CLOSE;
+    var lo = from, hi = to == null ? from + DAY : to;
     (people || []).forEach(function (p) {
       (p.events || []).forEach(function (e) {
         if (e.allDay || !e.start || !e.end) return;
-        var from = Date.parse(e.start), to = Date.parse(e.end);
-        if (!(to > dayStart && from < dayStart + DAY)) return;
-        open = Math.min(open, Math.floor((Math.max(from, dayStart) - dayStart) / HOUR));
-        close = Math.max(close, Math.ceil((Math.min(to, dayStart + DAY) - dayStart) / HOUR));
+        var a = Date.parse(e.start), b = Date.parse(e.end);
+        if (!(b > lo && a < hi)) return;
+        // Measured against the event's OWN day, so a week stretches to fit its
+        // earliest start and latest finish across all seven.
+        var dayStart = startOfDay(a);
+        open = Math.min(open, Math.floor((a - dayStart) / HOUR));
+        close = Math.max(close, Math.ceil((b - dayStart) / HOUR));
       });
     });
     OPEN = Math.max(0, open);
     CLOSE = Math.min(24, Math.max(OPEN + 1, close));
   }
 
-  var state = { at: startOfDay(Date.now()), span: 'day', people: [], loading: false, error: null, hint: null };
+  // 'day' shows everybody against one set of hours — the question "who is
+  // free at four". 'week' and 'month' show ONE person, because six people
+  // across seven days is a wall nobody reads, and the question those spans
+  // answer is "what has Swami got on" rather than "who is free".
+  var state = { at: startOfDay(Date.now()), span: 'day', person: null, people: [], loading: false, error: null, hint: null };
   var lastFetch = 0;
 
   function startOfDay(ts) { var d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -55,9 +63,23 @@
     var M = window.crmMentions;
     return (M && email) ? M.displayName(email) : (email || '');
   }
+  function startOfWeek(ts) { var d = new Date(startOfDay(ts)); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }
+  function startOfMonth(ts) { var d = new Date(startOfDay(ts)); d.setDate(1); return d.getTime(); }
+  function endOfMonth(ts) { var d = new Date(startOfMonth(ts)); d.setMonth(d.getMonth() + 1); return d.getTime(); }
   function windowFor() {
-    var from = state.at, to = state.at + (state.span === 'week' ? 7 * DAY : DAY);
-    return { from: from, to: to };
+    if (state.span === 'week') { var w = startOfWeek(state.at); return { from: w, to: w + 7 * DAY }; }
+    if (state.span === 'month') {
+      // The grid draws whole weeks, so it needs the days either side that fill
+      // the first and last rows.
+      var m = startOfMonth(state.at);
+      return { from: startOfWeek(m), to: startOfWeek(endOfMonth(state.at) - 1) + 7 * DAY };
+    }
+    return { from: state.at, to: state.at + DAY };
+  }
+  function whoFor() {
+    // One person for the long spans; everybody for a day.
+    if (state.span === 'day') return null;
+    return [state.person || (state.people[0] && state.people[0].person) || null].filter(Boolean);
   }
 
   // ── Getting the day ──
@@ -68,7 +90,7 @@
   function load(force) {
     var w = windowFor();
     if (state.loading) return;
-    if (!force && Date.now() - lastFetch < 60000 && state.fetchedFor === w.from + ':' + state.span) return;
+    if (!force && Date.now() - lastFetch < 60000 && state.fetchedFor === w.from + ':' + state.span + ':' + (state.person || '')) return;
     state.loading = true;
     state.error = null;
     state.hint = null;
@@ -77,12 +99,12 @@
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ op: 'day', from: w.from, to: w.to })
+        body: JSON.stringify({ op: 'day', from: w.from, to: w.to, people: whoFor() || [] })
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
       state.loading = false;
       lastFetch = Date.now();
-      state.fetchedFor = w.from + ':' + state.span;
+      state.fetchedFor = w.from + ':' + state.span + ':' + (state.person || '');
       if (d && d.ok) { state.people = d.people || []; state.note = d.note || null; }
       // Setup that is not finished is not an outage, and must not be drawn as one.
       else { state.error = (d && d.error) || 'Could not read the calendars'; state.hint = (d && d.hint) || null; state.people = []; }
@@ -141,10 +163,10 @@
     return sorted;
   }
 
-  function blocksFor(person, dayStart) {
+  function blocksFor(events, dayStart) {
     var top = dayStart + OPEN * HOUR, bottom = dayStart + CLOSE * HOUR;
     var out = [];
-    (person.events || []).forEach(function (e) {
+    (events || []).forEach(function (e) {
       if (e.allDay) return;
       var from = Date.parse(e.start), to = Date.parse(e.end);
       if (!(to > top && from < bottom)) return;
@@ -240,20 +262,18 @@
       return;
     }
 
+    if (state.span === 'week') return renderWeek(el);
+    if (state.span === 'month') return renderMonth(el);
+    renderDay(el);
+  }
+
+  // ── TODAY, EVERYBODY ── the question is "who is free at four"
+  function renderDay(el) {
     var dayStart = state.at;
     fitWindow(state.people, dayStart);
-    var hours = [];
-    for (var h = OPEN; h <= CLOSE; h++) {
-      var label = new Date(dayStart + h * HOUR).toLocaleTimeString([], { hour: 'numeric' });
-      hours.push('<div class="cal-hr" style="height:' + PX_PER_HOUR + 'px">' + esc(label) + '</div>');
-    }
-
     var cols = state.people.map(function (p) {
-      // A calendar we could not read is NOT a free one. Showing green beside
-      // "unreadable" is the one lie a status board must never tell: somebody
-      // books them, and they were in a meeting the whole time.
       var st = p.error ? { cls: 'unknown', text: 'calendar unreadable' } : statusOf(p);
-      var blocks = blocksFor(p, dayStart);
+      var blocks = blocksFor(p.events, dayStart);
       var allDay = (p.events || []).filter(function (e) { return e.allDay; });
       return '<div class="cal-col">'
         + '<div class="cal-col-h"><span class="cal-dot ' + st.cls + '"></span>'
@@ -265,34 +285,259 @@
         + nowLineHtml(dayStart)
         + '</div></div>';
     }).join('');
+    el.innerHTML = '<div class="cal-grid">' + hoursHtml() + '<div class="cal-cols">' + cols + '</div></div>';
+  }
 
-    el.innerHTML = '<div class="cal-grid">'
-      + '<div class="cal-hours"><div class="cal-col-h"></div><div>' + hours.join('') + '</div></div>'
-      + '<div class="cal-cols">' + cols + '</div></div>';
+  // ── ONE PERSON, SEVEN DAYS ── "what has Swami got on this week"
+  function renderWeek(el) {
+    var p = chosenPerson();
+    if (!p) { el.innerHTML = '<div class="cal-msg">Pick whose week to show.</div>'; return; }
+    var w = windowFor();
+    fitWindow([p], w.from, w.to);
+    var today = startOfDay(Date.now());
+    var cols = '';
+    for (var i = 0; i < 7; i++) {
+      var d = w.from + i * DAY;
+      var events = (p.events || []).filter(function (e) {
+        var t = Date.parse(e.start); return t >= d && t < d + DAY;
+      });
+      var allDay = events.filter(function (e) { return e.allDay; });
+      cols += '<div class="cal-col' + (d === today ? ' today' : '') + '">'
+        + '<div class="cal-col-h"><b>' + esc(new Date(d).toLocaleDateString([], { weekday: 'short' })) + '</b>'
+        + '<span class="cal-st">' + new Date(d).getDate() + ' ' + esc(new Date(d).toLocaleDateString([], { month: 'short' })) + '</span>'
+        + (allDay.length ? '<span class="cal-allday" title="' + esc(allDay.map(function (e) { return e.title; }).join(', ')) + '">' + esc(allDay[0].title) + '</span>' : '')
+        + '</div>'
+        + '<div class="cal-track" style="height:' + ((CLOSE - OPEN) * PX_PER_HOUR) + 'px">'
+        + blocksFor(events, d).map(function (b) { return blockHtml(b, d); }).join('')
+        + (d === today ? nowLineHtml(d) : '')
+        + '</div></div>';
+    }
+    el.innerHTML = '<div class="cal-grid">' + hoursHtml() + '<div class="cal-cols">' + cols + '</div></div>';
+  }
+
+  // ── ONE PERSON, A MONTH ── no hours: at this scale the useful thing is
+  // which days are heavy and which are empty, not what time anything starts.
+  function renderMonth(el) {
+    var p = chosenPerson();
+    if (!p) { el.innerHTML = '<div class="cal-msg">Pick whose month to show.</div>'; return; }
+    var w = windowFor();
+    var today = startOfDay(Date.now());
+    var thisMonth = new Date(state.at).getMonth();
+    var head = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+      .map(function (d) { return '<div class="cal-m-h">' + d + '</div>'; }).join('');
+    var cells = '';
+    for (var d = w.from; d < w.to; d += DAY) {
+      var day = d;
+      var events = (p.events || []).filter(function (e) {
+        var t = Date.parse(e.start); return t >= day && t < day + DAY;
+      }).sort(function (a, b) { return Date.parse(a.start) - Date.parse(b.start); });
+      var shown = events.slice(0, 3);
+      cells += '<div class="cal-m-d' + (day === today ? ' today' : '') + (new Date(day).getMonth() !== thisMonth ? ' other' : '') + '">'
+        + '<span class="cal-m-n">' + new Date(day).getDate() + '</span>'
+        + shown.map(function (e) {
+            var cls = e.away ? 'away' : e.leadId ? 'visit' : e.meetingId ? 'meet' : !e.busy ? 'free' : '';
+            return '<span class="cal-m-e ' + cls + '" title="' + esc((e.allDay ? 'All day' : clock(Date.parse(e.start))) + ' · ' + e.title) + '">'
+              + (e.allDay ? '' : '<b>' + esc(clock(Date.parse(e.start))) + '</b> ') + esc(e.title) + '</span>';
+          }).join('')
+        + (events.length > shown.length ? '<span class="cal-m-more">+' + (events.length - shown.length) + ' more</span>' : '')
+        + '</div>';
+    }
+    el.innerHTML = '<div class="cal-month"><div class="cal-m-head">' + head + '</div><div class="cal-m-grid">' + cells + '</div></div>';
+  }
+
+  function chosenPerson() {
+    if (!state.people.length) return null;
+    return state.people.filter(function (p) { return p.person === state.person; })[0] || state.people[0];
+  }
+
+  function hoursHtml() {
+    var out = [];
+    for (var h = OPEN; h <= CLOSE; h++) {
+      var label = new Date(startOfDay(Date.now()) + h * HOUR).toLocaleTimeString([], { hour: 'numeric' });
+      out.push('<div class="cal-hr" style="height:' + PX_PER_HOUR + 'px">' + esc(label) + '</div>');
+    }
+    return '<div class="cal-hours"><div class="cal-col-h"></div><div>' + out.join('') + '</div></div>';
   }
 
   function headHtml() {
     var d = new Date(state.at);
-    var isToday = startOfDay(Date.now()) === state.at;
-    var label = d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+    var w = windowFor();
+    var label, isNow;
+    if (state.span === 'week') {
+      var last = new Date(w.to - DAY);
+      label = new Date(w.from).toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' — '
+        + last.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+      isNow = Date.now() >= w.from && Date.now() < w.to;
+    } else if (state.span === 'month') {
+      label = d.toLocaleDateString([], { month: 'long', year: 'numeric' });
+      isNow = new Date().getMonth() === d.getMonth() && new Date().getFullYear() === d.getFullYear();
+    } else {
+      label = d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+      isNow = startOfDay(Date.now()) === state.at;
+    }
+    var spans = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(function (o) {
+      return '<button type="button" class="cal-span' + (state.span === o[0] ? ' on' : '') + '"'
+        + ' aria-pressed="' + (state.span === o[0]) + '" onclick="PinCalendar.setSpan(\'' + o[0] + '\')">' + o[1] + '</button>';
+    }).join('');
+    // Whose calendar, but only where the question makes sense: a day shows
+    // everybody, and a picker there would suggest it did not.
+    var whoPick = state.span === 'day' ? '' :
+      '<select class="cal-who" aria-label="Whose calendar" onchange="PinCalendar.setPerson(this.value)">'
+      + state.people.map(function (p) {
+          return '<option value="' + esc(p.person) + '"' + (chosenPersonEmail() === p.person ? ' selected' : '') + '>' + esc(who(p.person)) + '</option>';
+        }).join('') + '</select>';
+
     return '<div class="cal-nav">'
-      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.move(-1)" aria-label="Previous day">‹</button>'
-      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.today()"' + (isToday ? ' disabled' : '') + '>Today</button>'
-      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.move(1)" aria-label="Next day">›</button>'
+      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.move(-1)" aria-label="Back">\u2039</button>'
+      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.today()"' + (isNow ? ' disabled' : '') + '>Today</button>'
+      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.move(1)" aria-label="Forward">\u203a</button>'
       + '<b class="cal-date">' + esc(label) + '</b>'
       + '</div>'
       + '<div class="cal-acts">'
+      + '<div class="cal-spans" role="group" aria-label="How much to show">' + spans + '</div>'
+      + whoPick
+      + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.findTime()">Find a time</button>'
       + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.reload()"' + (state.loading ? ' disabled' : '') + '>'
-      + (state.loading ? 'Reading…' : 'Refresh') + '</button>'
+      + (state.loading ? 'Reading' + '\u2026' : 'Refresh') + '</button>'
       + '<button type="button" class="tt-btn" onclick="PinCalendar.newMeeting()">New meeting</button>'
       + '</div>';
   }
+  function chosenPersonEmail() { var p = chosenPerson(); return p ? p.person : null; }
+
+  // \u2550\u2550\u2550\u2550\u2550\u2550\u2550 FINDING A TIME \u2550\u2550\u2550\u2550\u2550\u2550\u2550
+  //
+  // Booking by guessing and then reading five refusals is how people give up on
+  // a scheduler. This offers the times that actually work: every slot in the
+  // next fortnight, during working hours, where nobody picked is busy.
+  //
+  // It reads the same events the grid does, so it cannot offer a time the grid
+  // shows as taken.
+  var findState = { days: 14, minutes: 60, people: [], slots: null, loading: false };
+
+  function findTimeHtml() {
+    var team = state.people.map(function (p) { return p.person; });
+    return '<div class="cal-sheet" id="findSheet" role="dialog" aria-modal="true" aria-label="Find a time">'
+      + '<div class="cal-sheet-in">'
+      + '<h3>Find a time</h3>'
+      + '<label>Who has to be there</label>'
+      + '<div class="cm-who" id="ftWho">' + team.map(function (e) {
+          return '<label class="cm-p"><input type="checkbox" value="' + esc(e) + '"'
+            + (findState.people.indexOf(e) >= 0 ? ' checked' : '') + ' onchange="PinCalendar.runFind()">'
+            + esc(who(e)) + '</label>';
+        }).join('') + '</div>'
+      + '<div class="cm-when">'
+      + '<div><label for="ftMins">Minutes</label><select id="ftMins" onchange="PinCalendar.runFind()">'
+      + [30, 60, 90, 120].map(function (m) { return '<option value="' + m + '"' + (m === findState.minutes ? ' selected' : '') + '>' + m + '</option>'; }).join('')
+      + '</select></div>'
+      + '<div><label for="ftDays">Look ahead</label><select id="ftDays" onchange="PinCalendar.runFind()">'
+      + [[3, 'Next 3 days'], [7, 'Next week'], [14, 'Next fortnight']]
+          .map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === findState.days ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+      + '</select></div>'
+      + '</div>'
+      + '<div class="ft-out" id="ftOut"></div>'
+      + '<div class="cal-sheet-acts"><button type="button" class="tt-btn quiet" onclick="PinCalendar.closeFind()">Close</button></div>'
+      + '</div></div>';
+  }
+
+  function runFind() {
+    var out = document.getElementById('ftOut');
+    if (!out) return;
+    findState.people = Array.prototype.slice.call(document.querySelectorAll('#ftWho input:checked')).map(function (i) { return i.value; });
+    findState.minutes = Number((document.getElementById('ftMins') || {}).value || 60);
+    findState.days = Number((document.getElementById('ftDays') || {}).value || 14);
+    if (!findState.people.length) { out.innerHTML = '<div class="ft-none">Pick who has to be there.</div>'; return; }
+
+    out.innerHTML = '<div class="ft-none">Looking' + '\u2026' + '</div>';
+    var from = Date.now();
+    var to = startOfDay(from) + findState.days * DAY;
+    window.crmAuth.getIdToken().then(function (token) {
+      return fetch('/api/tailortalk?action=calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ op: 'day', from: from, to: to, people: findState.people })
+      });
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) { out.innerHTML = '<div class="ft-none">' + esc((d && (d.hint || d.error)) || 'Could not read the calendars.') + '</div>'; return; }
+      renderFound(out, d.people || [], from, to);
+    }).catch(function () { out.innerHTML = '<div class="ft-none">Could not reach the calendar service.</div>'; });
+  }
+
+  // Working hours, every day: brokers show properties at weekends, so a
+  // Saturday slot is a real offer and skipping it would hide half the week.
+  function renderFound(out, people, from, to) {
+    var OPEN_M = 9 * 60 + 30, CLOSE_M = 19 * 60 + 30;
+    var busy = [];
+    people.forEach(function (p) {
+      (p.events || []).forEach(function (e) {
+        if (!e.busy || !e.start || !e.end) return;
+        // An all-day OUT OF OFFICE does block the day; an all-day tag does not.
+        if (e.allDay && !e.away) return;
+        busy.push([Date.parse(e.start), Date.parse(e.end)]);
+      });
+    });
+    var span = findState.minutes * 60000;
+    var byDay = {};
+    for (var t = Math.ceil(from / (30 * 60000)) * (30 * 60000); t + span <= to; t += 30 * 60000) {
+      var d = new Date(t);
+      var mins = d.getHours() * 60 + d.getMinutes();
+      if (mins < OPEN_M || mins + findState.minutes > CLOSE_M) continue;
+      var clash = busy.some(function (b) { return t < b[1] && t + span > b[0]; });
+      if (clash) continue;
+      var key = startOfDay(t);
+      (byDay[key] = byDay[key] || []).push(t);
+    }
+    var days = Object.keys(byDay).sort(function (a, b) { return a - b; }).slice(0, 7);
+    if (!days.length) {
+      out.innerHTML = '<div class="ft-none">Nobody is free together in the next '
+        + findState.days + ' days for ' + findState.minutes + ' minutes. Try a shorter meeting, or fewer people.</div>';
+      return;
+    }
+    out.innerHTML = days.map(function (k) {
+      var slots = byDay[k].slice(0, 8);
+      return '<div class="ft-day"><div class="ft-day-h">'
+        + esc(new Date(Number(k)).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' })) + '</div>'
+        + '<div class="ft-slots">' + slots.map(function (t) {
+            return '<button type="button" class="ft-slot" onclick="PinCalendar.useSlot(' + t + ')">' + esc(clock(t)) + '</button>';
+          }).join('') + (byDay[k].length > slots.length ? '<span class="ft-plus">+' + (byDay[k].length - slots.length) + '</span>' : '')
+        + '</div></div>';
+    }).join('');
+  }
+
+  // Picking a slot hands straight to the booking form with everything filled
+  // in. Finding a time and then retyping it is the half that gets skipped.
+  function useSlot(t) {
+    var people = findState.people.slice();
+    var mins = findState.minutes;
+    closeFind();
+    state.at = startOfDay(t);
+    newMeeting();
+    var d = new Date(t);
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.value = v; };
+    set('cmDate', d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()));
+    set('cmTime', pad(d.getHours()) + ':' + pad(d.getMinutes()));
+    set('cmMins', String(mins));
+    Array.prototype.slice.call(document.querySelectorAll('.cm-who input:not(:disabled)')).forEach(function (i) {
+      i.checked = people.indexOf(i.value) >= 0;
+    });
+    var t2 = document.getElementById('cmTitle');
+    if (t2) t2.focus();
+  }
+
+  function closeFind() { var el = document.getElementById('findSheet'); if (el) el.remove(); }
 
   // ═══════ BOOKING A MEETING ═══════
   //
   // Google does the inviting: everyone picked gets a normal invitation they can
   // accept or decline, on whatever calendar app they use, and a Meet link if it
   // was asked for. The CRM is only the booking form.
+  function newMeeting() {
+    if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
+    closeMeeting();
+    document.body.insertAdjacentHTML('beforeend', meetingHtml());
+    var t = document.getElementById('cmTitle');
+    if (t) t.focus();
+  }
+
   function meetingHtml() {
     var team = state.people.map(function (p) { return p.person; });
     // app.js declares currentUserEmail with `let`, which puts it in the global
@@ -406,15 +651,28 @@
   window.PinCalendar = {
     open: function () { render(); load(false); },
     reload: function () { load(true); },
-    move: function (n) { state.at += n * (state.span === 'week' ? 7 * DAY : DAY); load(true); },
-    today: function () { state.at = startOfDay(Date.now()); load(true); },
-    newMeeting: function () {
-      if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
-      closeMeeting();
-      document.body.insertAdjacentHTML('beforeend', meetingHtml());
-      var t = document.getElementById('cmTitle');
-      if (t) t.focus();
+    move: function (n) {
+      if (state.span === 'week') state.at = startOfWeek(state.at) + n * 7 * DAY;
+      else if (state.span === 'month') { var d = new Date(startOfMonth(state.at)); d.setMonth(d.getMonth() + n); state.at = d.getTime(); }
+      else state.at += n * DAY;
+      load(true);
     },
+    today: function () { state.at = startOfDay(Date.now()); load(true); },
+    newMeeting: newMeeting,
+    setSpan: function (span) {
+      state.span = span;
+      if (span !== 'day' && !state.person) state.person = (state.people[0] || {}).person || null;
+      load(true);
+    },
+    setPerson: function (email) { state.person = email; load(true); },
+    findTime: function () {
+      if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
+      closeFind();
+      if (!findState.people.length) findState.people = state.people.map(function (p) { return p.person; }).slice(0, 2);
+      document.body.insertAdjacentHTML('beforeend', findTimeHtml());
+      runFind();
+    },
+    runFind: runFind, useSlot: useSlot, closeFind: closeFind,
     closeMeeting: closeMeeting,
     book: book,
     // Exposed for the tests, which drive the layout without a real Google.

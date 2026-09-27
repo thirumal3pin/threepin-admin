@@ -3089,9 +3089,9 @@ function visitRowHtml(l){
   return `<div class="st-row sv"><span class="st-label">Site visit</span>
     <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}
       ${who ? `<span class="sv-team">${who}</span>` : ''}
-      ${v.at && !agents.length ? '<span class="sv-by">nobody sent yet</span>' : ''}
+      ${v.at && !agents.length ? '<span class="sv-by warn">nobody assigned yet</span>' : ''}
     </span>
-    <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Schedule'}</button></span>
+    <span class="st-item-acts"><button type="button" class="tt-btn${v.at && !agents.length ? '' : ' quiet'}" onclick="openVisitEditor('${l.id}')">${!v.at ? 'Schedule' : agents.length ? 'Reschedule' : 'Assign agent'}</button></span>
     ${reasons ? `<div class="sv-reasons">${reasons}</div>` : ''}
     ${myAnswerHtml(l, v)}
   </div>`;
@@ -3167,12 +3167,39 @@ function openVisitEditor(id){
   const l = leads.find(x => x.id === id);
   if(!l) return;
   closeVisitEditor(true);
-  loadInventory().then(() => {
-    document.body.insertAdjacentHTML('beforeend', visitSchedulerHtml(l));
-    const d = document.getElementById('svDate');
-    if(d) d.focus();
-    loadVisitAvailability();
-  });
+  // Draw the form FIRST. It used to wait on the inventory, and an inventory
+  // read that never settles — Firestore's daily quota runs out on this project
+  // — meant the button produced nothing at all: no form, no spinner, no error.
+  // The inventory only fills one dropdown, so it can arrive late.
+  document.body.insertAdjacentHTML('beforeend', visitSchedulerHtml(l));
+  const d = document.getElementById('svDate');
+  if(d) d.focus();
+  loadVisitAvailability();
+  if(!inventory) loadInventory().then(() => fillVisitProperties(l));
+}
+
+// The property list, once it turns up. Keeps whatever was already chosen.
+function fillVisitProperties(l){
+  const sel = document.getElementById('svProp');
+  if(!sel || visitEditId !== l.id) return;
+  const chosen = sel.value;
+  const v = window.crmPipeline.visitOf(l);
+  sel.innerHTML = visitPropertyOptions(v.property);
+  if(chosen && chosen !== '__loading') sel.value = chosen;
+  onVisitPropertyPicked();
+}
+
+function visitPropertyOptions(current){
+  // Coded properties first: an agent quotes a code, not a row id.
+  const props = (inventory || []).slice()
+    .sort((a,b) => (propertyCodeOf(b) ? 1 : 0) - (propertyCodeOf(a) ? 1 : 0))
+    .map(p => { const c = propertyCodeOf(p); const label = [c, p.name].filter(Boolean).join(' \u00b7 ');
+      return `<option value="${escapeHtml(c || p.name || '')}"${(c || p.name) === current ? ' selected' : ''}>${escapeHtml(label)}</option>`; })
+    .join('');
+  const freeText = current && !(inventory || []).some(p => (propertyCodeOf(p) || p.name) === current);
+  return `<option value="">${inventory ? '\u2014 pick from the inventory \u2014' : '\u2014 loading the inventory\u2026 \u2014'}</option>`
+    + props
+    + `<option value="__free"${freeText ? ' selected' : ''}>Something not in the inventory\u2026</option>`;
 }
 function closeVisitEditor(keepId){
   const el = document.getElementById('svSheet');
@@ -3193,12 +3220,6 @@ function visitSchedulerHtml(l){
 
   const opts = ['requested','scheduled','done','cancelled']
     .map(k => `<option value="${k}"${v.status === k ? ' selected' : ''}>${escapeHtml(P.VISIT_STATUS[k])}</option>`).join('');
-  // Coded properties first: an agent quotes a code, not a row id.
-  const props = (inventory || []).slice()
-    .sort((a,b) => (propertyCodeOf(b) ? 1 : 0) - (propertyCodeOf(a) ? 1 : 0))
-    .map(p => { const c = propertyCodeOf(p); const label = [c, p.name].filter(Boolean).join(' \u00b7 ');
-      return `<option value="${escapeHtml(c || p.name || '')}"${(c || p.name) === v.property ? ' selected' : ''}>${escapeHtml(label)}</option>`; })
-    .join('');
   const freeText = v.property && !(inventory || []).some(p => (propertyCodeOf(p) || p.name) === v.property);
 
   return `<div class="cal-sheet" id="svSheet" role="dialog" aria-modal="true" aria-label="Schedule a site visit">
@@ -3229,11 +3250,7 @@ function visitSchedulerHtml(l){
       <div class="sv-hint" id="svAvailNote">Checking the team\u2019s calendars\u2026</div>
 
       <label for="svProp">Property</label>
-      <select id="svProp" onchange="onVisitPropertyPicked()">
-        <option value="">\u2014 pick from the inventory \u2014</option>
-        ${props}
-        <option value="__free"${freeText ? ' selected' : ''}>Something not in the inventory\u2026</option>
-      </select>
+      <select id="svProp" onchange="onVisitPropertyPicked()">${visitPropertyOptions(v.property)}</select>
       <input id="svPropFree" type="text" placeholder="Where is it?" maxlength="120"
         value="${freeText ? escapeHtml(v.property) : ''}"${freeText ? '' : ' hidden'}>
 
@@ -3471,8 +3488,22 @@ function cancelVisit(id){
   showToast('Site visit called off \u2014 everyone invited has been told');
 }
 
+// The site visit has its own box at the top of the lead, not a row buried in
+// the panel below. Closed leads do not get one: there is nothing to send
+// anybody to.
+function renderVisitSection(l){
+  const sec = document.getElementById('dpVisitSec');
+  const el = document.getElementById('dpVisit');
+  if(!sec || !el) return;
+  const kind = stageKindOfId(l.stageId);
+  if(isBusinessLead(l) || kind === 'won' || kind === 'lost'){ sec.hidden = true; return; }
+  sec.hidden = false;
+  el.innerHTML = visitRowHtml(l);
+}
+
 // ── "Where this lead stands" on the lead page ──
 function renderStandSection(l){
+  renderVisitSection(l);
   const sec = document.getElementById('dpStandSec');
   const el = document.getElementById('dpStand');
   if(!sec || !el) return;
@@ -3507,7 +3538,6 @@ function renderStandSection(l){
   const step = nextStepOf(l);
   const stepIsTeam = step && (step.cls === 'team' || step.cls === 'overdue');
   if(step) parts.push(`<div class="st-step ${step.cls}${stepIsTeam ? ' with-acts' : ''}"><span class="st-label">Next step</span><span>${escapeHtml(step.text)}${step.due ? `<span class="st-due"> · ${escapeHtml(fmtDue(step.due))}</span>` : ''}</span>${stepIsTeam ? `<span class="st-item-acts"><button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button><button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(step.text))})">Done</button></span>` : ''}</div>`);
-  if(kind !== 'won' && kind !== 'lost') parts.push(visitRowHtml(l));
 
   // Everything that needs a person, with the action that settles it.
   const attn = attentionFor(l).filter(a => a.key !== 'ai_suggestion' && !(stepIsTeam && STEP_KEYS.has(a.key)));

@@ -23,9 +23,11 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const T = 't_3pinrealty';
 const STAGES = planPipelineMigration([{ id: 'new', name: 'New' }, { id: 'site_visit', name: 'Site Visit' }], []).stages;
 
-// A day built around 11am local, so the grid always has something in view.
-const base = new Date(); base.setHours(11, 0, 0, 0);
-const at = base.getTime();
+// Anchored to the clock, not to 11am. Fixed at 11:00 it only straddled "now"
+// if the suite happened to run late morning, so "somebody in a meeting reads
+// as busy" passed before lunch and failed after it.
+const now = Date.now();
+const at = now - 30 * 60000;   // started half an hour ago, still running
 const H = 3600000;
 const iso = t => new Date(t).toISOString();
 
@@ -243,6 +245,71 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...including somebody typed in who has no column here',
     (booked.attendees || []).includes('rajesh@threepin.in'), JSON.stringify(booked.attendees));
   ok('...and closes the form', sent.closed);
+
+  // ── WEEK AND MONTH, ONE PERSON ──
+  // Six people across seven days is a wall nobody reads. These spans answer a
+  // different question — "what has Swami got on" — so they show one person.
+  const week = await page.evaluate(async () => {
+    PinCalendar.setSpan('week');
+    await new Promise(r => setTimeout(r, 600));
+    return { cols: document.querySelectorAll('.cal-col').length,
+      heads: [...document.querySelectorAll('.cal-col-h b')].map(b => b.textContent),
+      picker: !!document.querySelector('.cal-who'),
+      on: (document.querySelector('.cal-span.on') || {}).textContent,
+      label: (document.querySelector('.cal-date') || {}).textContent || '' };
+  });
+  ok('a week shows seven days', week.cols === 7, JSON.stringify(week.heads));
+  ok('...of one person, chosen from a picker', week.picker);
+  ok('...with the span marked', week.on === 'Week', week.on);
+  ok('...and the dates it covers', /\d/.test(week.label), week.label);
+
+  const month = await page.evaluate(async () => {
+    PinCalendar.setSpan('month');
+    await new Promise(r => setTimeout(r, 600));
+    return { cells: document.querySelectorAll('.cal-m-d').length,
+      heads: document.querySelectorAll('.cal-m-h').length,
+      today: document.querySelectorAll('.cal-m-d.today').length,
+      hours: document.querySelectorAll('.cal-hr').length };
+  });
+  ok('a month draws whole weeks', month.cells % 7 === 0 && month.cells >= 28, String(month.cells));
+  ok('...under seven weekday headings', month.heads === 7, String(month.heads));
+  ok('...marking today once', month.today <= 1, String(month.today));
+  // At a month's scale the start time is noise; which days are heavy is not.
+  ok('...and drops the hour rail, which means nothing at that scale', month.hours === 0, String(month.hours));
+
+  // ── FINDING A TIME ──
+  // Booking by guessing and reading five refusals is how people give up on a
+  // scheduler. This offers the times that actually work.
+  const find = await page.evaluate(async () => {
+    PinCalendar.setSpan('day');
+    await new Promise(r => setTimeout(r, 400));
+    PinCalendar.findTime();
+    await new Promise(r => setTimeout(r, 700));
+    const sheet = document.getElementById('findSheet');
+    return { open: !!sheet, who: sheet ? sheet.querySelectorAll('#ftWho input').length : 0,
+      slots: document.querySelectorAll('.ft-slot').length,
+      firstSlot: (document.querySelector('.ft-slot') || {}).textContent || '',
+      days: document.querySelectorAll('.ft-day').length };
+  });
+  ok('there is a scheduling assistant', find.open && find.who > 0, JSON.stringify(find));
+  ok('...offering times everyone is free', find.slots > 0, JSON.stringify(find));
+  ok('...as real clock times', /\d/.test(find.firstSlot), find.firstSlot);
+  ok('...grouped by day', find.days > 0, String(find.days));
+
+  // Finding a time and then retyping it is the half that gets skipped.
+  const used = await page.evaluate(async () => {
+    document.querySelector('.ft-slot').click();
+    await new Promise(r => setTimeout(r, 400));
+    return { findClosed: !document.getElementById('findSheet'),
+      booking: !!document.getElementById('calSheet'),
+      date: (document.getElementById('cmDate') || {}).value,
+      time: (document.getElementById('cmTime') || {}).value,
+      ticked: [...document.querySelectorAll('.cm-who input:checked')].length };
+  });
+  ok('picking a slot opens the booking form already filled in',
+    used.booking && used.findClosed && !!used.date && !!used.time, JSON.stringify(used));
+  ok('...with the people it was found for', used.ticked > 0, String(used.ticked));
+  await page.evaluate(() => PinCalendar.closeMeeting());
 
   await page.screenshot({ path: join(OUT, (viewport.width === 390 ? 'phone' : 'laptop') + '.png'), fullPage: false });
   await page.context().close();
