@@ -25,6 +25,7 @@ import { JWT } from 'google-auth-library';
 const SCOPE = 'https://www.googleapis.com/auth/calendar';
 const CAL = 'https://www.googleapis.com/calendar/v3';
 const TZ = 'Asia/Kolkata';
+const IST_OFFSET_MS = 5.5 * 3600000;
 const STAMP = '3pin.lead';
 const MEET_STAMP = '3pin.meeting';
 
@@ -82,7 +83,10 @@ function explain(e) {
 async function eventsFor(subject, fromIso, toIso, key, make) {
   const url = `${CAL}/calendars/${encodeURIComponent(subject)}/events`
     + `?timeMin=${encodeURIComponent(fromIso)}&timeMax=${encodeURIComponent(toIso)}`
-    + `&singleEvents=true&orderBy=startTime&maxResults=100&timeZone=${encodeURIComponent(TZ)}`;
+    + `&singleEvents=true&orderBy=startTime&maxResults=100&timeZone=${encodeURIComponent(TZ)}`
+    // Days off and working-location markers are separate event types and do not
+    // arrive unless they are asked for by name.
+    + '&eventTypes=default&eventTypes=outOfOffice&eventTypes=workingLocation&eventTypes=focusTime';
   const r = await make(subject, key).request({ url });
   return (r.data.items || [])
     // A declined invitation is not a commitment, and showing it as one is how
@@ -99,6 +103,18 @@ async function eventsFor(subject, fromIso, toIso, key, make) {
       // reminder, a birthday) must not make somebody look unavailable.
       busy: e.transparency !== 'transparent',
       status: e.status || 'confirmed',
+      // Google distinguishes a meeting from a day off and from "working from
+      // home today". Treating all three as one grey block is how somebody gets
+      // a site visit booked on their leave — and worse, Google can be set to
+      // auto-decline conflicting invitations during out-of-office, so that
+      // booking comes back as a refusal the agent never made.
+      kind: e.eventType || 'default',
+      away: e.eventType === 'outOfOffice',
+      whereWorking: e.eventType === 'workingLocation'
+        ? ((e.workingLocationProperties || {}).type === 'homeOffice' ? 'working from home'
+          : ((e.workingLocationProperties || {}).officeLocation || {}).label
+            || ((e.workingLocationProperties || {}).customLocation || {}).label || 'in the office')
+        : null,
       leadId: (e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private[STAMP]) || null,
       meetingId: (e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private[MEET_STAMP]) || null,
       organiser: (e.organizer && e.organizer.email) || null,
@@ -131,7 +147,7 @@ export async function teamCalendar(people, from, to, { key = serviceKey(), makeC
 
 // ── Writing: only ever our own events ──────────────────────────────────────
 
-function visitEventBody(lead, visit, agents, property) {
+function visitEventBody(lead, visit, agents, property, crmBase) {
   const end = visit.at + (visit.minutes || 60) * 60000;
   const code = visit.property ? ` \u00b7 ${visit.property}` : '';
   // Not every viewing needs somebody to drive to it. Some are handled entirely
@@ -169,7 +185,17 @@ function visitEventBody(lead, visit, agents, property) {
     extendedProperties: { private: { [STAMP]: lead.id } },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: remote ? 15 : 60 }] },
     guestsCanModify: false,
-    guestsCanInviteOthers: false
+    guestsCanInviteOthers: false,
+    // One tap from the calendar entry to the lead it belongs to. An agent
+    // standing outside a building wants the history, not to go and search for
+    // the name in the CRM.
+    source: crmBase ? { title: 'Open this lead in the 3 PIN CRM', url: `${crmBase}/crm.html?lead=${encodeURIComponent(lead.id)}` } : undefined,
+    // The entry carries the client's number AND the seller's. Private keeps the
+    // detail to the people actually going, rather than to anybody in the domain
+    // who can see the agent's calendar.
+    visibility: 'private',
+    // 3 PIN's own bookings stand out in the agent's own calendar app.
+    colorId: remote ? '5' : '6'
   };
 }
 
@@ -193,6 +219,7 @@ async function stampedEvent(subject, eventId, leadId, key, make) {
  * event it did not create.
  */
 export async function syncVisitEvent({ lead, visit, subject, agents = [], property = null,
+  crmBase = process.env.CRM_BASE_URL || 'https://admin.threepin.in',
   previous = {}, key = serviceKey(), makeClient = realClient }) {
   if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
   const wanted = !!(subject && visit && visit.at && visit.status !== 'cancelled');
@@ -211,7 +238,7 @@ export async function syncVisitEvent({ lead, visit, subject, agents = [], proper
   }
   if (!wanted) return { eventId: null, owner: null, agents: [] };
 
-  const body = visitEventBody(lead, visit, agents, property);
+  const body = visitEventBody(lead, visit, agents, property, crmBase);
   // Without this Google files the change quietly and an agent turns up at the
   // old time, or does not turn up at all.
   const q = '?sendUpdates=all';
@@ -285,6 +312,29 @@ export function visitOwnerFor(lead, visit, team) {
 // Stamped like everything else, so the CRM can move or cancel the meetings it
 // made and nothing else.
 
+// Google states repetition as an RRULE. Only the handful a brokerage actually
+// uses are offered: the weekly review, the daily morning call, the Monday-to-
+// Saturday standup. Anything more elaborate is a thing somebody sets up once
+// in Google and the grid shows like any other event.
+//
+// The day names come from the meeting's OWN date in IST, not from the server's
+// idea of today — a Monday review booked from a machine on UTC would otherwise
+// repeat on Sundays.
+const ICS_DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+export function recurrenceRule(repeat, at) {
+  if (!repeat || repeat === 'none') return null;
+  const ist = new Date(at + IST_OFFSET_MS);
+  const day = ICS_DAYS[ist.getUTCDay()];
+  if (repeat === 'daily') return ['RRULE:FREQ=DAILY'];
+  if (repeat === 'weekly') return [`RRULE:FREQ=WEEKLY;BYDAY=${day}`];
+  // Brokers work Saturdays; Sunday is the day off, so "every working day" is
+  // Monday to Saturday here and not the Monday-to-Friday every calendar app
+  // assumes.
+  if (repeat === 'workdays') return ['RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA'];
+  if (repeat === 'monthly') return [`RRULE:FREQ=MONTHLY;BYMONTHDAY=${ist.getUTCDate()}`];
+  return null;
+}
+
 /**
  * Creates, moves or cancels a meeting among the team.
  *
@@ -297,11 +347,12 @@ export function visitOwnerFor(lead, visit, team) {
  * @param {string}   [o.about]    agenda
  * @param {string}   [o.where]    a room, or an address
  * @param {boolean}  [o.meet]     attach a Google Meet link
+ * @param {string}   [o.repeat]   none | daily | workdays | weekly | monthly
  * @param {string}   [o.eventId]  an existing meeting to move, rather than a new one
  * @param {boolean}  [o.cancel]   call it off and tell everyone
  */
 export async function syncTeamMeeting({ organiser, attendees = [], title, at, minutes = 30, about, where,
-  meet = false, eventId = null, cancel = false, key = serviceKey(), makeClient = realClient }) {
+  meet = false, repeat = 'none', eventId = null, cancel = false, key = serviceKey(), makeClient = realClient }) {
   if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
   if (!organiser) throw new Error('A meeting needs somebody to book it');
 
@@ -330,6 +381,10 @@ export async function syncTeamMeeting({ organiser, attendees = [], title, at, mi
     extendedProperties: { private: { [MEET_STAMP]: '1' } },
     guestsCanModify: true
   };
+  // Cancelling or moving a repeating meeting acts on the whole series, which
+  // is what somebody pressing "call it off" on a weekly review means.
+  const rule = recurrenceRule(repeat, at);
+  if (rule) body.recurrence = rule;
   // A Meet link has to be ASKED for, with a request id Google uses to
   // de-duplicate retries — so the same booking pressed twice gets one link.
   if (meet && !eventId) {
@@ -437,4 +492,27 @@ export async function respondToVisit({ agent, eventId, response, reason = '', le
   } catch (e) {
     throw explain(e);
   }
+}
+
+/**
+ * Our booking for this lead, found by the stamp rather than by a remembered id.
+ *
+ * The id is stored on the lead, but a restore, a hand-edit or a half-finished
+ * write can lose it — and without this the CRM would make a SECOND entry in
+ * the agent's diary for a visit that is already there. Asking Google which of
+ * its events carries our mark is the reliable question.
+ */
+export async function findVisitEvent({ organiser, leadId, from, to,
+  key = serviceKey(), makeClient = realClient }) {
+  if (!key || !organiser || !leadId) return null;
+  const url = `${CAL}/calendars/${encodeURIComponent(organiser)}/events`
+    + `?privateExtendedProperty=${encodeURIComponent(STAMP + '=' + leadId)}`
+    + `&maxResults=5&singleEvents=true&orderBy=startTime`
+    + (from ? `&timeMin=${encodeURIComponent(new Date(from).toISOString())}` : '')
+    + (to ? `&timeMax=${encodeURIComponent(new Date(to).toISOString())}` : '');
+  try {
+    const r = await makeClient(organiser, key).request({ url });
+    const hit = (r.data.items || []).find(e => e.status !== 'cancelled');
+    return hit ? hit.id : null;
+  } catch { return null; }
 }

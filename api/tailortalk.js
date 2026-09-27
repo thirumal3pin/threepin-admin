@@ -470,7 +470,8 @@ async function calendarPost(request) {
         at: Number(body.at) || 0, minutes: Math.min(600, Math.max(5, Number(body.minutes) || 30)),
         about: typeof body.about === 'string' ? body.about.slice(0, 2000) : undefined,
         where: typeof body.where === 'string' ? body.where.slice(0, 300) : undefined,
-        meet: body.meet === true, eventId: body.eventId || null, cancel: body.cancel === true
+        meet: body.meet === true, repeat: typeof body.repeat === 'string' ? body.repeat : 'none',
+        eventId: body.eventId || null, cancel: body.cancel === true
       });
       return json({ ok: true, ...r });
     }

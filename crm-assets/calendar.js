@@ -97,6 +97,16 @@
   // ── Status, the way Teams shows it ──
   function statusOf(person) {
     var now = Date.now();
+    // A day off is not a busy hour, and must not be read as one. Google can
+    // also be set to auto-decline invitations sent during out-of-office, so
+    // booking somebody on leave comes back as a refusal they never made.
+    var off = (person.events || []).filter(function (e) {
+      return e.away && Date.parse(e.start) <= now && Date.parse(e.end) > now;
+    })[0];
+    if (off) return { cls: 'away', text: off.title && !/^out of office$/i.test(off.title) ? off.title : 'on leave' };
+    var place = (person.events || []).filter(function (e) {
+      return e.whereWorking && Date.parse(e.start) <= now && Date.parse(e.end) > now;
+    })[0];
     var on = (person.events || []).filter(function (e) {
       return e.busy && !e.allDay && Date.parse(e.start) <= now && Date.parse(e.end) > now;
     }).sort(function (a, b) { return Date.parse(b.end) - Date.parse(a.end); })[0];
@@ -107,9 +117,9 @@
     if (next) {
       var mins = Math.round((Date.parse(next.start) - now) / MIN);
       // "Free until 3:30" is only useful while it is still today.
-      if (mins < 12 * 60) return { cls: 'free', text: 'free until ' + clock(Date.parse(next.start)) };
+      if (mins < 12 * 60) return { cls: 'free', text: 'free until ' + clock(Date.parse(next.start)) + (place ? ' \u00b7 ' + place.whereWorking : '') };
     }
-    return { cls: 'free', text: 'free' };
+    return { cls: 'free', text: place ? place.whereWorking : 'free' };
   }
 
   // ── Laying the day out ──
@@ -186,7 +196,8 @@
     var top = (b.from - (dayStart + OPEN * HOUR)) / HOUR * PX_PER_HOUR;
     var h = Math.max(18, (b.to - b.from) / HOUR * PX_PER_HOUR - 2);
     var w = 100 / b.lanes;
-    var cls = e.leadId ? 'cal-ev visit' : e.meetingId ? 'cal-ev meet' : !e.busy ? 'cal-ev free' : 'cal-ev';
+    var cls = e.away ? 'cal-ev away' : e.leadId ? 'cal-ev visit' : e.meetingId ? 'cal-ev meet'
+      : !e.busy ? 'cal-ev free' : 'cal-ev';
     var r = rsvpOf(e);
     var title = clock(b.realFrom) + '–' + clock(b.realTo) + ' · ' + e.title + (e.where ? ' · ' + e.where : '')
       + (r ? '\n' + r.detail : '');
@@ -304,6 +315,14 @@
       + [15, 30, 45, 60, 90].map(function (m) { return '<option value="' + m + '"' + (m === 30 ? ' selected' : '') + '>' + m + '</option>'; }).join('')
       + '</select></div>'
       + '</div>'
+      // The weekly review is the meeting people actually keep, and having to
+      // open Google to set one up is having to open Google.
+      + '<label for="cmRepeat">Repeats</label>'
+      + '<select id="cmRepeat">'
+      + [['none', 'Just once'], ['daily', 'Every day'], ['workdays', 'Every working day (Mon–Sat)'],
+         ['weekly', 'Every week, this day'], ['monthly', 'Every month, this date']]
+          .map(function (o) { return '<option value="' + o[0] + '">' + esc(o[1]) + '</option>'; }).join('')
+      + '</select>'
       + '<label>Who</label>'
       + '<div class="cm-who">' + team.map(function (e) {
           var self = e.toLowerCase() === mine;
@@ -331,6 +350,7 @@
     var minutes = Number(document.getElementById('cmMins').value);
     var where = document.getElementById('cmWhere').value.trim();
     var meet = document.getElementById('cmMeet').checked;
+    var repeat = document.getElementById('cmRepeat').value;
     var attendees = Array.prototype.slice.call(document.querySelectorAll('.cm-who input:checked:not(:disabled)'))
       .map(function (i) { return i.value; });
 
@@ -349,13 +369,17 @@
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ op: 'meeting', title: title, at: at, minutes: minutes, where: where, meet: meet, attendees: attendees })
+        body: JSON.stringify({ op: 'meeting', title: title, at: at, minutes: minutes, where: where, meet: meet, repeat: repeat, attendees: attendees })
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
       go.disabled = false; go.textContent = 'Send invitations';
       if (!d || !d.ok) return fail((d && (d.hint || d.error)) || 'Google would not take the booking.');
       closeMeeting();
-      if (typeof showToast === 'function') showToast('✓ Invitations sent to ' + attendees.length + ' — ' + title);
+      if (typeof showToast === 'function') {
+        var every = { daily: ' · every day', workdays: ' · every working day',
+          weekly: ' · every week', monthly: ' · every month' }[repeat] || '';
+        showToast('✓ Invitations sent to ' + attendees.length + ' — ' + title + every);
+      }
       // Jump to the day it was booked for, so it is visible immediately.
       state.at = startOfDay(at);
       load(true);

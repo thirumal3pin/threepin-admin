@@ -13,7 +13,7 @@
 // fake Google that records every request, so "it never touched that event" is
 // something the test can actually see rather than assume.
 
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, findVisitEvent, recurrenceRule, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
 
 let pass = 0;
 const fails = [];
@@ -41,7 +41,17 @@ function fakeGoogle(events = {}) {
         if (!e) { const err = new Error('Not Found'); err.response = { data: { error: { message: 'Not Found' } } }; throw err; }
         return { data: e };
       }
-      if (method === 'GET') return { data: { items: Object.values(store[subject] || {}) } };
+      if (method === 'GET') {
+        let items = Object.values(store[subject] || {});
+        // Honour privateExtendedProperty, or findVisitEvent's whole point -
+        // asking Google which event carries our mark - goes untested.
+        const pep = (url.match(/privateExtendedProperty=([^&]+)/) || [])[1];
+        if (pep) {
+          const [k, v] = decodeURIComponent(pep).split('=');
+          items = items.filter(e => ((e.extendedProperties || {}).private || {})[k] === v);
+        }
+        return { data: { items } };
+      }
       if (method === 'POST') {
         const id = 'ev' + (log.length);
         store[subject] = store[subject] || {};
@@ -452,6 +462,55 @@ section('WHEN IS EVERYONE FREE');
   const allDay = [{ person: 'a@x', events: [{ start: '2026-10-03', end: '2026-10-04', busy: true, allDay: true }] }];
   ok('an all-day tag does not wipe out the whole day',
     freeSlots(allDay, { from: AT, to: AT + 2 * H, minutes: 60, step: 60 }).length === 2);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+section('A DAY OFF IS NOT A BUSY HOUR');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const g = fakeGoogle({ 'swami@threepin.in': {
+    leave: { id: 'leave', summary: 'Annual leave', eventType: 'outOfOffice',
+      start: { dateTime: new Date(AT - 3600000).toISOString() }, end: { dateTime: new Date(AT + 7 * 3600000).toISOString() } },
+    wfh: { id: 'wfh', summary: 'Home', eventType: 'workingLocation',
+      workingLocationProperties: { type: 'homeOffice' },
+      start: { dateTime: new Date(AT).toISOString() }, end: { dateTime: new Date(AT + 3600000).toISOString() } }
+  } });
+  const day = await teamCalendar(['swami@threepin.in'], AT - 7200000, AT + 7200000, { key: KEY, makeClient: g.make });
+  const evs = day[0].events;
+  const leave = evs.find(e => e.title === 'Annual leave');
+  ok('a day off comes back marked as one', !!leave && leave.away === true, JSON.stringify(evs.map(e => [e.title, e.kind])));
+  ok('...and not as an ordinary meeting', leave.kind === 'outOfOffice');
+  const wfh = evs.find(e => e.title === 'Home');
+  ok('where somebody is working comes back too', wfh && wfh.whereWorking === 'working from home', JSON.stringify(wfh));
+  // Out-of-office and working-location are separate event types and never
+  // arrive unless the request asks for them by name.
+  ok('...because the request asks for those event types', g.log.some(x => /eventTypes=outOfOffice/.test(x.url)), g.log[0].url.slice(-120));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+section('THE WAY BACK TO THE LEAD');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP,
+    crmBase: 'https://admin.threepin.in', key: KEY, makeClient: g.make });
+  const made = g.store['sales@threepin.in'][r.eventId];
+  ok('the entry links back to the lead it came from', /crm\.html\?lead=L1/.test((made.source || {}).url || ''), JSON.stringify(made.source));
+  // It carries the client's number AND the seller's. Anyone in the domain who
+  // can see the agent's calendar should not get both.
+  ok('...and keeps two people’s phone numbers to the guests', made.visibility === 'private', made.visibility);
+  ok('...and is coloured as 3 PIN’s own', !!made.colorId);
+}
+{
+  // The stored event id can be lost to a restore or a half-finished write, and
+  // without this the CRM makes a SECOND entry for a visit already in the diary.
+  const g = fakeGoogle({ 'sales@threepin.in': { keep: stamped('keep', 'L1'), other: stamped('other', 'L9') } });
+  const found = await findVisitEvent({ organiser: 'sales@threepin.in', leadId: 'L1', key: KEY, makeClient: g.make });
+  ok('our booking can be found again by its mark', found === 'keep', String(found));
+  ok('...asking Google for that mark rather than guessing', g.log.some(x => /privateExtendedProperty/.test(x.url)));
+  const none = await findVisitEvent({ organiser: 'sales@threepin.in', leadId: 'NOPE', key: KEY, makeClient: g.make });
+  ok('...and a lead with no booking finds none', none === null, String(none));
 }
 
 console.log('');

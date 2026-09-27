@@ -423,6 +423,55 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   ok('…and only that one', filtered.length === 1, JSON.stringify(filtered));
 
   await page.screenshot({ path: join(OUT, '70-escalated.png') });
+
+  // ══════ ALERTS ══════
+  // Everything needing a person, gathered instead of found by scrolling. It reads
+  // the same computeAttention() the board does, so the bell can never claim
+  // something the lead itself denies.
+  {
+    const bell = await page.evaluate(() => {
+      const c = document.getElementById('bellCount');
+      return { there: !!document.getElementById('bellBtn'), hidden: c ? c.hidden : null,
+        count: c ? c.textContent : null, urgent: c ? c.className.includes('urgent') : null,
+        // What the board itself says needs a person, by the same rule.
+        board: leads.filter(l => !isBusinessLead(l))
+          .reduce((n, l) => n + attentionFor(l).filter(a => a.key !== 'ai_suggestion' && a.severity !== 'low').length, 0),
+        anyUrgent: leads.filter(l => !isBusinessLead(l))
+          .some(l => attentionFor(l).some(a => a.key !== 'ai_suggestion' && a.severity === 'high')) };
+    });
+    ok('There is an alerts bell in the header', bell.there);
+    ok('…carrying a count', !bell.hidden && Number(bell.count) > 0, JSON.stringify(bell));
+    // A bell that disagrees with the board is worse than no bell.
+    ok('…that agrees with the board', Number(bell.count) === bell.board, `bell ${bell.count}, board ${bell.board}`);
+    // Red has to MEAN urgent. A badge that is always red stops being read, and
+    // one that is never red when something is on fire is worse.
+    ok('…and goes red exactly when something is urgent', bell.urgent === bell.anyUrgent, JSON.stringify(bell));
+
+    const menu = await page.evaluate(() => {
+      toggleAlerts();
+      const m = document.getElementById('bellMenu');
+      const r = m.getBoundingClientRect();
+      return { open: m.classList.contains('open'), items: m.querySelectorAll('.bell-item').length,
+        first: (m.querySelector('.bell-item-t') || {}).textContent || '',
+        named: (m.querySelector('.bell-item-w') || {}).textContent || '',
+        // A menu hanging off the right edge is a menu half of which cannot be read.
+        onScreen: r.right <= innerWidth + 2 && r.left >= -2 };
+    });
+    ok('…which opens a list', menu.open && menu.items > 0, JSON.stringify(menu));
+    ok('…saying what needs doing', menu.first.length > 3, menu.first);
+    ok('…and on which lead', menu.named.length > 2, menu.named);
+    ok('…without hanging off the edge of the screen', menu.onScreen, JSON.stringify(menu));
+
+    const jumped = await page.evaluate(() => {
+      const id = leads.find(l => !isBusinessLead(l) && attentionFor(l).some(a => a.severity !== 'low')).id;
+      openAlert(id);
+      return { closed: !document.getElementById('bellMenu').classList.contains('open'),
+        opened: document.getElementById('dp').classList.contains('open') };
+    });
+    ok('…and picking one opens that lead', jumped.opened && jumped.closed, JSON.stringify(jumped));
+    await page.evaluate(() => closeDetail());
+  }
+
   await page.context().close();
 }
 

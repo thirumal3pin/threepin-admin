@@ -127,6 +127,7 @@ window.applyDashboardEmailSettingsSnapshot = function(settings){
 // real mobile bug — see checkFollowupNotify() for the specific case.
 function refreshAll(){
   attnCache = new Map();
+  try{ renderBell(); } catch(e){ console.error('renderBell failed:', e); }
   if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else applyFilters();
   try{ renderLeadFilterBar(); } catch(e){ console.error('renderLeadFilterBar failed:', e); }
@@ -300,6 +301,7 @@ function clearSearch(){
 
 function applyFilters(){
   attnCache = new Map();
+  try{ renderBell(); } catch(e){ console.error('renderBell failed:', e); }
   filteredLeads = leads.filter(l=>{
     if(!passesLeadFilter(l)) return false;
     if(currentSearch){
@@ -1449,6 +1451,86 @@ function renderTtSection(l){
   if(paneHasChat) renderConversationPane(l);
 }
 
+// ═══════ ALERTS ═══════
+//
+// Everything that needs a person, gathered from every lead instead of found by
+// scrolling the board. Nothing new is stored: it is the same computeAttention()
+// the board, the action queue and the daily digest all read from, so the bell
+// can never claim something the lead itself denies.
+//
+// The count is what is OPEN. Any team action on a lead moves updatedAt, which
+// closes its reasons, so the number comes down as work is done — a badge that
+// only ever grows is one people stop looking at.
+const ALERT_SEV = { high: 0, medium: 1, low: 2 };
+function alertItems(){
+  const out = [];
+  for(const l of leads){
+    if(isBusinessLead(l)) continue;
+    for(const a of attentionFor(l)){
+      if(a.key === 'ai_suggestion') continue;
+      if(ALERT_SEV[a.severity] > 1) continue;   // low noise stays on the lead
+      out.push({ lead: l, a });
+    }
+  }
+  out.sort((x, y) => (ALERT_SEV[x.a.severity] - ALERT_SEV[y.a.severity]) || ((y.a.at || 0) - (x.a.at || 0)));
+  return out;
+}
+function renderBell(){
+  const btn = document.getElementById('bellBtn');
+  const count = document.getElementById('bellCount');
+  if(!btn || !count) return;
+  const items = alertItems();
+  const urgent = items.filter(x => x.a.severity === 'high').length;
+  count.hidden = items.length === 0;
+  count.textContent = items.length > 99 ? '99+' : String(items.length);
+  count.className = 'bell-count' + (urgent ? ' urgent' : '');
+  btn.setAttribute('aria-label', items.length ? `Alerts — ${items.length} need a person` : 'Alerts — nothing waiting');
+  const menu = document.getElementById('bellMenu');
+  if(menu && menu.classList.contains('open')) renderAlertMenu();
+}
+function renderAlertMenu(){
+  const menu = document.getElementById('bellMenu');
+  if(!menu) return;
+  const items = alertItems();
+  if(!items.length){
+    menu.innerHTML = '<div class="bell-empty">Nothing needs you right now.</div>';
+    return;
+  }
+  const shown = items.slice(0, 12);
+  menu.innerHTML = `<div class="bell-head">${items.length} need${items.length === 1 ? 's' : ''} a person</div>`
+    + shown.map(({ lead: l, a }) => `<button type="button" class="bell-item ${a.severity}" onclick="openAlert('${l.id}')">
+        <span class="bell-item-t">${escapeHtml(a.label)}</span>
+        <span class="bell-item-w">${escapeHtml(l.name || 'Lead')}${a.detail ? ' · ' + escapeHtml(a.detail) : ''}</span>
+      </button>`).join('')
+    + (items.length > shown.length ? `<button type="button" class="bell-more" onclick="showAllAlerts()">See all ${items.length} on the board</button>` : '');
+}
+function toggleAlerts(e){
+  if(e) e.stopPropagation();
+  const menu = document.getElementById('bellMenu');
+  const btn = document.getElementById('bellBtn');
+  const open = menu.classList.toggle('open');
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if(open) renderAlertMenu();
+}
+function closeAlerts(){
+  const menu = document.getElementById('bellMenu');
+  const btn = document.getElementById('bellBtn');
+  if(!menu) return;
+  menu.classList.remove('open');
+  if(btn) btn.setAttribute('aria-expanded', 'false');
+}
+function openAlert(id){
+  closeAlerts();
+  openDetail(id);
+}
+function showAllAlerts(){
+  closeAlerts();
+  // The board already has a view for this; the bell should hand over to it
+  // rather than grow into a second, slightly different one.
+  setLeadFocus('needs');
+  toggleView('kanban');
+}
+
 // ═══════ NAV: view switching, more menu ═══════
 //
 // Which view is showing is the rail's job to display — the four buttons and
@@ -1498,7 +1580,7 @@ function closeMoreMenu(){
   document.getElementById('moreDd').classList.remove('open');
   syncDropdownAria();
 }
-document.addEventListener('click', ()=>{ closeMoreMenu(); closePropertyPop(); });
+document.addEventListener('click', ()=>{ closeMoreMenu(); closePropertyPop(); closeAlerts(); });
 
 // ═══════ HELPERS ═══════
 function stageById(id){ return stages.find(s=>s.id===id); }
@@ -3212,30 +3294,44 @@ function renderVisitAvailability(){
   document.querySelectorAll('.sv-agent-free').forEach(el => { el.textContent = ''; el.className = 'sv-agent-free'; });
   if(!Array.isArray(svAvail) || !at) return;
 
-  let clashes = 0;
+  let clashes = 0, onLeave = 0;
   document.querySelectorAll('.sv-agent').forEach(row => {
     const email = row.getAttribute('data-email');
     const person = svAvail.find(p => String(p.person).toLowerCase() === email);
     const mark = row.querySelector('.sv-agent-free');
     if(!person){ mark.textContent = '?'; mark.className = 'sv-agent-free unknown'; return; }
     if(person.error){ mark.textContent = 'calendar unreadable'; mark.className = 'sv-agent-free unknown'; return; }
-    const busy = (person.events || []).filter(e => e.busy && !e.allDay
-      && Date.parse(e.start) < at + mins*60000 && Date.parse(e.end) > at);
+    const covers = e => Date.parse(e.start) < at + mins*60000 && Date.parse(e.end) > at;
+    // Leave first, and said as leave. Booking somebody who is away is not a
+    // clash to shrug at: Google can be set to auto-decline invitations during
+    // out-of-office, so it comes back as a refusal the agent never made.
+    const away = (person.events || []).filter(e => e.away && covers(e))[0];
+    if(away){
+      mark.textContent = 'on leave';
+      mark.className = 'sv-agent-free away';
+      if(row.querySelector('input').checked) onLeave++;
+      return;
+    }
+    const busy = (person.events || []).filter(e => e.busy && !e.allDay && covers(e));
     if(busy.length){
       mark.textContent = 'busy \u00b7 ' + busy[0].title.slice(0, 22);
       mark.className = 'sv-agent-free busy';
       if(row.querySelector('input').checked) clashes++;
     } else {
-      mark.textContent = 'free';
+      const place = (person.events || []).filter(e => e.whereWorking && covers(e))[0];
+      mark.textContent = place ? place.whereWorking : 'free';
       mark.className = 'sv-agent-free ok';
     }
   });
   // A clash is not refused \u2014 the office may know the other thing can move \u2014
   // but it is said plainly before the invitations go out.
-  note.textContent = clashes
-    ? clashes + (clashes === 1 ? ' person you have picked is' : ' people you have picked are') + ' busy then. You can still send it.'
-    : 'Free/busy is from each agent\u2019s own calendar at the time you pick.';
-  note.className = 'sv-hint' + (clashes ? ' warn' : '');
+  note.textContent = onLeave
+    ? (onLeave === 1 ? 'Somebody you have picked is on leave then' : onLeave + ' of the people you have picked are on leave then')
+      + ' \u2014 Google may refuse the invitation on their behalf.'
+    : clashes
+      ? clashes + (clashes === 1 ? ' person you have picked is' : ' people you have picked are') + ' busy then. You can still send it.'
+      : 'Free/busy is from each agent\u2019s own calendar at the time you pick.';
+  note.className = 'sv-hint' + (onLeave ? ' bad' : clashes ? ' warn' : '');
 }
 
 function writeVisit(l, at, status, property, agents, notes, minutes, mode){
