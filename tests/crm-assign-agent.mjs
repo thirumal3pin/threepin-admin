@@ -184,13 +184,25 @@ if (opened.open) {
       taps: [...box.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,button,.cm-p')]
         .map(e => Math.round(e.getBoundingClientRect().height)),
       shouting: [...box.querySelectorAll('.cm-p')]
-        .filter(e => getComputedStyle(e).textTransform === 'uppercase').length };
+        .filter(e => getComputedStyle(e).textTransform === 'uppercase').length,
+      // The sheet is a flex column with a max height. Its children default to
+      // flex-shrink:1, so once the form is taller than the sheet they all get
+      // squeezed - and the textarea, being the tallest flexible thing, is
+      // squeezed hardest. It ended up half a line high with its own
+      // placeholder clipped through the middle.
+      notes: Math.round(document.getElementById('svNotes').getBoundingClientRect().height),
+      // Checkboxes and radios are 15px by design; their label is the target.
+      squashed: [...box.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,textarea')]
+        .filter(e => e.getBoundingClientRect().height < 28)
+        .map(e => (e.id || e.tagName) + ':' + Math.round(e.getBoundingClientRect().height)) };
   });
   ok('...fitting the screen', fits.right <= fits.w + 2, JSON.stringify(fits));
   ok('...with Save reachable', fits.saveOn, JSON.stringify(fits));
   ok('...and controls big enough to tap', Math.min(...fits.taps) >= 30, fits.taps.join(','));
   // A caption style leaking onto a person's name renders "PRADEEP".
   ok('...with names written, not shouted', fits.shouting === 0, fits.shouting + ' uppercased');
+  ok('...a notes box you can actually write in', fits.notes >= 50, fits.notes + 'px tall');
+  ok('...and nothing squeezed flat by the form being long', fits.squashed.length === 0, fits.squashed.join(', '));
 }
 
 // A picture of it open, because "is it fixed" is a question about what a

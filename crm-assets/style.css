@@ -651,6 +651,12 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    and completely invisible. From the outside that is a button that does
    nothing, which is exactly how it was reported. */
 .cal-sheet{position:fixed;inset:0;z-index:500;background:rgba(20,18,16,.44);display:flex;align-items:center;justify-content:center;padding:16px;}
+/* The sheet is a flex column with a max height, and flex children shrink by
+   default. Once the form was longer than the sheet, EVERY control was squeezed
+   proportionally: on a phone the notes box ended up 18px high with its own
+   placeholder clipped through the middle, and six other fields were flattened
+   with it. The sheet should scroll, not compress what is in it. */
+.cal-sheet-in > *{flex-shrink:0;}
 .cal-sheet-in{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:18px;
   width:min(440px,100%);max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:7px;}
 .cal-sheet-in h3{margin:0 0 4px;font-size:16px;}
@@ -731,7 +737,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 /* ── The scheduler ── */
 .sv-sheet{width:min(520px,100%);}
 .sv-sheet textarea{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
-  border-radius:var(--r2);background:var(--bg);color:var(--ink);width:100%;box-sizing:border-box;resize:vertical;}
+  border-radius:var(--r2);background:var(--bg);color:var(--ink);width:100%;box-sizing:border-box;
+  resize:vertical;min-height:66px;}
 .sv-sheet select,.sv-sheet input[type=text]{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
   border-radius:var(--r2);background:var(--bg);color:var(--ink);min-height:38px;width:100%;box-sizing:border-box;}
 .sv-agents{display:flex;flex-direction:column;gap:5px;}
