@@ -451,13 +451,22 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
       toggleAlerts();
       const m = document.getElementById('bellMenu');
       const r = m.getBoundingClientRect();
-      return { open: m.classList.contains('open'), items: m.querySelectorAll('.bell-item').length,
+      // A class and some innerHTML are not a menu somebody can see. This
+      // asked whether the element existed, and a display:none element with
+      // twelve rows in it answers yes — which is exactly how a bell that
+      // opened nothing passed its own test.
+      const hit = r.width ? document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + 20)) : null;
+      return { open: m.classList.contains('open'),
+        painted: !!(hit && m.contains(hit)),
+        shown: getComputedStyle(m).display !== 'none',
+        items: m.querySelectorAll('.bell-item').length,
         first: (m.querySelector('.bell-item-t') || {}).textContent || '',
         named: (m.querySelector('.bell-item-w') || {}).textContent || '',
         // A menu hanging off the right edge is a menu half of which cannot be read.
         onScreen: r.right <= innerWidth + 2 && r.left >= -2 };
     });
     ok('…which opens a list', menu.open && menu.items > 0, JSON.stringify(menu));
+    ok('…that is actually on the screen', menu.shown && menu.painted, JSON.stringify(menu));
     ok('…saying what needs doing', menu.first.length > 3, menu.first);
     ok('…and on which lead', menu.named.length > 2, menu.named);
     ok('…without hanging off the edge of the screen', menu.onScreen, JSON.stringify(menu));

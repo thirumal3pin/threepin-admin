@@ -603,6 +603,11 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 /* Red only when something is actually urgent — otherwise the badge is just
    a number, and a permanent red dot stops meaning anything. */
 .bell-count.urgent{background:var(--red);}
+/* .dd-menu is display:none, and the only rule that reveals one is
+   `.more-dd.open .dd-menu` — the OPEN class goes on the parent there. The bell
+   puts it on the menu itself, so without this line the menu was built,
+   populated and left invisible: a bell that opens nothing. */
+.bell-menu.open{display:flex;animation:ddIn .16s var(--ease);}
 .bell-menu{right:0;left:auto;width:min(360px,calc(100vw - 32px));max-height:min(460px,70vh);
   overflow-y:auto;padding:0;}
 .bell-grp{border-bottom:1px solid var(--border2);}
@@ -676,9 +681,9 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    worth clicking: it opens the lead. */
 /* A meeting you booked can be dragged to a new time. The cursor is the only
    hint it needs; a grab handle on a 26px block would be most of the block. */
-.cal-ev.movable{cursor:grab;}
+.cal-ev.movable{cursor:grab;touch-action:none;}
 .cal-ev.movable:active{cursor:grabbing;}
-.cal-ev.dragging{opacity:.45;}
+.cal-ev.dragging{opacity:.55;z-index:5;box-shadow:0 6px 16px rgba(20,18,15,.22);}
 .tt-btn.danger{color:var(--red);border-color:var(--red-line);}
 .tt-btn.danger:hover{background:var(--red-bg);}
 .cal-ev.visit{background:var(--amber-bg,#FFF7E8);border-color:var(--amber-line,#F0C98A);cursor:pointer;}

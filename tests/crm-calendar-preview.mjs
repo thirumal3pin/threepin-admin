@@ -359,7 +359,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   moved = null;
   const drag = await page.evaluate(async () => {
     const block = [...document.querySelectorAll('.cal-ev.meet')][0];
-    const movable = block && block.classList.contains('movable') && block.getAttribute('draggable') === 'true';
+    const movable = !!(block && block.classList.contains('movable') && block.getAttribute('data-ev'));
     const track = document.querySelector('.cal-track');
     const hasDay = !!(track && track.getAttribute('data-day'));
     // A site visit is not draggable here: moving one changes what an agent was
@@ -369,6 +369,52 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     return { movable, hasDay, visitMovable };
   });
   ok('a meeting you booked can be dragged', drag.movable, JSON.stringify(drag));
+
+  // Attributes are not a drag. Do it with the mouse, the way a person does,
+  // and check the server was actually told to move it.
+  moved = null;
+  page.once('dialog', d => d.accept());
+  // At phone width the grid scrolls sideways and the column may be off screen.
+  // A person scrolls to it before dragging; so does this.
+  await page.locator('.cal-ev.meet').first().scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  const box = await page.locator('.cal-ev.meet').first().boundingBox();
+  const track = await page.locator('.cal-track').first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + 120, { steps: 12 });
+  await page.mouse.move(box.x + box.width / 2, box.y + 130, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  ok('...and dragging it with the mouse actually moves it',
+    !!moved && moved.op === 'moveMeeting' && moved.eventId === 'mtg1', JSON.stringify(moved));
+  ok('...to a later time than it was', !!moved && moved.at > Date.parse(PEOPLE[3].events[0].start), JSON.stringify(moved && moved.at));
+
+  // And with a finger, which is the case HTML5 drag-and-drop could never do:
+  // the first version of this worked on a laptop and did nothing at all on a
+  // phone. Dispatched as real pointer events of type "touch".
+  if (viewport.width === 390) {
+    moved = null;
+    page.once('dialog', d => d.accept());
+    // The grid re-rendered after the mouse drag, so the block is found fresh
+    // and the events are sent to the element itself rather than to whatever
+    // happens to be at a remembered coordinate.
+    const el = page.locator('.cal-ev.meet').first();
+    await el.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+    await el.evaluate(node => {
+      const r = node.getBoundingClientRect();
+      const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + 6);
+      const fire = (type, cy) => node.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch', clientX: x, clientY: cy }));
+      fire('pointerdown', y);
+      fire('pointermove', y + 40);
+      fire('pointermove', y + 130);
+      fire('pointerup', y + 130);
+    });
+    await page.waitForTimeout(700);
+    ok('...and with a finger, not only a mouse', !!moved && moved.op === 'moveMeeting', JSON.stringify(moved));
+  }
   ok('...onto a day the grid knows the date of', drag.hasDay);
   ok('...while a site visit is not dragged from here', !drag.visitMovable);
 

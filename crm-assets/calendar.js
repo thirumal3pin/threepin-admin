@@ -240,11 +240,11 @@
     // organiser is only known once the event has been opened, so the grid
     // offers the drag and the SERVER decides — a drag by somebody else comes
     // back refused and the block snaps home.
-    var drag = (e.meetingId && !e.leadId) ? ' draggable="true" data-ev="' + esc(e.id) + '"'
+    var movable = (e.meetingId && !e.leadId) ? ' data-ev="' + esc(e.id) + '"'
       + ' data-mins="' + Math.round((b.realTo - b.realFrom) / 60000) + '"' : '';
-    return '<div class="' + cls + (drag ? ' movable' : '') + '" style="top:' + top.toFixed(1) + 'px;height:' + h.toFixed(1) + 'px;'
+    return '<div class="' + cls + (movable ? ' movable' : '') + '" style="top:' + top.toFixed(1) + 'px;height:' + h.toFixed(1) + 'px;'
       + 'left:' + (b.lane * w).toFixed(2) + '%;width:' + (w - 1).toFixed(2) + '%"'
-      + ' title="' + esc(title) + '"' + open + drag + '>' + inner + '</div>';
+      + ' title="' + esc(title) + '"' + open + movable + '>' + inner + '</div>';
   }
 
   function nowLineHtml(dayStart) {
@@ -256,61 +256,82 @@
 
   // ═══════ DRAGGING A MEETING TO A NEW TIME ═══════
   //
-  // Dropped where it lands, rounded to the nearest quarter hour, because
-  // nobody books a meeting at 2:07 and a grid pixel is not a time. The column
-  // it was dropped on decides the day, so a week view moves it across days as
-  // well as hours.
+  // Pointer events, not HTML5 drag-and-drop. HTML5 dragging does not exist on
+  // touch at all — the first version worked on a laptop and did nothing
+  // whatsoever on a phone — and it also insists on a dragover handler calling
+  // preventDefault on every element the pointer crosses, so a drop a few
+  // pixels off a track silently did nothing. Pointer events are one code path
+  // for mouse and finger, and the drop is worked out from coordinates rather
+  // than from whatever happened to be under the cursor.
   //
-  // The move is confirmed before it is sent: a drag is easy to do by accident
-  // on a trackpad, and this one emails everybody invited.
-  var dragging = null;
+  // The block also has a click on it, so a drag has to be told apart from a
+  // tap: nothing moves until the pointer has travelled far enough to mean it.
+  var MOVE_THRESHOLD = 6;
+  var drag = null;
 
-  function onDragStart(ev) {
+  function trackAt(x, y) {
+    var tracks = document.querySelectorAll('#calendarBody .cal-track');
+    for (var i = 0; i < tracks.length; i++) {
+      var r = tracks[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return tracks[i];
+    }
+    return null;
+  }
+
+  function onPointerDown(ev) {
+    if (ev.button != null && ev.button !== 0) return;
     var block = ev.target.closest ? ev.target.closest('[data-ev]') : null;
     if (!block) return;
-    dragging = { id: block.getAttribute('data-ev'), mins: Number(block.getAttribute('data-mins')) || 30 };
-    try { ev.dataTransfer.setData('text/plain', dragging.id); ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
-    block.classList.add('dragging');
+    drag = { id: block.getAttribute('data-ev'), mins: Number(block.getAttribute('data-mins')) || 30,
+      x: ev.clientX, y: ev.clientY, block: block, moving: false, pid: ev.pointerId };
   }
-  function onDragEnd(ev) {
-    var block = ev.target.closest ? ev.target.closest('[data-ev]') : null;
-    if (block) block.classList.remove('dragging');
-  }
-  function onDragOver(ev) {
-    if (!dragging) return;
-    var track = ev.target.closest ? ev.target.closest('.cal-track') : null;
-    if (!track) return;
+
+  function onPointerMove(ev) {
+    if (!drag) return;
+    if (!drag.moving) {
+      if (Math.abs(ev.clientY - drag.y) + Math.abs(ev.clientX - drag.x) < MOVE_THRESHOLD) return;
+      drag.moving = true;
+      drag.block.classList.add('dragging');
+      // Captured so the pointer keeps reporting to this block even when it
+      // leaves it, which is most of a drag.
+      try { drag.block.setPointerCapture(drag.pid); } catch (e) {}
+    }
     ev.preventDefault();
-    try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+    drag.block.style.transform = 'translateY(' + (ev.clientY - drag.y) + 'px)';
   }
-  function onDrop(ev) {
-    if (!dragging) return;
-    var track = ev.target.closest ? ev.target.closest('.cal-track') : null;
-    if (!track) return;
-    ev.preventDefault();
-    var moved = dragging;
-    dragging = null;
+
+  function onPointerUp(ev) {
+    if (!drag) return;
+    var d = drag;
+    drag = null;
+    d.block.classList.remove('dragging');
+    d.block.style.transform = '';
+    try { d.block.releasePointerCapture(d.pid); } catch (e) {}
+    if (!d.moving) return;              // a tap; the click handler has it
+
+    var track = trackAt(ev.clientX, ev.clientY);
+    if (!track) { if (typeof showToast === 'function') showToast('Drop it on a day to move it'); return; }
 
     var r = track.getBoundingClientRect();
     var hours = OPEN + ((ev.clientY - r.top) / PX_PER_HOUR);
     // Nobody books a meeting at 2:07, and a pixel is not a time.
-    var mins = Math.round((hours * 60) / 15) * 15;
+    var mins = Math.max(0, Math.round((hours * 60) / 15) * 15);
     var day = Number(track.getAttribute('data-day')) || state.at;
     var at = day + mins * 60000;
     if (at < Date.now() - 60000) { if (typeof showToast === 'function') showToast('That is in the past.'); return; }
 
     var when = new Date(at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    // Easy to do by accident on a trackpad, and this one emails everybody.
+    // Easy to do by accident, and this one emails everybody invited.
     if (!confirm('Move the meeting to ' + when + '? Everyone invited will be told.')) { render(); return; }
 
     window.crmAuth.getIdToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ op: 'moveMeeting', eventId: moved.id, at: at, minutes: moved.mins })
+        body: JSON.stringify({ op: 'moveMeeting', eventId: d.id, at: at, minutes: d.mins })
       });
-    }).then(function (x) { return x.json(); }).then(function (d) {
-      if (!d || !d.ok) {
-        if (typeof showToast === 'function') showToast((d && d.error) || 'Could not move it');
+    }).then(function (x) { return x.json(); }).then(function (res) {
+      if (!res || !res.ok) {
+        if (typeof showToast === 'function') showToast((res && res.error) || 'Could not move it');
         render();   // snap it home
         return;
       }
@@ -326,10 +347,10 @@
     var body = document.getElementById('calendarBody');
     if (!body || body.__dragWired) return;
     body.__dragWired = true;
-    body.addEventListener('dragstart', onDragStart);
-    body.addEventListener('dragend', onDragEnd);
-    body.addEventListener('dragover', onDragOver);
-    body.addEventListener('drop', onDrop);
+    body.addEventListener('pointerdown', onPointerDown);
+    body.addEventListener('pointermove', onPointerMove);
+    body.addEventListener('pointerup', onPointerUp);
+    body.addEventListener('pointercancel', onPointerUp);
   }
 
   function render() {
