@@ -55,9 +55,17 @@
   var MINE_ICON = '<svg class="td-mine-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
 
-  function mineBadge(waiting) {
-    return '<span class="td-mine' + (waiting ? ' waiting' : '') + '">' + MINE_ICON
-      + (waiting ? 'You have not answered' : 'Assigned to you') + '</span>';
+  // Beneath the time, in the same place on every row, so finding your own work
+  // is running your eye down one column rather than reading each line. A pill
+  // with words in it sits wherever the text before it happens to end, which is
+  // a different place on every row and so is not scannable at all.
+  //
+  // Amber when it is still waiting on you, because those are the ones to deal
+  // with first; the plain one just says the job is yours.
+  function mineMark(waiting) {
+    var label = waiting ? 'Yours \u2014 you have not answered' : 'Assigned to you';
+    return '<span class="td-mine' + (waiting ? ' waiting' : '') + '" role="img"'
+      + ' aria-label="' + label + '" title="' + label + '">' + MINE_ICON + '</span>';
   }
 
   function isMe(email) {
@@ -173,15 +181,14 @@
       var title = typeof propertyTitleOf === 'function' ? propertyTitleOf(item.property) : '';
       var mineOnVisit = (item.agents || []).some(isMe);
       if (mineOnVisit) cls += ' is-mine';
-      head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
+      head = '<span class="td-time">' + esc(clock(item.at))
+        + (mineOnVisit ? mineMark(replyStatus(item, currentUserEmail) === 'needsAction') : '') + '</span>'
         + '<span class="td-main"><span class="td-what">'
         + (item.byPhone ? 'Coordinate by phone' : 'Site visit')
         + (item.property ? ' — <b>' + esc(item.property) + '</b>' : '')
         + (title ? ' <span class="td-prop">' + esc(title) + '</span>' : '') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span>'
-        + '<span class="td-assigned">'
-        + (mineOnVisit ? mineBadge(replyStatus(item, currentUserEmail) === 'needsAction') : '')
-        + assignedHtml(item) + '</span></span>';
+        + '<span class="td-assigned">' + assignedHtml(item) + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
         + phoneLine('Property owner', seller && seller.name, seller && seller.phone)
         + (seller ? '' : '<div class="td-f"><dt>Property owner</dt><dd><span class="td-none">no owner listing on file for this property</span></dd></div>')
@@ -196,12 +203,12 @@
       // Every meeting in this list is one you are on — it came from your own
       // calendar — so what is worth marking is the ones still waiting on you.
       if (m.mine === 'needsAction') cls += ' is-mine';
-      head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
+      head = '<span class="td-time">' + esc(clock(item.at))
+        + (m.mine === 'needsAction' ? mineMark(true) : '') + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(m.title) + '</span>'
         + '<span class="td-who">' + (m.where ? esc(m.where) + ' · ' : '')
         + (m.end ? 'until ' + esc(clock(m.end)) : '') + '</span>'
         + '<span class="td-assigned">'
-        + (m.mine === 'needsAction' ? mineBadge(true) : '')
         + '<span class="td-agent ' + (m.mine || 'needsAction') + '">'
         + esc(ANS[m.mine] || 'you have not answered') + '</span>'
         + (m.attendees || []).filter(function (a) { return !isMe(a.email); }).slice(0, 4).map(function (a) {
@@ -255,10 +262,33 @@
       + '<div class="td-body"><dl class="td-dl">' + body + '</dl>' + acts + '</div></details>';
   }
 
+  // How many of a section are yours. Beside the heading, so you can tell
+  // whether a section is worth reading before you read any of it, and amber
+  // when some of yours are still unanswered.
+  function mineIn(items) {
+    var mine = 0, waiting = 0;
+    (items || []).forEach(function (it) {
+      if (it.kind === 'visit') {
+        if ((it.agents || []).some(isMe)) { mine++; if (replyStatus(it, currentUserEmail) === 'needsAction') waiting++; }
+      } else if (it.kind === 'meeting') {
+        // Every meeting in this list is already yours — it came out of your own
+        // calendar — so "yours" marks nothing. The ones still waiting on your
+        // answer are the ones worth finding.
+        if (it.meeting.mine === 'needsAction') { mine++; waiting++; }
+      }
+    });
+    return { mine: mine, waiting: waiting };
+  }
+
   function sectionHtml(title, note, items, emptyLine) {
+    var m = mineIn(items);
     return '<section class="td-sec">'
       + '<h2 class="td-sec-h"><span class="td-sec-t">' + esc(title) + '</span>'
-      + (items.length ? '<span class="td-n">' + items.length + '</span>' : '') + '</h2>'
+      + (items.length ? '<span class="td-n">' + items.length + '</span>' : '')
+      + (m.mine ? '<span class="td-sec-mine' + (m.waiting ? ' waiting' : '') + '"'
+          + ' title="' + m.mine + ' of these ' + (m.mine === 1 ? 'is' : 'are') + ' yours'
+          + (m.waiting ? ', ' + m.waiting + ' still unanswered' : '') + '">'
+          + MINE_ICON + m.mine + '</span>' : '') + '</h2>'
       + '<p class="td-sec-note">' + esc(note) + '</p>'
       + (items.length ? items.map(rowHtml).join('') : '<p class="td-empty">' + esc(emptyLine) + '</p>')
       + '</section>';

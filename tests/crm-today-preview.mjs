@@ -209,16 +209,36 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       meetingDone: !!(find('Monday pipeline') && find('Monday pipeline').classList.contains('is-mine')),
       meeting: { marked: !!(find('Owner call') && find('Owner call').classList.contains('is-mine')),
         text: read(find('Owner call')) },
-      icons: document.querySelectorAll('.td-mine-i').length
+      icons: document.querySelectorAll('.td-mine').length,
+      marks: [...document.querySelectorAll('.td-mine')].map(e => Math.round(e.getBoundingClientRect().left)),
+      sameColumn: (() => {
+        const xs = [...document.querySelectorAll('.td-mine')].map(e => Math.round(e.getBoundingClientRect().left));
+        return xs.length > 1 ? xs.every(x => x === xs[0]) : xs.length === 1;
+      })(),
+      sections: [...document.querySelectorAll('.td-sec-mine')].map(e => e.textContent.trim()),
+      sectionCount: document.querySelectorAll('.td-sec-mine').length > 0
     };
   });
   ok('a visit you are on is marked as yours', mine.radhi.marked, mine.radhi.text.slice(0, 100));
-  ok('...with a person icon, not just words', mine.icons >= 1, String(mine.icons));
-  ok('...saying you have not answered it yet', /not answered/i.test(mine.radhi.text), mine.radhi.text.slice(0, 120));
+  // A mark, not a label: it has to sit in the SAME place on every row, or
+  // finding your own work means reading every line rather than scanning one
+  // column. The x position of the mark is the thing being asserted.
+  ok('...with a person icon, not a worded tag', mine.icons >= 1 && !/You have not answered/.test(mine.radhi.text),
+    mine.radhi.text.slice(0, 110));
+  ok('...in the same place on every row that has one', mine.sameColumn, JSON.stringify(mine.marks));
+  ok('...and a count beside the section heading', mine.sectionCount, JSON.stringify(mine.sections));
+  // The mark carries the words in its title; the row still spells it out in
+  // the agent chips, so nothing is known only by hovering.
+  ok('...and the row still says it in words as well',
+    /not accepted yet/i.test(mine.radhi.text), mine.radhi.text.slice(0, 140));
   ok('a visit you are NOT on is left unmarked', !mine.vignesh);
   ok('a meeting waiting on your answer is marked too', mine.meeting.marked, mine.meeting.text.slice(0, 100));
-  // A badge on every row is a badge on no row.
+  // Every meeting on this screen is already yours — it came out of your own
+  // calendar — so a mark on all of them marks nothing. Only the ones still
+  // waiting on an answer carry it.
   ok('...and one you have already accepted is not', !mine.meetingDone);
+  ok('...so the section counts what is waiting, not what exists',
+    mine.sections.includes('1'), JSON.stringify(mine.sections));
 
   // Expanded, a meeting has to carry what the person who called it wrote down.
   const opened = await page.evaluate(async () => {
