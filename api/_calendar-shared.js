@@ -131,25 +131,37 @@ export async function teamCalendar(people, from, to, { key = serviceKey(), makeC
 
 // ── Writing: only ever our own events ──────────────────────────────────────
 
-function visitEventBody(lead, visit) {
-  const end = visit.at + 60 * 60000;
-  const code = visit.property ? ` · ${visit.property}` : '';
+function visitEventBody(lead, visit, agents, property) {
+  const end = visit.at + (visit.minutes || 60) * 60000;
+  const code = visit.property ? ` \u00b7 ${visit.property}` : '';
+  // What somebody standing outside the building at 11am actually needs, in the
+  // order they need it: who they are meeting, whose number to ring when nobody
+  // answers the gate, and what they were told to look out for.
   const lines = [
-    lead.phone ? `Phone: ${lead.phone}` : null,
+    `Client: ${lead.name || 'Lead'}${lead.phone ? ' \u00b7 ' + lead.phone : ''}`,
     lead.propertyInterest ? `Looking for: ${lead.propertyInterest}` : null,
     lead.budget ? `Budget: ${lead.budget}` : null,
+    property && (property.contactName || property.contactNumber)
+      ? `Seller: ${property.contactName || '\u2014'}${property.contactNumber ? ' \u00b7 ' + property.contactNumber : ''}` : null,
+    property && property.location ? `Where: ${property.location}` : null,
+    visit.notes ? `\nNotes from the office:\n${visit.notes}` : null,
     '',
-    'Created by the 3 PIN CRM. Reschedule it there and this entry follows.'
+    'Booked in the 3 PIN CRM. Accept or decline here and the CRM will show it.'
   ].filter(x => x !== null);
   return {
     summary: `Site visit: ${lead.name || 'Lead'}${code}`,
     description: lines.join('\n'),
-    location: visit.property || undefined,
+    location: (property && property.location) || visit.property || undefined,
     start: { dateTime: new Date(visit.at).toISOString(), timeZone: TZ },
     end: { dateTime: new Date(end).toISOString(), timeZone: TZ },
-    // The stamp. Everything below refuses to act on an event without it.
+    // The agents are GUESTS, not owners. That is what turns this from an entry
+    // appearing in somebody's diary into an invitation they can answer, which
+    // is the difference between assuming a visit is covered and knowing it.
+    attendees: (agents || []).map(email => ({ email })),
     extendedProperties: { private: { [STAMP]: lead.id } },
-    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }] }
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }] },
+    guestsCanModify: false,
+    guestsCanInviteOthers: false
   };
 }
 
@@ -162,51 +174,73 @@ async function stampedEvent(subject, eventId, leadId, key, make) {
 }
 
 /**
- * Puts this lead's site visit in `subject`'s calendar, moves it when it moves,
- * and takes it out when the visit is cancelled or the owner changes.
+ * Puts this lead's site visit in the diary as an invitation to the agents who
+ * are going, moves it when it moves, and calls it off when it is cancelled.
  *
- * Returns { eventId, owner } to store on the lead, or { eventId: null } when
- * there is nothing to show. Never touches an event it did not create.
+ * `subject` is the ORGANISER \u2014 whoever booked it. The agents are attendees, so
+ * they get the ordinary Google invitation, answer it from whatever calendar
+ * app they use, and their answer comes back on the event for the CRM to show.
+ *
+ * Returns { eventId, owner, agents } to store on the lead. Never touches an
+ * event it did not create.
  */
-export async function syncVisitEvent({ lead, visit, subject, previous = {}, key = serviceKey(), makeClient = realClient }) {
+export async function syncVisitEvent({ lead, visit, subject, agents = [], property = null,
+  previous = {}, key = serviceKey(), makeClient = realClient }) {
   if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
   const wanted = !!(subject && visit && visit.at && visit.status !== 'cancelled');
 
   // Moved to somebody else's calendar, or no longer wanted: clear the old one
-  // first, so a rescheduled visit never leaves a ghost in the wrong diary.
+  // first, so a rescheduled visit never leaves a ghost in the wrong diary, and
+  // everybody who was invited is told it is off.
   if (previous.eventId && (!wanted || previous.owner !== subject)) {
     const mine = await stampedEvent(previous.owner, previous.eventId, lead.id, key, makeClient);
     if (mine) {
       await makeClient(previous.owner, key)
-        .request({ url: `${CAL}/calendars/${encodeURIComponent(previous.owner)}/events/${encodeURIComponent(previous.eventId)}`, method: 'DELETE' })
+        .request({ url: `${CAL}/calendars/${encodeURIComponent(previous.owner)}/events/${encodeURIComponent(previous.eventId)}?sendUpdates=all`, method: 'DELETE' })
         .catch(() => {});
     }
     previous = {};
   }
-  if (!wanted) return { eventId: null, owner: null };
+  if (!wanted) return { eventId: null, owner: null, agents: [] };
 
-  const body = visitEventBody(lead, visit);
+  const body = visitEventBody(lead, visit, agents, property);
+  // Without this Google files the change quietly and an agent turns up at the
+  // old time, or does not turn up at all.
+  const q = '?sendUpdates=all';
   try {
     if (previous.eventId && previous.owner === subject) {
       const mine = await stampedEvent(subject, previous.eventId, lead.id, key, makeClient);
       if (mine) {
         await makeClient(subject, key).request({
-          url: `${CAL}/calendars/${encodeURIComponent(subject)}/events/${encodeURIComponent(previous.eventId)}`,
+          url: `${CAL}/calendars/${encodeURIComponent(subject)}/events/${encodeURIComponent(previous.eventId)}${q}`,
           method: 'PATCH', data: body
         });
-        return { eventId: previous.eventId, owner: subject };
+        return { eventId: previous.eventId, owner: subject, agents: agents };
       }
       // The stamp is gone: somebody deleted it in Google. Make a fresh one
-      // rather than resurrecting an event a person chose to remove... and do
-      // it only because the CRM still holds a live visit for this lead.
+      // rather than resurrecting an event a person chose to remove \u2014 and only
+      // because the CRM still holds a live visit for this lead.
     }
     const r = await makeClient(subject, key).request({
-      url: `${CAL}/calendars/${encodeURIComponent(subject)}/events`, method: 'POST', data: body
+      url: `${CAL}/calendars/${encodeURIComponent(subject)}/events${q}`, method: 'POST', data: body
     });
-    return { eventId: r.data.id, owner: subject };
+    return { eventId: r.data.id, owner: subject, agents: agents };
   } catch (e) {
     throw explain(e);
   }
+}
+
+/**
+ * How the agents answered an invitation the CRM sent.
+ * Read as the organiser, because it is their event that carries the replies.
+ */
+export async function visitReplies({ organiser, eventId, key = serviceKey(), makeClient = realClient }) {
+  if (!key || !organiser || !eventId) return [];
+  try {
+    const r = await makeClient(organiser, key).request({
+      url: `${CAL}/calendars/${encodeURIComponent(organiser)}/events/${encodeURIComponent(eventId)}` });
+    return (r.data.attendees || []).map(a => ({ email: a.email, status: a.responseStatus || 'needsAction' }));
+  } catch { return []; }
 }
 
 /**

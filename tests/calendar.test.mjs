@@ -13,7 +13,7 @@
 // fake Google that records every request, so "it never touched that event" is
 // something the test can actually see rather than assume.
 
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
 
 let pass = 0;
 const fails = [];
@@ -204,6 +204,83 @@ section('WHOSE CALENDAR A VISIT BELONGS IN');
   ok('somebody who has left the team is not a calendar',
     visitOwnerFor({ id: 'x', updatedBy: 'gone@example.com' }, { by: 'ai' }, T) === 'sales@threepin.in');
   ok('no team at all is not a crash', visitOwnerFor({ id: 'x' }, { by: 'ai' }, []) === null);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('A SITE VISIT IS AN INVITATION, NOT AN ENTRY');
+// ════════════════════════════════════════════════════════════════════════
+//
+// An entry appearing in somebody's diary and an invitation they answered are
+// different things, and only one of them tells the office the visit is
+// actually covered.
+const PROP = { propertyCode: 'ANRL001', name: 'Anna Nagar Residency', location: 'Anna Nagar West',
+  contactName: 'Mr Rajan', contactNumber: '9840099887' };
+{
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD,
+    visit: { at: AT, status: 'scheduled', property: 'ANRL001', minutes: 90, notes: 'Bring the EC copy. Gate code 4412.' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in', 'pradeep@threepin.in'], property: PROP,
+    key: KEY, makeClient: g.make });
+  const made = g.store['sales@threepin.in'][r.eventId];
+  ok('two agents can be sent on one visit',
+    made.attendees.map(a => a.email).sort().join(',') === 'pradeep@threepin.in,swami@threepin.in',
+    JSON.stringify(made.attendees));
+  ok('...as guests who can answer, not as a silent entry', made.attendees.length === 2 && !made.guestsCanInviteOthers);
+  ok('...and they are actually invited', g.log.some(x => x.method === 'POST' && /sendUpdates=all/.test(x.url)));
+  // What somebody standing outside the building at 11am needs.
+  ok('the invitation carries the client and their number', /Mr Kumar/.test(made.description) && /9840012345/.test(made.description), made.description);
+  ok('...the seller and THEIR number', /Mr Rajan/.test(made.description) && /9840099887/.test(made.description), made.description);
+  ok('...the office notes', /Bring the EC copy/.test(made.description) && /4412/.test(made.description));
+  ok('...and where the property is', made.location === 'Anna Nagar West', made.location);
+  ok('a visit can run longer than an hour', Date.parse(made.end.dateTime) - Date.parse(made.start.dateTime) === 90 * 60000);
+}
+{
+  // Rescheduling has to tell the people who said yes, or one of them drives to
+  // the old time.
+  const g = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1') } });
+  await syncVisitEvent({ lead: LEAD, visit: { at: AT + 3600000, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP,
+    previous: { eventId: 'ev1', owner: 'sales@threepin.in' }, key: KEY, makeClient: g.make });
+  ok('moving a visit tells everyone invited', g.log.some(x => x.method === 'PATCH' && /sendUpdates=all/.test(x.url)));
+}
+{
+  const g = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1') } });
+  await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'cancelled' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'],
+    previous: { eventId: 'ev1', owner: 'sales@threepin.in' }, key: KEY, makeClient: g.make });
+  ok('calling one off tells them too', g.log.some(x => x.method === 'DELETE' && /sendUpdates=all/.test(x.url)));
+}
+{
+  // The answers, which are the whole reason for sending an invitation.
+  const g = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1', { attendees: [
+    { email: 'swami@threepin.in', responseStatus: 'accepted' },
+    { email: 'pradeep@threepin.in', responseStatus: 'declined' },
+    { email: 'admin@threepin.in', responseStatus: 'needsAction' }
+  ] }) } });
+  const replies = await visitReplies({ organiser: 'sales@threepin.in', eventId: 'ev1', key: KEY, makeClient: g.make });
+  ok('the CRM can read who accepted', replies.find(a => a.email === 'swami@threepin.in').status === 'accepted');
+  ok('...who declined', replies.find(a => a.email === 'pradeep@threepin.in').status === 'declined');
+  ok('...and who has said nothing at all', replies.find(a => a.email === 'admin@threepin.in').status === 'needsAction');
+  const none = await visitReplies({ organiser: 'sales@threepin.in', eventId: 'gone', key: KEY, makeClient: g.make });
+  ok('a deleted event is no replies rather than a crash', Array.isArray(none) && none.length === 0);
+}
+{
+  // A visit with nobody sent on it is still a visit: the office may not have
+  // decided who is going. It must not fail, and must not invite nobody loudly.
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: [], property: PROP, key: KEY, makeClient: g.make });
+  ok('a visit with no agent yet is still booked', !!r.eventId);
+  ok('...with nobody invited', (g.store['sales@threepin.in'][r.eventId].attendees || []).length === 0);
+}
+{
+  // A property typed in freely, with no record behind it.
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'The plot behind the school' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: null, key: KEY, makeClient: g.make });
+  const made = g.store['sales@threepin.in'][r.eventId];
+  ok('a property typed in freely still books', /The plot behind the school/.test(made.summary), made.summary);
+  ok('...and says so as the place', made.location === 'The plot behind the school');
 }
 
 // ════════════════════════════════════════════════════════════════════════

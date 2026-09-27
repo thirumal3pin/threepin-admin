@@ -52,6 +52,13 @@ window.crmFirebase = {
   saveView: async () => {}, deleteView: async () => {},
   getInventory: async () => (${JSON.stringify(INV)})
 };
+// The team who can be sent on a visit — settings/{tenant}.team, the same list
+// that backs @mentions.
+window.applyTeamSnapshot({
+  swami: { email: 'swami@threepin.in' },
+  pradeep: { email: 'pradeep@threepin.in' },
+  sales: { email: 'sales@threepin.in' }
+});
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => '${T}' };
 window.onCrmAuthChange({ email: 'agent.a@example.com' });
 window.applyPipelineSnapshot(${JSON.stringify(STAGES)});
@@ -69,6 +76,7 @@ const ok = (label, cond, detail) => {
   else { console.log('  FAIL ' + label + (detail !== undefined ? ' — ' + detail : '')); errors.push(label); }
 };
 
+const calendarCalls = [];
 const browser = await chromium.launch();
 async function open(viewport) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
@@ -85,6 +93,18 @@ async function open(viewport) {
     const u = new URL(route.request().url());
     if (u.hostname !== 'crm.local') return route.abort();
     if (u.pathname === '/crm-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: STUB });
+    if (u.searchParams.get('action') === 'calendar') {
+      const b = JSON.parse(route.request().postData() || '{}');
+      if (b.op === 'day') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, people: [
+        { person: 'swami@threepin.in', events: [{ id: 'x', title: 'Bank call', busy: true, allDay: false,
+          start: new Date(Date.now() + 3 * 86400000).setHours(10, 30, 0, 0) && new Date(new Date(Date.now() + 3 * 86400000).setHours(10, 30, 0, 0)).toISOString(),
+          end: new Date(new Date(Date.now() + 3 * 86400000).setHours(12, 0, 0, 0)).toISOString() }] },
+        { person: 'pradeep@threepin.in', events: [] },
+        { person: 'sales@threepin.in', events: [] }
+      ] }) });
+      if (b.op === 'visit') { calendarCalls.push(b); return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, eventId: 'ev1', owner: 'sales@threepin.in', agents: b.agents || [] }) }); }
+      return route.fulfill({ contentType: 'application/json', body: '{"ok":true,"replies":[]}' });
+    }
     if (u.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
     const f = join(ROOT, decodeURIComponent(u.pathname));
     if (!existsSync(f)) return route.fulfill({ status: 404, body: '' });
@@ -161,67 +181,126 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('the note saves', saved.notes === 1);
   ok('...with the follow-up set for later the same day', saved.future && saved.sameDay, JSON.stringify(saved));
 
-  // ── THE SITE VISIT, WHICH IS NOT THE FOLLOW-UP ──
+  // ── SCHEDULING A SITE VISIT ──
   //
   // The viewing used to live inside the AI's verdict: no person could edit it,
-  // and every AI run rewrote it. On the live board that left 76 leads carrying a
-  // visit, 22 of them with a day that had already passed and was still open, and
-  // not one visit anywhere in the future. A date nobody can move is a date that
+  // and every AI run rewrote it. On the live board that left 76 leads carrying
+  // a visit, 22 with a day that had already passed and was still open, and not
+  // one visit anywhere in the future. A date nobody can move is a date that
   // rots where the AI last left it.
+  //
+  // It is now a booking: when, who goes, which property, what the office wants
+  // them to know — and a real invitation the agents answer.
   const row = await page.evaluate(() => {
     const r = document.querySelector('.st-row.sv');
-    return { there: !!r, text: r ? r.textContent.replace(/\s+/g, ' ').trim() : '',
-      btn: r ? (r.querySelector('button') || {}).textContent : null };
+    return { there: !!r, btn: r ? (r.querySelector('button') || {}).textContent : null };
   });
-  ok('the lead has a site-visit row of its own', row.there, row.text);
-  ok('...offering a way to set one when there is none', /Set a date/.test(row.btn || ''), row.btn);
+  ok('the lead has a site-visit row of its own', row.there);
+  ok('...offering to schedule one', /Schedule/.test(row.btn || ''), row.btn);
 
   await page.click('.st-row.sv button');
-  await page.waitForTimeout(250);
-  const editor = await page.evaluate(() => {
-    const ids = ['svDate', 'svTime', 'svStatus', 'svProp'];
-    const missing = ids.filter(i => !document.getElementById(i));
-    const box = document.querySelector('.st-row.sv .sv-edit');
+  await page.waitForTimeout(600);
+  const form = await page.evaluate(() => {
+    const ids = ['svDate', 'svTime', 'svMins', 'svAgents', 'svProp', 'svNotes', 'svStatus'];
+    const box = document.querySelector('.sv-sheet');
     const b = box ? box.getBoundingClientRect() : null;
-    return { missing, fits: b ? b.right <= innerWidth + 2 : false,
-      taps: ids.map(i => { const e = document.getElementById(i); return e ? Math.round(e.getBoundingClientRect().height) : 0; }) };
+    return { missing: ids.filter(i => !document.getElementById(i)),
+      agents: document.querySelectorAll('#svAgents input').length,
+      properties: document.querySelectorAll('#svProp option').length,
+      fits: b ? b.right <= innerWidth + 2 && b.width > 200 : false,
+      freeTextOption: [...document.querySelectorAll('#svProp option')].some(o => o.value === '__free') };
   });
-  ok('...which opens a date, a time, where it stands and the property', editor.missing.length === 0, editor.missing.join(','));
-  ok('...without spilling off the side', editor.fits);
-  ok('...with controls big enough to tap', Math.min(...editor.taps) >= 32, editor.taps.join(','));
+  ok('...which opens one form with everything on it', form.missing.length === 0, form.missing.join(','));
+  ok('...listing the team to send', form.agents >= 3, String(form.agents));
+  ok('...the inventory to pick a property from', form.properties > 50, String(form.properties));
+  ok('...and a way to name one that is not in it', form.freeTextOption);
+  ok('...fitting the screen', form.fits, JSON.stringify(form));
 
-  // A day with no time is refused for a fixed visit, because a viewing nobody
-  // has a time for is a viewing nobody turns up to.
-  const refused = await page.evaluate(() => {
-    document.getElementById('svStatus').value = 'scheduled';
-    document.getElementById('svDate').value = '';
-    saveVisitEdit('B1');
-    const e = document.getElementById('svErr');
-    return { shown: !!(e && e.classList.contains('show')), saved: !!(leads.find(x => x.id === 'B1').siteVisitAt) };
-  });
-  ok('a fixed visit with no day is refused, and says why', refused.shown && !refused.saved, JSON.stringify(refused));
-
-  const fixed = await page.evaluate(() => {
+  // The question that decides the time, answered without leaving the lead.
+  const avail = await page.evaluate(async () => {
     const d = new Date(Date.now() + 3 * 86400000);
     const pad = n => String(n).padStart(2, '0');
     document.getElementById('svDate').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     document.getElementById('svTime').value = '11:00';
-    document.getElementById('svStatus').value = 'scheduled';
-    document.getElementById('svProp').value = 'TNAG0001';
-    saveVisitEdit('B1');
-    const l = leads.find(x => x.id === 'B1');
-    const w = window.__saved[window.__saved.length - 1];
-    return { at: l.siteVisitAt, status: l.siteVisitStatus, prop: l.siteVisitProperty, by: l.siteVisitBy,
-      persisted: !!(w && w.siteVisitAt), followUpAt: l.followUpAt || null,
-      shown: (document.querySelector('.st-row.sv .sv-val') || {}).textContent || '' };
+    loadVisitAvailability();
+    await new Promise(r => setTimeout(r, 500));
+    const mark = e => (document.querySelector(`.sv-agent-free[data-for="${e}"]`) || {}).textContent || '';
+    return { swami: mark('swami@threepin.in'), pradeep: mark('pradeep@threepin.in'),
+      note: (document.getElementById('svAvailNote') || {}).textContent || '' };
   });
-  ok('an agent can fix the visit date by hand', !!fixed.at && fixed.status === 'scheduled', JSON.stringify(fixed));
-  ok('...recorded as theirs, so the AI leaves it alone', /@/.test(fixed.by || ''), fixed.by);
-  ok('...and it reaches the database', fixed.persisted);
-  ok('...shown on the row afterwards', /TNAG0001/.test(fixed.shown), fixed.shown);
-  // The whole point of the field: it is a different date from the follow-up.
-  ok('...and it did NOT become the follow-up date', fixed.followUpAt !== fixed.at,
-    `visit ${fixed.at} vs call ${fixed.followUpAt}`);
+  ok('the agents\u2019 calendars are shown while you pick the time',
+    /busy/i.test(avail.swami) && /free/i.test(avail.pradeep), JSON.stringify(avail));
+
+  // Picking somebody who is busy is allowed — the office may know the other
+  // thing can move — but it is said out loud first.
+  const clash = await page.evaluate(async () => {
+    [...document.querySelectorAll('#svAgents input')].forEach(i => { i.checked = i.value === 'swami@threepin.in'; });
+    renderVisitAvailability();
+    await new Promise(r => setTimeout(r, 100));
+    return (document.getElementById('svAvailNote') || {}).textContent || '';
+  });
+  ok('...and a clash is said plainly before the invitation goes out', /busy then/i.test(clash), clash);
+
+  // A scheduled visit with nobody on it tells nobody anything.
+  const nobody = await page.evaluate(async () => {
+    [...document.querySelectorAll('#svAgents input')].forEach(i => { i.checked = false; });
+    document.getElementById('svStatus').value = 'scheduled';
+    saveVisitEdit('B1');
+    const e = document.getElementById('svErr');
+    return { shown: !!(e && e.classList.contains('show')), text: e ? e.textContent : '' };
+  });
+  ok('a scheduled visit with nobody going is refused, and says why', nobody.shown && nobody.text.length > 20, nobody.text);
+
+  calendarCalls.length = 0;
+  const booked = await page.evaluate(async () => {
+    [...document.querySelectorAll('#svAgents input')].forEach(i => {
+      i.checked = i.value === 'swami@threepin.in' || i.value === 'pradeep@threepin.in';
+    });
+    const sel = document.getElementById('svProp');
+    sel.selectedIndex = 1;
+    document.getElementById('svNotes').value = 'Gate code 4412. Client asked about the car park.';
+    document.getElementById('svMins').value = '90';
+    document.getElementById('svStatus').value = 'scheduled';
+    saveVisitEdit('B1');
+    await new Promise(r => setTimeout(r, 500));
+    const l = leads.find(x => x.id === 'B1');
+    return { at: l.siteVisitAt, agents: l.siteVisitAgents, notes: l.siteVisitNotes, minutes: l.siteVisitMinutes,
+      property: l.siteVisitProperty, replies: l.siteVisitReplies,
+      closed: !document.querySelector('#svSheet'),
+      shown: (document.querySelector('.st-row.sv .sv-val') || {}).textContent || '',
+      followUpAt: l.followUpAt || null };
+  });
+  ok('two agents can be sent on one visit', (booked.agents || []).length === 2, JSON.stringify(booked.agents));
+  ok('...with the office\u2019s notes attached', /4412/.test(booked.notes || ''), booked.notes);
+  ok('...for as long as it needs', booked.minutes === 90, String(booked.minutes));
+  ok('...against a property from the inventory', !!booked.property, booked.property);
+  ok('...and nobody has answered yet', (booked.replies || []).every(r => r.status === 'needsAction'), JSON.stringify(booked.replies));
+  ok('the invitation is actually sent', calendarCalls.some(c => c.op === 'visit'), JSON.stringify(calendarCalls));
+  ok('...carrying the seller\u2019s number and the address for the gate',
+    !!(calendarCalls[0] && calendarCalls[0].property && calendarCalls[0].property.contactNumber), JSON.stringify(calendarCalls[0] && calendarCalls[0].property));
+  ok('...and the form closes', booked.closed);
+  ok('the visit date is still not the follow-up date', booked.followUpAt !== booked.at,
+    `visit ${booked.at} vs call ${booked.followUpAt}`);
+
+  // What the office needs to see when somebody turns it down.
+  const declined = await page.evaluate(() => {
+    const l = leads.find(x => x.id === 'B1');
+    l.siteVisitReplies = [{ email: 'swami@threepin.in', status: 'accepted' },
+                          { email: 'pradeep@threepin.in', status: 'declined' }];
+    // Exactly what refreshVisitReplies() does when an answer comes back from
+    // Google between snapshots: without this the page keeps the reasons the
+    // lead had before anybody replied.
+    forgetAttention('B1');
+    renderStandSection(l);
+    const chips = [...document.querySelectorAll('.sv-who')].map(c => c.className + ':' + c.textContent);
+    const attn = [...document.querySelectorAll('.st-item-t')].map(x => x.textContent);
+    return { chips, attn };
+  });
+  ok('who accepted and who refused is on the lead',
+    declined.chips.some(c => /accepted/.test(c)) && declined.chips.some(c => /declined/.test(c)), JSON.stringify(declined.chips));
+  // Google tells nobody in the office. This is the message.
+  ok('...and a refusal is raised for somebody to act on',
+    declined.attn.some(t => /cannot make the site visit/i.test(t)), JSON.stringify(declined.attn));
 
   await page.screenshot({ path: join(OUT, (viewport.width === 390 ? 'phone' : 'laptop') + '.png') });
   await page.context().close();

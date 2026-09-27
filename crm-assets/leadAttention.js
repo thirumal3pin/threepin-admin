@@ -136,6 +136,19 @@ export function computeAttention(lead, ctx = {}) {
   // agent fixed by hand raises these the same as one the AI read out of the chat.
   const visit = visitOf(lead);
 
+  // An agent who cannot make the visit is the office's problem, not theirs: it
+  // needs somebody else sent, or the client told. Google will not ring anyone
+  // about it, so the refusal surfaces here, where the board, the action queue
+  // and the daily digest all read from.
+  const declined = (Array.isArray(lead.siteVisitReplies) ? lead.siteVisitReplies : [])
+    .filter(r => r && r.status === 'declined')
+    .map(r => String(r.email || '').split('@')[0]);
+  if (declined.length && visit.at && visit.at > now - HOUR && visit.status !== 'cancelled') {
+    add('visit_declined', 'high',
+      declined.length === 1 ? 'Agent cannot make the site visit' : 'Agents cannot make the site visit',
+      declined.join(', ') + ' turned it down — send somebody else or move it', visit.at);
+  }
+
   if (key === 'visit_pending') {
     if (visit && visit.at && visit.at < now - 3 * HOUR && touched < visit.at) {
       add('visit_outcome', 'high', 'Did the site visit happen?', `it was set for ${ago(now - visit.at)} ago — record the outcome`, visit.at);

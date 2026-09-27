@@ -419,6 +419,11 @@ function ttNeedsAttention(l){ return needsActionUi(l); }
 // dashboard, the daily digest and the server-side AI. This block only draws them.
 const SEV_RANK = { critical:3, high:2, medium:1, low:0 };
 let attnCache = new Map();
+// The reasons a lead needs a person are cached per lead and rebuilt on every
+// snapshot. Anything that changes a lead WITHOUT a snapshot - an accept or a
+// decline collected from Google, say - has to drop its entry, or the page goes
+// on showing the reasons the lead had a moment ago.
+function forgetAttention(id){ attnCache.delete(id); }
 function attentionFor(l){
   if(!l) return [];
   if(attnCache.has(l.id)) return attnCache.get(l.id);
@@ -2961,74 +2966,235 @@ function markVisitedUi(id){
 // There is deliberately no future-date rule, unlike the follow-up: a visit is
 // very often recorded AFTER it happened, which is the whole point of Done.
 let visitEditId = null;
+let svAvail = null;          // the team's day, for the date being scheduled
+
+const RSVP_WORD = { accepted: 'coming', declined: 'cannot make it', tentative: 'maybe', needsAction: 'no reply yet' };
+
+function visitAgentsOf(l){ return Array.isArray(l.siteVisitAgents) ? l.siteVisitAgents : []; }
+function visitRepliesOf(l){ return Array.isArray(l.siteVisitReplies) ? l.siteVisitReplies : []; }
+function replyFor(l, email){
+  const r = visitRepliesOf(l).find(x => String(x.email).toLowerCase() === String(email).toLowerCase());
+  return r ? r.status : 'needsAction';
+}
+/** Anyone sent on this visit who has turned it down. This is the message to the office. */
+function visitDecliners(l){
+  return visitAgentsOf(l).filter(e => replyFor(l, e) === 'declined');
+}
 
 function visitRowHtml(l){
   const P = window.crmPipeline;
   const v = P.visitOf(l);
-  const said = [P.VISIT_STATUS[v.status] || '', v.property, v.at && fmtDue(v.at)].filter(Boolean).join(' · ');
-
-  if(visitEditId !== l.id){
-    const who = !said ? '' : v.by === 'ai' ? 'set by the AI' : v.by ? 'set by ' + (window.crmMentions.displayName(v.by) || v.by) : '';
-    return `<div class="st-row sv"><span class="st-label">Site visit</span>
-      <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}${who ? `<span class="sv-by">${escapeHtml(who)}</span>` : ''}</span>
-      <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Set a date'}</button></span></div>`;
-  }
-
-  const d = v.at ? new Date(v.at) : null;
-  const dv = d ? `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}` : '';
-  const tv = d ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '';
-  const opts = ['requested','scheduled','done','cancelled']
-    .map(k => `<option value="${k}"${v.status === k ? ' selected' : ''}>${escapeHtml(P.VISIT_STATUS[k])}</option>`).join('');
-  return `<div class="st-row sv editing"><span class="st-label">Site visit</span>
-    <div class="sv-edit">
-      <div class="sv-fields">
-        <input type="date" id="svDate" value="${dv}" aria-label="Site visit date">
-        <input type="time" id="svTime" value="${tv}" aria-label="Site visit time">
-        <select id="svStatus" aria-label="Where the visit stands">${opts}</select>
-        <input type="text" id="svProp" value="${escapeHtml(v.property || '')}" placeholder="Property code" aria-label="Property">
-      </div>
-      <div class="sv-acts">
-        <button type="button" class="tt-btn" onclick="saveVisitEdit('${l.id}')">Save</button>
-        ${v.at ? `<button type="button" class="tt-btn quiet" onclick="cancelVisit('${l.id}')">Cancel the visit</button>` : ''}
-        <button type="button" class="tt-btn quiet" onclick="closeVisitEditor()">Close</button>
-      </div>
-      <div class="sv-err" id="svErr"></div>
-    </div></div>`;
+  const said = [P.VISIT_STATUS[v.status] || '', v.property, v.at && fmtDue(v.at)].filter(Boolean).join(' \u00b7 ');
+  const agents = visitAgentsOf(l);
+  const who = agents.map(e => {
+    const st = replyFor(l, e);
+    const name = escapeHtml(window.crmMentions.displayName(e) || e);
+    return `<span class="sv-who ${st}" title="${name} \u2014 ${RSVP_WORD[st]}">${name}</span>`;
+  }).join('');
+  return `<div class="st-row sv"><span class="st-label">Site visit</span>
+    <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}
+      ${who ? `<span class="sv-team">${who}</span>` : ''}
+      ${v.at && !agents.length ? '<span class="sv-by">nobody sent yet</span>' : ''}
+    </span>
+    <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Schedule'}</button></span></div>`;
 }
+
+// ═══════ SCHEDULING A SITE VISIT ═══════
+//
+// Everything needed to send somebody to a property, on one screen, without
+// leaving the lead: when, who goes, which property, and what the office wants
+// them to know. The agents' calendars are shown while you pick, because the
+// question "is Swami free at four" is the one that decides the time, and going
+// to look it up somewhere else is how it stops being checked at all.
+//
+// What the agents get is a real Google invitation they can accept or decline
+// from their phone \u2014 with the client's number, the seller's number, the
+// address and the office's notes in it. Their answer comes back here.
 function openVisitEditor(id){
   visitEditId = id;
   const l = leads.find(x => x.id === id);
   if(!l) return;
-  renderStandSection(l);
-  const el = document.getElementById('svDate');
-  if(el) el.focus();
+  closeVisitEditor(true);
+  loadInventory().then(() => {
+    document.body.insertAdjacentHTML('beforeend', visitSchedulerHtml(l));
+    const d = document.getElementById('svDate');
+    if(d) d.focus();
+    loadVisitAvailability();
+  });
 }
-function closeVisitEditor(){
-  const id = visitEditId;
-  visitEditId = null;
-  const l = leads.find(x => x.id === id);
-  if(l) renderStandSection(l);
+function closeVisitEditor(keepId){
+  const el = document.getElementById('svSheet');
+  if(el) el.remove();
+  if(!keepId) visitEditId = null;
+  svAvail = null;
 }
-function writeVisit(l, at, status, property){
+
+function visitSchedulerHtml(l){
+  const P = window.crmPipeline;
+  const v = P.visitOf(l);
+  const d = v.at ? new Date(v.at) : (() => { const x = new Date(Date.now() + 86400000); x.setHours(11, 0, 0, 0); return x; })();
+  const dv = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  const tv = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const chosen = visitAgentsOf(l);
+  const roster = teamRoster();
+  const mins = l.siteVisitMinutes || 60;
+
+  const opts = ['requested','scheduled','done','cancelled']
+    .map(k => `<option value="${k}"${v.status === k ? ' selected' : ''}>${escapeHtml(P.VISIT_STATUS[k])}</option>`).join('');
+  // Coded properties first: an agent quotes a code, not a row id.
+  const props = (inventory || []).slice()
+    .sort((a,b) => (propertyCodeOf(b) ? 1 : 0) - (propertyCodeOf(a) ? 1 : 0))
+    .map(p => { const c = propertyCodeOf(p); const label = [c, p.name].filter(Boolean).join(' \u00b7 ');
+      return `<option value="${escapeHtml(c || p.name || '')}"${(c || p.name) === v.property ? ' selected' : ''}>${escapeHtml(label)}</option>`; })
+    .join('');
+  const freeText = v.property && !(inventory || []).some(p => (propertyCodeOf(p) || p.name) === v.property);
+
+  return `<div class="cal-sheet" id="svSheet" role="dialog" aria-modal="true" aria-label="Schedule a site visit">
+    <div class="cal-sheet-in sv-sheet">
+      <h3>Site visit \u00b7 ${escapeHtml(l.name || 'Lead')}</h3>
+      <div class="cm-when">
+        <div><label for="svDate">Day</label><input id="svDate" type="date" value="${dv}" onchange="loadVisitAvailability()"></div>
+        <div><label for="svTime">Time</label><input id="svTime" type="time" value="${tv}" onchange="renderVisitAvailability()"></div>
+        <div><label for="svMins">Minutes</label><select id="svMins">
+          ${[30,60,90,120].map(m => `<option value="${m}"${m === mins ? ' selected' : ''}>${m}</option>`).join('')}
+        </select></div>
+      </div>
+
+      <label>Who is going</label>
+      <div class="sv-agents" id="svAgents">${roster.map(e => {
+        const name = escapeHtml(window.crmMentions.displayName(e) || e);
+        const on = chosen.some(x => String(x).toLowerCase() === e);
+        return `<label class="cm-p sv-agent" data-email="${escapeHtml(e)}">
+          <input type="checkbox" value="${escapeHtml(e)}"${on ? ' checked' : ''} onchange="renderVisitAvailability()">
+          <span class="sv-agent-n">${name}</span><span class="sv-agent-free" data-for="${escapeHtml(e)}"></span></label>`;
+      }).join('')}</div>
+      <div class="sv-hint" id="svAvailNote">Checking the team\u2019s calendars\u2026</div>
+
+      <label for="svProp">Property</label>
+      <select id="svProp" onchange="onVisitPropertyPicked()">
+        <option value="">\u2014 pick from the inventory \u2014</option>
+        ${props}
+        <option value="__free"${freeText ? ' selected' : ''}>Something not in the inventory\u2026</option>
+      </select>
+      <input id="svPropFree" type="text" placeholder="Where is it?" maxlength="120"
+        value="${freeText ? escapeHtml(v.property) : ''}"${freeText ? '' : ' hidden'}>
+
+      <label for="svNotes">Notes for the agent</label>
+      <textarea id="svNotes" rows="2" maxlength="900" placeholder="Gate code, what to carry, what the client asked about\u2026">${escapeHtml(l.siteVisitNotes || '')}</textarea>
+
+      <label for="svStatus">Where it stands</label>
+      <select id="svStatus">${opts}</select>
+
+      <div class="cal-sheet-err" id="svErr"></div>
+      <div class="cal-sheet-acts">
+        <button type="button" class="tt-btn" id="svGo" onclick="saveVisitEdit('${l.id}')">${v.at ? 'Update and re-invite' : 'Send the invitation'}</button>
+        ${v.at ? `<button type="button" class="tt-btn quiet" onclick="cancelVisit('${l.id}')">Call it off</button>` : ''}
+        <button type="button" class="tt-btn quiet" onclick="closeVisitEditor()">Close</button>
+      </div>
+    </div></div>`;
+}
+
+function onVisitPropertyPicked(){
+  const sel = document.getElementById('svProp');
+  const free = document.getElementById('svPropFree');
+  free.hidden = sel.value !== '__free';
+  if(sel.value === '__free') free.focus();
+}
+
+function chosenVisitAgents(){
+  return [...document.querySelectorAll('#svAgents input:checked')].map(i => i.value);
+}
+function visitWhenChosen(){
+  const d = document.getElementById('svDate'), t = document.getElementById('svTime');
+  return d && t ? parseFollowUpRaw(d.value, t.value) : null;
+}
+
+// The team's day for the date being scheduled. One call, then the free/busy
+// marks re-render as the time is nudged, without asking Google again.
+function loadVisitAvailability(){
+  const note = document.getElementById('svAvailNote');
+  const day = document.getElementById('svDate');
+  if(!note || !day || !day.value) return;
+  svAvail = null;
+  note.textContent = 'Checking the team\u2019s calendars\u2026';
+  const from = new Date(day.value + 'T00:00:00').getTime();
+  window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
+    method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+    body: JSON.stringify({ op:'day', from: from, to: from + 86400000 })
+  })).then(r => r.json()).then(d => {
+    if(d && d.ok){ svAvail = d.people || []; }
+    else { svAvail = 'unavailable'; note.textContent = d && d.hint ? d.hint : (d && d.error) || 'Could not read the calendars \u2014 you can still book.'; }
+    renderVisitAvailability();
+  }).catch(() => { svAvail = 'unavailable'; note.textContent = 'Could not reach the calendars \u2014 you can still book.'; renderVisitAvailability(); });
+}
+
+function renderVisitAvailability(){
+  const note = document.getElementById('svAvailNote');
+  if(!note) return;
+  const at = visitWhenChosen();
+  const mins = Number((document.getElementById('svMins') || {}).value || 60);
+  document.querySelectorAll('.sv-agent-free').forEach(el => { el.textContent = ''; el.className = 'sv-agent-free'; });
+  if(!Array.isArray(svAvail) || !at) return;
+
+  let clashes = 0;
+  document.querySelectorAll('.sv-agent').forEach(row => {
+    const email = row.getAttribute('data-email');
+    const person = svAvail.find(p => String(p.person).toLowerCase() === email);
+    const mark = row.querySelector('.sv-agent-free');
+    if(!person){ mark.textContent = '?'; mark.className = 'sv-agent-free unknown'; return; }
+    if(person.error){ mark.textContent = 'calendar unreadable'; mark.className = 'sv-agent-free unknown'; return; }
+    const busy = (person.events || []).filter(e => e.busy && !e.allDay
+      && Date.parse(e.start) < at + mins*60000 && Date.parse(e.end) > at);
+    if(busy.length){
+      mark.textContent = 'busy \u00b7 ' + busy[0].title.slice(0, 22);
+      mark.className = 'sv-agent-free busy';
+      if(row.querySelector('input').checked) clashes++;
+    } else {
+      mark.textContent = 'free';
+      mark.className = 'sv-agent-free ok';
+    }
+  });
+  // A clash is not refused \u2014 the office may know the other thing can move \u2014
+  // but it is said plainly before the invitations go out.
+  note.textContent = clashes
+    ? clashes + (clashes === 1 ? ' person you have picked is' : ' people you have picked are') + ' busy then. You can still send it.'
+    : 'Free/busy is from each agent\u2019s own calendar at the time you pick.';
+  note.className = 'sv-hint' + (clashes ? ' warn' : '');
+}
+
+function writeVisit(l, at, status, property, agents, notes, minutes){
   const P = window.crmPipeline;
   const before = P.visitOf(l);
+  const beforeAgents = visitAgentsOf(l).join(',');
   const now = Date.now();
   l.siteVisitAt = at;
   l.siteVisitStatus = status;
   l.siteVisitProperty = property || null;
+  if(agents !== undefined){
+    l.siteVisitAgents = agents;
+    // A new invitation resets the answers: a yes to last Tuesday is not a yes
+    // to this Saturday.
+    l.siteVisitReplies = agents.map(e => ({ email: e, status: 'needsAction' }));
+  }
+  if(notes !== undefined) l.siteVisitNotes = notes || null;
+  if(minutes !== undefined) l.siteVisitMinutes = minutes;
   // Who moved it last is what tells the policy to leave this date alone until
-  // the lead says something new — see the site-visit block in _lead-policy.js.
+  // the lead says something new \u2014 see the site-visit block in _lead-policy.js.
   l.siteVisitBy = currentUserEmail || 'team';
   l.siteVisitSetAt = now;
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
-  if(at !== before.at || status !== before.status){
+  const nowAgents = visitAgentsOf(l).join(',');
+  forgetAttention(l.id);
+  if(at !== before.at || status !== before.status || nowAgents !== beforeAgents){
     const said = (P.VISIT_STATUS[status] || 'not planned').toLowerCase();
-    const when = at ? ` — <b>${escapeHtml(fmtDue(at))}</b>` : '';
+    const when = at ? ` \u2014 <b>${escapeHtml(fmtDue(at))}</b>` : '';
     const was = before.at && at && before.at !== at ? ` (was ${escapeHtml(fmtDue(before.at))})` : '';
-    addHistory(l, 'visit', `Site visit ${escapeHtml(said)}${when}${was}`);
+    const sent = visitAgentsOf(l).length
+      ? ' \u00b7 ' + visitAgentsOf(l).map(e => escapeHtml(window.crmMentions.displayName(e) || e)).join(', ') : '';
+    addHistory(l, 'visit', `Site visit ${escapeHtml(said)}${when}${was}${sent}`);
   }
-  visitEditId = null;
+  closeVisitEditor();
   renderStandSection(l);
   renderHistory(l);
   applyFilters();
@@ -3036,50 +3202,99 @@ function writeVisit(l, at, status, property){
   pushVisitToCalendar(l.id);
 }
 
-// The visit also belongs in the agent's actual diary, on the phone they carry
-// to the property. The server works out whose calendar it is and whether this
-// is a new entry, a moved one or a cancellation (api/_calendar-shared.js).
+function saveVisitEdit(id){
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  const err = document.getElementById('svErr');
+  const status = document.getElementById('svStatus').value;
+  const sel = document.getElementById('svProp');
+  const property = sel.value === '__free' ? document.getElementById('svPropFree').value.trim() : sel.value;
+  const notes = document.getElementById('svNotes').value.trim();
+  const minutes = Number(document.getElementById('svMins').value) || 60;
+  const agents = chosenVisitAgents();
+  const at = visitWhenChosen();
+
+  const fail = m => { err.textContent = m; err.classList.add('show'); };
+  // A viewing with no day is a viewing nobody turns up to. "Asked for" is the
+  // one standing that legitimately has no date yet \u2014 they have said yes and the
+  // time is still to be agreed \u2014 and a cancelled one needs no date at all.
+  if(!at && status !== 'requested' && status !== 'cancelled'){
+    return fail('Pick a day for the visit, or set it to "Asked for" until a time is agreed.');
+  }
+  if(at && status === 'scheduled' && !agents.length){
+    return fail('Pick who is going. An invitation with nobody on it tells nobody anything.');
+  }
+  writeVisit(l, at, status, property, agents, notes, minutes);
+  showToast(agents.length
+    ? `\u2713 Invitation sent to ${agents.map(e => window.crmMentions.displayName(e) || e).join(', ')}`
+    : (at ? `Site visit ${fmtDue(at)}` : 'Site visit updated'));
+}
+
+// The invitation itself, sent by the server: it works out whose event it is,
+// whether this is new, moved or called off, and pulls the seller's name and
+// number off the property so the agent has them at the gate.
 //
 // Quiet on failure, and deliberately so: the visit is already saved in the
-// CRM, which is the record that matters. A Workspace that has not been set up
-// yet must not produce an error box every time somebody books a viewing.
+// CRM, which is the record that matters. A Workspace not set up yet must not
+// produce an error box every time somebody books a viewing.
 function pushVisitToCalendar(leadId){
   if(!window.crmAuth || !window.crmAuth.getIdToken) return;
+  const l = leads.find(x => x.id === leadId);
+  // The page already has the inventory loaded, so it sends the property with
+  // the request rather than making the server look it up: this tenant runs
+  // close to its daily Firestore read quota.
+  const code = l && window.crmPipeline.visitOf(l).property;
+  const prop = code ? (inventory || []).find(p => (propertyCodeOf(p) || p.name) === code) : null;
+  const property = prop ? { contactName: prop.contactName || null, contactNumber: prop.contactNumber || null,
+    location: prop.location || null, propertyCode: propertyCodeOf(prop) || null } : null;
   window.crmAuth.getIdToken().then(function(token){
     return fetch('/api/tailortalk?action=calendar', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
-      body: JSON.stringify({ op:'visit', leadId: leadId })
+      body: JSON.stringify({ op:'visit', leadId: leadId, property: property })
     });
   }).then(function(r){ return r.json(); }).then(function(d){
-    if(d && d.ok && d.eventId && d.subject){
-      showToast('\u{1F4C5} Added to ' + (window.crmMentions.displayName(d.subject) || d.subject) + '\u2019s calendar');
+    if(d && d.ok && d.eventId && Array.isArray(d.agents) && d.agents.length){
+      const cur = leads.find(x => x.id === leadId);
+      if(cur){ cur.calendarEventId = d.eventId; cur.calendarEventOwner = d.owner; }
     }
   }).catch(function(){ /* the visit is saved; the diary can catch up later */ });
 }
-function saveVisitEdit(id){
-  const l = leads.find(x => x.id === id);
-  if(!l) return;
-  const status = document.getElementById('svStatus').value;
-  const property = document.getElementById('svProp').value.trim();
-  const at = parseFollowUpRaw(document.getElementById('svDate').value, document.getElementById('svTime').value);
-  // A viewing with no day is a viewing nobody turns up to. "Asked for" is the
-  // one standing that legitimately has no date yet — they have said yes and the
-  // time is still to be agreed — and a cancelled one needs no date at all.
-  if(!at && status !== 'requested' && status !== 'cancelled'){
-    const err = document.getElementById('svErr');
-    err.textContent = 'Pick a day for the visit, or set it to "Asked for" until a time is agreed.';
-    err.classList.add('show');
-    return;
-  }
-  writeVisit(l, at, status, property);
-  showToast(at ? `Site visit ${fmtDue(at)}` : 'Site visit updated');
+
+// Has anybody turned the visit down? Google does not push that to us \u2014 its
+// channels need a public endpoint and renewal, and there is no serverless
+// function left to give one \u2014 so the answers are collected when the lead is
+// opened. That is the moment somebody is looking anyway.
+function refreshVisitReplies(leadId){
+  const l = leads.find(x => x.id === leadId);
+  if(!l || !l.calendarEventId || !visitAgentsOf(l).length) return;
+  if(!window.crmAuth || !window.crmAuth.getIdToken) return;
+  window.crmAuth.getIdToken().then(function(token){
+    return fetch('/api/tailortalk?action=calendar', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+      body: JSON.stringify({ op:'replies', leadId: leadId })
+    });
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(!d || !d.ok || !Array.isArray(d.replies)) return;
+    const cur = leads.find(x => x.id === leadId);
+    if(!cur) return;
+    const was = JSON.stringify(cur.siteVisitReplies || []);
+    cur.siteVisitReplies = d.replies;
+    if(JSON.stringify(d.replies) === was) return;
+    // A refusal that arrived since this lead was last drawn is new information,
+    // and the cached reasons predate it.
+    forgetAttention(leadId);
+    if(currentDetailId === leadId) renderStandSection(cur);
+    applyFilters();
+  }).catch(function(){ /* nothing to show is better than an error box */ });
 }
+
 function cancelVisit(id){
   const l = leads.find(x => x.id === id);
   if(!l) return;
-  writeVisit(l, null, 'cancelled', window.crmPipeline.visitOf(l).property);
-  showToast('Site visit cancelled');
+  const v = window.crmPipeline.visitOf(l);
+  writeVisit(l, null, 'cancelled', v.property, [], l.siteVisitNotes, l.siteVisitMinutes);
+  showToast('Site visit called off \u2014 everyone invited has been told');
 }
 
 // ── "Where this lead stands" on the lead page ──
@@ -3859,6 +4074,8 @@ function openDetail(id){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
   currentDetailId = id;
+  // Collect any accept/decline that came in since this lead was last looked at.
+  refreshVisitReplies(id);
   document.getElementById('dpName').textContent = l.name;
   const sub =
     l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads'

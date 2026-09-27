@@ -50,7 +50,7 @@ import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
 import { visitOf } from '../crm-assets/pipeline.js';
 
 export const maxDuration = 60;
@@ -339,7 +339,8 @@ async function adminAiPost(request) {
 // existing router instead, the way ai-lead and admin-ai already do.
 //
 //   { op: 'day' }              what the team is doing between two instants
-//   { op: 'visit', leadId }    put that lead's site visit in the right diary
+//   { op: 'visit', leadId }    invite the agents going on that lead's site visit
+//   { op: 'replies', leadId }  who has accepted it and who has turned it down
 //   { op: 'meeting', ... }     book, move or call off a meeting among the team
 //
 // The team is settings/{tenant}.team, the same list that backs @mentions. A
@@ -367,16 +368,55 @@ async function calendarPost(request) {
       if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
 
       const team = await teamEmails(db, user.tenantId);
-      const visit = visitOf(lead);
+      const known = new Set(team.map(e => String(e).toLowerCase()));
+      const visit = { ...visitOf(lead), minutes: lead.siteVisitMinutes || 60, notes: lead.siteVisitNotes || '' };
+      // Only people on the team can be sent on a visit. Anything else in the
+      // field is a stale address or a typo, and inviting it emails a stranger
+      // the client's phone number and the seller's.
+      const agents = (Array.isArray(lead.siteVisitAgents) ? lead.siteVisitAgents : [])
+        .map(e => String(e).toLowerCase()).filter(e => known.has(e));
+      // Whoever booked it organises. The agents are guests, so the replies land
+      // on one event the office can read.
       const subject = visitOwnerFor(lead, visit, team);
       if (!subject) return json({ ok: true, skipped: 'nobody on the team to book it with' });
 
-      const r = await syncVisitEvent({ lead, visit, subject,
+      // The seller's name, number and the location come off the property when
+      // one is linked. Sent by the page when it has it already, looked up only
+      // when it does not \u2014 this tenant runs close to its Firestore read quota.
+      let property = body.property && typeof body.property === 'object' ? body.property : null;
+      if (!property && visit.property) {
+        const q = await db.collection('properties').where('tenantId', '==', user.tenantId)
+          .where('propertyCode', '==', String(visit.property)).limit(1).get().catch(() => null);
+        if (q && !q.empty) property = q.docs[0].data();
+      }
+
+      const r = await syncVisitEvent({ lead, visit, subject, agents, property,
         previous: { eventId: lead.calendarEventId || null, owner: lead.calendarEventOwner || null } });
       // Stored so the next reschedule moves this entry rather than making a
       // second one, and so a hand-over can clear the first person's diary.
-      await ref.update({ calendarEventId: r.eventId, calendarEventOwner: r.owner });
+      const write = { calendarEventId: r.eventId, calendarEventOwner: r.owner };
+      if (r.eventId) write.siteVisitReplies = agents.map(email => ({ email, status: 'needsAction' }));
+      else write.siteVisitReplies = [];
+      await ref.update(write);
       return json({ ok: true, ...r, subject });
+    }
+
+    // Who has answered an invitation the CRM sent. Read on demand rather than
+    // pushed: Google's push channels need a public endpoint and renewal, and
+    // this project has no serverless function left to give one.
+    if (body.op === 'replies') {
+      if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
+      const ref = db.collection('leads').doc(body.leadId);
+      const snap = await ref.get();
+      if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
+      const lead = snap.data();
+      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (!lead.calendarEventId || !lead.calendarEventOwner) return json({ ok: true, replies: [] });
+      const replies = await visitReplies({ organiser: lead.calendarEventOwner, eventId: lead.calendarEventId });
+      // Kept on the lead so the board, the attention list and the daily digest
+      // can all see a refusal without any of them calling Google.
+      await ref.update({ siteVisitReplies: replies });
+      return json({ ok: true, replies });
     }
 
     if (body.op === 'meeting') {

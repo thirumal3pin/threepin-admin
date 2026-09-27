@@ -584,25 +584,41 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   .cm-when{flex-direction:column;}
 }
 
-/* ── The site visit row: a value, who last moved it, and a way to move it ── */
+/* ── The site visit row: when, who is going, and how they answered ── */
 .st-row.sv{grid-template-columns:92px minmax(0,1fr) auto;align-items:center;}
 .sv-val{min-width:0;}
 .sv-val.none{color:var(--ink4);}
 .sv-by{display:block;font-size:11px;color:var(--ink4);margin-top:1px;}
-/* Editing takes the full width of the row rather than squeezing four controls
-   into the value column, where the date input alone would be clipped. */
-.st-row.sv.editing{grid-template-columns:92px minmax(0,1fr);align-items:start;}
-.sv-edit{display:flex;flex-direction:column;gap:8px;min-width:0;}
-.sv-fields{display:flex;flex-wrap:wrap;gap:6px;}
-.sv-fields input,.sv-fields select{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r2);background:var(--bg);color:var(--ink);min-height:34px;}
-.sv-fields input[type=date]{flex:0 0 auto;}
-.sv-fields input[type=time]{flex:0 0 auto;}
-.sv-fields select{flex:0 0 auto;}
-.sv-fields input[type=text]{flex:1 1 120px;min-width:0;}
-.sv-acts{display:flex;gap:6px;flex-wrap:wrap;}
-.sv-acts .tt-btn{margin-top:0;}
+.sv-team{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
+/* Who is going, and whether they said yes. Amber is the one that needs
+   chasing: an invitation nobody has answered is not a covered visit. */
+.sv-who{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--border);background:var(--bg);color:var(--ink3);}
+.sv-who.accepted{border-color:var(--green-line,#A7D8B4);background:var(--green-bg,#EEF8F1);color:var(--green,#15803D);}
+.sv-who.declined{border-color:var(--red-line);background:var(--red-bg);color:var(--red);text-decoration:line-through;}
+.sv-who.needsAction{border-color:var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
+.sv-who.tentative{border-style:dashed;}
+
+/* ── The scheduler ── */
+.sv-sheet{width:min(520px,100%);}
+.sv-sheet textarea{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
+  border-radius:var(--r2);background:var(--bg);color:var(--ink);width:100%;box-sizing:border-box;resize:vertical;}
+.sv-sheet select,.sv-sheet input[type=text]{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
+  border-radius:var(--r2);background:var(--bg);color:var(--ink);min-height:38px;width:100%;box-sizing:border-box;}
+.sv-agents{display:flex;flex-direction:column;gap:5px;}
+/* One per line, because the free/busy note beside each name is the point and
+   it does not survive being squeezed into a chip. */
+.sv-agent{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;}
+.sv-agent-n{flex:0 0 auto;}
+.sv-agent-free{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink4);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sv-agent-free.ok{color:var(--green,#15803D);}
+.sv-agent-free.busy{color:var(--red,#B91C1C);}
+.sv-agent-free.unknown{color:var(--ink4);}
+.sv-hint{font-size:11.5px;color:var(--ink4);margin-top:2px;}
+.sv-hint.warn{color:var(--amber,#B45309);}
 .sv-err{display:none;font-size:12px;color:var(--red);}
 .sv-err.show{display:block;}
+
 .st-attn{display:flex;flex-direction:column;gap:6px;margin:10px 0;}
 .st-item{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:9px 12px;border-radius:var(--r2);background:var(--card);border:1px solid var(--border);box-shadow:inset 3px 0 0 var(--ink4);}
 .st-item.critical{background:var(--red-bg);border-color:var(--red-line);box-shadow:inset 3px 0 0 var(--red);}
@@ -1537,9 +1553,7 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   .st-step,.st-row,.st-step.with-acts{grid-template-columns:minmax(0,1fr);gap:6px;align-items:start;}
   /* On a phone every control gets its own full-width line — a date and a time
      side by side leave neither wide enough to read what is in it. */
-  .st-row.sv,.st-row.sv.editing{grid-template-columns:minmax(0,1fr);}
-  .sv-fields{flex-direction:column;}
-  .sv-fields input,.sv-fields select{width:100%;min-height:38px;}
+  .st-row.sv{grid-template-columns:minmax(0,1fr);}
   .st-step .st-item-acts{justify-content:flex-start;width:100%;}
   .kcol-rule{display:none;}
   .tt-tab{padding:9px 10px 10px;font-size:12.5px;}
