@@ -399,7 +399,9 @@ export async function syncTeamMeeting({ organiser, attendees = [], title, at, mi
     end: { dateTime: new Date(at + Math.max(5, minutes) * 60000).toISOString(), timeZone: TZ },
     attendees: attendees.filter(a => a && a !== organiser).map(email => ({ email })),
     extendedProperties: { private: { [MEET_STAMP]: '1' } },
-    guestsCanModify: true
+    // The person who booked it moves it. A guest who could move the meeting
+    // could move it out from under the person who called it.
+    guestsCanModify: false
   };
   // Cancelling or moving a repeating meeting acts on the whole series, which
   // is what somebody pressing "call it off" on a weekly review means.
@@ -566,6 +568,12 @@ export async function eventDetail({ viewer, eventId, key = serviceKey(), makeCli
       where: e.location || null, about: e.description || null,
       meet: e.hangoutLink || null, link: e.htmlLink || null,
       organiser: (e.organizer && e.organizer.email) || null,
+      // Editing and cancelling belong to whoever booked it. Everyone else
+      // answers their own invitation and leaves the arrangements alone.
+      iCreated: sameEmail((e.organizer && e.organizer.email) || '', viewer),
+      minutes: (e.start && e.end && e.start.dateTime && e.end.dateTime)
+        ? Math.round((Date.parse(e.end.dateTime) - Date.parse(e.start.dateTime)) / 60000) : null,
+      repeats: Array.isArray(e.recurrence) && e.recurrence.length > 0,
       leadId: priv[STAMP] || null,
       attendees: (e.attendees || []).map(a => ({ email: a.email, status: a.responseStatus || 'needsAction', reason: a.comment || null })),
       mine: (e.attendees || []).filter(a => sameEmail(a.email, viewer))

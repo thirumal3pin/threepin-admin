@@ -495,6 +495,24 @@ async function calendarPost(request) {
       return json({ ok: true, replies: r.replies });
     }
 
+    // Dragged to a new time. Only the title, the guests and the length are
+    // carried over; everything else about the meeting stays as it was.
+    if (body.op === 'moveMeeting') {
+      const me = String(user.email || '').toLowerCase();
+      const at = Number(body.at) || 0;
+      if (!body.eventId || !at) return json({ ok: false, error: 'eventId and at required' }, 400);
+      const cur = await eventDetail({ viewer: me, eventId: body.eventId });
+      if (!cur || !cur.ok) return json({ ok: false, error: 'That meeting is no longer in your calendar' }, 404);
+      if (!cur.iCreated) return json({ ok: false, error: 'Only whoever booked this meeting can move it' }, 403);
+      if (cur.repeats) return json({ ok: false, error: 'This one repeats — change it in the form rather than by dragging' }, 409);
+      const r = await syncTeamMeeting({
+        organiser: me, attendees: (cur.attendees || []).map(a => a.email).filter(e => e && e.toLowerCase() !== me),
+        title: cur.title, at, minutes: Math.min(600, Math.max(5, Number(body.minutes) || cur.minutes || 30)),
+        where: cur.where || undefined, eventId: body.eventId
+      });
+      return json({ ok: true, ...r });
+    }
+
     if (body.op === 'meeting') {
       const team = await teamEmails(db, user.tenantId);
       const me = String(user.email || '').toLowerCase();
@@ -518,6 +536,14 @@ async function calendarPost(request) {
         .filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))
         .filter(e => known.has(e) || (domain && e.endsWith('@' + domain)))
         .slice(0, 50);
+      // Changing or calling off a meeting belongs to whoever booked it. Anyone
+      // else pressing those buttons would be moving a meeting out from under
+      // the person who called it.
+      if (body.eventId) {
+        const cur = await eventDetail({ viewer: me, eventId: body.eventId });
+        if (!cur || !cur.ok) return json({ ok: false, error: 'That meeting is no longer in your calendar' }, 404);
+        if (!cur.iCreated) return json({ ok: false, error: 'Only whoever booked this meeting can change it' }, 403);
+      }
       const r = await syncTeamMeeting({
         organiser: me, attendees: invited,
         title: typeof body.title === 'string' ? body.title.slice(0, 200) : '',

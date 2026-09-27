@@ -234,9 +234,17 @@
     // theirs, and is drawn but not opened.
     var ours = e.leadId || e.meetingId;
     var open = ours ? ' onclick="PinCalendar.openEvent(\'' + esc(e.id) + '\')" role="button" tabindex="0"' : '';
-    return '<div class="' + cls + '" style="top:' + top.toFixed(1) + 'px;height:' + h.toFixed(1) + 'px;'
+    // A meeting can be dragged to a new time by whoever booked it. Site visits
+    // are not draggable here: moving one changes what an agent was told about a
+    // client and a seller, and that belongs on the lead where the rest of it is.
+    // organiser is only known once the event has been opened, so the grid
+    // offers the drag and the SERVER decides — a drag by somebody else comes
+    // back refused and the block snaps home.
+    var drag = (e.meetingId && !e.leadId) ? ' draggable="true" data-ev="' + esc(e.id) + '"'
+      + ' data-mins="' + Math.round((b.realTo - b.realFrom) / 60000) + '"' : '';
+    return '<div class="' + cls + (drag ? ' movable' : '') + '" style="top:' + top.toFixed(1) + 'px;height:' + h.toFixed(1) + 'px;'
       + 'left:' + (b.lane * w).toFixed(2) + '%;width:' + (w - 1).toFixed(2) + '%"'
-      + ' title="' + esc(title) + '"' + open + '>' + inner + '</div>';
+      + ' title="' + esc(title) + '"' + open + drag + '>' + inner + '</div>';
   }
 
   function nowLineHtml(dayStart) {
@@ -244,6 +252,84 @@
     if (now < dayStart + OPEN * HOUR || now > dayStart + CLOSE * HOUR) return '';
     var top = (now - (dayStart + OPEN * HOUR)) / HOUR * PX_PER_HOUR;
     return '<div class="cal-now" style="top:' + top.toFixed(1) + 'px" aria-hidden="true"></div>';
+  }
+
+  // ═══════ DRAGGING A MEETING TO A NEW TIME ═══════
+  //
+  // Dropped where it lands, rounded to the nearest quarter hour, because
+  // nobody books a meeting at 2:07 and a grid pixel is not a time. The column
+  // it was dropped on decides the day, so a week view moves it across days as
+  // well as hours.
+  //
+  // The move is confirmed before it is sent: a drag is easy to do by accident
+  // on a trackpad, and this one emails everybody invited.
+  var dragging = null;
+
+  function onDragStart(ev) {
+    var block = ev.target.closest ? ev.target.closest('[data-ev]') : null;
+    if (!block) return;
+    dragging = { id: block.getAttribute('data-ev'), mins: Number(block.getAttribute('data-mins')) || 30 };
+    try { ev.dataTransfer.setData('text/plain', dragging.id); ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
+    block.classList.add('dragging');
+  }
+  function onDragEnd(ev) {
+    var block = ev.target.closest ? ev.target.closest('[data-ev]') : null;
+    if (block) block.classList.remove('dragging');
+  }
+  function onDragOver(ev) {
+    if (!dragging) return;
+    var track = ev.target.closest ? ev.target.closest('.cal-track') : null;
+    if (!track) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+  }
+  function onDrop(ev) {
+    if (!dragging) return;
+    var track = ev.target.closest ? ev.target.closest('.cal-track') : null;
+    if (!track) return;
+    ev.preventDefault();
+    var moved = dragging;
+    dragging = null;
+
+    var r = track.getBoundingClientRect();
+    var hours = OPEN + ((ev.clientY - r.top) / PX_PER_HOUR);
+    // Nobody books a meeting at 2:07, and a pixel is not a time.
+    var mins = Math.round((hours * 60) / 15) * 15;
+    var day = Number(track.getAttribute('data-day')) || state.at;
+    var at = day + mins * 60000;
+    if (at < Date.now() - 60000) { if (typeof showToast === 'function') showToast('That is in the past.'); return; }
+
+    var when = new Date(at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    // Easy to do by accident on a trackpad, and this one emails everybody.
+    if (!confirm('Move the meeting to ' + when + '? Everyone invited will be told.')) { render(); return; }
+
+    window.crmAuth.getIdToken().then(function (token) {
+      return fetch('/api/tailortalk?action=calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ op: 'moveMeeting', eventId: moved.id, at: at, minutes: moved.mins })
+      });
+    }).then(function (x) { return x.json(); }).then(function (d) {
+      if (!d || !d.ok) {
+        if (typeof showToast === 'function') showToast((d && d.error) || 'Could not move it');
+        render();   // snap it home
+        return;
+      }
+      if (typeof showToast === 'function') showToast('Moved to ' + when + ' — everyone has been told');
+      load(true);
+    }).catch(function () {
+      if (typeof showToast === 'function') showToast('Could not reach the calendar service');
+      render();
+    });
+  }
+
+  function wireDrag() {
+    var body = document.getElementById('calendarBody');
+    if (!body || body.__dragWired) return;
+    body.__dragWired = true;
+    body.addEventListener('dragstart', onDragStart);
+    body.addEventListener('dragend', onDragEnd);
+    body.addEventListener('dragover', onDragOver);
+    body.addEventListener('drop', onDrop);
   }
 
   function render() {
@@ -282,12 +368,13 @@
         + '<b>' + esc(who(p.person)) + '</b><span class="cal-st">' + esc(st.text) + '</span>'
         + (allDay.length ? '<span class="cal-allday" title="' + esc(allDay.map(function (e) { return e.title; }).join(', ')) + '">' + esc(allDay[0].title) + (allDay.length > 1 ? ' +' + (allDay.length - 1) : '') + '</span>' : '')
         + '</div>'
-        + '<div class="cal-track" style="height:' + ((CLOSE - OPEN) * PX_PER_HOUR) + 'px">'
+        + '<div class="cal-track" data-day="' + dayStart + '" style="height:' + ((CLOSE - OPEN) * PX_PER_HOUR) + 'px">'
         + blocks.map(function (b) { return blockHtml(b, dayStart); }).join('')
         + nowLineHtml(dayStart)
         + '</div></div>';
     }).join('');
     el.innerHTML = '<div class="cal-grid">' + hoursHtml() + '<div class="cal-cols">' + cols + '</div></div>';
+    wireDrag();
   }
 
   // ── ONE PERSON, SEVEN DAYS ── "what has Swami got on this week"
@@ -309,12 +396,13 @@
         + '<span class="cal-st">' + new Date(d).getDate() + ' ' + esc(new Date(d).toLocaleDateString([], { month: 'short' })) + '</span>'
         + (allDay.length ? '<span class="cal-allday" title="' + esc(allDay.map(function (e) { return e.title; }).join(', ')) + '">' + esc(allDay[0].title) + '</span>' : '')
         + '</div>'
-        + '<div class="cal-track" style="height:' + ((CLOSE - OPEN) * PX_PER_HOUR) + 'px">'
+        + '<div class="cal-track" data-day="' + d + '" style="height:' + ((CLOSE - OPEN) * PX_PER_HOUR) + 'px">'
         + blocksFor(events, d).map(function (b) { return blockHtml(b, d); }).join('')
         + (d === today ? nowLineHtml(d) : '')
         + '</div></div>';
     }
     el.innerHTML = '<div class="cal-grid">' + hoursHtml() + '<div class="cal-cols">' + cols + '</div></div>';
+    wireDrag();
   }
 
   // ── ONE PERSON, A MONTH ── no hours: at this scale the useful thing is
@@ -584,6 +672,13 @@
           + '<span class="ev-who-s">' + esc(ANSWER[st] || st) + (a.reason ? ' · “' + esc(a.reason) + '”' : '') + '</span></div>';
       }).join('');
       // A site visit sends you to the lead; a meeting is answered right here.
+      // Whoever booked it changes it. Everybody else answers and leaves the
+      // arrangements alone — a guest who could move the meeting could move it
+      // out from under the person who called it.
+      var owner = !d.leadId && d.iCreated
+        ? '<button type="button" class="tt-btn quiet" onclick="PinCalendar.editEvent()">Change it</button>'
+          + '<button type="button" class="tt-btn quiet danger" onclick="PinCalendar.callOff()">Call it off</button>'
+        : '';
       var acts = d.leadId
         ? '<button type="button" class="tt-btn" onclick="PinCalendar.openLead(\'' + esc(d.leadId) + '\')">Open the lead</button>'
         : (d.mine
@@ -599,7 +694,7 @@
         + (them ? '<div class="ev-list">' + them + '</div>' : '')
         + (d.about ? '<div class="ev-about">' + esc(d.about) + '</div>' : '')
         + '<div class="ev-err" id="evErr"></div>'
-        + '<div class="cal-sheet-acts">' + acts
+        + '<div class="cal-sheet-acts">' + acts + owner
         + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.closeEvent()">Close</button></div>';
     }
     return '<div class="cal-sheet" id="evSheet" role="dialog" aria-modal="true" aria-label="Booking">'
@@ -640,6 +735,60 @@
     answer('declined', String(why).trim().slice(0, 300));
   }
 
+  // Editing is the booking form again, filled in, writing back to the same
+  // event instead of making a second one.
+  function editEvent() {
+    var d = evState.data;
+    if (!d) return;
+    var id = d.id;
+    var at = Date.parse(d.start);
+    var mins = d.minutes || 30;
+    var people = (d.attendees || []).map(function (a) { return a.email; });
+    var title = d.title, where = d.where || '';
+    closeEvent();
+    newMeeting(id);
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    var dt = new Date(at);
+    var set = function (i, v) { var el = document.getElementById(i); if (el) el.value = v; };
+    set('cmTitle', title);
+    set('cmDate', dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()));
+    set('cmTime', pad(dt.getHours()) + ':' + pad(dt.getMinutes()));
+    set('cmMins', String(mins));
+    set('cmWhere', where);
+    Array.prototype.slice.call(document.querySelectorAll('.cm-who input:not(:disabled)')).forEach(function (i) {
+      i.checked = people.indexOf(i.value) >= 0;
+    });
+    var extra = people.filter(function (e) {
+      return !document.querySelector('.cm-who input[value="' + e + '"]');
+    });
+    set('cmAlso', extra.join(', '));
+  }
+
+  function callOff() {
+    var d = evState.data;
+    if (!d) return;
+    if (!confirm('Call off "' + d.title + '"? Everyone invited will be told.')) return;
+    var id = d.id;
+    window.crmAuth.getIdToken().then(function (token) {
+      return fetch('/api/tailortalk?action=calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ op: 'meeting', eventId: id, cancel: true })
+      });
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      var err = document.getElementById('evErr');
+      if (!res || !res.ok) {
+        if (err) { err.textContent = (res && res.error) || 'Could not call it off'; err.classList.add('show'); }
+        return;
+      }
+      closeEvent();
+      if (typeof showToast === 'function') showToast('Called off — everyone invited has been told');
+      load(true);
+    }).catch(function () {
+      var err = document.getElementById('evErr');
+      if (err) { err.textContent = 'Could not reach the calendar service'; err.classList.add('show'); }
+    });
+  }
+
   function closeEvent(keepState) {
     var el = document.getElementById('evSheet');
     if (el) el.remove();
@@ -651,8 +800,13 @@
   // Google does the inviting: everyone picked gets a normal invitation they can
   // accept or decline, on whatever calendar app they use, and a Meet link if it
   // was asked for. The CRM is only the booking form.
-  function newMeeting() {
+  // The id of the meeting being changed, or null for a new one. The form is
+  // the same either way; what differs is whether Google is told to make an
+  // event or to move the one that is already there.
+  var editingId = null;
+  function newMeeting(eventId) {
     if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
+    editingId = eventId || null;
     closeMeeting();
     document.body.insertAdjacentHTML('beforeend', meetingHtml());
     var t = document.getElementById('cmTitle');
@@ -671,7 +825,7 @@
     var pad = function (n) { return String(n).padStart(2, '0'); };
     return '<div class="cal-sheet" id="calSheet" role="dialog" aria-modal="true" aria-label="New meeting">'
       + '<div class="cal-sheet-in">'
-      + '<h3>New meeting</h3>'
+      + '<h3>' + (editingId ? 'Change the meeting' : 'New meeting') + '</h3>'
       + '<label for="cmTitle">What is it about</label>'
       + '<input id="cmTitle" type="text" placeholder="Monday pipeline review" maxlength="120">'
       + '<div class="cm-when">'
@@ -707,7 +861,7 @@
       + '<input id="cmWhere" type="text" placeholder="Office, or a property code" maxlength="120">'
       + '<div class="cal-sheet-err" id="cmErr"></div>'
       + '<div class="cal-sheet-acts">'
-      + '<button type="button" class="tt-btn" id="cmGo" onclick="PinCalendar.book()">Send invitations</button>'
+      + '<button type="button" class="tt-btn" id="cmGo" onclick="PinCalendar.book()">' + (editingId ? 'Save and tell everyone' : 'Send invitations') + '</button>'
       + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.closeMeeting()">Cancel</button>'
       + '</div></div></div>';
   }
@@ -744,10 +898,10 @@
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ op: 'meeting', title: title, at: at, minutes: minutes, where: where, meet: meet, repeat: repeat, attendees: attendees })
+        body: JSON.stringify({ op: 'meeting', eventId: editingId, title: title, at: at, minutes: minutes, where: where, meet: meet, repeat: repeat, attendees: attendees })
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
-      go.disabled = false; go.textContent = 'Send invitations';
+      go.disabled = false; go.textContent = editingId ? 'Save and tell everyone' : 'Send invitations';
       if (!d || !d.ok) return fail((d && (d.hint || d.error)) || 'Google would not take the booking.');
       closeMeeting();
       if (typeof showToast === 'function') {
@@ -759,7 +913,7 @@
       state.at = startOfDay(at);
       load(true);
     }).catch(function () {
-      go.disabled = false; go.textContent = 'Send invitations';
+      go.disabled = false; go.textContent = editingId ? 'Save and tell everyone' : 'Send invitations';
       fail('Could not reach the calendar service.');
     });
   }
@@ -779,7 +933,8 @@
       load(true);
     },
     today: function () { state.at = startOfDay(Date.now()); load(true); },
-    newMeeting: newMeeting,
+    newMeeting: function () { newMeeting(null); },
+    editEvent: editEvent, callOff: callOff,
     setSpan: function (span) {
       state.span = span;
       if (span !== 'day' && !state.person) state.person = (state.people[0] || {}).person || null;

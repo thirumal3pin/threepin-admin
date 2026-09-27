@@ -674,6 +674,13 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cal-ev-t{display:block;color:var(--ink3);font-size:10px;}
 /* A site visit is the one block here that is 3 PIN's own work, and the one
    worth clicking: it opens the lead. */
+/* A meeting you booked can be dragged to a new time. The cursor is the only
+   hint it needs; a grab handle on a 26px block would be most of the block. */
+.cal-ev.movable{cursor:grab;}
+.cal-ev.movable:active{cursor:grabbing;}
+.cal-ev.dragging{opacity:.45;}
+.tt-btn.danger{color:var(--red);border-color:var(--red-line);}
+.tt-btn.danger:hover{background:var(--red-bg);}
 .cal-ev.visit{background:var(--amber-bg,#FFF7E8);border-color:var(--amber-line,#F0C98A);cursor:pointer;}
 .cal-ev.visit:hover{filter:brightness(.97);}
 .cal-ev.meet{background:var(--purple-bg,#F3EEFF);border-color:var(--purple-line,#D6C7FB);}

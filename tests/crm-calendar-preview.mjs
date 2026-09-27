@@ -90,6 +90,7 @@ const ok = (label, cond, detail) => {
 const browser = await chromium.launch();
 let booked = null;
 let answered = null;
+let moved = null;
 
 async function open(viewport, calendarReply) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
@@ -113,11 +114,13 @@ async function open(viewport, calendarReply) {
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, event: {
           id: 'mtg1', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H),
           where: 'Office', about: 'Pipeline and the week ahead.', meet: 'https://meet.google.com/abc',
-          organiser: 'sales@threepin.in', leadId: null, mine: 'needsAction',
+          organiser: 'swami@threepin.in', iCreated: true, minutes: 30, repeats: false,
+          leadId: null, mine: 'needsAction',
           attendees: [{ email: 'swami@threepin.in', status: 'needsAction', reason: null },
                       { email: 'pradeep@threepin.in', status: 'declined', reason: 'Bank appointment.' },
                       { email: 'sales@threepin.in', status: 'accepted', reason: null } ] } }) });
       }
+      if (body.op === 'moveMeeting') { moved = body; return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, eventId: body.eventId }) }); }
       if (body.op === 'answer') {
         answered = body;
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, replies: [
@@ -312,6 +315,62 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('a refusal carries its reason', /Tambaram/.test((answered || {}).reason || ''), JSON.stringify(answered));
   ok('...and is shown as such', /Not coming/i.test(refused.mine), refused.mine);
   await page.evaluate(() => PinCalendar.closeEvent());
+
+  // ── CHANGING AND CALLING OFF, FOR WHOEVER BOOKED IT ──
+  const owner = await page.evaluate(async () => {
+    [...document.querySelectorAll('.cal-ev.meet')][0].click();
+    await new Promise(r => setTimeout(r, 450));
+    const sheet = document.getElementById('evSheet');
+    return { buttons: sheet ? [...sheet.querySelectorAll('.cal-sheet-acts button')].map(b => b.textContent.trim()) : [] };
+  });
+  ok('whoever booked it can change it', owner.buttons.some(b => /Change it/i.test(b)), JSON.stringify(owner.buttons));
+  ok('...and call it off', owner.buttons.some(b => /Call it off/i.test(b)), JSON.stringify(owner.buttons));
+
+  const edit = await page.evaluate(async () => {
+    PinCalendar.editEvent();
+    await new Promise(r => setTimeout(r, 350));
+    const sheet = document.getElementById('calSheet');
+    return { open: !!sheet, heading: ((sheet && sheet.querySelector('h3')) || {}).textContent || '',
+      title: (document.getElementById('cmTitle') || {}).value || '',
+      where: (document.getElementById('cmWhere') || {}).value || '',
+      mins: (document.getElementById('cmMins') || {}).value || '',
+      go: (document.getElementById('cmGo') || {}).textContent || '' };
+  });
+  // Editing is the booking form again, filled in, rather than a second form to
+  // learn and a second place for the two to disagree.
+  ok('changing it opens the booking form, filled in', edit.open && /Monday review/.test(edit.title), JSON.stringify(edit));
+  ok('...saying it is a change, not a new one', /Change the meeting/i.test(edit.heading), edit.heading);
+  ok('...with the place and the length carried over', edit.where === 'Office' && edit.mins === '30', JSON.stringify(edit));
+  ok('...and a button that says what it will do', /Save and tell everyone/i.test(edit.go), edit.go);
+
+  booked = null;
+  const saved = await page.evaluate(async () => {
+    document.getElementById('cmTitle').value = 'Monday review (moved)';
+    PinCalendar.book();
+    await new Promise(r => setTimeout(r, 400));
+    return { closed: !document.getElementById('calSheet') };
+  });
+  // Writing to the same event rather than making a second one is the whole
+  // point: without the id, changing a meeting leaves two in the diary.
+  ok('saving writes back to the same meeting', !!booked && booked.eventId === 'mtg1', JSON.stringify(booked));
+  ok('...and closes', saved.closed);
+
+  // ── DRAGGING IT TO A NEW TIME ──
+  moved = null;
+  const drag = await page.evaluate(async () => {
+    const block = [...document.querySelectorAll('.cal-ev.meet')][0];
+    const movable = block && block.classList.contains('movable') && block.getAttribute('draggable') === 'true';
+    const track = document.querySelector('.cal-track');
+    const hasDay = !!(track && track.getAttribute('data-day'));
+    // A site visit is not draggable here: moving one changes what an agent was
+    // told about a client and a seller, and that belongs on the lead.
+    const visit = document.querySelector('.cal-ev.visit');
+    const visitMovable = !!(visit && visit.classList.contains('movable'));
+    return { movable, hasDay, visitMovable };
+  });
+  ok('a meeting you booked can be dragged', drag.movable, JSON.stringify(drag));
+  ok('...onto a day the grid knows the date of', drag.hasDay);
+  ok('...while a site visit is not dragged from here', !drag.visitMovable);
 
   // Somebody's own appointment is drawn as a busy block. Opening it would hand
   // over what it is, so it does not open.
