@@ -20,23 +20,29 @@
 //      -> Security -> Access and data control -> API controls ->
 //      Manage Domain Wide Delegation -> Add new:
 //         Client ID : 118007570407573886710
-//         Scopes    : https://www.googleapis.com/auth/calendar.readonly
+//         Scopes    : https://www.googleapis.com/auth/calendar
 //      (That client ID is the service account's numeric id. It identifies, it
 //      does not authenticate — the private key stays where it is.)
 //
 //   3. Wait a few minutes. Google propagates delegation slowly, and a refusal
 //      in the first minute or two means nothing.
 //
-// Read-only is deliberate here. Widen the scope to .../auth/calendar only if
-// the CRM is going to WRITE site visits into agents' calendars — that is a
-// separate decision, and a bigger one, because a bug then writes to real
-// people's diaries rather than merely reading them.
+// The scope is the full read/write one, .../auth/calendar, because the owner
+// chose two-way: the CRM shows each agent's events AND pushes site visits into
+// their diary. That is a real privilege — a bug here is a bug in somebody's
+// day, not in a page — so every write the CRM makes is confined to events it
+// created itself and stamped as its own (see extendedProperties in
+// api/_calendar-shared.js). It never edits an event a person made.
+//
+// If you would rather start read-only, change SCOPE below AND the delegation
+// entry to .../auth/calendar.readonly. Google matches scopes as whole strings,
+// so the two must agree exactly.
 
 import { readFileSync } from 'node:fs';
 import { JWT } from 'google-auth-library';
 
 const KEY_PATH = 'api/pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json';
-const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+const SCOPE = 'https://www.googleapis.com/auth/calendar';
 const TEAM = process.argv.slice(2).length ? process.argv.slice(2)
   : ['sales@threepin.in', 'admin@threepin.in', 'swami@threepin.in', 'pradeep@threepin.in', 'thirumal@threepin.in'];
 
@@ -79,44 +85,54 @@ try {
 // ── Step two: is the Calendar API itself switched on for the project? ──
 const now = new Date();
 const end = new Date(now.getTime() + 24 * 3600000);
-const res = await jwt.request({
-  url: 'https://www.googleapis.com/calendar/v3/freeBusy',
-  method: 'POST',
-  data: { timeMin: now.toISOString(), timeMax: end.toISOString(), timeZone: 'Asia/Kolkata', items: TEAM.map(id => ({ id })) }
-}).catch(e => ({ failed: e }));
 
-if (res.failed) {
-  const d = (res.failed.response && res.failed.response.data) || {};
-  const msg = (d.error && (d.error.message || d.error)) || res.failed.message;
-  console.log(`calendar api    : FAILED — ${String(msg).slice(0, 200)}`);
-  if (/has not been used|is disabled|SERVICE_DISABLED/i.test(String(msg))) {
-    console.log('');
-    console.log('  That is step 1: the Google Calendar API is not enabled on the');
-    console.log('  pin-realty project. Enabling it takes a minute and costs nothing.');
+async function dayOf(person) {
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(person)}/events`
+    + `?timeMin=${encodeURIComponent(now.toISOString())}&timeMax=${encodeURIComponent(end.toISOString())}`
+    + '&singleEvents=true&orderBy=startTime&maxResults=20';
+  const as = new JWT({ email: key.client_email, key: key.private_key, scopes: [SCOPE], subject: person });
+  try {
+    const r = await as.request({ url });
+    return { ok: true, events: r.data.items || [] };
+  } catch (e) {
+    const d = (e.response && e.response.data) || {};
+    return { ok: false, msg: (d.error && (d.error.message || d.error)) || e.message };
   }
-  process.exit(1);
 }
 
+const first = await dayOf(TEAM[0]);
+if (!first.ok && /has not been used|is disabled|SERVICE_DISABLED/i.test(String(first.msg))) {
+  console.log(`calendar api    : OFF — ${String(first.msg).slice(0, 160)}`);
+  console.log('');
+  console.log('  That is step 1: the Google Calendar API is not enabled on the');
+  console.log('  pin-realty project. Enabling it takes a minute and costs nothing.');
+  process.exit(1);
+}
 console.log('calendar api    : ON');
 console.log('');
-console.log(`Busy time in the next 24 hours (IST), ${TEAM.length} calendars:`);
-const cals = res.data.calendars || {};
+console.log(`Next 24 hours (IST), ${TEAM.length} calendars:`);
+
+const t = iso => iso ? new Date(iso).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }) : 'all day';
 let reachable = 0;
-for (const who of TEAM) {
-  const c = cals[who];
-  if (!c) { console.log(`  ${who.padEnd(26)} no answer`); continue; }
-  if (c.errors && c.errors.length) {
-    // notFound here almost always means "that mailbox has not shared its
-    // calendar with the domain", which delegation does NOT override.
-    console.log(`  ${who.padEnd(26)} ${c.errors.map(e => e.reason).join(', ')}`);
+for (const person of TEAM) {
+  const r = person === TEAM[0] ? first : await dayOf(person);
+  if (!r.ok) {
+    // "notFound" here is usually a mailbox that does not exist, or an alias
+    // rather than a real account. Delegation does not conjure either.
+    console.log(`  ${person}`);
+    console.log(`      unreadable — ${String(r.msg).slice(0, 120)}`);
     continue;
   }
   reachable++;
-  const busy = c.busy || [];
-  const t = ms => new Date(ms).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
-  console.log(`  ${who.padEnd(26)} ${busy.length ? busy.map(b => t(b.start) + '-' + t(b.end)).join(', ') : 'clear'}`);
+  console.log(`  ${person}`);
+  if (!r.events.length) console.log('      nothing booked');
+  r.events.forEach(e => {
+    const when = e.start && (e.start.dateTime ? t(e.start.dateTime) : 'all day');
+    const mine = e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private.threepin;
+    console.log(`      ${String(when).padStart(8)}  ${(e.summary || '(no title)').slice(0, 52)}${mine ? '   [3 PIN]' : ''}`);
+  });
 }
 console.log('');
 console.log(reachable === TEAM.length
-  ? `All ${TEAM.length} calendars are readable. The CRM can show this.`
+  ? `All ${TEAM.length} calendars are readable, and the scope allows writing site visits back.`
   : `${reachable} of ${TEAM.length} readable — the rest are listed above with Google's reason.`);

@@ -486,6 +486,94 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .st-step .st-due{font-weight:500;}
 .st-step.team{border-color:var(--blue-line);}
 .st-step.overdue{border-color:var(--red-line);background:var(--red-bg);color:var(--red);font-weight:600;}
+
+/* ══════ THE TEAM CALENDAR ══════
+   A column per agent, hours down the side. The grid scrolls sideways rather
+   than squeezing five columns into a phone, because a 60px-wide day is not a
+   day anybody can read. */
+.cal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.cal-nav{display:flex;align-items:center;gap:6px;min-width:0;}
+.cal-nav .tt-btn{margin-top:0;}
+.cal-date{font-size:15px;margin-left:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-acts{display:flex;gap:6px;}
+.cal-acts .tt-btn{margin-top:0;}
+
+.cal-msg{padding:28px 20px;text-align:center;color:var(--ink3);font-size:13.5px;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);}
+.cal-msg.err{text-align:left;display:flex;flex-direction:column;gap:6px;border-color:var(--amber-line,var(--border));background:var(--amber-bg,var(--card));}
+.cal-msg.err b{color:var(--ink);font-size:14px;}
+.cal-msg-x{color:var(--ink4);font-size:12px;}
+
+.cal-grid{display:flex;gap:0;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;}
+.cal-hours{flex:0 0 58px;border-right:1px solid var(--border);}
+.cal-hr{font-family:var(--mono);font-size:10px;color:var(--ink4);padding:0 8px;text-align:right;
+  border-top:1px solid var(--border);box-sizing:border-box;transform:translateY(-1px);}
+.cal-hr:first-child{border-top:0;}
+/* Sideways, never squashed: below about 900px five readable columns do not
+   fit, and a column too narrow to hold a name is worse than a scrollbar. */
+.cal-cols{display:flex;flex:1 1 auto;min-width:0;overflow-x:auto;}
+.cal-col{flex:1 0 150px;min-width:150px;border-right:1px solid var(--border);}
+.cal-col:last-child{border-right:0;}
+.cal-col-h{height:54px;box-sizing:border-box;padding:7px 9px;border-bottom:1px solid var(--border);
+  display:flex;flex-direction:column;gap:1px;justify-content:center;position:relative;}
+.cal-col-h b{font-size:12.5px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-dot{position:absolute;top:9px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--green,#15803D);}
+.cal-dot.busy{background:var(--red,#B91C1C);}
+/* Not known, which is neither free nor busy and must not be mistaken for either. */
+.cal-dot.unknown{background:transparent;border:1.5px solid var(--ink4);box-sizing:border-box;}
+.cal-st{font-size:10.5px;color:var(--ink4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-allday{font-size:10px;color:var(--ink3);background:var(--bg);border-radius:3px;padding:1px 4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+.cal-track{position:relative;background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 51px,var(--border) 51px,var(--border) 52px);}
+.cal-ev{position:absolute;box-sizing:border-box;padding:3px 5px;border-radius:4px;overflow:hidden;
+  background:var(--blue-bg,#EFF4FF);border:1px solid var(--blue-line,#C7D7FE);
+  font-size:11px;line-height:1.25;cursor:default;}
+.cal-ev b{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-ev-t{display:block;color:var(--ink3);font-size:10px;}
+/* A site visit is the one block here that is 3 PIN's own work, and the one
+   worth clicking: it opens the lead. */
+.cal-ev.visit{background:var(--amber-bg,#FFF7E8);border-color:var(--amber-line,#F0C98A);cursor:pointer;}
+.cal-ev.visit:hover{filter:brightness(.97);}
+.cal-ev.meet{background:var(--purple-bg,#F3EEFF);border-color:var(--purple-line,#D6C7FB);}
+/* Marked free in Google — a birthday, a reminder. Present, but not a wall. */
+.cal-ev.free{background:transparent;border-style:dashed;color:var(--ink3);}
+.cal-now{position:absolute;left:0;right:0;height:2px;background:var(--red,#B91C1C);opacity:.75;pointer-events:none;}
+.cal-now::before{content:'';position:absolute;left:-1px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--red,#B91C1C);}
+
+/* ── Booking a meeting ── */
+.cal-sheet{position:fixed;inset:0;z-index:60;background:rgba(20,18,16,.44);display:flex;align-items:center;justify-content:center;padding:16px;}
+.cal-sheet-in{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:18px;
+  width:min(440px,100%);max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:7px;}
+.cal-sheet-in h3{margin:0 0 4px;font-size:16px;}
+.cal-sheet-in label{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);margin-top:4px;}
+.cal-sheet-in input[type=text],.cal-sheet-in input[type=date],.cal-sheet-in input[type=time],.cal-sheet-in select{
+  font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);border-radius:var(--r2);
+  background:var(--bg);color:var(--ink);min-height:38px;width:100%;box-sizing:border-box;}
+.cm-when{display:flex;gap:8px;}
+.cm-when>div{flex:1 1 0;min-width:0;display:flex;flex-direction:column;}
+.cm-who{display:flex;flex-wrap:wrap;gap:6px;}
+.cm-p{display:flex;align-items:center;gap:6px;font-family:var(--font,inherit);font-size:12.5px;
+  text-transform:none;letter-spacing:0;color:var(--ink);background:var(--bg);border:1px solid var(--border);
+  border-radius:var(--r2);padding:7px 10px;min-height:36px;box-sizing:border-box;cursor:pointer;margin-top:0;}
+.cm-p.self{opacity:.7;cursor:default;}
+.cm-p input{margin:0;width:15px;height:15px;}
+.cm-row{display:flex;gap:6px;margin-top:4px;}
+.cal-sheet-err{display:none;font-size:12.5px;color:var(--red);margin-top:4px;}
+.cal-sheet-err.show{display:block;}
+.cal-sheet-acts{display:flex;gap:8px;margin-top:10px;}
+.cal-sheet-acts .tt-btn{margin-top:0;}
+
+@media (max-width:720px){
+  .cal-head{gap:8px;}
+  .cal-date{width:100%;margin-left:0;order:3;}
+  .cal-acts{margin-left:auto;}
+  /* Every control a thumb has to hit gets a real target. */
+  .cal-nav .tt-btn,.cal-acts .tt-btn{min-height:36px;}
+  .cal-hours{flex-basis:44px;}
+  .cal-col{flex:0 0 138px;min-width:138px;}
+  .cm-when{flex-direction:column;}
+}
+
 /* ── The site visit row: a value, who last moved it, and a way to move it ── */
 .st-row.sv{grid-template-columns:92px minmax(0,1fr) auto;align-items:center;}
 .sv-val{min-width:0;}

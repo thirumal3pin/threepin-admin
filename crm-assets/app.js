@@ -1449,7 +1449,7 @@ function renderTtSection(l){
 // Which view is showing is the rail's job to display — the four buttons and
 // the Board/List dropdown that used to live in the header are entries in it
 // now. toggleView only has to show the right pane and tell the rail.
-const CRM_VIEWS = ['today', 'kanban', 'list', 'followups', 'dashboard'];
+const CRM_VIEWS = ['today', 'kanban', 'list', 'followups', 'dashboard', 'calendar'];
 function toggleView(view){
   currentView = view;
   if(view==='kanban' || view==='list') lastBrowseView = view;
@@ -1464,13 +1464,15 @@ function toggleView(view){
   });
   if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else if(view==='today'){ if(window.renderTodayView) window.renderTodayView(); }
+  else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }
   else applyFilters();
 }
 function updateNavState(){
   if(window.AppNav) window.AppNav.setActive(currentView);
   // Search and the filter chips act on a list of leads. Daily task is a list
-  // of today, so they have nothing to act on there and only get in the way.
-  const isLeadList = currentView !== 'today';
+  // of today and the calendar is a list of hours, so they have nothing to act
+  // on there and only get in the way.
+  const isLeadList = currentView !== 'today' && currentView !== 'calendar';
   document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
   document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
 }
@@ -3031,6 +3033,29 @@ function writeVisit(l, at, status, property){
   renderHistory(l);
   applyFilters();
   persistLead(l);
+  pushVisitToCalendar(l.id);
+}
+
+// The visit also belongs in the agent's actual diary, on the phone they carry
+// to the property. The server works out whose calendar it is and whether this
+// is a new entry, a moved one or a cancellation (api/_calendar-shared.js).
+//
+// Quiet on failure, and deliberately so: the visit is already saved in the
+// CRM, which is the record that matters. A Workspace that has not been set up
+// yet must not produce an error box every time somebody books a viewing.
+function pushVisitToCalendar(leadId){
+  if(!window.crmAuth || !window.crmAuth.getIdToken) return;
+  window.crmAuth.getIdToken().then(function(token){
+    return fetch('/api/tailortalk?action=calendar', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+      body: JSON.stringify({ op:'visit', leadId: leadId })
+    });
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(d && d.ok && d.eventId && d.subject){
+      showToast('\u{1F4C5} Added to ' + (window.crmMentions.displayName(d.subject) || d.subject) + '\u2019s calendar');
+    }
+  }).catch(function(){ /* the visit is saved; the diary can catch up later */ });
 }
 function saveVisitEdit(id){
   const l = leads.find(x => x.id === id);

@@ -50,6 +50,8 @@ import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
+import { visitOf } from '../crm-assets/pipeline.js';
 
 export const maxDuration = 60;
 const SYNC_BUDGET_MS = 40000;
@@ -329,6 +331,94 @@ async function adminAiPost(request) {
   return json({ ok: true, apply, model, count: results.length, cursor, rateLimited, done: finished && ids.length < limit && !(Array.isArray(body.leadIds) && body.leadIds.length), results });
 }
 
+// ═══════ THE TEAM CALENDAR ═══════
+//
+// Two operations behind one action, because Vercel's Hobby plan allows twelve
+// serverless functions and this project uses exactly twelve. A thirteenth file
+// in api/ does not cost money, it fails the deploy — so new endpoints join an
+// existing router instead, the way ai-lead and admin-ai already do.
+//
+//   { op: 'day' }              what the team is doing between two instants
+//   { op: 'visit', leadId }    put that lead's site visit in the right diary
+//   { op: 'meeting', ... }     book, move or call off a meeting among the team
+//
+// The team is settings/{tenant}.team, the same list that backs @mentions. A
+// calendar nobody has been added to is simply not read.
+async function teamEmails(db, tenantId) {
+  const snap = await db.collection('settings').doc(tenantId).get();
+  const team = (snap.exists && snap.data().team) || {};
+  return Object.values(team).map(m => m && m.email).filter(Boolean);
+}
+
+async function calendarPost(request) {
+  const user = await crmUser(request);
+  if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
+  let body = {};
+  try { body = await request.json(); } catch { /* validated below */ }
+  const db = getDb();
+
+  try {
+    if (body.op === 'visit') {
+      if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
+      const ref = db.collection('leads').doc(body.leadId);
+      const snap = await ref.get();
+      if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
+      const lead = { id: snap.id, ...snap.data() };
+      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+
+      const team = await teamEmails(db, user.tenantId);
+      const visit = visitOf(lead);
+      const subject = visitOwnerFor(lead, visit, team);
+      if (!subject) return json({ ok: true, skipped: 'nobody on the team to book it with' });
+
+      const r = await syncVisitEvent({ lead, visit, subject,
+        previous: { eventId: lead.calendarEventId || null, owner: lead.calendarEventOwner || null } });
+      // Stored so the next reschedule moves this entry rather than making a
+      // second one, and so a hand-over can clear the first person's diary.
+      await ref.update({ calendarEventId: r.eventId, calendarEventOwner: r.owner });
+      return json({ ok: true, ...r, subject });
+    }
+
+    if (body.op === 'meeting') {
+      const team = await teamEmails(db, user.tenantId);
+      const me = String(user.email || '').toLowerCase();
+      // The meeting is created AS the person booking it, so they must be
+      // somebody Google will let us act as. Anyone else would end up booking
+      // meetings in a colleague's name, which is not a feature.
+      if (!team.some(e => String(e).toLowerCase() === me)) {
+        return json({ ok: false, error: 'Your address is not on the team list, so meetings cannot be booked as you.' }, 403);
+      }
+      const known = new Set(team.map(e => String(e).toLowerCase()));
+      const invited = (Array.isArray(body.attendees) ? body.attendees : [])
+        .map(e => String(e).toLowerCase()).filter(e => known.has(e));
+      const r = await syncTeamMeeting({
+        organiser: me, attendees: invited,
+        title: typeof body.title === 'string' ? body.title.slice(0, 200) : '',
+        at: Number(body.at) || 0, minutes: Math.min(600, Math.max(5, Number(body.minutes) || 30)),
+        about: typeof body.about === 'string' ? body.about.slice(0, 2000) : undefined,
+        where: typeof body.where === 'string' ? body.where.slice(0, 300) : undefined,
+        meet: body.meet === true, eventId: body.eventId || null, cancel: body.cancel === true
+      });
+      return json({ ok: true, ...r });
+    }
+
+    // Default: read the day. A window is required rather than defaulted, so a
+    // client bug asks for nothing rather than silently for a year of calendar.
+    const from = Number(body.from), to = Number(body.to);
+    if (!from || !to || to <= from) return json({ ok: false, error: 'from and to required' }, 400);
+    if (to - from > 31 * 24 * 3600000) return json({ ok: false, error: 'at most a month at a time' }, 400);
+    const team = await teamEmails(db, user.tenantId);
+    if (!team.length) return json({ ok: true, people: [], note: 'No team is set up yet \u2014 see Settings.' });
+    return json({ ok: true, people: await teamCalendar(team, from, to) });
+  } catch (e) {
+    // Setup that has not been done yet is not an outage, and must not read
+    // like one: the CRM shows the hint rather than a red error.
+    if (e instanceof CalendarNotReady) return json({ ok: false, notReady: true, error: e.message, hint: e.hint }, 200);
+    console.error('calendar failed:', e);
+    return json({ ok: false, error: String((e && e.message) || e).slice(0, 300) }, 502);
+  }
+}
+
 export async function POST(request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action') || 'webhook';
@@ -337,6 +427,7 @@ export async function POST(request) {
   if (action === 'refresh') return refreshPost(request);
   if (action === 'ai-lead') return aiLeadPost(request);
   if (action === 'admin-ai') return adminAiPost(request);
+  if (action === 'calendar') return calendarPost(request);
   return json({ ok: false, error: 'Unknown action' }, 404);
 }
 

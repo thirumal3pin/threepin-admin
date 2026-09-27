@@ -93,6 +93,7 @@
         { id: 'kanban', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'crm', nav: 'kanban' },
         { id: 'list', label: 'List', icon: 'fa-solid fa-bars', page: 'crm', nav: 'list' },
         { id: 'followups', label: 'Follow-ups', icon: 'fa-regular fa-calendar-check', page: 'crm', nav: 'followups', badge: 'followups' },
+        { id: 'calendar', label: 'Team calendar', icon: 'fa-regular fa-calendar-days', page: 'crm', nav: 'calendar' },
         { id: 'dashboard', label: 'Analytics', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'dashboard' },
       ],
     },
