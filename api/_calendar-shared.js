@@ -141,6 +141,7 @@ async function eventsFor(subject, fromIso, toIso, key, make) {
       end: e.end && (e.end.dateTime || e.end.date) || null,
       allDay: !!(e.start && e.start.date && !e.start.dateTime),
       where: e.location || null,
+      about: e.description || null,
       // "busy" is the honest signal for status: an event marked free (a
       // reminder, a birthday) must not make somebody look unavailable.
       busy: e.transparency !== 'transparent',

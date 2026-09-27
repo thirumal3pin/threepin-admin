@@ -48,6 +48,18 @@
     }).join('');
   }
 
+  // The day is everybody's work, and the rows that are YOURS have to be
+  // findable in it without reading every line. A person icon and a tinted
+  // edge, not a colour that shouts: most of these will be yours most days, and
+  // a screen that is entirely highlighted is a screen with no highlight.
+  var MINE_ICON = '<svg class="td-mine-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+
+  function mineBadge(waiting) {
+    return '<span class="td-mine' + (waiting ? ' waiting' : '') + '">' + MINE_ICON
+      + (waiting ? 'You have not answered' : 'Assigned to you') + '</span>';
+  }
+
   function isMe(email) {
     return String(email || '').toLowerCase() === String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase();
   }
@@ -159,13 +171,17 @@
       // The code is what an agent quotes; the name is what tells you which
       // property this is without going and looking it up.
       var title = typeof propertyTitleOf === 'function' ? propertyTitleOf(item.property) : '';
+      var mineOnVisit = (item.agents || []).some(isMe);
+      if (mineOnVisit) cls += ' is-mine';
       head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
         + '<span class="td-main"><span class="td-what">'
         + (item.byPhone ? 'Coordinate by phone' : 'Site visit')
         + (item.property ? ' — <b>' + esc(item.property) + '</b>' : '')
         + (title ? ' <span class="td-prop">' + esc(title) + '</span>' : '') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span>'
-        + '<span class="td-assigned">' + assignedHtml(item) + '</span></span>';
+        + '<span class="td-assigned">'
+        + (mineOnVisit ? mineBadge(replyStatus(item, currentUserEmail) === 'needsAction') : '')
+        + assignedHtml(item) + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
         + phoneLine('Property owner', seller && seller.name, seller && seller.phone)
         + (seller ? '' : '<div class="td-f"><dt>Property owner</dt><dd><span class="td-none">no owner listing on file for this property</span></dd></div>')
@@ -177,20 +193,30 @@
       var ANS = { accepted: 'you are coming', declined: 'you said no', tentative: 'you said maybe', needsAction: 'you have not answered' };
       // Whether YOU have answered comes first: it is the only part of a
       // meeting that is still yours to do.
+      // Every meeting in this list is one you are on — it came from your own
+      // calendar — so what is worth marking is the ones still waiting on you.
+      if (m.mine === 'needsAction') cls += ' is-mine';
       head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(m.title) + '</span>'
         + '<span class="td-who">' + (m.where ? esc(m.where) + ' · ' : '')
         + (m.end ? 'until ' + esc(clock(m.end)) : '') + '</span>'
-        + '<span class="td-assigned"><span class="td-agent ' + (m.mine || 'needsAction') + '">'
+        + '<span class="td-assigned">'
+        + (m.mine === 'needsAction' ? mineBadge(true) : '')
+        + '<span class="td-agent ' + (m.mine || 'needsAction') + '">'
         + esc(ANS[m.mine] || 'you have not answered') + '</span>'
         + (m.attendees || []).filter(function (a) { return !isMe(a.email); }).slice(0, 4).map(function (a) {
             return '<span class="td-agent ' + (a.status || 'needsAction') + '">' + esc(person(a.email)) + '</span>';
           }).join('')
         + '</span></span>';
+      var about = m.about || '';
       body = (m.meet ? '<div class="td-f"><dt>Video</dt><dd><a href="' + esc(m.meet) + '" target="_blank" rel="noopener">Join the call</a></dd></div>' : '')
         + field('Where', m.where)
         + field('Who else', (m.attendees || []).filter(function (a) { return !isMe(a.email); })
-            .map(function (a) { return person(a.email); }).join(', '));
+            .map(function (a) { return person(a.email); }).join(', '))
+        // What the person who called the meeting wrote down. On a booking made
+        // off a lead that is the client, their number and the office's notes,
+        // which is what somebody opening this at nine in the morning needs.
+        + (about ? '<div class="td-f"><dt>Notes</dt><dd class="td-pre">' + esc(about) + '</dd></div>' : '');
     } else if (item.kind === 'call') {
       if (item.overdue) cls += ' is-late';
       head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : '') + '</span>'

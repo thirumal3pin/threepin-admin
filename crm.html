@@ -344,6 +344,22 @@ function toggleDensity(){
   <!-- LEAD DETAIL PANEL -->
   <div id="dp" role="dialog" aria-modal="true" aria-labelledby="dpName">
     <div class="dp-hdr">
+      <!-- The lead panel covers the whole screen, main header included, so
+           the two controls that live up there have to exist down here as well:
+           the rail toggle, or there is no way to collapse the rail while a
+           lead is open, and the bell, or alerts vanish for as long as you are
+           reading a lead. -->
+      <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"></button>
+      <!-- Beside the menu button rather than among the lead actions: on a
+           phone that action strip scrolls sideways, which put the bell off
+           the edge of the screen. Alerts are not something to scroll for. -->
+      <div class="bell-wrap" id="dpBellWrap">
+        <button class="bell-btn" id="dpBellBtn" onclick="toggleAlerts(event, 'dp')" aria-label="Alerts" aria-expanded="false" aria-haspopup="true" aria-controls="dpBellMenu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          <span class="bell-count" id="dpBellCount" hidden></span>
+        </button>
+        <div class="dd-menu bell-menu" id="dpBellMenu"></div>
+      </div>
       <button class="dp-back" onclick="closeDetail()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
         All Leads

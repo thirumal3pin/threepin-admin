@@ -538,6 +538,15 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .td-agent.declined{border-color:var(--red-line);background:var(--red-bg);color:var(--red);}
 .td-agent.declined em{color:var(--red);}
 .td-unassigned{font-size:11.5px;color:var(--amber,#B45309);font-weight:600;}
+/* Yours. A tinted edge rather than a filled row: most of these will be yours
+   most days, and a screen that is entirely highlighted has no highlight. */
+.td-row.is-mine{box-shadow:inset 3px 0 0 var(--brand);}
+.td-mine{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;
+  padding:2px 8px;border-radius:999px;
+  border:1px solid var(--brand-line);background:var(--brand-soft);color:var(--brand-ink);}
+.td-mine.waiting{border-color:var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
+.td-mine-i{width:12px;height:12px;flex:0 0 auto;}
+.td-pre{white-space:pre-wrap;}
 
 /* ── Opening a booking ── */
 .ev-sheet{width:min(420px,100%);gap:6px;}
@@ -608,6 +617,12 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    puts it on the menu itself, so without this line the menu was built,
    populated and left invisible: a bell that opens nothing. */
 .bell-menu.open{display:flex;animation:ddIn .16s var(--ease);}
+/* The lead panel sits at z-index 200; its bell has to come out above that or
+   it opens behind the very panel it lives in. */
+#dpBellMenu{z-index:260;}
+/* Inside the lead header the controls are a row; the bell keeps its size. */
+.dp-hdr .bell-wrap{flex:0 0 auto;}
+.dp-hdr .rail-toggle{flex:0 0 auto;}
 .bell-menu{right:0;left:auto;width:min(360px,calc(100vw - 32px));max-height:min(460px,70vh);
   overflow-y:auto;padding:0;}
 .bell-grp{border-bottom:1px solid var(--border2);}

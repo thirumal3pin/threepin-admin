@@ -209,6 +209,48 @@ if (opened.open) {
 // person sees, not about what an assertion returns.
 if (opened.open) await page.screenshot({ path: join(ROOT, 'tests/out/assign-' + viewport.width + '.png') });
 
+// ── THE CONTROLS THE PANEL COVERS UP ──
+//
+// The lead panel is a full-screen sheet at z-index 200, so the main header —
+// and the rail toggle and the alerts bell on it — sits behind it. Without its
+// own copies there is no way to collapse the rail while reading a lead, and
+// alerts disappear for as long as you are on one.
+await page.evaluate(() => { if (typeof closeVisitEditor === 'function') closeVisitEditor(); });
+await page.waitForTimeout(200);
+const covered = await page.evaluate(() => {
+  // There are two .dp-hdr elements on this page — the lead's and the
+  // conversation pane's — so this has to name the one it means.
+  const hdr = document.querySelector('#dp > .dp-hdr');
+  const seen = el => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return !!hit && (el === hit || el.contains(hit));
+  };
+  return { rail: seen(hdr && hdr.querySelector('[data-rail-toggle]')),
+    bell: seen(hdr && hdr.querySelector('#dpBellBtn')),
+    mainBellHidden: !seen(document.getElementById('bellBtn')) };
+});
+ok('the lead panel has its own rail toggle', covered.rail, JSON.stringify(covered));
+ok('...and its own alerts bell', covered.bell, JSON.stringify(covered));
+ok('...because the header ones are behind the panel', covered.mainBellHidden);
+
+const panelBell = await page.evaluate(async () => {
+  toggleAlerts(null, 'dp');
+  await new Promise(r => setTimeout(r, 250));
+  const m = document.getElementById('dpBellMenu');
+  const r = m.getBoundingClientRect();
+  const hit = r.width ? document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + 20)) : null;
+  // The panel is z-index 200. A menu below that opens behind the very thing it
+  // lives in, which is the bug this calendar has now shipped twice.
+  return { painted: !!(hit && m.contains(hit)), rows: m.querySelectorAll('.bell-item, .bell-empty').length,
+    covering: hit && !m.contains(hit) ? (hit.id || hit.className) : null };
+});
+ok('...and it opens in front of the panel, not behind it', panelBell.painted, JSON.stringify(panelBell));
+ok('...with something in it', panelBell.rows > 0, String(panelBell.rows));
+await page.evaluate(() => closeAlerts());
+
 // ── WHO MAY DO WHAT ──
 //
 // The owner's rule, and it is three different rules rather than one:
@@ -245,7 +287,10 @@ const guard = readFileSync(join(ROOT, 'api/tailortalk.js'), 'utf8');
 ok('...and the server checks it too, not just the page',
   /if \(!agents\.includes\(me\)\) return json\(\{ ok: false, error: 'You are not on this visit' \}, 403\)/.test(guard));
 
-// And the whole point: assigning somebody.
+// And the whole point: assigning somebody. The scheduler was closed above to
+// get a clear look at the header, so it is opened again here.
+await page.click('#dpVisit button');
+await page.waitForTimeout(500);
 if (opened.open) {
   const saved = await page.evaluate(async () => {
     [...document.querySelectorAll('#svAgents input')].forEach(i => { i.checked = i.value === 'rajesh@threepin.in'; });

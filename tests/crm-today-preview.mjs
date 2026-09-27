@@ -34,8 +34,9 @@ const LEADS = [
   { id: 'L1', tenantId: T, name: 'Radhi Radhikha', phone: '919999000111', stageId: sid('visit_pending'),
     createdAt: NOW - 4 * 86400000, updatedAt: NOW - 86400000,
     siteVisitAt: atHour(14), siteVisitStatus: 'scheduled', siteVisitProperty: 'TNAG0002',
-    siteVisitAgents: ['swami@threepin.in'],
-    siteVisitReplies: [{ email: 'swami@threepin.in', status: 'accepted', reason: null }] },
+    siteVisitAgents: ['swami@threepin.in', 'thirumal@threepin.in'],
+    siteVisitReplies: [{ email: 'swami@threepin.in', status: 'accepted', reason: null },
+                       { email: 'thirumal@threepin.in', status: 'needsAction', reason: null }] },
   // Sent, not answered. This is the one to sort out this morning.
   { id: 'L2', tenantId: T, name: 'Vignesh R', phone: '919888000222', stageId: sid('visit_pending'),
     createdAt: NOW - 3 * 86400000, updatedAt: NOW - 86400000,
@@ -111,8 +112,15 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
           { id: 'm1', title: 'Monday pipeline review', start: new Date(atHour(9)).toISOString(),
             end: new Date(atHour(9) + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
             where: 'Office', meet: 'https://meet.google.com/abc',
+            about: ['Client: Mr Kumar · 98400 12345',
+                    'Seller: Mr Rajan · 98400 99887', '',
+                    'Notes from the office:', 'Gate code 4412.'].join(String.fromCharCode(10)),
             attendees: [{ email: 'thirumal@threepin.in', status: 'accepted' },
                         { email: 'swami@threepin.in', status: 'accepted' }] },
+          { id: 'm3', title: 'Owner call with VGN', start: new Date(atHour(16)).toISOString(),
+            end: new Date(atHour(16) + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
+            attendees: [{ email: 'thirumal@threepin.in', status: 'needsAction' },
+                        { email: 'pradeep@threepin.in', status: 'accepted' }] },
           // Not answered, and not today — this is what the bell must surface.
           { id: 'm2', title: 'Budget review', start: new Date(atHour(9) + 3 * 86400000).toISOString(),
             end: new Date(atHour(9) + 3 * 86400000 + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
@@ -185,6 +193,44 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
 
   ok('the property name sits in the line, not over it',
     day.sizes.title !== null && day.sizes.title <= day.sizes.what, JSON.stringify(day.sizes));
+  // ── WHICH OF THESE ARE MINE ──
+  // The day is everybody's work. The rows that are yours have to be findable
+  // without reading every line.
+  const mine = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.td-row')];
+    const read = r => r ? r.textContent.replace(/\s+/g, ' ').trim() : '';
+    const find = t => rows.find(r => r.textContent.includes(t));
+    return {
+      radhi: { marked: !!(find('Radhi') && find('Radhi').classList.contains('is-mine')), text: read(find('Radhi')) },
+      // Not on this one, so it must NOT be marked — a badge on everything is
+      // a badge on nothing.
+      vignesh: !!(find('Vignesh') && find('Vignesh').classList.contains('is-mine')),
+      // Accepted already, so nothing is waiting on them: it must NOT be marked.
+      meetingDone: !!(find('Monday pipeline') && find('Monday pipeline').classList.contains('is-mine')),
+      meeting: { marked: !!(find('Owner call') && find('Owner call').classList.contains('is-mine')),
+        text: read(find('Owner call')) },
+      icons: document.querySelectorAll('.td-mine-i').length
+    };
+  });
+  ok('a visit you are on is marked as yours', mine.radhi.marked, mine.radhi.text.slice(0, 100));
+  ok('...with a person icon, not just words', mine.icons >= 1, String(mine.icons));
+  ok('...saying you have not answered it yet', /not answered/i.test(mine.radhi.text), mine.radhi.text.slice(0, 120));
+  ok('a visit you are NOT on is left unmarked', !mine.vignesh);
+  ok('a meeting waiting on your answer is marked too', mine.meeting.marked, mine.meeting.text.slice(0, 100));
+  // A badge on every row is a badge on no row.
+  ok('...and one you have already accepted is not', !mine.meetingDone);
+
+  // Expanded, a meeting has to carry what the person who called it wrote down.
+  const opened = await page.evaluate(async () => {
+    const row = [...document.querySelectorAll('.td-row')].find(r => r.textContent.includes('Monday pipeline'));
+    row.open = true;
+    await new Promise(r => setTimeout(r, 120));
+    return { text: row.textContent.replace(/\s+/g, ' ').trim() };
+  });
+  ok('opening a meeting shows the client and the number', /Mr Kumar/.test(opened.text) && /98400 12345/.test(opened.text), opened.text.slice(-160));
+  ok('...the seller too', /Mr Rajan/.test(opened.text));
+  ok('...and the notes kept on it', /Gate code 4412/.test(opened.text));
+
   ok('the page does not scroll sideways', day.overflowX === 0, day.overflowX + 'px');
 
   // ── MEETINGS ARE PART OF THE DAY TOO ──

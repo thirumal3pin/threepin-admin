@@ -1520,6 +1520,9 @@ function eventsToday(){
 window.myMeetingsToday = () => eventsToday().filter(e => e.meetingId && !e.leadId)
   .map(e => ({ id: e.id, title: e.title, at: Date.parse(e.start),
     end: e.end ? Date.parse(e.end) : null, where: e.where || '', meet: e.meet || null,
+    // What whoever called it wrote down: on a booking made off a lead that is
+    // the client, their number and the office's notes.
+    about: e.about || '',
     attendees: e.attendees || [], mine: myReply(e) }));
 
 // ═══════ ALERTS ═══════
@@ -1546,9 +1549,19 @@ function alertItems(){
   out.sort((x, y) => (ALERT_SEV[x.a.severity] - ALERT_SEV[y.a.severity]) || ((y.a.at || 0) - (x.a.at || 0)));
   return out;
 }
+// Two of them: the header's, and the lead panel's — the panel is a
+// full-screen sheet over the header, so without its own copy the alerts
+// disappear for as long as somebody is reading a lead. One list, drawn twice.
+const BELLS = [
+  { btn: 'bellBtn', count: 'bellCount', menu: 'bellMenu' },
+  { btn: 'dpBellBtn', count: 'dpBellCount', menu: 'dpBellMenu' }
+];
 function renderBell(){
-  const btn = document.getElementById('bellBtn');
-  const count = document.getElementById('bellCount');
+  BELLS.forEach(renderOneBell);
+}
+function renderOneBell(ids){
+  const btn = document.getElementById(ids.btn);
+  const count = document.getElementById(ids.count);
   if(!btn || !count) return;
   const items = alertItems();
   const waiting = unansweredEvents();
@@ -1560,8 +1573,8 @@ function renderBell(){
   count.textContent = total > 99 ? '99+' : String(total);
   count.className = 'bell-count' + (urgent ? ' urgent' : '');
   btn.setAttribute('aria-label', total ? `Alerts — ${total} waiting` : 'Alerts — nothing waiting');
-  const menu = document.getElementById('bellMenu');
-  if(menu && menu.classList.contains('open')) renderAlertMenu();
+  const menu = document.getElementById(ids.menu);
+  if(menu && menu.classList.contains('open')) renderAlertMenu(ids.menu);
 }
 // Grouped, because the three things in here are dealt with in three different
 // places: an invitation is answered in the calendar, a lead is worked on the
@@ -1575,8 +1588,8 @@ function fmtEventTime(e){
   return e.allDay ? 'all day'
     : new Date(Date.parse(e.start)).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
 }
-function renderAlertMenu(){
-  const menu = document.getElementById('bellMenu');
+function renderAlertMenu(which){
+  const menu = document.getElementById(which || 'bellMenu');
   if(!menu) return;
 
   const waiting = unansweredEvents();
@@ -1609,20 +1622,49 @@ function openBellEvent(id){
   toggleView('calendar');
   setTimeout(() => { if(window.PinCalendar) window.PinCalendar.openEvent(id); }, 350);
 }
-function toggleAlerts(e){
+function toggleAlerts(e, where){
   if(e) e.stopPropagation();
-  const menu = document.getElementById('bellMenu');
-  const btn = document.getElementById('bellBtn');
+  const ids = where === 'dp' ? BELLS[1] : BELLS[0];
+  const menu = document.getElementById(ids.menu);
+  const btn = document.getElementById(ids.btn);
+  if(!menu) return;
+  // Only ever one open, so pressing the other one swaps rather than leaving
+  // two identical menus hanging off the same screen.
+  closeAlerts();
   const open = menu.classList.toggle('open');
-  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if(open) renderAlertMenu();
+  if(btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if(open){
+    renderAlertMenu(ids.menu);
+    // The lead panel's header carries a backdrop-filter, which creates a
+    // stacking context nothing inside it can paint out of — so the menu opened
+    // UNDER the conversation pane beside it, whatever z-index it was given.
+    // Moved to the body and positioned by hand, it is out of that context
+    // entirely and cannot be covered by a sibling of the header.
+    if(where === 'dp' && btn){
+      if(menu.parentElement !== document.body) document.body.appendChild(menu);
+      const r = btn.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.top = Math.round(r.bottom + 7) + 'px';
+      menu.style.left = 'auto';
+      menu.style.right = Math.round(window.innerWidth - r.right) + 'px';
+      // The button sits on the LEFT of this header, and a 358px menu hung off
+      // its right edge starts somewhere past the left edge of a phone. Measure
+      // it and pull it back inside, keeping a gutter.
+      const m = menu.getBoundingClientRect();
+      if(m.left < 12){
+        menu.style.right = 'auto';
+        menu.style.left = '12px';
+      }
+    }
+  }
 }
 function closeAlerts(){
-  const menu = document.getElementById('bellMenu');
-  const btn = document.getElementById('bellBtn');
-  if(!menu) return;
-  menu.classList.remove('open');
-  if(btn) btn.setAttribute('aria-expanded', 'false');
+  BELLS.forEach(ids => {
+    const menu = document.getElementById(ids.menu);
+    const btn = document.getElementById(ids.btn);
+    if(menu) menu.classList.remove('open');
+    if(btn) btn.setAttribute('aria-expanded', 'false');
+  });
 }
 function openAlert(id){
   closeAlerts();
