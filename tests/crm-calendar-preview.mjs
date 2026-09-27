@@ -41,7 +41,11 @@ const PEOPLE = [
     { id: 'd', title: 'Owner meeting', start: iso(at + 0.5 * H), end: iso(at + 1.5 * H), busy: true, allDay: false },
     { id: 'e', title: 'Diwali', start: iso(at + 3 * H), end: iso(at + 4 * H), busy: false, allDay: false }
   ] },
-  { person: 'pradeep@threepin.in', events: [] },
+  // Outside the normal 8am-9pm working window. A fixed grid dropped these
+  // without a word, which is how a calendar starts lying about somebody's day.
+  { person: 'pradeep@threepin.in', events: [
+    { id: 'early', title: 'Early site visit', start: iso(at - 5 * H), end: iso(at - 4 * H), busy: true, allDay: false }
+  ] },
   { person: 'admin@threepin.in', events: [
     { id: 'f', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H), busy: true, allDay: false, meetingId: '1', meet: 'https://meet.google.com/abc' }
   ] },
@@ -126,6 +130,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       visits: document.querySelectorAll('.cal-ev.visit').length,
       free: document.querySelectorAll('.cal-ev.free').length,
       nowLine: !!document.querySelector('.cal-now'),
+      earlyShown: [...document.querySelectorAll('.cal-ev')].some(e => /Early site visit/.test(e.textContent)),
+      hours: [...document.querySelectorAll('.cal-hr')].map(h => h.textContent),
       overlap: (() => {
         const swami = cols[1];
         const two = [...swami.querySelectorAll('.cal-ev')].filter(e => /Bank call|Owner meeting/.test(e.textContent)).map(rect);
@@ -147,6 +153,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('a site visit is marked as the CRM’s own work', grid.visits === 1, String(grid.visits));
   ok('...and an event marked free is drawn differently', grid.free === 1, String(grid.free));
   ok('the current time is marked', grid.nowLine);
+  // The grid stretches rather than cropping: an appointment the page does not
+  // draw is one nobody turns up to.
+  ok('an appointment outside working hours is still drawn',
+    grid.earlyShown, JSON.stringify(grid.hours));
   ok('an unreadable calendar says so rather than looking free',
     grid.statuses.some(s => /unreadable/i.test(s || '')), JSON.stringify(grid.statuses));
   // The one lie a status board must never tell. A green dot beside "unreadable"

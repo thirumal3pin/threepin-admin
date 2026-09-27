@@ -18,8 +18,32 @@
   'use strict';
 
   var DAY = 86400000, MIN = 60000, HOUR = 3600000;
-  var OPEN = 8, CLOSE = 21;             // the grid runs 8am to 9pm
+  // The grid normally runs 8am to 9pm, which is the working day for a
+  // brokerage that shows properties at weekends and evenings. But it STRETCHES
+  // to whatever the day actually holds: an early site visit or a late call
+  // outside a fixed window would otherwise be dropped from the page without
+  // saying so, and a calendar that quietly hides an appointment is worse than
+  // no calendar. Live data already runs to 8:30pm, half an hour off the edge.
+  var DAY_OPEN = 8, DAY_CLOSE = 21;
+  var OPEN = DAY_OPEN, CLOSE = DAY_CLOSE;
   var PX_PER_HOUR = 52;
+
+  // Widen the window so nothing falls off it. Whole hours, so the labels stay
+  // on the lines.
+  function fitWindow(people, dayStart) {
+    var open = DAY_OPEN, close = DAY_CLOSE;
+    (people || []).forEach(function (p) {
+      (p.events || []).forEach(function (e) {
+        if (e.allDay || !e.start || !e.end) return;
+        var from = Date.parse(e.start), to = Date.parse(e.end);
+        if (!(to > dayStart && from < dayStart + DAY)) return;
+        open = Math.min(open, Math.floor((Math.max(from, dayStart) - dayStart) / HOUR));
+        close = Math.max(close, Math.ceil((Math.min(to, dayStart + DAY) - dayStart) / HOUR));
+      });
+    });
+    OPEN = Math.max(0, open);
+    CLOSE = Math.min(24, Math.max(OPEN + 1, close));
+  }
 
   var state = { at: startOfDay(Date.now()), span: 'day', people: [], loading: false, error: null, hint: null };
   var lastFetch = 0;
@@ -162,6 +186,7 @@
     }
 
     var dayStart = state.at;
+    fitWindow(state.people, dayStart);
     var hours = [];
     for (var h = OPEN; h <= CLOSE; h++) {
       var label = new Date(dayStart + h * HOUR).toLocaleTimeString([], { hour: 'numeric' });
