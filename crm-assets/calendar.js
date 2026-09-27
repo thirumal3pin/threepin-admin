@@ -330,6 +330,10 @@
             + '<input type="checkbox" value="' + esc(e) + '"' + (self ? ' checked disabled' : '') + '>'
             + esc(who(e)) + (self ? ' (you)' : '') + '</label>';
         }).join('') + '</div>'
+      // Somebody in the Workspace who has no calendar column here — they
+      // still get the invitation and still answer it in their own mail.
+      + '<label for="cmAlso">Anyone else</label>'
+      + '<input id="cmAlso" type="text" placeholder="name@threepin.in, another@threepin.in" autocomplete="off">'
       + '<div class="cm-row">'
       + '<label class="cm-p"><input type="checkbox" id="cmMeet" checked> Add a Google Meet link</label>'
       + '</div>'
@@ -353,6 +357,10 @@
     var repeat = document.getElementById('cmRepeat').value;
     var attendees = Array.prototype.slice.call(document.querySelectorAll('.cm-who input:checked:not(:disabled)'))
       .map(function (i) { return i.value; });
+    var typed = (document.getElementById('cmAlso').value || '').split(/[,;\s]+/)
+      .map(function (e) { return e.trim().toLowerCase(); }).filter(Boolean);
+    var bad = typed.filter(function (e) { return !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e); });
+    typed.forEach(function (e) { if (attendees.indexOf(e) === -1) attendees.push(e); });
 
     var fail = function (m) { err.textContent = m; err.classList.add('show'); };
     if (!title) return fail('Give the meeting a name, so it is recognisable in somebody’s calendar a week from now.');
@@ -360,6 +368,7 @@
     var at = new Date(date + 'T' + time + ':00').getTime();
     if (!at) return fail('That is not a time.');
     if (at < Date.now() - 5 * MIN) return fail('That is in the past.');
+    if (bad.length) return fail('That does not look like an email address: ' + bad[0]);
     if (!attendees.length) return fail('Pick at least one other person — a meeting with yourself is a reminder.');
 
     var go = document.getElementById('cmGo');

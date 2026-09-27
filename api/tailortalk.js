@@ -461,9 +461,20 @@ async function calendarPost(request) {
       if (!team.some(e => String(e).toLowerCase() === me)) {
         return json({ ok: false, error: 'Your address is not on the team list, so meetings cannot be booked as you.' }, 403);
       }
+      // A MEETING may reach anybody in the same Workspace, on the team list or
+      // not: colleagues exist who need no calendar column in this CRM, and a
+      // meeting carries nothing private about a client.
+      //
+      // A SITE VISIT is the opposite and stays locked to the team list, because
+      // that invitation carries the client's phone number and the seller's, and
+      // a typo there emails a stranger both.
+      const domain = me.split('@')[1] || '';
       const known = new Set(team.map(e => String(e).toLowerCase()));
       const invited = (Array.isArray(body.attendees) ? body.attendees : [])
-        .map(e => String(e).toLowerCase()).filter(e => known.has(e));
+        .map(e => String(e).toLowerCase().trim())
+        .filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))
+        .filter(e => known.has(e) || (domain && e.endsWith('@' + domain)))
+        .slice(0, 50);
       const r = await syncTeamMeeting({
         organiser: me, attendees: invited,
         title: typeof body.title === 'string' ? body.title.slice(0, 200) : '',

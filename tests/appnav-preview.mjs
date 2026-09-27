@@ -182,7 +182,10 @@ const clickItem = (page, name) => page.evaluate(n => {
   if (i) i.click();
 }, name);
 
-const SECTIONS = ['Daily task', 'Properties', 'CRM', 'Finance', 'Property & Media', 'Create brochure'];
+// Daily task and Team calendar are the pair at the top: one is my day, the
+// other is everyone's. Neither is buried inside a console, because both are
+// things people open first thing rather than navigate to.
+const SECTIONS = ['Daily task', 'Team calendar', 'Properties', 'CRM', 'Finance', 'Property & Media', 'Create brochure'];
 
 // ═══════ CRM ═══════
 console.log('\nCRM — desktop');
@@ -194,12 +197,7 @@ console.log('\nCRM — desktop');
   ok('The page content is pushed clear of it', s.padded >= 240, String(s.padded));
   const crm = s.secs.find(x => x.name === 'CRM');
   ok('The console you are in is the open one', crm.open && crm.here, JSON.stringify(crm));
-  // The three lead screens stay together; Team calendar follows them because it
-  // is about the team's day rather than about any one lead, and Analytics stays
-  // last because it is the only one you read rather than work in.
-  ok('…showing its pages, in the order someone works through them',
-    JSON.stringify(crm.items) === JSON.stringify(['Board', 'List', 'Follow-ups', 'Team calendar', 'Analytics']),
-    JSON.stringify(crm.items));
+  ok('…showing its four pages', JSON.stringify(crm.items) === JSON.stringify(['Board', 'List', 'Follow-ups', 'Analytics']), JSON.stringify(crm.items));
   ok('…with Board marked as where you are', s.current === 'Board', String(s.current));
   ok('No other console is expanded', s.secs.filter(x => x.open).length === 1);
   await page.screenshot({ path: join(OUT, 'crm-01-board.png') });

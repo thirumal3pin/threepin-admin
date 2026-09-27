@@ -197,20 +197,40 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     return { open: true, fits: r.right <= innerWidth + 2 && r.width > 200,
       people: [...s.querySelectorAll('.cm-who input')].length,
       selfLocked: [...s.querySelectorAll('.cm-who input')].some(i => i.disabled && i.checked),
-      meetDefault: (s.querySelector('#cmMeet') || {}).checked };
+      meetDefault: (s.querySelector('#cmMeet') || {}).checked,
+      repeats: [...s.querySelectorAll('#cmRepeat option')].map(o => o.value),
+      repeatDefault: (s.querySelector('#cmRepeat') || {}).value,
+      also: !!s.querySelector('#cmAlso') };
   });
   ok('New meeting opens a booking form', sheet.open);
   ok('...listing the whole team to invite', sheet.people === 5, String(sheet.people));
   ok('...with you already in it and not removable', sheet.selfLocked);
   ok('...offering a Meet link by default', sheet.meetDefault === true);
+  // The weekly review is the meeting people actually keep. Having to open
+  // Google to set one up is having to open Google.
+  ok('...and a repeating meeting can be set from here', sheet.repeats.includes('weekly'), JSON.stringify(sheet.repeats));
+  ok('...with a one-off still the default', sheet.repeatDefault === 'none', sheet.repeatDefault);
+  // Colleagues exist who need no calendar column here but still come to meetings.
+  ok('...and somebody with no column can still be invited', sheet.also);
   ok('...and fitting the screen', sheet.fits, JSON.stringify(sheet));
 
   // A meeting with no name is one nobody recognises in a week.
   const noName = await page.evaluate(() => { PinCalendar.book(); const e = document.getElementById('cmErr'); return { shown: e.classList.contains('show'), text: e.textContent }; });
   ok('a nameless meeting is refused, and says why', noName.shown && noName.text.length > 20, noName.text);
 
+  const typedBad = await page.evaluate(() => {
+    document.getElementById('cmTitle').value = 'Monday pipeline review';
+    document.getElementById('cmAlso').value = 'rajesh';
+    [...document.querySelectorAll('.cm-who input:not(:disabled)')][0].checked = true;
+    PinCalendar.book();
+    const e = document.getElementById('cmErr');
+    return { shown: e.classList.contains('show'), text: e.textContent };
+  });
+  ok('a half-typed address is refused, and names which one', typedBad.shown && /rajesh/.test(typedBad.text), typedBad.text);
+
   const sent = await page.evaluate(async () => {
     document.getElementById('cmTitle').value = 'Monday pipeline review';
+    document.getElementById('cmAlso').value = 'rajesh@threepin.in';
     const boxes = [...document.querySelectorAll('.cm-who input:not(:disabled)')];
     boxes[0].checked = true;
     PinCalendar.book();
@@ -219,6 +239,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
   ok('booking sends the invitations', !!booked && booked.op === 'meeting', JSON.stringify(booked));
   ok('...with the title, the time and the people', !!(booked.title && booked.at && booked.attendees.length), JSON.stringify(booked));
+  ok('...and how often it repeats', typeof booked.repeat === 'string', JSON.stringify(booked.repeat));
+  ok('...including somebody typed in who has no column here',
+    (booked.attendees || []).includes('rajesh@threepin.in'), JSON.stringify(booked.attendees));
   ok('...and closes the form', sent.closed);
 
   await page.screenshot({ path: join(OUT, (viewport.width === 390 ? 'phone' : 'laptop') + '.png'), fullPage: false });
