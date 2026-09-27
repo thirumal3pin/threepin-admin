@@ -3464,11 +3464,13 @@ function writeVisit(l, at, status, property, agents, notes, minutes, mode){
   l.siteVisitAt = at;
   l.siteVisitStatus = status;
   l.siteVisitProperty = property || null;
-  if(agents !== undefined){
-    l.siteVisitAgents = agents;
-    // A new invitation resets the answers: a yes to last Tuesday is not a yes
-    // to this Saturday.
-    l.siteVisitReplies = agents.map(e => ({ email: e, status: 'needsAction' }));
+  // A new invitation resets the answers, and so does moving the old one: a yes
+  // to last Tuesday is not a yes to this Saturday. Google is told to re-ask
+  // everybody at the same time (syncVisitEvent), so the two agree.
+  const timeMoved = at !== before.at;
+  if(agents !== undefined || timeMoved){
+    if(agents !== undefined) l.siteVisitAgents = agents;
+    l.siteVisitReplies = visitAgentsOf(l).map(e => ({ email: e, status: 'needsAction' }));
   }
   if(notes !== undefined) l.siteVisitNotes = notes || null;
   if(minutes !== undefined) l.siteVisitMinutes = minutes;

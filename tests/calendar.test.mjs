@@ -538,6 +538,68 @@ section('PROVING WHO WE ARE, ONCE');
   ok('...and every call asks for the subject it means', seen.every(x => x === 'sales@threepin.in'), JSON.stringify(seen));
 }
 
+// ══════════════════════════════════════════════════════════════════════
+section('A YES TO TUESDAY IS NOT A YES TO SATURDAY');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const held = { id: 'm1', summary: 'Monday review',
+    start: { dateTime: new Date(AT).toISOString() }, end: { dateTime: new Date(AT + 1800000).toISOString() },
+    extendedProperties: { private: { '3pin.meeting': '1' } },
+    attendees: [{ email: 'pradeep@threepin.in', responseStatus: 'accepted' },
+                { email: 'sales@threepin.in', responseStatus: 'declined' }] };
+
+  const g = fakeGoogle({ 'swami@threepin.in': { m1: JSON.parse(JSON.stringify(held)) } });
+  await syncTeamMeeting({ organiser: 'swami@threepin.in', attendees: ['pradeep@threepin.in', 'sales@threepin.in'],
+    title: 'Monday review', at: AT + 2 * 3600000, eventId: 'm1', key: KEY, makeClient: g.make });
+  const after = g.store['swami@threepin.in'].m1.attendees;
+  ok('moving a meeting asks everybody again',
+    after.every(a => a.responseStatus === 'needsAction'), JSON.stringify(after));
+
+  // Re-asking because somebody fixed a typo would train people to ignore it.
+  const g2 = fakeGoogle({ 'swami@threepin.in': { m1: JSON.parse(JSON.stringify(held)) } });
+  await syncTeamMeeting({ organiser: 'swami@threepin.in', attendees: ['pradeep@threepin.in', 'sales@threepin.in'],
+    title: 'Monday pipeline review', at: AT, eventId: 'm1', key: KEY, makeClient: g2.make });
+  const same = g2.store['swami@threepin.in'].m1.attendees;
+  // The guest list is sent whole on every PATCH, and a bare {email} entry has
+  // no answer on it — so without carrying them across, correcting a typo wiped
+  // everybody's response and a meeting the whole team had accepted looked
+  // unanswered.
+  ok('...but only when the TIME moved, not the title',
+    same.find(a => a.email === 'pradeep@threepin.in').responseStatus === 'accepted'
+    && same.find(a => a.email === 'sales@threepin.in').responseStatus === 'declined', JSON.stringify(same));
+
+  // Somebody added to an existing meeting has not answered it.
+  const g3 = fakeGoogle({ 'swami@threepin.in': { m1: JSON.parse(JSON.stringify(held)) } });
+  await syncTeamMeeting({ organiser: 'swami@threepin.in',
+    attendees: ['pradeep@threepin.in', 'sales@threepin.in', 'rajesh@threepin.in'],
+    title: 'Monday review', at: AT, eventId: 'm1', key: KEY, makeClient: g3.make });
+  const added = g3.store['swami@threepin.in'].m1.attendees;
+  ok('...and somebody newly invited starts unanswered',
+    added.find(a => a.email === 'rajesh@threepin.in').responseStatus === 'needsAction'
+    && added.find(a => a.email === 'pradeep@threepin.in').responseStatus === 'accepted', JSON.stringify(added));
+}
+{
+  // The same for a site visit: an agent who agreed to Tuesday morning has not
+  // agreed to Saturday afternoon, and the office must not read a stale yes as
+  // the visit being covered.
+  const g = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1', {
+    attendees: [{ email: 'swami@threepin.in', responseStatus: 'accepted' }] }) } });
+  const r = await syncVisitEvent({ lead: LEAD, visit: { at: AT + 2 * 86400000, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP,
+    previous: { eventId: 'ev1', owner: 'sales@threepin.in' }, key: KEY, makeClient: g.make });
+  ok('moving a site visit asks the agent again',
+    g.store['sales@threepin.in'].ev1.attendees.every(a => a.responseStatus === 'needsAction') && r.reAsked === true,
+    JSON.stringify(g.store['sales@threepin.in'].ev1.attendees));
+
+  const g2 = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1', {
+    attendees: [{ email: 'swami@threepin.in', responseStatus: 'accepted' }] }) } });
+  const r2 = await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'ANRL001', notes: 'Gate code changed to 9911.' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP,
+    previous: { eventId: 'ev1', owner: 'sales@threepin.in' }, key: KEY, makeClient: g2.make });
+  ok('...and a note added to the same time does not', !r2.reAsked,
+    JSON.stringify(g2.store['sales@threepin.in'].ev1.attendees));
+}
+
 console.log('');
 console.log('─'.repeat(64));
 if (fails.length) {

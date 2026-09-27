@@ -28,6 +28,28 @@ const TZ = 'Asia/Kolkata';
 const IST_OFFSET_MS = 5.5 * 3600000;
 const STAMP = '3pin.lead';
 const sameEmail = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
+/**
+ * The guest list for a PATCH, with everyone's answer carried across.
+ *
+ * Google is sent the whole list every time, and an entry that omits
+ * responseStatus is an entry with no answer on it. So an edit that changes
+ * nothing about WHEN would otherwise wipe what everybody had already said.
+ *
+ * When the time HAS moved, the opposite is wanted: a yes to Tuesday at eleven
+ * is not a yes to Saturday at four, so everybody is asked again. Somebody
+ * newly invited starts unanswered either way.
+ */
+function keepAnswers(next, current, moved) {
+  const was = new Map((current || []).map(a => [String(a.email || '').toLowerCase(), a]));
+  return (next || []).map(a => {
+    if (moved) return { ...a, responseStatus: 'needsAction' };
+    const before = was.get(String(a.email || '').toLowerCase());
+    return before
+      ? { ...a, responseStatus: before.responseStatus || 'needsAction', comment: before.comment || undefined }
+      : { ...a, responseStatus: 'needsAction' };
+  });
+}
 const MEET_STAMP = '3pin.meeting';
 
 // A Workspace that has not been set up yet must fail as "not configured",
@@ -266,11 +288,16 @@ export async function syncVisitEvent({ lead, visit, subject, agents = [], proper
     if (previous.eventId && previous.owner === subject) {
       const mine = await stampedEvent(subject, previous.eventId, lead.id, key, makeClient);
       if (mine) {
+        // Same rule as a meeting: a visit that moves has to be agreed again.
+        // An agent who said yes to Tuesday morning has not agreed to Saturday.
+        const wasAt = mine.start && mine.start.dateTime ? Date.parse(mine.start.dateTime) : null;
+        const moved = wasAt !== null && wasAt !== visit.at;
         await makeClient(subject, key).request({
           url: `${CAL}/calendars/${encodeURIComponent(subject)}/events/${encodeURIComponent(previous.eventId)}${q}`,
-          method: 'PATCH', data: body
+          method: 'PATCH',
+          data: { ...body, attendees: keepAnswers(body.attendees, mine.attendees, moved) }
         });
-        return { eventId: previous.eventId, owner: subject, agents: agents };
+        return { eventId: previous.eventId, owner: subject, agents: agents, reAsked: moved };
       }
       // The stamp is gone: somebody deleted it in Google. Make a fresh one
       // rather than resurrecting an event a person chose to remove \u2014 and only
@@ -419,6 +446,19 @@ export async function syncTeamMeeting({ organiser, attendees = [], title, at, mi
     if (eventId) {
       const mine = await stampedMeeting(organiser, eventId, key, makeClient);
       if (!mine) return { eventId, skipped: 'not a meeting this CRM created' };
+      // A yes to Tuesday at eleven is not a yes to Saturday at four. When the
+      // TIME moves, everybody is asked again; when only the title or the place
+      // changes, their answer still stands and re-asking would be noise.
+      //
+      // Set explicitly rather than left to Google's default, because what that
+      // default is is not something worth being wrong about twice.
+      const wasAt = mine.start && mine.start.dateTime ? Date.parse(mine.start.dateTime) : null;
+      const moved = wasAt !== null && wasAt !== at;
+      // The guest list is sent whole on every PATCH, and a bare {email} entry
+      // has no responseStatus — so without this, correcting a typo in the title
+      // wiped everybody's answer and the meeting looked unanswered by a team
+      // that had all said yes.
+      body.attendees = keepAnswers(body.attendees, mine.attendees, moved);
       const r = await client.request({ url: `${base}/${encodeURIComponent(eventId)}${q}`, method: 'PATCH', data: body });
       return { eventId: r.data.id, meet: r.data.hangoutLink || null, link: r.data.htmlLink || null };
     }
