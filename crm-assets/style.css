@@ -661,7 +661,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cm-when{display:flex;gap:8px;}
 .cm-when>div{flex:1 1 0;min-width:0;display:flex;flex-direction:column;}
 .cm-who{display:flex;flex-wrap:wrap;gap:6px;}
-.cm-p{display:flex;align-items:center;gap:6px;font-family:var(--font,inherit);font-size:12.5px;
+.cal-sheet-in .cm-p,.cm-p{display:flex;align-items:center;gap:6px;font-family:var(--font,inherit);font-size:12.5px;
   text-transform:none;letter-spacing:0;color:var(--ink);background:var(--bg);border:1px solid var(--border);
   border-radius:var(--r2);padding:7px 10px;min-height:36px;box-sizing:border-box;cursor:pointer;margin-top:0;}
 .cm-p.self{opacity:.7;cursor:default;}
@@ -669,8 +669,13 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cm-row{display:flex;gap:6px;margin-top:4px;}
 .cal-sheet-err{display:none;font-size:12.5px;color:var(--red);margin-top:4px;}
 .cal-sheet-err.show{display:block;}
-.cal-sheet-acts{display:flex;gap:8px;margin-top:10px;}
-.cal-sheet-acts .tt-btn{margin-top:0;}
+.cal-sheet-acts{display:flex;gap:8px;margin-top:10px;position:sticky;bottom:-18px;
+  background:var(--card);padding:10px 0 2px;margin-bottom:-2px;
+  box-shadow:0 -8px 12px -8px light-dark(rgba(20,18,15,.14),rgba(0,0,0,.5));}
+/* .tt-btn is 27px tall, which is right inline on a lead row and too small for
+   a thumb on the button that finishes a form. Raised here only, rather than
+   everywhere the class is used. */
+.cal-sheet-acts .tt-btn{margin-top:0;min-height:38px;padding-inline:14px;}
 
 @media (max-width:720px){
   .cal-head{gap:8px;}

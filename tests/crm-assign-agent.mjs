@@ -14,12 +14,13 @@
 // shows up here instead of being swallowed by the inline handler.
 
 import { chromium } from 'playwright';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planPipelineMigration } from '../crm-assets/pipeline.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+mkdirSync(join(ROOT, 'tests/out'), { recursive: true });
 const T = 't_3pinrealty';
 const STAGES = planPipelineMigration([
   { id: 'new', name: 'New' }, { id: 'site_visit', name: 'Site Visit' }
@@ -80,7 +81,13 @@ const ok = (label, cond, detail) => {
 };
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+console.log('');
+console.log('═'.repeat(64));
+console.log(viewport.width === 390 ? 'ON A PHONE' : 'ON A LAPTOP');
+console.log('═'.repeat(64));
+const ctx = await browser.newContext({ viewport });
 const page = await ctx.newPage();
 // An inline onclick that throws is silent in the UI. It is not silent here.
 page.on('pageerror', e => thrown.push(e.message));
@@ -158,6 +165,38 @@ ok('...listing the team to assign', opened.agents >= 3, String(opened.agents));
 ok('...and saying the property list is still coming', /loading/i.test(opened.propText), opened.propText.slice(0, 60));
 ok('nothing threw on the way', thrown.length === 0, thrown.join(' | '));
 
+// The form has to FIT, not merely be on top of things. A sheet wider than the
+// screen puts Save off the right-hand edge, which is its own kind of button
+// that does nothing.
+if (opened.open) {
+  const fits = await page.evaluate(() => {
+    const box = document.querySelector('#svSheet .cal-sheet-in');
+    const r = box.getBoundingClientRect();
+    const save = [...box.querySelectorAll('button')].find(b => /Send|Update/.test(b.textContent));
+    const sr = save ? save.getBoundingClientRect() : null;
+    return { right: Math.round(r.right), w: innerWidth,
+      // Reachable means ON THE SCREEN, both ways. The sheet scrolls, so the
+      // actions used to scroll off the bottom of a phone and the form opened
+      // with no visible way to finish it.
+      saveOn: sr ? (sr.right <= innerWidth + 2 && sr.left >= -2 && sr.width > 40
+        && sr.bottom <= innerHeight + 2 && sr.top >= -2) : false,
+      // The tap target is the LABEL wrapping a checkbox, not the 15px box.
+      taps: [...box.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,button,.cm-p')]
+        .map(e => Math.round(e.getBoundingClientRect().height)),
+      shouting: [...box.querySelectorAll('.cm-p')]
+        .filter(e => getComputedStyle(e).textTransform === 'uppercase').length };
+  });
+  ok('...fitting the screen', fits.right <= fits.w + 2, JSON.stringify(fits));
+  ok('...with Save reachable', fits.saveOn, JSON.stringify(fits));
+  ok('...and controls big enough to tap', Math.min(...fits.taps) >= 30, fits.taps.join(','));
+  // A caption style leaking onto a person's name renders "PRADEEP".
+  ok('...with names written, not shouted', fits.shouting === 0, fits.shouting + ' uppercased');
+}
+
+// A picture of it open, because "is it fixed" is a question about what a
+// person sees, not about what an assertion returns.
+if (opened.open) await page.screenshot({ path: join(ROOT, 'tests/out/assign-' + viewport.width + '.png') });
+
 // And the whole point: assigning somebody.
 if (opened.open) {
   const saved = await page.evaluate(async () => {
@@ -176,6 +215,7 @@ if (opened.open) {
 }
 
 await ctx.close();
+}
 await browser.close();
 console.log('');
 console.log('─'.repeat(64));
