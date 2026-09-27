@@ -645,7 +645,12 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cal-now::before{content:'';position:absolute;left:-1px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--red,#B91C1C);}
 
 /* ── Booking a meeting ── */
-.cal-sheet{position:fixed;inset:0;z-index:60;background:rgba(20,18,16,.44);display:flex;align-items:center;justify-content:center;padding:16px;}
+/* 500, the same layer every other modal in this CRM uses, and NOT 60.
+   The lead panel #dp is a full-screen opaque sheet at z-index 200, so at 60
+   the scheduler opened BEHIND it: the form was in the DOM, correctly filled,
+   and completely invisible. From the outside that is a button that does
+   nothing, which is exactly how it was reported. */
+.cal-sheet{position:fixed;inset:0;z-index:500;background:rgba(20,18,16,.44);display:flex;align-items:center;justify-content:center;padding:16px;}
 .cal-sheet-in{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:18px;
   width:min(440px,100%);max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:7px;}
 .cal-sheet-in h3{margin:0 0 4px;font-size:16px;}
