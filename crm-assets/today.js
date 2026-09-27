@@ -204,6 +204,7 @@
       // calendar — so what is worth marking is the ones still waiting on you.
       if (m.mine === 'needsAction') cls += ' is-mine';
       head = '<span class="td-time">' + esc(clock(item.at))
+        + (m.today ? '' : '<em class="td-day">' + esc(new Date(m.at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })) + '</em>')
         + (m.mine === 'needsAction' ? mineMark(true) : '') + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(m.title) + '</span>'
         + '<span class="td-who">' + (m.where ? esc(m.where) + ' · ' : '')
@@ -248,7 +249,15 @@
         + phoneLine('Client', l.name, l.phone);
     }
 
-    var acts = '<div class="td-acts">'
+    // An invitation you have not answered is answered HERE. Making somebody
+    // open the calendar to say yes is how a meeting sits unanswered until the
+    // morning it happens.
+    var answer = (item.kind === 'meeting' && item.meeting.mine === 'needsAction')
+      ? '<button type="button" class="td-act go" onclick="PinToday.answer(\'' + esc(item.meeting.id) + '\',\'accepted\')">I can come</button>'
+        + '<button type="button" class="td-act" onclick="PinToday.decline(\'' + esc(item.meeting.id) + '\')">Can' + '\u2019' + 't make it</button>'
+      : '';
+
+    var acts = '<div class="td-acts">' + answer
       // A meeting has no lead to open. It opens in the calendar, which is
       // where it can be answered.
       + (item.kind === 'meeting'
@@ -257,7 +266,8 @@
       + (item.kind === 'ask' ? '<button type="button" class="td-act done" onclick="markMentionDone(\'' + id + '\')">✓ Done</button>' : '')
       + '</div>';
 
-    return '<details class="' + cls + '"><summary>' + head
+    var openNow = item.kind === 'meeting' && item.meeting.mine === 'needsAction';
+    return '<details class="' + cls + '"' + (openNow ? ' open' : '') + '><summary>' + head
       + '<i class="td-chev fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
       + '<div class="td-body"><dl class="td-dl">' + body + '</dl>' + acts + '</div></details>';
   }
@@ -295,6 +305,15 @@
   }
 
   window.PinToday = {
+    answer: function (id, response, reason) {
+      if (typeof window.answerMeeting !== 'function') return;
+      window.answerMeeting(id, response, reason);
+    },
+    decline: function (id) {
+      var why = prompt('Why can' + '\u2019' + 't you make it? Everyone invited sees this.', '');
+      if (why === null) return;
+      if (typeof window.answerMeeting === 'function') window.answerMeeting(id, 'declined', String(why).trim().slice(0, 300));
+    },
     openMeeting: function (id) {
       if (typeof toggleView === 'function') toggleView('calendar');
       setTimeout(function () { if (window.PinCalendar) window.PinCalendar.openEvent(id); }, 350);

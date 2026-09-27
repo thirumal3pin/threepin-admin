@@ -121,6 +121,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
             end: new Date(atHour(16) + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
             attendees: [{ email: 'thirumal@threepin.in', status: 'needsAction' },
                         { email: 'pradeep@threepin.in', status: 'accepted' }] },
+          { id: 'm4', title: 'Site strategy with VGN', start: new Date(atHour(11) + 2 * 86400000).toISOString(),
+            end: new Date(atHour(11) + 2 * 86400000 + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
+            attendees: [{ email: 'thirumal@threepin.in', status: 'needsAction' }] },
           // Not answered, and not today — this is what the bell must surface.
           { id: 'm2', title: 'Budget review', start: new Date(atHour(9) + 3 * 86400000).toISOString(),
             end: new Date(atHour(9) + 3 * 86400000 + 1800000).toISOString(), busy: true, allDay: false, meetingId: '1',
@@ -250,6 +253,37 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('opening a meeting shows the client and the number', /Mr Kumar/.test(opened.text) && /98400 12345/.test(opened.text), opened.text.slice(-160));
   ok('...the seller too', /Mr Rajan/.test(opened.text));
   ok('...and the notes kept on it', /Gate code 4412/.test(opened.text));
+
+  // ── AN INVITATION YOU HAVE NOT ANSWERED IS TODAY'S JOB ──
+  // Somebody booked a room and is waiting to hear. That does not become your
+  // problem only on the morning it happens.
+  const waiting = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.td-row')];
+    const row = rows.find(r => r.textContent.includes('Site strategy'));
+    return { there: !!row,
+      // The time on the left would be a lie without the date beside it.
+      saysWhen: !!(row && row.querySelector('.td-day')),
+      open: !!(row && row.open),
+      buttons: row ? [...row.querySelectorAll('.td-acts button')].map(b => b.textContent.trim()) : [],
+      // One you have already accepted is not dragged forward from next week.
+      futureAccepted: rows.some(r => /Budget review/.test(r.textContent)) };
+  });
+  ok('an unanswered invitation shows even when it is not today', waiting.there, JSON.stringify(waiting));
+  ok('...saying which day it is for', waiting.saysWhen);
+  ok('...already open, so the answer is in front of you', waiting.open);
+  ok('...with both answers on the row itself',
+    waiting.buttons.some(b => /can come/i.test(b)) && waiting.buttons.some(b => /make it/i.test(b)),
+    JSON.stringify(waiting.buttons));
+
+  const answered = await page.evaluate(async () => {
+    PinToday.answer('m4', 'accepted');
+    await new Promise(r => setTimeout(r, 500));
+    const rows = [...document.querySelectorAll('.td-row')];
+    const row = rows.find(r => r.textContent.includes('Site strategy'));
+    return { gone: !row, text: row ? row.textContent.replace(/\s+/g, ' ').trim() : '' };
+  });
+  // Answered, it is no longer a job: it drops out of the day unless it is today.
+  ok('accepting it there and then clears it from the day', answered.gone, answered.text.slice(0, 90));
 
   ok('the page does not scroll sideways', day.overflowX === 0, day.overflowX + 'px');
 

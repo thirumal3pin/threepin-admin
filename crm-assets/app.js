@@ -1517,13 +1517,57 @@ function eventsToday(){
 // Daily task wants the MEETINGS on their own. A site visit is already a row
 // there, built from the lead, which carries the client and the seller that a
 // calendar entry does not.
-window.myMeetingsToday = () => eventsToday().filter(e => e.meetingId && !e.leadId)
+// Today's meetings, PLUS anything still waiting on an answer whenever it is.
+// An invitation for next Thursday is a job for today: somebody booked a room
+// and is waiting to hear, and it does not become your problem only on the
+// morning it happens.
+window.myMeetingsToday = () => {
+  const start = new Date(); start.setHours(0,0,0,0);
+  const end = start.getTime() + 86400000;
+  const seen = new Set();
+  return myEvents
+    .filter(e => e.meetingId && !e.leadId && e.start)
+    .filter(e => {
+      const t = Date.parse(e.start);
+      const today = t >= start.getTime() && t < end;
+      const waiting = t > Date.now() && myReply(e) === 'needsAction';
+      if(today && myReply(e) === 'declined') return false;   // you said no
+      return today || waiting;
+    })
+    .filter(e => !seen.has(e.id) && seen.add(e.id))
+    .sort((a,b) => Date.parse(a.start) - Date.parse(b.start))
   .map(e => ({ id: e.id, title: e.title, at: Date.parse(e.start),
     end: e.end ? Date.parse(e.end) : null, where: e.where || '', meet: e.meet || null,
     // What whoever called it wrote down: on a booking made off a lead that is
     // the client, their number and the office's notes.
     about: e.about || '',
-    attendees: e.attendees || [], mine: myReply(e) }));
+    attendees: e.attendees || [], mine: myReply(e),
+    // Not today, so the row has to say which day it is.
+    today: (() => { const d = new Date(); d.setHours(0,0,0,0);
+      return Date.parse(e.start) >= d.getTime() && Date.parse(e.start) < d.getTime() + 86400000; })() }));
+};
+
+// Answering from anywhere that is not the calendar — the Daily task screen,
+// for now. The same act on the same Google event, so the two cannot disagree.
+window.answerMeeting = function(id, response, reason){
+  return window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
+    method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+    body: JSON.stringify({ op:'answer', eventId: id, response: response, reason: reason || '' })
+  })).then(r => r.json()).then(d => {
+    if(!d || !d.ok){ showToast((d && d.error) || 'Could not send your answer'); return false; }
+    // Patch the copy in hand so the screen changes now rather than in two
+    // minutes when the cache next expires.
+    const me = String(currentUserEmail || '').toLowerCase();
+    const ev = myEvents.find(e => e.id === id);
+    if(ev) ev.attendees = (d.replies || []).length ? d.replies
+      : (ev.attendees || []).map(a => String(a.email).toLowerCase() === me ? { ...a, status: response } : a);
+    try{ renderBell(); }catch(e){}
+    if(currentView === 'today' && window.renderTodayView) window.renderTodayView();
+    showToast(response === 'accepted' ? '✓ You are coming — everyone has been told'
+      : 'Everyone has been told you cannot make it');
+    return true;
+  }).catch(() => { showToast('Could not reach the calendar service'); return false; });
+};
 
 // ═══════ ALERTS ═══════
 //

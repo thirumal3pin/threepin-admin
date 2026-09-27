@@ -556,6 +556,13 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   border:1px solid var(--brand-line);background:var(--brand-soft);color:var(--brand-ink);}
 .td-sec-mine.waiting{border-color:var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
 .td-pre{white-space:pre-wrap;}
+/* An invitation for another day still belongs in today's list, so the row has
+   to say which day it is or the time on the left is a lie. */
+.td-day{display:block;font-style:normal;font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.04em;color:var(--amber,#B45309);margin-top:2px;}
+/* The one action on this screen that commits you to being somewhere. */
+.td-act.go{border-color:var(--green-line,#BBF7D0);background:var(--green-bg,#E3F6E9);color:var(--green,#137A3B);font-weight:600;}
+.td-act.go:hover{filter:brightness(.97);}
 
 /* ── Opening a booking ── */
 .ev-sheet{width:min(420px,100%);gap:6px;}
