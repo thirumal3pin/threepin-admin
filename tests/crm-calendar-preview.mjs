@@ -52,11 +52,11 @@ const PEOPLE = [
     // A meeting where one person has said yes, one has said no and one has not
     // answered at all. Booking from the CRM is only worth doing if the answers
     // come back to the CRM.
-    { id: 'f', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H), busy: true, allDay: false,
+    { id: 'mtg1', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H), busy: true, allDay: false,
       meetingId: '1', meet: 'https://meet.google.com/abc',
-      attendees: [{ email: 'swami@threepin.in', status: 'accepted' },
-                  { email: 'pradeep@threepin.in', status: 'declined' },
-                  { email: 'sales@threepin.in', status: 'needsAction' }] }
+      attendees: [{ email: 'swami@threepin.in', status: 'needsAction' },
+                  { email: 'pradeep@threepin.in', status: 'declined', reason: 'Bank appointment.' },
+                  { email: 'sales@threepin.in', status: 'accepted' }] }
   ] },
   { person: 'thirumal@threepin.in', events: [], error: 'calendar unreadable' }
 ];
@@ -89,6 +89,7 @@ const ok = (label, cond, detail) => {
 
 const browser = await chromium.launch();
 let booked = null;
+let answered = null;
 
 async function open(viewport, calendarReply) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
@@ -107,6 +108,23 @@ async function open(viewport, calendarReply) {
     if (u.searchParams.get('action') === 'calendar') {
       const body = JSON.parse(route.request().postData() || '{}');
       if (body.op === 'meeting') { booked = body; return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, eventId: 'm1', meet: 'https://meet.google.com/xyz' }) }); }
+      if (body.op === 'event') {
+        if (body.eventId !== 'mtg1') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'That is not a 3 PIN booking' }) });
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, event: {
+          id: 'mtg1', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H),
+          where: 'Office', about: 'Pipeline and the week ahead.', meet: 'https://meet.google.com/abc',
+          organiser: 'sales@threepin.in', leadId: null, mine: 'needsAction',
+          attendees: [{ email: 'swami@threepin.in', status: 'needsAction', reason: null },
+                      { email: 'pradeep@threepin.in', status: 'declined', reason: 'Bank appointment.' },
+                      { email: 'sales@threepin.in', status: 'accepted', reason: null } ] } }) });
+      }
+      if (body.op === 'answer') {
+        answered = body;
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, replies: [
+          { email: 'swami@threepin.in', status: body.response, reason: body.reason || null },
+          { email: 'pradeep@threepin.in', status: 'declined', reason: 'Bank appointment.' },
+          { email: 'sales@threepin.in', status: 'accepted', reason: null } ] }) });
+      }
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(calendarReply) });
     }
     if (u.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
@@ -245,6 +263,63 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...including somebody typed in who has no column here',
     (booked.attendees || []).includes('rajesh@threepin.in'), JSON.stringify(booked.attendees));
   ok('...and closes the form', sent.closed);
+
+  // ── ANSWERING A MEETING FROM THE CALENDAR ITSELF ──
+  //
+  // A site visit sends you to the lead, because what you need in order to
+  // decide — who the client is, what the office wrote down — is there. A
+  // meeting has nowhere else to be, so it is answered here rather than by
+  // going and hunting for the invitation in your mail.
+  answered = null;
+  const detail = await page.evaluate(async () => {
+    [...document.querySelectorAll('.cal-ev.meet')][0].click();
+    await new Promise(r => setTimeout(r, 500));
+    const sheet = document.getElementById('evSheet');
+    const box = sheet && sheet.querySelector('.cal-sheet-in');
+    const r2 = box ? box.getBoundingClientRect() : null;
+    const hit = r2 ? document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + 30)) : null;
+    return { open: !!sheet, visible: !!(hit && sheet.contains(hit)),
+      title: ((sheet && sheet.querySelector('h3')) || {}).textContent || '',
+      mine: ((sheet && sheet.querySelector('.ev-mine')) || {}).textContent || '',
+      people: sheet ? sheet.querySelectorAll('.ev-who').length : 0,
+      text: sheet ? sheet.textContent : '',
+      meet: !!(sheet && sheet.querySelector('.ev-meet')),
+      buttons: sheet ? [...sheet.querySelectorAll('.cal-sheet-acts button')].map(x => x.textContent.trim()) : [] };
+  });
+  ok('a meeting opens from the grid', detail.open && /Monday review/.test(detail.title), detail.title);
+  ok('...somewhere you can see it', detail.visible);
+  ok('...saying where you stand on it', /No reply yet/i.test(detail.mine), detail.mine);
+  ok('...and where everyone else does', detail.people === 3, String(detail.people));
+  // A refusal without its reason makes somebody go and ask.
+  ok('...including why somebody cannot come', /Bank appointment/.test(detail.text));
+  ok('...with the video link to hand', detail.meet);
+  ok('...and both answers offered',
+    detail.buttons.some(x => /can come/i.test(x)) && detail.buttons.some(x => /make it/i.test(x)), JSON.stringify(detail.buttons));
+
+  const said = await page.evaluate(async () => {
+    PinCalendar.answer('accepted');
+    await new Promise(r => setTimeout(r, 450));
+    return { mine: (document.querySelector('.ev-mine') || {}).textContent || '' };
+  });
+  ok('accepting is sent', !!answered && answered.response === 'accepted', JSON.stringify(answered));
+  ok('...and the sheet says so straight away', /Coming/i.test(said.mine), said.mine);
+
+  const refused = await page.evaluate(async () => {
+    PinCalendar.answer('declined', 'Site visit in Tambaram that afternoon.');
+    await new Promise(r => setTimeout(r, 450));
+    return { mine: (document.querySelector('.ev-mine') || {}).textContent || '' };
+  });
+  ok('a refusal carries its reason', /Tambaram/.test((answered || {}).reason || ''), JSON.stringify(answered));
+  ok('...and is shown as such', /Not coming/i.test(refused.mine), refused.mine);
+  await page.evaluate(() => PinCalendar.closeEvent());
+
+  // Somebody's own appointment is drawn as a busy block. Opening it would hand
+  // over what it is, so it does not open.
+  const priv = await page.evaluate(() => {
+    const block = [...document.querySelectorAll('.cal-ev')].find(e => /Standup/.test(e.textContent));
+    return { clickable: !!(block && block.getAttribute('onclick')) };
+  });
+  ok('an event the CRM did not book does not open', !priv.clickable);
 
   // ── WEEK AND MONTH, ONE PERSON ──
   // Six people across seven days is a wall nobody reads. These spans answer a

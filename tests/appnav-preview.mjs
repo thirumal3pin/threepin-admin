@@ -257,7 +257,11 @@ console.log('\nCRM — desktop');
   });
   ok('The day opens on the person signed in', today.shown && /Your day, Agent A/.test(today.title), today.title);
   ok('…summarised in one line', /1 visit/.test(today.sub) && /call/.test(today.sub), today.sub);
-  ok('…in three sections', JSON.stringify(today.sections) === JSON.stringify(['Site visits', 'Calls due', 'Asked of you']), JSON.stringify(today.sections));
+  // Four now: meetings joined the day, because a meeting is a thing you have
+  // to be at and the screen is what you have to be at today.
+  ok('…in four sections',
+    JSON.stringify(today.sections) === JSON.stringify(['Site visits', 'Meetings', 'Calls due', 'Asked of you']),
+    JSON.stringify(today.sections));
   ok('Today\'s site visit is listed with its property and time', today.rows.some(r => /15:00|3:00 PM/.test(r) && /TNAG003/.test(r)), JSON.stringify(today.rows[0]));
   ok('…and the brochure a colleague asked for', today.rows.some(r => /Complete the brochure of I Block 3 BHK/.test(r)), JSON.stringify(today.rows));
 

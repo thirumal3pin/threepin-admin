@@ -523,6 +523,50 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .cal-m-e.free{background:transparent;border:1px dashed var(--border2);color:var(--ink4);}
 .cal-m-more{font-size:10px;color:var(--ink4);}
 
+/* ── Daily task: who is going, and whether they have said yes ── */
+/* NOT .td-title: that is the page heading, 27px, further down this file. */
+.td-prop{font-weight:400;color:var(--ink3);}
+.td-assigned{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;}
+.td-agent{display:inline-flex;align-items:baseline;gap:5px;font-size:11.5px;
+  padding:2px 8px;border-radius:999px;border:1px solid var(--border);background:var(--bg2);color:var(--ink2);}
+.td-agent em{font-style:normal;font-size:10.5px;color:var(--ink4);}
+/* Accepted is settled. Anything else is a question for this morning. */
+.td-agent.accepted{border-color:var(--green-line,#BBF7D0);background:var(--green-bg,#E3F6E9);color:var(--green,#137A3B);}
+.td-agent.accepted em{color:var(--green,#137A3B);}
+.td-agent.needsAction{border-color:var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
+.td-agent.needsAction em{color:var(--amber,#B45309);}
+.td-agent.declined{border-color:var(--red-line);background:var(--red-bg);color:var(--red);}
+.td-agent.declined em{color:var(--red);}
+.td-unassigned{font-size:11.5px;color:var(--amber,#B45309);font-weight:600;}
+
+/* ── Opening a booking ── */
+.ev-sheet{width:min(420px,100%);gap:6px;}
+.ev-sheet h3{margin:0 0 2px;font-size:16px;}
+.ev-when{font-family:var(--mono);font-size:12px;color:var(--ink2);}
+.ev-where{font-size:13px;color:var(--ink3);}
+.ev-meet{align-self:flex-start;font-size:12.5px;color:var(--blue);text-decoration:none;
+  border:1px solid var(--blue-line,#BFDBFE);background:var(--blue-bg,#EEF3FF);
+  border-radius:var(--r2);padding:7px 11px;min-height:34px;display:inline-flex;align-items:center;margin-top:4px;}
+.ev-meet:hover{filter:brightness(.97);}
+/* Where you stand on it, first, because that is what you opened it to change. */
+.ev-mine{margin-top:6px;padding:8px 11px;border-radius:var(--r2);font-size:13px;font-weight:600;
+  border:1px solid var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
+.ev-mine.accepted{border-color:var(--green-line,#A7D8B4);background:var(--green-bg,#EEF8F1);color:var(--green,#137A3B);}
+.ev-mine.declined{border-color:var(--red-line);background:var(--red-bg);color:var(--red);}
+.ev-list{display:flex;flex-direction:column;gap:3px;margin-top:6px;}
+.ev-who{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:5px 0;
+  border-bottom:1px solid var(--border);}
+.ev-who:last-child{border-bottom:0;}
+.ev-who-s{color:var(--ink4);font-size:11.5px;text-align:right;min-width:0;}
+.ev-who.accepted .ev-who-s{color:var(--green,#137A3B);}
+.ev-who.declined .ev-who-s{color:var(--red);}
+.ev-about{margin-top:8px;font-size:12.5px;color:var(--ink3);white-space:pre-wrap;
+  max-height:140px;overflow-y:auto;}
+.ev-note{font-size:12.5px;color:var(--ink4);align-self:center;}
+.ev-msg{padding:22px 4px;color:var(--ink3);font-size:13px;text-align:center;}
+.ev-err{display:none;font-size:12.5px;color:var(--red);margin-top:6px;}
+.ev-err.show{display:block;}
+
 /* ── Finding a time ── */
 .ft-out{display:flex;flex-direction:column;gap:10px;margin-top:10px;max-height:44vh;overflow-y:auto;}
 .ft-day-h{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
@@ -561,6 +605,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .bell-count.urgent{background:var(--red);}
 .bell-menu{right:0;left:auto;width:min(360px,calc(100vw - 32px));max-height:min(460px,70vh);
   overflow-y:auto;padding:0;}
+.bell-grp{border-bottom:1px solid var(--border2);}
+.bell-grp:last-child{border-bottom:0;}
 .bell-head{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--border);
   padding:10px 14px;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
   text-transform:uppercase;color:var(--ink4);}

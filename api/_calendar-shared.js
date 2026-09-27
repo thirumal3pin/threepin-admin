@@ -27,6 +27,7 @@ const CAL = 'https://www.googleapis.com/calendar/v3';
 const TZ = 'Asia/Kolkata';
 const IST_OFFSET_MS = 5.5 * 3600000;
 const STAMP = '3pin.lead';
+const sameEmail = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 const MEET_STAMP = '3pin.meeting';
 
 // A Workspace that has not been set up yet must fail as "not configured",
@@ -467,9 +468,9 @@ export function freeSlots(day, { from, to, minutes = 30, step = 30 } = {}) {
 //
 // The reason goes in Google's own `comment` field on the attendee, so it comes
 // back through exactly the channel a reason typed into Gmail would.
-const sameEmail = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
-export async function respondToVisit({ agent, eventId, response, reason = '', leadId = null,
+
+export async function respondToEvent({ agent, eventId, response, reason = '', leadId = null,
   key = serviceKey(), makeClient = realClient }) {
   if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
   if (!agent || !eventId) throw new Error('Who is answering, and to what?');
@@ -488,10 +489,15 @@ export async function respondToVisit({ agent, eventId, response, reason = '', le
   }
 
   // Only ever the CRM's own bookings, the same rule everything else here
-  // follows. An agent's other invitations are answered in their own calendar.
-  const stamp = cur.data.extendedProperties && cur.data.extendedProperties.private
-    && cur.data.extendedProperties.private[STAMP];
-  if (leadId && stamp !== leadId) return { ok: false, notOurs: true };
+  // follows. Somebody's other invitations are answered in their own calendar.
+  //
+  // With a leadId this is a site visit and must be THAT lead's. Without one it
+  // is a team meeting, and any booking the CRM made will do — but something
+  // the CRM did not make still will not, so a private appointment cannot be
+  // answered, or read, from here.
+  const priv = (cur.data.extendedProperties && cur.data.extendedProperties.private) || {};
+  if (leadId) { if (priv[STAMP] !== leadId) return { ok: false, notOurs: true }; }
+  else if (!priv[STAMP] && !priv[MEET_STAMP]) return { ok: false, notOurs: true };
 
   const attendees = cur.data.attendees || [];
   if (!attendees.some(a => sameEmail(a.email, agent))) return { ok: false, notInvited: true };
@@ -534,4 +540,36 @@ export async function findVisitEvent({ organiser, leadId, from, to,
     const hit = (r.data.items || []).find(e => e.status !== 'cancelled');
     return hit ? hit.id : null;
   } catch { return null; }
+}
+
+/** A site visit, which is an event with a lead behind it. Same act, narrower rule. */
+export const respondToVisit = respondToEvent;
+
+/**
+ * One CRM-made event as the person looking at it, with who is coming.
+ * Read AS them, so it only ever returns something already in their calendar.
+ */
+export async function eventDetail({ viewer, eventId, key = serviceKey(), makeClient = realClient }) {
+  if (!key || !viewer || !eventId) return null;
+  try {
+    const r = await makeClient(viewer, key).request({
+      url: `${CAL}/calendars/${encodeURIComponent(viewer)}/events/${encodeURIComponent(eventId)}` });
+    const e = r.data;
+    const priv = (e.extendedProperties && e.extendedProperties.private) || {};
+    // Not ours is not shown. The grid may draw somebody's dentist appointment
+    // as a busy block; opening it here must not hand over the details.
+    if (!priv[STAMP] && !priv[MEET_STAMP]) return { ok: false, notOurs: true };
+    return {
+      ok: true, id: e.id, title: e.summary || '(no title)',
+      start: e.start && (e.start.dateTime || e.start.date) || null,
+      end: e.end && (e.end.dateTime || e.end.date) || null,
+      where: e.location || null, about: e.description || null,
+      meet: e.hangoutLink || null, link: e.htmlLink || null,
+      organiser: (e.organizer && e.organizer.email) || null,
+      leadId: priv[STAMP] || null,
+      attendees: (e.attendees || []).map(a => ({ email: a.email, status: a.responseStatus || 'needsAction', reason: a.comment || null })),
+      mine: (e.attendees || []).filter(a => sameEmail(a.email, viewer))
+        .map(a => a.responseStatus || 'needsAction')[0] || null
+    };
+  } catch { return { ok: false, gone: true }; }
 }

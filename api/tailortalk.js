@@ -50,7 +50,7 @@ import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, respondToEvent, eventDetail, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
 import { visitOf } from '../crm-assets/pipeline.js';
 
 export const maxDuration = 60;
@@ -342,13 +342,15 @@ async function adminAiPost(request) {
 //   { op: 'visit', leadId }    invite the agents going on that lead's site visit
 //   { op: 'replies', leadId }  who has accepted it and who has turned it down
 //   { op: 'respond', ... }     the signed-in agent answers their own invitation
+//   { op: 'event', eventId }   one CRM booking, opened from the calendar
+//   { op: 'answer', ... }      answering a meeting from the calendar itself
 //   { op: 'meeting', ... }     book, move or call off a meeting among the team
 //
 // The team is settings/{tenant}.team, the same list that backs @mentions. A
 // calendar nobody has been added to is simply not read.
 // Held for a minute per instance. The team changes when somebody runs
 // set-team.mjs, which is roughly never, and every calendar call was spending a
-// Firestore read on it \u2014 on a project whose daily read quota keeps running out.
+// Firestore read on it — on a project whose daily read quota keeps running out.
 const teamCache = new Map();
 const TEAM_TTL_MS = 60000;
 async function teamEmails(db, tenantId) {
@@ -392,7 +394,7 @@ async function calendarPost(request) {
 
       // The seller's name, number and the location come off the property when
       // one is linked. Sent by the page when it has it already, looked up only
-      // when it does not \u2014 this tenant runs close to its Firestore read quota.
+      // when it does not — this tenant runs close to its Firestore read quota.
       let property = body.property && typeof body.property === 'object' ? body.property : null;
       if (!property && visit.property) {
         const q = await db.collection('properties').where('tenantId', '==', user.tenantId)
@@ -430,7 +432,7 @@ async function calendarPost(request) {
     }
 
     // An agent answering their own invitation. The same act as answering it in
-    // Gmail, on the same Google event \u2014 so there is no second copy of the
+    // Gmail, on the same Google event — so there is no second copy of the
     // answer anywhere to drift out of step with the first.
     if (body.op === 'respond') {
       if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
@@ -457,6 +459,39 @@ async function calendarPost(request) {
       // Kept on the lead so the board, the attention list and the daily digest
       // all see the answer without any of them calling Google.
       await ref.update({ siteVisitReplies: r.replies });
+      return json({ ok: true, replies: r.replies });
+    }
+
+    // Opening a booking from the calendar. Read AS the person looking, so it
+    // can only ever return something already in their own calendar — and the
+    // shared module refuses anything the CRM did not create, because the grid
+    // draws private appointments as busy blocks and opening one must not hand
+    // over what it is.
+    if (body.op === 'event') {
+      if (!body.eventId || typeof body.eventId !== 'string') return json({ ok: false, error: 'eventId required' }, 400);
+      const team = await teamEmails(db, user.tenantId);
+      const me = String(user.email || '').toLowerCase();
+      // Whose copy to read. Somebody not in the Workspace has no copy to read.
+      const viewer = team.some(e => String(e).toLowerCase() === me) ? me : null;
+      if (!viewer) return json({ ok: false, error: 'Your address is not on the team list' }, 403);
+      const d = await eventDetail({ viewer, eventId: body.eventId });
+      if (!d || !d.ok) return json({ ok: false, error: d && d.notOurs ? 'That is not a 3 PIN booking' : 'That booking is no longer in your calendar' }, 404);
+      return json({ ok: true, event: d });
+    }
+
+    // Answering a meeting from the calendar, rather than from a lead. The same
+    // act on the same Google event as answering it in Gmail.
+    if (body.op === 'answer') {
+      if (!body.eventId || typeof body.eventId !== 'string') return json({ ok: false, error: 'eventId required' }, 400);
+      const team = await teamEmails(db, user.tenantId);
+      const me = String(user.email || '').toLowerCase();
+      if (!team.some(e => String(e).toLowerCase() === me)) return json({ ok: false, error: 'Your address is not on the team list' }, 403);
+      const r = await respondToEvent({ agent: me, eventId: body.eventId,
+        response: body.response, reason: typeof body.reason === 'string' ? body.reason : '' });
+      if (!r.ok) {
+        return json({ ok: false, error: r.gone ? 'That invitation is no longer in your calendar'
+          : r.notInvited ? 'You are not on this invitation' : 'That is not a 3 PIN booking' }, 409);
+      }
       return json({ ok: true, replies: r.replies });
     }
 
@@ -501,7 +536,7 @@ async function calendarPost(request) {
     if (!from || !to || to <= from) return json({ ok: false, error: 'from and to required' }, 400);
     if (to - from > 31 * 24 * 3600000) return json({ ok: false, error: 'at most a month at a time' }, 400);
     const team = await teamEmails(db, user.tenantId);
-    if (!team.length) return json({ ok: true, people: [], note: 'No team is set up yet \u2014 see Settings.' });
+    if (!team.length) return json({ ok: true, people: [], note: 'No team is set up yet — see Settings.' });
     // A month of one person's calendar is one call; a month of everybody's is
     // six. The page asks for the subset it is actually going to draw.
     const only = Array.isArray(body.people) && body.people.length

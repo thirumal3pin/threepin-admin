@@ -209,6 +209,42 @@ if (opened.open) {
 // person sees, not about what an assertion returns.
 if (opened.open) await page.screenshot({ path: join(ROOT, 'tests/out/assign-' + viewport.width + '.png') });
 
+// ── WHO MAY DO WHAT ──
+//
+// The owner's rule, and it is three different rules rather than one:
+//   anyone on the team may open the lead and READ the visit;
+//   anyone may REASSIGN it — the office moves work around all day;
+//   only somebody actually sent on it may ACCEPT or DECLINE, because a yes
+//   from a person who is not going is a yes nobody has given.
+//
+// Thirumal is signed in here and is not on this visit.
+const mayI = await page.evaluate(() => {
+  const l = leads.find(x => x.id === 'tt_t_3pinrealty_contact_919999000111');
+  return { onIt: iAmOnVisit(l),
+    answerBox: !!document.querySelector('#dpVisit .sv-mine'),
+    canReassign: !!document.querySelector('#dpVisit button') };
+});
+ok('somebody not on the visit is not asked to answer it', !mayI.onIt && !mayI.answerBox, JSON.stringify(mayI));
+ok('...but can still reassign it', mayI.canReassign);
+
+// And once they are on it, they are asked.
+const nowOnIt = await page.evaluate(async () => {
+  const l = leads.find(x => x.id === 'tt_t_3pinrealty_contact_919999000111');
+  l.siteVisitAgents = ['thirumal@threepin.in'];
+  l.siteVisitReplies = [{ email: 'thirumal@threepin.in', status: 'needsAction', reason: null }];
+  forgetAttention(l.id);
+  renderStandSection(l);
+  const box = document.querySelector('#dpVisit .sv-mine');
+  return { asked: !!box, buttons: box ? [...box.querySelectorAll('button')].map(b => b.textContent.trim()) : [] };
+});
+ok('somebody who IS on it is asked', nowOnIt.asked, JSON.stringify(nowOnIt));
+ok('...with both answers', nowOnIt.buttons.length === 2, JSON.stringify(nowOnIt.buttons));
+
+// And the server does not take the page's word for it.
+const guard = readFileSync(join(ROOT, 'api/tailortalk.js'), 'utf8');
+ok('...and the server checks it too, not just the page',
+  /if \(!agents\.includes\(me\)\) return json\(\{ ok: false, error: 'You are not on this visit' \}, 403\)/.test(guard));
+
 // And the whole point: assigning somebody.
 if (opened.open) {
   const saved = await page.evaluate(async () => {

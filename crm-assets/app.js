@@ -128,6 +128,7 @@ window.applyDashboardEmailSettingsSnapshot = function(settings){
 function refreshAll(){
   attnCache = new Map();
   try{ renderBell(); } catch(e){ console.error('renderBell failed:', e); }
+  try{ loadMyEvents(false); } catch(e){}
   if(currentView==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else applyFilters();
   try{ renderLeadFilterBar(); } catch(e){ console.error('renderLeadFilterBar failed:', e); }
@@ -1451,6 +1452,76 @@ function renderTtSection(l){
   if(paneHasChat) renderConversationPane(l);
 }
 
+// ═══════ MY OWN BOOKINGS ═══════
+//
+// The signed-in person's 3 PIN bookings for the week ahead, fetched once and
+// shared by the alerts bell and the Daily task screen. Both want the same
+// question answered — what have I got on, and what have I not answered
+// — and asking Google twice for it would be twice the wait for one list.
+//
+// Only this person's calendar, and only what the CRM booked: a meeting to
+// answer, a visit to turn up to. Everything else in their diary is theirs.
+let myEvents = [];
+let myEventsAt = 0;
+let myEventsLoading = false;
+const MY_EVENTS_TTL = 120000;
+
+function loadMyEvents(force){
+  if(myEventsLoading) return;
+  if(!force && Date.now() - myEventsAt < MY_EVENTS_TTL) return;
+  if(!currentUserEmail || !window.crmAuth || !window.crmAuth.getIdToken) return;
+  myEventsLoading = true;
+  const from = Date.now() - 12 * 3600000;
+  const to = from + 8 * 86400000;
+  window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
+    method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+    body: JSON.stringify({ op:'day', from: from, to: to, people: [currentUserEmail] })
+  })).then(r => r.json()).then(d => {
+    myEventsLoading = false;
+    myEventsAt = Date.now();
+    const mine = (d && d.ok && (d.people || [])[0]) || null;
+    // A meeting or a visit the CRM made. Anything else is not ours to show.
+    myEvents = mine ? (mine.events || []).filter(e => e.meetingId || e.leadId) : [];
+    try{ renderBell(); }catch(e){}
+    if(currentView === 'today' && window.renderTodayView) window.renderTodayView();
+  }).catch(() => {
+    myEventsLoading = false;
+    // A calendar that will not load must not empty the screen: the leads half
+    // of Daily task is unaffected and still worth showing.
+    myEventsAt = Date.now();
+  });
+}
+window.getMyEvents = () => myEvents;
+
+/** My answer on one of them, from the attendee list. */
+function myReply(e){
+  const me = String(currentUserEmail || '').toLowerCase();
+  const a = (e.attendees || []).find(x => String(x.email).toLowerCase() === me);
+  return a ? (a.status || 'needsAction') : null;
+}
+window.myEventReply = myReply;
+
+/** Bookings I have been invited to and not answered. */
+function unansweredEvents(){
+  const now = Date.now();
+  return myEvents.filter(e => e.start && Date.parse(e.start) > now && myReply(e) === 'needsAction');
+}
+/** What I have on today, minus anything I have turned down. */
+function eventsToday(){
+  const start = new Date(); start.setHours(0,0,0,0);
+  const end = start.getTime() + 86400000;
+  return myEvents.filter(e => e.start && Date.parse(e.start) >= start.getTime() && Date.parse(e.start) < end
+    && myReply(e) !== 'declined')
+    .sort((a,b) => Date.parse(a.start) - Date.parse(b.start));
+}
+// Daily task wants the MEETINGS on their own. A site visit is already a row
+// there, built from the lead, which carries the client and the seller that a
+// calendar entry does not.
+window.myMeetingsToday = () => eventsToday().filter(e => e.meetingId && !e.leadId)
+  .map(e => ({ id: e.id, title: e.title, at: Date.parse(e.start),
+    end: e.end ? Date.parse(e.end) : null, where: e.where || '', meet: e.meet || null,
+    attendees: e.attendees || [], mine: myReply(e) }));
+
 // ═══════ ALERTS ═══════
 //
 // Everything that needs a person, gathered from every lead instead of found by
@@ -1480,29 +1551,63 @@ function renderBell(){
   const count = document.getElementById('bellCount');
   if(!btn || !count) return;
   const items = alertItems();
-  const urgent = items.filter(x => x.a.severity === 'high').length;
-  count.hidden = items.length === 0;
-  count.textContent = items.length > 99 ? '99+' : String(items.length);
+  const waiting = unansweredEvents();
+  const total = items.length + waiting.length;
+  // An unanswered invitation is urgent in the way that matters here: somebody
+  // is waiting to find out whether you are coming.
+  const urgent = items.some(x => x.a.severity === 'high') || waiting.length > 0;
+  count.hidden = total === 0;
+  count.textContent = total > 99 ? '99+' : String(total);
   count.className = 'bell-count' + (urgent ? ' urgent' : '');
-  btn.setAttribute('aria-label', items.length ? `Alerts — ${items.length} need a person` : 'Alerts — nothing waiting');
+  btn.setAttribute('aria-label', total ? `Alerts — ${total} waiting` : 'Alerts — nothing waiting');
   const menu = document.getElementById('bellMenu');
   if(menu && menu.classList.contains('open')) renderAlertMenu();
+}
+// Grouped, because the three things in here are dealt with in three different
+// places: an invitation is answered in the calendar, a lead is worked on the
+// lead, and "what have I got on today" is not a job at all — it is a
+// reminder, which is why it is not at the top.
+function bellGroup(title, rows, more){
+  if(!rows.length) return '';
+  return `<div class="bell-grp"><div class="bell-head">${escapeHtml(title)}</div>${rows.join('')}${more || ''}</div>`;
+}
+function fmtEventTime(e){
+  return e.allDay ? 'all day'
+    : new Date(Date.parse(e.start)).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
 }
 function renderAlertMenu(){
   const menu = document.getElementById('bellMenu');
   if(!menu) return;
+
+  const waiting = unansweredEvents();
+  const today = eventsToday();
   const items = alertItems();
-  if(!items.length){
-    menu.innerHTML = '<div class="bell-empty">Nothing needs you right now.</div>';
-    return;
-  }
-  const shown = items.slice(0, 12);
-  menu.innerHTML = `<div class="bell-head">${items.length} need${items.length === 1 ? 's' : ''} a person</div>`
-    + shown.map(({ lead: l, a }) => `<button type="button" class="bell-item ${a.severity}" onclick="openAlert('${l.id}')">
-        <span class="bell-item-t">${escapeHtml(a.label)}</span>
-        <span class="bell-item-w">${escapeHtml(l.name || 'Lead')}${a.detail ? ' · ' + escapeHtml(a.detail) : ''}</span>
-      </button>`).join('')
-    + (items.length > shown.length ? `<button type="button" class="bell-more" onclick="showAllAlerts()">See all ${items.length} on the board</button>` : '');
+
+  const askRows = waiting.slice(0, 6).map(e => `<button type="button" class="bell-item high" onclick="openBellEvent('${escapeHtml(e.id)}')">
+      <span class="bell-item-t">${escapeHtml(e.title)}</span>
+      <span class="bell-item-w">${escapeHtml(new Date(Date.parse(e.start)).toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' }))} · ${escapeHtml(fmtEventTime(e))} · you have not answered</span>
+    </button>`);
+  const todayRows = today.slice(0, 6).map(e => `<button type="button" class="bell-item" onclick="openBellEvent('${escapeHtml(e.id)}')">
+      <span class="bell-item-t">${escapeHtml(e.title)}</span>
+      <span class="bell-item-w">${escapeHtml(fmtEventTime(e))}${e.where ? ' · ' + escapeHtml(e.where) : ''}</span>
+    </button>`);
+  const leadRows = items.slice(0, 8).map(({ lead: l, a }) => `<button type="button" class="bell-item ${a.severity}" onclick="openAlert('${l.id}')">
+      <span class="bell-item-t">${escapeHtml(a.label)}</span>
+      <span class="bell-item-w">${escapeHtml(l.name || 'Lead')}${a.detail ? ' · ' + escapeHtml(a.detail) : ''}</span>
+    </button>`);
+
+  const html = bellGroup(waiting.length === 1 ? '1 invitation to answer' : waiting.length + ' invitations to answer', askRows)
+    + bellGroup(today.length === 1 ? '1 on today' : today.length + ' on today', todayRows)
+    + bellGroup(items.length === 1 ? '1 lead needs a person' : items.length + ' leads need a person', leadRows,
+        items.length > leadRows.length ? `<button type="button" class="bell-more" onclick="showAllAlerts()">See all ${items.length} on the board</button>` : '');
+
+  menu.innerHTML = html || '<div class="bell-empty">Nothing needs you right now.</div>';
+}
+// An invitation is answered where invitations are answered.
+function openBellEvent(id){
+  closeAlerts();
+  toggleView('calendar');
+  setTimeout(() => { if(window.PinCalendar) window.PinCalendar.openEvent(id); }, 350);
 }
 function toggleAlerts(e){
   if(e) e.stopPropagation();
@@ -1550,7 +1655,7 @@ function toggleView(view){
     if(el) el.style.display = view===v ? '' : 'none';
   });
   if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
-  else if(view==='today'){ if(window.renderTodayView) window.renderTodayView(); }
+  else if(view==='today'){ try{ loadMyEvents(false); }catch(e){} if(window.renderTodayView) window.renderTodayView(); }
   else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }
   else applyFilters();
 }
@@ -4402,6 +4507,14 @@ function loadInventory(){
   return inventoryLoading;
 }
 const inventoryById = id => (inventory || []).find(p => p.id === id) || null;
+// A site visit stores a CODE, because that is what an agent quotes. "TNAG0002"
+// is no help deciding which of today's two visits to leave for first, so
+// anywhere a person reads it, it gets the name as well.
+function propertyTitleOf(code){
+  if(!code) return '';
+  const p = (inventory || []).find(x => propertyCodeOf(x) === code || x.name === code);
+  return p && p.name ? p.name : '';
+}
 // "ANR003" for coded rows; older inventory rows only have a number as their id, so they go by name.
 const propertyCodeOf = p => p && p.propertyCode && !/^\d+$/.test(p.propertyCode) ? p.propertyCode : '';
 function propertyShortLabel(id){

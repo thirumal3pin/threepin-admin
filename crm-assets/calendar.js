@@ -229,9 +229,11 @@
     // meetings people book most would defeat the point of showing them.
     var inner = '<span class="cal-ev-h"><b>' + esc(e.title) + '</b>' + rsvpHtml(r) + '</span>'
       + (h > 30 ? '<span class="cal-ev-t">' + esc(clock(b.realFrom)) + (e.where ? ' · ' + esc(e.where) : '') + '</span>' : '');
-    // A site visit opens the lead it belongs to; that is the whole reason for
-    // showing it here rather than leaving people in Google Calendar.
-    var open = e.leadId ? ' onclick="openDetail(\'' + esc(e.leadId) + '\')" role="button" tabindex="0"' : '';
+    // Anything the CRM booked opens here — a meeting to answer it, a site visit
+    // to see the lead behind it. Everything else in somebody's calendar is
+    // theirs, and is drawn but not opened.
+    var ours = e.leadId || e.meetingId;
+    var open = ours ? ' onclick="PinCalendar.openEvent(\'' + esc(e.id) + '\')" role="button" tabindex="0"' : '';
     return '<div class="' + cls + '" style="top:' + top.toFixed(1) + 'px;height:' + h.toFixed(1) + 'px;'
       + 'left:' + (b.lane * w).toFixed(2) + '%;width:' + (w - 1).toFixed(2) + '%"'
       + ' title="' + esc(title) + '"' + open + '>' + inner + '</div>';
@@ -525,6 +527,125 @@
 
   function closeFind() { var el = document.getElementById('findSheet'); if (el) el.remove(); }
 
+  // ═══════ OPENING A BOOKING ═══════
+  //
+  // A meeting is answered here, in the calendar, rather than by going and
+  // finding the invitation in your mail. A site visit is answered on the lead,
+  // because the thing you need in order to decide — who the client is, what
+  // they asked for, what the office wrote down — is on the lead and not here.
+  //
+  // It is read AS the person looking, so nothing appears that is not already
+  // in their own calendar, and the server refuses anything the CRM did not
+  // book: the grid draws private appointments as busy blocks, and opening one
+  // must not hand over what it is.
+  var evState = { id: null, loading: false, data: null, error: null };
+
+  function openEvent(id) {
+    evState = { id: id, loading: true, data: null, error: null };
+    closeEvent(true);
+    document.body.insertAdjacentHTML('beforeend', eventHtml());
+    window.crmAuth.getIdToken().then(function (token) {
+      return fetch('/api/tailortalk?action=calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ op: 'event', eventId: id })
+      });
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (evState.id !== id) return;
+      evState.loading = false;
+      if (d && d.ok) evState.data = d.event; else evState.error = (d && d.error) || 'Could not open it';
+      redrawEvent();
+    }).catch(function () {
+      if (evState.id !== id) return;
+      evState.loading = false; evState.error = 'Could not reach the calendar service';
+      redrawEvent();
+    });
+  }
+
+  function redrawEvent() {
+    var el = document.getElementById('evSheet');
+    if (!el) return;
+    el.outerHTML = eventHtml();
+  }
+
+  var ANSWER = { accepted: 'Coming', declined: 'Not coming', tentative: 'Maybe', needsAction: 'No reply yet' };
+
+  function eventHtml() {
+    var d = evState.data;
+    var body;
+    if (evState.loading) body = '<div class="ev-msg">Opening' + '\u2026' + '</div>';
+    else if (evState.error) body = '<div class="ev-msg">' + esc(evState.error) + '</div>';
+    else if (!d) body = '<div class="ev-msg">Nothing to show.</div>';
+    else {
+      var when = d.start ? new Date(d.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+      var till = d.end ? clock(Date.parse(d.end)) : '';
+      var them = (d.attendees || []).map(function (a) {
+        var st = a.status || 'needsAction';
+        return '<div class="ev-who ' + st + '"><span>' + esc(who(a.email)) + '</span>'
+          + '<span class="ev-who-s">' + esc(ANSWER[st] || st) + (a.reason ? ' · “' + esc(a.reason) + '”' : '') + '</span></div>';
+      }).join('');
+      // A site visit sends you to the lead; a meeting is answered right here.
+      var acts = d.leadId
+        ? '<button type="button" class="tt-btn" onclick="PinCalendar.openLead(\'' + esc(d.leadId) + '\')">Open the lead</button>'
+        : (d.mine
+            ? (d.mine !== 'accepted' ? '<button type="button" class="tt-btn" onclick="PinCalendar.answer(\'accepted\')">'
+                + (d.mine === 'declined' ? 'Actually, I can come' : 'I can come') + '</button>' : '')
+              + (d.mine !== 'declined' ? '<button type="button" class="tt-btn quiet" onclick="PinCalendar.decline()">Can' + '\u2019' + 't make it</button>' : '')
+            : '<span class="ev-note">You are not on this one.</span>');
+      body = '<h3>' + esc(d.title) + '</h3>'
+        + '<div class="ev-when">' + esc(when) + (till ? ' – ' + esc(till) : '') + '</div>'
+        + (d.where ? '<div class="ev-where">' + esc(d.where) + '</div>' : '')
+        + (d.meet ? '<a class="ev-meet" href="' + esc(d.meet) + '" target="_blank" rel="noopener">Join the video call</a>' : '')
+        + (d.mine ? '<div class="ev-mine ' + d.mine + '">You: ' + esc(ANSWER[d.mine] || d.mine) + '</div>' : '')
+        + (them ? '<div class="ev-list">' + them + '</div>' : '')
+        + (d.about ? '<div class="ev-about">' + esc(d.about) + '</div>' : '')
+        + '<div class="ev-err" id="evErr"></div>'
+        + '<div class="cal-sheet-acts">' + acts
+        + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.closeEvent()">Close</button></div>';
+    }
+    return '<div class="cal-sheet" id="evSheet" role="dialog" aria-modal="true" aria-label="Booking">'
+      + '<div class="cal-sheet-in ev-sheet">' + body + '</div></div>';
+  }
+
+  function answer(response, reason) {
+    var err = document.getElementById('evErr');
+    var id = evState.id;
+    window.crmAuth.getIdToken().then(function (token) {
+      return fetch('/api/tailortalk?action=calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ op: 'answer', eventId: id, response: response, reason: reason || '' })
+      });
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) {
+        if (err) { err.textContent = (d && d.error) || 'Could not send your answer'; err.classList.add('show'); }
+        return;
+      }
+      if (evState.data) {
+        evState.data.attendees = d.replies || evState.data.attendees;
+        evState.data.mine = response;
+      }
+      redrawEvent();
+      if (typeof showToast === 'function') {
+        showToast(response === 'accepted' ? '✓ You are coming — everyone has been told'
+          : 'Everyone has been told you cannot make it');
+      }
+      load(true);
+    }).catch(function () {
+      if (err) { err.textContent = 'Could not reach the calendar service'; err.classList.add('show'); }
+    });
+  }
+
+  function decline() {
+    var why = prompt('Why can' + '\u2019' + 't you make it? Everyone invited sees this.', '');
+    if (why === null) return;
+    answer('declined', String(why).trim().slice(0, 300));
+  }
+
+  function closeEvent(keepState) {
+    var el = document.getElementById('evSheet');
+    if (el) el.remove();
+    if (!keepState) evState = { id: null, loading: false, data: null, error: null };
+  }
+
   // ═══════ BOOKING A MEETING ═══════
   //
   // Google does the inviting: everyone picked gets a normal invitation they can
@@ -673,6 +794,8 @@
       runFind();
     },
     runFind: runFind, useSlot: useSlot, closeFind: closeFind,
+    openEvent: openEvent, closeEvent: closeEvent, answer: answer, decline: decline,
+    openLead: function (id) { closeEvent(); if (typeof openDetail === 'function') openDetail(id); },
     closeMeeting: closeMeeting,
     book: book,
     // Exposed for the tests, which drive the layout without a real Google.

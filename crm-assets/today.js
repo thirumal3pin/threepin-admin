@@ -34,6 +34,24 @@
   // leads not re-read since the field existed. This file is a plain script, so
   // the shared module reaches it through the bridge crm.html sets up.
   function visitOf(l) { return window.crmPipeline.visitOf(l); }
+  var ANSWER = { accepted: 'accepted', declined: 'cannot make it', tentative: 'maybe', needsAction: 'not accepted yet' };
+  function replyStatus(item, email) {
+    var r = (item.replies || []).filter(function (x) { return String(x.email).toLowerCase() === String(email).toLowerCase(); })[0];
+    return r ? (r.status || 'needsAction') : 'needsAction';
+  }
+  // Who is going, each with where they stand on it.
+  function assignedHtml(item) {
+    if (!item.agents.length) return '<span class="td-unassigned">nobody assigned yet</span>';
+    return item.agents.map(function (e) {
+      var st = replyStatus(item, e);
+      return '<span class="td-agent ' + st + '">' + esc(person(e)) + '<em>' + esc(ANSWER[st] || st) + '</em></span>';
+    }).join('');
+  }
+
+  function isMe(email) {
+    return String(email || '').toLowerCase() === String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase();
+  }
+
   function closedLead(l) {
     var key = typeof stageKeyOfId === 'function' ? stageKeyOfId(l.stageId) : null;
     return key === 'won' || key === 'lost';
@@ -48,8 +66,22 @@
       return v.at && v.at >= from && v.at <= to && v.status !== 'done' && v.status !== 'cancelled' && !closedLead(l);
     }).map(function (l) {
       var v = visitOf(l);
-      return { kind: 'visit', lead: l, at: v.at, property: v.property || '' };
+      return { kind: 'visit', lead: l, at: v.at, property: v.property || '',
+        // Who is going and whether they have actually said yes. A visit with
+        // nobody on it, or one everybody has left unanswered, is the one to
+        // sort out before the morning goes.
+        agents: Array.isArray(l.siteVisitAgents) ? l.siteVisitAgents : [],
+        replies: Array.isArray(l.siteVisitReplies) ? l.siteVisitReplies : [],
+        byPhone: l.siteVisitMode === 'remote' };
     }).sort(function (a, b) { return a.at - b.at; });
+  }
+
+  // A meeting is not a lead, so it comes from the calendar rather than from
+  // the board — the same list the bell reads, fetched once for both. A site
+  // visit is NOT here: it already has a row above, built from the lead, which
+  // carries the client and the seller a calendar entry does not.
+  function meetingsToday() {
+    return (typeof window.myMeetingsToday === 'function' ? window.myMeetingsToday() : []) || [];
   }
 
   // Anything due by the end of today, overdue included — a call you missed on
@@ -117,21 +149,48 @@
 
   function rowHtml(item) {
     var l = item.lead;
-    var id = esc(l.id);
+    // A meeting belongs to the calendar, not to a lead. Everything below that
+    // reaches for l.id has to cope with there being none.
+    var id = esc(l ? l.id : item.meeting.id);
     var head, body, cls = 'td-row';
 
     if (item.kind === 'visit') {
       var seller = sellerFor(l);
+      // The code is what an agent quotes; the name is what tells you which
+      // property this is without going and looking it up.
+      var title = typeof propertyTitleOf === 'function' ? propertyTitleOf(item.property) : '';
       head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
-        + '<span class="td-main"><span class="td-what">Site visit'
-        + (item.property ? ' — <b>' + esc(item.property) + '</b>' : '') + '</span>'
-        + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span></span>';
+        + '<span class="td-main"><span class="td-what">'
+        + (item.byPhone ? 'Coordinate by phone' : 'Site visit')
+        + (item.property ? ' — <b>' + esc(item.property) + '</b>' : '')
+        + (title ? ' <span class="td-prop">' + esc(title) + '</span>' : '') + '</span>'
+        + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span>'
+        + '<span class="td-assigned">' + assignedHtml(item) + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
         + phoneLine('Property owner', seller && seller.name, seller && seller.phone)
         + (seller ? '' : '<div class="td-f"><dt>Property owner</dt><dd><span class="td-none">no owner listing on file for this property</span></dd></div>')
         + field('Looking for', l.propertyInterest)
         + field('Budget', l.budget)
         + field('Notes', latestNote(l));
+    } else if (item.kind === 'meeting') {
+      var m = item.meeting;
+      var ANS = { accepted: 'you are coming', declined: 'you said no', tentative: 'you said maybe', needsAction: 'you have not answered' };
+      // Whether YOU have answered comes first: it is the only part of a
+      // meeting that is still yours to do.
+      head = '<span class="td-time">' + esc(clock(item.at)) + '</span>'
+        + '<span class="td-main"><span class="td-what">' + esc(m.title) + '</span>'
+        + '<span class="td-who">' + (m.where ? esc(m.where) + ' · ' : '')
+        + (m.end ? 'until ' + esc(clock(m.end)) : '') + '</span>'
+        + '<span class="td-assigned"><span class="td-agent ' + (m.mine || 'needsAction') + '">'
+        + esc(ANS[m.mine] || 'you have not answered') + '</span>'
+        + (m.attendees || []).filter(function (a) { return !isMe(a.email); }).slice(0, 4).map(function (a) {
+            return '<span class="td-agent ' + (a.status || 'needsAction') + '">' + esc(person(a.email)) + '</span>';
+          }).join('')
+        + '</span></span>';
+      body = (m.meet ? '<div class="td-f"><dt>Video</dt><dd><a href="' + esc(m.meet) + '" target="_blank" rel="noopener">Join the call</a></dd></div>' : '')
+        + field('Where', m.where)
+        + field('Who else', (m.attendees || []).filter(function (a) { return !isMe(a.email); })
+            .map(function (a) { return person(a.email); }).join(', '));
     } else if (item.kind === 'call') {
       if (item.overdue) cls += ' is-late';
       head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : '') + '</span>'
@@ -157,7 +216,11 @@
     }
 
     var acts = '<div class="td-acts">'
-      + '<button type="button" class="td-act" onclick="openDetail(\'' + id + '\')">Open lead</button>'
+      // A meeting has no lead to open. It opens in the calendar, which is
+      // where it can be answered.
+      + (item.kind === 'meeting'
+          ? '<button type="button" class="td-act" onclick="PinToday.openMeeting(\'' + id + '\')">Open it</button>'
+          : '<button type="button" class="td-act" onclick="openDetail(\'' + id + '\')">Open lead</button>')
       + (item.kind === 'ask' ? '<button type="button" class="td-act done" onclick="markMentionDone(\'' + id + '\')">✓ Done</button>' : '')
       + '</div>';
 
@@ -175,14 +238,22 @@
       + '</section>';
   }
 
+  window.PinToday = {
+    openMeeting: function (id) {
+      if (typeof toggleView === 'function') toggleView('calendar');
+      setTimeout(function () { if (window.PinCalendar) window.PinCalendar.openEvent(id); }, 350);
+    }
+  };
+
   window.renderTodayView = function () {
     var host = document.getElementById('todayView');
     if (!host) return;
 
     var visits = visitsToday();
+    var meetings = meetingsToday().map(function (m) { return { kind: 'meeting', meeting: m, at: m.at, lead: null }; });
     var calls = callsDue();
     var asks = askedOfMe();
-    var total = visits.length + calls.length + asks.length;
+    var total = visits.length + meetings.length + calls.length + asks.length;
 
     var me = person(currentUserEmail);
     var late = calls.filter(function (c) { return c.overdue; }).length;
@@ -194,6 +265,7 @@
     else {
       var bits = [];
       if (visits.length) bits.push(visits.length + (visits.length === 1 ? ' visit' : ' visits'));
+      if (meetings.length) bits.push(meetings.length + (meetings.length === 1 ? ' meeting' : ' meetings'));
       if (calls.length) bits.push(calls.length + (calls.length === 1 ? ' call' : ' calls') + (late ? ' (' + late + ' late)' : ''));
       if (asks.length) bits.push(asks.length + (asks.length === 1 ? ' thing asked of you' : ' things asked of you'));
       summary = bits.join(' · ');
@@ -208,6 +280,8 @@
       + '</header>'
       + sectionHtml('Site visits', 'Booked for today. Open one for both numbers before you leave.',
         visits, 'No visits booked for today.')
+      + sectionHtml('Meetings', 'With the team. Open one to answer it or to join the call.',
+        meetings, 'No meetings today.')
       + sectionHtml('Calls due', 'Follow-ups due by the end of today, including any you missed.',
         calls, 'Nothing due today.')
       + sectionHtml('Asked of you', 'Where a colleague put your name in a note on a lead.',
