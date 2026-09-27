@@ -598,6 +598,21 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .sv-who.needsAction{border-color:var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--amber,#B45309);}
 .sv-who.tentative{border-style:dashed;}
 
+/* Why somebody cannot make it. Without the reason, "Pradeep can't" makes
+   whoever reads it open Google to find out what to do about it. */
+.sv-reasons{grid-column:1/-1;display:flex;flex-direction:column;gap:3px;margin-top:6px;}
+.sv-why{font-size:12px;color:var(--red);}
+/* The agent's own answer, for whoever is signed in. */
+.sv-mine{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-top:9px;padding:9px 11px;border-radius:var(--r2);font-size:13px;
+  border:1px solid var(--amber-line,#F0C98A);background:var(--amber-bg,#FFF7E8);color:var(--ink2);}
+.sv-mine.accepted{border-color:var(--green-line,#A7D8B4);background:var(--green-bg,#EEF8F1);}
+.sv-mine.declined{border-color:var(--red-line);background:var(--red-bg);}
+.sv-mine-acts{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap;}
+.sv-mine-acts .tt-btn{margin-top:0;}
+.sv-mode{display:flex;flex-wrap:wrap;gap:6px;}
+.sv-mode .cm-p{flex:1 1 180px;}
+
 /* ── The scheduler ── */
 .sv-sheet{width:min(520px,100%);}
 .sv-sheet textarea{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);

@@ -142,11 +142,15 @@ export function computeAttention(lead, ctx = {}) {
   // and the daily digest all read from.
   const declined = (Array.isArray(lead.siteVisitReplies) ? lead.siteVisitReplies : [])
     .filter(r => r && r.status === 'declined')
-    .map(r => String(r.email || '').split('@')[0]);
+    .map(r => ({ who: String(r.email || '').split('@')[0], why: r.reason || '' }));
   if (declined.length && visit.at && visit.at > now - HOUR && visit.status !== 'cancelled') {
+    // The reason belongs in the line itself. "Pradeep turned it down" makes
+    // somebody go and ask why; "Pradeep turned it down: in Tambaram until four"
+    // tells them whether to send another agent or move the whole visit.
+    const said = declined.map(d => d.who + (d.why ? ': ' + d.why : '')).join(' · ');
     add('visit_declined', 'high',
       declined.length === 1 ? 'Agent cannot make the site visit' : 'Agents cannot make the site visit',
-      declined.join(', ') + ' turned it down — send somebody else or move it', visit.at);
+      said + (declined.some(d => d.why) ? '' : ' — send somebody else or move it'), visit.at);
   }
 
   if (key === 'visit_pending') {

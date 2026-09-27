@@ -50,7 +50,7 @@ import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
 import { visitOf } from '../crm-assets/pipeline.js';
 
 export const maxDuration = 60;
@@ -341,6 +341,7 @@ async function adminAiPost(request) {
 //   { op: 'day' }              what the team is doing between two instants
 //   { op: 'visit', leadId }    invite the agents going on that lead's site visit
 //   { op: 'replies', leadId }  who has accepted it and who has turned it down
+//   { op: 'respond', ... }     the signed-in agent answers their own invitation
 //   { op: 'meeting', ... }     book, move or call off a meeting among the team
 //
 // The team is settings/{tenant}.team, the same list that backs @mentions. A
@@ -369,7 +370,8 @@ async function calendarPost(request) {
 
       const team = await teamEmails(db, user.tenantId);
       const known = new Set(team.map(e => String(e).toLowerCase()));
-      const visit = { ...visitOf(lead), minutes: lead.siteVisitMinutes || 60, notes: lead.siteVisitNotes || '' };
+      const visit = { ...visitOf(lead), minutes: lead.siteVisitMinutes || 60, notes: lead.siteVisitNotes || '',
+        mode: lead.siteVisitMode === 'remote' ? 'remote' : 'in_person' };
       // Only people on the team can be sent on a visit. Anything else in the
       // field is a stale address or a typo, and inviting it emails a stranger
       // the client's phone number and the seller's.
@@ -417,6 +419,37 @@ async function calendarPost(request) {
       // can all see a refusal without any of them calling Google.
       await ref.update({ siteVisitReplies: replies });
       return json({ ok: true, replies });
+    }
+
+    // An agent answering their own invitation. The same act as answering it in
+    // Gmail, on the same Google event \u2014 so there is no second copy of the
+    // answer anywhere to drift out of step with the first.
+    if (body.op === 'respond') {
+      if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
+      const ref = db.collection('leads').doc(body.leadId);
+      const snap = await ref.get();
+      if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
+      const lead = snap.data();
+      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (!lead.calendarEventId) return json({ ok: false, error: 'There is no invitation to answer' }, 400);
+
+      // You answer for yourself. Accepting on a colleague's behalf would put a
+      // yes on the board that nobody has actually agreed to.
+      const me = String(user.email || '').toLowerCase();
+      const agents = (Array.isArray(lead.siteVisitAgents) ? lead.siteVisitAgents : []).map(e => String(e).toLowerCase());
+      if (!agents.includes(me)) return json({ ok: false, error: 'You are not on this visit' }, 403);
+
+      const r = await respondToVisit({ agent: me, eventId: lead.calendarEventId,
+        response: body.response, reason: typeof body.reason === 'string' ? body.reason : '',
+        leadId: body.leadId });
+      if (!r.ok) {
+        return json({ ok: false, error: r.gone ? 'That invitation is no longer in your calendar'
+          : r.notInvited ? 'You are not on this invitation' : 'That invitation does not belong to this lead' }, 409);
+      }
+      // Kept on the lead so the board, the attention list and the daily digest
+      // all see the answer without any of them calling Google.
+      await ref.update({ siteVisitReplies: r.replies });
+      return json({ ok: true, replies: r.replies });
     }
 
     if (body.op === 'meeting') {

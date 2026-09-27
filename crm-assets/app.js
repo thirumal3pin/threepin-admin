@@ -2972,9 +2972,15 @@ const RSVP_WORD = { accepted: 'coming', declined: 'cannot make it', tentative: '
 
 function visitAgentsOf(l){ return Array.isArray(l.siteVisitAgents) ? l.siteVisitAgents : []; }
 function visitRepliesOf(l){ return Array.isArray(l.siteVisitReplies) ? l.siteVisitReplies : []; }
-function replyFor(l, email){
-  const r = visitRepliesOf(l).find(x => String(x.email).toLowerCase() === String(email).toLowerCase());
-  return r ? r.status : 'needsAction';
+function replyOf(l, email){
+  return visitRepliesOf(l).find(x => String(x.email).toLowerCase() === String(email).toLowerCase()) || null;
+}
+function replyFor(l, email){ const r = replyOf(l, email); return r ? r.status : 'needsAction'; }
+function replyReason(l, email){ const r = replyOf(l, email); return (r && r.reason) || ''; }
+/** Is the person signed in one of the agents sent on this visit? */
+function iAmOnVisit(l){
+  const me = String(currentUserEmail || '').toLowerCase();
+  return !!me && visitAgentsOf(l).some(e => String(e).toLowerCase() === me);
 }
 /** Anyone sent on this visit who has turned it down. This is the message to the office. */
 function visitDecliners(l){
@@ -2984,19 +2990,83 @@ function visitDecliners(l){
 function visitRowHtml(l){
   const P = window.crmPipeline;
   const v = P.visitOf(l);
-  const said = [P.VISIT_STATUS[v.status] || '', v.property, v.at && fmtDue(v.at)].filter(Boolean).join(' \u00b7 ');
+  const said = [P.VISIT_STATUS[v.status] || '', l.siteVisitMode === 'remote' ? 'by phone' : '', v.property, v.at && fmtDue(v.at)]
+    .filter(Boolean).join(' \u00b7 ');
   const agents = visitAgentsOf(l);
   const who = agents.map(e => {
     const st = replyFor(l, e);
+    const why = replyReason(l, e);
     const name = escapeHtml(window.crmMentions.displayName(e) || e);
-    return `<span class="sv-who ${st}" title="${name} \u2014 ${RSVP_WORD[st]}">${name}</span>`;
+    // The reason is on the chip itself, because "Pradeep can't" without the
+    // why makes somebody open Google to find out what to do about it.
+    return `<span class="sv-who ${st}" title="${name} \u2014 ${RSVP_WORD[st]}${why ? ': ' + escapeHtml(why) : ''}">${name}</span>`;
   }).join('');
+  const reasons = agents.map(e => ({ e, why: replyReason(l, e), st: replyFor(l, e) }))
+    .filter(x => x.why && x.st === 'declined')
+    .map(x => `<span class="sv-why">${escapeHtml(window.crmMentions.displayName(x.e) || x.e)}: \u201c${escapeHtml(x.why)}\u201d</span>`).join('');
   return `<div class="st-row sv"><span class="st-label">Site visit</span>
     <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}
       ${who ? `<span class="sv-team">${who}</span>` : ''}
       ${v.at && !agents.length ? '<span class="sv-by">nobody sent yet</span>' : ''}
     </span>
-    <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Schedule'}</button></span></div>`;
+    <span class="st-item-acts"><button type="button" class="tt-btn quiet" onclick="openVisitEditor('${l.id}')">${v.at ? 'Reschedule' : 'Schedule'}</button></span>
+    ${reasons ? `<div class="sv-reasons">${reasons}</div>` : ''}
+    ${myAnswerHtml(l, v)}
+  </div>`;
+}
+
+// The agent's own answer, on the lead, for whoever is signed in. The same act
+// as answering the invitation in Gmail \u2014 it writes to the same Google event,
+// so the two can never disagree. Shown only to somebody actually sent on it:
+// accepting on a colleague's behalf would put a yes on the board that nobody
+// has agreed to.
+function myAnswerHtml(l, v){
+  if(!iAmOnVisit(l) || !v.at || v.status === 'cancelled' || v.status === 'done') return '';
+  const mine = replyFor(l, currentUserEmail);
+  const why = replyReason(l, currentUserEmail);
+  const said = mine === 'accepted' ? 'You are going.'
+    : mine === 'declined' ? `You said you cannot make it${why ? ': \u201c' + escapeHtml(why) + '\u201d' : '.'}`
+    : 'You are on this visit \u2014 can you make it?';
+  return `<div class="sv-mine ${mine}">
+    <span>${said}</span>
+    <span class="sv-mine-acts">
+      ${mine !== 'accepted' ? `<button type="button" class="tt-btn" onclick="answerVisit('${l.id}','accepted')">${mine === 'declined' ? 'Actually, I can go' : 'I can go'}</button>` : ''}
+      ${mine !== 'declined' ? `<button type="button" class="tt-btn quiet" onclick="declineVisit('${l.id}')">Can\u2019t make it</button>` : ''}
+    </span>
+  </div>`;
+}
+
+let answeringVisit = false;
+function answerVisit(id, response, reason){
+  if(answeringVisit) return;
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  answeringVisit = true;
+  window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
+    method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+    body: JSON.stringify({ op:'respond', leadId: id, response: response, reason: reason || '' })
+  })).then(r => r.json()).then(d => {
+    answeringVisit = false;
+    if(!d || !d.ok){ showToast((d && d.error) || 'Could not send your answer'); return; }
+    const cur = leads.find(x => x.id === id);
+    if(!cur) return;
+    cur.siteVisitReplies = d.replies || [];
+    // The reasons this lead needs a person were worked out before this answer
+    // existed, so they have to be thrown away rather than redrawn.
+    forgetAttention(id);
+    renderStandSection(cur);
+    applyFilters();
+    showToast(response === 'accepted' ? '\u2713 You are going \u2014 the office has been told' : 'The office has been told you cannot make it');
+  }).catch(() => { answeringVisit = false; showToast('Could not reach the calendar service'); });
+}
+
+// A refusal without a reason leaves the office guessing whether to send
+// somebody else or move the whole thing, so it asks \u2014 and takes a blank
+// answer rather than trapping anybody who is in a hurry.
+function declineVisit(id){
+  const why = prompt('Why can\u2019t you make it? The office sees this on the lead.', '');
+  if(why === null) return;
+  answerVisit(id, 'declined', String(why).trim().slice(0, 300));
 }
 
 // ═══════ SCHEDULING A SITE VISIT ═══════
@@ -3058,6 +3128,12 @@ function visitSchedulerHtml(l){
         <div><label for="svMins">Minutes</label><select id="svMins">
           ${[30,60,90,120].map(m => `<option value="${m}"${m === mins ? ' selected' : ''}>${m}</option>`).join('')}
         </select></div>
+      </div>
+
+      <label>What kind of visit</label>
+      <div class="sv-mode">
+        <label class="cm-p"><input type="radio" name="svMode" value="in_person" ${l.siteVisitMode === 'remote' ? '' : 'checked'}> Somebody goes there</label>
+        <label class="cm-p"><input type="radio" name="svMode" value="remote" ${l.siteVisitMode === 'remote' ? 'checked' : ''}> By phone \u2014 call and coordinate</label>
       </div>
 
       <label>Who is going</label>
@@ -3162,7 +3238,7 @@ function renderVisitAvailability(){
   note.className = 'sv-hint' + (clashes ? ' warn' : '');
 }
 
-function writeVisit(l, at, status, property, agents, notes, minutes){
+function writeVisit(l, at, status, property, agents, notes, minutes, mode){
   const P = window.crmPipeline;
   const before = P.visitOf(l);
   const beforeAgents = visitAgentsOf(l).join(',');
@@ -3178,6 +3254,7 @@ function writeVisit(l, at, status, property, agents, notes, minutes){
   }
   if(notes !== undefined) l.siteVisitNotes = notes || null;
   if(minutes !== undefined) l.siteVisitMinutes = minutes;
+  if(mode !== undefined) l.siteVisitMode = mode;
   // Who moved it last is what tells the policy to leave this date alone until
   // the lead says something new \u2014 see the site-visit block in _lead-policy.js.
   l.siteVisitBy = currentUserEmail || 'team';
@@ -3213,6 +3290,7 @@ function saveVisitEdit(id){
   const minutes = Number(document.getElementById('svMins').value) || 60;
   const agents = chosenVisitAgents();
   const at = visitWhenChosen();
+  const mode = (document.querySelector('input[name=svMode]:checked') || {}).value === 'remote' ? 'remote' : 'in_person';
 
   const fail = m => { err.textContent = m; err.classList.add('show'); };
   // A viewing with no day is a viewing nobody turns up to. "Asked for" is the
@@ -3224,7 +3302,7 @@ function saveVisitEdit(id){
   if(at && status === 'scheduled' && !agents.length){
     return fail('Pick who is going. An invitation with nobody on it tells nobody anything.');
   }
-  writeVisit(l, at, status, property, agents, notes, minutes);
+  writeVisit(l, at, status, property, agents, notes, minutes, mode);
   showToast(agents.length
     ? `\u2713 Invitation sent to ${agents.map(e => window.crmMentions.displayName(e) || e).join(', ')}`
     : (at ? `Site visit ${fmtDue(at)}` : 'Site visit updated'));

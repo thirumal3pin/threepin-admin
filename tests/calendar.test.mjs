@@ -13,7 +13,7 @@
 // fake Google that records every request, so "it never touched that event" is
 // something the test can actually see rather than assume.
 
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
 
 let pass = 0;
 const fails = [];
@@ -281,6 +281,90 @@ const PROP = { propertyCode: 'ANRL001', name: 'Anna Nagar Residency', location: 
   const made = g.store['sales@threepin.in'][r.eventId];
   ok('a property typed in freely still books', /The plot behind the school/.test(made.summary), made.summary);
   ok('...and says so as the place', made.location === 'The plot behind the school');
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('SOME VISITS ARE A PHONE CALL, NOT A DRIVE');
+// ════════════════════════════════════════════════════════════════════════
+{
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD,
+    visit: { at: AT, status: 'scheduled', property: 'ANRL001', mode: 'remote', notes: 'Client can only talk after 6.' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP, key: KEY, makeClient: g.make });
+  const made = g.store['sales@threepin.in'][r.eventId];
+  // An agent glancing at a lock screen decides whether to set off from the
+  // title. It cannot be a field three lines down nobody opens in the car.
+  ok('a phone-only visit says so in the title', /Coordinate \(call only\)/.test(made.summary), made.summary);
+  ok('...and in the first line of the body', /^BY PHONE/.test(made.description), made.description.slice(0, 60));
+  // A map link is an instruction to drive somewhere they are not going.
+  ok('...and carries NO address to navigate to', made.location === undefined, String(made.location));
+  ok('...but still names the property, which they have to talk about', /Anna Nagar West/.test(made.description));
+  ok('...with the seller to ring', /9840099887/.test(made.description));
+  ok('...and a shorter warning, since there is no journey', made.reminders.overrides[0].minutes === 15);
+}
+{
+  const g = fakeGoogle();
+  const r = await syncVisitEvent({ lead: LEAD, visit: { at: AT, status: 'scheduled', property: 'ANRL001' },
+    subject: 'sales@threepin.in', agents: ['swami@threepin.in'], property: PROP, key: KEY, makeClient: g.make });
+  const made = g.store['sales@threepin.in'][r.eventId];
+  ok('an ordinary visit still reads as one, with the address', /^Site visit:/.test(made.summary) && made.location === 'Anna Nagar West');
+  ok('...and an hour\u2019s warning to travel', made.reminders.overrides[0].minutes === 60);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('ANSWERING, FROM EITHER SIDE');
+// ════════════════════════════════════════════════════════════════════════
+//
+// Answering in Gmail and answering in the CRM are the same act on the same
+// Google event. There is no second copy of the answer to drift out of step,
+// because there is no second copy of the answer.
+const invited = (extra = {}) => stamped('ev1', 'L1', { attendees: [
+  { email: 'swami@threepin.in', responseStatus: 'needsAction' },
+  { email: 'pradeep@threepin.in', responseStatus: 'accepted' }
+], ...extra });
+{
+  const g = fakeGoogle({ 'swami@threepin.in': { ev1: invited() } });
+  const r = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'accepted',
+    leadId: 'L1', key: KEY, makeClient: g.make });
+  const saved = g.store['swami@threepin.in'].ev1.attendees;
+  ok('an agent can accept from inside the CRM', r.ok && saved.find(a => a.email === 'swami@threepin.in').responseStatus === 'accepted');
+  // Sending only the responder has Google treat the rest as removed: saying
+  // yes would uninvite everybody else on the visit.
+  ok('...without uninviting everyone else', saved.length === 2 && saved.find(a => a.email === 'pradeep@threepin.in').responseStatus === 'accepted',
+    JSON.stringify(saved));
+  ok('...and the office is told', g.log.some(x => x.method === 'PATCH' && /sendUpdates=all/.test(x.url)));
+  ok('...with the answer handed straight back to the CRM', (r.replies || []).length === 2, JSON.stringify(r.replies));
+}
+{
+  const g = fakeGoogle({ 'swami@threepin.in': { ev1: invited() } });
+  const r = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'declined',
+    reason: 'I am in Tambaram until four, cannot get there by eleven.', leadId: 'L1', key: KEY, makeClient: g.make });
+  const me = g.store['swami@threepin.in'].ev1.attendees.find(a => a.email === 'swami@threepin.in');
+  ok('a refusal carries the reason', me.responseStatus === 'declined' && /Tambaram/.test(me.comment), JSON.stringify(me));
+  // Google's own field, so a reason typed into Gmail comes back the same way.
+  ok('...in the field Gmail uses for it, so both routes agree', me.comment === 'I am in Tambaram until four, cannot get there by eleven.');
+  ok('...and reaches the CRM with it', (r.replies.find(a => a.email === 'swami@threepin.in') || {}).reason === me.comment);
+}
+{
+  // Read back an answer somebody gave OUTSIDE the CRM, in Gmail.
+  const g = fakeGoogle({ 'sales@threepin.in': { ev1: stamped('ev1', 'L1', { attendees: [
+    { email: 'swami@threepin.in', responseStatus: 'declined', comment: 'Family function that morning.' }
+  ] }) } });
+  const replies = await visitReplies({ organiser: 'sales@threepin.in', eventId: 'ev1', key: KEY, makeClient: g.make });
+  ok('an answer given in Gmail reaches the CRM whole', replies[0].status === 'declined' && /Family function/.test(replies[0].reason),
+    JSON.stringify(replies));
+}
+{
+  const g = fakeGoogle({ 'swami@threepin.in': { ev1: invited() } });
+  const r = await respondToVisit({ agent: 'admin@threepin.in', eventId: 'ev1', response: 'accepted', leadId: 'L1', key: KEY, makeClient: g.make });
+  ok('somebody not invited cannot answer for the room', !r.ok, JSON.stringify(r));
+  const r2 = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'accepted', leadId: 'OTHER', key: KEY, makeClient: g.make });
+  ok('...and an answer meant for another lead is refused', !r2.ok && r2.notOurs, JSON.stringify(r2));
+  const r3 = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'vanished', response: 'accepted', leadId: 'L1', key: KEY, makeClient: g.make });
+  ok('...and an invitation that is gone is said plainly, not thrown', !r3.ok && r3.gone, JSON.stringify(r3));
+  let bad = null;
+  await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'maybe-ish', key: KEY, makeClient: g.make }).catch(e => { bad = e; });
+  ok('...and "maybe-ish" is not an answer', !!bad);
 }
 
 // ════════════════════════════════════════════════════════════════════════

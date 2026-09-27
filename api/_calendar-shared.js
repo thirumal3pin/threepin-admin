@@ -134,24 +134,32 @@ export async function teamCalendar(people, from, to, { key = serviceKey(), makeC
 function visitEventBody(lead, visit, agents, property) {
   const end = visit.at + (visit.minutes || 60) * 60000;
   const code = visit.property ? ` \u00b7 ${visit.property}` : '';
-  // What somebody standing outside the building at 11am actually needs, in the
-  // order they need it: who they are meeting, whose number to ring when nobody
-  // answers the gate, and what they were told to look out for.
+  // Not every viewing needs somebody to drive to it. Some are handled entirely
+  // on the phone \u2014 the agent rings the seller, rings the client, and puts the
+  // two together. An agent glancing at a phone screen has to know which kind
+  // this is before they decide whether to set off, so it goes in the TITLE and
+  // not in a field three lines down that nobody opens in the car.
+  const remote = visit.mode === 'remote';
+  const lead_line = `Client: ${lead.name || 'Lead'}${lead.phone ? ' \u00b7 ' + lead.phone : ''}`;
   const lines = [
-    `Client: ${lead.name || 'Lead'}${lead.phone ? ' \u00b7 ' + lead.phone : ''}`,
+    remote ? 'BY PHONE \u2014 no travel. Call the seller and the client and put the visit together.' : null,
+    remote ? '' : null,
+    lead_line,
     lead.propertyInterest ? `Looking for: ${lead.propertyInterest}` : null,
     lead.budget ? `Budget: ${lead.budget}` : null,
     property && (property.contactName || property.contactNumber)
       ? `Seller: ${property.contactName || '\u2014'}${property.contactNumber ? ' \u00b7 ' + property.contactNumber : ''}` : null,
-    property && property.location ? `Where: ${property.location}` : null,
+    property && property.location ? `${remote ? 'Property' : 'Where'}: ${property.location}` : null,
     visit.notes ? `\nNotes from the office:\n${visit.notes}` : null,
     '',
-    'Booked in the 3 PIN CRM. Accept or decline here and the CRM will show it.'
+    'Booked in the 3 PIN CRM. Accept or decline here or in the CRM \u2014 either way both agree.'
   ].filter(x => x !== null);
   return {
-    summary: `Site visit: ${lead.name || 'Lead'}${code}`,
+    summary: `${remote ? 'Coordinate (call only)' : 'Site visit'}: ${lead.name || 'Lead'}${code}`,
     description: lines.join('\n'),
-    location: (property && property.location) || visit.property || undefined,
+    // A phone job must not put an address in the agent's calendar: the map
+    // link is an instruction to drive somewhere they are not going.
+    location: remote ? undefined : ((property && property.location) || visit.property || undefined),
     start: { dateTime: new Date(visit.at).toISOString(), timeZone: TZ },
     end: { dateTime: new Date(end).toISOString(), timeZone: TZ },
     // The agents are GUESTS, not owners. That is what turns this from an entry
@@ -159,7 +167,7 @@ function visitEventBody(lead, visit, agents, property) {
     // is the difference between assuming a visit is covered and knowing it.
     attendees: (agents || []).map(email => ({ email })),
     extendedProperties: { private: { [STAMP]: lead.id } },
-    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }] },
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: remote ? 15 : 60 }] },
     guestsCanModify: false,
     guestsCanInviteOthers: false
   };
@@ -239,7 +247,11 @@ export async function visitReplies({ organiser, eventId, key = serviceKey(), mak
   try {
     const r = await makeClient(organiser, key).request({
       url: `${CAL}/calendars/${encodeURIComponent(organiser)}/events/${encodeURIComponent(eventId)}` });
-    return (r.data.attendees || []).map(a => ({ email: a.email, status: a.responseStatus || 'needsAction' }));
+    // `comment` is Google's own field for "why" \u2014 the same one the CRM writes
+    // when an agent declines with a reason, so an answer given in Gmail and an
+    // answer given in the CRM come back through one channel.
+    return (r.data.attendees || []).map(a => ({
+      email: a.email, status: a.responseStatus || 'needsAction', reason: a.comment || null }));
   } catch { return []; }
 }
 
@@ -369,4 +381,60 @@ export function freeSlots(day, { from, to, minutes = 30, step = 30 } = {}) {
     if (!busy.some(([s, e]) => t < e && t + span > s)) out.push(t);
   }
   return out;
+}
+
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550 ANSWERING FROM INSIDE THE CRM \u2550\u2550\u2550\u2550\u2550\u2550\u2550
+//
+// An agent can answer the invitation in Gmail, on their phone, or on the lead
+// in the CRM, and all three are the same act: this writes the response onto
+// the SAME Google event everyone else reads, acting as that agent. There is no
+// second copy of the answer to drift out of step, because there is no second
+// copy of the answer.
+//
+// The reason goes in Google's own `comment` field on the attendee, so it comes
+// back through exactly the channel a reason typed into Gmail would.
+const sameEmail = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
+export async function respondToVisit({ agent, eventId, response, reason = '', leadId = null,
+  key = serviceKey(), makeClient = realClient }) {
+  if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
+  if (!agent || !eventId) throw new Error('Who is answering, and to what?');
+  if (!['accepted', 'declined', 'tentative'].includes(response)) throw new Error('That is not an answer');
+
+  const client = makeClient(agent, key);
+  const url = `${CAL}/calendars/${encodeURIComponent(agent)}/events/${encodeURIComponent(eventId)}`;
+  let cur;
+  try {
+    cur = await client.request({ url });
+  } catch (e) {
+    const known = explain(e);
+    if (known instanceof CalendarNotReady) throw known;
+    // The invitation is gone from their calendar \u2014 deleted, or never arrived.
+    return { ok: false, gone: true };
+  }
+
+  // Only ever the CRM's own bookings, the same rule everything else here
+  // follows. An agent's other invitations are answered in their own calendar.
+  const stamp = cur.data.extendedProperties && cur.data.extendedProperties.private
+    && cur.data.extendedProperties.private[STAMP];
+  if (leadId && stamp !== leadId) return { ok: false, notOurs: true };
+
+  const attendees = cur.data.attendees || [];
+  if (!attendees.some(a => sameEmail(a.email, agent))) return { ok: false, notInvited: true };
+
+  // The whole guest list is handed back with one entry changed. Sending only
+  // the responder would have Google treat the others as removed, and an agent
+  // saying "yes" would uninvite everybody else on the visit.
+  const next = attendees.map(a => sameEmail(a.email, agent)
+    ? { ...a, responseStatus: response, comment: reason ? String(reason).slice(0, 500) : undefined }
+    : a);
+
+  try {
+    // sendUpdates=all so the office is told, which is the point of answering.
+    const r = await client.request({ url: url + '?sendUpdates=all', method: 'PATCH', data: { attendees: next } });
+    return { ok: true, replies: (r.data.attendees || []).map(a => ({
+      email: a.email, status: a.responseStatus || 'needsAction', reason: a.comment || null })) };
+  } catch (e) {
+    throw explain(e);
+  }
 }

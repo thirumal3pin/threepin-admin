@@ -60,7 +60,7 @@ window.applyTeamSnapshot({
   sales: { email: 'sales@threepin.in' }
 });
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => '${T}' };
-window.onCrmAuthChange({ email: 'agent.a@example.com' });
+window.onCrmAuthChange({ email: 'swami@threepin.in' });
 window.applyPipelineSnapshot(${JSON.stringify(STAGES)});
 window.applyEnquiryTypesSnapshot(['Property Enquiry','Seller Listing','General']);
 window.applyAutomationSettingsSnapshot({ enabled: true });
@@ -103,6 +103,14 @@ async function open(viewport) {
         { person: 'sales@threepin.in', events: [] }
       ] }) });
       if (b.op === 'visit') { calendarCalls.push(b); return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, eventId: 'ev1', owner: 'sales@threepin.in', agents: b.agents || [] }) }); }
+      if (b.op === 'respond') {
+        calendarCalls.push(b);
+        // What Google hands back: the whole guest list, with this one changed.
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, replies: [
+          { email: 'swami@threepin.in', status: b.response, reason: b.reason || null },
+          { email: 'pradeep@threepin.in', status: 'needsAction', reason: null }
+        ] }) });
+      }
       return route.fulfill({ contentType: 'application/json', body: '{"ok":true,"replies":[]}' });
     }
     if (u.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
@@ -208,13 +216,19 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       agents: document.querySelectorAll('#svAgents input').length,
       properties: document.querySelectorAll('#svProp option').length,
       fits: b ? b.right <= innerWidth + 2 && b.width > 200 : false,
-      freeTextOption: [...document.querySelectorAll('#svProp option')].some(o => o.value === '__free') };
+      freeTextOption: [...document.querySelectorAll('#svProp option')].some(o => o.value === '__free'),
+      // Plenty of viewings need somebody on the phone rather than at the gate.
+      modes: [...document.querySelectorAll('input[name=svMode]')].map(x => x.value),
+      modeDefault: ([...document.querySelectorAll('input[name=svMode]')].find(x => x.checked) || {}).value };
   });
   ok('...which opens one form with everything on it', form.missing.length === 0, form.missing.join(','));
   ok('...listing the team to send', form.agents >= 3, String(form.agents));
   ok('...the inventory to pick a property from', form.properties > 50, String(form.properties));
   ok('...and a way to name one that is not in it', form.freeTextOption);
   ok('...fitting the screen', form.fits, JSON.stringify(form));
+  ok('a visit can be a phone job instead of a journey',
+    form.modes.length === 2 && form.modes.includes('remote'), JSON.stringify(form.modes));
+  ok('...and somebody going there is the default', form.modeDefault === 'in_person', form.modeDefault);
 
   // The question that decides the time, answered without leaving the lead.
   const avail = await page.evaluate(async () => {
@@ -282,11 +296,56 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('the visit date is still not the follow-up date', booked.followUpAt !== booked.at,
     `visit ${booked.at} vs call ${booked.followUpAt}`);
 
+  // ── THE AGENT ANSWERS, ON THE LEAD ──
+  //
+  // The person signed in here is Swami, who was sent on this visit. Answering
+  // in the CRM and answering in Gmail are the same act on the same Google
+  // event, so the two can never disagree.
+  const mine = await page.evaluate(() => {
+    const box = document.querySelector('.sv-mine');
+    return { there: !!box, text: box ? box.textContent.replace(/\s+/g, ' ').trim() : '',
+      buttons: box ? [...box.querySelectorAll('button')].map(b => b.textContent.trim()) : [] };
+  });
+  ok('an agent sent on the visit is asked on the lead itself', mine.there, JSON.stringify(mine));
+  ok('...with both answers offered', mine.buttons.length === 2, JSON.stringify(mine.buttons));
+
+  calendarCalls.length = 0;
+  const accepted = await page.evaluate(async () => {
+    answerVisit('B1', 'accepted');
+    await new Promise(r => setTimeout(r, 400));
+    const l = leads.find(x => x.id === 'B1');
+    return { replies: l.siteVisitReplies, box: (document.querySelector('.sv-mine') || {}).className || '',
+      said: (document.querySelector('.sv-mine span') || {}).textContent || '' };
+  });
+  ok('accepting is sent to Google', calendarCalls.some(c => c.op === 'respond' && c.response === 'accepted'), JSON.stringify(calendarCalls));
+  ok('...and the lead shows it straight away', /accepted/.test(accepted.box), accepted.box);
+  ok('...saying so in the first person', /You are going/i.test(accepted.said), accepted.said);
+
+  // A refusal without a reason leaves the office guessing whether to send
+  // somebody else or move the whole thing.
+  calendarCalls.length = 0;
+  const refused = await page.evaluate(async () => {
+    answerVisit('B1', 'declined', 'In Tambaram until four, cannot get there by eleven.');
+    await new Promise(r => setTimeout(r, 400));
+    forgetAttention('B1');
+    const l = leads.find(x => x.id === 'B1');
+    renderStandSection(l);
+    return { sent: null, reasons: [...document.querySelectorAll('.sv-why')].map(x => x.textContent),
+      attn: [...document.querySelectorAll('.st-item-d')].map(x => x.textContent),
+      chipTitle: [...document.querySelectorAll('.sv-who')].map(x => x.title) };
+  });
+  ok('a refusal carries a reason to Google', calendarCalls.some(c => c.op === 'respond' && /Tambaram/.test(c.reason || '')),
+    JSON.stringify(calendarCalls));
+  ok('...shown on the lead', refused.reasons.some(t => /Tambaram/.test(t)), JSON.stringify(refused.reasons));
+  ok('...on the agent\u2019s own chip', refused.chipTitle.some(t => /Tambaram/.test(t || '')), JSON.stringify(refused.chipTitle));
+  // The whole point of the reason: it decides what the office does next.
+  ok('...and in the job it raises for the office', refused.attn.some(t => /Tambaram/.test(t)), JSON.stringify(refused.attn));
+
   // What the office needs to see when somebody turns it down.
   const declined = await page.evaluate(() => {
     const l = leads.find(x => x.id === 'B1');
-    l.siteVisitReplies = [{ email: 'swami@threepin.in', status: 'accepted' },
-                          { email: 'pradeep@threepin.in', status: 'declined' }];
+    l.siteVisitReplies = [{ email: 'swami@threepin.in', status: 'accepted', reason: null },
+                          { email: 'pradeep@threepin.in', status: 'declined', reason: 'Family function that morning.' }];
     // Exactly what refreshVisitReplies() does when an answer comes back from
     // Google between snapshots: without this the page keeps the reasons the
     // lead had before anybody replied.
