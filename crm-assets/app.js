@@ -1473,8 +1473,9 @@ function loadMyEvents(force){
   if(!currentUserEmail || !window.crmAuth || !window.crmAuth.getIdToken) return;
   myEventsLoading = true;
   const from = Date.now() - 12 * 3600000;
-  // A month ahead, because Daily task can be set to look that far.
-  const to = from + 32 * 86400000;
+  // A month ahead, because Daily task can be set to look that far. The server
+  // refuses anything over 31 days, so this is exactly it: 32 made EVERY call fail.
+  const to = from + 31 * 86400000;   // the most the server allows
   window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
     method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
     body: JSON.stringify({ op:'day', from: from, to: to, people: [currentUserEmail] })
