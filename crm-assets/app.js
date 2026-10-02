@@ -1472,7 +1472,8 @@ function loadMyEvents(force){
   if(!currentUserEmail || !window.crmAuth || !window.crmAuth.getIdToken) return;
   myEventsLoading = true;
   const from = Date.now() - 12 * 3600000;
-  const to = from + 8 * 86400000;
+  // A month ahead, because Daily task can be set to look that far.
+  const to = from + 32 * 86400000;
   window.crmAuth.getIdToken().then(token => fetch('/api/tailortalk?action=calendar', {
     method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
     body: JSON.stringify({ op:'day', from: from, to: to, people: [currentUserEmail] })
@@ -1521,15 +1522,16 @@ function eventsToday(){
 // An invitation for next Thursday is a job for today: somebody booked a room
 // and is waiting to hear, and it does not become your problem only on the
 // morning it happens.
-window.myMeetingsToday = () => {
+window.myMeetingsToday = (until) => {
   const start = new Date(); start.setHours(0,0,0,0);
-  const end = start.getTime() + 86400000;
+  // Today by default; a later end widens it to the week or the month.
+  const end = Math.max(start.getTime() + 86400000, (until || 0) + 1);
   const seen = new Set();
   return myEvents
     .filter(e => e.meetingId && !e.leadId && e.start)
     .filter(e => {
       const t = Date.parse(e.start);
-      const today = t >= start.getTime() && t < end;
+      const today = t >= start.getTime() && t < end;   // within the window
       const waiting = t > Date.now() && myReply(e) === 'needsAction';
       if(today && myReply(e) === 'declined') return false;   // you said no
       return today || waiting;

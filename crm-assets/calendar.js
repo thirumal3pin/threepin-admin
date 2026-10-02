@@ -53,7 +53,7 @@
   // free at four". 'week' and 'month' show ONE person, because six people
   // across seven days is a wall nobody reads, and the question those spans
   // answer is "what has Swami got on" rather than "who is free".
-  var state = { at: startOfDay(Date.now()), span: 'day', person: null, people: [], loading: false, error: null, hint: null };
+  var state = { at: startOfDay(Date.now()), span: 'day', person: null, people: [], loading: false, error: null, hint: null, seq: 0, blank: false, invites: null, upcoming: null, showAllMine: false, invitesAt: 0 };
   var lastFetch = 0;
 
   function startOfDay(ts) { var d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -87,33 +87,187 @@
   // Each call reaches five Google calendars, so it is not something to fire on
   // every render. Refetch happens when the window moves or the page has been
   // sitting for a minute, and never twice at once.
-  function load(force) {
-    var w = windowFor();
-    if (state.loading) return;
-    if (!force && Date.now() - lastFetch < 60000 && state.fetchedFor === w.from + ':' + state.span + ':' + (state.person || '')) return;
-    state.loading = true;
-    state.error = null;
-    state.hint = null;
-    render();
-    window.crmAuth.getIdToken().then(function (token) {
+  //
+  // Opening was slow because every visit started from nothing and waited on
+  // Google. Now the last answer for each window is kept on this device and
+  // drawn at once, while the fresh one is fetched behind it and swapped in
+  // when it lands (stale-while-revalidate). The next day or week is fetched
+  // quietly so stepping forward is instant too, and a page that has been in
+  // the background refreshes itself the moment it is looked at again.
+  var CACHE_PREFIX = 'pinCal:', CACHE_KEEP = 6 * HOUR;
+  function keyFor(w) { return w.from + ':' + state.span + ':' + (state.span === 'day' ? '' : (state.person || '')); }
+  function readCache(key) {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_PREFIX + key) || 'null');
+      return c && Date.now() - c.at < CACHE_KEEP && Array.isArray(c.people) ? c : null;
+    } catch (e) { return null; }
+  }
+  function writeCache(key, people) {
+    try {
+      localStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ at: Date.now(), people: people }));
+    } catch (e) {
+      // Storage full: drop our own old windows and carry on without a cache.
+      try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf(CACHE_PREFIX) === 0) localStorage.removeItem(k); }); } catch (e2) { /* no cache then */ }
+    }
+  }
+  function ask(body) {
+    return window.crmAuth.getIdToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ op: 'day', from: w.from, to: w.to, people: whoFor() || [] })
+        body: JSON.stringify(body)
       });
-    }).then(function (r) { return r.json(); }).then(function (d) {
+    }).then(function (r) { return r.json(); });
+  }
+  function prefetch(w) {
+    var key = keyFor(w);
+    var c = readCache(key);
+    if (c && Date.now() - c.at < 5 * MIN) return;
+    ask({ op: 'day', from: w.from, to: w.to, people: whoFor() || [] }).then(function (d) {
+      if (d && d.ok) writeCache(key, d.people || []);
+    }).catch(function () { /* a missed prefetch costs nothing */ });
+  }
+
+  function load(force) {
+    var w = windowFor();
+    var key = keyFor(w);
+    var seq = ++state.seq;
+    if (!force && Date.now() - lastFetch < 60000 && state.fetchedFor === key) { state.seq--; return; }
+    state.error = null;
+    state.hint = null;
+    // Something to show straight away: the last answer for this window.
+    if (state.fetchedFor !== key) {
+      var c = readCache(key);
+      if (c) { state.people = c.people; state.blank = false; }
+      else state.blank = true;
+    }
+    state.loading = true;
+    render();
+    ask({ op: 'day', from: w.from, to: w.to, people: whoFor() || [] }).then(function (d) {
+      if (seq !== state.seq) return;       // the window moved on while this was in flight
       state.loading = false;
+      state.blank = false;
       lastFetch = Date.now();
-      state.fetchedFor = w.from + ':' + state.span + ':' + (state.person || '');
-      if (d && d.ok) { state.people = d.people || []; state.note = d.note || null; }
+      state.fetchedFor = key;
+      if (d && d.ok) {
+        state.people = d.people || []; state.note = d.note || null;
+        writeCache(key, state.people);
+      }
       // Setup that is not finished is not an outage, and must not be drawn as one.
       else { state.error = (d && d.error) || 'Could not read the calendars'; state.hint = (d && d.hint) || null; state.people = []; }
       render();
+      if (d && d.ok && state.span !== 'month') prefetch({ from: w.to, to: w.to + (w.to - w.from) });
     }).catch(function () {
+      if (seq !== state.seq) return;
       state.loading = false;
-      state.error = 'Could not reach the calendar service';
+      state.blank = false;
+      // Still showing the last good answer is better than an error over it.
+      if (!state.people.length) state.error = 'Could not reach the calendar service';
       render();
     });
+    loadInvites(force);
+  }
+
+  // ── Invitations waiting on you ──
+  //
+  // The grid answers "what is on today". It cannot answer "what am I still
+  // owed an answer on", because that lives on days and hours it is not
+  // showing: after the evening edge, tomorrow, next week. So it is asked
+  // separately: your own calendar for the next fortnight, one call, whatever
+  // day the grid is on.
+  var INVITE_DAYS = 14;
+  function myEmail() { return String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase(); }
+  function pendingFor(events, me) {
+    return (events || []).filter(function (e) {
+      if (e.allDay || e.status === 'cancelled' || !(e.leadId || e.meetingId)) return false;
+      if (!(Date.parse(e.end) > Date.now())) return false;
+      if (String(e.organiser || '').toLowerCase() === me) return false;
+      return (e.attendees || []).some(function (a) { return String(a.email || '').toLowerCase() === me && a.status === 'needsAction'; });
+    }).sort(function (a, b) { return Date.parse(a.start) - Date.parse(b.start); });
+  }
+  // Everything still ahead of you, answered or not. Meetings from outside the
+  // CRM are included because "what do I have on" is the question; only the CRM's
+  // own bookings can be answered from here.
+  function upcomingFor(events, me) {
+    return (events || []).filter(function (e) {
+      if (e.allDay || e.status === 'cancelled' || e.away || e.whereWorking) return false;
+      if (e.kind && e.kind !== 'default') return false;
+      return Date.parse(e.end) > Date.now();
+    }).map(function (e) {
+      return { id: e.id, title: e.title, start: e.start, end: e.end, where: e.where,
+        about: e.about ? String(e.about).slice(0, 600) : null, meet: e.meet, link: e.link,
+        organiser: e.organiser, leadId: e.leadId, meetingId: e.meetingId, attendees: e.attendees || [],
+        mine: ((e.attendees || []).filter(function (a) { return String(a.email || '').toLowerCase() === me; })[0] || {}).status || null };
+    }).sort(function (a, b) { return Date.parse(a.start) - Date.parse(b.start); }).slice(0, 60);
+  }
+  function loadInvites(force) {
+    var me = myEmail();
+    if (!me) return;
+    if (!state.invites) {
+      try {
+        var c = JSON.parse(localStorage.getItem(CACHE_PREFIX + 'invites:' + me) || 'null');
+        if (c && Array.isArray(c.list)) { state.invites = c.list; state.upcoming = c.upcoming || []; render(); }
+      } catch (e) { /* nothing cached */ }
+    }
+    if (!force && Date.now() - state.invitesAt < 60000) return;
+    state.invitesAt = Date.now();
+    var from = Date.now();
+    ask({ op: 'day', from: from, to: from + INVITE_DAYS * DAY, people: [me] }).then(function (d) {
+      if (!d || !d.ok) return;
+      var mine = (d.people || []).filter(function (p) { return String(p.person).toLowerCase() === me; })[0];
+      state.invites = pendingFor(mine && mine.events, me);
+      state.upcoming = upcomingFor(mine && mine.events, me);
+      try { localStorage.setItem(CACHE_PREFIX + 'invites:' + me, JSON.stringify({ at: Date.now(), list: state.invites, upcoming: state.upcoming })); } catch (e) { /* fine */ }
+      render();
+    }).catch(function () { /* the grid still works without it */ });
+  }
+  function whenOf(e) {
+    var t = Date.parse(e.start);
+    var day = new Date(t), today = startOfDay(Date.now());
+    var label = startOfDay(t) === today ? 'Today' : startOfDay(t) === today + DAY ? 'Tomorrow'
+      : day.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    return label + ' \u00b7 ' + clock(t) + ' \u2013 ' + clock(Date.parse(e.end));
+  }
+  function withOf(e, me) {
+    var others = (e.attendees || []).map(function (a) { return a.email; })
+      .filter(function (x) { return x && String(x).toLowerCase() !== me; });
+    if (!others.length) return 'just you';
+    var names = others.slice(0, 3).map(who).join(', ');
+    return 'with ' + names + (others.length > 3 ? ' +' + (others.length - 3) : '');
+  }
+  var MINE_CHIP = { accepted: 'Coming', declined: 'Not coming', tentative: 'Maybe', needsAction: 'Reply needed' };
+  function invitesHtml() {
+    var me = myEmail();
+    var waiting = state.invites || [], ahead = state.upcoming || [];
+    if (!waiting.length && !ahead.length) return '';
+    var rows = waiting.map(function (e) {
+      var id = esc(e.id);
+      var acts = e.leadId
+        ? '<button type="button" class="tt-btn" onclick="PinCalendar.openEvent(\'' + id + '\')">Open</button>'
+        : '<button type="button" class="tt-btn" onclick="PinCalendar.quickAnswer(\'' + id + '\',\'accepted\')">I can come</button>'
+          + '<button type="button" class="tt-btn quiet" onclick="PinCalendar.quickAnswer(\'' + id + '\',\'declined\')">Can\u2019t make it</button>';
+      return '<div class="cal-inv-row"><button type="button" class="cal-inv-t" onclick="PinCalendar.openEvent(\'' + id + '\')">'
+        + '<b>' + esc(e.title) + '</b><span>' + esc(whenOf(e)) + (e.organiser ? ' \u00b7 from ' + esc(who(e.organiser)) : '') + '</span></button>'
+        + '<div class="cal-inv-a">' + acts + '</div></div>';
+    }).join('');
+    var shown = state.showAllMine ? ahead : ahead.slice(0, 5);
+    var mineRows = shown.map(function (e) {
+      var id = esc(e.id);
+      return '<div class="cal-inv-row"><button type="button" class="cal-inv-t" onclick="PinCalendar.openEvent(\'' + id + '\')">'
+        + '<b>' + esc(e.title) + '</b><span>' + esc(whenOf(e)) + ' \u00b7 ' + esc(withOf(e, me)) + '</span></button>'
+        + (e.mine ? '<span class="cal-chip ' + esc(e.mine) + '">' + esc(MINE_CHIP[e.mine] || e.mine) + '</span>' : '') + '</div>';
+    }).join('');
+    var more = ahead.length > 5
+      ? '<button type="button" class="cal-inv-more" onclick="PinCalendar.toggleMine()">' + (state.showAllMine ? 'Show fewer' : 'Show all ' + ahead.length) + '</button>' : '';
+    return '<div class="cal-inv" role="region" aria-label="Your meetings">'
+      + (waiting.length ? '<div class="cal-inv-h">Waiting for your answer <span>' + waiting.length + '</span></div>' + rows : '')
+      + (ahead.length ? '<div class="cal-inv-h plain">Your upcoming meetings <span>' + ahead.length + '</span></div>' + mineRows + more : '')
+      + '</div>';
+  }
+  function quickAnswer(id, response) {
+    evState = { id: id, loading: false, data: null, error: null };
+    if (response === 'declined') return decline();
+    answer(response, '');
   }
 
   // ── Status, the way Teams shows it ──
@@ -354,12 +508,18 @@
   }
 
   function render() {
+    renderMain();
+    var el = document.getElementById('calendarBody');
+    var inv = invitesHtml();
+    if (el && inv) el.insertAdjacentHTML('afterbegin', inv);
+  }
+  function renderMain() {
     var el = document.getElementById('calendarBody');
     if (!el) return;
     var head = document.getElementById('calendarHead');
     if (head) head.innerHTML = headHtml();
 
-    if (state.loading && !state.people.length) { el.innerHTML = '<div class="cal-msg">Reading the team’s calendars…</div>'; return; }
+    if (state.loading && (!state.people.length || state.blank)) { el.innerHTML = '<div class="cal-msg">Reading the team’s calendars…</div>'; return; }
     if (state.error) {
       el.innerHTML = '<div class="cal-msg err"><b>' + esc(state.error) + '</b>'
         + (state.hint ? '<span>' + esc(state.hint) + '</span>' : '')
@@ -652,6 +812,17 @@
   function openEvent(id) {
     evState = { id: id, loading: true, data: null, error: null };
     closeEvent(true);
+    var local = (state.upcoming || []).filter(function (e) { return e.id === id; })[0];
+    if (local && !local.leadId && !local.meetingId) {
+      // Not one the CRM booked, so there is nothing to answer here. It is in
+      // your own calendar, so what it holds is yours to read.
+      evState.loading = false;
+      evState.data = { id: local.id, title: local.title, start: local.start, end: local.end, where: local.where,
+        about: local.about, meet: local.meet, organiser: local.organiser, attendees: local.attendees,
+        mine: null, readOnly: true, link: local.link };
+      document.body.insertAdjacentHTML('beforeend', eventHtml());
+      return;
+    }
     document.body.insertAdjacentHTML('beforeend', eventHtml());
     window.crmAuth.getIdToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
@@ -706,7 +877,8 @@
             ? (d.mine !== 'accepted' ? '<button type="button" class="tt-btn" onclick="PinCalendar.answer(\'accepted\')">'
                 + (d.mine === 'declined' ? 'Actually, I can come' : 'I can come') + '</button>' : '')
               + (d.mine !== 'declined' ? '<button type="button" class="tt-btn quiet" onclick="PinCalendar.decline()">Can' + '\u2019' + 't make it</button>' : '')
-            : '<span class="ev-note">You are not on this one.</span>');
+            : (d.readOnly ? (d.link ? '<a class="tt-btn quiet" href="' + esc(d.link) + '" target="_blank" rel="noopener">Open in Google Calendar</a>' : '')
+                : '<span class="ev-note">You are not on this one.</span>'));
       body = '<h3>' + esc(d.title) + '</h3>'
         + '<div class="ev-when">' + esc(when) + (till ? ' – ' + esc(till) : '') + '</div>'
         + (d.where ? '<div class="ev-where">' + esc(d.where) + '</div>' : '')
@@ -739,6 +911,7 @@
         evState.data.attendees = d.replies || evState.data.attendees;
         evState.data.mine = response;
       }
+      state.invites = (state.invites || []).filter(function (e) { return e.id !== id; });
       redrawEvent();
       if (typeof showToast === 'function') {
         showToast(response === 'accepted' ? '✓ You are coming — everyone has been told'
@@ -970,13 +1143,21 @@
       runFind();
     },
     runFind: runFind, useSlot: useSlot, closeFind: closeFind,
-    openEvent: openEvent, closeEvent: closeEvent, answer: answer, decline: decline,
+    openEvent: openEvent, closeEvent: closeEvent, answer: answer, decline: decline, quickAnswer: quickAnswer, toggleMine: function () { state.showAllMine = !state.showAllMine; render(); },
     openLead: function (id) { closeEvent(); if (typeof openDetail === 'function') openDetail(id); },
     closeMeeting: closeMeeting,
     book: book,
     // Exposed for the tests, which drive the layout without a real Google.
     _state: state, _lanes: lanes, _statusOf: statusOf
   };
+
+  // Looked at again after a while away, or left open: catch up without being
+  // asked. Only when the calendar is the page actually on screen.
+  function onScreen() { var el = document.getElementById('calendarBody'); return !!(el && el.offsetParent); }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && onScreen() && Date.now() - lastFetch > 30000) load(true);
+  });
+  setInterval(function () { if (!document.hidden && onScreen()) load(true); }, 2 * MIN);
 
   window.renderCalendarView = function () { window.PinCalendar.open(); };
 })();

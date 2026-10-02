@@ -21,6 +21,24 @@
   function startOfToday() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function endOfToday() { return startOfToday() + DAY - 1; }
 
+  // How far ahead the screen looks. Today is the default and the narrowest;
+  // the week and the month widen the SAME four lists rather than showing
+  // something else, so nothing is counted differently depending on the toggle.
+  var SPANS = [['day', 'Today'], ['week', 'This week'], ['month', 'This month']];
+  var span = 'day';
+  try { var saved = localStorage.getItem('pinTodaySpan'); if (saved === 'week' || saved === 'month') span = saved; } catch (e) { /* default */ }
+  function endOfSpan() {
+    var d = new Date(startOfToday());
+    if (span === 'week') { d.setDate(d.getDate() + (7 - d.getDay())); return d.getTime() - 1; }   // through Saturday
+    if (span === 'month') { d.setDate(1); d.setMonth(d.getMonth() + 1); return d.getTime() - 1; }
+    return endOfToday();
+  }
+  function spanWord() { return span === 'week' ? 'this week' : span === 'month' ? 'this month' : 'today'; }
+  function dayTag(ts) {
+    if (ts >= startOfToday() && ts <= endOfToday()) return '';
+    return '<em class="td-day">' + esc(new Date(ts).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })) + '</em>';
+  }
+
   function esc(s) { return typeof escapeHtml === 'function' ? escapeHtml(s == null ? '' : s) : String(s == null ? '' : s); }
   // No leading zero: the clock column is narrow, and "3:00 PM" fits on one
   // line where "03:00 PM" wraps and stops looking like a time.
@@ -80,7 +98,7 @@
   // ── What is on today ──
 
   function visitsToday() {
-    var from = startOfToday(), to = endOfToday();
+    var from = startOfToday(), to = endOfSpan();
     return (leads || []).filter(function (l) {
       var v = visitOf(l);
       return v.at && v.at >= from && v.at <= to && v.status !== 'done' && v.status !== 'cancelled' && !closedLead(l);
@@ -101,13 +119,13 @@
   // visit is NOT here: it already has a row above, built from the lead, which
   // carries the client and the seller a calendar entry does not.
   function meetingsToday() {
-    return (typeof window.myMeetingsToday === 'function' ? window.myMeetingsToday() : []) || [];
+    return (typeof window.myMeetingsToday === 'function' ? window.myMeetingsToday(endOfSpan()) : []) || [];
   }
 
   // Anything due by the end of today, overdue included — a call you missed on
   // Friday is part of today whether or not the calendar agrees.
   function callsDue() {
-    var to = endOfToday();
+    var to = endOfSpan();
     var booked = {};
     visitsToday().forEach(function (v) { booked[v.lead.id] = 1; });
     return (leads || []).filter(function (l) {
@@ -181,7 +199,7 @@
       var title = typeof propertyTitleOf === 'function' ? propertyTitleOf(item.property) : '';
       var mineOnVisit = (item.agents || []).some(isMe);
       if (mineOnVisit) cls += ' is-mine';
-      head = '<span class="td-time">' + esc(clock(item.at))
+      head = '<span class="td-time">' + esc(clock(item.at)) + dayTag(item.at)
         + (mineOnVisit ? mineMark(replyStatus(item, currentUserEmail) === 'needsAction') : '') + '</span>'
         + '<span class="td-main"><span class="td-what">'
         + (item.byPhone ? 'Coordinate by phone' : 'Site visit')
@@ -227,7 +245,7 @@
         + (about ? '<div class="td-f"><dt>Notes</dt><dd class="td-pre">' + esc(about) + '</dd></div>' : '');
     } else if (item.kind === 'call') {
       if (item.overdue) cls += ' is-late';
-      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : '') + '</span>'
+      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : dayTag(item.at)) + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(latestNote(l) || 'Follow up') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
@@ -305,6 +323,11 @@
   }
 
   window.PinToday = {
+    setSpan: function (next) {
+      span = next === 'week' || next === 'month' ? next : 'day';
+      try { localStorage.setItem('pinTodaySpan', span); } catch (e) { /* remembered only for this visit */ }
+      window.renderTodayView();
+    },
     answer: function (id, response, reason) {
       if (typeof window.answerMeeting !== 'function') return;
       window.answerMeeting(id, response, reason);
@@ -336,7 +359,7 @@
     // The subtitle is the day in one sentence. "You are clear" is worth saying
     // plainly; so is "two of these are already late".
     var summary;
-    if (!total) summary = 'Nothing booked and nothing owed. A good day to work the board.';
+    if (!total) summary = span === 'day' ? 'Nothing booked and nothing owed. A good day to work the board.' : 'Nothing booked and nothing owed ' + spanWord() + '.';
     else {
       var bits = [];
       if (visits.length) bits.push(visits.length + (visits.length === 1 ? ' visit' : ' visits'));
@@ -352,13 +375,17 @@
       + '<div class="td-eyebrow">' + esc(dayName(Date.now())) + '</div>'
       + '<h1 class="td-title">' + (me ? 'Your day, ' + esc(me) : 'Your day') + '</h1>'
       + '<p class="td-sub">' + esc(summary) + '</p>'
+      + '<div class="td-spans" role="group" aria-label="How far ahead to look">' + SPANS.map(function (o) {
+          return '<button type="button" class="td-span' + (span === o[0] ? ' on' : '') + '" aria-pressed="' + (span === o[0]) + '"'
+            + ' onclick="PinToday.setSpan(\'' + o[0] + '\')">' + o[1] + '</button>';
+        }).join('') + '</div>'
       + '</header>'
-      + sectionHtml('Site visits', 'Booked for today. Open one for both numbers before you leave.',
-        visits, 'No visits booked for today.')
+      + sectionHtml('Site visits', 'Booked ' + spanWord() + '. Open one for both numbers before you leave.',
+        visits, 'No visits booked ' + spanWord() + '.')
       + sectionHtml('Meetings', 'With the team. Open one to answer it or to join the call.',
-        meetings, 'No meetings today.')
-      + sectionHtml('Calls due', 'Follow-ups due by the end of today, including any you missed.',
-        calls, 'Nothing due today.')
+        meetings, 'No meetings ' + spanWord() + '.')
+      + sectionHtml('Calls due', 'Follow-ups due ' + (span === 'day' ? 'by the end of today' : 'by the end of ' + spanWord().replace('this ', 'the ')) + ', including any you missed.',
+        calls, 'Nothing due ' + spanWord() + '.')
       + sectionHtml('Asked of you', 'Where a colleague put your name in a note on a lead.',
         asks, 'Nobody is waiting on you.')
       + '</div>';
