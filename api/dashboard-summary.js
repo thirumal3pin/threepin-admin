@@ -286,6 +286,10 @@ function ago(ms) {
 const isVendor = l => !!(l.tt && l.tt.category && String(l.tt.category).toLowerCase() !== 'sales');
 // When TailorTalk began clearing an escalation on a human reply (first clear seen in the data).
 const CLEAR_ON_REPLY_FROM = Date.parse('2026-09-23T06:30:00Z');
+// The owner's cut-off (2 Oct 2026): escalations that started before 24 Sep IST — and those whose
+// start is unknown because they were already open at the 13 Sep import — are ignored. Only a
+// count of them is shown, at the foot of the section.
+export const ESCALATIONS_FROM = Date.parse('2026-09-24T00:00:00+05:30');
 const istDayStart = now => { const d = new Date(now + 5.5 * HOUR); d.setUTCHours(0, 0, 0, 0); return d.getTime() - 5.5 * HOUR; };
 
 export const ESCALATION_WINDOW_DAYS = 3;
@@ -317,6 +321,8 @@ export function escalationMetrics(leads, now = Date.now()) {
         why: null, pending: t.stage });
     }
   }
+  const ignored = rows.filter(r => r.at == null || r.at < ESCALATIONS_FROM && r.status !== 'cleared').length;
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i].at == null || rows[i].at < ESCALATIONS_FROM) rows.splice(i, 1);
   rows.forEach(r => { r.today = r.at != null && r.at >= dayStart; r.waitMs = r.at ? (r.replyAt || now) - r.at : null; });
   // r.today means "inside the window" (the last ESCALATION_WINDOW_DAYS days).
   const byWait = (a, b) => (b.stillWriting - a.stillWriting) || ((a.at ?? 0) - (b.at ?? 0));
@@ -326,14 +332,14 @@ export function escalationMetrics(leads, now = Date.now()) {
   const stale = rows.filter(r => r.stale).sort((a, b) => (b.replyAt || 0) - (a.replyAt || 0));
   const olderAnswered = rows.filter(r => !r.today && r.answered).sort((a, b) => (b.replyAt || 0) - (a.replyAt || 0));
   const replyTimes = today.filter(r => r.answered && r.waitMs != null && r.waitMs >= 0).map(r => r.waitMs).sort((a, b) => a - b);
-  const aging = { '1–3 days': 0, '3–7 days': 0, 'Over 7 days': 0, 'Before 13 Sep (start unknown)': 0 };
-  olderWaiting.forEach(r => { const age = r.at ? now - r.at : null; aging[age == null ? 'Before 13 Sep (start unknown)' : age < 72 * HOUR ? '1–3 days' : age < 168 * HOUR ? '3–7 days' : 'Over 7 days']++; });
+  const aging = { '3–7 days': 0, 'Over 7 days': 0 };
+  olderWaiting.forEach(r => { aging[now - r.at < 168 * HOUR ? '3–7 days' : 'Over 7 days']++; });
   return {
     today, olderWaiting, olderAnswered, stale, windowStart: dayStart,
     todayAnswered: today.filter(r => r.answered).length,
     todayWaiting: today.filter(r => !r.answered).length,
     medianReplyMsToday: replyTimes.length ? replyTimes[Math.floor((replyTimes.length - 1) / 2)] : null,
-    aging, vendorsOpen
+    aging, vendorsOpen, ignored
   };
 }
 
@@ -378,7 +384,7 @@ function escalationSection(e, now) {
         <td style="${TD}vertical-align:top;">${who(r)}</td>
         <td style="${TD}vertical-align:top;white-space:nowrap;">${r.at ? '<b>' + ago(now - r.at) + '</b><br><span style="color:#888;font-size:11px;">since ' + fmtDateTime(r.at) + '</span>' : '<span style="color:#888;">before 13 Sep</span>'}${r.stillWriting ? '<br><span style="color:#B42318;font-size:11px;">wrote ' + ago(now - r.lastAskAt) + ' ago</span>' : ''}</td>
         <td style="${TD}vertical-align:top;font-size:12px;">${about(r)}</td></tr>`).join('');
-    olderHtml = sub(`Older than 3 days, still not answered — ${e.olderWaiting.length}`, '#B42318')
+    olderHtml = sub(`Since 24 Sep, older than 3 days, still not answered — ${e.olderWaiting.length}`, '#B42318')
       + `<div style="font-family:sans-serif;font-size:12px;color:#444;margin:0 0 6px;">${agingRow}</div>`
       + tableWrap(['Customer', 'Waiting', 'Why · what is pending'], body) + extraLine;
   }
@@ -392,7 +398,7 @@ function escalationSection(e, now) {
         <td style="${TD}">${escapeHtml(r.by ? r.by.split('@')[0] : '—')}</td>
         <td style="${TD}">${r.replyAt ? fmtDateTime(r.replyAt) : '—'}</td>
         <td style="${TD}font-size:12px;">${r.status === 'cleared' ? '<span style="color:#067647;">Cleared today</span>' : '<span style="color:#A85C00;">Replied, still escalated in TailorTalk — clear it there</span>'}</td></tr>`).join('');
-    answeredHtml = sub(`Older than 3 days, answered — ${e.olderAnswered.length}`, '#067647')
+    answeredHtml = sub(`Since 24 Sep, older than 3 days, answered — ${e.olderAnswered.length}`, '#067647')
       + tableWrap(['Customer', 'Replied by', 'When', 'Status'], body) + extraLine;
   }
   // 4. Probably stale: open since before tracking, the team did talk to them — clean-up, not work.
@@ -403,7 +409,11 @@ function escalationSection(e, now) {
       escalated before 13 Sep and the team has replied to them since, but before TailorTalk cleared escalations on a reply — so they still show escalated.
       Clear them in TailorTalk: ${names}${e.stale.length > 12 ? ` and ${e.stale.length - 12} more` : ''}.</p>`;
   }
-  const foot = e.vendorsOpen ? `<p style="font-family:sans-serif;font-size:11px;color:#999;margin-top:6px;">Vendor and collaboration chats are left out (${e.vendorsOpen} escalated).</p>` : '';
+  const footBits = [
+    e.ignored ? `${e.ignored} escalations from before 24 Sep are not counted` : '',
+    e.vendorsOpen ? `vendor and collaboration chats are left out (${e.vendorsOpen} escalated)` : ''
+  ].filter(Boolean);
+  const foot = footBits.length ? `<p style="font-family:sans-serif;font-size:11px;color:#999;margin-top:6px;">${footBits.join('; ').replace(/^./, c => c.toUpperCase())}.</p>` : '';
   return sectionWrap('🚨 Escalations — last 3 days', null, what + tiles + todayHtml + olderHtml + answeredHtml + staleHtml + foot);
 }
 
@@ -452,7 +462,7 @@ function renderDashboardEmailText(m, dateStr, esc) {
     lines.push('(Escalation = TailorTalk handed the chat to a person; it clears once someone replies in TailorTalk.)');
     esc.today.forEach(r => lines.push(`- ${r.answered ? 'ANSWERED' : 'NOT ANSWERED'} ${fmtDateTime(r.at)}: ${r.lead.name || 'Lead'} — ${r.lead.phone || '—'}${r.answered ? ' by ' + (r.by ? r.by.split('@')[0] : 'team') : ''}${r.why ? ' — "' + truncate(r.why, 90) + '"' : ''}`));
     if (esc.olderWaiting.length) {
-      lines.push(`OLDER THAN 3 DAYS, STILL NOT ANSWERED (${esc.olderWaiting.length}):`);
+      lines.push(`SINCE 24 SEP, OLDER THAN 3 DAYS, STILL NOT ANSWERED (${esc.olderWaiting.length}):`);
       esc.olderWaiting.slice(0, 25).forEach(r => lines.push(`- ${r.at ? ago(now - r.at) : 'before 13 Sep'}: ${r.lead.name || 'Lead'} — ${r.lead.phone || '—'}${r.why ? ' — "' + truncate(r.why, 90) + '"' : ''}`));
     }
     lines.push('');

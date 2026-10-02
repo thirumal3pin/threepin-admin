@@ -21,6 +21,7 @@ const leads = [
   lead('A week ago', { escalated: true, escalatedAt: NOW - 8 * 24 * H }),
   lead('Before tracking, never answered', { escalated: true, escalatedAt: null }),
   lead('Before tracking, answered then', { escalated: true, escalatedAt: null, lastHumanAt: Date.parse('2026-09-15T10:00:00Z') }),
+  lead('Before 24 Sep', { escalated: true, escalatedAt: Date.parse('2026-09-20T10:00:00Z') }),
   lead('Cleared last week', { escalated: false, escalationClearedAt: NOW - 7 * 24 * H }),
   { name: 'Vendor', tt: { category: 'others', escalated: true, escalatedAt: NOW - H } },
   { name: 'Manual lead, no TailorTalk' }
@@ -34,8 +35,8 @@ ok('Answered and not answered are counted', e.todayAnswered === 2 && e.todayWait
 ok('A customer who wrote again after escalating is marked', e.today.find(r => r.lead.name === 'Waiting today').stillWriting === true);
 ok('Who answered is named', e.today.find(r => r.lead.name === 'Answered today').by === 'agent.a@example.com');
 ok('Median reply time is from escalation to the reply', e.medianReplyMsToday === 1 * H, String(e.medianReplyMsToday));
-ok('Older unanswered escalations are the backlog', JSON.stringify(names(e.olderWaiting).sort()) === JSON.stringify(['A week ago', 'Before tracking, never answered']), JSON.stringify(names(e.olderWaiting)));
-ok('Answered before clear-on-reply existed is "probably stale", not backlog', JSON.stringify(names(e.stale)) === JSON.stringify(['Before tracking, answered then']));
+ok('Older unanswered escalations since 24 Sep are the backlog', JSON.stringify(names(e.olderWaiting)) === JSON.stringify(['A week ago']), JSON.stringify(names(e.olderWaiting)));
+ok('Escalations from before 24 Sep, or with no known start, are ignored and only counted', e.stale.length === 0 && e.ignored === 3 && !e.olderWaiting.some(r => /Before tracking|Before 24/.test(r.lead.name)), String(e.ignored));
 ok('A clear from last week is not in the report', !e.today.concat(e.olderAnswered).some(r => r.lead.name === 'Cleared last week'));
 ok('Vendors are left out and counted', e.vendorsOpen === 1 && !e.today.some(r => r.lead.name === 'Vendor'));
 
