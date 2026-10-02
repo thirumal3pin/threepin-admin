@@ -1508,9 +1508,15 @@ function myReply(e){
 window.myEventReply = myReply;
 
 /** Bookings I have been invited to and not answered. */
+// A real appointment in my diary, whoever made it: not a day off, a working-
+// location marker or an all-day banner.
+const realEvent = e => e.start && !e.allDay && e.status !== 'cancelled' && !e.away && !e.whereWorking
+  && (!e.kind || e.kind === 'default');
 function unansweredEvents(){
   const now = Date.now();
-  return myEvents.filter(e => e.start && Date.parse(e.start) > now && myReply(e) === 'needsAction');
+  // Invitations made in Google itself count as much as the CRM's own: somebody
+  // is waiting on the answer either way.
+  return myEventsAll.filter(realEvent).filter(e => e.start && Date.parse(e.start) > now && myReply(e) === 'needsAction');
 }
 /** What I have on today, minus anything I have turned down. */
 function eventsToday(){
@@ -1532,8 +1538,8 @@ window.myMeetingsToday = (until) => {
   // Today by default; a later end widens it to the week or the month.
   const end = Math.max(start.getTime() + 86400000, (until || 0) + 1);
   const seen = new Set();
-  return myEvents
-    .filter(e => e.meetingId && !e.leadId && e.start)
+  return myEventsAll
+    .filter(e => realEvent(e) && !e.leadId)
     .filter(e => {
       const t = Date.parse(e.start);
       const today = t >= start.getTime() && t < end;   // within the window
