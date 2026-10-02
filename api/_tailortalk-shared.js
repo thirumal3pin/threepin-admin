@@ -261,6 +261,41 @@ function lastAt(chat, roles) {
 
 // When the conversation currently ends on a message the AI left for the team: the time of that
 // marker, else null. The team closes it by acting on the lead (see ttNeedsAttention in app.js).
+// The words of a customer message. A reply to an earlier message can arrive with its text in
+// metadata and "[object Object]" as the content.
+function userText(m) {
+  const c = String(m.content || '').trim();
+  if (c && c !== '[object Object]') return c;
+  const meta = m.meta || {};
+  return String(meta.user_message || meta.text || '').trim();
+}
+// "Ok", "Thanks", "Hi" say nothing about what the customer wants, so the newest message with
+// some substance is preferred; a bare acknowledgement is used only when there is nothing else.
+const ACK = /^(ok+|okay|k|thanks?|thank you|thx|hi+|hello|hey|yes|yeah|no|fine|sure|done|good|great|👍|🙏)[\s.!]*$/i;
+function askAt(chat, until) {
+  let best = null, bestAny = null;
+  for (const m of chat) {
+    if (m.role !== 'user' || !m.at) continue;
+    if (until && m.at > until + 60000) continue;
+    const text = userText(m);
+    if (!text) continue;
+    if (!bestAny || m.at >= bestAny.at) bestAny = { at: m.at, text };
+    if (!ACK.test(text) && (!best || m.at >= best.at)) best = { at: m.at, text };
+  }
+  const pick = best || bestAny;
+  return pick ? { at: pick.at, text: quoteOf(pick.text) } : null;
+}
+function lastHumanIn(chat) {
+  let t = null;
+  for (const m of chat) if (isHumanReply(m) && m.at && (t === null || m.at > t)) t = m.at;
+  return t;
+}
+function lastHumanByIn(chat) {
+  let best = null;
+  for (const m of chat) if (isHumanReply(m) && m.at && (!best || m.at > best.at)) best = m;
+  return best ? ((best.meta && best.meta.email) || best.email || null) : null;
+}
+
 function awaitingTeamSince(chat) {
   for (let i = chat.length - 1; i >= 0; i--) {
     const m = chat[i];
@@ -269,6 +304,19 @@ function awaitingTeamSince(chat) {
   }
   return null;
 }
+
+// A reply a person on the team typed in TailorTalk. It arrives as an assistant turn marked
+// metadata.type "human_agent" (older payloads: role "human_agent", or text "<Human Agent: …").
+export function isHumanReply(m) {
+  return !!m && !isNoReplyMarker(m) && (m.role === 'human_agent'
+    || (m.meta && m.meta.type === 'human_agent')
+    || /^<human agent/i.test(String(m.content || '').trim()));
+}
+const firstHumanFrom = (chat, from) => {
+  if (!from) return null;
+  const m = chat.find(x => isHumanReply(x) && x.at >= from);
+  return m ? m.at : null;
+};
 
 const quoteOf = s => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > 140 ? t.slice(0, 139) + '…' : t; };
 
@@ -421,6 +469,24 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     escalated: d.escalated === true,
     escalatedAt: switchedOnAt(d.escalated === true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt),
     escalatedTo: textOf(d.escalated_to),
+    // Who answered an escalation, and when — what the EOD report's escalation section reads.
+    // TailorTalk clears an escalation once a person replies (switched on 23 Sep 2026), so the
+    // clear is recorded with the escalation it closed and the first human reply inside it.
+    escalationReplyAt: d.escalated === true
+      ? firstHumanFrom(chat, switchedOnAt(true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt))
+      : null,
+    escalationClearedAt: d.escalated === true ? ((prevTt && prevTt.escalationClearedAt) ?? null)
+      : (prevTt && prevTt.escalated ? occurredAt : ((prevTt && prevTt.escalationClearedAt) ?? null)),
+    lastEscalation: d.escalated !== true && prevTt && prevTt.escalated
+      ? { at: prevTt.escalatedAt ?? null, clearedAt: occurredAt, replyAt: firstHumanFrom(chat, prevTt.escalatedAt) || lastHumanIn(chat) }
+      : ((prevTt && prevTt.lastEscalation) ?? null),
+    // What the escalation is about, in the customer's words: the last thing they wrote up to the
+    // moment it was escalated (or, for one already open when first seen, their latest message),
+    // and the newest message they are still waiting on. Short quotes, for the EOD report.
+    escalationAsk: d.escalated === true ? askAt(chat, switchedOnAt(true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt)) : null,
+    latestAsk: askAt(chat, null),
+    lastHumanAt: lastHumanIn(chat),
+    lastHumanBy: lastHumanByIn(chat),
     flagged: d.flagged === true,
     flaggedAt: switchedOnAt(d.flagged === true, prevTt && prevTt.flagged, prevTt && prevTt.flaggedAt),
     flagDetails: shortValue(d.flag_details, 120),

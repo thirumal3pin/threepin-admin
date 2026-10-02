@@ -267,11 +267,152 @@ async function movedToDeadSection(m) {
   return sectionWrap('🚫 Moved to Not Interested / Spam Today', String(leadsArr.length), tableWrap(['Name', 'Phone', 'Property', 'Reason'], body) + extraLine);
 }
 
-async function renderDashboardEmailHtml(m, dateStr) {
+// ── ESCALATIONS — first thing in the report ─────────────────────────────
+// TailorTalk escalates a chat when its AI hands the customer to a person. Since 23 Sep 2026 the
+// escalation clears when someone on the team replies in TailorTalk (verified against the data:
+// every clear followed a human reply; nothing clears on a timer). The owner reads the day's
+// escalations first — each one answered or not — and the older backlog after.
+// Everything here reads fields the TailorTalk sync keeps on lead.tt; no extra reads.
+const HOUR = 3600000;
+function ago(ms) {
+  if (ms == null || ms < 0) return '—';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h' + (m % 60 && h < 3 ? ' ' + (m % 60) + 'm' : '');
+  const d = Math.floor(h / 24), rh = h % 24;
+  return d + 'd' + (rh && d < 3 ? ' ' + rh + 'h' : '');
+}
+const isVendor = l => !!(l.tt && l.tt.category && String(l.tt.category).toLowerCase() !== 'sales');
+// When TailorTalk began clearing an escalation on a human reply (first clear seen in the data).
+const CLEAR_ON_REPLY_FROM = Date.parse('2026-09-23T06:30:00Z');
+const istDayStart = now => { const d = new Date(now + 5.5 * HOUR); d.setUTCHours(0, 0, 0, 0); return d.getTime() - 5.5 * HOUR; };
+
+export const ESCALATION_WINDOW_DAYS = 3;
+export function escalationMetrics(leads, now = Date.now()) {
+  const dayStart = istDayStart(now) - (ESCALATION_WINDOW_DAYS - 1) * 24 * HOUR;
+  const tt = leads.filter(l => l && l.tt);
+  const vendorsOpen = tt.filter(l => l.tt.escalated && isVendor(l)).length;
+  const sales = tt.filter(l => !isVendor(l));
+
+  // One row per escalation the window is about: still open, or closed inside the window.
+  const rows = [];
+  for (const l of sales) {
+    const t = l.tt;
+    if (t.escalated) {
+      // Answered while still showing escalated: a person replied after it opened (TailorTalk
+      // clears it shortly — the CRM hears at the next event). One open since before tracking
+      // began (13 Sep import) whose last human reply predates clear-on-reply is probably stale:
+      // the team talked to them, but there is no proof the reply came after the escalation.
+      const stale = !t.escalatedAt && t.lastHumanAt && t.lastHumanAt < CLEAR_ON_REPLY_FROM;
+      const replyAt = t.escalationReplyAt || null;
+      const last = t.latestAsk;
+      rows.push({ lead: l, at: t.escalatedAt || null, replyAt: replyAt || (stale ? t.lastHumanAt : null), by: (replyAt || stale) ? t.lastHumanBy : null,
+        answered: !!replyAt, stale: !!stale, status: replyAt ? 'replied-open' : stale ? 'stale' : 'waiting',
+        stillWriting: !replyAt && !!(last && last.at > (t.escalatedAt || 0) && last.at > (t.lastHumanAt || 0)),
+        lastAskAt: last && last.at, why: t.escalationAsk && t.escalationAsk.text, pending: t.stage });
+    } else if (t.escalationClearedAt >= dayStart) {
+      const e = t.lastEscalation || {};
+      rows.push({ lead: l, at: e.at || null, replyAt: e.replyAt || null, by: t.lastHumanBy, answered: true, status: 'cleared',
+        why: null, pending: t.stage });
+    }
+  }
+  rows.forEach(r => { r.today = r.at != null && r.at >= dayStart; r.waitMs = r.at ? (r.replyAt || now) - r.at : null; });
+  // r.today means "inside the window" (the last ESCALATION_WINDOW_DAYS days).
+  const byWait = (a, b) => (b.stillWriting - a.stillWriting) || ((a.at ?? 0) - (b.at ?? 0));
+  // Not answered first (the work), then answered; newest first within each.
+  const today = rows.filter(r => r.today).sort((a, b) => (a.answered - b.answered) || ((b.at || 0) - (a.at || 0)));
+  const olderWaiting = rows.filter(r => !r.today && !r.answered && !r.stale).sort(byWait);
+  const stale = rows.filter(r => r.stale).sort((a, b) => (b.replyAt || 0) - (a.replyAt || 0));
+  const olderAnswered = rows.filter(r => !r.today && r.answered).sort((a, b) => (b.replyAt || 0) - (a.replyAt || 0));
+  const replyTimes = today.filter(r => r.answered && r.waitMs != null && r.waitMs >= 0).map(r => r.waitMs).sort((a, b) => a - b);
+  const aging = { '1–3 days': 0, '3–7 days': 0, 'Over 7 days': 0, 'Before 13 Sep (start unknown)': 0 };
+  olderWaiting.forEach(r => { const age = r.at ? now - r.at : null; aging[age == null ? 'Before 13 Sep (start unknown)' : age < 72 * HOUR ? '1–3 days' : age < 168 * HOUR ? '3–7 days' : 'Over 7 days']++; });
+  return {
+    today, olderWaiting, olderAnswered, stale, windowStart: dayStart,
+    todayAnswered: today.filter(r => r.answered).length,
+    todayWaiting: today.filter(r => !r.answered).length,
+    medianReplyMsToday: replyTimes.length ? replyTimes[Math.floor((replyTimes.length - 1) / 2)] : null,
+    aging, vendorsOpen
+  };
+}
+
+function escalationSection(e, now) {
+  const tile = (v, label, color) => `<div style="display:table-cell;width:25%;padding:4px;"><div style="${CARD}text-align:center;margin:0;">
+      <div style="font-size:22px;font-weight:700;color:${color || '#0A0A0A'};">${v}</div>
+      <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em;">${label}</div></div></div>`;
+  const what = `<p style="font-family:sans-serif;font-size:12px;color:#666;margin:0 0 10px;line-height:1.5;">
+    <b>Escalation</b> = TailorTalk's AI handed the chat to a person (it could not answer, or the customer asked for someone).
+    It clears once someone on the team <b>replies in TailorTalk</b> — it never clears by waiting.</p>`;
+  const tiles = `<div style="display:table;width:100%;margin-bottom:10px;"><div style="display:table-row;">
+      ${tile(e.today.length, 'Escalated · last 3 days')}
+      ${tile(e.todayAnswered, 'Answered', '#067647')}
+      ${tile(e.todayWaiting, 'Not answered', e.todayWaiting ? '#B42318' : '#067647')}
+      ${tile(e.medianReplyMsToday == null ? '—' : ago(e.medianReplyMsToday), 'Median reply time')}
+    </div></div>`;
+  const sub = (txt, color) => `<div style="font-family:sans-serif;font-size:13px;font-weight:700;margin:14px 0 4px;color:${color};">${txt}</div>`;
+  const who = r => `<b>${escapeHtml(r.lead.name || 'Lead')}</b><br><span style="color:#888;font-size:12px;">${escapeHtml(r.lead.phone || '—')}</span>`;
+  const about = r => `${r.why ? '“' + escapeHtml(truncate(r.why, 110)) + '”' : '<span style="color:#888;">—</span>'}${r.pending ? '<br><span style="color:#666;">Pending: ' + escapeHtml(truncate(r.pending, 120)) + '</span>' : ''}`;
+  const state = r => r.answered
+    ? `<span style="color:#067647;font-weight:600;">✓ Answered</span><br><span style="font-size:11px;color:#555;">${escapeHtml(r.by ? r.by.split('@')[0] : 'team')} · ${r.waitMs == null ? '' : 'in ' + ago(r.waitMs)}</span>${r.status === 'replied-open' ? '<br><span style="font-size:11px;color:#A85C00;">still escalated in TailorTalk</span>' : ''}`
+    : `<span style="color:#B42318;font-weight:600;">✗ Not answered</span><br><span style="font-size:11px;color:#555;">waiting ${ago(r.waitMs)}</span>${r.stillWriting ? '<br><span style="font-size:11px;color:#B42318;">wrote again ' + ago(now - r.lastAskAt) + ' ago</span>' : ''}`;
+
+  // 1. The last 3 days' escalations — every one, answered or not, with when it was escalated.
+  let todayHtml;
+  if (!e.today.length) todayHtml = `<p style="font-family:sans-serif;color:#888;font-size:13px;">No escalations in the last 3 days.</p>`;
+  else {
+    const body = e.today.map(r => `<tr>
+        <td style="${TD}vertical-align:top;">${who(r)}</td>
+        <td style="${TD}vertical-align:top;white-space:nowrap;">${fmtDateTime(r.at)}</td>
+        <td style="${TD}vertical-align:top;">${state(r)}</td>
+        <td style="${TD}vertical-align:top;font-size:12px;">${about(r)}</td></tr>`).join('');
+    todayHtml = tableWrap(['Customer', 'Escalated on', 'Status', 'Why · what is pending'], body);
+  }
+
+  // 2. Older escalations nobody has answered yet — the backlog, longest waiting first.
+  let olderHtml = '';
+  if (e.olderWaiting.length) {
+    const agingRow = Object.entries(e.aging).filter(([, n]) => n).map(([k, n]) => `<b>${n}</b> ${escapeHtml(k)}`).join(' · ');
+    const { shown, extraLine } = rowsWithCap(e.olderWaiting, 25);
+    const body = shown.map(r => `<tr>
+        <td style="${TD}vertical-align:top;">${who(r)}</td>
+        <td style="${TD}vertical-align:top;white-space:nowrap;">${r.at ? '<b>' + ago(now - r.at) + '</b><br><span style="color:#888;font-size:11px;">since ' + fmtDateTime(r.at) + '</span>' : '<span style="color:#888;">before 13 Sep</span>'}${r.stillWriting ? '<br><span style="color:#B42318;font-size:11px;">wrote ' + ago(now - r.lastAskAt) + ' ago</span>' : ''}</td>
+        <td style="${TD}vertical-align:top;font-size:12px;">${about(r)}</td></tr>`).join('');
+    olderHtml = sub(`Older than 3 days, still not answered — ${e.olderWaiting.length}`, '#B42318')
+      + `<div style="font-family:sans-serif;font-size:12px;color:#444;margin:0 0 6px;">${agingRow}</div>`
+      + tableWrap(['Customer', 'Waiting', 'Why · what is pending'], body) + extraLine;
+  }
+
+  // 3. Earlier escalations that have had a reply (cleared today, or replied but still flagged).
+  let answeredHtml = '';
+  if (e.olderAnswered.length) {
+    const { shown, extraLine } = rowsWithCap(e.olderAnswered, 15);
+    const body = shown.map(r => `<tr>
+        <td style="${TD}"><b>${escapeHtml(r.lead.name || 'Lead')}</b></td>
+        <td style="${TD}">${escapeHtml(r.by ? r.by.split('@')[0] : '—')}</td>
+        <td style="${TD}">${r.replyAt ? fmtDateTime(r.replyAt) : '—'}</td>
+        <td style="${TD}font-size:12px;">${r.status === 'cleared' ? '<span style="color:#067647;">Cleared today</span>' : '<span style="color:#A85C00;">Replied, still escalated in TailorTalk — clear it there</span>'}</td></tr>`).join('');
+    answeredHtml = sub(`Older than 3 days, answered — ${e.olderAnswered.length}`, '#067647')
+      + tableWrap(['Customer', 'Replied by', 'When', 'Status'], body) + extraLine;
+  }
+  // 4. Probably stale: open since before tracking, the team did talk to them — clean-up, not work.
+  let staleHtml = '';
+  if (e.stale.length) {
+    const names = e.stale.slice(0, 12).map(r => `${escapeHtml(r.lead.name || 'Lead')} <span style="color:#999;">(last reply ${r.replyAt ? fmtDate(r.replyAt) : '—'})</span>`).join(', ');
+    staleHtml = `<p style="font-family:sans-serif;font-size:12px;color:#666;margin:14px 0 0;line-height:1.5;"><b>${e.stale.length} probably stale:</b>
+      escalated before 13 Sep and the team has replied to them since, but before TailorTalk cleared escalations on a reply — so they still show escalated.
+      Clear them in TailorTalk: ${names}${e.stale.length > 12 ? ` and ${e.stale.length - 12} more` : ''}.</p>`;
+  }
+  const foot = e.vendorsOpen ? `<p style="font-family:sans-serif;font-size:11px;color:#999;margin-top:6px;">Vendor and collaboration chats are left out (${e.vendorsOpen} escalated).</p>` : '';
+  return sectionWrap('🚨 Escalations — last 3 days', null, what + tiles + todayHtml + olderHtml + answeredHtml + staleHtml + foot);
+}
+
+export async function renderDashboardEmailHtml(m, dateStr, esc) {
   const wonHeadline = m.movedToWonToday.count
     ? `${m.movedToWonToday.count}${m.movedToWonToday.totalValueINR > 0 ? ` · ${formatINR(m.movedToWonToday.totalValueINR)} combined value` : ''}`
     : null;
   const body = [
+    esc ? escalationSection(esc, Date.now()) : '',
     statCardsHtml(m),
     actionLogSection(m),
     newLeadsTodaySection(m),
@@ -303,8 +444,19 @@ async function renderDashboardEmailHtml(m, dateStr) {
   </div>`;
 }
 
-function renderDashboardEmailText(m, dateStr) {
+function renderDashboardEmailText(m, dateStr, esc) {
   const lines = [`3 PIN Realty — EOD Dashboard Summary — ${dateStr}`, ''];
+  if (esc) {
+    const now = Date.now();
+    lines.push(`ESCALATIONS, LAST 3 DAYS: ${esc.today.length} · answered ${esc.todayAnswered} · not answered ${esc.todayWaiting}`);
+    lines.push('(Escalation = TailorTalk handed the chat to a person; it clears once someone replies in TailorTalk.)');
+    esc.today.forEach(r => lines.push(`- ${r.answered ? 'ANSWERED' : 'NOT ANSWERED'} ${fmtDateTime(r.at)}: ${r.lead.name || 'Lead'} — ${r.lead.phone || '—'}${r.answered ? ' by ' + (r.by ? r.by.split('@')[0] : 'team') : ''}${r.why ? ' — "' + truncate(r.why, 90) + '"' : ''}`));
+    if (esc.olderWaiting.length) {
+      lines.push(`OLDER THAN 3 DAYS, STILL NOT ANSWERED (${esc.olderWaiting.length}):`);
+      esc.olderWaiting.slice(0, 25).forEach(r => lines.push(`- ${r.at ? ago(now - r.at) : 'before 13 Sep'}: ${r.lead.name || 'Lead'} — ${r.lead.phone || '—'}${r.why ? ' — "' + truncate(r.why, 90) + '"' : ''}`));
+    }
+    lines.push('');
+  }
   lines.push(`New today: ${m.newLeadsToday.total} | Followed up: ${m.followedUpToday.count} | Overdue: ${m.overdueFollowUps.count} | Cold: ${m.coldLeads.count}`);
   lines.push(`Pending site visit: ${m.siteVisitPending.total} | Site visits done today: ${m.siteVisitDone.movedTodayCount} | Needs action: ${m.needsAction.total} | Closed today: ${m.movedToWonToday.count}`);
   lines.push('');
@@ -350,11 +502,12 @@ async function dashboardSummaryForTenant(db, tenantId, opts) {
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
 
   const metrics = computeDashboardMetrics(leadsArr, stages, Date.now());
+  const esc = escalationMetrics(leadsArr, Date.now());
   const dateStr = fmtDate(Date.now());
   const subjectPrefix = opts.resend ? '[RE-SENT] ' : '';
   const subject = `${subjectPrefix}3 PIN Realty — EOD Dashboard Summary — ${dateStr}`;
-  const html = await renderDashboardEmailHtml(metrics, dateStr);
-  const text = renderDashboardEmailText(metrics, dateStr);
+  const html = await renderDashboardEmailHtml(metrics, dateStr, esc);
+  const text = renderDashboardEmailText(metrics, dateStr, esc);
 
   const results = [];
   for (const to of recipients) {

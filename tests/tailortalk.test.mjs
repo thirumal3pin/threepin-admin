@@ -330,6 +330,31 @@ section('Timeline entries, category, and what needs a person');
   eq('An escalation that switches on is dated', flip.leadWrite.tt.escalatedAt, Date.parse('2026-09-13T19:00:00+05:30'));
   eq('A live lead has no look-back window', flip.leadWrite.tt.attentionFrom, null);
 
+  // Escalation answered by a person: the EOD report needs who answered, when, and what it was about.
+  {
+    const base = SAMPLE.data.chat_history;
+    const ask = { role: 'user', content: 'Can someone call me about the price?', time: '2026-09-13T13:29:00+00:00' };
+    const human = { role: 'assistant', content: '<Human Agent: Calling you now>', time: '2026-09-13T13:45:00+00:00', metadata: { type: 'human_agent', message: 'Calling you now', email: 'agent.a@example.com' } };
+    const env = (extra, at) => real({ escalated: extra.escalated, chat_history: [...base, ask, ...(extra.human ? [human] : [])] }, { occurred_at: at });
+    const opened = planUpdate({ envelope: env({ escalated: true }, '2026-09-13T13:30:00+00:00'), lead: calm.leadWrite, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 2000 });
+    const o = opened.leadWrite.tt;
+    eq('An escalation carries the customer words that led to it', o.escalationAsk && o.escalationAsk.text, 'Can someone call me about the price?');
+    eq('…and is unanswered until a person replies', o.escalationReplyAt, null);
+    const answered = planUpdate({ envelope: env({ escalated: true, human: true }, '2026-09-13T13:45:30+00:00'), lead: { ...calm.leadWrite, ...opened.leadWrite }, state: opened.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 3000 });
+    const a = answered.leadWrite.tt;
+    eq('A human reply after the escalation is its answer', a.escalationReplyAt, Date.parse('2026-09-13T13:45:00+00:00'));
+    eq('…by that person', a.lastHumanBy, 'agent.a@example.com');
+    const cleared = planUpdate({ envelope: env({ escalated: false, human: true }, '2026-09-13T13:46:00+00:00'), lead: { ...calm.leadWrite, ...answered.leadWrite }, state: answered.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 4000 });
+    const c = cleared.leadWrite.tt;
+    eq('A cleared escalation is dated', c.escalationClearedAt, Date.parse('2026-09-13T13:46:00+00:00'));
+    eq('…and remembers the escalation it closed and its answer', [c.lastEscalation.at, c.lastEscalation.replyAt], [Date.parse('2026-09-13T13:30:00+00:00'), Date.parse('2026-09-13T13:45:00+00:00')]);
+    eq('…and has no open ask', c.escalationAsk, null);
+    const okAfter = planUpdate({ envelope: real({ escalated: true, chat_history: [...base, ask, { role: 'user', content: 'Ok', time: '2026-09-13T13:29:30+00:00' }] }, { occurred_at: '2026-09-13T13:30:00+00:00' }), lead: calm.leadWrite, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 5000 });
+    eq('A bare "Ok" is not shown as the reason when the customer said more', okAfter.leadWrite.tt.escalationAsk.text, 'Can someone call me about the price?');
+    const objectReply = planUpdate({ envelope: real({ escalated: true, chat_history: [...base, { role: 'user', content: { nested: true }, time: '2026-09-13T13:29:00+00:00', metadata: { type: 'reply', user_message: 'Is it still available?' } }] }, { occurred_at: '2026-09-13T13:30:00+00:00' }), lead: calm.leadWrite, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 6000 });
+    eq('A reply whose text sits in metadata is read from there', objectReply.leadWrite.tt.escalationAsk.text, 'Is it still available?');
+  }
+
   const TYPES_B = [...TYPES, 'Vendor / Collaboration'];
   const vendor = planUpdate({ envelope: real({ category: 'others', lead_status: 'vendor pitch', intent_and_who: 'Buy ads on our portal' }), lead: null, state: null, leadId: 'LV', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES_B, now: NOW });
   eq('A vendor gets the Vendor / Collaboration type', vendor.leadWrite.enquiryType, 'Vendor / Collaboration');
