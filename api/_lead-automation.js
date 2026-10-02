@@ -44,6 +44,15 @@ const aiStateRef = (db, tenantId) => db.collection('aiState').doc(tenantId);
 // read, so 100 is at most ~$0.60 a day. LEAD_AI_CLAUDE_DAILY_CAP overrides.
 export const CLAUDE_DAILY_CAP = Number(process.env.LEAD_AI_CLAUDE_DAILY_CAP) || 100;
 const istDay = t => new Date(t + 5.5 * 3600000).toISOString().slice(0, 10);
+// The Anthropic account's Haiku 4.x rate limits (console, 2 Oct 2026), and the owner's rule that
+// lead automation may use at most HALF of each in any minute. Counted per clock minute in
+// aiState, which every function instance shares; a read that would cross half waits a minute.
+export const CLAUDE_LIMITS = { requests: 10000, inputTokens: 10000000, outputTokens: 2000000 };
+export const CLAUDE_SHARE = 0.5;
+const minuteOf = t => Math.floor(t / 60000);
+// Before the call only the case file is known: the system prompt is ~3,500 tokens, the case file
+// ~1 token per 3 characters, and the answer is capped at 1,024.
+const estimateInput = caseFile => 3500 + Math.ceil(caseFile.length / 3);
 
 /**
  * @param {object} db
@@ -97,6 +106,17 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   if (onClaude && used >= CLAUDE_DAILY_CAP) return { leadId, ok: false, error: 'daily Claude cap reached', retry: true, retryAfterMs: 30 * 60000 };
 
   const caseFile = buildCaseFile({ lead, state, notes, stages, now });
+  const st = aiStateSnap.exists ? aiStateSnap.data() : {};
+  const minute = minuteOf(now);
+  const inMinute = onClaude && st.claudeMin === minute ? (st.claudeMinUse || {}) : {};
+  if (onClaude) {
+    const half = k => CLAUDE_LIMITS[k] * CLAUDE_SHARE;
+    if ((inMinute.requests || 0) + 1 > half('requests')
+      || (inMinute.inputTokens || 0) + estimateInput(caseFile) > half('inputTokens')
+      || (inMinute.outputTokens || 0) + 1024 > half('outputTokens')) {
+      return { leadId, ok: false, error: 'over half the Claude rate limit this minute', retry: true, retryAfterMs: 60000 };
+    }
+  }
   let answer;
   try {
     answer = await classifyLead({ client, model, caseFile, now, gemini });
@@ -104,7 +124,18 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     answer = { ok: false, error: String((e && e.message) || e).slice(0, 300), model };
   }
 
-  if (onClaude && apply) await aiStateRef(db, tenantId).set({ claudeDay: day, claudeRuns: used + 1 }, { merge: true });
+  if (onClaude && apply) {
+    const u = answer.usage || {};
+    const use = {
+      requests: (inMinute.requests || 0) + 1,
+      inputTokens: (inMinute.inputTokens || 0) + (u.input_tokens || estimateInput(caseFile)),
+      outputTokens: (inMinute.outputTokens || 0) + (u.output_tokens || 0)
+    };
+    // The busiest minute seen, as a share of the full limit — what the monitoring reads.
+    const share = Math.max(use.requests / CLAUDE_LIMITS.requests, use.inputTokens / CLAUDE_LIMITS.inputTokens, use.outputTokens / CLAUDE_LIMITS.outputTokens);
+    const peak = st.claudePeak && st.claudePeak.share >= share ? st.claudePeak : { share, at: now, ...use };
+    await aiStateRef(db, tenantId).set({ claudeDay: day, claudeRuns: used + 1, claudeMin: minute, claudeMinUse: use, claudePeak: peak }, { merge: true });
+  }
 
   const rid = runId(now);
   const runRecord = {

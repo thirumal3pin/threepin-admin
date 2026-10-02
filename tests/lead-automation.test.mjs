@@ -16,7 +16,7 @@ import { teamKey, handleOf, displayName, mentionedEmails, openMentionFor, openMe
 import { computeAttention, needsAction, teamOwes } from '../crm-assets/leadAttention.js';
 import { buildCaseFile, normaliseVerdict, classifyLead, LEAD_AI_SCHEMA } from '../api/_lead-ai.js';
 import { decideLeadChanges, withinWorkingHours } from '../api/_lead-policy.js';
-import { runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, CLAUDE_DAILY_CAP } from '../api/_lead-automation.js';
+import { runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, CLAUDE_DAILY_CAP, CLAUDE_LIMITS } from '../api/_lead-automation.js';
 import { createFakeDb } from './_fake-firestore.mjs';
 
 let passed = 0, failed = 0;
@@ -661,6 +661,20 @@ section('Runs on Firestore: apply, audit, debounce');
     const gem = await runLeadAutomation(db, T, 'L1', { model: 'gemini-3.5-flash-lite', now: NOW + HOUR, force: true, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(good) }] } }] }) }) } });
     check('...but Gemini is not capped', gem.ok, JSON.stringify(gem));
     db._store.set(`aiState/${T}`, { ...st, claudeDay: '2000-01-01', claudeRuns: CLAUDE_DAILY_CAP });
+    // Never more than half the account's per-minute limits.
+    const minute = Math.floor((NOW + 2 * HOUR) / 60000);
+    const busy = (use) => { db._store.set(`aiState/${T}`, { claudeMin: minute, claudeMinUse: use }); calls.length = 0; return runLeadAutomation(db, T, 'L1', { client: counting, model: 'claude-haiku-4-5', now: NOW + 2 * HOUR, force: true }); };
+    const r1 = await busy({ requests: CLAUDE_LIMITS.requests / 2, inputTokens: 0, outputTokens: 0 });
+    check('Half the requests per minute used: the read waits a minute, no call', r1.retry && r1.retryAfterMs === 60000 && calls.length === 0, JSON.stringify(r1));
+    const r2 = await busy({ requests: 1, inputTokens: CLAUDE_LIMITS.inputTokens / 2 - 100, outputTokens: 0 });
+    check('...the same for input tokens', r2.retry && calls.length === 0);
+    const r3 = await busy({ requests: 1, inputTokens: 0, outputTokens: CLAUDE_LIMITS.outputTokens / 2 - 100 });
+    check('...and for output tokens', r3.retry && calls.length === 0);
+    const r4 = await busy({ requests: 10, inputTokens: 50000, outputTokens: 2000 });
+    const after = db._get(`aiState/${T}`);
+    check('Under half: the read goes ahead and the minute is counted', r4.ok && calls.length === 1 && after.claudeMinUse.requests === 11 && after.claudeMinUse.inputTokens > 50000, JSON.stringify(after.claudeMinUse));
+    check('...and the busiest minute is kept for monitoring', after.claudePeak && after.claudePeak.share > 0 && after.claudePeak.share < 0.5, JSON.stringify(after.claudePeak));
+    db._store.set(`aiState/${T}`, { claudeDay: '2000-01-01' });
   }
 
   // A person moves the lead while the AI is reading — the write-time decision respects it.
