@@ -385,7 +385,11 @@
     // Anything the CRM booked opens here — a meeting to answer it, a site visit
     // to see the lead behind it. Everything else in somebody's calendar is
     // theirs, and is drawn but not opened.
-    var ours = e.leadId || e.meetingId;
+    // Also anything you are yourself invited to, whoever made it: it is already
+    // in your own diary, and it is the one you need to answer.
+    var me = myEmail();
+    var onIt = !!me && (e.attendees || []).some(function (a) { return String(a.email || '').toLowerCase() === me; });
+    var ours = e.leadId || e.meetingId || onIt;
     var open = ours ? ' onclick="PinCalendar.openEvent(\'' + esc(e.id) + '\')" role="button" tabindex="0"' : '';
     // A meeting can be dragged to a new time by whoever booked it. Site visits
     // are not draggable here: moving one changes what an agent was told about a
@@ -826,6 +830,19 @@
     evState = { id: id, loading: true, data: null, error: null };
     closeEvent(true);
     var local = (state.upcoming || []).filter(function (e) { return e.id === id; })[0];
+    if (!local) {
+      // Not in the next fortnight's list (a past one, or another week): the grid
+      // has it, because that is where it was clicked.
+      var me = myEmail();
+      state.people.forEach(function (p) {
+        (p.events || []).forEach(function (e) {
+          if (local || e.id !== id) return;
+          local = { id: e.id, title: e.title, start: e.start, end: e.end, where: e.where, about: e.about, meet: e.meet,
+            link: e.link, organiser: e.organiser, leadId: e.leadId, meetingId: e.meetingId, attendees: e.attendees || [],
+            mine: ((e.attendees || []).filter(function (a) { return String(a.email || '').toLowerCase() === me; })[0] || {}).status || null };
+        });
+      });
+    }
     if (local && !local.leadId && !local.meetingId) {
       // Not one the CRM booked, so there is nothing to answer here. It is in
       // your own calendar, so what it holds is yours to read.
