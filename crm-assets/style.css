@@ -727,6 +727,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    worth clicking: it opens the lead. */
 /* A meeting you booked can be dragged to a new time. The cursor is the only
    hint it needs; a grab handle on a 26px block would be most of the block. */
+.cal-ev[role=button]{cursor:pointer;}
 .cal-ev.movable{cursor:grab;touch-action:none;}
 .cal-ev.movable:active{cursor:grabbing;}
 .cal-ev.dragging{opacity:.55;z-index:5;box-shadow:0 6px 16px rgba(20,18,15,.22);}
