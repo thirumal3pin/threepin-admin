@@ -486,7 +486,7 @@ async function calendarPost(request) {
       const team = await teamEmails(db, user.tenantId);
       const me = String(user.email || '').toLowerCase();
       if (!team.some(e => String(e).toLowerCase() === me)) return json({ ok: false, error: 'Your address is not on the team list' }, 403);
-      const r = await respondToEvent({ agent: me, eventId: body.eventId,
+      const r = await respondToEvent({ agent: me, eventId: body.eventId, anyInvitation: true,
         response: body.response, reason: typeof body.reason === 'string' ? body.reason : '' });
       if (!r.ok) {
         return json({ ok: false, error: r.gone ? 'That invitation is no longer in your calendar'
@@ -568,7 +568,9 @@ async function calendarPost(request) {
     const only = Array.isArray(body.people) && body.people.length
       ? new Set(body.people.map(e => String(e).toLowerCase())) : null;
     const asked = only ? team.filter(e => only.has(String(e).toLowerCase())) : team;
-    return json({ ok: true, people: await teamCalendar(asked.length ? asked : team, from, to) });
+    // The whole team rides along, so the week and month pickers can offer
+    // everybody even though only one person's calendar was read.
+    return json({ ok: true, team, people: await teamCalendar(asked.length ? asked : team, from, to) });
   } catch (e) {
     // Setup that has not been done yet is not an outage, and must not read
     // like one: the CRM shows the hint rather than a red error.

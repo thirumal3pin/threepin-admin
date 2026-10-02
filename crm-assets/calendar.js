@@ -79,7 +79,7 @@
   function whoFor() {
     // One person for the long spans; everybody for a day.
     if (state.span === 'day') return null;
-    return [state.person || (state.people[0] && state.people[0].person) || null].filter(Boolean);
+    return [state.person || defaultPerson() || null].filter(Boolean);
   }
 
   // ── Getting the day ──
@@ -119,15 +119,6 @@
       });
     }).then(function (r) { return r.json(); });
   }
-  function prefetch(w) {
-    var key = keyFor(w);
-    var c = readCache(key);
-    if (c && Date.now() - c.at < 5 * MIN) return;
-    ask({ op: 'day', from: w.from, to: w.to, people: whoFor() || [] }).then(function (d) {
-      if (d && d.ok) writeCache(key, d.people || []);
-    }).catch(function () { /* a missed prefetch costs nothing */ });
-  }
-
   function load(force) {
     var w = windowFor();
     var key = keyFor(w);
@@ -136,10 +127,17 @@
     state.error = null;
     state.hint = null;
     // Something to show straight away: the last answer for this window.
+    var c = readCache(key);
     if (state.fetchedFor !== key) {
-      var c = readCache(key);
       if (c) { state.people = c.people; state.blank = false; }
       else state.blank = true;
+    }
+    // A window fetched under 90 seconds ago is not asked for again just because
+    // somebody clicked back to it. Only the Refresh button insists.
+    if (!force && c && Date.now() - c.at < 90000) {
+      state.seq--; state.fetchedFor = key; state.blank = false; state.loading = false;
+      render();
+      return;
     }
     state.loading = true;
     render();
@@ -151,12 +149,12 @@
       state.fetchedFor = key;
       if (d && d.ok) {
         state.people = d.people || []; state.note = d.note || null;
+        if (d.team && d.team.length) { state.team = d.team; try { localStorage.setItem(CACHE_PREFIX + 'team', JSON.stringify(d.team)); } catch (e) { /* fine */ } }
         writeCache(key, state.people);
       }
       // Setup that is not finished is not an outage, and must not be drawn as one.
       else { state.error = (d && d.error) || 'Could not read the calendars'; state.hint = (d && d.hint) || null; state.people = []; }
       render();
-      if (d && d.ok && state.span !== 'month') prefetch({ from: w.to, to: w.to + (w.to - w.from) });
     }).catch(function () {
       if (seq !== state.seq) return;
       state.loading = false;
@@ -179,26 +177,36 @@
   function myEmail() { return String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase(); }
   function pendingFor(events, me) {
     return (events || []).filter(function (e) {
-      if (e.allDay || e.status === 'cancelled' || !(e.leadId || e.meetingId)) return false;
+      if (e.allDay || e.status === 'cancelled' || e.away || e.whereWorking || (e.kind && e.kind !== 'default')) return false;
       if (!(Date.parse(e.end) > Date.now())) return false;
       if (String(e.organiser || '').toLowerCase() === me) return false;
       return (e.attendees || []).some(function (a) { return String(a.email || '').toLowerCase() === me && a.status === 'needsAction'; });
     }).sort(function (a, b) { return Date.parse(a.start) - Date.parse(b.start); });
   }
-  // Everything still ahead of you, answered or not. Meetings from outside the
-  // CRM are included because "what do I have on" is the question; only the CRM's
-  // own bookings can be answered from here.
+  // Everything still ahead of you, answered or not, whoever booked it.
   function upcomingFor(events, me) {
+    var limit = Date.now() + INVITE_DAYS * DAY;
     return (events || []).filter(function (e) {
       if (e.allDay || e.status === 'cancelled' || e.away || e.whereWorking) return false;
       if (e.kind && e.kind !== 'default') return false;
-      return Date.parse(e.end) > Date.now();
+      return Date.parse(e.end) > Date.now() && Date.parse(e.start) < limit;
     }).map(function (e) {
       return { id: e.id, title: e.title, start: e.start, end: e.end, where: e.where,
         about: e.about ? String(e.about).slice(0, 600) : null, meet: e.meet, link: e.link,
         organiser: e.organiser, leadId: e.leadId, meetingId: e.meetingId, attendees: e.attendees || [],
         mine: ((e.attendees || []).filter(function (a) { return String(a.email || '').toLowerCase() === me; })[0] || {}).status || null };
     }).sort(function (a, b) { return Date.parse(a.start) - Date.parse(b.start); }).slice(0, 60);
+  }
+  // Your own diary is already fetched once for the bell and Daily task. This
+  // page reads that copy rather than asking Google for the same fortnight a
+  // second time.
+  function fromMyDiary() {
+    var me = myEmail();
+    if (!me || typeof window.getMyEventsAll !== 'function') return;
+    var all = window.getMyEventsAll() || [];
+    state.invites = pendingFor(all, me);
+    state.upcoming = upcomingFor(all, me);
+    try { localStorage.setItem(CACHE_PREFIX + 'invites:' + me, JSON.stringify({ at: Date.now(), list: state.invites, upcoming: state.upcoming })); } catch (e) { /* fine */ }
   }
   function loadInvites(force) {
     var me = myEmail();
@@ -209,17 +217,8 @@
         if (c && Array.isArray(c.list)) { state.invites = c.list; state.upcoming = c.upcoming || []; render(); }
       } catch (e) { /* nothing cached */ }
     }
-    if (!force && Date.now() - state.invitesAt < 60000) return;
-    state.invitesAt = Date.now();
-    var from = Date.now();
-    ask({ op: 'day', from: from, to: from + INVITE_DAYS * DAY, people: [me] }).then(function (d) {
-      if (!d || !d.ok) return;
-      var mine = (d.people || []).filter(function (p) { return String(p.person).toLowerCase() === me; })[0];
-      state.invites = pendingFor(mine && mine.events, me);
-      state.upcoming = upcomingFor(mine && mine.events, me);
-      try { localStorage.setItem(CACHE_PREFIX + 'invites:' + me, JSON.stringify({ at: Date.now(), list: state.invites, upcoming: state.upcoming })); } catch (e) { /* fine */ }
-      render();
-    }).catch(function () { /* the grid still works without it */ });
+    if (typeof window.refreshMyEvents === 'function') window.refreshMyEvents(!!force);
+    if (typeof window.getMyEventsAll === 'function' && (window.getMyEventsAll() || []).length) { fromMyDiary(); render(); }
   }
   function whenOf(e) {
     var t = Date.parse(e.start);
@@ -654,8 +653,8 @@
     // everybody, and a picker there would suggest it did not.
     var whoPick = state.span === 'day' ? '' :
       '<select class="cal-who" aria-label="Whose calendar" onchange="PinCalendar.setPerson(this.value)">'
-      + state.people.map(function (p) {
-          return '<option value="' + esc(p.person) + '"' + (chosenPersonEmail() === p.person ? ' selected' : '') + '>' + esc(who(p.person)) + '</option>';
+      teamList().map(function (e) {
+          return '<option value="' + esc(e) + '"' + (chosenPersonEmail() === e ? ' selected' : '') + '>' + esc(who(e)) + '</option>';
         }).join('') + '</select>';
 
     return '<div class="cal-nav">'
@@ -674,6 +673,20 @@
       + '</div>';
   }
   function chosenPersonEmail() { var p = chosenPerson(); return p ? p.person : null; }
+  // Everybody on the team, not only whoever the last read happened to include.
+  function teamList() {
+    var t = state.team;
+    if (!t) { try { t = JSON.parse(localStorage.getItem(CACHE_PREFIX + 'team') || 'null'); } catch (e) { t = null; } }
+    var list = (t && t.length ? t : state.people.map(function (p) { return p.person; })).slice();
+    state.people.forEach(function (p) { if (list.indexOf(p.person) < 0) list.push(p.person); });
+    return list;
+  }
+  // Week and month open on YOU: the first thing anybody wants there is their own.
+  function defaultPerson() {
+    var me = myEmail();
+    var hit = teamList().filter(function (e) { return String(e).toLowerCase() === me; })[0];
+    return hit || (state.people[0] || {}).person || null;
+  }
 
   // \u2550\u2550\u2550\u2550\u2550\u2550\u2550 FINDING A TIME \u2550\u2550\u2550\u2550\u2550\u2550\u2550
   //
@@ -819,7 +832,7 @@
       evState.loading = false;
       evState.data = { id: local.id, title: local.title, start: local.start, end: local.end, where: local.where,
         about: local.about, meet: local.meet, organiser: local.organiser, attendees: local.attendees,
-        mine: null, readOnly: true, link: local.link };
+        mine: local.mine, readOnly: true, link: local.link };
       document.body.insertAdjacentHTML('beforeend', eventHtml());
       return;
     }
@@ -877,8 +890,10 @@
             ? (d.mine !== 'accepted' ? '<button type="button" class="tt-btn" onclick="PinCalendar.answer(\'accepted\')">'
                 + (d.mine === 'declined' ? 'Actually, I can come' : 'I can come') + '</button>' : '')
               + (d.mine !== 'declined' ? '<button type="button" class="tt-btn quiet" onclick="PinCalendar.decline()">Can' + '\u2019' + 't make it</button>' : '')
-            : (d.readOnly ? (d.link ? '<a class="tt-btn quiet" href="' + esc(d.link) + '" target="_blank" rel="noopener">Open in Google Calendar</a>' : '')
-                : '<span class="ev-note">You are not on this one.</span>'));
+            : '<span class="ev-note">You are not on this one.</span>');
+      // Somebody else's invitation still gets the same two answers, and a way
+      // through to Google for everything the CRM does not show.
+      if (d.readOnly && d.link) acts += '<a class="tt-btn quiet" href="' + esc(d.link) + '" target="_blank" rel="noopener">Open in Google Calendar</a>';
       body = '<h3>' + esc(d.title) + '</h3>'
         + '<div class="ev-when">' + esc(when) + (till ? ' – ' + esc(till) : '') + '</div>'
         + (d.where ? '<div class="ev-where">' + esc(d.where) + '</div>' : '')
@@ -912,6 +927,8 @@
         evState.data.mine = response;
       }
       state.invites = (state.invites || []).filter(function (e) { return e.id !== id; });
+      (state.upcoming || []).forEach(function (e) { if (e.id === id) { e.mine = response; e.attendees = d.replies || e.attendees; } });
+      if (typeof window.refreshMyEvents === 'function') window.refreshMyEvents(true);
       redrawEvent();
       if (typeof showToast === 'function') {
         showToast(response === 'accepted' ? '✓ You are coming — everyone has been told'
@@ -1124,17 +1141,17 @@
       if (state.span === 'week') state.at = startOfWeek(state.at) + n * 7 * DAY;
       else if (state.span === 'month') { var d = new Date(startOfMonth(state.at)); d.setMonth(d.getMonth() + n); state.at = d.getTime(); }
       else state.at += n * DAY;
-      load(true);
+      load(false);
     },
-    today: function () { state.at = startOfDay(Date.now()); load(true); },
+    today: function () { state.at = startOfDay(Date.now()); load(false); },
     newMeeting: function () { newMeeting(null); },
     editEvent: editEvent, callOff: callOff,
     setSpan: function (span) {
       state.span = span;
-      if (span !== 'day' && !state.person) state.person = (state.people[0] || {}).person || null;
-      load(true);
+      if (span !== 'day' && !state.person) state.person = defaultPerson();
+      load(false);
     },
-    setPerson: function (email) { state.person = email; load(true); },
+    setPerson: function (email) { state.person = email; load(false); },
     findTime: function () {
       if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
       closeFind();
@@ -1143,7 +1160,8 @@
       runFind();
     },
     runFind: runFind, useSlot: useSlot, closeFind: closeFind,
-    openEvent: openEvent, closeEvent: closeEvent, answer: answer, decline: decline, quickAnswer: quickAnswer, toggleMine: function () { state.showAllMine = !state.showAllMine; render(); },
+    openEvent: openEvent, closeEvent: closeEvent, answer: answer, decline: decline, quickAnswer: quickAnswer,
+    myEventsChanged: function () { fromMyDiary(); if (onScreen()) render(); }, toggleMine: function () { state.showAllMine = !state.showAllMine; render(); },
     openLead: function (id) { closeEvent(); if (typeof openDetail === 'function') openDetail(id); },
     closeMeeting: closeMeeting,
     book: book,
@@ -1157,7 +1175,7 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && onScreen() && Date.now() - lastFetch > 30000) load(true);
   });
-  setInterval(function () { if (!document.hidden && onScreen()) load(true); }, 2 * MIN);
+  setInterval(function () { if (!document.hidden && onScreen()) load(true); }, 5 * MIN);
 
   window.renderCalendarView = function () { window.PinCalendar.open(); };
 })();

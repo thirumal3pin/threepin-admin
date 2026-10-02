@@ -13,7 +13,7 @@
 // fake Google that records every request, so "it never touched that event" is
 // something the test can actually see rather than assume.
 
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, findVisitEvent, recurrenceRule, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, findVisitEvent, recurrenceRule, respondToEvent, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
 
 let pass = 0;
 const fails = [];
@@ -375,6 +375,23 @@ const invited = (extra = {}) => stamped('ev1', 'L1', { attendees: [
   let bad = null;
   await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'maybe-ish', key: KEY, makeClient: g.make }).catch(e => { bad = e; });
   ok('...and "maybe-ish" is not an answer', !!bad);
+}
+
+{
+  // An invitation made in Google itself, not by the CRM, sitting in the agent's own calendar.
+  const plain = () => ({ id: 'g1', summary: 'Studios', start: { dateTime: '2026-10-03T12:00:00+05:30' }, end: { dateTime: '2026-10-03T13:00:00+05:30' },
+    organizer: { email: 'rajesh@threepin.in' },
+    attendees: [{ email: 'rajesh@threepin.in', responseStatus: 'accepted' }, { email: 'swami@threepin.in', responseStatus: 'needsAction' }] });
+  const g = fakeGoogle({ 'swami@threepin.in': { g1: plain() } });
+  const refused = await respondToEvent({ agent: 'swami@threepin.in', eventId: 'g1', response: 'accepted', key: KEY, makeClient: g.make });
+  ok('by default only the CRM own bookings can be answered', !refused.ok && refused.notOurs, JSON.stringify(refused));
+  const r = await respondToEvent({ agent: 'swami@threepin.in', eventId: 'g1', response: 'accepted', anyInvitation: true, key: KEY, makeClient: g.make });
+  const saved = g.store['swami@threepin.in'].g1.attendees;
+  ok('...but your own invitation from Google can be answered as you', r.ok && saved.find(a => a.email === 'swami@threepin.in').responseStatus === 'accepted', JSON.stringify(r));
+  ok('...without touching anyone else answer', saved.find(a => a.email === 'rajesh@threepin.in').responseStatus === 'accepted');
+  const g2 = fakeGoogle({ 'swami@threepin.in': { g1: plain() } });
+  const stranger = await respondToEvent({ agent: 'admin@threepin.in', eventId: 'g1', response: 'accepted', anyInvitation: true, key: KEY, makeClient: g2.make });
+  ok('...and still only if you are on the guest list', !stranger.ok);
 }
 
 // ════════════════════════════════════════════════════════════════════════

@@ -1462,6 +1462,7 @@ function renderTtSection(l){
 // Only this person's calendar, and only what the CRM booked: a meeting to
 // answer, a visit to turn up to. Everything else in their diary is theirs.
 let myEvents = [];
+let myEventsAll = [];   // everything in my own diary, not only what the CRM booked
 let myEventsAt = 0;
 let myEventsLoading = false;
 const MY_EVENTS_TTL = 120000;
@@ -1482,7 +1483,9 @@ function loadMyEvents(force){
     myEventsAt = Date.now();
     const mine = (d && d.ok && (d.people || [])[0]) || null;
     // A meeting or a visit the CRM made. Anything else is not ours to show.
-    myEvents = mine ? (mine.events || []).filter(e => e.meetingId || e.leadId) : [];
+    myEventsAll = mine ? (mine.events || []) : [];
+    myEvents = myEventsAll.filter(e => e.meetingId || e.leadId);
+    try{ if(window.PinCalendar) window.PinCalendar.myEventsChanged(); }catch(e){}
     try{ renderBell(); }catch(e){}
     if(currentView === 'today' && window.renderTodayView) window.renderTodayView();
   }).catch(() => {
@@ -1493,6 +1496,8 @@ function loadMyEvents(force){
   });
 }
 window.getMyEvents = () => myEvents;
+window.getMyEventsAll = () => myEventsAll;
+window.refreshMyEvents = loadMyEvents;
 
 /** My answer on one of them, from the attendee list. */
 function myReply(e){

@@ -128,7 +128,12 @@ async function eventsFor(subject, fromIso, toIso, key, make) {
     + `&singleEvents=true&orderBy=startTime&maxResults=100&timeZone=${encodeURIComponent(TZ)}`
     // Days off and working-location markers are separate event types and do not
     // arrive unless they are asked for by name.
-    + '&eventTypes=default&eventTypes=outOfOffice&eventTypes=workingLocation&eventTypes=focusTime';
+    + '&eventTypes=default&eventTypes=outOfOffice&eventTypes=workingLocation&eventTypes=focusTime'
+    // Only the fields drawn below. A calendar answers with dozens of fields per
+    // event (conference data, reminders, creator, sequence...) that nothing here
+    // reads, and across six calendars that is most of what goes over the wire.
+    + '&fields=' + encodeURIComponent('items(id,summary,start,end,location,description,transparency,status,eventType,'
+      + 'workingLocationProperties,extendedProperties/private,organizer/email,attendees(email,responseStatus,self),hangoutLink,htmlLink)');
   const r = await make(subject, key).request({ url });
   return (r.data.items || [])
     // A declined invitation is not a commitment, and showing it as one is how
@@ -513,7 +518,7 @@ export function freeSlots(day, { from, to, minutes = 30, step = 30 } = {}) {
 // back through exactly the channel a reason typed into Gmail would.
 
 
-export async function respondToEvent({ agent, eventId, response, reason = '', leadId = null,
+export async function respondToEvent({ agent, eventId, response, reason = '', leadId = null, anyInvitation = false,
   key = serviceKey(), makeClient = realClient }) {
   if (!key) throw new CalendarNotReady('No Google service account is configured on this deployment');
   if (!agent || !eventId) throw new Error('Who is answering, and to what?');
@@ -540,7 +545,13 @@ export async function respondToEvent({ agent, eventId, response, reason = '', le
   // answered, or read, from here.
   const priv = (cur.data.extendedProperties && cur.data.extendedProperties.private) || {};
   if (leadId) { if (priv[STAMP] !== leadId) return { ok: false, notOurs: true }; }
-  else if (!priv[STAMP] && !priv[MEET_STAMP]) return { ok: false, notOurs: true };
+  // anyInvitation: the signed-in person answering an invitation sitting in
+  // THEIR OWN calendar, whoever sent it. That is acting as themselves on their
+  // own copy, exactly what the Respond buttons in Google do, so the CRM's-own-
+  // bookings rule (which protects what the CRM would otherwise reveal about
+  // other people's diaries) has nothing to guard here. They must still be on
+  // the guest list, checked below.
+  else if (!anyInvitation && !priv[STAMP] && !priv[MEET_STAMP]) return { ok: false, notOurs: true };
 
   const attendees = cur.data.attendees || [];
   if (!attendees.some(a => sameEmail(a.email, agent))) return { ok: false, notInvited: true };
