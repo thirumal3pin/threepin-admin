@@ -14,6 +14,10 @@ import { STAGE_DEFS, LADDER, LOST_REASONS, HOLD_REASONS, stageKeyOf, stageDef } 
 // runs on Claude instead (Claude Haiku 4.5 was used for testing).
 export const LEAD_AI_MODEL = process.env.LEAD_AI_MODEL || 'gemini-3.5-flash-lite';
 export const LEAD_AI_VERSION = 1;
+// When lead automation runs on Claude it runs on Haiku 4.5 and nothing else (the owner's rule,
+// 2 Oct 2026: Claude credit is scarce). Any other "claude-…" id in settings is read as Haiku, so a
+// typo or an old setting can never quietly bill a larger model.
+export const LEAD_AI_CLAUDE_MODEL = 'claude-haiku-4-5';
 
 const HOUR = 3600000;
 const MAX_MESSAGES = 40;
@@ -360,9 +364,12 @@ async function classifyWithGemini({ model, caseFile, now, apiKey = process.env.G
 
 export async function classifyLead({ client, model = LEAD_AI_MODEL, caseFile, now = Date.now(), gemini = {} }) {
   if (/^gemini-/.test(model)) return classifyWithGemini({ model, caseFile, now, ...gemini });
+  model = LEAD_AI_CLAUDE_MODEL;
+  if (!client) return { ok: false, error: 'LEAD_AI_ANTHROPIC_API_KEY is not set', model };
   const base = {
     model,
-    max_tokens: 4000,
+    // A verdict is ~250 tokens of JSON. 1024 leaves room and caps what a runaway answer can cost.
+    max_tokens: 1024,
     system: LEAD_AI_SYSTEM,
     messages: [{ role: 'user', content: caseFile }],
     output_config: { ...(takesEffort(model) ? { effort: 'low' } : {}), format: { type: 'json_schema', schema: LEAD_AI_SCHEMA } }

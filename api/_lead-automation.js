@@ -40,6 +40,10 @@ function historyId(now) { histSeq = (histSeq + 1) % 1e6; return `h${now}ai${hist
 // While the model is rate limited, nobody asks it anything: aiState/{tenant}.blockedUntil is
 // shared by every function instance, so a webhook burst does not turn into a burst of 429s.
 const aiStateRef = (db, tenantId) => db.collection('aiState').doc(tenantId);
+// Haiku reads allowed per day. Measured 2 Oct 2026: ~5,000 tokens in and ~180 out, about $0.006 a
+// read, so 100 is at most ~$0.60 a day. LEAD_AI_CLAUDE_DAILY_CAP overrides.
+export const CLAUDE_DAILY_CAP = Number(process.env.LEAD_AI_CLAUDE_DAILY_CAP) || 100;
+const istDay = t => new Date(t + 5.5 * 3600000).toISOString().slice(0, 10);
 
 /**
  * @param {object} db
@@ -85,6 +89,12 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   }
   const blockedUntil = (aiStateSnap.exists && aiStateSnap.data().blockedUntil) || 0;
   if (blockedUntil > now) return { leadId, ok: false, error: 'rate limited', retry: true, retryAfterMs: blockedUntil - now };
+  // Claude credit is scarce, so its reads are capped per day (IST). Over the cap the lead stays
+  // queued and is read tomorrow, exactly as a rate limit would leave it. Gemini is not capped.
+  const onClaude = !/^gemini-/.test(model);
+  const day = istDay(now);
+  const used = onClaude && aiStateSnap.exists && aiStateSnap.data().claudeDay === day ? (aiStateSnap.data().claudeRuns || 0) : 0;
+  if (onClaude && used >= CLAUDE_DAILY_CAP) return { leadId, ok: false, error: 'daily Claude cap reached', retry: true, retryAfterMs: 30 * 60000 };
 
   const caseFile = buildCaseFile({ lead, state, notes, stages, now });
   let answer;
@@ -93,6 +103,8 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   } catch (e) {
     answer = { ok: false, error: String((e && e.message) || e).slice(0, 300), model };
   }
+
+  if (onClaude && apply) await aiStateRef(db, tenantId).set({ claudeDay: day, claudeRuns: used + 1 }, { merge: true });
 
   const rid = runId(now);
   const runRecord = {

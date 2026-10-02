@@ -37,7 +37,10 @@
 //   TAILORTALK_WEBHOOK_KEY   a long random string; the same one goes in the webhook URL
 //   TAILORTALK_TENANT_ID     the CRM tenant these leads belong to (e.g. t_3pinrealty)
 //   TAILORTALK_AGENT_TOKEN   TailorTalk → Developer → API Keys (for the pull)
-//   ANTHROPIC_API_KEY        Claude, for lead automation (already set for AI summaries)
+//   ANTHROPIC_API_KEY        Claude, for AI summaries only
+//   LEAD_AI_ANTHROPIC_API_KEY  a separate Claude key for lead automation (the work Gemini does),
+//                            used only while settings.leadAutomation.model is a claude- model;
+//                            always Haiku 4.5 (api/_lead-ai.js). scripts/set-lead-ai.mjs switches.
 //   CRM_ADMIN_KEY            maintenance actions only
 //   CRON_SECRET, FIREBASE_SERVICE_ACCOUNT_JSON  already set for the other functions
 
@@ -68,15 +71,19 @@ function keyMatches(given, expected) {
   return timingSafeEqual(a, b);
 }
 
-let _anthropic;
-function claude() {
-  if (!_anthropic) _anthropic = new Anthropic();
-  return _anthropic;
+// Lead automation has its OWN key, so its spend is separate from the summaries' and running out
+// of one cannot stop the other. No key, no client: the read is recorded as a clear error instead of
+// falling back to the summaries' key.
+let _leadClaude;
+function leadClaude() {
+  if (!process.env.LEAD_AI_ANTHROPIC_API_KEY) return null;
+  if (!_leadClaude) _leadClaude = new Anthropic({ apiKey: process.env.LEAD_AI_ANTHROPIC_API_KEY });
+  return _leadClaude;
 }
 // Several CRM tabs refresh every few minutes; TailorTalk is pulled at most this often per tenant.
 const REFRESH_PULL_EVERY_MS = 2 * 60000;
 // Bulk re-reads (admin-ai with apply) run on Claude Haiku, like the lead summaries.
-const BULK_MODEL = 'claude-haiku-4-5-20251001';
+const BULK_MODEL = 'claude-haiku-4-5';
 
 // After the webhook has been answered: queue this lead (it is read once its chat goes quiet) and
 // read a few leads whose chats already have. Nothing sleeps waiting for a quiet period — the next
@@ -84,7 +91,7 @@ const BULK_MODEL = 'claude-haiku-4-5-20251001';
 function scheduleAutomation(db, tenantId, leadId, model) {
   waitUntil((async () => {
     await queueLeadAutomation(db, tenantId, leadId, { now: Date.now() });
-    await drainQueue(db, tenantId, { client: claude(), model, budgetMs: 30000, maxRuns: 3, trigger: 'webhook' });
+    await drainQueue(db, tenantId, { client: leadClaude(), model, budgetMs: 30000, maxRuns: 3, trigger: 'webhook' });
   })().catch(e => console.error('lead automation after webhook failed:', leadId, e)));
 }
 
@@ -171,7 +178,7 @@ async function syncCron(request) {
   if (auto.enabled) {
     for (const leadId of changed) { await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 }); queued++; }
     const left = 52000 - (Date.now() - started);
-    if (left > 5000) aiRan = (await drainQueue(db, tenantId, { client: claude(), model: auto.model, budgetMs: left - 5000, trigger: 'nightly' })).ran;
+    if (left > 5000) aiRan = (await drainQueue(db, tenantId, { client: leadClaude(), model: auto.model, budgetMs: left - 5000, trigger: 'nightly' })).ran;
   }
   await stateRef.set({
     lastSyncAt: started,
@@ -248,7 +255,7 @@ async function refreshPost(request) {
       if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 });
     }
     if (auto.enabled) {
-      const drained = await drainQueue(db, tenantId, { client: claude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
+      const drained = await drainQueue(db, tenantId, { client: leadClaude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
       out.aiDue = drained.due; out.aiRan = drained.ran; out.rateLimited = !!drained.rateLimited;
       out.moved = drained.results.filter(r => r.moved).length;
     }
@@ -274,7 +281,7 @@ async function aiLeadPost(request) {
     // so a note that says something new costs one read and a note that repeats costs nothing.
     const force = body.force !== false;
     const who = (user.email || '').split('@')[0];
-    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: claude(), model: auto.model, force, trigger: `${force ? 'recheck' : 'note'}:${who}` });
+    const r = await runLeadAutomation(db, user.tenantId, body.leadId, { client: leadClaude(), model: auto.model, force, trigger: `${force ? 'recheck' : 'note'}:${who}` });
     return json({ ok: r.ok !== false, ...r });
   } catch (e) {
     console.error('ai-lead failed:', e);
@@ -318,7 +325,7 @@ async function adminAiPost(request) {
     try {
       // A preview always asks; a backfill skips leads already read on the same evidence unless
       // { force: true } (e.g. after a prompt change the evidence key changes anyway).
-      r = await runLeadAutomation(db, tenantId, leadId, { client: claude(), model, apply, force: !apply || body.force === true, trigger: apply ? 'backfill' : 'preview' });
+      r = await runLeadAutomation(db, tenantId, leadId, { client: leadClaude(), model, apply, force: !apply || body.force === true, trigger: apply ? 'backfill' : 'preview' });
     } catch (e) {
       r = { leadId, ok: false, error: String((e && e.message) || e).slice(0, 300) };
     }

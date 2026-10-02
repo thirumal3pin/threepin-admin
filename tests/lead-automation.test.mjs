@@ -16,7 +16,7 @@ import { teamKey, handleOf, displayName, mentionedEmails, openMentionFor, openMe
 import { computeAttention, needsAction, teamOwes } from '../crm-assets/leadAttention.js';
 import { buildCaseFile, normaliseVerdict, classifyLead, LEAD_AI_SCHEMA } from '../api/_lead-ai.js';
 import { decideLeadChanges, withinWorkingHours } from '../api/_lead-policy.js';
-import { runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue } from '../api/_lead-automation.js';
+import { runLeadAutomation, queueLeadAutomation, claimQueued, finishQueued, drainQueue, CLAUDE_DAILY_CAP } from '../api/_lead-automation.js';
 import { createFakeDb } from './_fake-firestore.mjs';
 
 let passed = 0, failed = 0;
@@ -189,8 +189,10 @@ function fakeClient(answer, { failBeta = false, stop = 'end_turn' } = {}) {
   const r = await classifyLead({ client: c, model: 'claude-opus-5', caseFile: cf, now: NOW });
   check('Classification succeeds', r.ok, JSON.stringify(r));
   const p = c.calls[0];
-  eq('Asks for low effort and a strict JSON schema', [p.output_config.effort, p.output_config.format.type], ['low', 'json_schema']);
-  check('Uses server-side fallbacks for refusals', p.fallbacks === 'default' && p.betas.includes('server-side-fallback-2026-07-01'));
+  // The owner's rule: on Claude, lead automation runs on Haiku and nothing else.
+  eq('Any Claude model in settings is read as Haiku 4.5', p.model, 'claude-haiku-4-5');
+  eq('...with a strict JSON schema and a capped answer', [p.output_config.format.type, p.max_tokens], ['json_schema', 1024]);
+  eq('No key for lead automation is reported clearly, not sent with another key', (await classifyLead({ client: null, model: 'claude-haiku-4-5', caseFile: cf, now: NOW })).error, 'LEAD_AI_ANTHROPIC_API_KEY is not set');
   {
     const sent = [];
     const fakeFetch = async (url, init) => {
@@ -232,7 +234,7 @@ function fakeClient(answer, { failBeta = false, stop = 'end_turn' } = {}) {
   check('Haiku is asked without effort or fallbacks (it rejects them)', !('effort' in h.calls[0].output_config) && !('fallbacks' in h.calls[0]) && h.calls[0].output_config.format.type === 'json_schema');
   const c2 = fakeClient(good, { failBeta: true });
   const r2 = await classifyLead({ client: c2, model: 'claude-opus-5', caseFile: cf, now: NOW });
-  check('Falls back to a plain request if fallbacks are rejected', r2.ok && !('fallbacks' in c2.calls[0]));
+  check('A larger model named in settings still goes out as Haiku', r2.ok && c2.calls[0].model === 'claude-haiku-4-5' && !('fallbacks' in c2.calls[0]));
   eq('A refusal is reported, not applied', (await classifyLead({ client: fakeClient(good, { stop: 'refusal' }), model: 'claude-haiku-4-5', caseFile: cf, now: NOW })).error, 'refused');
   eq('Garbage is reported, not applied', (await classifyLead({ client: fakeClient('not json'), model: 'claude-haiku-4-5', caseFile: cf, now: NOW })).error, 'unreadable answer');
 }
@@ -645,6 +647,21 @@ section('Runs on Firestore: apply, audit, debounce');
 
   const bad = await runLeadAutomation(db, T, 'L1', { client: fakeClient('nope'), model: 'claude-haiku-4-5', now: NOW + HOUR, force: true });
   check('A failed read records the error without changing the stage', !bad.ok && db._get('leads/L1').ai.error === 'unreadable answer' && db._get('leads/L1').stageId === sid('visit_pending'));
+
+  // Claude credit is scarce: reads are counted per IST day and stop at the cap.
+  {
+    const istDay = t => new Date(t + 5.5 * 3600000).toISOString().slice(0, 10);
+    const st = db._get(`aiState/${T}`) || {};
+    check('Each Claude read is counted for the day', st.claudeDay === istDay(NOW + HOUR) && st.claudeRuns >= 1, JSON.stringify(st));
+    db._store.set(`aiState/${T}`, { ...st, claudeDay: istDay(NOW + HOUR), claudeRuns: CLAUDE_DAILY_CAP });
+    const calls = [];
+    const counting = { beta: { messages: { create: async p => { calls.push(p); return fakeClient(good).messages.create(p); } } }, messages: { create: async p => { calls.push(p); return fakeClient(good).messages.create(p); } } };
+    const capped = await runLeadAutomation(db, T, 'L1', { client: counting, model: 'claude-haiku-4-5', now: NOW + HOUR, force: true });
+    check('Over the daily cap: no Claude call, and the lead stays queued for later', !capped.ok && capped.retry && calls.length === 0 && capped.error === 'daily Claude cap reached', JSON.stringify(capped));
+    const gem = await runLeadAutomation(db, T, 'L1', { model: 'gemini-3.5-flash-lite', now: NOW + HOUR, force: true, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(good) }] } }] }) }) } });
+    check('...but Gemini is not capped', gem.ok, JSON.stringify(gem));
+    db._store.set(`aiState/${T}`, { ...st, claudeDay: '2000-01-01', claudeRuns: CLAUDE_DAILY_CAP });
+  }
 
   // A person moves the lead while the AI is reading — the write-time decision respects it.
   db._store.set('leads/L2', ttLead({ id: 'L2' }));
