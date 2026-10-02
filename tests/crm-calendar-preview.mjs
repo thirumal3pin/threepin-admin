@@ -435,11 +435,13 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     return { cols: document.querySelectorAll('.cal-col').length,
       heads: [...document.querySelectorAll('.cal-col-h b')].map(b => b.textContent),
       picker: !!document.querySelector('.cal-who'),
+      pickerHtml: (document.querySelector('.cal-who') || {}).outerHTML,
       on: (document.querySelector('.cal-span.on') || {}).textContent,
       label: (document.querySelector('.cal-date') || {}).textContent || '' };
   });
   ok('a week shows seven days', week.cols === 7, JSON.stringify(week.heads));
   ok('...of one person, chosen from a picker', week.picker);
+  ok("...and the picker offers people by name, closed properly", /<option[^>]*>[A-Z][a-z]+<\/option><\/select>$/.test(week.pickerHtml), week.pickerHtml);
   ok('...with the span marked', week.on === 'Week', week.on);
   ok('...and the dates it covers', /\d/.test(week.label), week.label);
 

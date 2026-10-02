@@ -18,13 +18,13 @@
   'use strict';
 
   var DAY = 86400000, MIN = 60000, HOUR = 3600000;
-  // The grid normally runs 8am to 9pm, which is the working day for a
+  // The grid runs 8am to midnight: a brokerage that shows properties at weekends and evenings does not stop at nine, and a calendar that ends at 9pm cannot show what is booked after it. It is the working day for a
   // brokerage that shows properties at weekends and evenings. But it STRETCHES
   // to whatever the day actually holds: an early site visit or a late call
   // outside a fixed window would otherwise be dropped from the page without
   // saying so, and a calendar that quietly hides an appointment is worse than
   // no calendar. Live data already runs to 8:30pm, half an hour off the edge.
-  var DAY_OPEN = 8, DAY_CLOSE = 21;
+  var DAY_OPEN = 8, DAY_CLOSE = 24;
   var OPEN = DAY_OPEN, CLOSE = DAY_CLOSE;
   var PX_PER_HOUR = 52;
 
@@ -653,7 +653,7 @@
     // everybody, and a picker there would suggest it did not.
     var whoPick = state.span === 'day' ? '' :
       '<select class="cal-who" aria-label="Whose calendar" onchange="PinCalendar.setPerson(this.value)">'
-      teamList().map(function (e) {
+      + teamList().map(function (e) {
           return '<option value="' + esc(e) + '"' + (chosenPersonEmail() === e ? ' selected' : '') + '>' + esc(who(e)) + '</option>';
         }).join('') + '</select>';
 
