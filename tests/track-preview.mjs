@@ -61,7 +61,7 @@ const LEADS = [
     propertyInterest: 'Adambakkam 2BHK', budget: '85 L', createdAt: NOW - 2 * D },
   { id: 'sd3', tenantId: T, name: 'Priya', phone: '9840044444', enquiryType: 'Property Enquiry',
     propertyInterest: 'T Nagar', createdAt: NOW - D,
-    ai: { intent: 'rent_out', line: 'Owner wants to give out her flat on rent' } },   // AI-only seller
+    ai: { intent: 'rent_out', confidence: 'high', line: 'Owner wants to give out her flat on rent' } },   // AI-only seller
   { id: 'b1', tenantId: T, name: 'Karthik (buyer)', phone: '9840055555', enquiryType: 'Property Enquiry',
     propertyInterest: 'Velachery', createdAt: NOW - 3 * D },
   // Deliberately set aside — must never be given a card by the reconcile.
@@ -380,7 +380,24 @@ ok('Each new card is linked back on its lead',
 await page.evaluate(() => toggleView('sellers'));
 await page.waitForTimeout(300);
 const sellers = (await text(page, '#sellersView'))[0];
-ok('It reports how many sellers are tracked', /of \d+ seller/.test(sellers), sellers.slice(0, 140));
+ok('It reports how many sellers there are', /\d+\s*Sellers/.test(sellers) && /\d+ sellers?/.test(sellers), sellers.slice(0, 140));
+const tiles = await page.evaluate(() => [...document.querySelectorAll('#sellersView .sl-tile')].map(t => ({
+  name: (t.querySelector('.sl-name') || {}).textContent, phone: (t.querySelector('.sl-phone') || {}).textContent || '',
+  prop: (t.querySelector('.sl-prop') || {}).textContent || '', meta: (t.querySelector('.sl-meta') || {}).textContent || '' })));
+const gopal = tiles.find(t => t.name === 'Gopal');
+ok('Each seller is a tile: name and number first', gopal && /9840033333/.test(gopal.phone), JSON.stringify(gopal));
+ok('…then the property: area, configuration and price', gopal && /Adambakkam/.test(gopal.prop) && /2 BHK/.test(gopal.prop) && /85 L/.test(gopal.prop), gopal && gopal.prop);
+ok('…then when they came in', gopal && /Came in/.test(gopal.meta), gopal && gopal.meta);
+await page.evaluate(() => { setSellerPref('sort', 'name'); });
+await page.waitForTimeout(100);
+const byName = await page.evaluate(() => [...document.querySelectorAll('#sellersView .sl-name')].map(n => n.textContent));
+ok('Sorting by name orders the tiles', JSON.stringify(byName) === JSON.stringify([...byName].sort((a, b) => a.localeCompare(b))), JSON.stringify(byName));
+await page.evaluate(() => { setSellerPref('deal', 'rent'); });
+await page.waitForTimeout(100);
+const rentOnly = await page.evaluate(() => [...document.querySelectorAll('#sellersView .sl-name')].map(n => n.textContent));
+ok('Filtering to rent shows only rentals', rentOnly.length < byName.length, JSON.stringify(rentOnly));
+await page.evaluate(() => { clearSellerPrefs(); setSellerPref('sort', 'newest'); });
+await page.waitForTimeout(100);
 ok('…nothing is left waiting once the sync has run', !/Waiting to be added/.test(sellers), sellers.slice(0, 220));
 ok('…and a seller set aside is shown as such, not silently gone',
   /Set aside/.test(sellers) && /Ravi/.test(sellers), sellers.slice(0, 260));

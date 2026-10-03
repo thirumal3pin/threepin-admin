@@ -118,7 +118,7 @@
       items: [
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
         { id: 'shoots', label: 'Shoots', icon: 'fa-regular fa-calendar-check', page: 'track', nav: 'shoots' },
-        { id: 'sellers', label: 'Sellers to list', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
+        { id: 'sellers', label: 'Sellers', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
       ],
     },
     {

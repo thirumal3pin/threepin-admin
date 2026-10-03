@@ -26,6 +26,7 @@
 
 import * as P from './track-pipeline.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
+import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -874,32 +875,179 @@ function shootRow(x) {
 
 // ═══════ SELLERS VIEW ═══════
 // The safety net: every seller in the CRM without a card here.
+// ═══════ SELLERS ═══════
+//
+// Every seller's property on one page, as tiles: who (name, number) first, then the property
+// (area, configuration, size, price, sale or rent), then the rest (when they came in, from where,
+// where the card stands, when they last wrote). Filters and sorts are remembered on the device.
+//
+// The property facts come, in order of trust: the card's own fields (edited on the board), the
+// facts the TailorTalk sync read from the seller's own messages (lead.tt.facts), and — for a
+// seller typed in by hand — the same reader run over their note, interest and price here.
+const SELLER_PREFS_KEY = 'tkSellerPrefs';
+const SELLER_DEFAULTS = { deal: 'all', type: 'all', stage: 'all', area: 'all', intake: 'all', missing: false, sort: 'newest' };
+let sellerPrefs = (() => {
+  try { return { ...SELLER_DEFAULTS, ...(JSON.parse(localStorage.getItem(SELLER_PREFS_KEY) || '{}')) }; }
+  catch (e) { return { ...SELLER_DEFAULTS }; }
+})();
+function setSellerPref(k, v) {
+  sellerPrefs = { ...sellerPrefs, [k]: v };
+  try { localStorage.setItem(SELLER_PREFS_KEY, JSON.stringify(sellerPrefs)); } catch (e) { /* this visit only */ }
+  renderSellers();
+}
+function clearSellerPrefs() { sellerPrefs = { ...SELLER_DEFAULTS, sort: sellerPrefs.sort }; setSellerPref('sort', sellerPrefs.sort); }
+window.setSellerPref = setSellerPref; window.clearSellerPrefs = clearSellerPrefs;
+
+const areaOf = s => {
+  const a = String(s || '').split(/[,/|(]| - /)[0].trim();
+  return a ? a.replace(/\b\w/g, c => c.toUpperCase()) : '';
+};
+const SELLER_CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website chat' };
+
+function sellerItem(x) {
+  const lead = x.leadId ? leadById(x.leadId) : null;
+  const fromChat = (lead && lead.tt && lead.tt.facts) || null;
+  const typed = extractPropertyFacts([lead && lead.lastNote && lead.lastNote.text, lead && lead.propertyInterest, lead && lead.budget, x.title, x.config, x.askingPrice, x.remarks].filter(Boolean));
+  const f = {
+    deal: (fromChat && fromChat.deal) || typed.deal,
+    type: (fromChat && fromChat.type) || typed.type,
+    config: x.config || (fromChat && fromChat.config) || typed.config,
+    sizes: ((fromChat && fromChat.sizes && fromChat.sizes.length) ? fromChat.sizes : typed.sizes) || [],
+    price: x.askingPrice || (fromChat && fromChat.price) || typed.price,
+    priceValue: (x.askingPrice ? extractPropertyFacts(x.askingPrice).priceValue : null) || (fromChat && fromChat.priceValue) || typed.priceValue || 0
+  };
+  const locality = x.location || (lead && lead.propertyInterest) || '';
+  const intake = (lead && (lead.createdAt || (lead.tt && lead.tt.createdAt))) || x.createdAt || 0;
+  const channel = lead && (lead.channel || (lead.tt && lead.tt.integration)) || '';
+  return {
+    x, lead, f, locality, area: areaOf(locality), intake,
+    name: (lead && lead.name) || x.sellerName || 'Unnamed seller',
+    phone: x.sellerPhone || (lead && lead.phone) || '',
+    channel: SELLER_CHANNELS[String(channel).toLowerCase()] || (lead ? (lead.tt ? 'TailorTalk' : 'Added in CRM') : 'Added on the board'),
+    lastMsg: lead && lead.tt ? lead.tt.lastMessageAt : null,
+    stage: stageById(x.stageId),
+    missing: [!locality && 'area', !f.config && 'configuration', !f.sizes.length && 'size', !f.price && 'price'].filter(Boolean)
+  };
+}
+
+function sellerSort(items) {
+  const st = id => stages.findIndex(s => s.id === id);
+  const by = {
+    newest: (a, b) => b.intake - a.intake,
+    oldest: (a, b) => a.intake - b.intake,
+    priceHigh: (a, b) => (b.f.priceValue || -1) - (a.f.priceValue || -1),
+    priceLow: (a, b) => (a.f.priceValue || Infinity) - (b.f.priceValue || Infinity),
+    sizeHigh: (a, b) => sortSize(b.f) - sortSize(a.f),
+    name: (a, b) => a.name.localeCompare(b.name),
+    stage: (a, b) => st(a.x.stageId) - st(b.x.stageId) || b.intake - a.intake,
+    lastMsg: (a, b) => (b.lastMsg || 0) - (a.lastMsg || 0)
+  }[sellerPrefs.sort] || ((a, b) => b.intake - a.intake);
+  return items.slice().sort(by);
+}
+
+function sellerTile(it) {
+  const { x, f } = it;
+  const wa = telOf(it.phone).replace(/^\+/, '');
+  const chip = (t, cls) => `<span class="sl-chip${cls ? ' ' + cls : ''}">${esc(t)}</span>`;
+  const chips = [
+    f.deal ? chip(f.deal === 'rent' ? 'For rent' : 'For sale', f.deal) : '',
+    f.type ? chip(TYPE_LABELS[f.type] || f.type) : '',
+    f.config && f.config !== 'Commercial' ? chip(f.config) : '',
+    ...[...new Set(f.sizes.map(z => z.label))].slice(0, 3).map(l => chip(l)),
+    f.price ? chip(f.price, 'price') : ''
+  ].join('');
+  const m = mediaProgress(x);
+  const stage = it.stage;
+  return `<div class="sl-tile" role="button" tabindex="0" onclick="openDetail('${x.id}')" onkeydown="if(event.key==='Enter')openDetail('${x.id}')">
+    <div class="sl-head">
+      <div class="sl-who">
+        <div class="sl-name">${esc(it.name)}</div>
+        ${it.phone ? `<div class="sl-phone"><a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}</div>` : '<div class="sl-phone none">No number</div>'}
+      </div>
+      ${stage ? `<span class="sl-stage" style="--sc:${esc(stage.color || '#888')}">${esc(stage.name)}</span>` : ''}
+    </div>
+    <div class="sl-prop">
+      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}</div>
+      ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
+      ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
+    </div>
+    <div class="sl-meta">
+      <span title="${esc(it.intake ? new Date(it.intake).toLocaleString() : '')}">Came in ${esc(it.intake ? fmtDateTime(it.intake) : '—')}${it.intake ? ' · ' + esc(timeAgo(it.intake)) : ''}</span>
+      <span>${esc(it.channel)}</span>
+      ${it.lastMsg ? `<span>Last message ${esc(timeAgo(it.lastMsg))}</span>` : ''}
+      ${x.propertyCode ? `<span class="tk-code">${esc(x.propertyCode)}</span>` : ''}
+      ${m.total ? `<span>Media ${m.done}/${m.total}</span>` : ''}
+    </div>
+    ${it.lead ? `<div class="sl-acts"><a class="tk-btn ghost sm" href="${esc(crmLeadHref(it.lead.id, x.id))}" onclick="event.stopPropagation()">Open lead</a></div>` : ''}
+  </div>`;
+}
+
 function renderSellers() {
   const el = document.getElementById('sellersView');
   if (!el) return;
-  const missing = unlistedSellers();     // normally empty — the sync creates these
+  const now = Date.now();
+  const all = listings.map(sellerItem);
+  const q = currentSearch;
+  const startOfToday = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const since = { today: startOfToday, '7': now - 7 * DAY, '30': now - 30 * DAY }[sellerPrefs.intake] || 0;
+  const p = sellerPrefs;
+  const shown = sellerSort(all.filter(it => {
+    if (p.deal !== 'all' && it.f.deal !== p.deal) return false;
+    if (p.type !== 'all' && it.f.type !== p.type) return false;
+    if (p.stage !== 'all' && it.x.stageId !== p.stage) return false;
+    if (p.area !== 'all' && it.area !== p.area) return false;
+    if (since && !(it.intake >= since)) return false;
+    if (p.missing && !it.missing.length) return false;
+    if (q) {
+      const hay = [it.name, it.phone, it.locality, it.x.propertyCode, it.x.title, it.f.config, it.f.price].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }));
+
+  const count = fn => all.filter(fn).length;
+  const areas = [...new Set(all.map(it => it.area).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const opt = (v, label, cur) => `<option value="${esc(v)}"${String(cur) === String(v) ? ' selected' : ''}>${esc(label)}</option>`;
+  const sel = (key, label, options) => `<label class="sl-f"><span>${esc(label)}</span><select onchange="setSellerPref('${key}', this.value)">${options}</select></label>`;
+  const filtersOn = ['deal', 'type', 'stage', 'area', 'intake'].some(k => p[k] !== 'all') || p.missing;
+
+  const missing = unlistedSellers();
   const aside = skippedSellers();
-  const tracked = listings.filter(x => x.leadId).length;
-  const total = sellerLeads().length;
   el.innerHTML = `
-    <div class="tk-note">
-      <b>${tracked}</b> of <b>${total}</b> seller${total === 1 ? '' : 's'} in the CRM ${tracked === 1 ? 'is' : 'are'} on this board.
-      New sellers are added here automatically, and their name and number follow any correction made in the CRM.
-      A seller counts if the CRM marked them a Seller Listing <i>or</i> the AI read the conversation as selling or renting out.
+    <div class="sl-summary">
+      <div class="sl-stat"><b>${all.length}</b><span>Sellers</span></div>
+      <div class="sl-stat"><b>${count(it => it.intake >= now - 7 * DAY)}</b><span>New this week</span></div>
+      <div class="sl-stat"><b>${count(it => it.f.deal === 'sale')}</b><span>For sale</span></div>
+      <div class="sl-stat"><b>${count(it => it.f.deal === 'rent')}</b><span>For rent</span></div>
+      <div class="sl-stat warn"><b>${count(it => it.missing.length)}</b><span>Missing details</span></div>
     </div>
+    <div class="sl-tools">
+      ${sel('deal', 'Sale / rent', opt('all', 'All', p.deal) + opt('sale', 'For sale', p.deal) + opt('rent', 'For rent', p.deal))}
+      ${sel('type', 'Type', opt('all', 'All types', p.type) + Object.entries(TYPE_LABELS).map(([k, v]) => opt(k, v, p.type)).join(''))}
+      ${sel('area', 'Area', opt('all', 'All areas', p.area) + areas.map(a => opt(a, a, p.area)).join(''))}
+      ${sel('stage', 'Stage', opt('all', 'All stages', p.stage) + stages.map(st => opt(st.id, st.name, p.stage)).join(''))}
+      ${sel('intake', 'Came in', opt('all', 'Any time', p.intake) + opt('today', 'Today', p.intake) + opt('7', 'Last 7 days', p.intake) + opt('30', 'Last 30 days', p.intake))}
+      <label class="sl-f check"><input type="checkbox" ${p.missing ? 'checked' : ''} onchange="setSellerPref('missing', this.checked)"><span>Missing details</span></label>
+      ${sel('sort', 'Sort', opt('newest', 'Newest first', p.sort) + opt('oldest', 'Oldest first', p.sort) + opt('lastMsg', 'Last message', p.sort)
+        + opt('priceHigh', 'Price: high to low', p.sort) + opt('priceLow', 'Price: low to high', p.sort) + opt('sizeHigh', 'Size: largest first', p.sort)
+        + opt('stage', 'Stage', p.sort) + opt('name', 'Name A–Z', p.sort))}
+      ${filtersOn ? `<button type="button" class="tk-btn ghost sm" onclick="clearSellerPrefs()">Clear filters</button>` : ''}
+    </div>
+    <div class="sl-count">${shown.length === all.length ? `${all.length} seller${all.length === 1 ? '' : 's'}` : `${shown.length} of ${all.length} sellers`}</div>
+    ${shown.length ? `<div class="sl-grid">${shown.map(sellerTile).join('')}</div>`
+      : `<div class="tk-empty"><div class="tk-empty-i">🔎</div><div class="tk-empty-t">No seller matches</div><div class="tk-empty-s">Try clearing a filter.</div></div>`}
     ${missing.length ? `
       <div class="tk-group">
         <div class="tk-group-hdr warn">Waiting to be added <span class="tk-count">${missing.length}</span></div>
         <div class="tk-hint" style="margin:-4px 0 9px">These appear for a moment before the sync picks them up. If one stays here, something is blocking the write.</div>
         <div class="tk-rows">${missing.map(l => sellerRow(l, 'pending')).join('')}</div>
       </div>` : ''}
-    ${!missing.length && !aside.length ? `<div class="tk-empty"><div class="tk-empty-i">✅</div><div class="tk-empty-t">Every seller is on the board</div><div class="tk-empty-s">Nothing has slipped through.</div></div>` : ''}
     ${aside.length ? `
-      <div class="tk-group">
-        <div class="tk-group-hdr">Set aside <span class="tk-count">${aside.length}</span></div>
-        <div class="tk-hint" style="margin:-4px 0 9px">Deliberately not tracked — a deleted card or a skip. They are never re-added on their own.</div>
+      <details class="tk-group">
+        <summary class="tk-group-hdr">Set aside <span class="tk-count">${aside.length}</span></summary>
+        <div class="tk-hint" style="margin:4px 0 9px">Deliberately not tracked — a deleted card or a skip. They are never re-added on their own.</div>
         <div class="tk-rows">${aside.map(l => sellerRow(l, 'aside')).join('')}</div>
-      </div>` : ''}`;
+      </details>` : ''}`;
 }
 function sellerRow(l, mode) {
   return `<div class="tk-row">

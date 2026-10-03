@@ -19,6 +19,7 @@
 //                            only fills a follow-up when a booking arrives and none is set.
 
 import { createHash } from 'node:crypto';
+import { extractPropertyFacts } from '../crm-assets/propertyFacts.js';
 
 export const FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
 
@@ -291,6 +292,12 @@ function chatEscalatedAt(chat, until) {
   }
   return t;
 }
+function factsOf(chat, d) {
+  const texts = chat.filter(m => m.role === 'user').map(userText).filter(Boolean);
+  texts.push(clean(d.requirement_details), clean(d.budget_and_finance));
+  const f = extractPropertyFacts(texts.filter(Boolean));
+  return (f.deal || f.type || f.config || f.sizes.length || f.price) ? f : null;
+}
 function askAt(chat, until) {
   let best = null, bestAny = null;
   for (const m of chat) {
@@ -521,6 +528,9 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     latestAsk: askAt(chat, null),
     lastHumanAt: lastHumanIn(chat),
     lastHumanBy: lastHumanByIn(chat),
+    // The property in the customer's own words (and TailorTalk's notes of it): sale or rent, type,
+    // configuration, sizes, price. What the Sellers page shows, filters and sorts by.
+    facts: factsOf(chat, d),
     flagged: d.flagged === true,
     flaggedAt: switchedOnAt(d.flagged === true, prevTt && prevTt.flagged, prevTt && prevTt.flaggedAt),
     flagDetails: shortValue(d.flag_details, 120),
