@@ -106,7 +106,8 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
   // record has not already caught up, correct it here too — same rule TailorTalk's own sync
   // already follows: never touch it once a person in the CRM has set it themselves (ttHold).
   const sellerType = (enquiryTypes || []).find(t => String(t).toLowerCase() === 'seller listing') || null;
-  const aiSaysSeller = verdict.intent === 'sell' || verdict.intent === 'rent_out';
+  // Confident reads only: a forwarded ad once made a buyer a "seller" (2 Oct 2026).
+  const aiSaysSeller = (verdict.intent === 'sell' || verdict.intent === 'rent_out') && verdict.confidence === 'high';
   const alreadySeller = String(lead.enquiryType || '').trim().toLowerCase() === 'seller listing';
   const enquiryTypeHeld = !!(lead.ttHold && lead.ttHold.enquiryType);
   if (sellerType && aiSaysSeller && !alreadySeller && !enquiryTypeHeld) {

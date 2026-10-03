@@ -73,6 +73,12 @@ export const LEAD_AI_SYSTEM = [
   '- lost: the LEAD stopped — not interested, bought or rented elsewhere, chose someone else, asked for no contact — or spam, a wrong number, a vendor, agent or job seeker. NOT lost: anger or doubt because 3 PIN was slow or missed a callback (keep the milestone, next_owner "team", urgency high), or a property that missed the budget or location.',
   '- Owners (sell, rent_out): new while sharing details, photos or price; visit_pending once an inspection is asked for or agreed; negotiation on commission or listing terms; won when the listing is signed.',
   '',
+  'INTENT — sell or rent_out ONLY when the lead says, in their own words, that the property is theirs (or their family\'s, or their company\'s project) and they want 3 PIN to sell it or let it: "I want to sell my flat", "my villa for rent", "we are launching plots", "can you sell my land". A builder, developer or broker offering their own stock to 3 PIN also counts.',
+  '- A lead who pastes or forwards a property advertisement — 3 PIN\'s own, an Instagram post or reel, or another agent\'s, often ending "for details / site visit, WhatsApp <number>" — and asks about it (available? price? location? visit?) is a BUYER or TENANT: buy or rent. The ad describes a property for sale; that does not make the person who sent it the seller.',
+  '- A pasted ad with no words of their own, a link, or "Hi" alone is unclear — never sell or rent_out on that alone.',
+  '- Answering 3 PIN\'s "buy, rent or sell?" with "Buy", or stating a budget and configuration to look for, is a buyer even if the chat also contains listings 3 PIN sent.',
+  '- Use confidence high for sell or rent_out only when the ownership words are there.',
+  '',
   'JUDGING:',
   '- Place the lead at the FURTHEST milestone reached (options → details asked for → visit asked or agreed → visited → price or token → done); stages can be skipped.',
   '- send_details is the one rung that is about what WE owe. Use it only while the request is open: the lead asked, and the answer has not been sent. The moment it is sent, they are back to weighing it up (options) — or further on, if they also asked for a visit.',
@@ -154,7 +160,7 @@ export function buildCaseFile({ lead, state, notes, stages, now }) {
   lines.push('LEAD');
   lines.push(`Name: ${clip(shortName(lead.name) || 'Unknown', 40)}`);
   lines.push(`Channel: ${lead.channel || tt.integration || 'unknown'}${tt.leadSource ? ' · source: ' + tt.leadSource : ''}${tt.adTitle ? ' · ad: ' + clip(tt.adTitle, 60) : ''}`);
-  lines.push(`Enquiry type in CRM: ${lead.enquiryType || '—'} · Property/locality: ${clip(lead.propertyInterest || '—', 80)} · Budget: ${clip(lead.budget || '—', 40)}`);
+  lines.push(`Enquiry type in CRM: ${lead.enquiryType || '—'}${lead.enquiryType && !(lead.ttHold && lead.ttHold.enquiryType) && lead.tt ? ' (set automatically — not evidence)' : ''} · Property/locality: ${clip(lead.propertyInterest || '—', 80)} · Budget: ${clip(lead.budget || '—', 40)}`);
   lines.push(`CRM stage now: ${stageName}${lead.stageChangedAt ? ` (since ${fmtIstLong(lead.stageChangedAt)}, set by ${String(by).split('@')[0]})` : ''}`);
   if (lead.lostReason) lines.push(`Recorded loss reason: ${LOST_REASONS[lead.lostReason] || lead.lostReason}`);
   if (lead.holdUntil) lines.push(`On hold until: ${fmtIstLong(lead.holdUntil)}`);

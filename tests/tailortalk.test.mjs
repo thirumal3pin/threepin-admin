@@ -362,6 +362,22 @@ section('Timeline entries, category, and what needs a person');
   eq('…and its own status', vendor.leadWrite.tt.status, 'vendor pitch');
 }
 
+section('Who is a seller, from the TailorTalk one-line intent');
+{
+  const T2 = ['Property Enquiry', 'Seller Listing', 'General'];
+  const cases = [
+    ['Sell, residential, owner.', 'Seller Listing'],
+    ['Sell or List, residential, for themselves', 'Seller Listing'],
+    ['Rent, residential, listing their own villa for corporate clients', 'Seller Listing'],
+    ['List, residential, for rental income', 'Seller Listing'],
+    ['Enquiring about a listing in T Nagar', 'Property Enquiry'],
+    ['Buyer, wants to contact the owner of the T Nagar flat', 'Property Enquiry'],
+    ['Interested in the listing shared on Instagram', 'Property Enquiry'],
+    ['Buy, residential, for himself', 'Property Enquiry']
+  ];
+  for (const [line, want] of cases) eq(`"${line}" → ${want}`, enquiryTypeFor(line, T2), want);
+}
+
 section('Pull (import / daily sync / Sync button)');
 {
   _clearConfigCache();

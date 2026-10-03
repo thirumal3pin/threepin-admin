@@ -30,8 +30,10 @@ console.log('3 PIN Realty — seller ⇄ listing sync');
 
 section('Who counts as a seller');
 check('Enquiry type Seller Listing', isSellerLead(lead()));
-check('AI read them as selling', isSellerLead(lead({ enquiryType: 'Property Enquiry', ai: { intent: 'sell' } })));
-check('AI read them as renting out', isSellerLead(lead({ enquiryType: '', ai: { intent: 'rent_out' } })));
+check('AI read them as selling, confidently', isSellerLead(lead({ enquiryType: 'Property Enquiry', ai: { intent: 'sell', confidence: 'high' } })));
+check('A hesitant AI read is not enough for a listing', !isSellerLead(lead({ enquiryType: 'Property Enquiry', ai: { intent: 'sell', confidence: 'medium' } })));
+check('A person who set the type overrides the AI', !isSellerLead(lead({ enquiryType: 'Property Enquiry', ttHold: { enquiryType: true }, ai: { intent: 'sell', confidence: 'high' } })));
+check('AI read them as renting out', isSellerLead(lead({ enquiryType: '', ai: { intent: 'rent_out', confidence: 'high' } })));
 check('A buyer is not a seller', !isSellerLead(lead({ enquiryType: 'Property Enquiry', ai: { intent: 'buy' } })));
 check('A vendor is excluded even when tagged a seller',
   isBusinessLead(lead({ tt: { id: 'x', category: 'others' } })) && !wantsListing(lead({ tt: { id: 'x', category: 'others' } })));
@@ -99,7 +101,7 @@ section('The whole reconcile');
 {
   const leads = [
     lead({ id: 'S1', name: 'Gopal' }),
-    lead({ id: 'S2', name: 'Priya', enquiryType: 'Property Enquiry', ai: { intent: 'rent_out' } }),
+    lead({ id: 'S2', name: 'Priya', enquiryType: 'Property Enquiry', ai: { intent: 'rent_out', confidence: 'high' } }),
     lead({ id: 'B1', name: 'Karthik', enquiryType: 'Property Enquiry' }),
     lead({ id: 'S3', name: 'Dropped', listingSkipped: true }),
     lead({ id: 'S4', name: 'Already', phone: '9840044444' })

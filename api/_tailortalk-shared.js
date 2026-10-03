@@ -183,8 +183,17 @@ export function enquiryTypeFor(intent, enquiryTypes) {
   if (!s) return null;
   const head = s.split(/[,.;(\n]/)[0];
   const has = t => (enquiryTypes || []).find(x => String(x).toLowerCase() === t.toLowerCase()) || null;
-  if (/\b(sell|selling|seller|list|listing|owner|landlord|rent(ing)? out|lease out|let out)\b/i.test(head)) return has('Seller Listing');
-  if (/\b(buy|buying|buyer|purchase|purchasing|rent|renting|tenant|lease|invest|investing|investment)\b/i.test(head)) return has('Property Enquiry');
+  // A seller says so: "Sell, residential, owner…", "List their own villa", "Rent out". "Enquiring
+  // about a listing" or "wants to contact the owner" is a buyer, so "listing" and "owner" on their
+  // own are not enough — and any buying word in the clause wins.
+  const buying = /\b(buy|buying|buyer|purchase|purchasing|enquir\w*|inquir\w*|interested in|looking for|tenant)\b/i.test(head);
+  // Ownership said anywhere in the line ("Rent, residential, listing their own villa", "Rent,
+  // commercial, for themselves as owner") makes "Rent" mean renting it OUT.
+  const owns = /\b(list(ing)?\s+(his|her|their|my|our)\s+own|their own (property|villa|flat|house|land|apartment)|(for (themselves|himself|herself) )?as (the )?owner|owner of)\b/i.test(s);
+  if (!buying && (owns || /\b(sell|selling|seller|rent(ing)? out|lease out|let out|landlord)\b/i.test(head)
+    || /\blist(ing)?\s+(his|her|their|my|our|own|a property|property)\b/i.test(head)
+    || /^\s*list\b/i.test(head))) return has('Seller Listing');
+  if (/\b(buy|buying|buyer|purchase|purchasing|rent|renting|tenant|lease|invest|investing|investment|enquir\w*|inquir\w*|interested)\b/i.test(head)) return has('Property Enquiry');
   return null;
 }
 

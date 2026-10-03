@@ -63,7 +63,9 @@ export function isSellerLead(lead) {
   if (!lead) return false;
   const t = String(lead.enquiryType || '').trim().toLowerCase();
   if (t === 'seller listing') return true;
-  return !!(lead.ai && (lead.ai.intent === 'sell' || lead.ai.intent === 'rent_out'));
+  // A person who set the enquiry type to something else has decided: not a seller.
+  if (lead.ttHold && lead.ttHold.enquiryType) return false;
+  return !!(lead.ai && (lead.ai.intent === 'sell' || lead.ai.intent === 'rent_out') && lead.ai.confidence === 'high');
 }
 
 // Vendors and collaborations are not sales leads at all — same exclusion the
