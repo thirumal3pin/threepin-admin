@@ -15,35 +15,88 @@ const BROCHURE_FIELD_MAP = {
   internal: 'entry.1764716931'  // Internal TEAM Instructions and Notes
 };
 
-function openBrochureModal(){
-  document.getElementById('brochureForm').reset();
-  const err = document.getElementById('bfErr');
-  err.classList.remove('show');
-  err.textContent = '';
-  document.getElementById('brochureModal').classList.add('open');
-  setTimeout(() => document.getElementById('bfTitle').focus(), 50);
+// A page now, not a pop-up: room to paste a long description, a checklist beside it, and a
+// draft kept on this device so leaving the page loses nothing.
+const BF_DRAFT_KEY = 'brochureDraft';
+const BF_RECENT_KEY = 'brochureRecent';
+const BF_FIELDS = ['bfTitle', 'bfDrive', 'bfDetails', 'bfInternal'];
+const bfEl = id => document.getElementById(id);
+const bfStore = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* this visit only */ } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) { /* fine */ } }
+};
+
+function bfCountUpdate(){
+  const n = (bfEl('bfDetails').value || '').trim().length;
+  bfEl('bfCount').textContent = n ? `${n.toLocaleString()} characters` : '';
+}
+function saveBrochureDraft(){
+  const d = {}; BF_FIELDS.forEach(id => { d[id] = bfEl(id).value; });
+  if (BF_FIELDS.some(id => d[id].trim())) { bfStore.set(BF_DRAFT_KEY, { at: Date.now(), d }); bfEl('bfDraftNote').textContent = 'Draft saved on this device'; }
+  else { bfStore.del(BF_DRAFT_KEY); bfEl('bfDraftNote').textContent = ''; }
+  bfCountUpdate();
+}
+function clearBrochureDraft(ask){
+  const any = BF_FIELDS.some(id => bfEl(id).value.trim());
+  if (ask && any && !confirm('Clear everything typed here?')) return;
+  bfEl('brochureForm').reset();
+  bfStore.del(BF_DRAFT_KEY);
+  bfEl('bfDraftNote').textContent = '';
+  bfCountUpdate();
+}
+function renderBrochureRecent(){
+  const list = bfStore.get(BF_RECENT_KEY, []);
+  bfEl('bfRecentCard').hidden = !list.length;
+  bfEl('bfRecent').innerHTML = list.slice(0, 8).map(r =>
+    `<div class="bp-recent"><b>${escapeHtml(r.title || 'Untitled')}</b><span>${new Date(r.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span></div>`).join('');
 }
 
-function closeBrochureModal(){
-  document.getElementById('brochureModal').classList.remove('open');
+function openBrochureModal(){ openBrochurePage(); }
+function openBrochurePage(){
+  const err = bfEl('bfErr');
+  err.classList.remove('show');
+  err.textContent = '';
+  bfEl('bfDone').hidden = true;
+  bfEl('brochureForm').hidden = false;
+  const draft = bfStore.get(BF_DRAFT_KEY, null);
+  if (draft && draft.d) {
+    BF_FIELDS.forEach(id => { bfEl(id).value = draft.d[id] || ''; });
+    bfEl('bfDraftNote').textContent = 'Draft restored from ' + new Date(draft.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  }
+  bfCountUpdate();
+  renderBrochureRecent();
+  bfEl('brochurePanel').classList.add('open');
+  bfEl('brochurePanel').scrollTop = 0;
+  setTimeout(() => bfEl(bfEl('bfTitle').value ? 'bfDetails' : 'bfTitle').focus(), 50);
+}
+function closeBrochureModal(){ closeBrochurePage(); }
+function closeBrochurePage(){
+  bfEl('brochurePanel').classList.remove('open');
+}
+function newBrochure(){
+  clearBrochureDraft(false);
+  bfEl('bfDone').hidden = true;
+  bfEl('brochureForm').hidden = false;
+  bfEl('bfTitle').focus();
 }
 
 async function submitBrochureForm(){
-  const title = document.getElementById('bfTitle').value.trim();
-  const drive = document.getElementById('bfDrive').value.trim();
-  const details = document.getElementById('bfDetails').value.trim();
-  const internal = document.getElementById('bfInternal').value.trim();
-  const err = document.getElementById('bfErr');
+  const title = bfEl('bfTitle').value.trim();
+  const drive = bfEl('bfDrive').value.trim();
+  const details = bfEl('bfDetails').value.trim();
+  const internal = bfEl('bfInternal').value.trim();
+  const err = bfEl('bfErr');
 
   if(!details){
-    err.textContent = 'Property Details is required.';
+    err.textContent = 'Property details is required.';
     err.classList.add('show');
-    document.getElementById('bfDetails').focus();
+    bfEl('bfDetails').focus();
     return;
   }
   err.classList.remove('show');
 
-  const btn = document.getElementById('bfSubmitBtn');
+  const btn = bfEl('bfSubmitBtn');
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
@@ -65,17 +118,21 @@ async function submitBrochureForm(){
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString()
     });
-    closeBrochureModal();
+    const recent = bfStore.get(BF_RECENT_KEY, []);
+    recent.unshift({ title: title || details.slice(0, 60), at: Date.now() });
+    bfStore.set(BF_RECENT_KEY, recent.slice(0, 20));
+    clearBrochureDraft(false);
+    bfEl('bfDoneWhat').textContent = title ? `“${title}” — you can close this page or create another.` : 'You can close this page or create another.';
+    bfEl('bfDone').hidden = false;
+    bfEl('brochureForm').hidden = true;
+    renderBrochureRecent();
+    bfEl('brochurePanel').scrollTop = 0;
     showToast('✓ Submitted — brochure will be ready in ~30 min');
   } catch(e) {
-    err.textContent = 'Could not submit — check your connection and try again.';
+    err.textContent = 'Could not submit — check your connection and try again. Your text is kept.';
     err.classList.add('show');
   } finally {
     btn.disabled = false;
     btn.textContent = '✓ Submit';
   }
 }
-
-document.getElementById('brochureModal')?.addEventListener('click', e => {
-  if(e.target.id === 'brochureModal') closeBrochureModal();
-});

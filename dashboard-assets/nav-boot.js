@@ -4,19 +4,20 @@
 // Nothing here reloads: All properties, Missing data and Changes are panels
 // this page already has, so picking one is a class toggle, not a navigation.
 //
-// Sync and Create brochure are modals rather than pages. They open over
-// whatever you were reading and leave it highlighted in the rail, because
-// that is still where you are — a dialog is not somewhere you went.
+// Sync is a modal rather than a page: it opens over whatever you were reading
+// and leaves it highlighted in the rail. Create brochure is a page of its own
+// (a long paste needs the room), so it is highlighted like the other panels.
 
 (function () {
   'use strict';
 
-  var panel = 'all';   // the page underneath: all | missing | changes | areamap
+  var panel = 'all';   // the page underneath: all | missing | changes | areamap | brochure
 
   function showAll() {
     if (typeof closeMissing === 'function') closeMissing();
     if (typeof closeChanges === 'function') closeChanges();
     if (typeof closeAreaMap === 'function') closeAreaMap();
+    if (typeof closeBrochurePage === 'function') closeBrochurePage();
     if (typeof closeDetail === 'function') closeDetail();
   }
 
@@ -26,7 +27,7 @@
       case 'changes': showAll(); if (typeof openChanges === 'function') openChanges(); panel = 'changes'; break;
       case 'areamap': showAll(); if (typeof openAreaMap === 'function') openAreaMap(); panel = 'areamap'; break;
       case 'sync': if (typeof openSyncModal === 'function') openSyncModal(); break;
-      case 'brochure': if (typeof openBrochureModal === 'function') openBrochureModal(); break;
+      case 'brochure': showAll(); if (typeof openBrochurePage === 'function') openBrochurePage(); panel = 'brochure'; break;
       default: showAll(); panel = 'all';
     }
     // Said last, and said here, because showAll() closes whichever panel was
@@ -41,7 +42,7 @@
 
   // Closing a panel from its own back button has to move the rail too,
   // otherwise the highlight claims you are still inside it.
-  ['closeMissing', 'closeChanges', 'closeAreaMap'].forEach(function (fn) {
+  ['closeMissing', 'closeChanges', 'closeAreaMap', 'closeBrochurePage'].forEach(function (fn) {
     var original = window[fn];
     if (typeof original !== 'function') return;
     window[fn] = function () {

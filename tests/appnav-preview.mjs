@@ -358,15 +358,24 @@ console.log('\nProperties — desktop');
   s = await railState(page);
   ok('Closing it from the panel returns the rail to the properties dashboard', s.current === 'Property Intelligence Dashboard', String(s.current));
 
-  // Create brochure is an action, so it must not steal the highlight.
+  // Create brochure is a page of its own now — room for a long paste.
   await clickSection(page, 'Create brochure');
   await page.waitForTimeout(300);
   s = await railState(page);
-  const modal = await page.evaluate(() => getComputedStyle(document.getElementById('brochureModal')).display !== 'none');
-  ok('Create brochure opens the intake form', modal);
-  ok('…and leaves the rail pointing at the page underneath', s.current === 'Property Intelligence Dashboard', String(s.current));
+  const bp = await page.evaluate(() => {
+    const el = document.getElementById('brochurePanel');
+    const r = el.getBoundingClientRect();
+    return { shown: getComputedStyle(el).display !== "none", fills: Math.round(r.right) >= window.innerWidth - 2 && r.width >= window.innerWidth * 0.6 && r.height >= window.innerHeight - 2, rows: document.getElementById("bfDetails").rows };
+  });
+  ok('Create brochure opens as a full page, not a pop-up', bp.shown && bp.fills, JSON.stringify(bp));
+  ok('…and the rail points at it', s.current === 'Create brochure', String(s.current));
+  await page.evaluate(() => { const t = document.getElementById('bfDetails'); t.value = '3 BHK in Velachery, 1450 sqft'; saveBrochureDraft(); closeBrochurePage(); openBrochurePage(); });
+  const kept = await page.evaluate(() => document.getElementById('bfDetails').value);
+  ok('A draft survives leaving the page', kept === '3 BHK in Velachery, 1450 sqft', kept);
   await page.screenshot({ path: join(OUT, 'prop-03-brochure.png') });
-  await page.evaluate(() => closeBrochureModal());
+  await page.evaluate(() => { clearBrochureDraft(false); closeBrochurePage(); });
+  s = await railState(page);
+  ok('Going back returns the rail to the properties dashboard', s.current === 'Property Intelligence Dashboard', String(s.current));
 
   await page.evaluate(() => openDetail('TNAG003'));
   await page.waitForTimeout(400);

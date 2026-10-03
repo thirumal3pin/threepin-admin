@@ -384,40 +384,83 @@
   </div>
 </div>
 
-<!-- CREATE BROCHURE (NEW LISTING INTAKE) MODAL -->
-<div id="brochureModal">
-  <div class="pmodal-box brochure-box">
-    <div class="pmodal-hdr">
-      <div class="pmodal-title">📋 Create Brochure — New Listing Intake</div>
-      <button class="pmodal-x" onclick="closeBrochureModal()">×</button>
+<!-- CREATE BROCHURE (NEW LISTING INTAKE) — a page of its own, not a pop-up -->
+<div id="brochurePanel">
+  <div class="chg-hdr">
+    <div class="dp-hdr-nav">
+      <button class="dp-back" onclick="closeBrochurePage()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        All Properties
+      </button>
     </div>
-    <div class="pmodal-body">
-      <p class="brochure-hint">Fill this in for a new property. Claude will build the brochure and update the inventory automatically within ~30 min.</p>
-      <form id="brochureForm" class="pmodal-form">
-        <div class="pf-field pf-wide">
-          <label for="bfTitle">Property ID &amp; Title</label>
-          <input type="text" id="bfTitle" placeholder="e.g. NOL002 - 3BHK in Velachery">
+    <div class="chg-title-row">
+      <div>
+        <h1 class="chg-title">Create brochure</h1>
+        <div class="chg-sub">New listing intake. Claude builds the brochure and adds the property to the inventory within about 30 minutes of submitting.</div>
+      </div>
+    </div>
+  </div>
+  <div class="bp-body">
+    <div class="bp-main">
+      <div class="bp-done" id="bfDone" hidden>
+        <div class="bp-done-i">✓</div>
+        <div>
+          <div class="bp-done-t">Submitted — the brochure will be ready in about 30 minutes</div>
+          <div class="bp-done-s" id="bfDoneWhat"></div>
         </div>
-        <div class="pf-field pf-wide">
-          <label for="bfDrive">Google Drive Photo Folder Link</label>
-          <input type="url" id="bfDrive" placeholder="https://drive.google.com/drive/folders/...">
+        <button type="button" class="pmodal-save" onclick="newBrochure()">+ Create another</button>
+      </div>
+      <form id="brochureForm" class="bp-form" onsubmit="event.preventDefault(); submitBrochureForm();">
+        <div class="bp-row">
+          <div class="pf-field">
+            <label for="bfTitle">Property ID &amp; title</label>
+            <input type="text" id="bfTitle" placeholder="e.g. NOL002 - 3BHK in Velachery" oninput="saveBrochureDraft()">
+          </div>
+          <div class="pf-field">
+            <label for="bfDrive">Google Drive photo folder link</label>
+            <input type="url" id="bfDrive" placeholder="https://drive.google.com/drive/folders/..." oninput="saveBrochureDraft()">
+          </div>
         </div>
-        <div class="pf-field pf-wide">
-          <label for="bfDetails">Property Details <span class="req-star">*</span></label>
-          <textarea id="bfDetails" rows="7" placeholder="Paste full description — title, specs, highlights, price, nearby landmarks" required></textarea>
+        <div class="pf-field">
+          <label for="bfDetails">Property details <span class="req-star">*</span></label>
+          <textarea id="bfDetails" rows="16" placeholder="Paste the full description — title, specs, highlights, price, nearby landmarks" required oninput="saveBrochureDraft()"></textarea>
+          <div class="bp-count" id="bfCount"></div>
         </div>
-        <div class="pf-field pf-wide">
-          <label for="bfInternal">🔒 Internal Notes &amp; Instructions</label>
-          <textarea id="bfInternal" rows="4" placeholder="Owner's number, negotiation floor, access instructions — anything the team needs but the client must not see"></textarea>
+        <div class="pf-field">
+          <label for="bfInternal">🔒 Internal notes &amp; instructions</label>
+          <textarea id="bfInternal" rows="5" placeholder="Owner's number, negotiation floor, access instructions — anything the team needs but the client must not see" oninput="saveBrochureDraft()"></textarea>
           <p class="bf-internal-hint">Team-only. Lands in the property's Internal Notes tab, never on the shared property link.</p>
         </div>
+        <div class="pmodal-err" id="bfErr"></div>
+        <div class="bp-actions">
+          <span class="bp-draft" id="bfDraftNote"></span>
+          <button type="button" class="pmodal-cancel" onclick="clearBrochureDraft(true)">Clear</button>
+          <button type="submit" class="pmodal-save" id="bfSubmitBtn">✓ Submit</button>
+        </div>
       </form>
-      <div class="pmodal-err" id="bfErr"></div>
     </div>
-    <div class="pmodal-ftr">
-      <button class="pmodal-cancel" onclick="closeBrochureModal()">Cancel</button>
-      <button class="pmodal-save" id="bfSubmitBtn" onclick="submitBrochureForm()">✓ Submit</button>
-    </div>
+    <aside class="bp-side">
+      <div class="bp-card">
+        <div class="bp-card-t">What to include</div>
+        <ul class="bp-list">
+          <li><b>Property ID</b> first in the title — e.g. NOL002 — so it lands on the right inventory row.</li>
+          <li><b>Type and configuration</b> — 3 BHK apartment, villa, plot, commercial.</li>
+          <li><b>Sizes</b> — built-up, carpet, UDS or land area.</li>
+          <li><b>Price</b> and whether it is negotiable; rent and deposit for a rental.</li>
+          <li><b>Location</b> — locality, street, and a Google Maps link.</li>
+          <li><b>Highlights</b> — floor, facing, parking, age, furnishing, amenities.</li>
+          <li><b>Nearby</b> — schools, hospitals, metro, main roads.</li>
+        </ul>
+      </div>
+      <div class="bp-card">
+        <div class="bp-card-t">Keep for the team only</div>
+        <p class="bp-p">Owner's name and number, your negotiation floor, key or access instructions, commission terms — put these in <b>Internal notes</b>, never in the details.</p>
+      </div>
+      <div class="bp-card" id="bfRecentCard" hidden>
+        <div class="bp-card-t">Submitted from this device</div>
+        <div id="bfRecent"></div>
+      </div>
+    </aside>
   </div>
 </div>
 
