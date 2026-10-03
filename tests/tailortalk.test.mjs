@@ -453,7 +453,7 @@ section('Firestore: webhook end to end');
   _clearConfigCache();
   const db = createFakeDb();
   db._store.set(`pipelines/${TENANT}`, { stages: STAGES });
-  db._store.set(`settings/${TENANT}`, { enquiryTypes: TYPES });
+  db._store.set(`settings/${TENANT}`, { enquiryTypes: TYPES, defaultLeadAgent: 'admin@threepin.in' });
 
   const test = await applyTailorTalkEvent(db, TENANT, SAMPLE, { now: NOW });
   check('Test webhook answers ok', test.ok && test.test);
@@ -466,6 +466,7 @@ section('Firestore: webhook end to end');
   const saved = db._get(`leads/${id}`);
   eq('Saved name', saved.name, 'John Doe');
   eq('Saved tenant', saved.tenantId, TENANT);
+  eq('A new lead starts with the default agent', [saved.assignedAgent, saved.agentsSetBy], ['admin@threepin.in', 'default']);
   eq('No notes written for TailorTalk facts (history holds them)', db._list(`leads/${id}/notes`).length, 0);
   check('State document written', !!db._get(`leads/${id}/tailortalk/state`));
   eq('History entries written (first message, added snapshot, booking, follow-up, payment)', db._list(`leads/${id}/history`).length, 5);

@@ -32,7 +32,10 @@ async function tenantConfig(db, tenantId, now) {
   const enquiryTypes = settings.exists && Array.isArray(settings.data().enquiryTypes)
     ? settings.data().enquiryTypes
     : ['Property Enquiry', 'Seller Listing', 'General'];
-  const entry = { at: now, stages, enquiryTypes };
+  // Who a brand-new lead is assigned to until a person changes it (settings.defaultLeadAgent,
+  // set to admin@threepin.in on 3 Oct 2026). Blank means new leads start unassigned.
+  const defaultLeadAgent = (settings.exists && settings.data().defaultLeadAgent) || null;
+  const entry = { at: now, stages, enquiryTypes, defaultLeadAgent };
   configCache.set(tenantId, entry);
   return entry;
 }
@@ -186,7 +189,12 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
       return { leadId: ref.id, created: false, stale: plan.stale, unchanged: true, history: 0 };
     }
 
-    if (plan.isNew) t.set(ref, plan.leadWrite);
+    if (plan.isNew) {
+      if (config.defaultLeadAgent && !plan.leadWrite.assignedAgent) {
+        Object.assign(plan.leadWrite, { assignedAgent: String(config.defaultLeadAgent).toLowerCase(), secondaryAgent: null, agentsSetAt: now, agentsSetBy: 'default' });
+      }
+      t.set(ref, plan.leadWrite);
+    }
     else t.set(ref, plan.leadWrite, { merge: true });
     t.set(stateRef, plan.stateWrite);
 

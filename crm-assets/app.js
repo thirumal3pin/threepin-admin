@@ -647,7 +647,7 @@ function renderDetailAgents(l){
   el.innerHTML = `
     <div class="dp-agent"><span class="dp-agent-l">Lead agent</span>${sel('primary', primary, withCurrent(primary), 'Unassigned')}</div>
     <div class="dp-agent"><span class="dp-agent-l">Secondary</span>${sel('secondary', secondary, withCurrent(secondary).filter(e => e !== String(primary).toLowerCase()), primary ? 'None' : 'Pick a lead agent first')}</div>
-    ${l.agentsSetBy ? `<span class="dp-agent-by">set by ${escapeHtml(agentName(l.agentsSetBy))}${l.agentsSetAt ? ' · ' + escapeHtml(timeAgo(l.agentsSetAt)) : ''}</span>` : ''}`;
+    ${l.agentsSetBy ? `<span class="dp-agent-by">${l.agentsSetBy === 'default' ? 'assigned by default' : 'set by ' + escapeHtml(agentName(l.agentsSetBy))}${l.agentsSetAt ? ' · ' + escapeHtml(timeAgo(l.agentsSetAt)) : ''}</span>` : ''}`;
   const s2 = el.querySelectorAll('select')[1];
   if(s2 && !primary) s2.disabled = true;
 }
@@ -4303,6 +4303,7 @@ function createLeadFromForm(form){
     updatedAt: now,
     createdBy: currentUserEmail || null,
     updatedBy: currentUserEmail || null,
+    ...(defaultLeadAgent ? { assignedAgent: defaultLeadAgent, secondaryAgent: null, agentsSetAt: now, agentsSetBy: 'default' } : {}),
     // Denormalized for the Dashboard's "today" metrics (computeDashboardMetrics
     // in dashboardMetrics.js) — lets it tell an untouched brand-new lead apart
     // from one that already got a first note, with zero extra reads/writes.
@@ -5297,6 +5298,10 @@ function ttChatUrl(l){
 window.applyTeamSnapshot = function(map){
   team = map && typeof map === 'object' ? map : {};
 };
+// Who a lead added here starts with (settings.defaultLeadAgent) — the same default TailorTalk
+// leads get on the server. A person changes it on the lead page.
+let defaultLeadAgent = null;
+window.applyDefaultLeadAgent = function(email){ defaultLeadAgent = email ? String(email).toLowerCase() : null; };
 function teamRoster(){
   const set = new Set();
   Object.values(team).forEach(m => { const e = m && m.email; if(e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e))) set.add(String(e).trim().toLowerCase()); });
