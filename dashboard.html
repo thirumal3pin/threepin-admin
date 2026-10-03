@@ -95,6 +95,7 @@
            whole extra row inside a position:sticky header, which pinned ~40px
            of chrome to the top of every screen for ever. -->
       <div class="mv-modes" id="mapModeSwitch" role="group" aria-label="How to view the properties"></div>
+      <div class="sel-wrap"><select class="sortsel" id="agentSel" onchange="setAgentFilter(this.value)" aria-label="Filter by agent"><option value="">All agents</option></select></div>
       <button class="fbtn fav-toggle" id="favToggle" onclick="toggleFavView()">★ Favorites</button>
       <div class="sel-wrap">
         <select class="sortsel" id="sortSel" onchange="applySort()">
@@ -207,6 +208,8 @@
       </div>
     </div>
     <div class="dp-hero" id="dpHero"></div>
+    <!-- The property's agent (and an optional second), picked by a person. -->
+    <div class="dp-agents" id="dpAgents"></div>
     <div class="dp-tabs">
       <button class="dp-tab active" onclick="showTab('overview',this)">Overview</button>
       <button class="dp-tab" onclick="showTab('matches',this)">Matching Buyers</button>

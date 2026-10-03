@@ -93,6 +93,7 @@ window.applyLeadsSnapshot = function(list){
       renderAiSummary(l);
       renderStandSection(l);
       renderDetailStageRow(l);
+      renderDetailAgents(l);
       if(isTtLead(l)){
         renderDetailInfo(l);
         renderFollowUpSpotlight(l);
@@ -566,10 +567,10 @@ const FOCUS_FILTERS = [
 // Per device (localStorage), like the theme — one person's working view, not a team setting.
 const LEAD_FILTER_KEY = 'crmLeadFilter';
 const LEAD_SCOPES = ['all', 'tt', 'other', 'business'];
-let leadFilter = { scope:'all', status:null, focus:null };
+let leadFilter = { scope:'all', status:null, focus:null, agent:'' };
 try{
   const saved = JSON.parse(localStorage.getItem(LEAD_FILTER_KEY) || 'null');
-  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null };
+  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null, agent: typeof saved.agent === 'string' ? saved.agent : '' };
 }catch(e){}
 
 const TT_STATUS_FILTERS = [
@@ -598,20 +599,94 @@ function inScope(l, scope, status){
 function passesLeadFilter(l){
   if(propertyFilter) return (l.propertyCodes || []).includes(propertyFilter);
   if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
+  if(leadFilter.agent && !matchesAgentFilter(l, leadFilter.agent)) return false;
   const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
   return focus ? focus.test(l) : true;
+}
+// ── Lead agent ──
+// Every lead has an agent (and optionally a secondary) picked by a person — never assigned
+// automatically, and separate from the agents on a site visit. Unassigned until someone picks.
+function agentsOf(l){ return [l.assignedAgent, l.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase()); }
+function agentName(email){
+  if(!email) return '';
+  const M = window.crmMentions;
+  return (M && M.displayName(email)) || String(email).split('@')[0];
+}
+function matchesAgentFilter(l, f){
+  const a = agentsOf(l);
+  if(f === 'none') return !a.length;
+  if(f === 'me') return !!currentUserEmail && a.includes(String(currentUserEmail).toLowerCase());
+  return a.includes(String(f).toLowerCase());
+}
+function setLeadAgentFilter(v){
+  leadFilter = { ...leadFilter, agent: v || '' };
+  saveLeadFilter();
+  renderLeadFilterBar();
+  applyFilters();
+}
+function agentFilterHtml(){
+  const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
+  const n = f => scoped.filter(l => matchesAgentFilter(l, f)).length;
+  const opt = (v, label) => `<option value="${escapeHtml(v)}"${leadFilter.agent === v ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  return `<label class="lf-agent${leadFilter.agent ? ' at' : ''}"><span>Agent</span><select onchange="setLeadAgentFilter(this.value)" aria-label="Filter by agent">
+    ${opt('', 'Everyone')}${opt('none', `Unassigned (${n('none')})`)}${currentUserEmail ? opt('me', `Mine (${n('me')})`) : ''}
+    ${teamRoster().map(e => opt(e, `${agentName(e)} (${n(e)})`)).join('')}
+  </select></label>`;
+}
+function renderDetailAgents(l){
+  const el = document.getElementById('dpAgents');
+  if(!el || !l) return;
+  const roster = teamRoster();
+  // Someone set before they left the team list still shows, rather than silently reading "Unassigned".
+  const withCurrent = e => e && !roster.includes(String(e).toLowerCase()) ? [String(e).toLowerCase(), ...roster] : roster;
+  const sel = (which, value, list, empty) => `<select class="dp-agent-sel${value ? '' : ' empty'}" onchange="setLeadAgent('${which}', this.value)" aria-label="${which === 'primary' ? 'Lead agent' : 'Secondary agent'}">
+      <option value="">${empty}</option>
+      ${list.map(e => `<option value="${escapeHtml(e)}"${String(value || '').toLowerCase() === e ? ' selected' : ''}>${escapeHtml(agentName(e))}</option>`).join('')}
+    </select>`;
+  const primary = l.assignedAgent || '', secondary = l.secondaryAgent || '';
+  el.innerHTML = `
+    <div class="dp-agent"><span class="dp-agent-l">Lead agent</span>${sel('primary', primary, withCurrent(primary), 'Unassigned')}</div>
+    <div class="dp-agent"><span class="dp-agent-l">Secondary</span>${sel('secondary', secondary, withCurrent(secondary).filter(e => e !== String(primary).toLowerCase()), primary ? 'None' : 'Pick a lead agent first')}</div>
+    ${l.agentsSetBy ? `<span class="dp-agent-by">set by ${escapeHtml(agentName(l.agentsSetBy))}${l.agentsSetAt ? ' · ' + escapeHtml(timeAgo(l.agentsSetAt)) : ''}</span>` : ''}`;
+  const s2 = el.querySelectorAll('select')[1];
+  if(s2 && !primary) s2.disabled = true;
+}
+function setLeadAgent(which, value){
+  const l = leads.find(x => x.id === currentDetailId);
+  if(!l) return;
+  const v = value ? String(value).toLowerCase() : null;
+  const before = { p: l.assignedAgent || null, s: l.secondaryAgent || null };
+  if(which === 'primary'){
+    l.assignedAgent = v;
+    // The same person cannot be both; clearing the lead agent clears the second too.
+    if(!v || l.secondaryAgent === v) l.secondaryAgent = null;
+  } else {
+    l.secondaryAgent = v && v !== l.assignedAgent ? v : null;
+  }
+  l.agentsSetAt = Date.now();
+  l.agentsSetBy = currentUserEmail || null;
+  const patch = { assignedAgent: l.assignedAgent || null, secondaryAgent: l.secondaryAgent || null, agentsSetAt: l.agentsSetAt, agentsSetBy: l.agentsSetBy };
+  if(window.crmFirebase && window.crmFirebase.setLeadAgents){
+    window.crmFirebase.setLeadAgents(l.id, patch).catch(e => { console.error('Could not save the agent:', e); showToast('Could not save the agent — check your connection'); });
+  }
+  const name = e => e ? `<b>${escapeHtml(agentName(e))}</b>` : '<b>nobody</b>';
+  if(before.p !== (l.assignedAgent || null)) addHistory(l, 'agent', `Lead agent ${before.p ? 'changed from ' + name(before.p) + ' to ' : 'set to '}${name(l.assignedAgent)}`);
+  if(before.s !== (l.secondaryAgent || null)) addHistory(l, 'agent', `Secondary agent ${before.s ? 'changed from ' + name(before.s) + ' to ' : 'set to '}${name(l.secondaryAgent)}`);
+  renderDetailAgents(l);
+  applyFilters();
+  renderLeadFilterBar();
 }
 function saveLeadFilter(){
   try{ localStorage.setItem(LEAD_FILTER_KEY, JSON.stringify(leadFilter)); }catch(e){}
 }
 function setLeadScope(scope){
-  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus };
+  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus, agent: leadFilter.agent || '' };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
 }
 function setLeadStatusFilter(key){
-  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus };
+  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus, agent: leadFilter.agent || '' };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
@@ -655,6 +730,7 @@ function renderLeadFilterBar(){
     html += '<span class="lf-sep" aria-hidden="true"></span>'
       + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
+  html += '<span class="lf-sep" aria-hidden="true"></span>' + agentFilterHtml();
   el.innerHTML = html;
   renderBoardSortCtl();
   if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
@@ -1979,7 +2055,7 @@ function addHistory(l, type, text){
   return event;
 }
 function historyIcon(type){
-  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', visit:'📍', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬' }[type] || '•';
+  return { created:'✨', stage:'🔀', field:'✏️', followup:'📅', visit:'📍', 'followup-removed':'🗑️', 'followed-up':'✓', 'details-sent':'📨', tailortalk:'💬', agent:'👤' }[type] || '•';
 }
 
 // ═══════ TIMELINE — everything that happened to a lead, in one feed ═══════
@@ -2502,6 +2578,7 @@ function leadCardHtml(l, sort){
          onclick="event.stopPropagation()" title="WhatsApp from this device" aria-label="WhatsApp">●</a>` : ''}
     </div>` : ''}
     ${what ? `<div class="lcard-what">${what}</div>` : (l.enquiryType ? `<div class="lcard-what">${escapeHtml(l.enquiryType)}</div>` : '')}
+    <div class="lcard-agent${l.assignedAgent ? '' : ' none'}">👤 ${l.assignedAgent ? escapeHtml(agentName(l.assignedAgent)) + (l.secondaryAgent ? ' <span class="lcard-agent2">+ ' + escapeHtml(agentName(l.secondaryAgent)) + '</span>' : '') : 'Unassigned'}</div>
     ${step ? `<div class="lcard-step ${step.cls}"><span class="lcard-step-t">${escapeHtml(step.text)}</span>${step.due ? `<span class="lcard-step-due">${escapeHtml(fmtDue(step.due))}</span>` : ''}</div>` : ''}
     ${alertItem ? `<div class="lcard-alert ${OVERDUE_KEYS.has(alertItem.key) ? 'overdue' : 'note'}">${escapeHtml(alertItem.label)}${extra > 0 ? ` <span class="lcard-alert-more">+${extra}</span>` : ''}</div>` : ''}
     ${sortMeta ? `<div class="lcard-sortmeta">${escapeHtml(sortMeta)}</div>` : ''}
@@ -2524,6 +2601,7 @@ const LIST_COLUMNS = [
   { key:'stage', label:'Stage', filterable:true, get:l=>{ const s=stageById(l.stageId); return s?s.name:'—'; }, sortVal:l=>{ const s=stageById(l.stageId); return s?s.name.toLowerCase():''; } },
   { key:'next', label:'Next step', filterable:false, get:l=>{ const s=nextStepOf(l); return s?s.text:'—'; }, sortVal:l=>{ const t=topAttentionUi(l); return t ? -SEV_RANK[t.severity]*1e13 + (t.at||0) : 9e15; } },
   { key:'source', label:'Source', filterable:true, get:l=>sourceLabel(l.source), sortVal:l=>sourceLabel(l.source).toLowerCase() },
+  { key:'agent', label:'Agent', filterable:true, get:l=>l.assignedAgent ? agentName(l.assignedAgent) + (l.secondaryAgent ? ' + ' + agentName(l.secondaryAgent) : '') : 'Unassigned', sortVal:l=>l.assignedAgent ? agentName(l.assignedAgent).toLowerCase() : '\uffff' },
   { key:'ttStatus', label:'TailorTalk', filterable:true, get:l=>isTtLead(l)?(ttStatusLabel(l.tt.status)||'Linked'):'—', sortVal:l=>{ const order={hot:0,warm:1,cold:2,converted:3,dead:4}; return isTtLead(l)?(order[l.tt.status]??5):9; } },
   { key:'ttLastMessage', label:'Last message', filterable:false, get:l=>isTtLead(l)&&l.tt.lastMessageAt?timeAgo(l.tt.lastMessageAt):'—', sortVal:l=>isTtLead(l)?(l.tt.lastMessageAt||0):0 },
   { key:'followUpAt', label:'Follow-up', filterable:false, get:l=>l.followUpAt?new Date(l.followUpAt).toLocaleDateString():'—', sortVal:l=>l.followUpAt||0 },
@@ -4515,6 +4593,7 @@ function openDetail(id){
   waBtn.title = isTtLead(l) ? 'Opens WhatsApp on this device. It is not sent from the business number and will not appear in the TailorTalk chat.' : '';
 
   renderDetailStageRow(l);
+  renderDetailAgents(l);
   renderStandSection(l);
   renderFollowUpSpotlight(l);
   renderDetailInfo(l);

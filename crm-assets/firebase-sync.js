@@ -146,6 +146,8 @@ window.crmFirebase = {
   },
   // "Use TailorTalk's value": writes the value AND hands the field back to TailorTalk in one
   // update — saveLead() would drop the field again because it is no longer held.
+  // Lead agent (and a secondary). Only these keys, so nothing else on the lead is rewritten.
+  setLeadAgents: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
   releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
     .catch(e => { console.error('Firestore release field error:', e); throw e; }),
   // Dotted paths only ('ai.suggestion', 'ai.dismissed.visit_pending', 'ai.lastMove') — the rest of

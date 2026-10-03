@@ -88,8 +88,11 @@ window.__ready = true;
 `;
 
 const DASH_STUB = `
+window.__propAgentWrites = [];
 window.dashboardFirebase = { saveProperty: async()=>{}, deleteProperty: async()=>{}, saveFavorites: async()=>{},
-  saveChange: async()=>{}, getChanges: async()=>[], saveNaFields: async()=>{} };
+  saveChange: async()=>{}, getChanges: async()=>[], saveNaFields: async()=>{},
+  getTeam: async()=>['pradeep@threepin.in','swami@threepin.in','thirumal@threepin.in'],
+  setPropertyAgents: async(id, patch)=>{ window.__propAgentWrites.push({ id, patch }); } };
 window.dashboardAuth = { login: async()=>{}, logout: async()=>{}, getIdToken: async()=>'t', getTenantId: ()=>'${T}' };
 if(window.onDashboardAuthChange) window.onDashboardAuthChange({ email:'agent.a@example.com' });
 if(window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(${JSON.stringify(PROPS)});
@@ -407,6 +410,26 @@ console.log('\nProperties — desktop');
     return { shown: getComputedStyle(el).display !== 'none', left: Math.round(el.getBoundingClientRect().left) };
   });
   ok('A property page opens beside the rail too', propDp.shown && propDp.left >= 240, JSON.stringify(propDp));
+  // A property's own agent, picked by a person; unassigned until then.
+  await page.waitForTimeout(300);
+  const pa = await page.evaluate(() => [...document.querySelectorAll('#dpAgents select')].map(x => ({ v: x.value, n: x.options.length, d: x.disabled })));
+  ok('A property starts with no agent, and a secondary waits for one', pa.length === 2 && pa[0].v === '' && pa[0].n === 4 && pa[1].d, JSON.stringify(pa));
+  await page.selectOption('#dpAgents select >> nth=0', 'swami@threepin.in');
+  await page.waitForTimeout(200);
+  const pw = await page.evaluate(() => window.__propAgentWrites.slice(-1)[0]);
+  ok('Picking one saves only the agent fields', pw && pw.id === 'TNAG003' && pw.patch.assignedAgent === 'swami@threepin.in' && pw.patch.secondaryAgent === null, JSON.stringify(pw));
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(200);
+  const pcards = await page.evaluate(() => [...document.querySelectorAll('.card .card-agent')].map(x => x.textContent.trim()));
+  ok('The cards say who, or Unassigned', pcards.some(t => /Swami/.test(t)) && pcards.some(t => /Unassigned/.test(t)), JSON.stringify(pcards));
+  await page.evaluate(() => setAgentFilter('none'));
+  const un = await page.evaluate(() => document.querySelectorAll('#pgrid .card').length);
+  await page.evaluate(() => setAgentFilter(''));
+  ok('The agent filter narrows to the unassigned', un === 1, String(un));
+  await page.screenshot({ path: join(OUT, 'prop-05-cards-agent.png') });
+  await page.evaluate(() => openDetail('TNAG003'));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(OUT, 'prop-06-detail-agent.png') });
   await page.evaluate(() => closeDetail());
   await page.waitForTimeout(200);
 

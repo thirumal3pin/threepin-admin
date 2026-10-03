@@ -209,6 +209,80 @@ function clearSearch(){
 function openAdvanced(){ PinAdvanced.open(); }
 function closeAdvanced(){ PinAdvanced.close(); }
 
+// ── Property agent ──
+// Each property can have an agent and a secondary, picked by a person on the property page —
+// never assigned automatically. Unassigned until someone picks. Separate from site-visit agents.
+let propTeam = [];
+let agentFilter = '';
+try { agentFilter = localStorage.getItem('propAgentFilter') || ''; } catch(e) {}
+const agentNameOf = e => e ? String(e).split('@')[0].split(/[._-]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : '';
+const propAgents = p => [p.assignedAgent, p.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
+const myEmail = () => String((window.dashboardAuth && window.dashboardAuth.getUserEmail && window.dashboardAuth.getUserEmail()) || '').toLowerCase();
+function agentFilterPasses(p){
+  if(!agentFilter) return true;
+  const a = propAgents(p);
+  if(agentFilter === 'none') return !a.length;
+  if(agentFilter === 'me') return !!myEmail() && a.includes(myEmail());
+  return a.includes(agentFilter);
+}
+async function loadPropTeam(){
+  if(propTeam.length || !window.dashboardFirebase || !window.dashboardFirebase.getTeam) return;
+  try { propTeam = (await window.dashboardFirebase.getTeam()).sort(); } catch(e) { propTeam = []; }
+  renderAgentFilter();
+  if(currentDetailId) renderPropAgents(properties.find(x => x.id === currentDetailId));
+}
+function renderAgentFilter(){
+  const sel = document.getElementById('agentSel');
+  if(!sel) return;
+  const n = f => properties.filter(p => { const keep = agentFilter; agentFilter = f; const r = agentFilterPasses(p); agentFilter = keep; return r; }).length;
+  const opt = (v, l) => `<option value="${escapeHtml(v)}"${agentFilter === v ? ' selected' : ''}>${escapeHtml(l)}</option>`;
+  sel.innerHTML = opt('', 'All agents') + opt('none', `Unassigned (${n('none')})`) + (myEmail() ? opt('me', `Mine (${n('me')})`) : '')
+    + propTeam.map(e => opt(e, `${agentNameOf(e)} (${n(e)})`)).join('');
+  sel.classList.toggle('on', !!agentFilter);
+}
+function setAgentFilter(v){
+  agentFilter = v || '';
+  try { localStorage.setItem('propAgentFilter', agentFilter); } catch(e) {}
+  renderAgentFilter();
+  applyFilters();
+}
+function renderPropAgents(p){
+  const el = document.getElementById('dpAgents');
+  if(!el || !p) return;
+  if(!propTeam.length) loadPropTeam();
+  const withCurrent = e => e && !propTeam.includes(String(e).toLowerCase()) ? [String(e).toLowerCase(), ...propTeam] : propTeam;
+  const primary = p.assignedAgent || '', secondary = p.secondaryAgent || '';
+  const sel = (which, value, list, empty, disabled) => `<select class="dp-agent-sel${value ? '' : ' empty'}" onchange="setPropertyAgent('${which}', this.value)"${disabled ? ' disabled' : ''} aria-label="${which === 'primary' ? 'Property agent' : 'Secondary agent'}">
+      <option value="">${empty}</option>
+      ${list.map(e => `<option value="${escapeHtml(e)}"${String(value).toLowerCase() === e ? ' selected' : ''}>${escapeHtml(agentNameOf(e))}</option>`).join('')}
+    </select>`;
+  el.innerHTML = `
+    <div class="dp-agent"><span class="dp-agent-l">Property agent</span>${sel('primary', primary, withCurrent(primary), 'Unassigned', false)}</div>
+    <div class="dp-agent"><span class="dp-agent-l">Secondary</span>${sel('secondary', secondary, withCurrent(secondary).filter(e => e !== String(primary).toLowerCase()), primary ? 'None' : 'Pick a property agent first', !primary)}</div>
+    ${p.agentsSetBy ? `<span class="dp-agent-by">set by ${escapeHtml(agentNameOf(p.agentsSetBy))}</span>` : ''}`;
+}
+async function setPropertyAgent(which, value){
+  const p = properties.find(x => x.id === currentDetailId);
+  if(!p) return;
+  const v = value ? String(value).toLowerCase() : null;
+  const before = { a: p.assignedAgent || null, s: p.secondaryAgent || null };
+  if(which === 'primary'){ p.assignedAgent = v; if(!v || p.secondaryAgent === v) p.secondaryAgent = null; }
+  else p.secondaryAgent = v && v !== p.assignedAgent ? v : null;
+  p.agentsSetAt = Date.now();
+  p.agentsSetBy = myEmail() || null;
+  renderPropAgents(p);
+  try {
+    await window.dashboardFirebase.setPropertyAgents(p.id, { assignedAgent: p.assignedAgent || null, secondaryAgent: p.secondaryAgent || null, agentsSetAt: p.agentsSetAt, agentsSetBy: p.agentsSetBy });
+    showToast(p.assignedAgent ? `Agent: ${agentNameOf(p.assignedAgent)}${p.secondaryAgent ? ' + ' + agentNameOf(p.secondaryAgent) : ''}` : 'Agent cleared');
+  } catch(e) {
+    p.assignedAgent = before.a; p.secondaryAgent = before.s;
+    renderPropAgents(p);
+    showToast('✗ Could not save the agent — check your connection');
+  }
+  renderAgentFilter();
+  applyFilters();
+}
+
 function applyFilters(){
   const norm = {'Apartment':'Apartments','Apartments':'Apartments','Plot':'Plots','Plots':'Plots','Villa':'Villa','Residential':'Residential','Townhouse':'Townhouse','Independent House':'House'};
   // The quick bar at the top of the page still filters first — it is faster
@@ -219,6 +293,7 @@ function applyFilters(){
     if(currentType!=='all' && (norm[p.type]||p.type)!==currentType) return false;
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
+    if(!agentFilterPasses(p)) return false;
     return true;
   });
 
@@ -556,6 +631,7 @@ function renderGrid(){
           <div>
             <div class="card-name" title="${e.name}">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
             <div class="card-loc" title="${e.location}">📍 ${e.location}</div>
+            <div class="card-agent${p.assignedAgent ? '' : ' none'}">👤 ${p.assignedAgent ? escapeHtml(agentNameOf(p.assignedAgent)) + (p.secondaryAgent ? ' <span class="card-agent2">+ ' + escapeHtml(agentNameOf(p.secondaryAgent)) + '</span>' : '') : 'Unassigned'}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
             <button class="card-action-btn card-share" onclick="sharePropertyLink('${e.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
@@ -724,6 +800,7 @@ function renderDetail(id){
   document.getElementById('dpSoldOut').textContent = isSoldOut?'✓ Marked Sold Out':'🏷️ Mark Sold Out';
 
   document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
+  renderPropAgents(p);
   // The sticky mobile bar carries Call; CSS decides whether it is visible.
   document.getElementById('dpMabCall').href = 'tel:' + (p.contactNumber || '');
 
@@ -1753,6 +1830,8 @@ function refreshAfterDataChange(){
   setupTypeFilters();
   rebuildSearchIndex();
   updateStats();
+  renderAgentFilter();
+  loadPropTeam();
   applyFilters();
   updateMissingCount();
   renderMissing();

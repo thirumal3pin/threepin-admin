@@ -109,6 +109,14 @@ window.dashboardFirebase = {
   // firestore.rules already allows this: `leads` is readable by any signed-in
   // user of the owning tenant, and dashboard.html shares the CRM's Firebase
   // Auth and tenantId model. No rules change is needed.
+  // The team, for picking a property's agent — the same settings.team list the CRM uses.
+  getTeam: async () => {
+    const s = await getDoc(doc(db, 'settings', currentTenantId));
+    return Object.values((s.exists() && s.data().team) || {}).map(m => m && m.email).filter(Boolean).map(e => String(e).trim().toLowerCase());
+  },
+  // A property's agent (and a secondary). Only these keys, merged, so the sheet-owned fields and
+  // the change log are untouched — an agent is the team's to set, not the sheet's.
+  setPropertyAgents: (id, patch) => setDoc(doc(db, 'properties', id), { ...patch, tenantId: currentTenantId }, { merge: true }),
   getLeads: () => getDocs(query(collection(db, 'leads'), where('tenantId', '==', currentTenantId)))
     .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
     .catch(e => { console.error('Firestore leads read error:', e); return []; }),

@@ -395,6 +395,9 @@ function toggleDensity(){
           <button type="button" class="dp-flag-btn no" onclick="setDetailsSent(false)">No</button>
         </div>
       </div>
+      <!-- The lead's own agent (and an optional second), chosen by a person. Separate from the
+           agents on a site visit, which are set per visit. -->
+      <div class="dp-agents" id="dpAgents"></div>
 
       <!-- Logging what just happened is the commonest reason to open a lead,
            so the box for it is the first thing under the header rather than
