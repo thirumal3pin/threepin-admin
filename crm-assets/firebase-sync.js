@@ -159,6 +159,11 @@ window.crmFirebase = {
   // update — saveLead() would drop the field again because it is no longer held.
   // Lead agent (and a secondary). Only these keys, so nothing else on the lead is rewritten.
   setLeadAgents: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
+  // "Not a seller": the lead's own fields, and its Property & Media card when that card is still
+  // the empty one made automatically. A card someone has worked on is never deleted from here.
+  setLeadFields: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
+  getListing: (id) => getDoc(doc(db, 'listings', id)).then(s => (s.exists() ? { id: s.id, ...s.data() } : null)),
+  deleteListing: (id) => deleteDoc(doc(db, 'listings', id)),
   releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
     .catch(e => { console.error('Firestore release field error:', e); throw e; }),
   // Dotted paths only ('ai.suggestion', 'ai.dismissed.visit_pending', 'ai.lastMove') — the rest of

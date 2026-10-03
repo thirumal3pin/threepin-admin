@@ -20,7 +20,8 @@ const lead = (id, name, extra) => ({ id, tenantId: T, name, phone: '9000000' + i
 const LEADS = [
   lead('L001', 'Asha'),
   lead('L002', 'Bala', { siteVisitAt: NOW + 86400000, siteVisitStatus: 'scheduled', siteVisitAgents: ['pradeep@threepin.in'] }),
-  lead('L003', 'Chitra')
+  lead('L003', 'Chitra'),
+  lead('L004', 'Ravi (forwarded an ad)', { enquiryType: 'Seller Listing', listingId: 'lst_auto1' })
 ];
 const saved = [];
 const STUB = `
@@ -32,7 +33,10 @@ window.crmFirebase = {
   saveProperties: async () => {}, saveFollowupDigestSettings: async () => {}, saveDashboardEmailSettings: async () => {},
   releaseLeadField: async () => {}, getLeadTailorTalk: async () => null, updateLeadAi: async () => {},
   saveAutomationSettings: async () => {}, saveView: async () => {}, deleteView: async () => {}, getInventory: async () => ({ docs: [] }),
-  setLeadAgents: async (id, patch) => { window.__agentWrites.push({ id, patch }); }
+  setLeadAgents: async (id, patch) => { window.__agentWrites.push({ id, patch }); },
+  setLeadFields: async (id, patch) => { (window.__fieldWrites = window.__fieldWrites || []).push({ id, patch }); },
+  getListing: async (id) => ({ id, leadId: 'L004', media: {}, stageId: 'new_listing' }),
+  deleteListing: async (id) => { (window.__deleted = window.__deleted || []).push(id); }
 };
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => '${T}' };
 window.onCrmAuthChange({ email: 'thirumal@threepin.in' });
@@ -66,7 +70,7 @@ await page.evaluate(() => { try { localStorage.removeItem('crmLeadFilter'); } ca
 
 console.log('\nEvery lead starts unassigned');
 const cards = await page.evaluate(() => [...document.querySelectorAll('.lcard .lcard-agent')].map(e => e.textContent.trim()));
-ok('Each card says Unassigned', cards.length === 3 && cards.every(t => /Unassigned/.test(t)), JSON.stringify(cards));
+ok('Each card says Unassigned', cards.length === 4 && cards.every(t => /Unassigned/.test(t)), JSON.stringify(cards));
 
 console.log('\nPicking the agent on the lead page');
 await page.evaluate(() => openDetail('L001'));
@@ -98,11 +102,11 @@ ok('The card names both', /Swami/.test(card) && /Pradeep/.test(card), card);
 console.log('\nFiltering by agent');
 const count = () => page.evaluate(() => document.querySelectorAll('.lcard').length);
 await page.evaluate(() => setLeadAgentFilter('none'));
-ok('Unassigned shows the other two', await count() === 2, String(await count()));
+ok('Unassigned shows the other three', await count() === 3, String(await count()));
 await page.evaluate(() => setLeadAgentFilter('pradeep@threepin.in'));
 ok('One person shows the leads they are on, as lead or secondary agent', await count() === 1, String(await count()));
 await page.evaluate(() => setLeadAgentFilter(''));
-ok('Everyone shows all three again', await count() === 3, String(await count()));
+ok('Everyone shows all four again', await count() === 4, String(await count()));
 
 console.log('\nSeveral agents at once');
 await page.evaluate(() => { const L = leads.find(l => l.id === 'L003'); L.assignedAgent = 'thirumal@threepin.in'; applyFilters(); renderLeadFilterBar(); });
@@ -121,6 +125,17 @@ const label = await page.evaluate(() => document.querySelector('details.lf-agent
 ok('…and the button names them', /Swami/.test(label) && /Thirumal/.test(label), label);
 await page.evaluate(() => setLeadAgents([]));
 
+console.log('\nNot a seller');
+await page.evaluate(() => { setLeadAgents([]); window.confirm = () => true; openDetail('L004'); });
+await page.waitForTimeout(300);
+const btn = await page.evaluate(() => !!document.querySelector('#dpSub .dp-track-link.not'));
+ok('A lead marked as a seller offers Not a seller', btn);
+await page.click('#dpSub .dp-track-link.not');
+await page.waitForTimeout(400);
+const after = await page.evaluate(() => ({ l: (({ enquiryType, ttHold, listingSkipped, listingId }) => ({ enquiryType, ttHold, listingSkipped, listingId }))(leads.find(x => x.id === 'L004')), del: window.__deleted || [], writes: window.__fieldWrites || [], still: !!document.querySelector('#dpSub .dp-track-link.not') }));
+ok('It goes back to Property Enquiry and stays (held)', after.l.enquiryType === 'Property Enquiry' && after.l.ttHold.enquiryType === true && after.l.listingSkipped === true, JSON.stringify(after.l));
+ok('…its empty board card is removed', JSON.stringify(after.del) === '["lst_auto1"]' && after.l.listingId === null, JSON.stringify(after));
+ok('…and the button goes away', !after.still);
 ok('Nothing threw', !thrown.length, thrown.join(' | '));
 await browser.close();
 console.log('');

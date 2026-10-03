@@ -3986,7 +3986,13 @@ window.applyPropertiesSnapshot = function(list){
 function isPropertyEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'property enquiry'; }
 function isSellerEnquiryType(t){ return String(t || '').trim().toLowerCase() === 'seller listing'; }
 // Either signal is enough — see the "Sellers & owners" focus filter above for why both exist.
-function isSellerLead(l){ return isSellerEnquiryType(l.enquiryType) || !!(l.ai && (l.ai.intent==='sell' || l.ai.intent==='rent_out')); }
+// Same rule as the Property & Media board (track-assets/seller-sync.js): the enquiry type, or a
+// confident AI read — never over a person who set the type themselves.
+function isSellerLead(l){
+  if(isSellerEnquiryType(l.enquiryType)) return true;
+  if(l.ttHold && l.ttHold.enquiryType) return false;
+  return !!(l.ai && (l.ai.intent==='sell' || l.ai.intent==='rent_out') && l.ai.confidence === 'high');
+}
 function knownProperties(){
   const byKey = new Map();
   const add = (v) => {
@@ -4900,7 +4906,41 @@ function trackBackHtml(l){
     : 'propertytrack.html?nav=sellers';
   const label = cameFromTrack ? '← Back to the property card'
     : (listingId ? '🏷️ Open its property card' : '🏷️ Track this listing');
-  return `<a class="dp-track-link" href="${href}" title="Property &amp; Media Track">${label}</a>`;
+  return `<a class="dp-track-link" href="${href}" title="Property &amp; Media Track">${label}</a>`
+    + `<button type="button" class="dp-track-link not" onclick="markNotSeller('${escapeHtml(l.id)}')" title="This person is a buyer or tenant, not the owner">Not a seller? Move back to leads</button>`;
+}
+
+// One click to undo a wrong "seller": the lead goes back to Property Enquiry and STAYS there
+// (held, so neither TailorTalk nor the AI re-tags it), it is kept off the Property & Media board,
+// and its card there is removed — but only while it is still the empty card made automatically.
+// A card with a shoot, media or remarks on it is left for a person to delete on the board.
+async function markNotSeller(leadId){
+  const l = leads.find(x => x.id === leadId);
+  if(!l) return;
+  if(!confirm(`Move ${l.name || 'this lead'} back to leads as a buyer/tenant enquiry? It comes off the Property & Media board.`)) return;
+  const enquiryType = (typeof enquiryTypes !== 'undefined' && enquiryTypes.find(t => /^property enquiry$/i.test(t))) || 'Property Enquiry';
+  const listingId = l.listingId || null;
+  let cardNote = '';
+  if(listingId && window.crmFirebase.getListing){
+    try{
+      const card = await window.crmFirebase.getListing(listingId);
+      const untouched = card && !Object.values(card.media || {}).some(Boolean) && !card.shootAt && !card.remarks && !card.brochureLink && !card.propertyCode;
+      if(card && untouched){ await window.crmFirebase.deleteListing(listingId); cardNote = ' Its empty board card was removed.'; }
+      else if(card){ cardNote = ' Its board card has work on it, so it was kept — delete it on the Property & Media board if it should go.'; }
+    }catch(e){ cardNote = ' Its board card could not be checked — delete it on the Property & Media board if it is still there.'; }
+  }
+  l.enquiryType = enquiryType;
+  l.ttHold = { ...(l.ttHold || {}), enquiryType: true };
+  l.listingSkipped = true;
+  if(cardNote.startsWith(' Its empty')) l.listingId = null;
+  try{
+    await window.crmFirebase.setLeadFields(l.id, { enquiryType, 'ttHold.enquiryType': true, listingSkipped: true,
+      ...(l.listingId ? {} : { listingId: null }), updatedAt: Date.now(), updatedBy: currentUserEmail || null });
+  }catch(e){ showToast('Could not save — check your connection and try again'); return; }
+  addHistory(l, 'field', `Marked <b>not a seller</b> — moved back to leads as ${escapeHtml(enquiryType)}.${escapeHtml(cardNote)}`);
+  showToast('✓ Moved back to leads.' + cardNote);
+  if(currentDetailId === l.id) openDetail(l.id);
+  applyFilters();
 }
 
 // Fetch a lead's notes + history subcollections into the in-memory object and
