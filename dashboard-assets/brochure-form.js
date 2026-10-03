@@ -56,35 +56,62 @@ async function brochureApi(method, body){
   return res.json();
 }
 let bfLog = null;
+// Two tabs: the form, and the team's log of everything submitted with where each one stands.
+let bfTab = 'new';
+let bfStatus = 'all';
+function setBrochureTab(tab){
+  bfTab = tab === 'recent' ? 'recent' : 'new';
+  bfEl('bpNew').hidden = bfTab !== 'new';
+  bfEl('bpRecent').hidden = bfTab !== 'recent';
+  bfEl('bpTabNew').classList.toggle('on', bfTab === 'new');
+  bfEl('bpTabRecent').classList.toggle('on', bfTab === 'recent');
+  if (bfTab === 'recent') renderBrochureRecent();
+}
+function setBrochureStatus(s){ bfStatus = s; drawBrochureLog(); }
+
 async function renderBrochureRecent(){
   const box = bfEl('bfRecent');
-  bfEl('bfRecentCard').hidden = false;
-  if (!bfLog) box.innerHTML = '<div class="bp-p">Loading…</div>';
+  if (!bfLog) box.innerHTML = '<div class="empty-mini">Loading…</div>';
   try {
     const d = await brochureApi('GET');
     if (d && d.ok) bfLog = d.entries || [];
-  } catch (e) { if (!bfLog) { box.innerHTML = '<div class="bp-p">Could not load the log.</div>'; return; } }
+  } catch (e) { if (!bfLog) { box.innerHTML = '<div class="empty-mini">Could not load the log — check your connection.</div>'; return; } }
   drawBrochureLog();
 }
+const BF_STATES = [['all', 'All'], ['queued', 'In queue'], ['generated', 'Generated'], ['delivered', 'Delivered'], ['error', 'Needs attention']];
 function drawBrochureLog(){
   const box = bfEl('bfRecent');
-  const list = bfLog || [];
-  if (!list.length) { box.innerHTML = '<div class="bp-p">Nothing submitted yet.</div>'; return; }
+  const all = bfLog || [];
+  const stOf = r => (r.status && r.status.state) || 'queued';
+  bfEl('bpTabCount').textContent = all.length ? String(all.length) : '';
+  bfEl('bpStatusFilter').innerHTML = BF_STATES.map(([k, l]) => {
+    const n = k === 'all' ? all.length : all.filter(r => stOf(r) === k).length;
+    return `<button type="button" class="fbtn${bfStatus === k ? ' at' : ''}${k === 'error' && n ? ' warn' : ''}" onclick="setBrochureStatus('${k}')">${l} <span class="bp-n">${n}</span></button>`;
+  }).join('');
+  const q = (bfEl('bpSearch').value || '').trim().toLowerCase();
+  const list = all.filter(r => (bfStatus === 'all' || stOf(r) === bfStatus)
+    && (!q || `${r.title} ${r.by || ''}`.toLowerCase().includes(q)));
+  if (!list.length) { box.innerHTML = `<div class="empty-mini">${all.length ? 'Nothing matches.' : 'Nothing submitted yet.'}</div>`; return; }
   const byId = new Map((typeof properties !== 'undefined' ? properties : []).map(p => [String(p.id || '').toUpperCase(), p]));
-  box.innerHTML = list.slice(0, 40).map(r => {
+  const fmt = ts => new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const rows = list.map(r => {
+    const st = r.status || { state: 'queued', label: 'In queue' };
     const pid = String(r.title || '').trim().split(/\s+/)[0].toUpperCase();
     const prop = byId.get(pid);
-    const st = r.status || null;
-    const link = (st && st.link) || (prop && prop.brochureLink ? String(prop.brochureLink).trim() : '');
-    const who = r.by ? r.by.split('@')[0].replace(/^./, c => c.toUpperCase()) : 'sender not recorded';
-    const when = new Date(r.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    return `<div class="bp-log">
-      <div class="bp-log-t">${escapeHtml(r.title || 'Untitled')}</div>
-      <div class="bp-log-m">${escapeHtml(who)} · ${escapeHtml(when)}</div>
-      ${st ? `<div class="bp-log-s ${escapeHtml(st.state)}"><span class="bp-dot"></span>${escapeHtml(st.label)}${st.state === 'delivered' && st.at ? ' · ' + escapeHtml(new Date(st.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) : ''}${link ? ` · <a href="${escapeHtml(link)}" target="_blank" rel="noopener">Open brochure ↗</a>` : ''}</div>` : ''}
-      ${st && st.state === 'error' && st.detail ? `<div class="bp-log-e">${escapeHtml(st.detail)}</div>` : ''}
-    </div>`;
+    const link = st.link || (prop && prop.brochureLink ? String(prop.brochureLink).trim() : '');
+    const who = r.by ? r.by.split('@')[0].replace(/^./, c => c.toUpperCase()) : '<span class="bp-muted">not recorded</span>';
+    return `<tr>
+      <td class="bp-t">${escapeHtml(r.title || 'Untitled')}${st.state === 'error' && st.detail ? `<div class="bp-log-e">${escapeHtml(st.detail)}</div>` : ''}</td>
+      <td>${r.by ? escapeHtml(who) : who}</td>
+      <td class="bp-nw">${escapeHtml(fmt(r.at))}</td>
+      <td><span class="bp-log-s ${escapeHtml(st.state)}"><span class="bp-dot"></span>${escapeHtml(st.label)}</span></td>
+      <td class="bp-nw">${st.at ? escapeHtml(fmt(st.at)) : '<span class="bp-muted">—</span>'}</td>
+      <td>${link ? `<a class="bp-open" href="${escapeHtml(link)}" target="_blank" rel="noopener">Open ↗</a>` : '<span class="bp-muted">—</span>'}</td>
+    </tr>`;
   }).join('');
+  box.innerHTML = `<div class="bp-table-wrap"><table class="bp-table">
+    <thead><tr><th>Property</th><th>Created by</th><th>Submitted</th><th>Status</th><th>Delivered</th><th>Brochure</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
 }
 
 function openBrochureModal(){ openBrochurePage(); }
@@ -100,6 +127,7 @@ function openBrochurePage(){
     bfEl('bfDraftNote').textContent = 'Draft restored from ' + new Date(draft.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
   }
   bfCountUpdate();
+  setBrochureTab(bfTab);
   renderBrochureRecent();
   bfEl('brochurePanel').classList.add('open');
   bfEl('brochurePanel').scrollTop = 0;
@@ -162,7 +190,7 @@ async function submitBrochureForm(){
     bfEl('bfDoneWhat').textContent = title ? `“${title}” — you can close this page or create another.` : 'You can close this page or create another.';
     bfEl('bfDone').hidden = false;
     bfEl('brochureForm').hidden = true;
-    renderBrochureRecent();
+    drawBrochureLog();
     bfEl('brochurePanel').scrollTop = 0;
     showToast('✓ Submitted — brochure will be ready in ~30 min');
   } catch(e) {

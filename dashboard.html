@@ -399,8 +399,19 @@
         <div class="chg-sub">New listing intake. Claude builds the brochure and adds the property to the inventory within about 30 minutes of submitting.</div>
       </div>
     </div>
+    <div class="bp-tabs" role="tablist">
+      <button type="button" class="bp-tab on" id="bpTabNew" role="tab" onclick="setBrochureTab('new')">New brochure</button>
+      <button type="button" class="bp-tab" id="bpTabRecent" role="tab" onclick="setBrochureTab('recent')">Recent brochures <span class="bp-tab-n" id="bpTabCount"></span></button>
+    </div>
   </div>
-  <div class="bp-body">
+  <div class="bp-recent-page" id="bpRecent" hidden>
+    <div class="bp-rtools">
+      <div class="fgroup" id="bpStatusFilter"></div>
+      <input class="chg-search" id="bpSearch" placeholder="Search title or person…" oninput="drawBrochureLog()">
+    </div>
+    <div id="bfRecent"></div>
+  </div>
+  <div class="bp-body" id="bpNew">
     <div class="bp-main">
       <div class="bp-done" id="bfDone" hidden>
         <div class="bp-done-i">✓</div>
@@ -440,10 +451,6 @@
       </form>
     </div>
     <aside class="bp-side">
-      <div class="bp-card" id="bfRecentCard" hidden>
-        <div class="bp-card-t">Recent brochures</div>
-        <div id="bfRecent"></div>
-      </div>
       <div class="bp-card">
         <div class="bp-card-t">What to include</div>
         <ul class="bp-list">

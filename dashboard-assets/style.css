@@ -274,6 +274,28 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .bp-card-t{font-weight:700;font-size:14px;margin-bottom:8px;}
 .bp-list{margin:0;padding-left:18px;font-size:13px;line-height:1.55;color:var(--ink2);display:flex;flex-direction:column;gap:4px;}
 .bp-p{font-size:13px;line-height:1.55;color:var(--ink2);margin:0;}
+.bp-tabs{display:flex;gap:4px;margin-top:10px;}
+.bp-tab{font:inherit;font-size:14px;font-weight:600;color:var(--ink3);background:none;border:0;border-bottom:2.5px solid transparent;padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:7px;}
+.bp-tab:hover{color:var(--ink);}
+.bp-tab.on{color:var(--ink);border-bottom-color:var(--gold, #FE8D00);}
+.bp-tab-n{font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:99px;padding:1px 7px;color:var(--ink3);}
+.bp-tab-n:empty{display:none;}
+.bp-body[hidden],.bp-recent-page[hidden]{display:none;}
+.bp-recent-page{padding:20px 28px 60px;max-width:1240px;}
+.bp-rtools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.bp-n{font-size:11px;opacity:.7;margin-left:3px;}
+.fbtn.warn .bp-n{color:#B42318;opacity:1;font-weight:700;}
+.bp-table-wrap{background:var(--white);border:1.5px solid var(--border);border-radius:14px;overflow-x:auto;}
+.bp-table{width:100%;border-collapse:collapse;font-size:13px;}
+.bp-table th{text-align:left;font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em;padding:11px 14px;border-bottom:1.5px solid var(--border);background:var(--bg);white-space:nowrap;}
+.bp-table td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top;}
+.bp-table tr:last-child td{border-bottom:0;}
+.bp-t{font-weight:600;color:var(--ink);min-width:240px;}
+.bp-nw{white-space:nowrap;color:var(--ink2);}
+.bp-muted{color:var(--ink3);font-style:italic;}
+.bp-open{color:#067647;font-weight:600;text-decoration:none;white-space:nowrap;}
+.bp-table .bp-log-s{margin-top:0;white-space:nowrap;}
+@media (max-width:900px){.bp-recent-page{padding:16px 16px 48px;}}
 .bp-log{padding:8px 0;border-top:1px dashed var(--border);}
 .bp-log:first-child{border-top:0;padding-top:0;}
 #bfRecent{max-height:420px;overflow-y:auto;}

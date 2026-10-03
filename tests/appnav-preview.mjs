@@ -373,6 +373,29 @@ console.log('\nProperties — desktop');
   const kept = await page.evaluate(() => document.getElementById('bfDetails').value);
   ok('A draft survives leaving the page', kept === '3 BHK in Velachery, 1450 sqft', kept);
   await page.screenshot({ path: join(OUT, 'prop-03-brochure.png') });
+  // The log is its own tab: a table with who, when, status and a link, filterable by status.
+  await page.evaluate(() => setBrochureTab('recent'));
+  await page.waitForTimeout(400);   // the tab fetches the live log first; the stub answers empty
+  await page.evaluate(() => {
+    bfLog = [
+      { title: 'VDPLH001 - Individual House Vadapalani', by: 'thirumal@threepin.in', at: Date.now() - 3600000, status: { state: 'delivered', label: 'Delivered', at: Date.now() - 600000, link: 'https://drive.google.com/file/d/x/view' } },
+      { title: 'RAJP0003 - Upcoming Commercial', by: null, at: Date.now() - 86400000, status: { state: 'error', label: 'Needs attention', detail: 'no photo folder link' } },
+      { title: 'NOL009 - 3BHK in Velachery', by: 'swami@threepin.in', at: Date.now() - 60000, status: { state: 'queued', label: 'In queue' } }
+    ];
+    drawBrochureLog();
+  });
+  const rec = await page.evaluate(() => ({
+    formHidden: document.getElementById('bpNew').hidden,
+    rows: [...document.querySelectorAll('#bfRecent tbody tr')].map(r => r.textContent.replace(/\s+/g, ' ').trim()),
+    heads: [...document.querySelectorAll('#bfRecent thead th')].map(h => h.textContent)
+  }));
+  ok('Recent brochures is its own tab, with the form out of the way', rec.formHidden && rec.rows.length === 3, JSON.stringify(rec));
+  ok('…a table of who created each one, when, its status and the brochure', JSON.stringify(rec.heads) === JSON.stringify(['Property', 'Created by', 'Submitted', 'Status', 'Delivered', 'Brochure']), JSON.stringify(rec.heads));
+  ok('…naming the person, or saying it was not recorded', /Thirumal/.test(rec.rows[0]) && /not recorded/.test(rec.rows[1]), JSON.stringify(rec.rows));
+  await page.screenshot({ path: join(OUT, 'prop-04-brochure-log.png') });
+  const errOnly = await page.evaluate(() => { setBrochureStatus('error'); return [...document.querySelectorAll('#bfRecent tbody tr')].length; });
+  ok('…and the status filter narrows it', errOnly === 1, String(errOnly));
+  await page.evaluate(() => { setBrochureStatus('all'); setBrochureTab('new'); bfLog = null; });
   await page.evaluate(() => { clearBrochureDraft(false); closeBrochurePage(); });
   s = await railState(page);
   ok('Going back returns the rail to the properties dashboard', s.current === 'Property Intelligence Dashboard', String(s.current));
