@@ -1,4 +1,5 @@
 import { getDb, sendEmail, verifyCrmUser } from './_bot-shared.js';
+import { getSheetsToken, QUEUE_SHEET_ID } from './_inventory-shared.js';
 import { json, fail, checkAuth, checkRateLimit, getDriveAccessToken, makeDriveFilePublic, logBrochureCall } from './_brochure-shared.js';
 
 // Brochure delivery, in one file/one function (Vercel's Hobby plan caps a
@@ -211,15 +212,61 @@ async function logPost(request) {
   const ref = await getDb().collection(LOG).add(entry);
   return json({ ok: true, entry: { id: ref.id, ...entry } });
 }
+// Where each request stands, from the intake Queue sheet the brochure scheduler works through:
+// Status blank = queued, "Done" = generated, "Brochure Emailed: Yes - <time> - <link>" =
+// delivered, "Error - …" = needs a person. Read-only; matched to a log entry by the sheet's own
+// timestamp, else by Property ID (the first word of the title) on or after the entry's time.
+const QUEUE_RANGE = "'Form Responses 1'!A1:I2000";
+const istStamp = s => {
+  const m = String(s || '').match(/^(\d+)\/(\d+)\/(\d{4}) (\d+):(\d+):(\d+)$/);
+  return m ? Date.parse(`${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}T${m[4].padStart(2, '0')}:${m[5]}:${m[6]}+05:30`) : null;
+};
+const pidOf = t => String(t || '').trim().split(/\s+/)[0].toUpperCase();
+function statusOf(statusCell, emailedCell) {
+  const st = String(statusCell || '').trim(), em = String(emailedCell || '').trim();
+  if (/^error/i.test(st)) return { state: 'error', label: 'Needs attention', detail: st.replace(/^error\s*[-:–]\s*/i, '').slice(0, 220) };
+  if (/^yes/i.test(em)) {
+    const at = (em.match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/) || [])[0];
+    const link = (em.match(/https?:\/\/\S+/) || [])[0] || null;
+    return { state: 'delivered', label: 'Delivered', deliveredAt: at ? Date.parse(at) : null, link };
+  }
+  if (/^done/i.test(st)) return { state: 'generated', label: 'Generated — being sent' };
+  return { state: 'queued', label: 'In queue' };
+}
+async function queueStatus() {
+  try {
+    const token = await getSheetsToken(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${QUEUE_SHEET_ID}/values/${encodeURIComponent(QUEUE_RANGE)}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const rows = (await res.json()).values || [];
+    const norm = (rows[0] || []).map(h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' '));
+    const col = (pfx, exact) => norm.findIndex(h => exact ? h === pfx : h.startsWith(pfx));
+    const c = { at: col('timestamp', true), title: col('property id'), status: col('status', true), emailed: col('brochure emailed') };
+    if (c.title < 0 || c.status < 0) return null;
+    return rows.slice(1).map(r => ({ at: istStamp(r[c.at]), pid: pidOf(r[c.title]), ...statusOf(r[c.status], c.emailed >= 0 ? r[c.emailed] : '') }));
+  } catch (e) {
+    console.error('brochure log: Queue sheet unreadable', e);
+    return null;
+  }
+}
+
 async function logList(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) return json({ ok: false, error: 'Unauthorized' }, 401);
   // Newest first by the single-field index on `at`; the tenant is checked on the way out.
-  const snap = await getDb().collection(LOG).orderBy('at', 'desc').limit(120).get();
+  const [snap, queue] = await Promise.all([getDb().collection(LOG).orderBy('at', 'desc').limit(120).get(), queueStatus()]);
   const entries = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .filter(e => e.tenantId === user.tenantId).slice(0, 60)
-    .map(({ tenantId, ...e }) => e);
-  return json({ ok: true, entries });
+    .map(({ tenantId, ...e }) => {
+      if (!queue) return e;
+      // The sheet row this entry became: same second (loaded from the sheet), else the first row
+      // for the same Property ID submitted from a minute before the entry onwards.
+      const row = queue.find(q => q.at && Math.abs(q.at - e.at) < 1000)
+        || queue.filter(q => q.pid && q.pid === pidOf(e.title) && q.at >= e.at - 60000).sort((a, b) => a.at - b.at)[0];
+      // A submission the Form has not written to the sheet yet is simply queued.
+      return { ...e, status: row ? { state: row.state, label: row.label, at: row.deliveredAt || null, detail: row.detail || null, link: row.link || null } : { state: 'queued', label: 'In queue' } };
+    });
+  return json({ ok: true, entries, sheet: !!queue });
 }
 
 export async function GET(request) {

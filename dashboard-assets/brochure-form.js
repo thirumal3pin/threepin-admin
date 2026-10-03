@@ -74,12 +74,15 @@ function drawBrochureLog(){
   box.innerHTML = list.slice(0, 40).map(r => {
     const pid = String(r.title || '').trim().split(/\s+/)[0].toUpperCase();
     const prop = byId.get(pid);
-    const link = prop && prop.brochureLink ? String(prop.brochureLink).trim() : '';
+    const st = r.status || null;
+    const link = (st && st.link) || (prop && prop.brochureLink ? String(prop.brochureLink).trim() : '');
     const who = r.by ? r.by.split('@')[0].replace(/^./, c => c.toUpperCase()) : 'sender not recorded';
     const when = new Date(r.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     return `<div class="bp-log">
       <div class="bp-log-t">${escapeHtml(r.title || 'Untitled')}</div>
-      <div class="bp-log-m">${escapeHtml(who)} · ${escapeHtml(when)}${link ? ` · <a href="${escapeHtml(link)}" target="_blank" rel="noopener">Brochure ready ↗</a>` : ''}</div>
+      <div class="bp-log-m">${escapeHtml(who)} · ${escapeHtml(when)}</div>
+      ${st ? `<div class="bp-log-s ${escapeHtml(st.state)}"><span class="bp-dot"></span>${escapeHtml(st.label)}${st.state === 'delivered' && st.at ? ' · ' + escapeHtml(new Date(st.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) : ''}${link ? ` · <a href="${escapeHtml(link)}" target="_blank" rel="noopener">Open brochure ↗</a>` : ''}</div>` : ''}
+      ${st && st.state === 'error' && st.detail ? `<div class="bp-log-e">${escapeHtml(st.detail)}</div>` : ''}
     </div>`;
   }).join('');
 }
