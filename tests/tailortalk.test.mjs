@@ -353,6 +353,18 @@ section('Timeline entries, category, and what needs a person');
     eq('A bare "Ok" is not shown as the reason when the customer said more', okAfter.leadWrite.tt.escalationAsk.text, 'Can someone call me about the price?');
     const objectReply = planUpdate({ envelope: real({ escalated: true, chat_history: [...base, { role: 'user', content: { nested: true }, time: '2026-09-13T13:29:00+00:00', metadata: { type: 'reply', user_message: 'Is it still available?' } }] }, { occurred_at: '2026-09-13T13:30:00+00:00' }), lead: calm.leadWrite, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 6000 });
     eq('A reply whose text sits in metadata is read from there', objectReply.leadWrite.tt.escalationAsk.text, 'Is it still available?');
+
+    // 2 Oct: already flagged (start unknown), the AI re-escalates in its reply, a person answers
+    // the next day — the CRM never saw the flag switch, so the chat must date it.
+    const visit = { role: 'user', content: 'I want to visit nol002 tomorrow 2pm', time: '2026-10-02T15:05:00+00:00' };
+    const esc = { role: 'assistant', content: 'I have escalated your request for the site visit to our team.', time: '2026-10-02T15:07:00+00:00' };
+    const pradeep = { role: 'assistant', content: '<Human Agent: This is Pradeep from 3 PIN realty>', time: '2026-10-03T06:30:00+00:00', metadata: { type: 'human_agent', message: 'This is Pradeep from 3 PIN realty' } };
+    const flagged = { ...calm.leadWrite, tt: { ...calm.leadWrite.tt, escalated: true, escalatedAt: null } };
+    const still = planUpdate({ envelope: real({ escalated: true, chat_history: [...base, visit, esc] }, { occurred_at: '2026-10-02T15:08:00+00:00' }), lead: flagged, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 7000 });
+    eq('A re-escalation the flag never showed is dated from the AI\'s own words', still.leadWrite.tt.escalatedAt, Date.parse('2026-10-02T15:07:00+00:00'));
+    eq('…with the customer\'s ask behind it', still.leadWrite.tt.escalationAsk.text, 'I want to visit nol002 tomorrow 2pm');
+    const cleared2 = planUpdate({ envelope: real({ escalated: false, chat_history: [...base, visit, esc, pradeep] }, { occurred_at: '2026-10-03T06:34:00+00:00' }), lead: flagged, state: calm.stateWrite, leadId: 'LC', tenantId: TENANT, stages: STAGES, enquiryTypes: TYPES, now: NOW + 8000 });
+    eq('A clear seen only afterwards still knows when that escalation began and when it was answered', [cleared2.leadWrite.tt.lastEscalation.at, cleared2.leadWrite.tt.lastEscalation.replyAt], [Date.parse('2026-10-02T15:07:00+00:00'), Date.parse('2026-10-03T06:30:00+00:00')]);
   }
 
   const TYPES_B = [...TYPES, 'Vendor / Collaboration'];

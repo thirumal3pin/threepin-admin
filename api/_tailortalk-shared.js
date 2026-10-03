@@ -281,6 +281,16 @@ function userText(m) {
 // "Ok", "Thanks", "Hi" say nothing about what the customer wants, so the newest message with
 // some substance is preferred; a bare acknowledgement is used only when there is nothing else.
 const ACK = /^(ok+|okay|k|thanks?|thank you|thx|hi+|hello|hey|yes|yeah|no|fine|sure|done|good|great|👍|🙏)[\s.!]*$/i;
+// The newest message in which TailorTalk's AI (not a person) says it escalated, up to `until`.
+const ESCALATED_WORDS = /\b(i('ve| have)|we('ve| have))\s+escalated\b|\bescalated (this|your|it)\b/i;
+function chatEscalatedAt(chat, until) {
+  let t = null;
+  for (const m of chat) {
+    if (m.role !== 'assistant' || isHumanReply(m) || !m.at || (until && m.at > until)) continue;
+    if (ESCALATED_WORDS.test(String(m.content || '')) && (t === null || m.at > t)) t = m.at;
+  }
+  return t;
+}
 function askAt(chat, until) {
   let best = null, bestAny = null;
   for (const m of chat) {
@@ -462,6 +472,16 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     return occurredAt;
   };
 
+  // When the current escalation began. TailorTalk sends no timestamp for it and only notifies the
+  // CRM when the customer writes — so an escalation the AI makes in its reply, a minute after the
+  // customer's last message, is not seen starting, and one that re-escalates while the flag was
+  // already on never "switches on" at all (both happened on 2 Oct). The AI announces it in the
+  // chat ("I have escalated your request…"), so the newest such message is the start whenever
+  // it is newer than what the flag tells us.
+  const escFromChat = chatEscalatedAt(chat);
+  const escBase = switchedOnAt(d.escalated === true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt);
+  const escStart = d.escalated === true ? (Math.max(escBase || 0, escFromChat || 0) || null) : null;
+
   const freshTt = {
     id: incomingId,
     ids,
@@ -476,23 +496,28 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     convertedAt: toMs(d.converted_at),
     locked: d.lead_lock_status === true,
     escalated: d.escalated === true,
-    escalatedAt: switchedOnAt(d.escalated === true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt),
+    escalatedAt: escStart,
     escalatedTo: textOf(d.escalated_to),
     // Who answered an escalation, and when — what the EOD report's escalation section reads.
     // TailorTalk clears an escalation once a person replies (switched on 23 Sep 2026), so the
     // clear is recorded with the escalation it closed and the first human reply inside it.
-    escalationReplyAt: d.escalated === true
-      ? firstHumanFrom(chat, switchedOnAt(true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt))
-      : null,
+    escalationReplyAt: d.escalated === true ? firstHumanFrom(chat, escStart) : null,
     escalationClearedAt: d.escalated === true ? ((prevTt && prevTt.escalationClearedAt) ?? null)
       : (prevTt && prevTt.escalated ? occurredAt : ((prevTt && prevTt.escalationClearedAt) ?? null)),
     lastEscalation: d.escalated !== true && prevTt && prevTt.escalated
-      ? { at: prevTt.escalatedAt ?? null, clearedAt: occurredAt, replyAt: firstHumanFrom(chat, prevTt.escalatedAt) || lastHumanIn(chat) }
-      : ((prevTt && prevTt.lastEscalation) ?? null),
+      ? (() => {
+          const at = prevTt.escalatedAt ?? chatEscalatedAt(chat, occurredAt);
+          return { at: at ?? null, clearedAt: occurredAt, replyAt: firstHumanFrom(chat, at) || lastHumanIn(chat) };
+        })()
+      : (prevTt && prevTt.lastEscalation && prevTt.lastEscalation.at == null && chatEscalatedAt(chat, prevTt.lastEscalation.clearedAt)
+          // A clear recorded before its start could be dated: date it from the chat now.
+          ? (() => { const at = chatEscalatedAt(chat, prevTt.lastEscalation.clearedAt);
+              return { ...prevTt.lastEscalation, at, replyAt: firstHumanFrom(chat, at) || prevTt.lastEscalation.replyAt || null }; })()
+          : ((prevTt && prevTt.lastEscalation) ?? null)),
     // What the escalation is about, in the customer's words: the last thing they wrote up to the
     // moment it was escalated (or, for one already open when first seen, their latest message),
     // and the newest message they are still waiting on. Short quotes, for the EOD report.
-    escalationAsk: d.escalated === true ? askAt(chat, switchedOnAt(true, prevTt && prevTt.escalated, prevTt && prevTt.escalatedAt)) : null,
+    escalationAsk: d.escalated === true ? askAt(chat, escStart) : null,
     latestAsk: askAt(chat, null),
     lastHumanAt: lastHumanIn(chat),
     lastHumanBy: lastHumanByIn(chat),

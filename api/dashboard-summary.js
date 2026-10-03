@@ -1,6 +1,32 @@
 import { getDb, verifyCrmUser, sendEmail } from './_bot-shared.js';
 import { computeDashboardMetrics, formatINR } from '../crm-assets/dashboardMetrics.js';
 import { summarizeDeadReasons } from './_dashboard-ai-shared.js';
+import { pullTailorTalkPage } from './_tailortalk-sync.js';
+
+export const maxDuration = 60;
+
+// TailorTalk tells the CRM about a chat only when the customer writes. An escalation its AI makes
+// in a reply, or one a person clears by answering, can sit unseen until that customer writes
+// again — so the report first pulls the last day's conversations (the same pull the nightly
+// sync and the CRM's refresh run). Best effort: if TailorTalk is slow or down, the report goes
+// out on what the CRM already has.
+async function freshenTailorTalk(db, tenantId) {
+  const token = process.env.TAILORTALK_AGENT_TOKEN;
+  if (!token || process.env.TAILORTALK_TENANT_ID !== tenantId) return null;
+  const started = Date.now();
+  let next = null, processed = 0;
+  try {
+    for (let i = 0; i < 3 && Date.now() - started < 25000; i++) {
+      const r = await pullTailorTalkPage(db, tenantId, token, { startAfter: next, pageSize: 50, stopBefore: Date.now() - 26 * 3600000 });
+      processed += r.processed || 0;
+      if (r.done) break;
+      next = r.next;
+    }
+  } catch (e) {
+    console.error('dashboard-summary: TailorTalk refresh failed, using stored data:', e);
+  }
+  return processed;
+}
 
 const TZ = 'Asia/Kolkata';
 
@@ -504,6 +530,7 @@ async function dashboardSummaryForTenant(db, tenantId, opts) {
   const recipients = settings.dashboardEmailEnabled ? (settings.dashboardEmailRecipients || []) : [];
   if (!recipients.length) return { tenantId, skipped: true, results: [] };
 
+  await freshenTailorTalk(db, tenantId);
   const [leadsSnap, pipelineSnap] = await Promise.all([
     db.collection('leads').where('tenantId', '==', tenantId).get(),
     db.collection('pipelines').doc(tenantId).get()
