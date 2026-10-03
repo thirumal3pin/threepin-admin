@@ -1021,6 +1021,7 @@ function renderAreaMap(){
 // the live record.
 let matchLeads = null;         // null = never fetched, [] = fetched and empty
 let matchLeadsPromise = null;
+let matchLeadsFailed = false;
 
 function loadMatchLeads(){
   if(matchLeads) return Promise.resolve(matchLeads);
@@ -1032,8 +1033,9 @@ function loadMatchLeads(){
     return Promise.resolve(matchLeads);
   }
   matchLeadsPromise = window.dashboardFirebase.getLeads()
-    .then(list => { matchLeads = list || []; return matchLeads; })
-    .catch(() => { matchLeads = []; return matchLeads; });
+    .then(list => { matchLeads = list || []; matchLeadsFailed = false; return matchLeads; })
+    // A failed read is not "no leads": say so, and let the next open try again.
+    .catch(() => { matchLeads = null; matchLeadsPromise = null; matchLeadsFailed = true; return []; });
   return matchLeadsPromise;
 }
 
@@ -1069,7 +1071,9 @@ function renderMatchingBuyers(id){
     PinMatchPanel.render(el, matches, {
       title: live === 1 ? '1 buyer worth calling' : `${live} buyers worth calling`,
       subtitle: `out of ${leads.length} in the CRM`,
-      empty: leads.length
+      empty: matchLeadsFailed
+        ? 'Could not read the CRM leads just now — close and reopen this property to try again.'
+        : leads.length
         ? 'No buyer on the CRM is looking for anything like this yet. The ruled-out list below says why for each one.'
         : 'No leads in the CRM yet — once buyers are in, they will be matched here automatically.',
       shape: m => ({
@@ -2540,4 +2544,24 @@ function exportSelected(format){
 PinPropertyView.setResolver(id => properties.find(x => x.id === id));
 
 // keyboard: ESC closes detail
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePModal();closeDetail();closeShareDetailsModal();}});
+// Escape closes the topmost open layer only. It used to close the edit form AND the property
+// behind it at once (losing the place), and did nothing for the full-page panels.
+const DASH_LAYERS = [
+  ['pModal', () => closePModal()], ['shareDetailsModal', () => closeShareDetailsModal()],
+  ['syncModal', () => closeSyncModal()], ['advPanel', () => PinAdvanced.close()],
+  ['dp', () => closeDetail()], ['brochurePanel', () => closeBrochurePage()],
+  ['changesPanel', () => closeChanges()], ['missingPanel', () => closeMissing()],
+  ['areaMapPanel', () => closeAreaMap()]
+];
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape') return;
+  const hit = DASH_LAYERS.find(([id]) => { const el = document.getElementById(id); return el && el.classList.contains('open'); });
+  if(hit){ e.preventDefault(); try { hit[1](); } catch(err) { document.getElementById(hit[0]).classList.remove('open'); } }
+});
+// A click on the dimmed area around a dialog closes it — not the edit form, where a stray click
+// would throw away typing.
+document.addEventListener('mousedown', e => {
+  const id = e.target && e.target.id;
+  if(id === 'shareDetailsModal') closeShareDetailsModal();
+  else if(id === 'syncModal') closeSyncModal();
+});

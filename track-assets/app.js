@@ -1287,6 +1287,10 @@ function renderWaitingBuyers(x, lead) {
         ].filter(Boolean)
       })
     });
+  }).catch(e => {
+    // Without this the panel stayed on "Scoring every buyer…" for ever.
+    console.error('Buyer matching failed:', e);
+    if (currentDetailId === x.id) el.innerHTML = '<div class="tk-hint">Could not score the buyers just now — close and reopen the listing to try again.</div>';
   });
 }
 
@@ -1466,7 +1470,9 @@ function openPendingListing() {
 }
 
 function loadHistory(id) {
-  if (!window.trackFirebase) return;
+  // "Loading…" used to stay for ever when the read failed or the store was not ready.
+  const failed = () => { const el = document.getElementById('dpHistory'); if (el && currentDetailId === id) el.innerHTML = '<div class="tk-hint">Could not load the timeline — close and reopen the listing to try again.</div>'; };
+  if (!window.trackFirebase) { failed(); return; }
   window.trackFirebase.getListingHistory(id).then(list => {
     if (currentDetailId !== id) return;
     const el = document.getElementById('dpHistory');
@@ -1474,7 +1480,7 @@ function loadHistory(id) {
     el.innerHTML = list.length
       ? list.map(h => `<div class="tk-hist-i"><div class="tk-hist-t">${h.text}</div><div class="tk-hist-m">${esc(timeAgo(h.at))} · ${esc(String(h.by || '').split('@')[0])}</div></div>`).join('')
       : '<div class="tk-hint">Nothing yet.</div>';
-  }).catch(e => console.error('History load failed:', e));
+  }).catch(e => { console.error('History load failed:', e); failed(); });
 }
 
 // ── Small field writes from the detail panel ──
@@ -1932,18 +1938,33 @@ function trackLogout() { window.trackAuth.logout(); }
 window.attemptLogin = attemptLogin; window.trackLogout = trackLogout;
 
 // Escape closes whatever is on top; overlay clicks close their own layer.
+// Each layer closes through its own function, so the state it holds (which listing a shoot or a
+// reason is for) is cleared too — removing the class alone left that behind. The access and wrap
+// modals were missing from this list, so Escape in them closed the listing underneath instead.
+const TRACK_LAYERS = [
+  ['acModal', () => closeAccessModal()], ['wrapModal', () => closeWrapModal()],
+  ['rsModal', () => closeReasonModal()], ['shModal', () => closeShootModal()],
+  ['mModal', () => closeModal()], ['mapModal', null], ['linkModal', null],
+  ['sellerPrev', () => closeSellerPreview()]
+];
+function closeTrackLayer(id) {
+  const hit = TRACK_LAYERS.find(([x]) => x === id);
+  const fn = hit && hit[1];
+  if (fn) fn(); else { const el = document.getElementById(id); if (el) el.classList.remove('open'); }
+}
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   // Innermost layer first, so Escape peels one thing at a time.
-  const open = ['mModal', 'shModal', 'mapModal', 'linkModal', 'rsModal', 'sellerPrev'].find(id => {
+  const open = TRACK_LAYERS.map(([id]) => id).find(id => {
     const el = document.getElementById(id);
     return el && el.classList.contains('open');
   });
-  if (open) document.getElementById(open).classList.remove('open');
+  if (open) closeTrackLayer(open);
   else if (currentDetailId) closeDetail();
 });
 document.addEventListener('mousedown', e => {
-  if (e.target.classList && e.target.classList.contains('tk-ov')) e.target.classList.remove('open');
+  const t = e.target;
+  if (t.classList && (t.classList.contains('tk-ov') || t.classList.contains('tk-prev')) && t.id) closeTrackLayer(t.id);
 });
 
 // ═══════ THE RAIL ═══════

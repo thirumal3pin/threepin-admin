@@ -843,6 +843,14 @@
         });
       });
     }
+    // A site visit is about a lead: open the lead (where the visit is managed), whoever's calendar
+    // the block sits in. Asking Google for it as the viewer fails whenever the visit is in a
+    // colleague's diary — which left the page stuck on an error with no way out (3 Oct).
+    if (local && local.leadId) {
+      evState = { id: null, loading: false, data: null, error: null };
+      if (typeof openDetail === 'function') openDetail(local.leadId);
+      return;
+    }
     if (local && !local.leadId && !local.meetingId) {
       // Not one the CRM booked, so there is nothing to answer here. It is in
       // your own calendar, so what it holds is yours to read.
@@ -862,7 +870,12 @@
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (evState.id !== id) return;
       evState.loading = false;
-      if (d && d.ok) evState.data = d.event; else evState.error = (d && d.error) || 'Could not open it';
+      if (d && d.ok) evState.data = d.event;
+      // Not in YOUR calendar (it is a colleague's meeting): show what the grid already knows,
+      // read-only, rather than an error.
+      else if (local) evState.data = { id: local.id, title: local.title, start: local.start, end: local.end, where: local.where,
+        about: local.about, meet: local.meet, organiser: local.organiser, attendees: local.attendees, mine: local.mine, readOnly: true, link: local.link };
+      else evState.error = (d && d.error) || 'Could not open it';
       redrawEvent();
     }).catch(function () {
       if (evState.id !== id) return;
@@ -882,9 +895,11 @@
   function eventHtml() {
     var d = evState.data;
     var body;
-    if (evState.loading) body = '<div class="ev-msg">Opening' + '\u2026' + '</div>';
-    else if (evState.error) body = '<div class="ev-msg">' + esc(evState.error) + '</div>';
-    else if (!d) body = '<div class="ev-msg">Nothing to show.</div>';
+    // Every state has a way out — an error with no Close button left the page stuck (3 Oct).
+    var closeRow = '<div class="cal-sheet-acts"><button type="button" class="tt-btn quiet" onclick="PinCalendar.closeEvent()">Close</button></div>';
+    if (evState.loading) body = '<div class="ev-msg">Opening' + '\u2026' + '</div>' + closeRow;
+    else if (evState.error) body = '<div class="ev-msg">' + esc(evState.error) + '</div>' + closeRow;
+    else if (!d) body = '<div class="ev-msg">Nothing to show.</div>' + closeRow;
     else {
       var when = d.start ? new Date(d.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
       var till = d.end ? clock(Date.parse(d.end)) : '';
@@ -1193,6 +1208,21 @@
     if (!document.hidden && onScreen() && Date.now() - lastFetch > 30000) load(true);
   });
   setInterval(function () { if (!document.hidden && onScreen()) load(true); }, 5 * MIN);
+
+  // Any calendar sheet closes with Esc or a click on the dimmed area around it.
+  function closeTopSheet() {
+    var sheets = document.querySelectorAll('.cal-sheet');
+    var top = sheets[sheets.length - 1];
+    if (!top) return false;
+    if (top.id === 'evSheet') closeEvent();
+    else if (top.id === 'findSheet') closeFind();
+    else if (top.id === 'calSheet') closeMeeting();
+    else if (top.id === 'svSheet' && typeof closeVisitEditor === 'function') closeVisitEditor();
+    else top.remove();
+    return true;
+  }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && closeTopSheet()) e.stopPropagation(); });
+  document.addEventListener('click', function (e) { if (e.target && e.target.classList && e.target.classList.contains('cal-sheet')) closeTopSheet(); });
 
   window.renderCalendarView = function () { window.PinCalendar.open(); };
 })();

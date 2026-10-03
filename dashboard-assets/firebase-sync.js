@@ -188,10 +188,19 @@ onAuthStateChanged(auth, async (user) => {
   if(user){
     // Force-refresh so a tenantId claim set AFTER this browser's last
     // sign-in is picked up immediately instead of reusing a stale token.
-    const tokenResult = await user.getIdTokenResult(true);
-    currentTenantId = tokenResult.claims.tenantId || null;
+    // A fresh token can fail on a poor connection; without a fallback the page stayed blank
+    // with no message. Use the cached one then — it carries the same tenant claim.
+    let tokenResult = null;
+    try { tokenResult = await user.getIdTokenResult(true); }
+    catch (e) {
+      console.error('Could not refresh the sign-in; using the cached one:', e);
+      try { tokenResult = await user.getIdTokenResult(false); } catch (e2) { tokenResult = null; }
+    }
+    currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
+      // The single-property page otherwise sits on its skeleton for ever.
+      if (pageMode === 'single' && window.onPinTenantMissing) window.onPinTenantMissing();
     } else if (pageMode === 'single') {
       // Single-property page: it loads its own doc, no collection listener.
       if (window.onPinTenantReady) window.onPinTenantReady(currentTenantId);

@@ -205,7 +205,7 @@ window.crmFirebase = {
     const snap = await getDoc(whatsappBotRef(currentTenantId));
     return snap.exists() ? snap.data() : null;
   },
-  saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }).catch(e => console.error('Firestore save bot config error:', e)),
+  saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }),
   saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
   // The curated property list behind the Add Lead combobox. Leads already in
   // the CRM contribute their properties client-side; this doc is what makes a
@@ -236,8 +236,15 @@ onAuthStateChanged(auth, async (user) => {
     // browser's last sign-in — e.g. right after scripts/create-tenant.js or
     // scripts/migrate-existing-tenant.js ran — is picked up immediately,
     // instead of silently reusing a cached token that predates the claim.
-    const tokenResult = await user.getIdTokenResult(true);
-    currentTenantId = tokenResult.claims.tenantId || null;
+    // A fresh token can fail on a poor connection; without a fallback the page stayed blank
+    // with no message. Use the cached one then — it carries the same tenant claim.
+    let tokenResult = null;
+    try { tokenResult = await user.getIdTokenResult(true); }
+    catch (e) {
+      console.error('Could not refresh the sign-in; using the cached one:', e);
+      try { tokenResult = await user.getIdTokenResult(false); } catch (e2) { tokenResult = null; }
+    }
+    currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
     } else {

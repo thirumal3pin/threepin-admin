@@ -155,8 +155,8 @@ onAuthStateChanged(auth, async user => {
       const token = await user.getIdTokenResult(true);
       currentTenantId = token.claims.tenantId || null;
     } catch(e){
-      console.error('Could not read the tenant claim:', e);
-      currentTenantId = null;
+      console.error('Could not refresh the sign-in; using the cached one:', e);
+      try { currentTenantId = (await user.getIdTokenResult(false)).claims.tenantId || null; } catch(e2) { currentTenantId = null; }
     }
     if(currentTenantId) subscribeToData(currentTenantId);
   } else {

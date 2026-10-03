@@ -1247,6 +1247,7 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .lcard-agent{font-size:11.5px;font-weight:600;color:var(--ink2);margin-top:3px;}
 .lcard-agent.none{color:var(--ink4, #A8A29E);font-weight:500;}
 .lcard-agent2{font-weight:500;color:var(--ink3);}
+.lf-agentctl{flex:0 0 auto;display:flex;align-items:center;}
 .lf-agent{position:relative;flex-shrink:0;}
 .lf-agent summary{list-style:none;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;}
 .lf-agent summary::-webkit-details-marker{display:none;}
@@ -1254,13 +1255,13 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .lf-agent.at summary{border-color:var(--ink);background:var(--ink);color:var(--white);}
 .lf-agent.at .lf-agent-k{color:inherit;opacity:.7;}
 .lf-pop{position:absolute;z-index:60;top:calc(100% + 6px);right:0;min-width:220px;background:var(--white);border:1.5px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.12);padding:6px;}
-.lf-pop-row{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;font-size:13px;color:var(--ink);cursor:pointer;}
+.lf-pop-row{display:flex;align-items:center;gap:9px;padding:7px 8px;min-height:34px;box-sizing:border-box;border-radius:8px;font-size:13px;color:var(--ink);cursor:pointer;}
 .lf-pop-row:hover{background:var(--bg);}
 .lf-pop-row span:nth-child(2){flex:1;}
 .lf-pop-row input{width:15px;height:15px;accent-color:var(--ink);}
 .lf-pop-sep{height:1px;background:var(--border);margin:4px 2px;}
 .lf-pop-foot{border-top:1px solid var(--border);margin-top:4px;padding:6px 2px 2px;display:flex;justify-content:flex-end;}
-.lf-pop-foot button{font:inherit;font-size:12px;font-weight:600;color:var(--ink2);background:none;border:0;cursor:pointer;padding:4px 6px;}
+.lf-pop-foot button{font:inherit;font-size:12px;font-weight:600;color:var(--ink2);background:none;border:0;cursor:pointer;padding:4px 8px;min-height:32px;}
 .lf-pop-foot button:disabled{opacity:.4;cursor:default;}
 .dp-stage-sel{appearance:none;-webkit-appearance:none;font-family:var(--sans);font-size:13px;font-weight:700;padding:9px 34px 9px 16px;border-radius:99px;border:1.5px solid var(--border);background-color:var(--white);color:var(--ink);cursor:pointer;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%238C877F' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center;}
 .dp-ai-summary{margin-bottom:18px;}
@@ -2042,7 +2043,21 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   padding: 8px 11px; font-size: 11.5px; line-height: 1.45;
   color: var(--ink3, #655E59); max-width: 240px;
 }
-@media (max-width: 720px) { .lf-bsort-btn { min-height: 36px; } }
+@media (max-width: 720px) {
+  .lf-bsort-btn { min-height: 36px; }
+  /* On a phone the chips were squeezed into the ~60px left between Views and Sort, and the
+     strip's edge-to-edge margin pushed it under the Sort button. Views and Sort share the first
+     line; the chips get a full-width line of their own beneath. */
+  .lf-row { flex-wrap: wrap; row-gap: 8px; }
+  .lf-row .lf-bar { order: 3; flex: 1 0 100%; margin: 0 -12px; padding: 0 12px 1px; }
+  .lf-row .lf-sortctl { margin-left: auto; border-left: 0; padding-left: 0; }
+  /* The Agent list sits near the left on a phone: open it rightwards so it stays on screen. */
+  .lf-agentctl .lf-pop { left: 0; right: auto; max-width: calc(100vw - 24px); }
+  .lf-agent summary { min-height: 36px; }
+  /* Icon and value only, so Views, Agent and Sort share one line. */
+  .lf-bsort-k { display: none; }
+  .lf-bsort-btn, .lf-agent summary { padding-left: 10px; padding-right: 10px; }
+}
 
 /* ═══════ HANDING OVER TO TAILORTALK ═══════
    Where a compose box would be if we could send. We cannot: the TailorTalk

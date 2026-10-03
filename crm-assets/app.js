@@ -752,8 +752,9 @@ function renderLeadFilterBar(){
     html += '<span class="lf-sep" aria-hidden="true"></span>'
       + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
-  html += '<span class="lf-sep" aria-hidden="true"></span>' + agentFilterHtml();
   el.innerHTML = html;
+  const ag = document.getElementById('agentFilterCtl');
+  if(ag) ag.innerHTML = agentFilterHtml();
   renderBoardSortCtl();
   if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
   updateViewsChip();
@@ -771,7 +772,7 @@ function boardSortCtlHtml(){
   return `<div class="lf-bsort${set ? ' set' : ''}">
         <button type="button" class="lf-bsort-btn" aria-haspopup="true" aria-expanded="${openBoardSortAll}"
           title="Sort every column on the board" onclick="toggleBoardSortAll(event)">
-          ⇅ Sort board<span class="lf-bsort-v">${escapeHtml(active.label)}</span></button>
+          ⇅<span class="lf-bsort-k"> Sort board</span><span class="lf-bsort-v">${escapeHtml(active.label)}</span></button>
         ${openBoardSortAll ? `<div class="kcol-sort-pop lf-bsort-pop" role="menu" onclick="event.stopPropagation()">
           ${BOARD_SORTS.map(o => `<button type="button" role="menuitemradio" aria-checked="${o.key===active.key}"
             class="kcol-sort-opt${o.key===active.key?' at':''}" onclick="setBoardSortAll('${o.key}')">${escapeHtml(o.label)}</button>`).join('')}
@@ -3505,7 +3506,7 @@ function visitPropertyOptions(current){
       return `<option value="${escapeHtml(c || p.name || '')}"${(c || p.name) === current ? ' selected' : ''}>${escapeHtml(label)}</option>`; })
     .join('');
   const freeText = current && !(inventory || []).some(p => (propertyCodeOf(p) || p.name) === current);
-  return `<option value="">${inventory ? '\u2014 pick from the inventory \u2014' : '\u2014 loading the inventory\u2026 \u2014'}</option>`
+  return `<option value="">${inventory ? '\u2014 pick from the inventory \u2014' : inventoryFailed ? '\u2014 could not read the inventory \u2014 reopen to retry' : '\u2014 loading the inventory\u2026 \u2014'}</option>`
     + props
     + `<option value="__free"${freeText ? ' selected' : ''}>Something not in the inventory\u2026</option>`;
 }
@@ -4704,12 +4705,21 @@ let inventory = null;
 let inventoryLoading = null;
 let propLinkOpenFor = null;
 let propLinkQuery = '';
+// Set when the last inventory read failed, so the pickers can say so (with a retry) instead of
+// showing "Loading..." for ever.
+let inventoryFailed = false;
+function retryInventory(leadId){
+  inventoryFailed = false;
+  if(leadId) renderPropertyResults(leadId);
+  loadInventory().then(() => { if(leadId && propLinkOpenFor === leadId) renderPropertyResults(leadId); });
+}
 function loadInventory(){
   if(inventory) return Promise.resolve(inventory);
   if(!inventoryLoading){
     inventoryLoading = Promise.resolve(window.crmFirebase && window.crmFirebase.getInventory ? window.crmFirebase.getInventory() : [])
       .then(list => { inventory = Array.isArray(list) ? list : []; return inventory; })
-      .catch(() => { inventoryLoading = null; return []; });
+      .catch(() => { inventoryLoading = null; inventoryFailed = true; return []; });
+    inventoryFailed = false;
   }
   return inventoryLoading;
 }
@@ -4748,7 +4758,9 @@ function propertyLinksInner(l){
     </div>`;
 }
 function propertyResultsHtml(l){
-  if(!inventory) return '<div class="pl-empty">Loading inventory…</div>';
+  if(!inventory) return inventoryFailed
+    ? `<div class="pl-empty">Could not read the inventory. <button type="button" class="pl-retry" onclick="retryInventory('${escapeHtml(l.id)}')">Retry</button></div>`
+    : '<div class="pl-empty">Loading inventory…</div>';
   const ids = new Set(l.propertyCodes || []);
   const q = propLinkQuery.trim().toLowerCase();
   const matches = inventory.filter(p => !ids.has(p.id) && (!q || [p.id, p.propertyCode, p.name, p.location, p.config].join(' ').toLowerCase().includes(q))).slice(0, 8);
@@ -5065,6 +5077,7 @@ function onDetailStageChange(){
 }
 function closeDetail(){
   document.getElementById('dp').classList.remove('open');
+  if(typeof closeAlerts === 'function') closeAlerts();   // the lead's bell menu lives on <body>
   currentDetailId = null;
   convSheetOpen = false;
   stopTtWatch();
@@ -5701,7 +5714,10 @@ let botTestHistory = [];
 
 async function openBotEditor(){
   document.getElementById('botEditorPanel').classList.add('open');
-  const saved = await window.crmFirebase.getBotConfig();
+  // A failed read used to leave a blank form, and Save then threw on the empty draft.
+  let saved = null;
+  try { saved = await window.crmFirebase.getBotConfig(); }
+  catch(e){ showToast('Could not load the saved workflow — showing the default. Saving will replace it.'); }
   botConfigDraft = saved ? JSON.parse(JSON.stringify(saved)) : JSON.parse(JSON.stringify(DEFAULT_BOT_CONFIG_CLIENT));
   renderBotEditorForm();
   botTestHistory = [];
@@ -6019,11 +6035,13 @@ function addGuardrailDraft(){
   renderGuardrailsRows();
 }
 
-function saveBotConfig(){
+async function saveBotConfig(){
+  if(!botConfigDraft) botConfigDraft = JSON.parse(JSON.stringify(DEFAULT_BOT_CONFIG_CLIENT));
   syncBotDraftFromForm();
   updateWaConnectionStatus();
-  window.crmFirebase.saveBotConfig(botConfigDraft);
-  showToast('✓ Workflow saved');
+  // Said only once it is true — it used to say "saved" before the write had happened.
+  try { await window.crmFirebase.saveBotConfig(botConfigDraft); showToast('✓ Workflow saved'); }
+  catch(e){ showToast('Could not save the workflow — check your connection and try again'); }
 }
 
 function renderBotChat(){
@@ -6299,6 +6317,10 @@ new MutationObserver(muts => {
 }).observe(document.documentElement, { attributes:true, subtree:true, attributeFilter:['class'] });
 
 document.addEventListener('keydown', e => {
+  // A calendar or site-visit sheet sits above everything else and handles its own Escape and
+  // focus (calendar.js). Left to this handler, Escape also closed the lead behind it, and Tab
+  // sent focus to the lead's controls underneath.
+  if((e.key === 'Escape' || e.key === 'Tab') && document.querySelector('.cal-sheet')) return;
   if(e.key === 'Escape'){
     // Close only the topmost layer. Closing all of them meant that pressing
     // Escape in the Edit modal also closed the lead behind it, dumping you back
@@ -6340,7 +6362,9 @@ document.addEventListener('keydown', e => {
 // handler keeps that promise everywhere rather than per component.
 const ROVING_SEL = '[role="toolbar"],[role="tablist"]';
 function rovingItems(group){
-  return [...group.querySelectorAll('button,a[href],select,input')]
+  // <summary> too: the Agent filter is a <details> in the filter bar, and without it in this list
+  // it was a second tab stop in a group that promises one.
+  return [...group.querySelectorAll('button,a[href],select,input,summary')]
     .filter(el => !el.disabled && el.offsetParent !== null);
 }
 document.addEventListener('keydown', e => {
@@ -6367,7 +6391,8 @@ function syncRovingTabstops(root){
   (root || document).querySelectorAll(ROVING_SEL).forEach(group => {
     const items = rovingItems(group);
     if(items.length < 2) return;
-    const active = group.querySelector('[aria-selected="true"],[aria-pressed="true"],.at') || items[0];
+    // The active ITEM — a container marked .at (the Agent filter's <details>) is not one.
+    const active = items.find(el => el.matches('[aria-selected="true"],[aria-pressed="true"],.at')) || items[0];
     items.forEach(el => { el.tabIndex = el === active ? 0 : -1; });
   });
 }

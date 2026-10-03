@@ -441,7 +441,9 @@ tr.undone td.lead .tag { text-decoration: none; }
 
 /* ═══════ MODAL & DRAWER ═══════ */
 
-.ov { position: fixed; inset: 0; z-index: 100; display: none; background: rgba(25, 17, 8, .42); padding: 0; align-items: flex-end; justify-content: center; }
+/* Above the app rail (240): at 100 the left part of every dialog sat under the rail between
+   ~900 and ~1144px wide, and the rail stayed clickable over the dim layer. */
+.ov { position: fixed; inset: 0; z-index: 300; display: none; background: rgba(25, 17, 8, .42); padding: 0; align-items: flex-end; justify-content: center; }
 .ov.show { display: flex; }
 .modal { background: var(--bg); width: 100%; max-width: 640px; border-radius: 18px 18px 0 0; max-height: 92vh; overflow: auto; padding-bottom: env(safe-area-inset-bottom); }
 .modal-head { position: sticky; top: 0; background: var(--bg); z-index: 2; display: flex; align-items: center; gap: var(--s3); padding: var(--s4) var(--s5); border-bottom: 1px solid var(--line); }
@@ -453,7 +455,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%) translateY(20px);
-  bottom: calc(var(--tab-h) + 16px); z-index: 200;
+  bottom: calc(var(--tab-h) + 16px); z-index: 320;   /* a confirmation shows above an open dialog */
   background: var(--es); color: var(--on-es); padding: 11px 18px; border-radius: 999px;
   font-size: 13.5px; font-weight: 500; opacity: 0; pointer-events: none;
   transition: opacity .18s, transform .18s; display: flex; align-items: center; gap: 14px; max-width: calc(100vw - 32px);

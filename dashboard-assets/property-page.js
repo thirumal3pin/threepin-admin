@@ -120,6 +120,9 @@ if(propertyId){
 }
 
 // Called by firebase-sync.js once the tenant claim is resolved.
+window.onPinTenantMissing = function(){
+  showMessage('Account not set up yet', 'This sign-in is not linked to the 3 PIN account, so the property cannot be shown. Ask the office to finish setting you up, or sign in with your work account.');
+};
 window.onPinTenantReady = function(){
   if(!propertyId) return;
   if(unsubscribe) return;
