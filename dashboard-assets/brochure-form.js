@@ -45,11 +45,43 @@ function clearBrochureDraft(ask){
   bfEl('bfDraftNote').textContent = '';
   bfCountUpdate();
 }
-function renderBrochureRecent(){
-  const list = bfStore.get(BF_RECENT_KEY, []);
-  bfEl('bfRecentCard').hidden = !list.length;
-  bfEl('bfRecent').innerHTML = list.slice(0, 8).map(r =>
-    `<div class="bp-recent"><b>${escapeHtml(r.title || 'Untitled')}</b><span>${new Date(r.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span></div>`).join('');
+// The team's log: title, who, when — and a link once the brochure is on that property.
+async function brochureApi(method, body){
+  const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
+  if (!token) throw new Error('Not signed in');
+  const res = await fetch('/api/brochure?op=log', {
+    method, headers: { 'Authorization': 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return res.json();
+}
+let bfLog = null;
+async function renderBrochureRecent(){
+  const box = bfEl('bfRecent');
+  bfEl('bfRecentCard').hidden = false;
+  if (!bfLog) box.innerHTML = '<div class="bp-p">Loading…</div>';
+  try {
+    const d = await brochureApi('GET');
+    if (d && d.ok) bfLog = d.entries || [];
+  } catch (e) { if (!bfLog) { box.innerHTML = '<div class="bp-p">Could not load the log.</div>'; return; } }
+  drawBrochureLog();
+}
+function drawBrochureLog(){
+  const box = bfEl('bfRecent');
+  const list = bfLog || [];
+  if (!list.length) { box.innerHTML = '<div class="bp-p">Nothing submitted yet.</div>'; return; }
+  const byId = new Map((typeof properties !== 'undefined' ? properties : []).map(p => [String(p.id || '').toUpperCase(), p]));
+  box.innerHTML = list.slice(0, 40).map(r => {
+    const pid = String(r.title || '').trim().split(/\s+/)[0].toUpperCase();
+    const prop = byId.get(pid);
+    const link = prop && prop.brochureLink ? String(prop.brochureLink).trim() : '';
+    const who = r.by ? r.by.split('@')[0].replace(/^./, c => c.toUpperCase()) : 'sender not recorded';
+    const when = new Date(r.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return `<div class="bp-log">
+      <div class="bp-log-t">${escapeHtml(r.title || 'Untitled')}</div>
+      <div class="bp-log-m">${escapeHtml(who)} · ${escapeHtml(when)}${link ? ` · <a href="${escapeHtml(link)}" target="_blank" rel="noopener">Brochure ready ↗</a>` : ''}</div>
+    </div>`;
+  }).join('');
 }
 
 function openBrochureModal(){ openBrochurePage(); }
@@ -118,9 +150,11 @@ async function submitBrochureForm(){
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString()
     });
-    const recent = bfStore.get(BF_RECENT_KEY, []);
-    recent.unshift({ title: title || details.slice(0, 60), at: Date.now() });
-    bfStore.set(BF_RECENT_KEY, recent.slice(0, 20));
+    // Logged for the team: the title only (or the first words of the details), who, when.
+    try {
+      const r = await brochureApi('POST', { title: title || details.replace(/\s+/g, ' ').slice(0, 80) });
+      if (r && r.ok && r.entry) bfLog = [r.entry, ...(bfLog || [])];
+    } catch (e) { /* the brochure is submitted; the log entry is best effort */ }
     clearBrochureDraft(false);
     bfEl('bfDoneWhat').textContent = title ? `“${title}” — you can close this page or create another.` : 'You can close this page or create another.';
     bfEl('bfDone').hidden = false;

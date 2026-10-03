@@ -1,4 +1,4 @@
-import { getDb, sendEmail } from './_bot-shared.js';
+import { getDb, sendEmail, verifyCrmUser } from './_bot-shared.js';
 import { json, fail, checkAuth, checkRateLimit, getDriveAccessToken, makeDriveFilePublic, logBrochureCall } from './_brochure-shared.js';
 
 // Brochure delivery, in one file/one function (Vercel's Hobby plan caps a
@@ -194,7 +194,42 @@ async function handleAlert(db, body) {
   return json({ success: true, alert_sent: true });
 }
 
+// ── The team's brochure log ─────────────────────────────────────────────
+// Every Create brochure submission from the dashboard, as a short entry: the title, who sent it
+// and when — never the details or internal notes. Shared by the whole team, read on the Create
+// brochure page. Signed-in CRM users only (Firebase ID token), unlike the scheduler routes below
+// which use the shared secret.
+const LOG = 'brochureLog';
+async function logPost(request) {
+  const user = await verifyCrmUser(request);
+  if (!user || !user.tenantId) return json({ ok: false, error: 'Unauthorized' }, 401);
+  let body = {};
+  try { body = await request.json(); } catch { /* checked below */ }
+  const title = String((body && body.title) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!title) return json({ ok: false, error: 'title required' }, 400);
+  const entry = { tenantId: user.tenantId, title, by: String(user.email || '').toLowerCase() || null, at: Date.now(), source: 'dashboard' };
+  const ref = await getDb().collection(LOG).add(entry);
+  return json({ ok: true, entry: { id: ref.id, ...entry } });
+}
+async function logList(request) {
+  const user = await verifyCrmUser(request);
+  if (!user || !user.tenantId) return json({ ok: false, error: 'Unauthorized' }, 401);
+  // Newest first by the single-field index on `at`; the tenant is checked on the way out.
+  const snap = await getDb().collection(LOG).orderBy('at', 'desc').limit(120).get();
+  const entries = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(e => e.tenantId === user.tenantId).slice(0, 60)
+    .map(({ tenantId, ...e }) => e);
+  return json({ ok: true, entries });
+}
+
+export async function GET(request) {
+  const url = new URL(request.url);
+  if (url.searchParams.get('op') === 'log') return logList(request);
+  return json({ ok: false, error: 'Unknown op' }, 404);
+}
+
 export async function POST(request) {
+  if (new URL(request.url).searchParams.get('op') === 'log') return logPost(request);
   if (!checkAuth(request)) return fail('auth', 'Unauthorized', 401);
 
   const db = getDb();
