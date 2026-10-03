@@ -210,8 +210,10 @@ function applyFilters() {
   filtered = listings.filter(x => {
     if (stageFilter.size && !stageFilter.has(x.stageId)) return false;
     if (!q) return true;
+    const l = x.leadId ? leadById(x.leadId) : null;
     const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone,
-      x.askingPrice, x.shootAssignee, x.remarks].join(' ').toLowerCase();
+      x.askingPrice, x.shootAssignee, x.remarks, l && l.name, l && l.phone, l && l.propertyInterest,
+      l && l.assignedAgent, l && l.secondaryAgent].join(' ').toLowerCase();
     return hay.includes(q);
   });
   if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
@@ -387,11 +389,12 @@ function listRowHtml(x) {
   const done = MEDIA_KEYS.filter(([k]) => m[k]).length;
   const blocked = blockersFor(x);
   const late = x.shootAt && x.shootAt < Date.now();
+  const it = sellerItem(x);
   return `<div class="tk-tr${isLate(x) ? ' late' : ''}" role="row" tabindex="0"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <span role="cell">
-      <b>${esc(x.title || 'Untitled')}</b>
-      <span class="tk-sub2">${[x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ') || '—'}</span>
+      <b>${esc(it.locality || x.title || 'Area not given')}</b>
+      <span class="tk-sub2">${[it.f.deal && (it.f.deal === 'rent' ? 'For rent' : 'For sale'), it.f.type && (TYPE_LABELS[it.f.type] || it.f.type), it.f.config, it.f.sizes[0] && it.f.sizes[0].label, it.f.price].filter(Boolean).map(esc).join(' · ') || '—'}</span>
       ${codeChip(x)}
     </span>
     <span role="cell">
@@ -399,8 +402,9 @@ function listRowHtml(x) {
       <span class="tk-sub2${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days}d here</span>
     </span>
     <span role="cell">
-      ${x.sellerName ? esc(x.sellerName) : '—'}
-      ${x.sellerPhone ? `<a class="tk-sub2 link" href="tel:${esc(telOf(x.sellerPhone))}" onclick="event.stopPropagation()">${esc(x.sellerPhone)}</a>` : ''}
+      ${esc(it.name)}
+      ${it.phone ? `<a class="tk-sub2 link" href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()">${esc(it.phone)}</a>` : ''}
+      <span class="tk-sub2">👤 ${agentsOf(it).length ? esc(agentsOf(it).map(personName).join(' + ')) : 'Unassigned'}</span>
     </span>
     <span role="cell" class="${late ? 'bad' : ''}">
       ${x.shootAt ? `${esc(fmtDate(x.shootAt))}<span class="tk-sub2">${esc(relDays(x.shootAt))}</span>` : '<span class="tk-sub2">not booked</span>'}
@@ -431,39 +435,60 @@ function cardUrgency(x) {
 //   6. Is this one stuck?                days in column, against its target
 // Everything else belongs in the detail panel. A card that tries to show
 // everything shows nothing.
+// The same reading order as the Sellers tiles — who (name, number), then the property (area,
+// sale/rent, type, configuration, size, price), then where it stands — so a card reads the same
+// on both pages. The column already says the stage, so the card says how long it has sat there.
+const personName = e => { const s = String(e || '').split('@')[0]; return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; };
+function agentsOf(it) {
+  const l = it.lead;
+  return [l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean);
+}
+function factChips(f, maxSizes) {
+  const chip = (t, cls) => `<span class="sl-chip${cls ? ' ' + cls : ''}">${esc(t)}</span>`;
+  return [
+    f.deal ? chip(f.deal === 'rent' ? 'For rent' : 'For sale', f.deal) : '',
+    f.type ? chip(TYPE_LABELS[f.type] || f.type) : '',
+    f.config && f.config !== 'Commercial' ? chip(f.config) : '',
+    ...[...new Set(f.sizes.map(z => z.label))].slice(0, maxSizes).map(l => chip(l)),
+    f.price ? chip(f.price, 'price') : ''
+  ].join('');
+}
 function cardHtml(x) {
   const late = isLate(x);
   const age = P.stageAge(x, stages, Date.now());
   const blocked = blockersFor(x);
+  const it = sellerItem(x);
+  const wa = telOf(it.phone).replace(/^\+/, '');
+  const chips = factChips(it.f, 2);
+  const agents = agentsOf(it);
+  const by = personName(x.updatedBy);
+  // A card added by hand on the board may have no owner yet: its title is then all it has.
+  it.locality = it.locality || (it.name !== x.title ? x.title || '' : '');
   return `<div class="tk-card${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
-      aria-label="Open ${esc(x.title || x.propertyCode || 'listing')}"
+      aria-label="Open ${esc(it.name)}${it.locality ? ', ' + esc(it.locality) : ''}"
       data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
-    <div class="tk-card-top">
-      <span class="tk-card-title">${esc(x.title || x.propertyCode || 'Untitled listing')}</span>
-      ${codeChip(x)}
+    <div class="sl-head">
+      <div class="sl-who">
+        <div class="sl-name" title="${esc(it.name)}">${esc(it.name)}</div>
+        ${it.phone ? `<div class="sl-phone"><a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}${x.leadId ? ` · <button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="See what they said">Chat</button>` : ''}</div>` : '<div class="sl-phone none">No number</div>'}
+      </div>
+      <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
     </div>
-    ${(x.location || x.config || x.askingPrice) ? `<div class="tk-card-sub">${
-      [x.location, x.config, x.askingPrice].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
-
-    ${x.sellerName || x.sellerPhone ? `<div class="tk-card-owner">
-      <span class="tk-ava" aria-hidden="true">${esc(initials(x.sellerName))}</span>
-      <span class="tk-own-nm">${esc(x.sellerName || 'Owner')}</span>
-      ${x.sellerPhone ? `<a class="tk-call" href="tel:${esc(telOf(x.sellerPhone))}" onclick="event.stopPropagation()" title="Call ${esc(x.sellerName || 'the owner')}">Call</a>` : ''}
-      ${x.leadId ? `<button type="button" class="tk-mini" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="See what they said">Chat</button>` : ''}
-    </div>` : ''}
-
+    <div class="sl-prop">
+      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}${codeChip(x)}</div>
+      ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
+      ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
+    </div>
     ${shootLine(x)}
     ${mediaBar(x)}
-
     ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
-
-    <div class="tk-card-foot">
-      <span class="tk-age${age.farOver ? ' bad' : age.over ? ' warn' : ''}"
-        title="${age.target ? 'This column should take about ' + age.target + ' days' : ''}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
+    <div class="tk-card-meta">
+      <span class="tk-agent${agents.length ? '' : ' none'}" title="The lead's agent (set on the lead in the CRM)">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</span>
       ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
-      <span class="tk-upd">${esc(timeAgo(x.updatedAt))}</span>
+      <span class="tk-upd" title="${esc(x.updatedAt ? new Date(x.updatedAt).toLocaleString() : '')}">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span>
+      ${it.intake ? `<span title="${esc(new Date(it.intake).toLocaleString())}">Came in ${esc(fmtDate(it.intake))} · ${esc(it.channel)}</span>` : ''}
     </div>
   </div>`;
 }
@@ -508,7 +533,7 @@ function shootLine(x) {
   return `<div class="tk-card-row${late ? ' bad' : soon ? ' hot' : ''}">📸 ${esc(fmtDateTime(x.shootAt))}
     <span class="tk-rel">${esc(relDays(x.shootAt))}</span>
     ${x.shootAssignee ? `<span class="tk-who">· ${esc(x.shootAssignee)}</span>` : ''}
-    ${!x.ownerInformed ? '<span class="tk-blk sm" title="The owner has not been told we are coming">owner not told</span>' : ''}
+    ${!x.ownerInformed && P.stageKeyOf(stageById(x.stageId)) !== 'shoot_scheduled' ? '<span class="tk-blk sm" title="The owner has not been told we are coming">owner not told</span>' : ''}
   </div>`;
 }
 
@@ -921,7 +946,7 @@ function sellerItem(x) {
   const channel = lead && (lead.channel || (lead.tt && lead.tt.integration)) || '';
   return {
     x, lead, f, locality, area: areaOf(locality), intake,
-    name: (lead && lead.name) || x.sellerName || 'Unnamed seller',
+    name: (lead && lead.name) || x.sellerName || x.title || 'Unnamed seller',
     phone: x.sellerPhone || (lead && lead.phone) || '',
     channel: SELLER_CHANNELS[String(channel).toLowerCase()] || (lead ? (lead.tt ? 'TailorTalk' : 'Added in CRM') : 'Added on the board'),
     lastMsg: lead && lead.tt ? lead.tt.lastMessageAt : null,
@@ -948,14 +973,7 @@ function sellerSort(items) {
 function sellerTile(it) {
   const { x, f } = it;
   const wa = telOf(it.phone).replace(/^\+/, '');
-  const chip = (t, cls) => `<span class="sl-chip${cls ? ' ' + cls : ''}">${esc(t)}</span>`;
-  const chips = [
-    f.deal ? chip(f.deal === 'rent' ? 'For rent' : 'For sale', f.deal) : '',
-    f.type ? chip(TYPE_LABELS[f.type] || f.type) : '',
-    f.config && f.config !== 'Commercial' ? chip(f.config) : '',
-    ...[...new Set(f.sizes.map(z => z.label))].slice(0, 3).map(l => chip(l)),
-    f.price ? chip(f.price, 'price') : ''
-  ].join('');
+  const chips = factChips(f, 3);
   const m = mediaProgress(x);
   const stage = it.stage;
   return `<div class="sl-tile" role="button" tabindex="0" onclick="openDetail('${x.id}')" onkeydown="if(event.key==='Enter')openDetail('${x.id}')">

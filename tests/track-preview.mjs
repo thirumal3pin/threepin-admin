@@ -34,7 +34,7 @@ const LISTINGS = [
     address: 'Flat 3B, Sai Apartments, 12 Wallace Garden 2nd St, Nungambakkam',
     siteContact: '9840011111', occupancy: 'tenant', bestTime: 'Morning light', accessNotes: 'Gate code 4417',
     need: { photos: true, floorPlan: true, video: true },
-    media: {}, stageChangedAt: NOW - 2 * D, createdAt: NOW - 5 * D, updatedAt: NOW - H },
+    media: {}, stageChangedAt: NOW - 2 * D, createdAt: NOW - 5 * D, updatedAt: NOW - H, updatedBy: 'agent.a@example.com' },
   { id: 'l2', tenantId: T, title: 'Villa, Kottivakkam', propertyCode: '', location: 'Kottivakkam',
     sellerName: 'Suresh', sellerPhone: '9840022222', stageId: sid('details'),
     media: {}, stageChangedAt: NOW - 9 * D, createdAt: NOW - 9 * D, updatedAt: NOW - 3 * D },   // late: target 3d
@@ -56,7 +56,8 @@ const LISTINGS = [
 // Two of these are sellers with NO listing card — they must show up under "Sellers to list".
 const LEADS = [
   { id: 'sd1', tenantId: T, name: 'Meenakshi', phone: '9840011111', enquiryType: 'Seller Listing',
-    propertyInterest: 'Nungambakkam', createdAt: NOW - 6 * D },
+    propertyInterest: 'Nungambakkam', createdAt: NOW - 6 * D,
+    assignedAgent: 'agent.a@example.com', secondaryAgent: 'agent.b@example.com' },
   { id: 'sd2', tenantId: T, name: 'Gopal', phone: '9840033333', enquiryType: 'Seller Listing',
     propertyInterest: 'Adambakkam 2BHK', budget: '85 L', createdAt: NOW - 2 * D },
   { id: 'sd3', tenantId: T, name: 'Priya', phone: '9840044444', enquiryType: 'Property Enquiry',
@@ -151,12 +152,27 @@ const text = (page, sel) => page.$$eval(sel, els => els.map(e => e.textContent.r
 // ── Desktop ──
 console.log('Property & Media Track — the board');
 const page = await open({ width: 1440, height: 950 });
-const shot = async (name) => { await page.waitForTimeout(180); await page.screenshot({ path: `${OUT}/desk-${name}.png`, fullPage: true }); };
+// The board scrolls sideways inside itself; a full-page capture of it renders shifted, so it is shot at the viewport.
+const shot = async (name) => { await page.waitForTimeout(180); await page.screenshot({ path: `${OUT}/desk-${name}.png`, fullPage: name !== 'board' }); };
 
 const cols = await text(page, '.tk-col-title');
 ok('Ten columns, in pipeline order', cols.length === 10 && cols[0] === 'New listing' && cols[9] === 'Dropped', JSON.stringify(cols));
 ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 10);
-ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card-title'))[0] === 'Villa, Kottivakkam');
+ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card .sl-name'))[0] === 'Suresh');
+// The card reads like the Sellers tile: who and their number, then the property, then who owns
+// the work and when it was last touched.
+const meena = await page.evaluate(() => {
+  const c = [...document.querySelectorAll('.tk-card')].find(e => /Meenakshi/.test(e.textContent));
+  const t = s => (c.querySelector(s) || {}).textContent || '';
+  return { name: t('.sl-name'), phone: t('.sl-phone'), loc: t('.sl-loc'), chips: [...c.querySelectorAll('.sl-chip')].map(e => e.textContent), agent: t('.tk-agent'), upd: t('.tk-upd'), age: t('.tk-age-pill') };
+});
+ok('Card: name, then the number with WhatsApp', meena.name === 'Meenakshi' && /9840011111/.test(meena.phone) && /WhatsApp/.test(meena.phone), JSON.stringify(meena));
+ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
+ok('Card: the assigned agents', /Agent\.a \+ Agent\.b/.test(meena.agent), meena.agent);
+ok('Card: last updated, and by whom', /Updated 1h ago by Agent\.a/.test(meena.upd), meena.upd);
+ok('Card: days in this column', /2d here/.test(meena.age), meena.age);
+ok('A card with no agent says Unassigned', (await text(page, '.tk-agent.none')).some(t => /Unassigned/.test(t)));
+ok('A card with no owner keeps its title', await page.evaluate(() => [...document.querySelectorAll('.tk-card .sl-name')].some(e => e.textContent === 'Flat, Adyar')));
 ok('A listing past its stage target is marked late', (await page.$$('.tk-card.late')).length >= 1);
 // Unmapped is normal early on and only matters once a stage needs it, so the
 // chip is silent on a new listing and loud on one at the brochure stages.
@@ -178,6 +194,11 @@ ok('A booked shoot shows on the card', (await text(page, '.tk-card-row')).some(t
 // exactly what it is now for.
 ok('The sellers badge settles at nothing once the sync has caught up',
   !(await text(page, '.rl-badge')).length, JSON.stringify(await text(page, '.rl-badge')));
+const deskWide = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, sx: window.scrollX,
+  culprits: [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 2 && !e.closest('.tk-board')).slice(0, 5).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)) }));
+ok('The desktop board does not scroll the page sideways (the board scrolls inside itself)', deskWide.sw <= deskWide.cw + 2 && deskWide.sx === 0, JSON.stringify(deskWide));
+const shifted = await page.evaluate(() => [...document.querySelectorAll('*')].filter(e => e.scrollLeft > 0 && !e.classList.contains('tk-board') && !e.classList.contains('tk-chips')).map(e => e.tagName + '#' + e.id + '.' + e.className + ' ' + e.scrollLeft));
+ok('Nothing around the board is left scrolled sideways', !shifted.length, JSON.stringify(shifted));
 await shot('board');
 
 // ── Stage move ──

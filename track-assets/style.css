@@ -22,7 +22,7 @@
 
 /* ── Board ── */
 .tk-board { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding: 4px var(--pad, 18px) 40px; }
-.tk-col { flex: 0 0 292px; display: flex; flex-direction: column; background: var(--bg2); border-radius: var(--r2); padding: 10px; max-height: calc(100vh - 210px); }
+.tk-col { flex: 0 0 318px; display: flex; flex-direction: column; background: var(--bg2); border-radius: var(--r2); padding: 10px; max-height: calc(100vh - 210px); }
 .tk-col-won { background: color-mix(in srgb, var(--green, #15803D) 7%, var(--bg2)); }
 .tk-col-lost, .tk-col-hold { opacity: .82; }
 .tk-col-hdr { padding: 2px 4px 10px; }
@@ -59,6 +59,23 @@
 .tk-age.warn { color: var(--amber, #B45309); font-weight: 600; }
 .tk-age.bad { color: var(--red, #B91C1C); font-weight: 700; }
 .tk-upd { margin-left: auto; }
+/* The board card wears the Sellers tile (.sl-head / .sl-prop) — tighter, for a 318px column. */
+.tk-card { gap: 8px; padding: 12px 13px; }
+.tk-card .sl-name { font-size: 14.5px; }
+.tk-card .sl-phone { font-size: 12.5px; }
+.tk-card .sl-prop { padding-top: 8px; gap: 6px; }
+.tk-card .sl-loc { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; }
+.tk-card .sl-loc .tk-code { margin-left: auto; }
+.tk-card .sl-chip { font-size: 11px; padding: 2px 7px; }
+.sl-link { font: inherit; font-weight: 600; color: var(--brand-ink, var(--brand)); background: none; border: 0; padding: 0; cursor: pointer; }
+.sl-link:hover, .sl-phone a:hover { text-decoration: underline; }
+.tk-age-pill { flex: none; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--bg2); color: var(--ink3); white-space: nowrap; }
+.tk-age-pill.warn { background: color-mix(in srgb, var(--amber, #B45309) 13%, var(--card)); color: var(--amber, #B45309); }
+.tk-age-pill.bad { background: var(--red-bg, #FEE2E2); color: var(--red, #B91C1C); font-weight: 700; }
+.tk-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; font-size: 11px; color: var(--ink4); border-top: 1px dashed var(--border); padding-top: 7px; }
+.tk-card-meta .tk-upd { margin-left: 0; }
+.tk-agent { color: var(--ink2); font-weight: 600; }
+.tk-agent.none { color: var(--ink4); font-weight: 400; font-style: italic; }
 .tk-ok { color: var(--green, #15803D); font-weight: 600; }
 .tk-warn { color: var(--amber, #B45309); font-weight: 600; }
 
