@@ -213,39 +213,57 @@ function closeAdvanced(){ PinAdvanced.close(); }
 // Each property can have an agent and a secondary, picked by a person on the property page —
 // never assigned automatically. Unassigned until someone picks. Separate from site-visit agents.
 let propTeam = [];
-let agentFilter = '';
-try { agentFilter = localStorage.getItem('propAgentFilter') || ''; } catch(e) {}
+let agentFilters = [];
+try {
+  const saved = localStorage.getItem('propAgentFilter') || '';
+  agentFilters = saved.startsWith('[') ? JSON.parse(saved) : (saved ? [saved] : []);
+} catch(e) { agentFilters = []; }
 const agentNameOf = e => e ? String(e).split('@')[0].split(/[._-]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : '';
 const propAgents = p => [p.assignedAgent, p.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
 const myEmail = () => String((window.dashboardAuth && window.dashboardAuth.getUserEmail && window.dashboardAuth.getUserEmail()) || '').toLowerCase();
-function agentFilterPasses(p){
-  if(!agentFilter) return true;
+function agentMatches(p, f){
   const a = propAgents(p);
-  if(agentFilter === 'none') return !a.length;
-  if(agentFilter === 'me') return !!myEmail() && a.includes(myEmail());
-  return a.includes(agentFilter);
+  if(f === 'none') return !a.length;
+  if(f === 'me') return !!myEmail() && a.includes(myEmail());
+  return a.includes(f);
 }
+// Several at once (any of them); empty = everyone.
+function agentFilterPasses(p){ return !agentFilters.length || agentFilters.some(f => agentMatches(p, f)); }
 async function loadPropTeam(){
   if(propTeam.length || !window.dashboardFirebase || !window.dashboardFirebase.getTeam) return;
   try { propTeam = (await window.dashboardFirebase.getTeam()).sort(); } catch(e) { propTeam = []; }
   renderAgentFilter();
   if(currentDetailId) renderPropAgents(properties.find(x => x.id === currentDetailId));
 }
+let agentPopOpen = false;
 function renderAgentFilter(){
-  const sel = document.getElementById('agentSel');
-  if(!sel) return;
-  const n = f => properties.filter(p => { const keep = agentFilter; agentFilter = f; const r = agentFilterPasses(p); agentFilter = keep; return r; }).length;
-  const opt = (v, l) => `<option value="${escapeHtml(v)}"${agentFilter === v ? ' selected' : ''}>${escapeHtml(l)}</option>`;
-  sel.innerHTML = opt('', 'All agents') + opt('none', `Unassigned (${n('none')})`) + (myEmail() ? opt('me', `Mine (${n('me')})`) : '')
-    + propTeam.map(e => opt(e, `${agentNameOf(e)} (${n(e)})`)).join('');
-  sel.classList.toggle('on', !!agentFilter);
+  const box = document.getElementById('agentFilt');
+  if(!box) return;
+  const n = f => properties.filter(p => agentMatches(p, f)).length;
+  const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentNameOf(f);
+  const label = !agentFilters.length ? 'All agents' : agentFilters.length <= 2 ? agentFilters.map(nameOf).join(', ') : `${nameOf(agentFilters[0])} +${agentFilters.length - 1}`;
+  const row = (v, l) => `<label class="agf-row"><input type="checkbox" ${agentFilters.includes(v) ? 'checked' : ''} onchange="toggleAgentFilter('${escapeHtml(v)}')"><span>${escapeHtml(l)}</span><span class="agf-n">${n(v)}</span></label>`;
+  box.innerHTML = `<details class="agf-d${agentFilters.length ? ' on' : ''}"${agentPopOpen ? ' open' : ''} ontoggle="agentPopOpen=this.open">
+    <summary>👤 ${escapeHtml(label)} ▾</summary>
+    <div class="agf-pop" role="group" aria-label="Show properties assigned to">
+      ${row('none', 'Unassigned')}${myEmail() ? row('me', 'Mine') : ''}
+      <div class="agf-sep"></div>
+      ${propTeam.map(e => row(e, agentNameOf(e))).join('')}
+      <div class="agf-foot"><button type="button" onclick="setAgentFilters([])"${agentFilters.length ? '' : ' disabled'}>Show all</button></div>
+    </div></details>`;
 }
-function setAgentFilter(v){
-  agentFilter = v || '';
-  try { localStorage.setItem('propAgentFilter', agentFilter); } catch(e) {}
+function setAgentFilters(list){
+  agentFilters = [...new Set((list || []).filter(Boolean))];
+  try { localStorage.setItem('propAgentFilter', JSON.stringify(agentFilters)); } catch(e) {}
   renderAgentFilter();
   applyFilters();
 }
+function setAgentFilter(v){ setAgentFilters(v ? [v] : []); }
+function toggleAgentFilter(v){ setAgentFilters(agentFilters.includes(v) ? agentFilters.filter(x => x !== v) : [...agentFilters, v]); }
+document.addEventListener('click', e => {
+  const open = document.querySelector('details.agf-d[open]');
+  if(open && !open.contains(e.target)){ open.open = false; agentPopOpen = false; }
+});
 function renderPropAgents(p){
   const el = document.getElementById('dpAgents');
   if(!el || !p) return;

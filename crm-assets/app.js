@@ -567,10 +567,11 @@ const FOCUS_FILTERS = [
 // Per device (localStorage), like the theme — one person's working view, not a team setting.
 const LEAD_FILTER_KEY = 'crmLeadFilter';
 const LEAD_SCOPES = ['all', 'tt', 'other', 'business'];
-let leadFilter = { scope:'all', status:null, focus:null, agent:'' };
+let leadFilter = { scope:'all', status:null, focus:null, agents:[] };
 try{
   const saved = JSON.parse(localStorage.getItem(LEAD_FILTER_KEY) || 'null');
-  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null, agent: typeof saved.agent === 'string' ? saved.agent : '' };
+  if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null,
+    agents: Array.isArray(saved.agents) ? saved.agents.filter(x => typeof x === 'string') : (typeof saved.agent === 'string' && saved.agent ? [saved.agent] : []) };
 }catch(e){}
 
 const TT_STATUS_FILTERS = [
@@ -599,7 +600,7 @@ function inScope(l, scope, status){
 function passesLeadFilter(l){
   if(propertyFilter) return (l.propertyCodes || []).includes(propertyFilter);
   if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
-  if(leadFilter.agent && !matchesAgentFilter(l, leadFilter.agent)) return false;
+  if(leadFilter.agents.length && !leadFilter.agents.some(f => matchesAgentFilter(l, f))) return false;
   const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
   return focus ? focus.test(l) : true;
 }
@@ -618,21 +619,42 @@ function matchesAgentFilter(l, f){
   if(f === 'me') return !!currentUserEmail && a.includes(String(currentUserEmail).toLowerCase());
   return a.includes(String(f).toLowerCase());
 }
-function setLeadAgentFilter(v){
-  leadFilter = { ...leadFilter, agent: v || '' };
+// Several at once: tick Swami and Pradeep and see everything either of them is on. Empty = everyone.
+function setLeadAgents(list){
+  leadFilter = { ...leadFilter, agents: [...new Set((list || []).filter(Boolean))] };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
 }
+function setLeadAgentFilter(v){ setLeadAgents(v ? [v] : []); }
+function toggleLeadAgentFilter(v){
+  const cur = leadFilter.agents;
+  setLeadAgents(cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v]);
+}
+let agentPopOpen = false;
 function agentFilterHtml(){
   const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
   const n = f => scoped.filter(l => matchesAgentFilter(l, f)).length;
-  const opt = (v, label) => `<option value="${escapeHtml(v)}"${leadFilter.agent === v ? ' selected' : ''}>${escapeHtml(label)}</option>`;
-  return `<label class="lf-agent${leadFilter.agent ? ' at' : ''}"><span>Agent</span><select onchange="setLeadAgentFilter(this.value)" aria-label="Filter by agent">
-    ${opt('', 'Everyone')}${opt('none', `Unassigned (${n('none')})`)}${currentUserEmail ? opt('me', `Mine (${n('me')})`) : ''}
-    ${teamRoster().map(e => opt(e, `${agentName(e)} (${n(e)})`)).join('')}
-  </select></label>`;
+  const picked = leadFilter.agents;
+  const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentName(f);
+  const label = !picked.length ? 'Everyone' : picked.length <= 2 ? picked.map(nameOf).join(', ') : `${nameOf(picked[0])} +${picked.length - 1}`;
+  const row = (v, l) => `<label class="lf-pop-row"><input type="checkbox" ${picked.includes(v) ? 'checked' : ''} onchange="toggleLeadAgentFilter('${escapeHtml(v)}')"><span>${escapeHtml(l)}</span><span class="lf-n">${n(v)}</span></label>`;
+  return `<details class="lf-agent${picked.length ? ' at' : ''}"${agentPopOpen ? ' open' : ''} ontoggle="agentPopOpen=this.open">
+    <summary><span class="lf-agent-k">Agent</span> ${escapeHtml(label)} <span aria-hidden="true">▾</span></summary>
+    <div class="lf-pop" role="group" aria-label="Show leads assigned to">
+      ${row('none', 'Unassigned')}
+      ${currentUserEmail ? row('me', 'Mine') : ''}
+      <div class="lf-pop-sep"></div>
+      ${teamRoster().map(e => row(e, agentName(e))).join('')}
+      <div class="lf-pop-foot"><button type="button" onclick="setLeadAgents([])"${picked.length ? '' : ' disabled'}>Show everyone</button></div>
+    </div>
+  </details>`;
 }
+// A tick anywhere else closes the list.
+document.addEventListener('click', e => {
+  const open = document.querySelector('details.lf-agent[open]');
+  if(open && !open.contains(e.target)){ open.open = false; agentPopOpen = false; }
+});
 function renderDetailAgents(l){
   const el = document.getElementById('dpAgents');
   if(!el || !l) return;
@@ -680,13 +702,13 @@ function saveLeadFilter(){
   try{ localStorage.setItem(LEAD_FILTER_KEY, JSON.stringify(leadFilter)); }catch(e){}
 }
 function setLeadScope(scope){
-  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus, agent: leadFilter.agent || '' };
+  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus, agents: leadFilter.agents || [] };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
 }
 function setLeadStatusFilter(key){
-  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus, agent: leadFilter.agent || '' };
+  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus, agents: leadFilter.agents || [] };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
@@ -784,12 +806,13 @@ function currentViewState(){
   const list = lastBrowseView === 'list';
   return {
     scope: leadFilter.scope, status: leadFilter.status || null, focus: leadFilter.focus || null,
+    agents: [...(leadFilter.agents || [])].sort(),
     search: currentSearch || '', view: list ? 'list' : 'kanban',
     sortCol: list && listSortCol ? listSortCol : null, sortDir: list && listSortCol ? listSortDir : null,
     colFilters: list ? colFilters : {}
   };
 }
-const viewStateKey = s => JSON.stringify([s.scope, s.status || null, s.focus || null, (s.search || '').toLowerCase(), s.view, s.sortCol || null, s.sortDir || null, Object.keys(s.colFilters || {}).sort().map(k => [k, [...s.colFilters[k]].sort()])]);
+const viewStateKey = s => JSON.stringify([s.scope, s.status || null, s.focus || null, [...(s.agents || [])].sort(), (s.search || '').toLowerCase(), s.view, s.sortCol || null, s.sortDir || null, Object.keys(s.colFilters || {}).sort().map(k => [k, [...s.colFilters[k]].sort()])]);
 function activeSavedView(){
   const key = viewStateKey(currentViewState());
   return Object.values(savedViews).find(v => v && viewStateKey(v) === key) || null;
@@ -799,7 +822,8 @@ function viewSummary(v){
   const focus = v.focus && FOCUS_FILTERS.find(f => f.key === v.focus);
   const status = v.status && TT_STATUS_FILTERS.find(f => f.key === v.status);
   const cols = Object.keys(v.colFilters || {}).length;
-  return [scope, status && status.label, focus && focus.label, v.search && `“${v.search}”`, v.view === 'list' ? 'List' : 'Board', cols && `${cols} column filter${cols === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+  const ag = (v.agents || []).map(a => a === 'none' ? 'Unassigned' : a === 'me' ? 'Mine' : agentName(a)).join(' + ');
+  return [scope, status && status.label, focus && focus.label, ag && `Agent: ${ag}`, v.search && `“${v.search}”`, v.view === 'list' ? 'List' : 'Board', cols && `${cols} column filter${cols === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
 }
 function renderViewsCtl(){
   const el = document.getElementById('viewsCtl');
@@ -865,7 +889,8 @@ function applySavedView(id){
   leadFilter = {
     scope: LEAD_SCOPES.includes(v.scope) ? v.scope : 'all',
     status: v.scope === 'tt' && TT_STATUS_FILTERS.some(f => f.key === v.status) ? v.status : null,
-    focus: FOCUS_FILTERS.some(f => f.key === v.focus) ? v.focus : null
+    focus: FOCUS_FILTERS.some(f => f.key === v.focus) ? v.focus : null,
+    agents: Array.isArray(v.agents) ? v.agents.slice() : []
   };
   saveLeadFilter();
   const inp = document.getElementById('searchInput');

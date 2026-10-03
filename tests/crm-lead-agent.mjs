@@ -102,6 +102,23 @@ ok('One person shows the leads they are on, as lead or secondary agent', await c
 await page.evaluate(() => setLeadAgentFilter(''));
 ok('Everyone shows all three again', await count() === 3, String(await count()));
 
+console.log('\nSeveral agents at once');
+await page.evaluate(() => { const L = leads.find(l => l.id === 'L003'); L.assignedAgent = 'thirumal@threepin.in'; applyFilters(); renderLeadFilterBar(); });
+await page.click('details.lf-agent summary');
+await page.waitForTimeout(150);
+const rows = await page.evaluate(() => [...document.querySelectorAll('.lf-pop-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+ok('The Agent button opens a checklist with counts', rows.some(r => /^Unassigned/.test(r)) && rows.some(r => /^Swami\s*1$/.test(r)) && rows.some(r => /^Thirumal\s*1$/.test(r)), JSON.stringify(rows));
+await page.click('.lf-pop-row:has-text("Swami") input');
+await page.waitForTimeout(150);
+await page.click('.lf-pop-row:has-text("Thirumal") input');
+await page.waitForTimeout(150);
+ok('Ticking Swami and Thirumal shows both of their leads', await count() === 2, String(await count()));
+const stillOpen = await page.evaluate(() => !!document.querySelector('details.lf-agent[open]'));
+ok('…and the list stays open while ticking', stillOpen);
+const label = await page.evaluate(() => document.querySelector('details.lf-agent summary').textContent.replace(/\s+/g, ' ').trim());
+ok('…and the button names them', /Swami/.test(label) && /Thirumal/.test(label), label);
+await page.evaluate(() => setLeadAgents([]));
+
 ok('Nothing threw', !thrown.length, thrown.join(' | '));
 await browser.close();
 console.log('');
