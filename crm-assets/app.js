@@ -640,7 +640,7 @@ function agentFilterHtml(){
   const label = !picked.length ? 'Everyone' : picked.length <= 2 ? picked.map(nameOf).join(', ') : `${nameOf(picked[0])} +${picked.length - 1}`;
   const row = (v, l) => `<label class="lf-pop-row"><input type="checkbox" ${picked.includes(v) ? 'checked' : ''} onchange="toggleLeadAgentFilter('${escapeHtml(v)}')"><span>${escapeHtml(l)}</span><span class="lf-n">${n(v)}</span></label>`;
   return `<details class="lf-agent${picked.length ? ' at' : ''}"${agentPopOpen ? ' open' : ''} ontoggle="agentPopOpen=this.open">
-    <summary><span class="lf-agent-k">Agent</span> ${escapeHtml(label)} <span aria-hidden="true">▾</span></summary>
+    <summary aria-label="Agent filter: ${escapeHtml(label)}" title="Show leads assigned to…"><span aria-hidden="true">👤</span> ${escapeHtml(label)} <span aria-hidden="true">▾</span></summary>
     <div class="lf-pop" role="group" aria-label="Show leads assigned to">
       ${row('none', 'Unassigned')}
       ${currentUserEmail ? row('me', 'Mine') : ''}
@@ -688,6 +688,17 @@ function setLeadAgent(which, value){
   l.agentsSetAt = Date.now();
   l.agentsSetBy = currentUserEmail || null;
   const patch = { assignedAgent: l.assignedAgent || null, secondaryAgent: l.secondaryAgent || null, agentsSetAt: l.agentsSetAt, agentsSetBy: l.agentsSetBy };
+  // Whoever is newly on the lead is told: it lands in their "Asked of you", the "@ you" chip on the
+  // card and their morning digest — the same path an @mention takes. Not when you pick yourself.
+  const me = String(currentUserEmail || '').toLowerCase();
+  const M = window.crmMentions;
+  [[l.assignedAgent, before.p, 'Assigned this lead to you'], [l.secondaryAgent, before.s, 'Added you as the secondary agent on this lead']].forEach(([now, was, text]) => {
+    if(!now || now === was || now === me || !M) return;
+    const key = M.teamKey(now);
+    const m = { email: now, by: currentUserEmail || null, at: Date.now(), noteId: null, text, doneAt: null };
+    l.mentions = { ...(l.mentions || {}), [key]: m };
+    patch['mentions.' + key] = m;
+  });
   if(window.crmFirebase && window.crmFirebase.setLeadAgents){
     window.crmFirebase.setLeadAgents(l.id, patch).catch(e => { console.error('Could not save the agent:', e); showToast('Could not save the agent — check your connection'); });
   }
@@ -771,7 +782,7 @@ function boardSortCtlHtml(){
   const overrides = Object.keys(boardSort).length;
   return `<div class="lf-bsort${set ? ' set' : ''}">
         <button type="button" class="lf-bsort-btn" aria-haspopup="true" aria-expanded="${openBoardSortAll}"
-          title="Sort every column on the board" onclick="toggleBoardSortAll(event)">
+          title="Sort every column on the board" aria-label="Sort board: ${escapeHtml(active.label)}" onclick="toggleBoardSortAll(event)">
           ⇅<span class="lf-bsort-k"> Sort board</span><span class="lf-bsort-v">${escapeHtml(active.label)}</span></button>
         ${openBoardSortAll ? `<div class="kcol-sort-pop lf-bsort-pop" role="menu" onclick="event.stopPropagation()">
           ${BOARD_SORTS.map(o => `<button type="button" role="menuitemradio" aria-checked="${o.key===active.key}"
@@ -1834,7 +1845,10 @@ function showAllAlerts(){
   closeAlerts();
   // The board already has a view for this; the bell should hand over to it
   // rather than grow into a second, slightly different one.
-  setLeadFocus('needs');
+  // Set, not toggled, and with the focus key the board actually has ('action') — 'needs' matched
+  // nothing, so this showed every lead.
+  leadFilter = { ...leadFilter, focus: 'action' };
+  saveLeadFilter(); renderLeadFilterBar();
   toggleView('kanban');
 }
 
@@ -3337,6 +3351,9 @@ function markVisitedUi(id){
   if(l){
     const v = window.crmPipeline.visitOf(l);
     if(v.status !== 'done') writeVisit(l, v.at || Date.now(), 'done', v.property);
+    // The most useful thing anyone learns that day is how the visit went — ask now, not two
+    // days later when the feedback reminder fires.
+    openFollowUpLogModal(id, 'How did the visit go?');
   }
 }
 
@@ -3727,8 +3744,9 @@ function saveVisitEdit(id){
     return fail('Pick who is going. An invitation with nobody on it tells nobody anything.');
   }
   writeVisit(l, at, status, property, agents, notes, minutes, mode);
+  // Said once the server has answered (pushVisitToCalendar), not before.
   showToast(agents.length
-    ? `\u2713 Invitation sent to ${agents.map(e => window.crmMentions.displayName(e) || e).join(', ')}`
+    ? `Visit saved \u2014 sending the invitation\u2026`
     : (at ? `Site visit ${fmtDue(at)}` : 'Site visit updated'));
 }
 
@@ -3756,11 +3774,18 @@ function pushVisitToCalendar(leadId){
       body: JSON.stringify({ op:'visit', leadId: leadId, property: property })
     });
   }).then(function(r){ return r.json(); }).then(function(d){
+    const names = (l ? visitAgentsOf(l) : []).map(e => window.crmMentions.displayName(e) || e).join(', ');
     if(d && d.ok && d.eventId && Array.isArray(d.agents) && d.agents.length){
       const cur = leads.find(x => x.id === leadId);
       if(cur){ cur.calendarEventId = d.eventId; cur.calendarEventOwner = d.owner; }
+      showToast(`\u2713 Invitation sent to ${names || d.agents.join(', ')}`);
+    } else if(names && !(d && d.notReady)){
+      showToast(`Visit saved, but the invitation did not go out \u2014 tell ${names} directly`);
     }
-  }).catch(function(){ /* the visit is saved; the diary can catch up later */ });
+  }).catch(function(){
+    const names = (l ? visitAgentsOf(l) : []).map(e => window.crmMentions.displayName(e) || e).join(', ');
+    if(names) showToast(`Visit saved, but the invitation could not be sent \u2014 tell ${names} directly`);
+  });
 }
 
 // Has anybody turned the visit down? Google does not push that to us \u2014 its
@@ -3794,6 +3819,8 @@ function refreshVisitReplies(leadId){
 function cancelVisit(id){
   const l = leads.find(x => x.id === id);
   if(!l) return;
+  // It sits next to "Update and re-invite" on a phone, and it emails everyone invited.
+  if(!confirm('Call off this visit? Everyone invited will be told.')) return;
   const v = window.crmPipeline.visitOf(l);
   writeVisit(l, null, 'cancelled', v.property, [], l.siteVisitNotes, l.siteVisitMinutes);
   showToast('Site visit called off \u2014 everyone invited has been told');
@@ -4168,7 +4195,10 @@ function computeFollowUpAt(dateStr, timeStr){
   if(dateStr <= toDateInputValue(new Date())){
     return { error: 'Follow-up date must be a future date (add a time if you mean later today).' };
   }
-  return { value: new Date(`${dateStr}T00:00:00`).getTime() };
+  // A date with no time is due at 10 am, not midnight — at midnight it was "late" from 12 am and
+  // led the morning digest's overdue list on the day it was due. 10:00 matches the On-hold
+  // revisit and the bulk follow-up.
+  return { value: new Date(`${dateStr}T10:00:00`).getTime() };
 }
 // Reads + validates the add/edit modal into one plain object. Returns null
 // (after showing the inline error) when anything is missing, so every caller —
@@ -4564,6 +4594,10 @@ async function runExport(){
       'Added By': l.createdBy || '',
       'Last Updated': l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '',
       'Last Updated By': l.updatedBy || '',
+      'Lead Agent': l.assignedAgent || '',
+      'Secondary Agent': l.secondaryAgent || '',
+      'Lost Reason': l.lostReason || '',
+      'Site Visit': l.siteVisitAt ? new Date(l.siteVisitAt).toLocaleString() + (l.siteVisitStatus ? ' (' + l.siteVisitStatus + ')' : '') : '',
       'Notes Count': notes.length,
       'Notes': notesSummary
     };
@@ -4574,7 +4608,7 @@ async function runExport(){
   leadsSheet['!cols'] = [
     {wch:20},{wch:14},{wch:22},{wch:14},{wch:16},{wch:24},{wch:12},{wch:14},
     {wch:16},{wch:14},{wch:12},{wch:19},
-    {wch:12},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:10},{wch:50}
+    {wch:12},{wch:19},{wch:19},{wch:19},{wch:22},{wch:19},{wch:22},{wch:22},{wch:22},{wch:18},{wch:26},{wch:10},{wch:50}
   ];
   XLSX.utils.book_append_sheet(wb, leadsSheet, 'Leads');
 
@@ -4603,6 +4637,12 @@ function openDetail(id){
   document.getElementById('dpSub').innerHTML = escapeHtml(sub) + trackBackHtml(l);
   renderAiSummary(l);
 
+  const callBtn = document.getElementById('dpCallBtn');
+  if(callBtn){
+    const tel = String(l.phone || '').replace(/[^\d+]/g, '');
+    callBtn.style.display = tel ? '' : 'none';
+    if(tel) callBtn.href = 'tel:' + tel;
+  }
   const waBtn = document.getElementById('dpWaBtn');
   const waUrl = waHref(l.phone);
   waBtn.style.display = waUrl ? '' : 'none';
@@ -5101,7 +5141,7 @@ function renderNoteFollowUpFields(l){
 }
 function parseFollowUpRaw(dateStr, timeStr){
   if(!dateStr) return null;
-  return timeStr ? new Date(`${dateStr}T${timeStr}:00`).getTime() : new Date(`${dateStr}T00:00:00`).getTime();
+  return timeStr ? new Date(`${dateStr}T${timeStr}:00`).getTime() : new Date(`${dateStr}T10:00:00`).getTime();
 }
 // Closes out a follow-up: log what happened AND set the next one in one
 // step — a real estate agent almost always needs both ("called, still
@@ -5109,10 +5149,12 @@ function parseFollowUpRaw(dateStr, timeStr){
 // wipes the date the way a bare "mark done" would. removeFollowUp() below
 // stays fully separate for when a lead genuinely needs no more follow-up.
 let fuLogLeadId = null;
-function openFollowUpLogModal(leadId){
+function openFollowUpLogModal(leadId, title){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
   fuLogLeadId = leadId;
+  const t = document.getElementById('fuLogTitle');
+  if(t) t.textContent = title || 'Log Follow-up';
   document.getElementById('fuLogLeadName').textContent = l.name;
   document.getElementById('fuLogNote').value = '';
   document.getElementById('fuLogDate').value = '';
@@ -5445,6 +5487,7 @@ function pickMention(i){
 function deleteNote(leadId, noteId){
   const l = leads.find(x=>x.id===leadId);
   if(!l) return;
+  if(!confirm('Delete this note? It cannot be brought back.')) return;
   l.notes = (l.notes||[]).filter(n=>n.id!==noteId);
   recomputeNoteMeta(l);
   l.updatedAt = Date.now();
@@ -6449,3 +6492,16 @@ window.onCrmAuthChange = function(user){
     document.getElementById('appRoot').style.display = 'none';
   }
 };
+
+// ═══════ AFTER A CALL ═══════
+// Tapping Call or WhatsApp on a lead hands the phone to the dialler; coming back to the CRM a
+// while later is the moment to write down what happened. The follow-up sheet opens then, so an
+// overdue call does not stay red after the agent has actually made it.
+let pendingCallLog = null;
+function noteCallStarted(id){ if(id) pendingCallLog = { id, at: Date.now() }; }
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState !== 'visible' || !pendingCallLog) return;
+  const p = pendingCallLog; pendingCallLog = null;
+  const away = Date.now() - p.at;
+  if(away > 5000 && away < 30 * 60000 && !document.querySelector('.modal-overlay.open')) openFollowUpLogModal(p.id, 'What happened on the call?');
+});

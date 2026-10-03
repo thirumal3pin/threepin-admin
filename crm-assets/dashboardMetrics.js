@@ -272,7 +272,10 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
     stageCounts.set(l.stageId, (stageCounts.get(l.stageId) || 0) + 1);
     enquiryTypeCountsAll.set(l.enquiryType || 'Unspecified', (enquiryTypeCountsAll.get(l.enquiryType || 'Unspecified') || 0) + 1);
 
-    const updOwner = ensureOwner(ownerLabel(l.updatedBy));
+    // The lead's AGENT carries it — open and overdue counts were credited to whoever last edited
+    // the lead, so "who is carrying the book" showed who last clicked. (Touched-today stays on
+    // updatedBy below: that genuinely measures activity.) No agent = Unassigned.
+    const updOwner = ensureOwner(ownerLabel(l.assignedAgent));
     if (isOpen) updOwner.openLeads++;
 
     const np = normPhone(l.phone);
@@ -389,7 +392,7 @@ export function computeDashboardMetrics(leads, stages, referenceDate, opts) {
       channelCounts.set(chan, (channelCounts.get(chan) || 0) + 1);
       enquiryTypeCountsNewToday.set(l.enquiryType || 'Unspecified', (enquiryTypeCountsNewToday.get(l.enquiryType || 'Unspecified') || 0) + 1);
       sourceCountsNewToday.set(l.source || 'Unspecified', (sourceCountsNewToday.get(l.source || 'Unspecified') || 0) + 1);
-      const creatorOwner = ensureOwner(ownerLabel(l.createdBy));
+      const creatorOwner = ensureOwner(ownerLabel(l.assignedAgent));
       creatorOwner.newAssigned++;
       const untouched = l.lastActionType ? l.lastActionType === 'created' : ((l.updatedAt || 0) <= (l.createdAt || 0));
       if (untouched) newLeadsNoActionToday.push(l);

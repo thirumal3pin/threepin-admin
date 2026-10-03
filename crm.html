@@ -372,7 +372,8 @@ function toggleDensity(){
              full-height sheet on a narrow one. Hidden entirely for a lead with
              no TailorTalk chat — see syncConversationPane(). -->
         <button class="dp-act conv" id="dpConvBtn" onclick="toggleConversationPane()" aria-pressed="false" hidden>💬 Conversation</button>
-        <a class="dp-act wa" id="dpWaBtn" href="#" target="_blank" rel="noopener">💬 WhatsApp</a>
+        <a class="dp-act call" id="dpCallBtn" href="#" onclick="noteCallStarted(currentDetailId)">📞 Call</a>
+        <a class="dp-act wa" id="dpWaBtn" href="#" target="_blank" rel="noopener" onclick="noteCallStarted(currentDetailId)">💬 WhatsApp</a>
         <!-- The business number's thread, in TailorTalk. The WhatsApp button
              beside this one opens the agent's OWN WhatsApp, which the client
              sees arriving from a different number. -->

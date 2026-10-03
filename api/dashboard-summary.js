@@ -586,6 +586,8 @@ export async function GET(request) {
 
       const r = await dashboardSummaryForTenant(db, tenantId);
       if (r.skipped) { summary.push({ tenantId, skipped: 'no-recipients' }); continue; }
+      // Every send failed: do not mark the day, so a later trigger retries.
+      if (r.results.length && !r.results.some(x => x.ok)) throw new Error('every send failed: ' + r.results.map(x => x.error).filter(Boolean).join('; '));
 
       // Mark the day AFTER a successful run so a failed send can be retried by
       // a later trigger the same day, while a success blocks a redundant one —

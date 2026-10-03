@@ -1,6 +1,7 @@
 import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared.js';
 import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
 import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
+import { stageKindOf } from '../crm-assets/pipeline.js';
 
 // What needs a person right now — the same rule book the board and action queue use, so the
 // morning digest never lists something the CRM does not show, or misses something it does.
@@ -61,8 +62,11 @@ function istDateString(ts = Date.now()) {
 // rather than lumped into a single "upcoming" pile.
 const DAY_MS = 86400000;
 const LOOKAHEAD_DAYS = 3;
-function bucketLeads(leadsSnap) {
+function bucketLeads(leadsSnap, stages = []) {
   const now = Date.now();
+  // Won and Lost leads are finished: an old follow-up date on one is not overdue work. (The AI's
+  // automatic Lost does not clear the date, so they were listed as OVERDUE every morning.)
+  const closed = l => { const k = stageKindOf(stages.find(s => s.id === l.stageId)); return k === 'won' || k === 'lost'; };
   // Midnight IST for "today," expressed as a true UTC epoch ms timestamp —
   // works no matter what timezone the server process itself is running in.
   const startOfToday = Math.floor((now + IST_OFFSET_MS) / DAY_MS) * DAY_MS - IST_OFFSET_MS;
@@ -70,7 +74,7 @@ function bucketLeads(leadsSnap) {
   const days = Array.from({ length: LOOKAHEAD_DAYS }, () => []);
   leadsSnap.forEach(d => {
     const l = d.data();
-    if (!l.followUpAt) return;
+    if (!l.followUpAt || closed(l)) return;
     if (l.followUpAt < now) { overdue.push(l); return; }
     const dayIndex = Math.floor((l.followUpAt - startOfToday) / DAY_MS);
     if (dayIndex >= 0 && dayIndex < LOOKAHEAD_DAYS) days[dayIndex].push(l);
@@ -86,11 +90,11 @@ function dayLabel(i, startOfToday) {
   return dateStr;
 }
 
-// Who last touched the lead, as the local part of their login email — the
-// same short form the CRM shows on cards and in the action log, so a name in
-// the digest matches what the agent sees in the app.
+// Whose lead it is — the lead's agent — as the local part of their email, the same short form
+// the CRM shows. It used to name whoever last touched the lead, which is not who should call.
+// Falls back to the last editor only for a lead with no agent.
 function updatedByLabel(l) {
-  const email = l.updatedBy || l.createdBy;
+  const email = l.assignedAgent || l.updatedBy || l.createdBy;
   if (!email) return '—';
   const at = String(email).indexOf('@');
   return at > 0 ? String(email).slice(0, at) : String(email);
@@ -99,7 +103,7 @@ function updatedByLabel(l) {
 // Property is always shown so an agent can act without opening the CRM;
 // kept in the same position/format across every line so entries line up.
 function leadLine(l) {
-  return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — last updated by ${updatedByLabel(l)}`;
+  return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — agent ${updatedByLabel(l)}`;
 }
 function formatDigestText(overdue, days, startOfToday, actions = [], stages = [], mentions = []) {
   const lines = ['Follow-up digest', ''];
@@ -166,7 +170,7 @@ const COLS = [
   { label: 'Name', width: '20%' },
   { label: 'Phone', width: '16%' },
   { label: 'Property', width: '26%' },
-  { label: 'Last Updated By', width: '23%' },
+  { label: 'Agent', width: '23%' },
   { label: 'Time', width: '15%' }
 ];
 function leadRowHtml(l, showTime) {
@@ -252,7 +256,7 @@ async function digestForTenant(db, tenantId) {
     db.collection('pipelines').doc(tenantId).get()
   ]);
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
-  const { overdue, days, startOfToday } = bucketLeads(leadsSnap);
+  const { overdue, days, startOfToday } = bucketLeads(leadsSnap, stages);
   const actions = actionItems(leadsSnap, stages);
 
   const results = [];
@@ -325,6 +329,9 @@ export async function GET(request) {
 
       const r = await digestForTenant(db, tenantId);
       if (r.skipped) { summary.push({ tenantId, skipped: 'no-recipients' }); continue; }
+      // A send that failed for everyone is not a sent day: throwing leaves the date unmarked, so
+      // the later trigger retries (sendEmail returns ok:false rather than throwing).
+      if (r.results.length && !r.results.some(x => x.ok)) throw new Error('every send failed: ' + r.results.map(x => x.error).filter(Boolean).join('; '));
 
       // Mark the day AFTER a successful run so a failed send can be retried by
       // a later trigger the same day, while a success blocks a redundant one.

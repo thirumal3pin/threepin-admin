@@ -29,7 +29,9 @@
   try { var saved = localStorage.getItem('pinTodaySpan'); if (saved === 'week' || saved === 'month') span = saved; } catch (e) { /* default */ }
   function endOfSpan() {
     var d = new Date(startOfToday());
-    if (span === 'week') { d.setDate(d.getDate() + (7 - d.getDay())); return d.getTime() - 1; }   // through Saturday
+    // Through Saturday — but on a Friday, Saturday or Sunday, through NEXT Saturday: weekends are
+    // when visits happen, and "this week" on a Saturday used to mean just today.
+    if (span === 'week') { const add = 7 - d.getDay(); d.setDate(d.getDate() + (add <= 2 ? add + 7 : add)); return d.getTime() - 1; }
     if (span === 'month') { d.setDate(1); d.setMonth(d.getMonth() + 1); return d.getTime() - 1; }
     return endOfToday();
   }
@@ -131,8 +133,12 @@
     return (leads || []).filter(function (l) {
       return l.followUpAt && l.followUpAt <= to && !closedLead(l) && !booked[l.id];
     }).map(function (l) {
-      return { kind: 'call', lead: l, at: l.followUpAt, overdue: l.followUpAt < Date.now() };
-    }).sort(function (a, b) { return a.at - b.at; });
+      // Mine = I am the lead's agent or its secondary. Listed first and marked, so "Your day"
+      // starts with your own calls rather than the whole company's.
+      var me = String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase();
+      var mine = !!me && [l.assignedAgent, l.secondaryAgent].some(function (e) { return e && String(e).toLowerCase() === me; });
+      return { kind: 'call', lead: l, at: l.followUpAt, overdue: l.followUpAt < Date.now(), mine: mine };
+    }).sort(function (a, b) { return (b.mine - a.mine) || (a.at - b.at); });
   }
 
   function askedOfMe() {
@@ -245,7 +251,8 @@
         + (about ? '<div class="td-f"><dt>Notes</dt><dd class="td-pre">' + esc(about) + '</dd></div>' : '');
     } else if (item.kind === 'call') {
       if (item.overdue) cls += ' is-late';
-      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : dayTag(item.at)) + '</span>'
+      if (item.mine) cls += ' is-mine';
+      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : dayTag(item.at)) + (item.mine ? mineMark(false) : '') + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(latestNote(l) || 'Follow up') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
@@ -282,6 +289,8 @@
           ? '<button type="button" class="td-act" onclick="PinToday.openMeeting(\'' + id + '\')">Open it</button>'
           : '<button type="button" class="td-act" onclick="openDetail(\'' + id + '\')">Open lead</button>')
       + (item.kind === 'ask' ? '<button type="button" class="td-act done" onclick="markMentionDone(\'' + id + '\')">✓ Done</button>' : '')
+      // A call row logs the call where it is: what happened and the next follow-up, one sheet.
+      + (item.kind === 'call' ? '<button type="button" class="td-act go" onclick="openFollowUpLogModal(\'' + id + '\')">✓ Log call</button>' : '')
       + '</div>';
 
     var openNow = item.kind === 'meeting' && item.meeting.mine === 'needsAction';
@@ -303,6 +312,8 @@
         // calendar — so "yours" marks nothing. The ones still waiting on your
         // answer are the ones worth finding.
         if (it.meeting.mine === 'needsAction') { mine++; waiting++; }
+      } else if (it.kind === 'call') {
+        if (it.mine) { mine++; if (it.overdue) waiting++; }
       }
     });
     return { mine: mine, waiting: waiting };

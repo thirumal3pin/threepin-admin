@@ -82,6 +82,8 @@ await page.waitForTimeout(200);
 const writes = await page.evaluate(() => window.__agentWrites);
 const last = writes[writes.length - 1] || {};
 ok('Both are saved on the lead, with who set them', last.id === 'L001' && last.patch.assignedAgent === 'swami@threepin.in' && last.patch.secondaryAgent === 'pradeep@threepin.in' && last.patch.agentsSetBy === 'thirumal@threepin.in', JSON.stringify(last));
+const told = writes.find(w => w.patch['mentions.swami_threepin_in']);
+ok('The new agent is told (it lands in their Asked of you and digest)', told && /Assigned this lead to you/.test(told.patch['mentions.swami_threepin_in'].text), JSON.stringify(writes.map(w => Object.keys(w.patch))));
 const secondOpts = await page.evaluate(() => [...document.querySelectorAll('#dpAgents select')[1].options].map(o => o.textContent));
 ok('The lead agent is not offered again as the secondary', !secondOpts.includes('Swami'), JSON.stringify(secondOpts));
 const hist = await page.evaluate(() => (leads.find(l => l.id === 'L001').history || []).map(h => h.text.replace(/<[^>]+>/g, '')));

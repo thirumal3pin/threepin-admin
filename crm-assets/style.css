@@ -1185,6 +1185,8 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .dp-act{display:inline-flex;align-items:center;gap:6px;background:var(--white);border:1.5px solid var(--border);border-radius:var(--r1);padding:8px 14px;font-size:12px;font-weight:600;color:var(--ink3);cursor:pointer;transition:all .15s;flex-shrink:0;white-space:nowrap;text-decoration:none;}
 .dp-act:hover{border-color:var(--ink);color:var(--ink);}
 .dp-act.danger:hover{background:var(--red-bg);border-color:var(--red);color:var(--red);}
+.dp-act.call{color:var(--ink);border-color:var(--border);background:var(--white);}
+.dp-act.call:hover{background:var(--ink);color:var(--white);}
 .dp-act.wa{color:var(--green);border-color:transparent;background:var(--green-bg);}
 .dp-act.wa:hover{background:var(--green);color:light-dark(#fff,#05240F);}
 /* ── SPLIT: LEAD ON THE LEFT, CONVERSATION ON THE RIGHT ──
@@ -1249,7 +1251,7 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .lcard-agent2{font-weight:500;color:var(--ink3);}
 .lf-agentctl{flex:0 0 auto;display:flex;align-items:center;}
 .lf-agent{position:relative;flex-shrink:0;}
-.lf-agent summary{list-style:none;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;}
+.lf-agent summary{list-style:none;display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;white-space:nowrap;}
 .lf-agent summary::-webkit-details-marker{display:none;}
 .lf-agent-k{color:var(--ink3);}
 .lf-agent.at summary{border-color:var(--ink);background:var(--ink);color:var(--white);}
@@ -2024,7 +2026,7 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
    stop and the board's own order begins. */
 .lf-sortctl {
   flex: 0 0 auto; display: flex; align-items: center;
-  padding-left: 10px; margin-left: 2px;
+  padding-left: 8px; margin-left: 0;
   border-left: 1px solid var(--border, #E4E0D8);
 }
 .lf-sortctl:empty { border-left: 0; padding-left: 0; }
@@ -2043,6 +2045,9 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   padding: 8px 11px; font-size: 11.5px; line-height: 1.45;
   color: var(--ink3, #655E59); max-width: 240px;
 }
+/* On laptop widths the chips need the room: the Sort button shows its icon and value; the
+   tooltip and the accessible name still say Sort board. */
+@media (max-width: 1599px) { .lf-bsort-k { display: none; } }
 @media (max-width: 720px) {
   .lf-bsort-btn { min-height: 36px; }
   /* On a phone the chips were squeezed into the ~60px left between Views and Sort, and the

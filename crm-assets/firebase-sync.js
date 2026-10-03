@@ -125,6 +125,16 @@ function subscribeToData(tenantId){
 // api/_tailortalk-shared.js FOLLOW_FIELDS — the two lists must match).
 const TT_FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
 
+// A write that does not go through must not look as if it did: the page has already updated and
+// often said "saved". On a quota-exhausted day every write fails. One warning per few seconds.
+let lastSaveWarn = 0;
+function saveFailed(what, e){
+  console.error('Firestore ' + what + ' error:', e);
+  if(Date.now() - lastSaveWarn < 5000 || !window.showToast) return;
+  lastSaveWarn = Date.now();
+  const why = e && e.code === 'resource-exhausted' ? "the database's limit for today is reached" : 'check your connection';
+  window.showToast('⚠ Not saved — ' + why + '. Try again.');
+}
 window.crmFirebase = {
   // Notes + history live in per-lead subcollections now (see saveNote /
   // saveHistory below), so they are stripped from the parent write: the lead
@@ -143,7 +153,7 @@ window.crmFirebase = {
       TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
     }
     if ('phone' in rest && typeof window.phoneKey === 'function') rest.phoneKey = window.phoneKey(rest.phone);
-    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }, { merge: true }).catch(e => console.error('Firestore save lead error:', e));
+    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }, { merge: true }).catch(e => saveFailed('save lead', e));
   },
   // "Use TailorTalk's value": writes the value AND hands the field back to TailorTalk in one
   // update — saveLead() would drop the field again because it is no longer held.
@@ -165,11 +175,14 @@ window.crmFirebase = {
     .catch(e => { console.error('Firestore save view error:', e); throw e; }),
   deleteView: (id) => updateDoc(settingsRef(currentTenantId), { ['views.' + id]: deleteField() })
     .catch(e => { console.error('Firestore delete view error:', e); throw e; }),
-  // The inventory (properties collection) for linking leads to property codes — read once, on
-  // first use, not kept live: the CRM only needs codes and names.
+  // The inventory (properties collection) — read once, on first use, not kept live. The WHOLE
+  // record: the visit invitation takes the seller's name and number from it, and the buyer
+  // matching reads type, BHK, furnishing, facing, possession and more. It was trimmed to seven
+  // fields, so invitations went out without the seller and matching worked half-blind. A failed
+  // read is passed on (not turned into an empty list) so the pickers can say so.
   getInventory: () => getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)))
-    .then(s => s.docs.map(d => { const p = d.data(); return { id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }; }))
-    .catch(e => { console.error('Firestore inventory read error:', e); return []; }),
+    .then(s => s.docs.map(d => { const p = d.data(); return { ...p, id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }; }))
+    .catch(e => { console.error('Firestore inventory read error:', e); throw e; }),
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
   getLeadTailorTalk: (leadId) => getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'))
     .then(s => (s.exists() ? s.data() : null)),
@@ -186,7 +199,7 @@ window.crmFirebase = {
     s => cb(s.exists() ? s.data() : null, null),
     e => { console.error('Firestore watch tailortalk error:', e); cb(null, e); }
   ),
-  deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => console.error('Firestore delete lead error:', e)),
+  deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => saveFailed('delete lead', e)),
 
   // ── Notes / history subcollections ──
   getLeadNotes: (leadId) => getDocs(collection(db, 'leads', leadId, 'notes'))
@@ -195,9 +208,9 @@ window.crmFirebase = {
   getLeadHistory: (leadId) => getDocs(collection(db, 'leads', leadId, 'history'))
     .then(s => s.docs.map(d => d.data()))
     .catch(e => { console.error('Firestore get history error:', e); return []; }),
-  saveNote: (leadId, note) => setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => console.error('Firestore save note error:', e)),
-  deleteNoteDoc: (leadId, noteId) => deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => console.error('Firestore delete note error:', e)),
-  saveHistory: (leadId, event) => setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => console.error('Firestore save history error:', e)),
+  saveNote: (leadId, note) => setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
+  deleteNoteDoc: (leadId, noteId) => deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
+  saveHistory: (leadId, event) => setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
 
   savePipeline: (stages) => setDoc(pipelineRef(currentTenantId), { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
   getBotConfig: async () => {
