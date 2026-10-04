@@ -135,7 +135,7 @@ async function open(path, viewport, stubs) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
   await ctx.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
   const page = await ctx.newPage();
-  page.on('pageerror', e => { console.log('  PAGEERROR ' + e.message); errors.push('pageerror: ' + e.message); });
+  page.on('pageerror', e => { console.log('  PAGEERROR ' + e.message + (process.env.STACK ? ' @ ' + String(e.stack).split(/\r?\n/).slice(1, 4).join(' | ') : '')); errors.push('pageerror: ' + e.message); });
   page.on('console', m => {
     if (m.type() === 'error' && !/Failed to load resource|net::ERR|favicon/.test(m.text())) {
       console.log('  CONSOLE ' + m.text()); errors.push('console: ' + m.text());

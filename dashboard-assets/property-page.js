@@ -94,6 +94,13 @@ function openLeadCrm(){
   window.location.href = 'crm.html?propertyId=' + encodeURIComponent(currentProperty.id);
 }
 
+// This page is the light, shareable view (Overview, Specifications, Sales Pitch). The team's
+// notes, internal notes and matching buyers live in the full record on the Properties page.
+function openFullRecord(){
+  if(!currentProperty) return;
+  window.location.href = 'dashboard.html?property=' + encodeURIComponent(currentProperty.id);
+}
+
 function openInDashboard(){
   window.location.href = 'dashboard.html';
 }

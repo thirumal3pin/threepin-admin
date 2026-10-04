@@ -1884,8 +1884,26 @@ window.applyPropertiesSnapshot = function(list){
   duplicateRecords = window.PinDedupe ? window.PinDedupe.findDuplicates(properties).pairs : [];
   refreshAfterDataChange();
   migrateLegacyInterests();
+  openLinkedProperty();
 };
 window.getDuplicateRecords = () => duplicateRecords;
+
+// dashboard.html?property=ID opens that property's full record — every tab, Internal Notes and
+// Notes & CRM included. The Property & Media board and the CRM link here; property.html is the
+// lighter page for sharing. Matched by document id or Property_ID, opened once.
+let linkedProperty = null;
+try { linkedProperty = new URLSearchParams(location.search).get('property'); } catch (e) {}
+function openLinkedProperty(){
+  if(!linkedProperty || !properties.length) return;
+  const want = String(linkedProperty).toLowerCase();
+  const p = properties.find(x => String(x.id).toLowerCase() === want) || properties.find(x => String(x.propertyCode || '').toLowerCase() === want);
+  // A first snapshot from the local cache may not have it yet; the next one is tried too.
+  if(p){
+    linkedProperty = null;
+    openDetail(p.id);
+    try { const u = new URL(location.href); u.searchParams.delete('property'); history.replaceState(null, '', u.pathname + u.search + u.hash); } catch (e) {}
+  }
+}
 
 // What was merged, and on what evidence. Hiding a record without being able
 // to say which one and why would be worse than showing the duplicate: the

@@ -2340,8 +2340,19 @@ const BOARD_SORTS = [
     val:l => l.followUpAt || Infinity },
   { key:'created', label:'Newest first',     meta:l => l.createdAt ? 'added ' + timeAgo(l.createdAt) : null,
     val:l => -(l.createdAt || 0) },
+  // The same choices as the Sellers page on the Property & Media board.
+  { key:'oldest',  label:'Oldest first',     meta:l => l.createdAt ? 'added ' + timeAgo(l.createdAt) : null,
+    val:l => l.createdAt || Infinity },
+  { key:'updated', label:'Last updated',     meta:l => l.updatedAt ? 'updated ' + timeAgo(l.updatedAt) : null,
+    val:l => -(l.updatedAt || 0) },
+  // A lead with no readable budget goes to the end either way.
+  { key:'budgetHigh', label:'Budget: high to low', meta:l => l.budget ? '₹ ' + l.budget : null,
+    val:l => { const v = budgetValueOf(l); return v == null ? Infinity : -v; } },
+  { key:'budgetLow',  label:'Budget: low to high', meta:l => l.budget ? '₹ ' + l.budget : null,
+    val:l => { const v = budgetValueOf(l); return v == null ? Infinity : v; } },
   { key:'name',    label:'Name A–Z',         meta:null, val:l => (l.name || '').toLowerCase() }
 ];
+function budgetValueOf(l){ return window.parseBudgetToINR ? window.parseBudgetToINR(l.budget) : null; }
 const BOARD_SORT_KEY = 'crmBoardSort';
 const BOARD_SORT_ALL_KEY = 'crmBoardSortAll';
 let boardSort = {};
@@ -4791,7 +4802,7 @@ function propertyLinksInner(l){
     const p = inventoryById(id);
     const code = p ? propertyCodeOf(p) : (/^\d+$/.test(id) ? '' : id);
     const title = p ? [p.name, p.location, p.config, p.startingPrice].filter(Boolean).join(' · ') : id;
-    return `<span class="pl-chip${p && p.soldOut ? ' sold' : ''}"><a href="property.html?id=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${code ? `<b>${escapeHtml(code)}</b>` : ''}${p && p.name ? `<span>${escapeHtml(p.name)}</span>` : (code ? '' : escapeHtml(propertyShortLabel(id)))}${p && p.soldOut ? '<i>sold</i>' : ''}</a><button type="button" aria-label="Unlink ${escapeHtml(propertyShortLabel(id))}" title="Unlink" onclick="unlinkProperty('${l.id}','${escapeHtml(id)}')">×</button></span>`;
+    return `<span class="pl-chip${p && p.soldOut ? ' sold' : ''}"><a href="dashboard.html?property=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${code ? `<b>${escapeHtml(code)}</b>` : ''}${p && p.name ? `<span>${escapeHtml(p.name)}</span>` : (code ? '' : escapeHtml(propertyShortLabel(id)))}${p && p.soldOut ? '<i>sold</i>' : ''}</a><button type="button" aria-label="Unlink ${escapeHtml(propertyShortLabel(id))}" title="Unlink" onclick="unlinkProperty('${l.id}','${escapeHtml(id)}')">×</button></span>`;
   }).join('');
   const open = propLinkOpenFor === l.id;
   return `<div class="info-b-l">Properties</div>
@@ -4924,7 +4935,7 @@ async function markNotSeller(leadId){
   if(listingId && window.crmFirebase.getListing){
     try{
       const card = await window.crmFirebase.getListing(listingId);
-      const untouched = card && !Object.values(card.media || {}).some(Boolean) && !card.shootAt && !card.remarks && !card.brochureLink && !card.propertyCode;
+      const untouched = card && !Object.values(card.media || {}).some(Boolean) && !card.shootAt && !card.remarks && !card.noteCount &&!card.brochureLink && !card.propertyCode;
       if(card && untouched){ await window.crmFirebase.deleteListing(listingId); cardNote = ' Its empty board card was removed.'; }
       else if(card){ cardNote = ' Its board card has work on it, so it was kept — delete it on the Property & Media board if it should go.'; }
     }catch(e){ cardNote = ' Its board card could not be checked — delete it on the Property & Media board if it is still there.'; }
@@ -5036,7 +5047,7 @@ function renderMatchingProperties(l){
           m.alreadyShared ? '· already shared with them' : ''
         ].filter(Boolean).join(' · '),
         actions: [
-          { id:'open', key:m.p.id, label:'Open property →', href:'property.html?id=' + encodeURIComponent(m.p.id), blank:true, primary:true },
+          { id:'open', key:m.p.id, label:'Open property →', href:'dashboard.html?property=' + encodeURIComponent(m.p.id), blank:true, primary:true },
           m.alreadyShared ? null : { id:'link', key:m.p.id, label:'Link to this lead' }
         ].filter(Boolean)
       }),

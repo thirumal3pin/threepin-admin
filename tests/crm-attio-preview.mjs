@@ -357,6 +357,18 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
 
   // Choosing a board order clears the overrides, so "Name A-Z" cannot mean
   // "Name A-Z except those two columns, silently".
+  // The same choices as the Sellers page: oldest first, last updated, and budget both ways.
+  const opts = await page.evaluate(() => BOARD_SORTS.map(s => s.label));
+  ok('The board sort offers Oldest first, Last updated and Budget both ways',
+    ['Oldest first', 'Last updated', 'Budget: high to low', 'Budget: low to high'].every(l => opts.includes(l)), JSON.stringify(opts));
+  const byBudget = await page.evaluate(() => {
+    const v = l => window.parseBudgetToINR(l.budget);
+    const fake = [{ name: 'a', budget: '85 L' }, { name: 'b', budget: '2 Cr' }, { name: 'c' }, { name: 'd', budget: '1.2 Cr' }];
+    const s = BOARD_SORTS.find(x => x.key === 'budgetHigh');
+    return fake.slice().sort((a, b) => { const x = s.val(a), y = s.val(b); return !isFinite(x) ? 1 : !isFinite(y) ? -1 : x - y; }).map(l => l.name).join('');
+  });
+  ok('…and budget high to low puts the biggest first and no budget last', byBudget === 'bdac', byBudget);
+
   await page.evaluate(() => setBoardSortAll('created'));
   await page.waitForTimeout(200);
   ok('Choosing a board order clears the per-column overrides',

@@ -75,6 +75,41 @@
 .tk-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; font-size: 11px; color: var(--ink4); border-top: 1px dashed var(--border); padding-top: 7px; }
 .tk-card-meta .tk-upd { margin-left: 0; }
 .tk-agent { color: var(--ink2); font-weight: 600; }
+.tk-card-note { display: flex; flex-direction: column; gap: 1px; background: var(--bg2); border-radius: var(--r1, 8px); padding: 6px 8px; font-size: 11.5px; }
+.tk-card-note-t { color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
+.tk-card-note-m { font-size: 10.5px; color: var(--ink4); }
+
+/* ── Board fills the screen: no blank page below it, columns scroll inside ──
+   --board-top is measured in renderBoard (the header height varies with the filter row). */
+@media (min-width: 761px) {
+  html.tk-fit, html.tk-fit body { overflow-y: hidden; }
+  html.tk-fit #main { padding-bottom: 0; }
+  /* Stage chips and the Board/List switch on one row — the chips scroll, the switch stays put. */
+  .tk-filterbar { flex-wrap: nowrap; }
+  #tkFilterBar { flex: 1 1 0; min-width: 0; flex-wrap: nowrap; }
+  html.tk-fit .tk-board { height: calc(100dvh - var(--board-top, 210px)); align-items: stretch; padding-bottom: 12px; }
+  html.tk-fit .tk-col { max-height: none; min-height: 0; }
+  html.tk-fit .tk-col-body { flex: 1; min-height: 0; }
+}
+
+/* ── Detail page: the work on the left, notes and the timeline on the right ── */
+.tk-dp-side .tk-sec-hdr { display: flex; align-items: center; gap: 7px; }
+.tk-note-add { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.tk-note-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tk-note-bar .tk-hint { margin: 0; }
+.tk-btn.sm { padding: 6px 12px; font-size: 12px; }
+.tk-notes { display: flex; flex-direction: column; gap: 8px; }
+.tk-nt { border: 1px solid var(--border); border-radius: var(--r1, 8px); padding: 9px 11px; background: var(--bg); }
+.tk-nt.legacy { border-style: dashed; }
+.tk-nt-t { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.tk-nt-m { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 11px; color: var(--ink4); margin-top: 5px; }
+.tk-nt-m b { color: var(--ink2); }
+.tk-nt-del { margin-left: auto; font: inherit; font-size: 11px; background: none; border: 0; color: var(--ink4); cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.tk-nt-del:hover { color: var(--red, #B91C1C); background: var(--red-bg, #FEE2E2); }
+@media (min-width: 1100px) {
+  #dp .dp-body { max-width: none; display: grid; grid-template-columns: minmax(0, 860px) minmax(360px, 1fr); gap: 18px; overflow: hidden; padding-bottom: 0; }
+  #dp .tk-dp-main, #dp .tk-dp-side { overflow-y: auto; min-height: 0; padding-bottom: 40px; padding-right: 4px; }
+}
 .tk-agent.none { color: var(--ink4); font-weight: 400; font-style: italic; }
 .tk-ok { color: var(--green, #15803D); font-weight: 600; }
 .tk-warn { color: var(--amber, #B45309); font-weight: 600; }

@@ -898,7 +898,8 @@ function toggleDensity(){
      implementations of the same numbers. This bridges it into the classic-
      script global scope that app.js/dashboardView.js share. -->
 <script type="module">
-  import { computeDashboardMetrics, formatINR } from './crm-assets/dashboardMetrics.js';
+  import { computeDashboardMetrics, formatINR, parseBudgetToINR } from './crm-assets/dashboardMetrics.js';
+  window.parseBudgetToINR = parseBudgetToINR;
   import * as crmPipeline from './crm-assets/pipeline.js';
   import * as leadAttention from './crm-assets/leadAttention.js';
   import * as crmMentions from './crm-assets/mentions.js';

@@ -179,6 +179,18 @@ setTimeout(() => {
 }, 0);
 `;
 
+// The Property & Media board and the CRM link to dashboard.html?property=ID: the FULL record,
+// not the share page, which has no Internal Notes or Notes & CRM.
+console.log('\nProperties console — opened from a link');
+{
+  const page = await open('dash.local', 'dashboard.html?property=p1', '/dashboard-assets/firebase-sync.js', DASH_STUB, { width: 1440, height: 1000 });
+  const tabs = await texts(page, '.dp-tab');
+  ok('A ?property= link opens that property with every tab', await page.evaluate(() => document.getElementById('dp').classList.contains('open'))
+    && ['Notes & CRM', '🔒 Internal Notes', 'Matching Buyers'].every(t => tabs.includes(t)), J(tabs));
+  ok('…and the link is consumed, so a refresh does not reopen it', !/property=/.test(page.url()), page.url());
+  await page.context().close();
+}
+
 console.log('\nProperties console — Matching Buyers');
 for (const vp of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
   const page = await open('dash.local', 'dashboard.html', '/dashboard-assets/firebase-sync.js', DASH_STUB, vp);

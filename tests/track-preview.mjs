@@ -40,7 +40,7 @@ const LISTINGS = [
     media: {}, stageChangedAt: NOW - 9 * D, createdAt: NOW - 9 * D, updatedAt: NOW - 3 * D },   // late: target 3d
   { id: 'l3', tenantId: T, title: '2BHK Velachery', propertyCode: 'VLCA002', location: 'Velachery',
     sellerName: 'Lakshmi', stageId: sid('shoot_done'), shootAt: NOW - 2 * D, shootAssignee: 'Ravi',
-    media: { photos: true, floorPlan: true }, ownerInformed: true, ownerApproved: true,
+    media: { photos: true, floorPlan: true }, ownerInformed: true, ownerApproved: true, remarks: 'Owner prefers calls after 6pm',
     stageChangedAt: NOW - D, createdAt: NOW - 12 * D, updatedAt: NOW - D },
   { id: 'l4', tenantId: T, title: 'Plot, Kelambakkam', propertyCode: '', sellerName: 'Anand',
     stageId: sid('shoot_scheduled'), shootAt: NOW - 4 * D, media: {},                            // missed shoot
@@ -108,7 +108,8 @@ window.trackFirebase = {
   } : null,
   getInventory: async () => ${JSON.stringify(INVENTORY)},
   getListingHistory: async () => window.__history.slice().reverse(),
-  saveHistory: async (id, e) => { window.__history.push({ ...e, listingId: id }); }
+  saveHistory: async (id, e) => { window.__history.push({ ...e, listingId: id }); },
+  deleteHistory: async (id, eid) => { window.__history = window.__history.filter(h => !(h.listingId === id && h.id === eid)); }
 };
 window.trackAuth = { login: async () => {}, logout: async () => {}, getTenantId: () => '${T}' };
 setTimeout(() => {
@@ -234,7 +235,27 @@ ok('…the brief, with what is needed and what is done', /what to capture/i.test
 ok('…and how to actually get there', /Getting there/.test(body));
 ok('…the shoot section', /Shoot/.test(body));
 ok('…and the deliverables', /Deliverables/.test(body));
+const cols2 = await page.evaluate(() => { const m = document.querySelector('#dp .tk-dp-main').getBoundingClientRect(), d = document.querySelector('#dp .tk-dp-side').getBoundingClientRect(); return { mR: Math.round(m.right), sL: Math.round(d.left), sW: Math.round(d.width) }; });
+ok('The detail page uses the width: notes and timeline sit in a right-hand column', cols2.sL >= cols2.mR && cols2.sW >= 340, JSON.stringify(cols2));
+ok('An old remark still shows in the notes until it is moved', /Owner prefers calls after 6pm/.test((await text(page, '#dpNotes'))[0] || ''));
+await page.fill('#dpNoteText', 'Owner will be away till Monday — shoot after that');
+await page.click('.tk-note-bar .tk-btn');
+await page.waitForTimeout(250);
+const noteNow = await page.evaluate(() => ({ list: document.querySelector('#dpNotes').textContent, saved: window.__history.filter(h => h.type === 'note'), card: (window.__saved.filter(s => s.id === 'l3').pop() || {}).lastNote, box: document.querySelector('#dpNoteText').value }));
+ok('A note is added with who wrote it and when', /away till Monday/.test(noteNow.list) && /Agent\.a/.test(noteNow.list) && noteNow.saved.length === 1 && noteNow.saved[0].by === 'agent.a@example.com' && !noteNow.box, JSON.stringify(noteNow));
+ok('…and the card carries it as the latest note', noteNow.card && /away till Monday/.test(noteNow.card.text));
+ok('…while the timeline keeps only what the board recorded', !/away till Monday/.test((await text(page, '#dpHistory'))[0] || ''));
 await shot('detail');
+await page.evaluate(() => closeDetail());
+await page.waitForTimeout(150);
+ok('The board card shows the latest note', (await text(page, '.tk-card-note')).some(t => /away till Monday/.test(t) && /Agent\.a/.test(t)));
+const fit = await page.evaluate(() => { const b = document.querySelector('.tk-board').getBoundingClientRect(); return { bottom: Math.round(b.bottom), vh: innerHeight, sh: document.documentElement.scrollHeight }; });
+ok('The board fills the screen to the bottom, with no blank page below', Math.abs(fit.bottom - fit.vh) <= 2 && fit.sh <= fit.vh + 2, JSON.stringify(fit));
+await page.evaluate(() => openDetail('l3'));
+await page.waitForTimeout(250);
+await page.click('.tk-nt-del');
+await page.waitForTimeout(250);
+ok('A note can be deleted', !(await page.evaluate(() => window.__history.some(h => h.type === 'note'))) && !(await page.evaluate(() => (window.__saved.filter(s => s.id === 'l3').pop() || {}).lastNote)));
 
 // Ticking a media item writes it through.
 await page.evaluate(() => setMedia('l3', 'video', true));

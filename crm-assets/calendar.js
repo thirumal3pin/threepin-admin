@@ -110,8 +110,13 @@
       try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf(CACHE_PREFIX) === 0) localStorage.removeItem(k); }); } catch (e2) { /* no cache then */ }
     }
   }
+  // Sign-in loads as a module after this script; a click before it lands must fail like any
+  // other failed load (the sheet says so), not throw.
+  function idToken() {
+    return window.crmAuth ? window.crmAuth.getIdToken() : Promise.reject(new Error('Still signing in — try again in a moment'));
+  }
   function ask(body) {
-    return window.crmAuth.getIdToken().then(function (token) {
+    return idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -481,7 +486,7 @@
     // Easy to do by accident, and this one emails everybody invited.
     if (!confirm('Move the meeting to ' + when + '? Everyone invited will be told.')) { render(); return; }
 
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ op: 'moveMeeting', eventId: d.id, at: at, minutes: d.mins })
@@ -738,7 +743,7 @@
     out.innerHTML = '<div class="ft-none">Looking' + '\u2026' + '</div>';
     var from = Date.now();
     var to = startOfDay(from) + findState.days * DAY;
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ op: 'day', from: from, to: to, people: findState.people })
@@ -862,7 +867,7 @@
       return;
     }
     document.body.insertAdjacentHTML('beforeend', eventHtml());
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ op: 'event', eventId: id })
@@ -944,7 +949,7 @@
   function answer(response, reason) {
     var err = document.getElementById('evErr');
     var id = evState.id;
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ op: 'answer', eventId: id, response: response, reason: reason || '' })
@@ -1012,7 +1017,7 @@
     if (!d) return;
     if (!confirm('Call off "' + d.title + '"? Everyone invited will be told.')) return;
     var id = d.id;
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ op: 'meeting', eventId: id, cancel: true })
@@ -1137,7 +1142,7 @@
     var go = document.getElementById('cmGo');
     go.disabled = true; go.textContent = 'Sending…';
     err.classList.remove('show');
-    window.crmAuth.getIdToken().then(function (token) {
+    idToken().then(function (token) {
       return fetch('/api/tailortalk?action=calendar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },

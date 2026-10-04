@@ -140,6 +140,11 @@ window.trackFirebase = {
   },
   async saveHistory(listingId, entry){
     await setDoc(doc(db, 'listings', listingId, 'history', entry.id), entry);
+  },
+  // Notes are timeline entries of type 'note' (the rules already cover this subcollection),
+  // so deleting one is deleting its entry.
+  async deleteHistory(listingId, entryId){
+    await deleteDoc(doc(db, 'listings', listingId, 'history', entryId));
   }
 };
 

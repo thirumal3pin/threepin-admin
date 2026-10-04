@@ -212,10 +212,11 @@ function applyFilters() {
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
     const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone,
-      x.askingPrice, x.shootAssignee, x.remarks, l && l.name, l && l.phone, l && l.propertyInterest,
+      x.askingPrice, x.shootAssignee, x.remarks, x.lastNote && x.lastNote.text, l && l.name, l && l.phone, l && l.propertyInterest,
       l && l.assignedAgent, l && l.secondaryAgent].join(' ').toLowerCase();
     return hay.includes(q);
   });
+  fitBoard();
   if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
   else renderSellers();
@@ -327,7 +328,19 @@ function renderBoard() {
       </div>
     </div>`;
   }).join('')}</div>`;
+  fitBoard();
 }
+// The board fills the screen below the header: columns scroll inside themselves, and the page
+// never scrolls on into blank space. Only the board view; list, shoots and sellers scroll as pages.
+function fitBoard() {
+  const on = currentView === 'board' && boardMode !== 'list';
+  document.documentElement.classList.toggle('tk-fit', on);
+  const b = on && document.querySelector('#boardView .tk-board');
+  if (!b) return;
+  window.scrollTo(0, 0);
+  document.documentElement.style.setProperty('--board-top', Math.round(b.getBoundingClientRect().top) + 'px');
+}
+window.addEventListener('resize', () => fitBoard());
 
 // ═══════ LIST VIEW ═══════
 // Everything at once, in one scan: stage, owner, mapping, shoot, media,
@@ -484,6 +497,7 @@ function cardHtml(x) {
     ${shootLine(x)}
     ${mediaBar(x)}
     ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
+    ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span><span class="tk-card-note-m">${esc(personName(x.lastNote.by))} · ${esc(timeAgo(x.lastNote.at))}${x.noteCount > 1 ? ` · ${x.noteCount} notes` : ''}</span></div>` : ''}
     <div class="tk-card-meta">
       <span class="tk-agent${agents.length ? '' : ' none'}" title="The lead's agent (set on the lead in the CRM)">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</span>
       ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
@@ -932,7 +946,7 @@ const SELLER_CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram', website:
 function sellerItem(x) {
   const lead = x.leadId ? leadById(x.leadId) : null;
   const fromChat = (lead && lead.tt && lead.tt.facts) || null;
-  const typed = extractPropertyFacts([lead && lead.lastNote && lead.lastNote.text, lead && lead.propertyInterest, lead && lead.budget, x.title, x.config, x.askingPrice, x.remarks].filter(Boolean));
+  const typed = extractPropertyFacts([lead && lead.lastNote && lead.lastNote.text, lead && lead.propertyInterest, lead && lead.budget, x.title, x.config, x.askingPrice, x.remarks, x.lastNote && x.lastNote.text].filter(Boolean));
   const f = {
     deal: (fromChat && fromChat.deal) || typed.deal,
     type: (fromChat && fromChat.type) || typed.type,
@@ -1129,6 +1143,7 @@ function openDetail(id) {
   ].filter(Boolean).join(' · ');
 
   document.getElementById('dpBody').innerHTML = `
+    <div class="tk-dp-main">
     <div class="tk-sec">
       <label class="tk-lab">Stage</label>
       <select class="tk-sel" onchange="changeStage('${x.id}', this.value)">
@@ -1166,7 +1181,7 @@ function openDetail(id) {
       <div class="tk-sec-hdr">Inventory</div>
       <div class="tk-kv"><span>Property ID</span>${x.propertyCode ? `<b>${esc(x.propertyCode)}</b>` : '<i>not mapped</i>'}</div>
       <button class="tk-btn" onclick="openMapProperty('${x.id}')">${x.propertyCode ? 'Change mapping' : 'Map to a property'}</button>
-      ${x.propertyCode ? `<a class="tk-btn ghost" href="property.html?id=${encodeURIComponent(x.propertyCode)}" target="_blank" rel="noopener">Open property →</a>` : ''}
+      ${x.propertyCode ? `<a class="tk-btn ghost" href="dashboard.html?property=${encodeURIComponent(x.propertyCode)}" target="_blank" rel="noopener" title="The full record: notes, internal notes, matching buyers">Open property →</a>` : ''}
     </div>
 
     <div class="tk-sec">
@@ -1220,20 +1235,27 @@ function openDetail(id) {
       <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
     </div>
 
-    <div class="tk-sec">
-      <div class="tk-sec-hdr">Remarks</div>
-      <textarea class="tk-area" rows="3" placeholder="Anything the next person needs to know…" onchange="setRemarks('${x.id}', this.value)">${esc(x.remarks || '')}</textarea>
-    </div>
-
-    <div class="tk-sec">
-      <div class="tk-sec-hdr">Timeline</div>
-      <div id="dpHistory" class="tk-hist"><div class="tk-hint">Loading…</div></div>
-    </div>
-
     <div class="tk-sec tk-danger">
       <button class="tk-btn" onclick="openEditModal('${x.id}')">Edit details</button>
       <button class="tk-btn danger" onclick="deleteListing('${x.id}')">Delete listing</button>
-    </div>`;
+    </div>
+    </div>
+
+    <aside class="tk-dp-side">
+      <div class="tk-sec tk-notes-sec">
+        <div class="tk-sec-hdr">Notes <span class="tk-count" id="dpNoteCount"></span></div>
+        <div class="tk-note-add">
+          <textarea id="dpNoteText" class="tk-area" rows="3" placeholder="What happened, what the owner said, what the next person needs to know…"
+            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();addNote('${x.id}')}"></textarea>
+          <div class="tk-note-bar"><span class="tk-hint">Ctrl + Enter to add</span><button type="button" class="tk-btn primary sm" onclick="addNote('${x.id}')">Add note</button></div>
+        </div>
+        <div id="dpNotes" class="tk-notes"><div class="tk-hint">Loading…</div></div>
+      </div>
+      <div class="tk-sec">
+        <div class="tk-sec-hdr">Timeline</div>
+        <div id="dpHistory" class="tk-hist"><div class="tk-hint">Loading…</div></div>
+      </div>
+    </aside>`;
 
   document.getElementById('dp').classList.add('open');
   loadHistory(x.id);
@@ -1492,14 +1514,70 @@ function loadHistory(id) {
   const failed = () => { const el = document.getElementById('dpHistory'); if (el && currentDetailId === id) el.innerHTML = '<div class="tk-hint">Could not load the timeline — close and reopen the listing to try again.</div>'; };
   if (!window.trackFirebase) { failed(); return; }
   window.trackFirebase.getListingHistory(id).then(list => {
+    histCache.set(id, list);
     if (currentDetailId !== id) return;
-    const el = document.getElementById('dpHistory');
-    if (!el) return;
-    el.innerHTML = list.length
-      ? list.map(h => `<div class="tk-hist-i"><div class="tk-hist-t">${h.text}</div><div class="tk-hist-m">${esc(timeAgo(h.at))} · ${esc(String(h.by || '').split('@')[0])}</div></div>`).join('')
-      : '<div class="tk-hint">Nothing yet.</div>';
+    paintHistory(id);
   }).catch(e => { console.error('History load failed:', e); failed(); });
 }
+// Notes and the timeline share one subcollection: a note is an entry of type 'note', written by
+// a person, kept as plain text. Everything else is the timeline the board writes itself.
+const histCache = new Map();
+function paintHistory(id) {
+  const list = histCache.get(id) || [];
+  const x = listings.find(l => l.id === id);
+  const notes = list.filter(h => h.type === 'note');
+  const events = list.filter(h => h.type !== 'note');
+  const nEl = document.getElementById('dpNotes');
+  const hEl = document.getElementById('dpHistory');
+  const cEl = document.getElementById('dpNoteCount');
+  if (cEl) cEl.textContent = notes.length ? String(notes.length) : '';
+  if (nEl) {
+    // A remark from before notes existed, not yet moved into the log, is still shown.
+    const legacy = x && x.remarks ? `<div class="tk-nt legacy"><div class="tk-nt-t">${esc(x.remarks)}</div><div class="tk-nt-m">Remarks (from before notes)</div></div>` : '';
+    nEl.innerHTML = (notes.length || legacy)
+      ? notes.map(n => `<div class="tk-nt">
+          <div class="tk-nt-t">${esc(n.text)}</div>
+          <div class="tk-nt-m"><b>${esc(personName(n.by) || 'Team')}</b> · <span title="${esc(n.at ? new Date(n.at).toLocaleString() : '')}">${esc(fmtDateTime(n.at))} · ${esc(timeAgo(n.at))}</span>
+            <button type="button" class="tk-nt-del" onclick="deleteNote('${id}','${esc(n.id)}')" aria-label="Delete note" title="Delete note">Delete</button></div>
+        </div>`).join('') + legacy
+      : '<div class="tk-hint">No notes yet. Write what happened so the next person does not have to ask.</div>';
+  }
+  if (hEl) {
+    hEl.innerHTML = events.length
+      ? events.map(h => `<div class="tk-hist-i"><div class="tk-hist-t">${h.text}</div><div class="tk-hist-m">${esc(timeAgo(h.at))} · ${esc(String(h.by || '').split('@')[0])}</div></div>`).join('')
+      : '<div class="tk-hint">Nothing yet.</div>';
+  }
+}
+function latestNoteOf(list) {
+  const n = list.filter(h => h.type === 'note').sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+  return n ? { text: n.text, by: n.by, at: n.at } : null;
+}
+async function addNote(id) {
+  const box = document.getElementById('dpNoteText');
+  const text = String(box && box.value || '').trim();
+  if (!text) { if (box) box.focus(); return; }
+  const x = listings.find(l => l.id === id);
+  if (!x || !window.trackFirebase) return;
+  const entry = { id: newId('n'), type: 'note', text, at: Date.now(), by: currentUserEmail || 'team' };
+  try { await window.trackFirebase.saveHistory(id, entry); }
+  catch (e) { console.error('Note save failed:', e); toast('Could not save the note — check your connection'); return; }
+  histCache.set(id, [entry, ...(histCache.get(id) || [])]);
+  if (box) box.value = '';
+  // The card shows the latest note and how many there are, without opening anything.
+  mutate(id, o => { o.lastNote = { text, by: entry.by, at: entry.at }; o.noteCount = (o.noteCount || 0) + 1; });
+  if (currentDetailId === id) paintHistory(id);
+  toast('Note added');
+}
+async function deleteNote(id, noteId) {
+  if (!confirm('Delete this note? It cannot be brought back.')) return;
+  try { await window.trackFirebase.deleteHistory(id, noteId); }
+  catch (e) { console.error('Note delete failed:', e); toast('Could not delete — check your connection'); return; }
+  const list = (histCache.get(id) || []).filter(h => h.id !== noteId);
+  histCache.set(id, list);
+  mutate(id, o => { o.lastNote = latestNoteOf(list); o.noteCount = list.filter(h => h.type === 'note').length; });
+  if (currentDetailId === id) paintHistory(id);
+}
+window.addNote = addNote; window.deleteNote = deleteNote;
 
 // ── Small field writes from the detail panel ──
 function mutate(id, fn, historyText) {
