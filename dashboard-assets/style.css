@@ -1389,3 +1389,11 @@ body.adv-open{overflow:hidden;}
 .agf-foot button{font:inherit;font-size:12px;font-weight:600;color:var(--ink2);background:none;border:0;cursor:pointer;padding:4px 8px;min-height:32px;}
 .agf-foot button:disabled{opacity:.4;cursor:default;}
 @media (max-width:720px){.dp-agents{padding:10px 16px 2px;}}
+
+/* ── Property detail: the header (name, price, call, agents) scrolls away with the page; only the
+   tab row stays pinned. The whole header used to be sticky and covered ~70% of a laptop screen. */
+#dp .dp-hdr{position:static;box-shadow:none;border-bottom:0;}
+#dp .dp-tabbar{position:sticky;top:0;z-index:10;background:var(--white);padding:0 28px;border-bottom:1.5px solid var(--border);box-shadow:0 2px 14px rgba(0,0,0,.05);}
+#dp .dp-tabbar .dp-tabs{margin-top:0;position:static;}
+@media (max-width:760px){ #dp .dp-tabbar{padding:0 14px;} }
+@media print{ #dp .dp-tabbar{display:none;} }

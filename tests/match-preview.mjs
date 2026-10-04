@@ -188,6 +188,12 @@ console.log('\nProperties console — opened from a link');
   ok('A ?property= link opens that property with every tab', await page.evaluate(() => document.getElementById('dp').classList.contains('open'))
     && ['Notes & CRM', '🔒 Internal Notes', 'Matching Buyers'].every(t => tabs.includes(t)), J(tabs));
   ok('…and the link is consumed, so a refresh does not reopen it', !/property=/.test(page.url()), page.url());
+  // The header (name, price, call, agents) scrolls away; only the tab row stays pinned.
+  await page.evaluate(() => { const d = document.getElementById('dp'); d.style.scrollBehavior = 'auto'; document.getElementById('dpBody').style.minHeight = '3000px'; d.scrollTop = 900; });
+  await page.waitForTimeout(150);
+  const pin = await page.evaluate(() => ({ hero: Math.round(document.getElementById('dpHero').getBoundingClientRect().bottom), tabs: Math.round(document.querySelector('#dp .dp-tabbar').getBoundingClientRect().top), tabsH: Math.round(document.querySelector('#dp .dp-tabbar').getBoundingClientRect().height) }));
+  ok('Scrolling the property moves the header away and keeps only the tabs pinned', pin.hero <= 0 && pin.tabs === 0 && pin.tabsH < 80, J(pin));
+  await shot(page, 'property-scrolled');
   await page.context().close();
 }
 
