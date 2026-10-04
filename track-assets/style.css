@@ -502,3 +502,64 @@ body.agent-mode .tk-filterbar { display: none !important; }
   .sl-f { flex: 1 1 140px; }
   .sl-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Detail summary: who, what property, agent, stage, created, updated — first, in one card ── */
+.tk-sum { display: flex; flex-direction: column; gap: 12px; border-color: var(--brand-line, var(--border)); }
+.tk-sum-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.tk-sum-who { min-width: 0; }
+.tk-sum-name { font-size: 19px; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.tk-sum .sl-phone { font-size: 14px; }
+.tk-sum .sl-phone .none { color: var(--ink4); font-style: italic; }
+.tk-sum-ch { color: var(--ink4); font-weight: 400; }
+.tk-sum-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.tk-sum-prop { border-top: 1px dashed var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 7px; }
+.tk-sum-prop .sl-loc { font-size: 14px; }
+.tk-sum-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; border-top: 1px dashed var(--border); padding-top: 11px; }
+.tk-sum-f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tk-sum-f > span:first-child { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink4); }
+.tk-sum-f b { font-size: 13.5px; font-weight: 600; display: flex; flex-direction: column; }
+.tk-sum-f b.none { color: var(--ink4); font-style: italic; font-weight: 400; }
+.tk-sum-sub { font-size: 11.5px; font-weight: 400; color: var(--ink4); }
+.tk-sum-sub.warn { color: var(--amber, #B45309); font-weight: 600; }
+.tk-sum-sub.bad { color: var(--red, #B91C1C); font-weight: 600; }
+.tk-sel.sm { padding: 6px 8px; font-size: 13px; }
+.tk-sum .tk-hint { margin-top: -4px; }
+@media (max-width: 760px) {
+  .tk-sum-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ── Filter bar: Stage and Agent as multi-select dropdowns, one Sort ── */
+#tkFilterBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow: visible; }
+.tk-dd { position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; border: 1px solid var(--border); background: var(--card); border-radius: var(--r1, 8px); padding: 0; }
+.tk-dd > summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; cursor: pointer; border-radius: inherit; white-space: nowrap; }
+.tk-dd > summary::-webkit-details-marker { display: none; }
+.tk-dd.on { border-color: var(--ink2); }
+.tk-dd-k { color: var(--ink4); font-weight: 600; }
+.tk-dd-v { color: var(--ink); font-weight: 600; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.tk-dd-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 150; min-width: 240px; max-height: 60vh; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: var(--r2); box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.15)); padding: 6px; display: flex; flex-direction: column; }
+.tk-dd-row { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--ink); }
+.tk-dd-row:hover { background: var(--bg2); }
+.tk-dd-row input { accent-color: var(--brand); width: 15px; height: 15px; margin: 0; flex: none; }
+.tk-dd-l { flex: 1; min-width: 0; }
+.tk-dd-n { font-size: 11px; color: var(--ink4); }
+.tk-dd-clear { font: inherit; font-size: 12px; font-weight: 600; color: var(--brand); background: none; border: 0; border-top: 1px solid var(--border); margin-top: 4px; padding: 9px; cursor: pointer; text-align: left; }
+.tk-dd-sort { padding-left: 11px; }
+.tk-dd-sort select { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); background: transparent; border: 0; padding: 7px 8px 7px 0; cursor: pointer; }
+@media (max-width: 760px) {
+  .tk-filterbar { flex-wrap: wrap; }
+  #tkFilterBar { flex: 1 1 100%; }
+  .tk-dd { flex: 1 1 auto; }
+  .tk-dd > summary { width: 100%; justify-content: space-between; min-height: 36px; }
+  .tk-dd-pop { left: 0; right: auto; min-width: min(280px, 86vw); }
+  #ddAgent .tk-dd-pop { left: auto; right: 0; }
+  .tk-dd-v { max-width: 110px; }
+}
+@media (max-width: 760px) {
+  /* Stage + Agent on one row, Sort + Board/List on the next. */
+  #tkFilterBar { display: contents; }
+  .tk-filterbar { gap: 8px; }
+  #ddStage, #ddAgent { flex: 1 1 40%; }
+  .tk-dd-sort { flex: 1 1 50%; min-width: 0; }
+  .tk-dd-sort select { flex: 1; min-width: 0; }
+  #tkModeTog { flex: none; }
+}

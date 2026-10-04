@@ -198,6 +198,38 @@ ok('The sellers badge settles at nothing once the sync has caught up',
 const deskWide = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, sx: window.scrollX,
   culprits: [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 2 && !e.closest('.tk-board')).slice(0, 5).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)) }));
 ok('The desktop board does not scroll the page sideways (the board scrolls inside itself)', deskWide.sw <= deskWide.cw + 2 && deskWide.sx === 0, JSON.stringify(deskWide));
+// Stage and Agent are multi-select dropdowns, Sort is one select, all on one line with Board/List.
+const bar = await page.evaluate(() => {
+  const r = s => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { t: Math.round(b.top), l: Math.round(b.left), r: Math.round(b.right) }; };
+  return { stage: r('#ddStage'), agent: r('#ddAgent'), sort: r('.tk-dd-sort'), tog: r('#tkModeTog'), chips: document.querySelectorAll('.tk-chip').length,
+    opts: [...document.querySelectorAll('.tk-dd-sort option')].map(o => o.textContent) };
+});
+ok('The filter bar is Stage, Agent and Sort dropdowns — no row of chips running off the edge',
+  bar.stage && bar.agent && bar.sort && !bar.chips && bar.sort.r < bar.tog.l && Math.abs(bar.stage.t - bar.tog.t) <= 4, JSON.stringify(bar));
+ok('…and Sort offers every order', ['Needs attention', 'Newest first', 'Oldest first', 'Last updated', 'Last message', 'Price: high to low', 'Price: low to high', 'Size: largest first', 'Name A–Z'].every(o => bar.opts.includes(o)), JSON.stringify(bar.opts));
+await page.click('#ddStage summary');
+await page.click('#ddStage .tk-dd-row:has-text("Shoot scheduled") input');
+await page.waitForTimeout(150);
+await page.click('#ddStage .tk-dd-row:has-text("Shot") input');
+await page.waitForTimeout(150);
+const picked = await page.evaluate(() => ({ cols: [...document.querySelectorAll('.tk-col-title')].map(e => e.textContent), open: !!document.querySelector('#ddStage[open]'), v: document.querySelector('#ddStage .tk-dd-v').textContent }));
+await page.screenshot({ path: `${OUT}/desk-filter-open.png` });
+ok('Ticking two stages shows just those two columns, and the list stays open while ticking', picked.cols.join('|') === 'Shoot scheduled|Shot' && picked.open && /Shoot scheduled, Shot/.test(picked.v), JSON.stringify(picked));
+await page.click('#ddStage .tk-dd-clear');
+await page.mouse.click(5, 900);
+await page.waitForTimeout(150);
+ok('…a click elsewhere closes it', !(await page.$('#ddStage[open]')));
+await page.click('#ddAgent summary');
+await page.click('#ddAgent .tk-dd-row:has-text("Agent.b") input');
+await page.waitForTimeout(150);
+ok('Picking an agent shows only their listings', JSON.stringify(await text(page, '.tk-card .sl-name')) === '["Meenakshi"]', JSON.stringify(await text(page, '.tk-card .sl-name')));
+await page.evaluate(() => clearAgentFilter());
+await page.selectOption('.tk-dd-sort select', 'name');
+await page.waitForTimeout(150);
+const sortedCol = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => [...c.querySelectorAll('.tk-card .sl-name')].map(e => e.textContent)).find(a => a.length > 1));
+ok('Sorting by name orders the cards in each column', sortedCol && sortedCol.join() === [...sortedCol].sort((a, b) => a.localeCompare(b)).join(), JSON.stringify(sortedCol));
+await page.selectOption('.tk-dd-sort select', 'urgency');
+await page.waitForTimeout(150);
 const shifted = await page.evaluate(() => [...document.querySelectorAll('*')].filter(e => e.scrollLeft > 0 && !e.classList.contains('tk-board') && !e.classList.contains('tk-chips')).map(e => e.tagName + '#' + e.id + '.' + e.className + ' ' + e.scrollLeft));
 ok('Nothing around the board is left scrolled sideways', !shifted.length, JSON.stringify(shifted));
 await shot('board');
@@ -231,6 +263,15 @@ await page.waitForTimeout(250);
 ok('The detail panel opens', await page.$eval('#dp', e => e.classList.contains('open')));
 const body = (await text(page, '#dpBody'))[0];
 ok('…showing the owner', /Lakshmi/.test(body));
+const sum = await page.evaluate(() => {
+  const s = document.querySelector('#dpBody .tk-sum');
+  const secs = [...document.querySelectorAll('#dpBody .tk-dp-main > .tk-sec')];
+  return { first: secs[0] === s, txt: s ? s.textContent.replace(/\s+/g, ' ') : '', buyersLast: secs.indexOf(document.getElementById('dpBuyers')) === secs.length - 2 };
+});
+ok('The detail page opens on a summary: name, area, agent, stage, created and last updated', sum.first
+  && /Lakshmi/.test(sum.txt) && /Velachery/.test(sum.txt) && /Agent/.test(sum.txt) && /Unassigned/.test(sum.txt)
+  && /Stage/.test(sum.txt) && /Created/.test(sum.txt) && /Last updated/.test(sum.txt), sum.txt.slice(0, 300));
+ok('Matching buyers come last, after the property work', sum.buyersLast);
 ok('…the brief, with what is needed and what is done', /what to capture/i.test(body) && /Floor plan/.test(body), body.slice(0, 200));
 ok('…and how to actually get there', /Getting there/.test(body));
 ok('…the shoot section', /Shoot/.test(body));
@@ -293,10 +334,10 @@ const listTxt = (await text(page, '.tk-table'))[0] || '';
 ok('…with stage, owner, shoot and what it needs', /Shoot/.test(listTxt) && /Owner/.test(listTxt) && /Needs/.test(listTxt), listTxt.slice(0, 200));
 ok('…and it says what is blocking a listing', /not in inventory|owner has not approved|photos not/.test(listTxt), listTxt.slice(0, 400));
 await shot('list');
-await page.selectOption('.tk-listbar select', 'shoot');
+await page.selectOption('.tk-dd-sort select', 'shoot');
 await page.waitForTimeout(250);
-ok('The list re-sorts on demand', (await page.$$('.tk-tr:not(.tk-th)')).length >= 5);
-await page.evaluate(() => setBoardMode('board'));
+ok('The list re-sorts with the same Sort as the board', (await page.$$('.tk-tr:not(.tk-th)')).length >= 5 && await page.evaluate(() => document.querySelector('.tk-dd-sort select').value === 'shoot'));
+await page.evaluate(() => { setBoardSort('urgency'); setBoardMode('board'); });
 await page.waitForTimeout(250);
 ok('…and switches back to the board', (await page.$$('.tk-col')).length === 10);
 
@@ -487,6 +528,9 @@ await agentPage.screenshot({ path: `${OUT}/phone-agent-day.png`, fullPage: true 
 const phone = await open({ width: 390, height: 844 });
 await phone.waitForTimeout(250);
 await phone.screenshot({ path: `${OUT}/phone-board.png`, fullPage: true });
+await phone.click('#ddStage summary'); await phone.waitForTimeout(150); await phone.screenshot({ path: `${OUT}/phone-filter-open.png` });
+ok('On a phone the stage list fits on screen', await phone.evaluate(() => { const b = document.querySelector('#ddStage .tk-dd-pop').getBoundingClientRect(); return b.left >= 0 && b.right <= innerWidth; }));
+await phone.click('#ddStage summary');
 const wide = await phone.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
 ok('The phone board does not scroll the page sideways', !wide);
 await phone.evaluate(() => openDetail('l1'));

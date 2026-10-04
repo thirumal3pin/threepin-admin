@@ -67,11 +67,6 @@ function renderModeToggle() {
     `<button type="button" class="tk-sbtn${boardMode === m ? ' on' : ''}" aria-pressed="${boardMode === m}" onclick="setBoardMode('${m}')">${label}</button>`).join('');
 }
 
-// The list's own sort. Default puts what needs a person first, which is the
-// same order the board's columns already imply.
-let listSort = 'urgency';
-function setListSort(k) { listSort = k; applyFilters(); }
-window.setListSort = setListSort;
 
 // ═══════ SNAPSHOT CALLBACKS ═══════
 // The sync module calls these; each ends in a re-render. Same contract as the
@@ -209,6 +204,7 @@ function applyFilters() {
   const q = currentSearch;
   filtered = listings.filter(x => {
     if (stageFilter.size && !stageFilter.has(x.stageId)) return false;
+    if (ownerAgentFilter.size) { const ag = listingAgents(x); if (!(ag.length ? ag.some(e => ownerAgentFilter.has(e)) : ownerAgentFilter.has('none'))) return false; }
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
     const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone,
@@ -245,15 +241,6 @@ function onSearch(v) {
 }
 window.onSearch = onSearch;
 
-function toggleStageFilter(id) {
-  if (stageFilter.has(id)) stageFilter.delete(id); else stageFilter.add(id);
-  renderFilterBar();
-  applyFilters();
-}
-window.toggleStageFilter = toggleStageFilter;
-
-function clearStageFilter() { stageFilter = new Set(); renderFilterBar(); applyFilters(); }
-window.clearStageFilter = clearStageFilter;
 
 // Ten stages meant ten coloured pills wrapping over five rows on a phone —
 // half a screen of chrome before the first listing, and a rainbow that said
@@ -267,30 +254,102 @@ window.clearStageFilter = clearStageFilter;
 //
 // The bar is also collapsed by default on a phone behind a single summary
 // button: most visits are to read the board, not to narrow it.
-let filtersOpen = false;
-function toggleFilters() { filtersOpen = !filtersOpen; renderFilterBar(); }
-window.toggleFilters = toggleFilters;
+// Stage and Agent are multi-select dropdowns, and Sort is one choice shared by the board and the
+// list. Ten stage chips ran off the edge of the bar and overlapped the Board/List switch.
+let ownerAgentFilter = new Set();     // emails, or 'none' for Unassigned
+const SORT_KEY = 'track.sort';
+const SORTS = [
+  ['urgency', 'Needs attention'],
+  ['newest', 'Newest first'],
+  ['oldest', 'Oldest first'],
+  ['updated', 'Last updated'],
+  ['lastMsg', 'Last message'],
+  ['shoot', 'Shoot date'],
+  ['age', 'Longest in stage'],
+  ['priceHigh', 'Price: high to low'],
+  ['priceLow', 'Price: low to high'],
+  ['sizeHigh', 'Size: largest first'],
+  ['stage', 'Stage'],
+  ['name', 'Name A–Z']
+];
+let boardSortKey = 'urgency';
+try { const v = localStorage.getItem(SORT_KEY); if (SORTS.some(([k]) => k === v)) boardSortKey = v; } catch (e) {}
+function setBoardSort(k) {
+  boardSortKey = SORTS.some(([s]) => s === k) ? k : 'urgency';
+  try { localStorage.setItem(SORT_KEY, boardSortKey); } catch (e) {}
+  applyFilters();
+}
+window.setBoardSort = setBoardSort;
+function sortCards(arr) {
+  const items = arr.map(x => ({ x, it: sellerItem(x) }));
+  const idx = o => stages.findIndex(s => s.id === o.x.stageId);
+  const urgent = (a, b) => cardUrgency(b.x) - cardUrgency(a.x) || (b.x.updatedAt || 0) - (a.x.updatedAt || 0);
+  const has = v => v != null && v !== 0 && isFinite(v);   // no value sinks to the end
+  const num = (f, dir) => (a, b) => { const x = f(a), y = f(b); return !has(x) && !has(y) ? 0 : !has(x) ? 1 : !has(y) ? -1 : dir * (x - y); };
+  const by = {
+    newest: num(o => o.it.intake, -1),
+    oldest: num(o => o.it.intake, 1),
+    updated: num(o => o.x.updatedAt, -1),
+    lastMsg: num(o => o.it.lastMsg, -1),
+    shoot: num(o => o.x.shootAt, 1),
+    age: (a, b) => P.stageAge(b.x, stages, Date.now()).days - P.stageAge(a.x, stages, Date.now()).days,
+    priceHigh: num(o => o.it.f.priceValue, -1),
+    priceLow: num(o => o.it.f.priceValue, 1),
+    sizeHigh: num(o => sortSize(o.it.f), -1),
+    stage: (a, b) => idx(a) - idx(b),
+    name: (a, b) => String(a.it.name || '').toLowerCase().localeCompare(String(b.it.name || '').toLowerCase())
+  }[boardSortKey] || urgent;
+  return items.sort((a, b) => by(a, b) || urgent(a, b)).map(o => o.x);
+}
+
+function listingAgents(x) {
+  const l = x.leadId ? leadById(x.leadId) : null;
+  return [l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
+}
+function toggleStageFilter(id) {
+  if (stageFilter.has(id)) stageFilter.delete(id); else stageFilter.add(id);
+  renderFilterBar(); applyFilters();
+}
+function clearStageFilter() { stageFilter = new Set(); renderFilterBar(); applyFilters(); }
+function toggleAgentFilter(v) {
+  if (ownerAgentFilter.has(v)) ownerAgentFilter.delete(v); else ownerAgentFilter.add(v);
+  renderFilterBar(); applyFilters();
+}
+function clearAgentFilter() { ownerAgentFilter = new Set(); renderFilterBar(); applyFilters(); }
+Object.assign(window, { toggleStageFilter, clearStageFilter, toggleAgentFilter, clearAgentFilter });
 
 function renderFilterBar() {
   const el = document.getElementById('tkFilterBar');
   if (!el) return;
-  const chips = stages.map(s => {
-    const on = stageFilter.has(s.id);
-    const n = listings.filter(x => x.stageId === s.id).length;
-    return `<button type="button" class="tk-chip${on ? ' on' : ''}${!n ? ' empty' : ''}" onclick="toggleStageFilter('${s.id}')">
-      <i class="tk-cdot" style="background:${s.color}"></i>${esc(s.name)}<span class="tk-n">${n}</span></button>`;
-  }).join('');
-  const label = stageFilter.size
-    ? `${stageFilter.size} stage${stageFilter.size === 1 ? '' : 's'}`
-    : 'All stages';
+  const openId = (el.querySelector('details[open]') || {}).id;
+  const row = (on, onclick, dot, label, n) => `<label class="tk-dd-row"><input type="checkbox" ${on ? 'checked' : ''} onchange="${onclick}">${dot}<span class="tk-dd-l">${esc(label)}</span><span class="tk-dd-n">${n}</span></label>`;
+  const stageRows = stages.map(s => row(stageFilter.has(s.id), `toggleStageFilter('${s.id}')`,
+    `<i class="tk-cdot" style="background:${s.color}"></i>`, s.name, listings.filter(x => x.stageId === s.id).length)).join('');
+  const emails = [...new Set(listings.flatMap(listingAgents))].sort();
+  const agentRows = row(ownerAgentFilter.has('none'), `toggleAgentFilter('none')`, '', 'Unassigned', listings.filter(x => !listingAgents(x).length).length)
+    + emails.map(e => row(ownerAgentFilter.has(e), `toggleAgentFilter('${esc(e)}')`, '', personName(e), listings.filter(x => listingAgents(x).includes(e)).length)).join('');
+  const names = (set, all, nameOf) => !set.size ? all : set.size <= 2 ? [...set].map(nameOf).join(', ') : set.size + ' selected';
+  const stageLabel = names(stageFilter, 'All stages', id => (stageById(id) || {}).name || id);
+  const agentLabel = names(ownerAgentFilter, 'Everyone', e => e === 'none' ? 'Unassigned' : personName(e));
   el.innerHTML = `
-    <button type="button" class="tk-filtoggle${stageFilter.size ? ' on' : ''}" onclick="toggleFilters()"
-      aria-expanded="${filtersOpen}">${esc(label)}<span class="tk-caret">${filtersOpen ? '▴' : '▾'}</span></button>
-    <div class="tk-chips${filtersOpen ? ' open' : ''}">
-      ${chips}
-      ${stageFilter.size ? `<button type="button" class="tk-chip clear" onclick="clearStageFilter()">Clear</button>` : ''}
-    </div>`;
+    <details class="tk-dd${stageFilter.size ? ' on' : ''}" id="ddStage"${openId === 'ddStage' ? ' open' : ''}>
+      <summary><span class="tk-dd-k">Stage</span><span class="tk-dd-v">${esc(stageLabel)}</span><span class="tk-caret">▾</span></summary>
+      <div class="tk-dd-pop">${stageRows}
+        ${stageFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearStageFilter()">Show all stages</button>` : ''}</div>
+    </details>
+    <details class="tk-dd${ownerAgentFilter.size ? ' on' : ''}" id="ddAgent"${openId === 'ddAgent' ? ' open' : ''}>
+      <summary><span class="tk-dd-k">Agent</span><span class="tk-dd-v">${esc(agentLabel)}</span><span class="tk-caret">▾</span></summary>
+      <div class="tk-dd-pop">${agentRows}
+        ${ownerAgentFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearAgentFilter()">Show everyone</button>` : ''}</div>
+    </details>
+    <label class="tk-dd tk-dd-sort"><span class="tk-dd-k">Sort</span>
+      <select onchange="setBoardSort(this.value)" aria-label="Sort">${SORTS.map(([k, l]) => `<option value="${k}"${boardSortKey === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+    </label>`;
 }
+// A dropdown closes when you click anywhere else, like any menu.
+document.addEventListener('click', e => {
+  document.querySelectorAll('#tkFilterBar details[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
+});
 
 function updateSellerBadge() {
   if (window.AppNav) window.AppNav.setBadge('sellers', unlistedSellers().length);
@@ -306,8 +365,7 @@ function renderBoard() {
   }
   const shown = stageFilter.size ? stages.filter(s => stageFilter.has(s.id)) : stages;
   board.innerHTML = `<div class="tk-board">${shown.map(stage => {
-    const cards = filtered.filter(x => x.stageId === stage.id)
-      .sort((a, b) => cardUrgency(b) - cardUrgency(a) || (b.updatedAt || 0) - (a.updatedAt || 0));
+    const cards = sortCards(filtered.filter(x => x.stageId === stage.id));
     const late = cards.filter(isLate).length;
     const kind = P.stageKindOf(stage);
     const rule = (P.stageDef(P.stageKeyOf(stage)) || {}).rule || '';
@@ -347,28 +405,10 @@ window.addEventListener('resize', () => fitBoard());
 // what is blocking it. The board answers "where is this one"; this answers
 // "what is the state of all of them", which is the question asked before a
 // week is planned.
-const LIST_SORTS = [
-  ['urgency', 'Needs attention'],
-  ['stage', 'Stage'],
-  ['shoot', 'Shoot date'],
-  ['age', 'Longest in column'],
-  ['updated', 'Recently touched']
-];
-function sortForList(arr) {
-  const idx = x => stages.findIndex(s => s.id === x.stageId);
-  const copy = arr.slice();
-  switch (listSort) {
-    case 'stage': return copy.sort((a, b) => idx(a) - idx(b) || cardUrgency(b) - cardUrgency(a));
-    case 'shoot': return copy.sort((a, b) => (a.shootAt || Infinity) - (b.shootAt || Infinity));
-    case 'age': return copy.sort((a, b) => P.stageAge(b, stages, Date.now()).days - P.stageAge(a, stages, Date.now()).days);
-    case 'updated': return copy.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    default: return copy.sort((a, b) => cardUrgency(b) - cardUrgency(a) || (a.shootAt || Infinity) - (b.shootAt || Infinity));
-  }
-}
 function renderList() {
   const host = document.getElementById('boardView');
   if (!host) return;
-  const rows = sortForList(filtered);
+  const rows = sortCards(filtered);
   if (!rows.length) {
     host.innerHTML = `<div class="tk-empty"><div class="tk-empty-i">📋</div><div class="tk-empty-t">Nothing matches</div></div>`;
     return;
@@ -376,10 +416,6 @@ function renderList() {
   host.innerHTML = `
     <div class="tk-listwrap">
       <div class="tk-listbar">
-        <span class="tk-lab">Sort</span>
-        <select class="tk-sel sm" onchange="setListSort(this.value)">
-          ${LIST_SORTS.map(([k, l]) => `<option value="${k}"${listSort === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}
-        </select>
         <span class="tk-listcount">${rows.length} listing${rows.length === 1 ? '' : 's'}</span>
       </div>
       <div class="tk-table" role="table">
@@ -1129,6 +1165,52 @@ function createFromLead(leadId) {
 window.createFromLead = createFromLead;
 
 // ═══════ DETAIL PANEL ═══════
+// The top of the detail page answers what a person opening it asks first, all in one card:
+// who (name, number), what property (area, sale/rent, type, configuration, size, price), whose
+// it is (agent), where it stands (stage, days there) and when it came in and was last touched.
+function summaryHtml(x, lead, stage) {
+  const it = sellerItem(x);
+  const wa = telOf(it.phone).replace(/^\+/, '');
+  const chips = factChips(it.f, 4);
+  const agents = agentsOf(it);
+  const age = P.stageAge(x, stages, Date.now());
+  const when = ts => ts ? `${esc(fmtDateTime(ts))}<span class="tk-sum-sub">${esc(timeAgo(ts))}</span>` : '—';
+  const by = personName(x.updatedBy);
+  const rule = stage && P.stageDef(P.stageKeyOf(stage)) ? P.stageDef(P.stageKeyOf(stage)).rule : '';
+  return `<div class="tk-sec tk-sum">
+    <div class="tk-sum-head">
+      <div class="tk-sum-who">
+        <div class="tk-sum-name">${esc(it.name)}</div>
+        <div class="sl-phone">${it.phone ? `<a href="tel:${esc(telOf(it.phone))}">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>` : ''}` : '<span class="none">No number</span>'}
+          ${lead ? ` · <span class="tk-sum-ch">${esc(it.channel)}</span>` : ''}</div>
+      </div>
+      <div class="tk-sum-acts">
+        ${lead ? `<button class="tk-btn sm" onclick="openSellerPreview('${x.id}')">Preview CRM record</button>
+          <a class="tk-btn ghost sm" href="${esc(crmLeadHref(lead.id, x.id))}">Open in CRM →</a>`
+          : `<button class="tk-btn sm" onclick="openLinkLead('${x.id}')">Link a CRM lead</button>`}
+      </div>
+    </div>
+    <div class="tk-sum-prop">
+      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}</div>
+      ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
+      ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))} — add it with Edit details at the bottom</div>` : ''}
+    </div>
+    <div class="tk-sum-grid">
+      <div class="tk-sum-f"><span>Agent</span><b class="${agents.length ? '' : 'none'}">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</b>${lead ? '<span class="tk-sum-sub">set on the CRM lead</span>' : ''}</div>
+      <div class="tk-sum-f stage"><span>Stage</span>
+        <select class="tk-sel sm" aria-label="Stage" onchange="changeStage('${x.id}', this.value)">
+          ${stages.map(s => `<option value="${s.id}"${s.id === x.stageId ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
+        </select>
+        <span class="tk-sum-sub${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days === 0 ? 'moved here today' : age.days + (age.days === 1 ? ' day' : ' days') + ' in this stage'}${age.target ? ' · aim ' + age.target + 'd' : ''}</span></div>
+      <div class="tk-sum-f"><span>Created</span><b>${when(it.intake)}</b></div>
+      <div class="tk-sum-f"><span>Last updated</span><b>${when(x.updatedAt)}</b>${by ? `<span class="tk-sum-sub">by ${esc(by)}</span>` : ''}</div>
+    </div>
+    ${rule ? `<div class="tk-hint">${esc(stage.name)}: ${esc(rule)}</div>` : ''}
+    ${x.dropReason ? `<div class="tk-hint bad">Dropped — ${esc(P.DROP_REASONS[x.dropReason] || x.dropReason)}</div>` : ''}
+    ${x.holdReason ? `<div class="tk-hint warn">On hold — ${esc(P.HOLD_REASONS[x.holdReason] || x.holdReason)}${x.holdUntil ? ', until ' + esc(fmtDate(x.holdUntil)) : ''}</div>` : ''}
+  </div>`;
+}
+
 function openDetail(id) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
@@ -1144,38 +1226,12 @@ function openDetail(id) {
 
   document.getElementById('dpBody').innerHTML = `
     <div class="tk-dp-main">
-    <div class="tk-sec">
-      <label class="tk-lab">Stage</label>
-      <select class="tk-sel" onchange="changeStage('${x.id}', this.value)">
-        ${stages.map(s => `<option value="${s.id}"${s.id === x.stageId ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
-      </select>
-      ${stage && P.stageDef(P.stageKeyOf(stage)) ? `<div class="tk-hint">${esc(P.stageDef(P.stageKeyOf(stage)).rule)}</div>` : ''}
-      ${x.dropReason ? `<div class="tk-hint bad">Dropped — ${esc(P.DROP_REASONS[x.dropReason] || x.dropReason)}</div>` : ''}
-      ${x.holdReason ? `<div class="tk-hint warn">On hold — ${esc(P.HOLD_REASONS[x.holdReason] || x.holdReason)}${x.holdUntil ? ', until ' + esc(fmtDate(x.holdUntil)) : ''}</div>` : ''}
-    </div>
-
-    <div class="tk-sec">
-      <div class="tk-sec-hdr">Owner</div>
-      <div class="tk-kv"><span>Name</span><b>${esc(x.sellerName || '—')}</b></div>
-      <div class="tk-kv"><span>Phone</span>${x.sellerPhone ? `<a href="tel:${esc(telOf(x.sellerPhone))}">${esc(x.sellerPhone)}</a>` : '—'}</div>
-      ${lead ? `<div class="tk-btnrow">
-          <button class="tk-btn" onclick="openSellerPreview('${x.id}')">Preview their CRM record</button>
-          <a class="tk-btn ghost" href="${esc(crmLeadHref(lead.id, x.id))}">Open in CRM →</a>
-        </div>`
-        : `<div class="tk-hint">Not linked to a CRM lead. <button class="tk-link" onclick="openLinkLead('${x.id}')">Link one</button></div>`}
-    </div>
+    ${summaryHtml(x, lead, stage)}
 
     ${lead ? `<div class="tk-sec" id="dpConvo">
       <div class="tk-sec-hdr">What the owner told us</div>
       <div class="tk-hint">Reading the conversation…</div>
     </div>` : ''}
-
-    <div class="tk-sec" id="dpBuyers">
-      <div class="tk-sec-hdr">Who is already waiting for this</div>
-      <div class="tk-hint" style="margin:-3px 0 9px">Scored against every buyer in the CRM — before the shoot, not after.
-        A property three people are waiting for is worth photographing today.</div>
-      <div id="dpBuyersList"></div>
-    </div>
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Inventory</div>
@@ -1233,6 +1289,13 @@ function openDetail(id) {
       ${linkRow('Drive photos', x.photosLink, x.id, 'photosLink')}
       ${linkRow('Brochure PDF', x.brochureLink, x.id, 'brochureLink')}
       <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
+    </div>
+
+    <div class="tk-sec" id="dpBuyers">
+      <div class="tk-sec-hdr">Who is already waiting for this</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Scored against every buyer in the CRM — before the shoot, not after.
+        A property three people are waiting for is worth photographing today.</div>
+      <div id="dpBuyersList"></div>
     </div>
 
     <div class="tk-sec tk-danger">
