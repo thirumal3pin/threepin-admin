@@ -1460,6 +1460,8 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .combo-opt{display:block;width:100%;text-align:left;padding:9px 11px;border:none;background:none;border-radius:var(--r1);font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer;}
 .combo-opt:hover,.combo-opt.at{background:var(--brand-soft);color:var(--ink);}
 .combo-opt.add{color:var(--brand-ink);font-weight:700;border-bottom:1px solid var(--border);border-radius:var(--r1) var(--r1) 0 0;margin-bottom:3px;}
+.combo-opt small{display:block;font-size:11.5px;font-weight:500;color:var(--ink3);margin-top:2px;}
+.combo-group{padding:8px 11px 4px;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);border-top:1px solid var(--border);margin-top:3px;}
 .combo-empty{padding:12px;font-size:12.5px;color:var(--ink3);text-align:center;}
 .combo-hint{font-size:11px;color:var(--ink4);margin-top:5px;}
 .modal-err{color:var(--red);background:var(--red-bg);border:1px solid var(--red-line);border-radius:var(--r1);padding:9px 12px;margin-top:6px;font-size:12.5px;font-weight:600;display:none;}

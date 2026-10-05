@@ -4020,7 +4020,7 @@ function knownProperties(){
 function rememberProperty(enquiryType, value){
   if(!isPropertyEnquiryType(enquiryType)) return;
   const val = String(value || '').trim();
-  if(!val) return;
+  if(!val || resolveInventoryProperty(val)) return; // inventory properties are listed from the inventory itself
   if(savedProperties.some(p => String(p).trim().toLowerCase() === val.toLowerCase())) return;
   savedProperties = savedProperties.concat([val]);
   if(window.crmFirebase && window.crmFirebase.saveProperties) window.crmFirebase.saveProperties(savedProperties);
@@ -4030,6 +4030,21 @@ let propertyPopOpen = false;
 let propertyPopItems = [];
 let propertyPopIndex = -1;
 
+// What the field holds once an inventory property is picked: "TNAG0002 · Name", or just the
+// name for older rows with no code. The code in the text is also what lets the server-side
+// automation (propertyLinks.js) recognise it.
+function inventoryLabel(p){
+  return [propertyCodeOf(p), p.name].filter(Boolean).join(' · ') || p.id;
+}
+// The inventory row a typed/picked value names — its label, its code or its exact name.
+function resolveInventoryProperty(text){
+  const t = String(text || '').trim().toLowerCase();
+  if(!t || !inventory) return null;
+  return inventory.find(p => inventoryLabel(p).toLowerCase() === t)
+    || inventory.find(p => propertyCodeOf(p).toLowerCase() === t)
+    || inventory.find(p => String(p.name || '').trim().toLowerCase() === t)
+    || null;
+}
 function updatePropertyFieldMode(){
   const isProp = isPropertyEnquiryType(document.getElementById('lmEnquiryType').value);
   const combo = document.getElementById('lmInterestCombo');
@@ -4038,36 +4053,50 @@ function updatePropertyFieldMode(){
   const label = document.getElementById('lmInterestLabel');
   if(!combo) return;
   combo.classList.toggle('is-combo', isProp);
-  input.placeholder = isProp ? 'Search properties, or type a new one…' : 'e.g. 3BHK in Nanganallur';
+  input.placeholder = isProp ? 'Search code, name or area, or type a new one…' : 'e.g. 3BHK in Nanganallur';
   label.textContent = isProp ? 'Property *' : 'Property / Locality *';
-  hint.textContent = isProp ? `${knownProperties().length} propert${knownProperties().length===1?'y':'ies'} on file — pick one or type a new name to add it.` : '';
+  hint.textContent = !isProp ? ''
+    : inventory ? `${inventory.length} propert${inventory.length===1?'y':'ies'} in the inventory — pick one, or type a new name to add it.`
+    : inventoryFailed ? 'Could not read the inventory — only names used before are listed. Reopen the form to retry.'
+    : 'Loading the inventory…';
+  if(isProp && !inventory){
+    loadInventory().then(() => { updatePropertyFieldMode(); if(propertyPopOpen) renderPropertyPop(); });
+  }
   if(!isProp) closePropertyPop();
 }
+// Inventory properties first (searchable by code, name, area and config), then any free-text
+// names used before that aren't an inventory property.
 function propertyMatches(query){
   const q = String(query || '').trim().toLowerCase();
-  const all = knownProperties();
-  if(!q) return all;
-  return all.filter(p => p.toLowerCase().includes(q));
+  const inv = (inventory || []).slice()
+    .sort((a,b) => (a.soldOut?1:0) - (b.soldOut?1:0) || inventoryLabel(a).localeCompare(inventoryLabel(b)))
+    .filter(p => !q || [p.id, p.propertyCode, p.name, p.location, p.config].join(' ').toLowerCase().includes(q))
+    .map(p => ({ kind:'pick', value: inventoryLabel(p), sub: [p.location, p.config, p.startingPrice, p.soldOut ? 'sold' : ''].filter(Boolean).join(' · ') }));
+  const other = knownProperties()
+    .filter(v => !resolveInventoryProperty(v) && (!q || v.toLowerCase().includes(q)))
+    .map(v => ({ kind:'pick', value: v, sub: '', old: true }));
+  return inv.concat(other);
 }
 function renderPropertyPop(){
   const pop = document.getElementById('lmInterestPop');
   const input = document.getElementById('lmInterest');
   const typed = input.value.trim();
-  const matches = propertyMatches(typed).slice(0, 60);
-  const exact = matches.some(p => p.toLowerCase() === typed.toLowerCase());
+  const matches = propertyMatches(typed).slice(0, 80);
+  const exact = matches.some(p => p.value.toLowerCase() === typed.toLowerCase()) || !!resolveInventoryProperty(typed);
 
-  propertyPopItems = matches.map(p => ({ kind:'pick', value:p }));
+  propertyPopItems = matches;
   if(typed && !exact) propertyPopItems.unshift({ kind:'add', value:typed });
 
   if(!propertyPopItems.length){
-    pop.innerHTML = '<div class="combo-empty">No properties yet — type a name to add the first one.</div>';
+    pop.innerHTML = `<div class="combo-empty">${inventory || inventoryFailed ? 'No properties yet — type a name to add the first one.' : 'Loading the inventory…'}</div>`;
     return;
   }
+  let oldHeader = false;
   pop.innerHTML = propertyPopItems.map((it,i)=>{
     const active = i===propertyPopIndex ? ' at' : '';
-    return it.kind === 'add'
-      ? `<button type="button" class="combo-opt add${active}" role="option" onclick="pickProperty(${i})">＋ Add “${escapeHtml(it.value)}” as a new property</button>`
-      : `<button type="button" class="combo-opt${active}" role="option" onclick="pickProperty(${i})">${escapeHtml(it.value)}</button>`;
+    if(it.kind === 'add') return `<button type="button" class="combo-opt add${active}" role="option" onclick="pickProperty(${i})">＋ Add “${escapeHtml(it.value)}” as a new property</button>`;
+    const head = it.old && !oldHeader && (oldHeader = true) ? '<div class="combo-group">Used before, not in the inventory</div>' : '';
+    return `${head}<button type="button" class="combo-opt${active}" role="option" onclick="pickProperty(${i})">${escapeHtml(it.value)}${it.sub ? `<small>${escapeHtml(it.sub)}</small>` : ''}</button>`;
   }).join('');
   const activeEl = pop.querySelector('.combo-opt.at');
   if(activeEl) activeEl.scrollIntoView({ block:'nearest' });
@@ -4244,6 +4273,8 @@ function readLeadForm(){
   if(!form.phone){ showErr('Phone number is required.'); return null; }
   if(!form.enquiryType || form.enquiryType==='__add_new__'){ showErr('Please select an enquiry type.'); return null; }
   if(!form.propertyInterest){ showErr('Property / Locality is required.'); return null; }
+  const invProp = isPropertyEnquiryType(form.enquiryType) ? resolveInventoryProperty(form.propertyInterest) : null;
+  form.propertyId = invProp ? invProp.id : null;
 
   const followUpDate = document.getElementById('lmFollowUpDate').value;
   const followUpTime = document.getElementById('lmFollowUpTime').value;
@@ -4327,6 +4358,12 @@ function applyLeadForm(l, form, now){
   }
   l.lastActionType = stageChanged ? 'stage' : (form.noteText ? 'note' : 'field');
   diffs.forEach(d => addHistory(l, d.type, d.text));
+  // Picking an inventory property links it — the same link "＋ Link" on the lead page makes.
+  if(form.propertyId && !(l.propertyCodes || []).includes(form.propertyId)){
+    l.propertyCodes = [...(l.propertyCodes || []), form.propertyId];
+    l.unlinkedPropertyIds = (l.unlinkedPropertyIds || []).filter(x => x !== form.propertyId);
+    addHistory(l, 'field', `Linked to property <b>${escapeHtml(propertyShortLabel(form.propertyId))}</b>`);
+  }
   return diffs;
 }
 
@@ -4365,6 +4402,7 @@ function createLeadFromForm(form){
     id: 'lead_'+now,
     channel: form.channel, name: form.name, phone: form.phone, email: form.email,
     enquiryType: form.enquiryType, propertyInterest: form.propertyInterest, budget: form.budget,
+    ...(form.propertyId ? { propertyCodes: [form.propertyId] } : {}),
     source: 'manual',
     stageId: form.stageId,
     notes: [],

@@ -56,7 +56,11 @@ window.crmFirebase = {
   getBotConfig: async()=>null, saveBotConfig: async()=>{}, saveEnquiryTypes: async()=>{}, saveProperties: async()=>{},
   saveFollowupDigestSettings: async()=>{}, saveDashboardEmailSettings: async()=>{},
   releaseLeadField: async()=>{}, getLeadTailorTalk: async()=>null,
-  updateLeadAi: async()=>{}, saveAutomationSettings: async()=>{}
+  updateLeadAi: async()=>{}, saveAutomationSettings: async()=>{},
+  getInventory: async()=>[
+    { id:'TNAG0002', propertyCode:'TNAG0002', name:'Sample Towers', location:'T Nagar', config:'3BHK', tenantId:'t_3pinrealty' },
+    { id:'ADYR0001', propertyCode:'ADYR0001', name:'Example Residency', location:'Adyar', config:'2BHK', tenantId:'t_3pinrealty' }
+  ]
 };
 window.crmAuth = { login: async()=>{}, logout: async()=>{}, getIdToken: async()=>'x', getTenantId: ()=>'t_3pinrealty' };
 window.onCrmAuthChange({ email: 'agent.a@example.com' });
@@ -537,6 +541,20 @@ for (const vp of [{ width:1440, height:900 }, { width:1024, height:768 }, { widt
     }));
     ok('Escape closes the dropdown and leaves the form open', s.pop === 'none' && s.modal, JSON.stringify(s));
   }
+
+  // The Property dropdown lists the INVENTORY (code · name), not just names typed on old leads,
+  // and saving a picked one links it to the lead.
+  const inv = await page.evaluate(async () => {
+    await loadInventory();
+    const inp = document.getElementById('lmInterest');
+    inp.value = 'tnag'; onPropertyInput();
+    const first = document.querySelector('#lmInterestPop .combo-opt:not(.add)');
+    const label = first ? first.firstChild.textContent : '';
+    if (first) first.click();
+    return { label, value: inp.value, id: resolveInventoryProperty(inp.value)?.id || null };
+  });
+  ok('property dropdown lists inventory properties by code', inv.label === 'TNAG0002 · Sample Towers', JSON.stringify(inv));
+  ok('picking an inventory property resolves to its id', inv.id === 'TNAG0002', JSON.stringify(inv));
 
   // Escape must close only the top layer, and hand focus back.
   await page.evaluate(() => document.querySelector('#lModal .modal-box').focus?.());
