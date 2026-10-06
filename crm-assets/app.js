@@ -318,6 +318,7 @@ function applyFilters(){
   else if(currentView==='followups') renderFollowups();
   else if(currentView==='today' && window.renderTodayView) window.renderTodayView();
   updateViewsChip();
+  renderActiveFilters();
   // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
   // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
 }
@@ -736,8 +737,9 @@ function renderLeadFilterBar(){
   const sales = leads.filter(l => !isBusinessLead(l));
   const ttSales = sales.filter(isTtLead);
   const business = leads.length - sales.length;
-  const chip = (cls, pressed, onclick, label, n) =>
-    `<button type="button" class="lf-chip${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}">${label}<span class="lf-n">${n}</span></button>`;
+  // A picked filter reads as picked without comparing colours: a tick before it and a × after it.
+  const chip = (cls, pressed, onclick, label, n, title) =>
+    `<button type="button" class="lf-chip${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}"${title ? ` title="${title}"` : ''}>${pressed && cls.includes('sub') ? '<span class="lf-tick" aria-hidden="true">✓</span>' : ''}${label}<span class="lf-n">${n}</span>${pressed && cls.includes('sub') ? '<span class="lf-x" aria-hidden="true">×</span>' : ''}</button>`;
   if(propertyFilter){
     // Came from a property page: that property's leads, whatever their scope.
     if(!inventory) loadInventory().then(() => renderLeadFilterBar());
@@ -747,10 +749,13 @@ function renderLeadFilterBar(){
     updateViewsChip();
     return;
   }
-  let html = chip('', leadFilter.scope==='all', "setLeadScope('all')", 'Sales leads', sales.length)
-    + chip(' tt', leadFilter.scope==='tt', "setLeadScope('tt')", 'TailorTalk', ttSales.length)
-    + chip('', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length)
-    + chip(' biz', leadFilter.scope==='business', "setLeadScope('business')", 'Vendors &amp; collabs', business);
+  // Which leads — one of four, never combined — so it is drawn as one switch, not as more chips.
+  let html = '<span class="lf-seg" role="group" aria-label="Which leads">'
+    + chip(' seg', leadFilter.scope==='all', "setLeadScope('all')", 'Sales leads', sales.length, 'Every buyer, tenant and seller lead, from any source')
+    + chip(' seg tt', leadFilter.scope==='tt', "setLeadScope('tt')", 'TailorTalk', ttSales.length, 'Sales leads that came in through the TailorTalk chat (WhatsApp, Instagram, website)')
+    + chip(' seg', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length, 'Sales leads typed in by hand or from anywhere other than TailorTalk')
+    + chip(' seg biz', leadFilter.scope==='business', "setLeadScope('business')", 'Vendors &amp; collabs', business, 'Businesses, suppliers and partners: kept out of the sales counts')
+    + '</span>';
   const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
   html += '<span class="lf-sep" aria-hidden="true"></span>'
     + FOCUS_FILTERS.map(f => {
@@ -764,11 +769,80 @@ function renderLeadFilterBar(){
       + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
   }
   el.innerHTML = html;
+  // The strip scrolls sideways; a picked chip past its edge was a filter nobody could see.
+  const picked = el.querySelector('.lf-chip.sub.at');
+  if(picked){
+    const l = picked.offsetLeft - el.offsetLeft, r = l + picked.offsetWidth;
+    if(l < el.scrollLeft || r > el.scrollLeft + el.clientWidth) el.scrollLeft = Math.max(0, r - el.clientWidth + 48);
+  }
+  if(!el.dataset.edges){ el.dataset.edges = '1'; el.addEventListener('scroll', updateLeadFilterEdges, { passive: true }); }
+  updateLeadFilterEdges();
   const ag = document.getElementById('agentFilterCtl');
   if(ag) ag.innerHTML = agentFilterHtml();
   renderBoardSortCtl();
   if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
   updateViewsChip();
+}
+// Fades the edge that has more chips beyond it, so a hidden chip is at least a visible hint.
+function updateLeadFilterEdges(){
+  const el = document.getElementById('leadFilterBar');
+  if(!el) return;
+  el.classList.toggle('more-l', el.scrollLeft > 2);
+  el.classList.toggle('more-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+}
+window.addEventListener('resize', updateLeadFilterEdges);
+
+// ── Everything narrowing the leads, in one line under the bar ──
+// The chips scroll, the agent pick is a dropdown, the list's column filters live in its header and
+// the choice is remembered on the device — so a filter from yesterday could hide a lead with nothing
+// on screen saying so. This line names each one, with its own × and a Clear all, whenever any is on.
+function activeLeadFilters(){
+  const out = [];
+  if(propertyFilter) out.push({ label: `🏠 ${propertyShortLabel(propertyFilter)}`, clear: 'clearPropertyFilter()' });
+  if(leadFilter.scope !== 'all') out.push({ label: { tt:'TailorTalk only', other:'Other sources only', business:'Vendors & collabs' }[leadFilter.scope], clear: "setLeadScope('all')" });
+  const status = leadFilter.status && TT_STATUS_FILTERS.find(f => f.key === leadFilter.status);
+  if(status) out.push({ label: status.label, clear: `setLeadStatusFilter('${status.key}')` });
+  const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key === leadFilter.focus);
+  if(focus) out.push({ label: focus.label, clear: `setLeadFocus('${focus.key}')` });
+  if(leadFilter.agents.length){
+    const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentName(f);
+    out.push({ label: 'Agent: ' + leadFilter.agents.map(nameOf).join(', '), clear: 'setLeadAgents([])' });
+  }
+  if(currentSearch) out.push({ label: `Search “${currentSearch}”`, clear: 'clearSearch()' });
+  const cols = currentView === 'list' ? Object.keys(listColumnFilters) : [];
+  if(cols.length){
+    const names = cols.map(k => { const c = LIST_COLUMNS.find(x => x.key === k); return c ? c.label : k; });
+    out.push({ label: `Column filter: ${names.join(', ')}`, clear: 'clearListColumnFilters()' });
+  }
+  return out;
+}
+function renderActiveFilters(){
+  const el = document.getElementById('leadFilterActive');
+  if(!el) return;
+  const list = activeLeadFilters();
+  if(!list.length || !['kanban','list'].includes(currentView)){ el.hidden = true; el.innerHTML = ''; return; }
+  const shown = currentView === 'list' ? filteredLeads.filter(passesColumnFilters).length : filteredLeads.length;
+  el.hidden = false;
+  el.innerHTML = `<span class="lfa-count">Showing <b>${shown}</b> of ${leads.length}</span>`
+    + list.map(f => `<button type="button" class="lfa-pill" onclick="${f.clear}" title="Remove this filter">${escapeHtml(f.label)}<span aria-hidden="true">×</span></button>`).join('')
+    + `<button type="button" class="lfa-clear" onclick="clearAllLeadFilters()">Clear all</button>`;
+}
+function clearListColumnFilters(){
+  listColumnFilters = {};
+  if(currentView === 'list') renderList();
+}
+function clearAllLeadFilters(){
+  leadFilter = { scope:'all', status:null, focus:null, agents:[] };
+  saveLeadFilter();
+  listColumnFilters = {};
+  const inp = document.getElementById('searchInput');
+  if(inp) inp.value = '';
+  currentSearch = '';
+  const clr = document.getElementById('srchClear');
+  if(clr) clr.classList.remove('show');
+  if(propertyFilter) clearPropertyFilter();
+  renderLeadFilterBar();
+  applyFilters();
 }
 
 // ── Sort the whole board ──
@@ -2812,8 +2886,10 @@ function isFilterValueChecked(key, value){
 
 function renderList(){
   const wrap = document.getElementById('listView');
+  renderActiveFilters();
   if(!filteredLeads.length){
-    wrap.innerHTML = '<div class="nores"><div class="nores-i">🗂️</div><div class="nores-t">No leads match your filters</div></div>';
+    wrap.innerHTML = '<div class="nores"><div class="nores-i">🗂️</div><div class="nores-t">No leads match your filters</div>'
+      + (activeLeadFilters().length ? '<button type="button" class="lfa-clear" onclick="clearAllLeadFilters()">Clear all filters</button>' : '') + '</div>';
     return;
   }
 

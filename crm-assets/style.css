@@ -359,7 +359,30 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lf-chip:hover{border-color:var(--brand);color:var(--ink);}
 .lf-chip.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
 .lf-chip.sub{font-size:12px;padding:5px 11px;}
-.lf-chip.sub.at{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink);}
+.lf-chip.sub.at{background:var(--ink);border-color:var(--ink);color:var(--bg);box-shadow:0 1px 3px rgba(0,0,0,.18);}
+.lf-chip.sub.at .lf-n{opacity:.8;}
+.lf-tick{font-size:11px;margin-right:-2px;}
+.lf-x{font-size:15px;line-height:1;margin-left:-1px;opacity:.75;}
+.lf-chip.sub.at:hover .lf-x{opacity:1;}
+/* Which leads: one switch of four, not four more chips. */
+.lf-seg{display:inline-flex;flex-shrink:0;padding:2px;gap:2px;border:1.5px solid var(--border);border-radius:99px;background:var(--bg2);}
+.lf-seg .lf-chip{border-color:transparent;background:transparent;padding:4px 11px;}
+.lf-seg .lf-chip:hover{border-color:transparent;background:var(--white);}
+.lf-seg .lf-chip.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
+.lf-seg .lf-chip.biz:not(.at){border-style:solid;}
+/* A faded edge says "more chips this way". */
+.lf-bar.more-r{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent);}
+.lf-bar.more-l{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 36px),transparent);}
+.lf-bar.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent);}
+/* The line naming every active filter. */
+.lf-active{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:var(--r2,10px);background:var(--brand-soft);border:1px solid var(--brand-line);font-size:12.5px;color:var(--ink2);}
+.lfa-count{margin-right:4px;}
+.lfa-count b{color:var(--ink);font-variant-numeric:tabular-nums;}
+.lfa-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;border-radius:99px;border:1px solid var(--ink);background:var(--ink);color:var(--bg);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;}
+.lfa-pill span{font-size:14px;line-height:1;opacity:.75;}
+.lfa-pill:hover span{opacity:1;}
+.lfa-clear{margin-left:auto;padding:3px 10px;border:none;background:transparent;color:var(--brand-ink);font-family:var(--sans);font-size:12.5px;font-weight:700;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
+.nores .lfa-clear{margin:12px auto 0;display:block;}
 .lf-n{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;opacity:.72;}
 .lf-sep{width:1px;height:20px;background:var(--border2);flex-shrink:0;margin:0 3px;}
 
@@ -460,8 +483,10 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
    single source, and it is the same test the Overdue filter uses. */
 .lcard.is-overdue{border-left:3px solid var(--red);}
 
-.lf-chip.sub.focus.warn:not(.at){border-color:var(--amber-line);color:var(--amber);}
-.lf-chip.sub.focus.bad:not(.at){border-color:var(--red-line);color:var(--red);}
+/* Unpicked chips stay neutral — the tone is carried by the count alone — so the one solid,
+   ticked chip is the only thing on the bar that looks picked. */
+.lf-chip.sub.focus.warn:not(.at) .lf-n{color:var(--amber);opacity:1;font-weight:700;}
+.lf-chip.sub.focus.bad:not(.at) .lf-n{color:var(--red);opacity:1;font-weight:700;}
 
 .lv-next{font-size:12px;color:var(--ink2);}
 .lv-next.critical{color:var(--red);font-weight:600;}
@@ -896,7 +921,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .tt-chip.muted{background:transparent;color:var(--ink4);box-shadow:inset 0 0 0 1px var(--border);}
 /* Vendors & collabs is a different kind of record, not a status — it sits apart in quiet ink. */
 .lf-chip.biz:not(.at){border-style:dashed;}
-.lf-chip.sub.warn:not(.at){border-color:var(--amber-line);color:var(--amber);}
+.lf-chip.sub.warn:not(.at) .lf-n{color:var(--amber);opacity:1;font-weight:700;}
 
 /* Overview · Activity · Conversation — an underline tab row, the record-page pattern. */
 .tt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:4px 0 14px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
