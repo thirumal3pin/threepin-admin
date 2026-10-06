@@ -186,8 +186,14 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
   } else {
     const from = LADDER.indexOf(curKey);
     const to = LADDER.indexOf(target);
+    // The lead asking for, agreeing to or making a visit is itself the milestone, however many
+    // rungs it skips: "When can I see the site?" from New is Visit planned. Without this the
+    // visit field was written ("Asked for") while the column stayed on New, because the model
+    // often rates a jump it inferred from a visit as medium.
+    const visitBacked = (target === 'visit_pending' && ['requested', 'scheduled'].includes(verdict.visit && verdict.visit.status))
+      || (target === 'visit_done' && verdict.visit && verdict.visit.status === 'done');
     if (to > from) {
-      if (conf === 'high' || (conf === 'medium' && to - from === 1)) moveTo = target;
+      if (conf === 'high' || (conf === 'medium' && (to - from === 1 || visitBacked))) moveTo = target;
       else suggest('evidence not strong enough to skip ahead');
     } else {
       if (conf === 'high') suggest('moving back is a person\'s call');

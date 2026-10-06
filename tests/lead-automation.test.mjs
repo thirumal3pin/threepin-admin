@@ -268,6 +268,14 @@ const decide = (lead, vd, now = NOW) => decideLeadChanges({ lead, verdict: vd, s
   eq('Medium confidence may take one step', d2.moved, { from: 'new', to: 'options' });
   const d3 = decide(ttLead(), verdict({ stage: 'options', confidence: 'low' }));
   check('Low confidence does nothing, not even a suggestion', !d3.moved && !d3.suggested);
+  // "When is it possible to visit the site?" straight after the first property card.
+  const asked = decide(ttLead(), verdict({ stage: 'visit_pending', confidence: 'medium', visit: { status: 'requested', at: null } }));
+  eq('A visit the lead asked for moves New → Visit planned on medium', asked.moved, { from: 'new', to: 'visit_pending' });
+  eq('…and the column agrees with the visit field', [asked.patch.stageId, asked.patch.siteVisitStatus], [sid('visit_pending'), 'requested']);
+  const went = decide(ttLead({ stageId: sid('options') }), verdict({ stage: 'visit_done', confidence: 'medium', visit: { status: 'done', at: null } }));
+  eq('A visit that happened moves Options → Visited on medium', went.moved, { from: 'options', to: 'visit_done' });
+  const lowAsk = decide(ttLead(), verdict({ stage: 'visit_pending', confidence: 'low', visit: { status: 'requested', at: null } }));
+  check('…but never on low confidence', !lowAsk.moved);
 }
 {
   const d = decide(ttLead({ stageId: sid('visit_done') }), verdict({ stage: 'options', confidence: 'high' }));
