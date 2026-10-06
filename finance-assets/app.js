@@ -803,11 +803,11 @@ function drawStage() {
 // filled (a preset from Owed or a statement line) is always shown, whatever this says; so is
 // anything required, and any field the event marks tier:'core'.
 const CORE = {
-  expense: ['amt', 'desc', 'via', 'date'],
+  expense: ['amt', 'desc', 'acc', 'via', 'date'],
   dealpay: ['party', 'amt', 'tds', 'short', 'alloc', 'via', 'date'],
   paybill: ['party', 'amt', 'short', 'useAdvance', 'alloc', 'via', 'date'],
   billclose: ['party', 'bill', 'amt', 'why', 'tdsSection', 'date'],
-  bill: ['vendor', 'desc', 'amt', 'dueDate', 'date'],
+  bill: ['vendor', 'desc', 'amt', 'acc', 'dueDate', 'date'],
   billarrived: ['sub', 'month', 'amt', 'date'],
   confirmcharge: ['sub', 'month', 'result', 'amt', 'via', 'date'],
   invoice: ['deal', 'from', 'amt', 'gst', 'gstRate', 'adv', 'recv', 'date'],
@@ -835,7 +835,7 @@ const rawIN = v => String(v ?? '').replace(/,/g, '');
 // Core first (amount leading), the rest in the engine's order inside the fold.
 function splitFields(fields) {
   const wanted = CORE[evKey];
-  const isCore = f => f.tier === 'core' || f.required || evPreset[f.k] !== undefined || f.type === 'alloc'
+  const isCore = f => f.tier === 'core' || f.required || !!f.blank || evPreset[f.k] !== undefined || f.type === 'alloc'
     || (wanted ? wanted.includes(f.k) : false);
   let core = fields.filter(f => f.tier !== 'detail' && isCore(f));
   if (!wanted) core = [...new Set([...fields.slice(0, 4), ...core])];
@@ -859,10 +859,13 @@ function renderField(f) {
   }
   if (f.type === 'select') {
     const opts = typeof f.opts === 'function' ? f.opts(vals) : (f.opts || []);
-    const cur = vals[f.k] ?? f.def ?? (opts[0] ? opts[0][0] : '');
+    // A ledger the person must choose starts empty: defaulting to the first option silently
+    // booked every expense to 5000 Rent.
+    const cur = vals[f.k] ?? f.def ?? (f.blank ? '' : (opts[0] ? opts[0][0] : ''));
     return `<div class="field" data-field="${f.k}">${label}
       <select id="${id}" data-k="${f.k}">
         ${opts.length ? '' : '<option value="">— nothing available —</option>'}
+        ${f.blank && opts.length ? `<option value="" ${cur ? '' : 'selected'} disabled>${esc(f.blank)}</option>` : ''}
         ${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}
       </select>${hintHtml}${errSlot}</div>`;
   }
@@ -903,7 +906,7 @@ function buildForm() {
     if (vals[f.k] === undefined) {
       if (f.type === 'select') {
         const opts = typeof f.opts === 'function' ? f.opts(vals) : (f.opts || []);
-        vals[f.k] = f.def ?? (opts[0] ? opts[0][0] : '');
+        vals[f.k] = f.def ?? (f.blank ? '' : (opts[0] ? opts[0][0] : ''));
       } else if (f.def !== undefined) {
         vals[f.k] = f.def;
       } else {

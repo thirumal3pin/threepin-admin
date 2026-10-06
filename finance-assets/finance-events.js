@@ -1682,7 +1682,7 @@ EV.expense = {
     F('date', 'Date', 'date', { def: today() }),
     F('desc', 'What', 'text', { required: true }),
     ...gstFields('Amount (before GST)', { kind: 'input', gstShow: x => x.rcm !== 'yes', refAlways: true }),
-    F('acc', 'Category', 'select', { opts: expOpts(), hint: 'The account this cost is posted to.' }),
+    F('acc', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…', hint: 'The ledger this cost is posted to — Rent is only for rent.' }),
     F('via', 'Paid from', 'select', { opts: PAY_VIA, def: '1000' }),
     methodField(),
     F('vendor', 'Vendor (optional)', 'party', { partyType: 'vendor', hint: 'Naming them puts this purchase in the GST register against their invoice.' }),
@@ -1698,7 +1698,7 @@ EV.expense = {
   check: v => [
     ...dateChecks(v),
     ...(String(v.desc || '').trim() ? [] : [err('desc', 'Say what it was for')]),
-    ...(v.acc ? [] : [err('acc', 'Pick a category')]),
+    ...(v.acc ? [] : [err('acc', 'Pick the expense ledger')]),
     ...posAmt(v), ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(tdsOn() && v.tds && v.tds !== 'none' && !pidOf(v.vendor) ? [err('vendor', 'TDS is deducted from someone — name the vendor')] : []),
     ...(v.via === '1010' ? pettyCheck('via', v, num(v.amt) + gstOf(v)) : []),
@@ -1707,7 +1707,7 @@ EV.expense = {
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
-    if (!v.acc) return need('Pick a category.');
+    if (!v.acc) return need('Pick the expense ledger.');
     const rcm = rcmLines(amt, v);
     const gi = v.rcm === 'yes' ? 0 : gstOf(v);
     const tax = inputTax(v.acc, gi, v);
@@ -1741,7 +1741,7 @@ EV.bill = {
     F('date', 'Bill date', 'date', { def: today() }),
     F('vendor', 'Vendor', 'party', { partyType: 'vendor' }),
     F('desc', 'What for', 'text', { required: true }),
-    F('acc', 'Category', 'select', { opts: expOpts(), hint: 'The account this cost is posted to.' }),
+    F('acc', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…', hint: 'The ledger this cost is posted to — Rent is only for rent.' }),
     F('note', 'Note', 'text', { hint: 'Optional — anything you will want to remember.' }),
     F('dueDate', 'Due on', 'date', { hint: 'Leave blank for 30 days from the bill date' }),
     F('period', 'Which month is this cost for?', 'month', {
@@ -1771,7 +1771,7 @@ EV.bill = {
     ...dateChecks(v),
     ...partyReq(v, 'vendor', 'Name the vendor'),
     ...(String(v.desc || '').trim() ? [] : [err('desc', 'Say what the bill is for')]),
-    ...(v.acc ? [] : [err('acc', 'Pick a category')]),
+    ...(v.acc ? [] : [err('acc', 'Pick the expense ledger')]),
     ...posAmt(v, 'amt', 'Enter the bill amount'),
     ...(v.rcm === 'yes' ? [] : gstChecks(v)), ...rcmChecks(v),
     ...(v.dueDate && v.dueDate < v.date ? [err('dueDate', 'Due date is before the bill date')] : []),
@@ -1781,7 +1781,7 @@ EV.bill = {
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the bill amount.');
-    if (!v.acc) return need('Pick a category.');
+    if (!v.acc) return need('Pick the expense ledger.');
     const pid = pidOf(v.vendor);
     if (!pid) return need('Name the vendor.');
     const rcm = rcmLines(amt, v);
@@ -2393,22 +2393,22 @@ EV.petty = {
     F('date', 'Date', 'date', { def: today() }),
     F('d1', 'What', 'text', { hint: 'Tea, auto, courier…' }),
     F('a1', 'Amount', 'number', { required: true }),
-    F('c1', 'Category', 'select', { opts: expOpts() }),
+    F('c1', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…' }),
     F('d2', 'Second voucher — what', 'text', { hint: 'Leave blank if there is only one.' }),
     F('a2', 'Amount', 'number', { def: 0, show: x => !!String(x.d2 || '').trim() || num(x.a2) > 0 }),
-    F('c2', 'Category', 'select', { opts: expOpts(), show: x => num(x.a2) > 0 }),
+    F('c2', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…', show: x => num(x.a2) > 0 }),
     F('d3', 'Third voucher — what', 'text', { show: x => num(x.a2) > 0 }),
     F('a3', 'Amount', 'number', { def: 0, show: x => !!String(x.d3 || '').trim() || num(x.a3) > 0 }),
-    F('c3', 'Category', 'select', { opts: expOpts(), show: x => num(x.a3) > 0 }),
+    F('c3', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…', show: x => num(x.a3) > 0 }),
   ],
   check: v => {
     const tot = num(v.a1) + num(v.a2) + num(v.a3);
     return [
       ...dateChecks(v),
       ...(num(v.a1) > 0 ? [] : [err('a1', 'Enter the first voucher')]),
-      ...(num(v.a1) > 0 && !v.c1 ? [err('c1', 'Pick a category')] : []),
-      ...(num(v.a2) > 0 && !v.c2 ? [err('c2', 'Pick a category')] : []),
-      ...(num(v.a3) > 0 && !v.c3 ? [err('c3', 'Pick a category')] : []),
+      ...(num(v.a1) > 0 && !v.c1 ? [err('c1', 'Pick the expense ledger')] : []),
+      ...(num(v.a2) > 0 && !v.c2 ? [err('c2', 'Pick the expense ledger')] : []),
+      ...(num(v.a3) > 0 && !v.c3 ? [err('c3', 'Pick the expense ledger')] : []),
       ...pettyCheck('a1', v, tot),
     ];
   },
@@ -2436,15 +2436,15 @@ EV.director = {
   fields: () => [
     F('date', 'Date', 'date', { def: today() }),
     F('desc', 'What', 'text', { required: true }),
-    F('acc', 'Category', 'select', { opts: expOpts() }),
+    F('acc', 'Expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…' }),
     ...gstFields('Amount (before GST)', { kind: 'input' }),
   ],
   onchange: gstSync,
-  check: v => [...dateChecks(v), ...(String(v.desc || '').trim() ? [] : [err('desc', 'Say what it was for')]), ...(v.acc ? [] : [err('acc', 'Pick a category')]), ...posAmt(v), ...gstChecks(v)],
+  check: v => [...dateChecks(v), ...(String(v.desc || '').trim() ? [] : [err('desc', 'Say what it was for')]), ...(v.acc ? [] : [err('acc', 'Pick the expense ledger')]), ...posAmt(v), ...gstChecks(v)],
   build: v => {
     const amt = num(v.amt);
     if (!amt) return need('Enter the amount.');
-    if (!v.acc) return need('Pick a category.');
+    if (!v.acc) return need('Pick the expense ledger.');
     const gi = gstOf(v);
     const tax = inputTax(v.acc, gi, v);
     return {
@@ -2906,7 +2906,7 @@ EV.vendorrefund = {
       def: 'cost',
       hint: x => typeof x.vendor === 'string' && vendorAdvance(x.vendor) > 0.5 ? `They hold ${fmt(vendorAdvance(x.vendor))} of your money as an advance.` : '',
     }),
-    F('acc', 'Original category', 'select', { opts: expOpts(), show: x => x.what !== 'advance' }),
+    F('acc', 'Original expense ledger', 'select', { opts: expOpts(), blank: 'Pick the expense ledger…', show: x => x.what !== 'advance' }),
     ...rcmFields(x => x.what !== 'advance'),
     ...gstFields('Amount (before GST)', { kind: 'input', def: 'no', gstShow: x => x.what !== 'advance' && x.rcm !== 'yes' }),
     F('how', 'How it came back', 'select', {
