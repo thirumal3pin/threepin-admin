@@ -370,10 +370,24 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .lf-seg .lf-chip:hover{border-color:transparent;background:var(--white);}
 .lf-seg .lf-chip.at{background:var(--ink);border-color:var(--ink);color:var(--bg);}
 .lf-seg .lf-chip.biz:not(.at){border-style:solid;}
-/* A faded edge says "more chips this way". */
-.lf-bar.more-r{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent);}
-.lf-bar.more-l{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 36px),transparent);}
-.lf-bar.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent);}
+/* The bar holds the group switch and the Filters button only, so it fits without scrolling. */
+.lf-bar{overflow:visible;flex-wrap:wrap;row-gap:6px;}
+.lf-more{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;padding:6px 12px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);color:var(--ink);font-family:var(--sans);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.lf-more:hover{border-color:var(--ink3);}
+.lf-more[aria-expanded="true"]{border-color:var(--ink);}
+.lf-more.on{border-color:var(--ink);}
+.lf-badge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--brand);color:#14120F;font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;}
+.lf-caret{font-size:10px;color:var(--ink3);}
+.lf-panel{margin-top:8px;padding:12px 14px;border:1px solid var(--border2);border-radius:var(--r3,14px);background:var(--white);box-shadow:0 8px 24px rgba(0,0,0,.08);}
+.lfp-group+.lfp-group{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
+.lfp-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-bottom:8px;}
+.lfp-h small{font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink4);margin-left:6px;}
+.lfp-chips{display:flex;flex-wrap:wrap;gap:6px;}
+.lfp-note{margin-top:10px;font-size:12px;color:var(--ink3);}
+.lfp-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}
+.lfp-reset{padding:7px 14px;border-radius:99px;border:1.5px solid var(--border);background:transparent;color:var(--ink);font-family:var(--sans);font-size:12.5px;font-weight:600;cursor:pointer;}
+.lfp-reset:disabled{opacity:.45;cursor:default;}
+.lfp-done{padding:7px 16px;border-radius:99px;border:none;background:var(--ink);color:var(--bg);font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;}
 /* The line naming every active filter. */
 .lf-active{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:var(--r2,10px);background:var(--brand-soft);border:1px solid var(--brand-line);font-size:12.5px;color:var(--ink2);}
 .lfa-count{margin-right:4px;}
@@ -2083,7 +2097,10 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
      strip's edge-to-edge margin pushed it under the Sort button. Views and Sort share the first
      line; the chips get a full-width line of their own beneath. */
   .lf-row { flex-wrap: wrap; row-gap: 8px; }
-  .lf-row .lf-bar { order: 3; flex: 1 0 100%; margin: 0 -12px; padding: 0 12px 1px; }
+  .lf-row .lf-bar { order: 3; flex: 1 0 100%; margin: 0; padding: 0; }
+  /* The four groups as a 2 × 2 switch on a phone, so the row never runs past the screen edge. */
+  .lf-seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: 14px; }
+  .lf-seg .lf-chip { justify-content: center; border-radius: 11px; min-height: 34px; }
   .lf-row .lf-sortctl { margin-left: auto; border-left: 0; padding-left: 0; }
   /* The Agent list sits near the left on a phone: open it rightwards so it stays on screen. */
   .lf-agentctl .lf-pop { left: 0; right: auto; max-width: calc(100vw - 24px); }

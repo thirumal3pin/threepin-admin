@@ -319,6 +319,7 @@ function applyFilters(){
   else if(currentView==='today' && window.renderTodayView) window.renderTodayView();
   updateViewsChip();
   renderActiveFilters();
+  if(filterPanelOpen) renderFilterPanel();
   // 'dashboard' renders itself (see dashboardView.js) — it reuses the same
   // in-memory `leads`/`filteredLeads` state but isn't a filtered list view.
 }
@@ -756,41 +757,55 @@ function renderLeadFilterBar(){
     + chip(' seg', leadFilter.scope==='other', "setLeadScope('other')", 'Other sources', sales.length - ttSales.length, 'Sales leads typed in by hand or from anywhere other than TailorTalk')
     + chip(' seg biz', leadFilter.scope==='business', "setLeadScope('business')", 'Vendors &amp; collabs', business, 'Businesses, suppliers and partners: kept out of the sales counts')
     + '</span>';
-  const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
-  html += '<span class="lf-sep" aria-hidden="true"></span>'
-    + FOCUS_FILTERS.map(f => {
-        const n = scoped.filter(f.test).length;
-        if(f.onlyWhenAny && !n && leadFilter.focus !== f.key) return '';
-        const tone = f.tone && n ? ' ' + f.tone : '';
-        return chip(' sub focus'+tone, leadFilter.focus===f.key, `setLeadFocus('${f.key}')`, f.label, n);
-      }).join('');
-  if(leadFilter.scope==='tt'){
-    html += '<span class="lf-sep" aria-hidden="true"></span>'
-      + TT_STATUS_FILTERS.map(f => chip(' sub', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('');
-  }
+  // The focus and TailorTalk-status chips live in a panel behind one Filters button, like a shop's
+  // filter page: the bar never scrolls, and the button says how many are on while the panel is shut.
+  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0);
+  html += `<button type="button" class="lf-more${nOn ? ' on' : ''}" aria-expanded="${filterPanelOpen}" aria-controls="leadFilterPanel" onclick="toggleFilterPanel()">`
+    + `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>`
+    + `Filters${nOn ? `<span class="lf-badge">${nOn}</span>` : ''}<span class="lf-caret" aria-hidden="true">${filterPanelOpen ? '▴' : '▾'}</span></button>`;
   el.innerHTML = html;
-  // The strip scrolls sideways; a picked chip past its edge was a filter nobody could see.
-  const picked = el.querySelector('.lf-chip.sub.at');
-  if(picked){
-    const l = picked.offsetLeft - el.offsetLeft, r = l + picked.offsetWidth;
-    if(l < el.scrollLeft || r > el.scrollLeft + el.clientWidth) el.scrollLeft = Math.max(0, r - el.clientWidth + 48);
-  }
-  if(!el.dataset.edges){ el.dataset.edges = '1'; el.addEventListener('scroll', updateLeadFilterEdges, { passive: true }); }
-  updateLeadFilterEdges();
+  renderFilterPanel();
   const ag = document.getElementById('agentFilterCtl');
   if(ag) ag.innerHTML = agentFilterHtml();
   renderBoardSortCtl();
   if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
   updateViewsChip();
 }
-// Fades the edge that has more chips beyond it, so a hidden chip is at least a visible hint.
-function updateLeadFilterEdges(){
-  const el = document.getElementById('leadFilterBar');
-  if(!el) return;
-  el.classList.toggle('more-l', el.scrollLeft > 2);
-  el.classList.toggle('more-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+let filterPanelOpen = false;
+function toggleFilterPanel(force){
+  filterPanelOpen = typeof force === 'boolean' ? force : !filterPanelOpen;
+  renderLeadFilterBar();
 }
-window.addEventListener('resize', updateLeadFilterEdges);
+function renderFilterPanel(){
+  const el = document.getElementById('leadFilterPanel');
+  if(!el) return;
+  if(!filterPanelOpen || propertyFilter){ el.hidden = true; el.innerHTML = ''; return; }
+  const ttSales = leads.filter(l => !isBusinessLead(l) && isTtLead(l));
+  const scoped = leads.filter(l => inScope(l, leadFilter.scope, leadFilter.status));
+  const chip = (cls, pressed, onclick, label, n) =>
+    `<button type="button" class="lf-chip sub${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}">${pressed ? '<span class="lf-tick" aria-hidden="true">✓</span>' : ''}${label}<span class="lf-n">${n}</span></button>`;
+  const focus = FOCUS_FILTERS.map(f => {
+    const n = scoped.filter(f.test).length;
+    if(f.onlyWhenAny && !n && leadFilter.focus !== f.key) return '';
+    return chip(' focus' + (f.tone && n ? ' ' + f.tone : ''), leadFilter.focus===f.key, `setLeadFocus('${f.key}')`, f.label, n);
+  }).join('');
+  const status = leadFilter.scope === 'tt'
+    ? TT_STATUS_FILTERS.map(f => chip('', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('')
+    : '';
+  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0);
+  el.hidden = false;
+  el.innerHTML = `<div class="lfp-group"><div class="lfp-h">Show only <small>pick one</small></div><div class="lfp-chips">${focus}</div></div>`
+    + (status ? `<div class="lfp-group"><div class="lfp-h">TailorTalk status <small>pick one</small></div><div class="lfp-chips">${status}</div></div>` : '')
+    + (leadFilter.scope !== 'tt' ? `<div class="lfp-note">Hot, Warm, Cold and AI paused appear here when <b>TailorTalk</b> is picked above.</div>` : '')
+    + `<div class="lfp-foot"><button type="button" class="lfp-reset" onclick="resetPanelFilters()"${nOn ? '' : ' disabled'}>Reset</button>`
+    + `<button type="button" class="lfp-done" onclick="toggleFilterPanel(false)">Show ${filteredLeads.length} lead${filteredLeads.length===1?'':'s'}</button></div>`;
+}
+function resetPanelFilters(){
+  leadFilter = { ...leadFilter, focus:null, status:null };
+  saveLeadFilter();
+  applyFilters();
+  renderLeadFilterBar();
+}
 
 // ── Everything narrowing the leads, in one line under the bar ──
 // The chips scroll, the agent pick is a dropdown, the list's column filters live in its header and
