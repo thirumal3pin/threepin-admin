@@ -7,13 +7,16 @@
   "scripts": {
     "start": "live-server --port=5173 --no-browser",
     "dev": "live-server --port=5173",
-    "test": "node tests/finance-engine.test.mjs && node tests/finance-documents.test.mjs && node tests/finance-edgecases.test.mjs && node tests/finance-guide.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs && node tests/finance-scenarios2.test.mjs && node tests/finance-snapshot.test.mjs && node tests/finance-delta.test.mjs && node tests/finance-billclose.test.mjs && node tests/finance-dealcycle.test.mjs && node tests/finance-books.test.mjs && node tests/tailortalk.test.mjs && node tests/lead-automation.test.mjs && node tests/property-search.test.mjs && node tests/dedupe.test.mjs && node tests/seller-sync.test.mjs && node tests/area-model.test.mjs && node tests/match-engine.test.mjs && node tests/map-geo.test.mjs && node tests/map-core.test.mjs && node tests/map-nearby.test.mjs && node tests/appnav.test.mjs && node tests/calendar.test.mjs && node tests/eod-escalations.test.mjs && node tests/property-facts.test.mjs",
+    "test": "node tests/finance-engine.test.mjs && node tests/finance-documents.test.mjs && node tests/finance-edgecases.test.mjs && node tests/finance-guide.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs && node tests/finance-scenarios2.test.mjs && node tests/finance-snapshot.test.mjs && node tests/finance-delta.test.mjs && node tests/finance-billclose.test.mjs && node tests/finance-dealcycle.test.mjs && node tests/finance-books.test.mjs && node tests/tailortalk.test.mjs && node tests/lead-automation.test.mjs && node tests/property-search.test.mjs && node tests/dedupe.test.mjs && node tests/seller-sync.test.mjs && node tests/area-model.test.mjs && node tests/match-engine.test.mjs && node tests/map-geo.test.mjs && node tests/map-core.test.mjs && node tests/map-nearby.test.mjs && node tests/appnav.test.mjs && node tests/calendar.test.mjs && node tests/eod-escalations.test.mjs && node tests/property-facts.test.mjs && node tests/posting.test.mjs && node tests/posting-plan.test.mjs && node tests/brochure-flow.test.mjs",
     "test:finance": "node tests/finance-engine.test.mjs && node tests/finance-views.test.mjs && node tests/finance-modules.test.mjs",
     "test:search": "node tests/property-search.test.mjs",
     "test:match": "node tests/area-model.test.mjs && node tests/match-engine.test.mjs",
     "test:map": "node tests/map-geo.test.mjs && node tests/map-core.test.mjs && node tests/map-nearby.test.mjs",
     "preview:match": "node tests/match-preview.mjs",
     "preview:map": "node tests/map-preview.mjs",
+    "preview:brochure": "node tests/brochure-board.mjs",
+    "preview:shoot": "node tests/shoot-extras.mjs",
+    "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs",
     "preview:brief": "node tests/brief-preview.mjs",
     "audit:ui": "node tests/ui-audit.mjs",
     "check:realmap": "node tests/real-map.mjs"

@@ -25,6 +25,7 @@
 // board, they are on that list.
 
 import * as P from './track-pipeline.js';
+import * as BF from './brochure-flow.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
 import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
 
@@ -43,7 +44,7 @@ let currentUserEmail = null;
 let trackInited = false;
 let stageFilter = new Set();
 
-const TRACK_VIEWS = ['board', 'shoots', 'sellers'];
+const TRACK_VIEWS = ['board', 'shoots', 'sellers', 'posting'];
 const DAY = 86400000;
 
 // Board or list, remembered per device. The board is for moving work along;
@@ -77,9 +78,48 @@ window.applyListingsSnapshot = function (list) {
   refreshAll();
 };
 window.applyTrackPipelineSnapshot = function (list) {
-  stages = (Array.isArray(list) ? list : []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+  // A board saved before a column was renamed ("Shot" → "Shoot done") is brought up to date once,
+  // here, and saved — only where the old default name is still in place.
+  const r = P.renameOldDefaults(Array.isArray(list) ? list : []);
+  // The brochure columns were retired: drop them here, move their listings once listings are in.
+  const t = P.retireColumns(r.stages);
+  // …and a column added since (Media ready) is placed on a board that does not have it yet.
+  const a = P.addNewColumns(t.stages);
+  stages = a.stages.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+  if (a.changed) mediaSweepPending = true;
+  if (t.retiredIds.length) retirePending = { ids: t.retiredIds, stages: a.stages, all: P.addNewColumns(r.stages).stages.slice().sort((p, q) => (p.order || 0) - (q.order || 0)) };
+  else if ((r.changed || a.changed) && window.trackFirebase && window.trackFirebase.savePipeline) {
+    window.trackFirebase.savePipeline(a.stages).catch(e => console.error('Column update save failed:', e));
+  }
   refreshAll();
 };
+// Listings that sat in a retired column go back to Shoot done — the brochure state they carried
+// shows on their tile now — and only once every one of them is saved is the board saved without
+// those columns. If a save fails the board keeps them, and the next load tries again, so no
+// listing is ever left pointing at a column that no longer exists.
+let retirePending = null;
+function retireColumnsNow() {
+  if (!retirePending || !seenListings || !window.trackFirebase) return;
+  const { ids, stages: kept, all } = retirePending;
+  retirePending = null;
+  const target = P.stageForKey(kept, 'shoot_done') || kept[0];
+  const now = Date.now();
+  const moved = listings.filter(l => ids.includes(l.stageId));
+  for (const x of moved) {
+    addHistory(x, 'stage', `Moved to <b>${esc(target.name)}</b> — the brochure columns were retired; its brochure shows on the tile`);
+    x.prevStageId = x.stageId; x.stageId = target.id; x.stageChangedAt = now; x.stageChangedBy = 'automatic';
+    x.updatedAt = now;
+  }
+  Promise.all(moved.map(x => window.trackFirebase.saveListing(x)))
+    .then(() => window.trackFirebase.savePipeline(kept))
+    .catch(e => {
+      // Some listing was not saved and may still point at an old column: show those columns again
+      // for this session so nothing goes out of sight; the next load tries again.
+      console.error('Retiring the brochure columns failed — will retry on the next load:', e);
+      stages = all;
+      applyFilters();
+    });
+}
 window.applyTrackLeadsSnapshot = function (list) {
   leads = Array.isArray(list) ? list : [];
   seenLeads = true;
@@ -87,7 +127,15 @@ window.applyTrackLeadsSnapshot = function (list) {
 };
 
 function refreshAll() {
+  forgetBrochures();
   try { reconcileSellers(); } catch (e) { console.error('seller sync:', e); }
+  // Listings waiting on a brochure: link them once their property reaches the dashboard, tick
+  // "Brochure created" once it is delivered (throttled inside to once a minute).
+  try { retireColumnsNow(); } catch (e) { console.error('column retire:', e); }
+  // Only from a tab someone is looking at: a hidden tab re-reading the inventory on every CRM
+  // snapshot is reads nobody sees (the visible tab, or this one when it comes back, does it).
+  try { if (seenListings && window.bpReconcile && document.visibilityState === 'visible') window.bpReconcile(); } catch (e) { console.error('brochure reconcile:', e); }
+  try { mediaSweepNow(); } catch (e) { console.error('media ready:', e); }
   try { applyFilters(); } catch (e) { console.error(e); }
   try { renderFilterBar(); } catch (e) { console.error(e); }
   try { renderModeToggle(); } catch (e) { console.error(e); }
@@ -201,9 +249,11 @@ function leadById(id) { return leads.find(l => l.id === id) || null; }
 
 // ═══════ FILTER + ROUTING ═══════
 function applyFilters() {
+  forgetBrochures();
   const q = currentSearch;
   filtered = listings.filter(x => {
     if (stageFilter.size && !stageFilter.has(x.stageId)) return false;
+    if (brochureFilter && brochureOf(x) !== brochureFilter) return false;
     if (ownerAgentFilter.size) { const ag = listingAgents(x); if (!(ag.length ? ag.some(e => ownerAgentFilter.has(e)) : ownerAgentFilter.has('none'))) return false; }
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
@@ -215,15 +265,20 @@ function applyFilters() {
   fitBoard();
   if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
+  // The Posting tab redraws through its own guard: never while someone is typing in it or has a
+  // dialog open (it only needs this call for the search text — it has no use for listings or leads).
+  else if (currentView === 'posting') { const r = window.refreshPosting || window.renderPosting; if (r) r(); }
   else renderSellers();
 }
 
 function toggleView(view) {
   currentView = TRACK_VIEWS.includes(view) ? view : 'board';
+  document.documentElement.classList.toggle('pg-on', currentView === 'posting');
   TRACK_VIEWS.forEach(v => {
     const el = document.getElementById(v + 'View');
     if (el) el.style.display = v === currentView ? '' : 'none';
   });
+  if (currentView === 'posting' && window.postingOpened) window.postingOpened();
   // Stage chips and the board/list switch only mean anything on the board.
   const bar = document.querySelector('.tk-filterbar');
   if (bar) bar.style.display = currentView === 'board' ? '' : 'none';
@@ -257,6 +312,10 @@ window.onSearch = onSearch;
 // Stage and Agent are multi-select dropdowns, and Sort is one choice shared by the board and the
 // list. Ten stage chips ran off the edge of the bar and overlapped the Board/List switch.
 let ownerAgentFilter = new Set();     // emails, or 'none' for Unassigned
+// The brochure is a filter, not a column: '' (all) · none · requested · building · created.
+let brochureFilter = '';
+const BROCHURE_FILTERS = [['', 'All'], ['none', 'Not started'], ['requested', 'Requested'], ['building', 'On its way'], ['created', 'Created']];
+window.setBrochureFilter = v => { brochureFilter = BROCHURE_FILTERS.some(([k]) => k === v) ? v : ''; renderFilterBar(); applyFilters(); };
 const SORT_KEY = 'track.sort';
 const SORTS = [
   ['urgency', 'Needs attention'],
@@ -342,6 +401,9 @@ function renderFilterBar() {
       <div class="tk-dd-pop">${agentRows}
         ${ownerAgentFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearAgentFilter()">Show everyone</button>` : ''}</div>
     </details>
+    <label class="tk-dd tk-dd-pick tk-dd-bro${brochureFilter ? ' on' : ''}"><span class="tk-dd-k">Brochure</span>
+      <select onchange="setBrochureFilter(this.value)" aria-label="Brochure">${BROCHURE_FILTERS.map(([k, l]) => `<option value="${k}"${brochureFilter === k ? ' selected' : ''}>${esc(l)}${k ? ' (' + listings.filter(x => brochureOf(x) === k).length + ')' : ''}</option>`).join('')}</select>
+    </label>
     <label class="tk-dd tk-dd-sort"><span class="tk-dd-k">Sort</span>
       <select onchange="setBoardSort(this.value)" aria-label="Sort">${SORTS.map(([k, l]) => `<option value="${k}"${boardSortKey === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
     </label>`;
@@ -458,7 +520,7 @@ function listRowHtml(x) {
     <span role="cell" class="${late ? 'bad' : ''}">
       ${x.shootAt ? `${esc(fmtDate(x.shootAt))}<span class="tk-sub2">${esc(relDays(x.shootAt))}</span>` : '<span class="tk-sub2">not booked</span>'}
     </span>
-    <span role="cell">${done}/${MEDIA_KEYS.length}${x.ownerApproved ? '<span class="tk-sub2 ok">owner ✓</span>' : ''}</span>
+    <span role="cell">${done}/${MEDIA_KEYS.length}${x.ownerApproved ? '<span class="tk-sub2 ok">owner ✓</span>' : ''}${brochureSignal(x) ? `<span class="tk-sub2">${brochureSignal(x)}</span>` : ''}</span>
     <span role="cell">${blocked.length ? blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('') : '<span class="tk-sub2">—</span>'}</span>
   </div>`;
 }
@@ -521,7 +583,7 @@ function cardHtml(x) {
     <div class="sl-head">
       <div class="sl-who">
         <div class="sl-name" title="${esc(it.name)}">${esc(it.name)}</div>
-        ${it.phone ? `<div class="sl-phone"><a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}${x.leadId ? ` · <button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="See what they said">Chat</button>` : ''}</div>` : '<div class="sl-phone none">No number</div>'}
+        ${it.phone ? `<div class="sl-phone"><a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}${x.leadId ? ` · <button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance">Preview</button>` : ''}</div>` : '<div class="sl-phone none">No number</div>'}
       </div>
       <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
     </div>
@@ -537,6 +599,7 @@ function cardHtml(x) {
     <div class="tk-card-meta">
       <span class="tk-agent${agents.length ? '' : ' none'}" title="The lead's agent (set on the lead in the CRM)">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</span>
       ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
+      ${brochureSignal(x)}
       <span class="tk-upd" title="${esc(x.updatedAt ? new Date(x.updatedAt).toLocaleString() : '')}">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span>
       ${it.intake ? `<span title="${esc(new Date(it.intake).toLocaleString())}">Came in ${esc(fmtDate(it.intake))} · ${esc(it.channel)}</span>` : ''}
     </div>
@@ -556,7 +619,7 @@ function codeChip(x) {
   if (realCode(x.propertyCode)) return `<span class="tk-code" title="Inventory ${esc(x.propertyCode)}">${esc(x.propertyCode)}</span>`;
   if (x.propertyCode) return `<span class="tk-code" title="Mapped to an older inventory record">mapped</span>`;
   const key = P.stageKeyOf(stageById(x.stageId));
-  const needsIt = ['brochure_queued', 'brochure_ready', 'live'].includes(key);
+  const needsIt = key === 'live';
   return needsIt
     ? `<span class="tk-code none" title="This stage cannot proceed without an inventory mapping">unmapped</span>`
     : '';
@@ -613,16 +676,83 @@ function blockersFor(x) {
     if (!x.sellerPhone && !x.siteContact) out.push('no site contact');
     if (!x.ownerInformed) out.push('owner not told');
   }
-  // After it: what is still outstanding against the brief.
-  if (key === 'shoot_done') {
-    const { done, total } = mediaProgress(x);
-    if (done < total) out.push(`${total - done} of ${total} media missing`);
-    if (!x.photosLink) out.push('photos not uploaded');
+  // After it: what is still outstanding before the media is ready. In Media ready itself the same
+  // list shows anything unticked after the move. A brochure on its way already shows as its own
+  // signal on the tile, so only a missing one is repeated here.
+  if (key === 'shoot_done' || key === 'media_ready') {
+    for (const g of mediaGaps(x)) if (g !== GAP_BROCHURE || brochureOf(x) === 'none') out.push(g);
   }
-  if (['brochure_queued', 'brochure_ready', 'live'].includes(key) && !x.propertyCode) out.push('not in inventory');
-  if (['brochure_ready', 'live'].includes(key) && !x.ownerApproved) out.push('owner has not approved');
-  if (key === 'live' && !x.brochureLink) out.push('no brochure');
+  if (key === 'live' && !x.propertyCode) out.push('not in inventory');
+  if (key === 'live' && !x.ownerApproved) out.push('owner has not approved');
+  if (key === 'live' && brochureOf(x) !== 'created') out.push('no brochure');
   return out;
+}
+
+// ── Media ready: everything the shoot was for is in hand ──
+// The brief's media, the photos uploaded, the voice-over (when it is made separately), every
+// "Shoot for" cut that was planned, and the brochure. Empty = ready.
+const GAP_BROCHURE = 'no brochure';
+function mediaGaps(x) {
+  const out = [];
+  const { done, total } = mediaProgress(x);
+  if (done < total) out.push(`${total - done} of ${total} media missing`);
+  if (!x.photosLink) out.push('photos not uploaded');
+  if (x.voice === 'vo' && !x.voDone) out.push('voice-over not made');
+  const forLeft = FOR_KEYS.filter(([k]) => x.forPlan && x.forPlan[k] && !(x.forDone && x.forDone[k])).map(([, l]) => l);
+  if (forLeft.length) out.push(`${forLeft.join(' + ')} not done`);
+  if (brochureOf(x) !== 'created') out.push(GAP_BROCHURE);
+  return out;
+}
+// A listing in Shoot done moves on by itself once nothing is left. It is called only from this
+// tab's own actions — an edit (mutate, which the brochure reconcile also goes through), a move
+// forward into Shoot done, the column being added — never off another tab's snapshot (that tab
+// already did it). A listing someone moved BACK into Shoot done is held there (x.heldBack) until
+// an edit finishes something that was missing again. Never moves a listing back out of Media
+// ready either: the tile says what went missing instead.
+function promoteIfMediaReady(x) {
+  if (!x || x.heldBack || P.stageKeyOf(stageById(x.stageId)) !== 'shoot_done') return false;
+  if (!P.stageForKey(stages, 'media_ready') || mediaGaps(x).length) return false;
+  advanceTo(x.id, 'media_ready', 'everything the shoot was for is done');
+  if (currentDetailId === x.id) openDetail(x.id);
+  toast(`${x.title || 'Listing'} → Media ready`);
+  return true;
+}
+// Media ready was just added to this board: listings already complete in Shoot done move once.
+let mediaSweepPending = false;
+function mediaSweepNow() {
+  if (!mediaSweepPending || !seenListings) return;
+  mediaSweepPending = false;
+  listings.forEach(promoteIfMediaReady);
+}
+
+// ── The brochure, as a signal on the tile (it is a step inside a listing, not a column) ──
+// created · requested (waiting for the dashboard) · building (built, not delivered) · none
+// Read many times per render (tile, filter counts, blockers), so it is remembered until the
+// listing, the inventory or the board changes.
+let broCache = new Map(), broInv = null;
+const forgetBrochures = () => broCache.clear();
+function brochureOf(x) {
+  if (broInv !== inventory) { broCache.clear(); broInv = inventory; }
+  if (broCache.has(x.id)) return broCache.get(x.id);
+  let v;
+  if (BF.isLocked(x, inventory || [])) v = 'created';
+  else {
+    const st = BF.brochureState(x, inventory || []), b = x.brochure || {};
+    // Unlocked for a redo: the old brochure no longer counts — only a request made after the unlock.
+    if (b.unlockedAt) v = (b.requestedAt || 0) > b.unlockedAt ? (st === 'ready' ? 'requested' : st) : 'none';
+    else v = st === 'ready' ? 'created' : st;
+  }
+  broCache.set(x.id, v);
+  return v;
+}
+const BROCHURE_SIG = {
+  created: ['📄 Brochure ✓', 'ok', 'Brochure created'],
+  requested: ['📄 Brochure requested', 'warn', 'Requested — waiting for it to reach the dashboard'],
+  building: ['📄 Brochure on its way', 'warn', 'Built — waiting for delivery from the Mac']
+};
+function brochureSignal(x) {
+  const b = BROCHURE_SIG[brochureOf(x)];
+  return b ? `<span class="tk-bro ${b[1]}" title="${esc(b[2])}">${b[0]}</span>` : '';
 }
 window.blockersFor = blockersFor;   // read by tests/track-preview.mjs
 
@@ -719,7 +849,11 @@ function changeStage(id, stageId, opts) {
   x.stageId = stageId;
   x.stageChangedAt = now;
   x.stageChangedBy = currentUserEmail || 'team';
-  Object.assign(x, P.reachedUpdate(x, key, now) || {});
+  markReached(x, key, now);
+  // Moved BACK into Shoot done by a person: held there — it does not jump forward again on its own.
+  const fromStep = P.ladderIndex(P.stageKeyOf(from)), toStep = P.ladderIndex(key);
+  x.heldBack = key === 'shoot_done' && fromStep > toStep;
+  x.heldGap = x.heldBack && mediaGaps(x).length > 0;
   if (kind === 'lost') x.dropReason = opts.reason || null;
   else x.dropReason = null;
   if (kind === 'hold') { x.holdReason = opts.reason || null; x.holdUntil = opts.until || null; }
@@ -729,7 +863,12 @@ function changeStage(id, stageId, opts) {
   persist(x);
   applyFilters();
   if (currentDetailId === id) openDetail(id);
-  toast(`Moved to ${to.name}`);
+  // Moved into Media ready by hand with things still open: say so, rather than let the column lie.
+  const gaps = key === 'media_ready' ? mediaGaps(x) : [];
+  toast(gaps.length ? `Moved to ${to.name} — still missing: ${gaps.join(', ')}` : `Moved to ${to.name}`);
+  // Brought into Shoot done with everything already in hand (forward, or back from On hold): on to
+  // Media ready. Moved back from further on, it is held (above).
+  if (key === 'shoot_done') promoteIfMediaReady(x);
 }
 window.changeStage = changeStage;
 
@@ -1185,7 +1324,7 @@ function summaryHtml(x, lead, stage) {
           ${lead ? ` · <span class="tk-sum-ch">${esc(it.channel)}</span>` : ''}</div>
       </div>
       <div class="tk-sum-acts">
-        ${lead ? `<button class="tk-btn sm" onclick="openSellerPreview('${x.id}')">Preview CRM record</button>
+        ${lead ? `<button class="tk-btn sm" onclick="openSellerPreview('${x.id}')">Preview</button>
           <a class="tk-btn ghost sm" href="${esc(crmLeadHref(lead.id, x.id))}">Open in CRM →</a>`
           : `<button class="tk-btn sm" onclick="openLinkLead('${x.id}')">Link a CRM lead</button>`}
       </div>
@@ -1214,6 +1353,9 @@ function summaryHtml(x, lead, stage) {
 function openDetail(id) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
+  // Redrawing the same listing (a tick, a save) keeps what was open and what was half-typed.
+  const same = currentDetailId === id && document.getElementById('dp').classList.contains('open');
+  const keep = same ? { buyers: !!document.getElementById('dpBuyers')?.open, note: document.getElementById('dpNoteText')?.value || '' } : null;
   currentDetailId = id;
   const stage = stageById(x.stageId);
   const lead = x.leadId ? leadById(x.leadId) : null;
@@ -1227,11 +1369,6 @@ function openDetail(id) {
   document.getElementById('dpBody').innerHTML = `
     <div class="tk-dp-main">
     ${summaryHtml(x, lead, stage)}
-
-    ${lead ? `<div class="tk-sec" id="dpConvo">
-      <div class="tk-sec-hdr">What the owner told us</div>
-      <div class="tk-hint">Reading the conversation…</div>
-    </div>` : ''}
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Inventory</div>
@@ -1261,6 +1398,13 @@ function openDetail(id) {
       ${x.rescheduled ? `<div class="tk-kv"><span>Rescheduled</span>${x.rescheduled} time${x.rescheduled === 1 ? '' : 's'}${x.rescheduleReason ? ' — ' + esc(x.rescheduleReason) : ''}</div>` : ''}
       <label class="tk-check"><input type="checkbox" ${x.ownerInformed ? 'checked' : ''} onchange="setFlag('${x.id}','ownerInformed',this.checked)"> Owner told we are coming</label>
       <label class="tk-check"><input type="checkbox" ${x.ownerApproved ? 'checked' : ''} onchange="setFlag('${x.id}','ownerApproved',this.checked)"> Owner approved the photos / brochure</label>
+      <div class="tk-kv tk-voice"><span>Voice</span>
+        <select class="tk-sel sm" aria-label="Voice" onchange="setVoice('${x.id}', this.value)">
+          <option value=""${!x.voice ? ' selected' : ''}>Not decided</option>
+          <option value="live"${x.voice === 'live' ? ' selected' : ''}>Shot with voice</option>
+          <option value="vo"${x.voice === 'vo' ? ' selected' : ''}>Voice-over separately</option>
+        </select></div>
+      ${x.voice === 'vo' ? `<label class="tk-check${x.voDone ? '' : ' tk-pending'}"><input type="checkbox" ${x.voDone ? 'checked' : ''} onchange="setVoDone('${x.id}', this.checked)"> Voice-over made</label>` : ''}
       <div class="tk-btnrow">
         <button class="tk-btn" onclick="openShootModal('${x.id}')">${x.shootAt ? 'Reschedule' : 'Book the shoot'}</button>
         ${x.shootAt && !x.shootDoneAt ? `<button class="tk-btn primary" onclick="openWrapModal('${x.id}')">Shoot done →</button>` : ''}
@@ -1284,6 +1428,22 @@ function openDetail(id) {
       </div>
     </div>
 
+    <div class="tk-sec" id="dpFor">
+      <div class="tk-sec-hdr">Shoot for</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. Tick what is planned on the left, and what has been made on the right.</div>
+      <div class="tk-brief">
+        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span></div>
+        ${FOR_KEYS.map(([k, label]) => {
+          const plan = !!(x.forPlan && x.forPlan[k]), done = !!(x.forDone && x.forDone[k]);
+          return `<div class="tk-brief-r${plan && !done ? ' open' : ''}">
+            <span><i class="${FOR_ICON[k]} tk-for-i tk-for-${k}" aria-hidden="true"></i> ${esc(label)}</span>
+            <span><input type="checkbox" ${plan ? 'checked' : ''} onchange="setForPlan('${x.id}','${k}',this.checked)" aria-label="${esc(label)} planned"></span>
+            <span><input type="checkbox" ${done ? 'checked' : ''} ${!plan ? 'class="dim"' : ''} onchange="setForDone('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
     <div class="tk-sec">
       <div class="tk-sec-hdr">Deliverables</div>
       ${linkRow('Drive photos', x.photosLink, x.id, 'photosLink')}
@@ -1291,12 +1451,12 @@ function openDetail(id) {
       <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
     </div>
 
-    <div class="tk-sec" id="dpBuyers">
-      <div class="tk-sec-hdr">Who is already waiting for this</div>
-      <div class="tk-hint" style="margin:-3px 0 9px">Scored against every buyer in the CRM — before the shoot, not after.
+    <details class="tk-sec tk-fold" id="dpBuyers" ontoggle="if (this.open) openWaitingBuyers('${x.id}')">
+      <summary class="tk-sec-hdr"><span>Who is already waiting for this</span><span class="tk-fold-act">Show</span></summary>
+      <div class="tk-hint" style="margin:6px 0 9px">Scored against every buyer in the CRM — before the shoot, not after.
         A property three people are waiting for is worth photographing today.</div>
       <div id="dpBuyersList"></div>
-    </div>
+    </details>
 
     <div class="tk-sec tk-danger">
       <button class="tk-btn" onclick="openEditModal('${x.id}')">Edit details</button>
@@ -1314,6 +1474,7 @@ function openDetail(id) {
         </div>
         <div id="dpNotes" class="tk-notes"><div class="tk-hint">Loading…</div></div>
       </div>
+      ${window.bpPanelHtml ? window.bpPanelHtml(x) : ''}
       <div class="tk-sec">
         <div class="tk-sec-hdr">Timeline</div>
         <div id="dpHistory" class="tk-hist"><div class="tk-hint">Loading…</div></div>
@@ -1321,9 +1482,14 @@ function openDetail(id) {
     </aside>`;
 
   document.getElementById('dp').classList.add('open');
+  if (keep) {
+    if (keep.note) document.getElementById('dpNoteText').value = keep.note;
+    if (keep.buyers) document.getElementById('dpBuyers').open = true;   // its toggle event re-fills the list
+  }
   loadHistory(x.id);
-  if (lead) loadConversation(x.id, lead.id);
-  renderWaitingBuyers(x, lead);
+  // "Who is already waiting" is folded shut; buyers are scored only when it is opened.
+  // The brochure panel reads the inventory; make sure it is there, then redraw once if it arrived late.
+  if (!inventory) loadInventory().then(() => { if (currentDetailId === x.id) { const s = document.getElementById('bpSec'); if (s && window.bpPanelHtml) s.outerHTML = window.bpPanelHtml(listings.find(l => l.id === x.id) || x); } });
   // A card opened from anywhere is addressable — copy the URL and it reopens.
   try {
     const u = new URL(location.href);
@@ -1346,6 +1512,15 @@ window.openDetail = openDetail;
 // rather than an inventory property (PinMatch.listingProfile), folding in the
 // owner's own TailorTalk conversation — which for a brand-new listing is
 // usually the only description of the property that exists anywhere.
+// Opened by hand: score the buyers then (once per opening of the listing).
+function openWaitingBuyers(id) {
+  const x = listings.find(l => l.id === id);
+  const el = document.getElementById('dpBuyersList');
+  if (!x || !el || el.dataset.done === id) return;
+  el.dataset.done = id;
+  renderWaitingBuyers(x, x.leadId ? leadById(x.leadId) : null);
+}
+window.openWaitingBuyers = openWaitingBuyers;
 function renderWaitingBuyers(x, lead) {
   const el = document.getElementById('dpBuyersList');
   if (!el || !window.PinMatch || !window.PinMatchPanel) return;
@@ -1401,117 +1576,47 @@ function renderWaitingBuyers(x, lead) {
 // the map-to-property picker uses. A second loader here would mean two
 // caches of one collection disagreeing about what the inventory contains.
 
-// ═══════ WHAT THE OWNER TOLD US ═══════
-// TailorTalk's AI writes a profile of every conversation. For a seller that
-// profile IS the property brief — what they have, where, what they want for
-// it, what has already been discussed — and it was the one thing this board
-// could not show. Same field list and labels the CRM uses, so the two read
-// identically.
-const CONVO_FIELDS = [
-  ['requirement_details', 'What they have'],
-  ['preferred_location', 'Location'],
-  ['budget_and_finance', 'Price expectation'],
-  ['properties_discussed', 'Properties discussed'],
-  ['objections_and_blockers', 'Objections & blockers'],
-  ['activity_so_far', 'Activity so far'],
-  ['stage_and_next_action', 'Stage & next action'],
-  ['chat_summary', 'Conversation summary'],
-  ['remarks', 'Remarks']
-];
-const convoCache = new Map();
-function loadConversation(listingId, leadId) {
-  const paint = state => {
-    if (currentDetailId !== listingId) return;
-    const el = document.getElementById('dpConvo');
-    if (!el) return;
-    el.innerHTML = `<div class="tk-sec-hdr">What the owner told us</div>${convoHtml(leadId, state)}`;
-  };
-  if (convoCache.has(leadId)) return paint(convoCache.get(leadId));
-  if (!window.trackFirebase || !window.trackFirebase.getLeadConversation) return paint(null);
-  window.trackFirebase.getLeadConversation(leadId)
-    .then(state => { convoCache.set(leadId, state); paint(state); })
-    .catch(e => { console.error('conversation load failed:', e); convoCache.set(leadId, null); paint(null); });
-}
-function convoHtml(leadId, state) {
-  const lead = leadById(leadId);
-  const bits = [];
-  // The AI's one-line read of where this lead stands comes first — it is the
-  // fastest thing to act on.
-  if (lead && lead.ai && lead.ai.line) bits.push(`<div class="tk-ailine">🤖 ${esc(lead.ai.line)}</div>`);
-  const profile = (state && state.profile) || null;
-  if (profile) {
-    const cards = CONVO_FIELDS.filter(([k]) => profile[k])
-      .map(([k, label]) => `<div class="tk-kv col"><span>${esc(label)}</span><div>${esc(profile[k])}</div></div>`);
-    if (cards.length) bits.push(`<div class="tk-convo">${cards.join('')}</div>`);
-  }
-  // The last few messages, so a number can be called with the thread in mind.
-  const chat = (state && Array.isArray(state.chat)) ? state.chat.slice(-6) : [];
-  if (chat.length) {
-    bits.push(`<div class="tk-chat">${chat.map(m => `
-      <div class="tk-msg ${m.role === 'user' ? 'them' : 'us'}">
-        <span class="tk-msg-w">${m.role === 'user' ? esc((lead && lead.name) || 'Owner') : (m.role === 'human_agent' ? '3 PIN team' : '3 PIN AI')}</span>
-        <span class="tk-msg-t">${esc(String(m.content || '').slice(0, 300))}</span>
-      </div>`).join('')}</div>`);
-  }
-  if (lead && lead.lastNote && lead.lastNote.text) {
-    bits.push(`<div class="tk-kv col"><span>Latest team note</span><div>${esc(lead.lastNote.text)}</div></div>`);
-  }
-  if (!bits.length) return `<div class="tk-hint">Nothing recorded from a conversation yet — this owner was probably added by hand. Their CRM record is the place to add what they told you.</div>
-    <div class="tk-btnrow"><a class="tk-btn ghost" href="${esc(crmLeadHref(leadId, currentDetailId))}">Open in CRM →</a></div>`;
-  return bits.join('');
-}
-
 // ═══════ SELLER PREVIEW ═══════
-// Their CRM record without leaving the board: who they are, what the AI made
-// of them, what they said, and one click to the real thing. Closing it puts
-// you back exactly where you were, which is the whole point — checking a
-// detail should not cost your place.
+// The owner and their property without leaving the board, and one click to the
+// CRM record. Closing it puts you back exactly where you were, which is the whole
+// point — checking a detail should not cost your place.
 function openSellerPreview(listingId) {
   const x = listings.find(l => l.id === listingId);
-  if (!x || !x.leadId) return;
-  const lead = leadById(x.leadId);
+  if (!x) return;
   const el = document.getElementById('sellerPrev');
-  if (!el || !lead) return;
-  const stageName = lead.stageId || '—';
+  if (!el) return;
+  // The property, read the way the board tile reads it — who, where, what, how big, how much.
+  // The owner's conversation lives in the CRM (one click below); it is not repeated here.
+  const it = sellerItem(x);
+  const lead = it.lead;
+  const wa = telOf(it.phone).replace(/^\+/, '');
+  const chips = factChips(it.f, 4);
   el.querySelector('.tk-prev-body').innerHTML = `
     <div class="tk-prev-head">
-      <span class="tk-ava lg">${esc(initials(lead.name))}</span>
+      <span class="tk-ava lg">${esc(initials(it.name))}</span>
       <div>
-        <div class="tk-prev-nm">${esc(lead.name || 'Unnamed lead')}</div>
-        <div class="tk-prev-sub">${[lead.enquiryType, lead.channel && channelName(lead.channel)].filter(Boolean).map(esc).join(' · ')}</div>
+        <div class="tk-prev-nm">${esc(it.name)}</div>
+        <div class="tk-prev-sub">${esc([it.phone, it.channel].filter(Boolean).join(' · '))}</div>
       </div>
     </div>
     <div class="tk-prev-actions">
-      ${lead.phone ? `<a class="tk-btn primary" href="tel:${esc(telOf(lead.phone))}">Call ${esc(lead.phone)}</a>` : ''}
-      ${lead.phone ? `<a class="tk-btn" href="https://wa.me/${esc(telOf(lead.phone).replace(/^\+/, ''))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+      ${it.phone ? `<a class="tk-btn primary" href="tel:${esc(telOf(it.phone))}">Call</a>` : ''}
+      ${wa ? `<a class="tk-btn" href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
     </div>
-    <div class="tk-kv"><span>Property / locality</span><b>${esc(lead.propertyInterest || '—')}</b></div>
-    <div class="tk-kv"><span>Budget</span>${esc(lead.budget || '—')}</div>
-    <div class="tk-kv"><span>Added</span>${esc(timeAgo(lead.createdAt))}</div>
-    ${lead.followUpAt ? `<div class="tk-kv"><span>Next follow-up</span>${esc(fmtDateTime(lead.followUpAt))}</div>` : ''}
-    <div id="prevConvo" class="tk-prev-convo"><div class="tk-hint">Reading the conversation…</div></div>
+    <div class="tk-prev-prop">
+      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}${codeChip(x)}</div>
+      ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
+      ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
+      ${x.description ? `<div class="tk-prev-desc">${esc(x.description)}</div>` : ''}
+    </div>
     <div class="tk-btnrow">
-      <a class="tk-btn primary" href="${esc(crmLeadHref(lead.id, listingId))}">Open fully in CRM →</a>
-      <button class="tk-btn ghost" onclick="closeSellerPreview()">Close preview</button>
+      ${lead ? `<a class="tk-btn primary" href="${esc(crmLeadHref(lead.id, listingId))}">Open in CRM →</a>` : ''}
+      <button class="tk-btn ghost" onclick="openDetail('${x.id}');closeSellerPreview()">Open the listing</button>
     </div>`;
   el.classList.add('open');
-  // Same cache the detail panel fills, so opening both costs one read.
-  const paint = state => {
-    const host = document.getElementById('prevConvo');
-    if (host) host.innerHTML = convoHtml(lead.id, state);
-  };
-  if (convoCache.has(lead.id)) paint(convoCache.get(lead.id));
-  else if (window.trackFirebase && window.trackFirebase.getLeadConversation) {
-    window.trackFirebase.getLeadConversation(lead.id)
-      .then(s => { convoCache.set(lead.id, s); paint(s); })
-      .catch(() => paint(null));
-  } else paint(null);
 }
 function closeSellerPreview() { document.getElementById('sellerPrev')?.classList.remove('open'); }
 window.openSellerPreview = openSellerPreview; window.closeSellerPreview = closeSellerPreview;
-
-const CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website', meta: 'Meta' };
-const channelName = c => CHANNELS[c] || c;
 
 // A CRM link that opens THIS lead, and knows to offer a way back here.
 // crm.html reads ?lead= and ?from=track (see crm-assets/app.js).
@@ -1646,14 +1751,64 @@ window.addNote = addNote; window.deleteNote = deleteNote;
 function mutate(id, fn, historyText) {
   const x = listings.find(l => l.id === id);
   if (!x) return null;
+  const hadGaps = mediaGaps(x).length > 0;
   fn(x);
+  forgetBrochures();
   x.updatedAt = Date.now();
   x.updatedBy = currentUserEmail || null;
   if (historyText) addHistory(x, 'field', historyText);
-  persist(x);
-  applyFilters();
+  // Held back by hand: a note or remark leaves it there; finishing something that was missing
+  // since it was held releases it, and it moves on. heldGap remembers that something was missing,
+  // because the brochure can turn up in the inventory before the edit that records it.
+  if (x.heldBack) {
+    const left = mediaGaps(x).length;
+    if (left || hadGaps) x.heldGap = true;
+    if (!left && x.heldGap) { x.heldBack = false; x.heldGap = false; }
+  }
+  // When this edit completes it, the move is saved together with it — one write, so another tab
+  // never sees the edit without the move.
+  if (!promoteIfMediaReady(x)) { persist(x); applyFilters(); }
   return x;
 }
+// The first time a listing reaches a milestone (listing.reached.{key}), kept for "how long from
+// owner yes to live". Set on the object itself: saveListing writes it whole, and a dotted key
+// such as "reached.live" would be stored as one literal field name.
+function markReached(x, key, at) {
+  // Listings saved by the older code carry it as a literal "reached.<key>" field: that date counts.
+  const old = Number(x['reached.' + key]) || 0;
+  if (P.reachedUpdate(x, key, at)) x.reached = { ...(x.reached || {}), [key]: old || at };
+}
+// Move a listing forward to a milestone without asking — used when its media is all ready.
+// Never moves it back, never touches a listing on hold, dropped or closed.
+function advanceTo(id, key, why) {
+  const x = listings.find(l => l.id === id);
+  const to = P.stageForKey(stages, key);
+  if (!x || !to || x.stageId === to.id) return;
+  if (stageKindOfId(x.stageId) !== 'open') return;
+  const cur = P.ladderIndex(P.stageKeyOf(stageById(x.stageId)));
+  if (cur < 0 || cur >= P.ladderIndex(key)) return;
+  const now = Date.now(), from = stageById(x.stageId);
+  addHistory(x, 'stage', `Moved from <b>${esc(from ? from.name : 'no column')}</b> to <b>${esc(to.name)}</b> — automatically${why ? ', ' + esc(why) : ''}`);
+  x.prevStageId = x.stageId; x.stageId = to.id; x.stageChangedAt = now; x.stageChangedBy = 'automatic';
+  markReached(x, key, now);
+  x.updatedAt = now;
+  x.updatedBy = currentUserEmail || null;
+  persist(x);
+  applyFilters();
+}
+// What the brochure panel (brochure-panel.js) needs from the board.
+window.trackApi = {
+  listings: () => listings,
+  inventory: () => inventory,
+  loadInventory: force => loadInventory(force),
+  mutate: (id, fn, text) => mutate(id, fn, text),
+  brochureOf: x => brochureOf(x),
+  openDetail: id => openDetail(id),
+  currentDetailId: () => currentDetailId,
+  editingId: () => (mModalMode === 'edit' ? mModalEditId : null),
+  user: () => currentUserEmail,
+  toast: m => toast(m)
+};
 function setFlag(id, key, on) {
   mutate(id, x => { x[key] = !!on; },
     (key === 'ownerInformed' ? 'Owner informed about the shoot' : 'Owner approval') + ': ' + (on ? 'yes' : 'no'));
@@ -1671,6 +1826,31 @@ function setNeed(id, key, on) {
   if (currentDetailId === id) openDetail(id);
 }
 window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRemarks; window.setNeed = setNeed;
+
+// ── Voice: recorded on the shoot, or a voice-over made separately (and whether it is made yet) ──
+const VOICE = { live: 'Shot with voice', vo: 'Voice-over separately' };
+function setVoice(id, v) {
+  const val = VOICE[v] ? v : '';
+  mutate(id, x => { x.voice = val; if (val !== 'vo') x.voDone = false; }, val ? `Voice: ${VOICE[val].toLowerCase()}` : 'Voice: not decided');
+  if (currentDetailId === id) openDetail(id);
+}
+function setVoDone(id, on) {
+  mutate(id, x => { x.voDone = !!on; }, on ? 'Voice-over made' : 'Voice-over not made yet');
+}
+// ── Shoot for: which outlets this shoot is cut for, planned and done — the same two ticks as the brief ──
+const FOR_KEYS = [['insta', 'Instagram'], ['yt', 'YouTube'], ['collab', 'Collab']];
+const FOR_ICON = { insta: 'fa-brands fa-instagram', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake' };
+function setForPlan(id, key, on) {
+  const label = (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
+  mutate(id, x => { x.forPlan = { ...(x.forPlan || {}), [key]: !!on }; if (!on) x.forDone = { ...(x.forDone || {}), [key]: false }; }, `Shoot for ${label}: ${on ? 'planned' : 'not planned'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+function setForDone(id, key, on) {
+  const label = (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
+  mutate(id, x => { x.forDone = { ...(x.forDone || {}), [key]: !!on }; if (on) x.forPlan = { ...(x.forPlan || {}), [key]: true }; }, `${label} cut: ${on ? 'done' : 'not done'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+Object.assign(window, { setVoice, setVoDone, setForPlan, setForDone });
 
 // ═══════ ACCESS DETAILS ═══════
 // The block that decides whether a shoot happens at all. Kept as its own
@@ -1865,11 +2045,16 @@ function loadInventory(force) {
   if (fresh && !force) return Promise.resolve(inventory);
   if (!window.trackFirebase) return Promise.resolve(inventory || []);
   return window.trackFirebase.getInventory()
-    .then(list => { inventory = list; inventoryAt = Date.now(); return list; })
+    // Tiles read their brochure state from the inventory, so they are redrawn when it arrives.
+    .then(list => { inventory = list; inventoryAt = Date.now(); if (seenListings) applyFilters(); return list; })
     // A failed refresh must not empty a picker that already had something in
     // it — better slightly stale than suddenly blank.
     .catch(e => { console.error('inventory read failed:', e); return inventory || []; });
 }
+window.trackLoadInventory = loadInventory;
+window.trackUser = () => currentUserEmail;
+window.trackSearchText = () => currentSearch;
+window.trackToast = msg => toast(msg);
 let mapFor = null;
 function openMapProperty(id) {
   mapFor = id;
@@ -1916,9 +2101,24 @@ function renderMapList(q) {
 window.onMapSearch = v => renderMapList(v);
 function pickProperty(code) {
   if (!mapFor) return;
+  // Linking goes through the brochure panel's path, so mapping brings the description, internal
+  // notes and a delivered brochure across too, and ticks "Brochure created" when there is one.
+  if (code && window.bpLink) {
+    const id = mapFor; mapFor = null;
+    document.getElementById('mapModal').classList.remove('open');
+    window.bpLink(id, code);
+    return;
+  }
+  // Unmapping is the same unlink as clearing the code in Edit: the old property's brochure, links
+  // and request go with it — otherwise the background check would link it straight back.
+  const unlink = !code && window.bpResolveFormCode ? window.bpResolveFormCode({ propertyCode: '' }, mapFor) : null;
   const p = (inventory || []).find(i => i.propertyCode === code);
   mutate(mapFor, x => {
     x.propertyCode = code || '';
+    if (unlink) {
+      if (unlink.patch) Object.assign(x, unlink.patch);
+      if (unlink.brochure) x.brochure = { ...(x.brochure || {}), ...unlink.brochure };
+    }
     // Mapping pulls the inventory's own facts across so the card stops being a
     // second, divergent copy of them. The inventory stays the source of truth:
     // this only fills what the card has not had filled in by hand.
@@ -1991,6 +2191,9 @@ function openAddModal() {
   document.getElementById('mmTitle').textContent = 'New listing';
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = ''; });
   document.getElementById('mmErr').textContent = '';
+  const hint = document.getElementById('mmCodeHint'); if (hint) hint.innerHTML = '';
+  // The code check needs the inventory; read it now so it is there by the time a code is typed.
+  loadInventory();
   document.getElementById('mModal').classList.add('open');
 }
 function openEditModal(id) {
@@ -1999,17 +2202,47 @@ function openEditModal(id) {
   mModalMode = 'edit'; mModalEditId = id;
   document.getElementById('mmTitle').textContent = 'Edit listing';
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = x[k] || ''; });
+  // A code kept for the brochure (not yet in the dashboard) shows in the same box.
+  if (!x.propertyCode && x.brochure && x.brochure.code) document.getElementById('mm_propertyCode').value = x.brochure.code;
   document.getElementById('mmErr').textContent = '';
+  const hint = () => { if (window.bpModalCode && mModalEditId === id) window.bpModalCode(document.getElementById('mm_propertyCode').value); };
+  hint();
+  // The code check needs the inventory, as in New listing; say it again once it is in.
+  if (!inventory) loadInventory().then(hint);
   document.getElementById('mModal').classList.add('open');
 }
 function closeModal() { document.getElementById('mModal').classList.remove('open'); }
-function saveModal() {
+let modalWaiting = false;
+function saveModal(retried) {
+  // What a typed Property ID means depends on the inventory — never decide it without one. One
+  // wait at a time (a second click does nothing), and only if the same form is still open after it.
+  if (!inventory && window.trackFirebase && retried !== true) {
+    if (modalWaiting) return;
+    modalWaiting = true;
+    const same = { mode: mModalMode, id: mModalEditId };
+    document.getElementById('mmErr').textContent = 'Checking the Property dashboard…';
+    loadInventory().finally(() => {
+      modalWaiting = false;
+      const open = document.getElementById('mModal').classList.contains('open');
+      if (open && mModalMode === same.mode && mModalEditId === same.id) saveModal(true);
+    });
+    return;
+  }
+  document.getElementById('mmErr').textContent = '';
   const form = {};
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); form[k] = el ? el.value.trim() : ''; });
   if (!form.title && !form.propertyCode) {
     document.getElementById('mmErr').textContent = 'Give it a title, or a Property ID.';
     return;
   }
+  // What the typed Property ID means: a dashboard property (link it), another listing's code
+  // (refuse), or a new code (keep it for the brochure, not as a dashboard link).
+  const codeMeaning = window.bpResolveFormCode ? window.bpResolveFormCode(form, mModalMode === 'edit' ? mModalEditId : null) : { propertyCode: form.propertyCode };
+  if (codeMeaning.error) { document.getElementById('mmErr').textContent = codeMeaning.error; return; }
+  const linkAfter = codeMeaning.link || null;
+  form.propertyCode = linkAfter ? '' : codeMeaning.propertyCode;   // linking itself is done by bpLink below
+  const sameCode = (a, b) => String(a || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === String(b || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  let sameLink = false;
   const now = Date.now();
   if (mModalMode === 'edit') {
     mutate(mModalEditId, x => {
@@ -2021,11 +2254,22 @@ function saveModal() {
       for (const f of ['sellerName', 'sellerPhone']) {
         if ((form[f] || '') !== (x[f] || '')) own[f] = true;
       }
-      Object.assign(x, form, { own });
+      // Same code as it is already linked to: keep the link as it is (no unlink-relink in the timeline).
+      sameLink = !!linkAfter && sameCode(linkAfter, x.propertyCode);
+      // A link to make is left to bpLink below, which sets the code itself — the listing is never
+      // saved unlinked in between (seller sync would see that).
+      const { propertyCode: _code, ...rest } = form;
+      Object.assign(x, linkAfter ? rest : form, { own });
+      if (codeMeaning.brochure) x.brochure = { ...(x.brochure || {}), ...codeMeaning.brochure };
+      // Unlinked (or moved to a new code): what belonged to the old property goes with it.
+      if (codeMeaning.patch) Object.assign(x, codeMeaning.patch);
+      // Box cleared: forget a draft code that was never sent.
+      if (!document.getElementById('mm_propertyCode').value.trim() && x.brochure && !x.brochure.requestedAt) x.brochure = { ...x.brochure, code: '' };
     }, 'Details edited');
+    const editedId = mModalEditId;
     closeModal();
-    if (currentDetailId === mModalEditId) openDetail(mModalEditId);
-    toast('Saved');
+    if (linkAfter && !sameLink && window.bpLink) linkOrSay(editedId, linkAfter, 'Saved');
+    else { if (currentDetailId === editedId) openDetail(editedId); toast('Saved'); }
     return;
   }
   const first = stages[0];
@@ -2037,13 +2281,22 @@ function saveModal() {
     reached: { [P.stageKeyOf(first) || 'new_listing']: now },
     createdAt: now, createdBy: currentUserEmail || 'team', updatedAt: now, updatedBy: currentUserEmail || null
   };
+  if (codeMeaning.brochure) x.brochure = { code: codeMeaning.brochure.code };
   listings.push(x);
   addHistory(x, 'created', 'Listing created');
   persist(x);
   closeModal();
   refreshAll();
-  toast('Listing created');
-  openDetail(x.id);
+  // A code already in the dashboard: link it now, which also fills photos, brochure and details.
+  if (linkAfter && window.bpLink) linkOrSay(x.id, linkAfter, 'Listing created');
+  else { toast('Listing created'); openDetail(x.id); }
+}
+// Link after a save. Cancelled (or not possible): the save still stands — say so, and show it.
+function linkOrSay(id, code, saved) {
+  const notLinked = () => { toast(`${saved} — not linked to ${code}`); openDetail(id); };
+  Promise.resolve().then(() => window.bpLink(id, code))
+    .then(ok => { if (!ok) notLinked(); })
+    .catch(e => { console.error('link after save failed:', e); notLinked(); });
 }
 window.openAddModal = openAddModal; window.openEditModal = openEditModal;
 window.closeModal = closeModal; window.saveModal = saveModal;
@@ -2077,7 +2330,7 @@ window.onTrackAuthChange = function (user, tenantId) {
       trackInited = true;
       // A shoot phone opens on its own day. Everyone else gets the board.
       document.body.classList.toggle('agent-mode', !!myAgent);
-      toggleView(myAgent ? 'shoots' : 'board');
+      toggleView(myAgent ? 'shoots' : (window.__trackInitialView || 'board'));
     }
   } else {
     currentUserEmail = null;
@@ -2104,7 +2357,7 @@ const TRACK_LAYERS = [
   ['acModal', () => closeAccessModal()], ['wrapModal', () => closeWrapModal()],
   ['rsModal', () => closeReasonModal()], ['shModal', () => closeShootModal()],
   ['mModal', () => closeModal()], ['mapModal', null], ['linkModal', null],
-  ['sellerPrev', () => closeSellerPreview()]
+  ['sellerPrev', () => closeSellerPreview()], ['bpPrev', () => window.bpClosePreview && window.bpClosePreview()]
 ];
 function closeTrackLayer(id) {
   const hit = TRACK_LAYERS.find(([x]) => x === id);
@@ -2138,4 +2391,4 @@ window.AppNav.boot({
 });
 window.AppNav.setActive(currentView);
 const pendingNav = window.AppNav.takeNav();
-if (pendingNav) setTimeout(() => toggleView(pendingNav), 0);
+if (pendingNav) { window.__trackInitialView = pendingNav; setTimeout(() => toggleView(pendingNav), 0); }

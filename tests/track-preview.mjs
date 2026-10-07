@@ -157,8 +157,8 @@ const page = await open({ width: 1440, height: 950 });
 const shot = async (name) => { await page.waitForTimeout(180); await page.screenshot({ path: `${OUT}/desk-${name}.png`, fullPage: name !== 'board' }); };
 
 const cols = await text(page, '.tk-col-title');
-ok('Ten columns, in pipeline order', cols.length === 10 && cols[0] === 'New listing' && cols[9] === 'Dropped', JSON.stringify(cols));
-ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 10);
+ok('Nine columns, in pipeline order — Media ready after Shoot done, no brochure columns', cols.length === 9 && cols[0] === 'New listing' && cols[3] === 'Shoot done' && cols[4] === 'Media ready' && cols[8] === 'Dropped' && !cols.some(c => /Brochure/.test(c)), JSON.stringify(cols));
+ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 9);
 ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card .sl-name'))[0] === 'Suresh');
 // The card reads like the Sellers tile: who and their number, then the property, then who owns
 // the work and when it was last touched.
@@ -210,11 +210,11 @@ ok('…and Sort offers every order', ['Needs attention', 'Newest first', 'Oldest
 await page.click('#ddStage summary');
 await page.click('#ddStage .tk-dd-row:has-text("Shoot scheduled") input');
 await page.waitForTimeout(150);
-await page.click('#ddStage .tk-dd-row:has-text("Shot") input');
+await page.click('#ddStage .tk-dd-row:has-text("Shoot done") input');
 await page.waitForTimeout(150);
 const picked = await page.evaluate(() => ({ cols: [...document.querySelectorAll('.tk-col-title')].map(e => e.textContent), open: !!document.querySelector('#ddStage[open]'), v: document.querySelector('#ddStage .tk-dd-v').textContent }));
 await page.screenshot({ path: `${OUT}/desk-filter-open.png` });
-ok('Ticking two stages shows just those two columns, and the list stays open while ticking', picked.cols.join('|') === 'Shoot scheduled|Shot' && picked.open && /Shoot scheduled, Shot/.test(picked.v), JSON.stringify(picked));
+ok('Ticking two stages shows just those two columns, and the list stays open while ticking', picked.cols.join('|') === 'Shoot scheduled|Shoot done' && picked.open && /Shoot scheduled, Shoot done/.test(picked.v), JSON.stringify(picked));
 await page.click('#ddStage .tk-dd-clear');
 await page.mouse.click(5, 900);
 await page.waitForTimeout(150);
@@ -303,13 +303,11 @@ await page.evaluate(() => setMedia('l3', 'video', true));
 await page.waitForTimeout(150);
 ok('Ticking a media item saves it', await page.evaluate(() => window.__saved.some(s => s.id === 'l3' && s.media && s.media.video === true)));
 
-// ── What the owner told us (the conversation) ──
+// ── The owner conversation was taken off the listing (it lives in the CRM); the brochure panel took its place ──
 await page.evaluate(() => { closeDetail(); openDetail('l1'); });
 await page.waitForTimeout(400);
-const convo = (await text(page, '#dpConvo'))[0] || '';
-ok('The detail panel shows what the owner said', /What they have/.test(convo) && /1450 sqft/.test(convo), convo.slice(0, 180));
-ok('…their price expectation', /2\.1 Cr/.test(convo));
-ok('…and the last few messages', /weekend works/.test(convo));
+ok('The listing no longer shows the owner chat', !(await page.$('#dpConvo')) && !/weekend works/.test(await page.textContent('#dpBody')));
+ok('…the brochure panel is there instead, under Notes', !!(await page.$('.tk-dp-side #bpSec')));
 await shot('detail-convo');
 
 // ── Seller preview, without leaving the board ──
@@ -318,7 +316,7 @@ await page.waitForTimeout(400);
 ok('The seller preview opens over the board', await page.$eval('#sellerPrev', e => e.classList.contains('open')));
 const prev = (await text(page, '#sellerPrev'))[0] || '';
 ok('…showing who they are and how to reach them', /Meenakshi/.test(prev) && /Call/.test(prev), prev.slice(0, 160));
-ok('…what they said', /Nungambakkam/.test(prev));
+ok('…the property the way the tile reads it (area, configuration, price) — no conversation', /Nungambakkam/.test(prev) && /3 BHK/.test(prev) && /2.1 Cr/.test(prev) && !/weekend works|What they have|Price expectation/.test(prev), prev.slice(0, 200));
 ok('…a way to open them fully in the CRM', (await page.$$eval('#sellerPrev a', els => els.map(a => a.getAttribute('href')))).some(h => /crm\.html\?lead=sd1&from=track/.test(h)));
 await shot('seller-preview');
 await page.evaluate(() => closeSellerPreview());
@@ -339,7 +337,7 @@ await page.waitForTimeout(250);
 ok('The list re-sorts with the same Sort as the board', (await page.$$('.tk-tr:not(.tk-th)')).length >= 5 && await page.evaluate(() => document.querySelector('.tk-dd-sort select').value === 'shoot'));
 await page.evaluate(() => { setBoardSort('urgency'); setBoardMode('board'); });
 await page.waitForTimeout(250);
-ok('…and switches back to the board', (await page.$$('.tk-col')).length === 10);
+ok('…and switches back to the board', (await page.$$('.tk-col')).length === 9);
 
 // ── Property mapping ──
 await page.evaluate(() => openMapProperty('l2'));
@@ -426,7 +424,7 @@ ok('…which clears the blocker that used to be permanent',
   }));
 ok('…and what was asked for but not got stays outstanding',
   !wrapped.media.floorPlan && !wrapped.media.video);
-ok('…and the card moves to Shot', wrapped.stageId === 'shoot_done', wrapped.stageId);
+ok('…and the card moves to Shoot done', wrapped.stageId === 'shoot_done', wrapped.stageId);
 
 // Two shoots, one agent, same hour.
 await page.evaluate(() => { toggleView('board'); openShootModal('l5'); });

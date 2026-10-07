@@ -114,10 +114,11 @@
     },
     {
       id: 'track', label: 'Property & Media', icon: 'fa-solid fa-camera-retro', page: 'track',
-      note: 'Listings from owner yes to brochure out, and the shoots between',
+      note: 'Listings from owner yes to brochure out, the shoots, and where each is posted',
       items: [
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
         { id: 'shoots', label: 'Shoots', icon: 'fa-regular fa-calendar-check', page: 'track', nav: 'shoots' },
+        { id: 'posting', label: 'Posting', icon: 'fa-solid fa-bullhorn', page: 'track', nav: 'posting', badge: 'posting' },
         { id: 'sellers', label: 'Sellers', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
       ],
     },
@@ -221,7 +222,7 @@
     if (!n) return '';
     // A seller with no listing card is revenue sitting untouched — it earns
     // the same red treatment as an overdue follow-up or a property missing data.
-    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers';
+    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting';
     return '<span class="rl-badge' + (alert ? ' alert' : '') + '" aria-hidden="true">' + (n > 99 ? '99+' : n) + '</span>'
       + '<span class="sr-only"> (' + n + ')</span>';
   }

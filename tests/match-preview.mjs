@@ -546,6 +546,8 @@ console.log('\nProperty & Media Track — Who is already waiting');
   ok('the engine is loaded on the Track board', await page.evaluate(() => !!window.PinMatch && !!window.PinMatchPanel));
 
   await page.evaluate(() => window.openDetail('ls1'));
+  ok('Who is already waiting is folded shut until asked for', await page.$eval('#dpBuyers', e => !e.open && !document.getElementById('dpBuyersList').textContent.trim()));
+  await page.click('#dpBuyers > summary');
   await page.waitForFunction(() => {
     const el = document.getElementById('dpBuyersList');
     return el && /waiting|Nobody|Not enough/i.test(el.textContent || '');
@@ -561,6 +563,7 @@ console.log('\nProperty & Media Track — Who is already waiting');
 
   // The thin listing must explain itself rather than show an empty list.
   await page.evaluate(() => window.openDetail('ls2'));
+  await page.click('#dpBuyers > summary');
   await page.waitForTimeout(500);
   const thin = await page.$eval('#dpBuyersList', e => e.textContent.replace(/\s+/g, ' '));
   ok('a listing with nothing on it says what to add', /Location|Configuration|Asking price/.test(thin), thin.slice(0, 200));

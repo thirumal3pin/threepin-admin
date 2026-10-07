@@ -157,6 +157,14 @@ service cloud.firestore {
         get(/databases/$(database)/documents/listings/$(listingId)).data.tenantId == tenantId();
     }
 
+    // Posting tracker — per-property record of what has been posted where (Insta, Facebook,
+    // YouTube, 99 Acres, website, brochure). Same flat tenantId scoping as listings.
+    match /postTracker/{trackerId} {
+      allow read, delete: if ownsTenantField();
+      allow update: if ownsTenantField() && writingOwnTenantField();
+      allow create: if writingOwnTenantField();
+    }
+
     // The Property & Media board's own columns, one document per tenant —
     // the same singleton shape as pipelines/{tenantId} above.
     match /trackPipelines/{tid} {

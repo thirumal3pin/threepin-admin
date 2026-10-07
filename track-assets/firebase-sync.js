@@ -3,14 +3,16 @@
 // Mirrors crm-assets/firebase-sync.js in shape and in contract: it never
 // imports the app, it hands data over through `window.applyXSnapshot(...)`
 // globals, and every write goes through one `window.trackFirebase` object
-// with `tenantId` stamped on and `{ merge: true }` set.
+// with `tenantId` stamped on — `{ merge: true }` for whole documents, and an
+// update of only the changed fields for an existing posting row.
 //
 // Firebase is initialised with getApps()[0] when it already exists, so this
 // module can sit on a page beside another sync module without a second app.
 //
-// Three live subscriptions:
+// Four live subscriptions:
 //   listings/                    where tenantId == ours   → the board's cards
 //   trackPipelines/{tenantId}    the board's own columns
+//   postTracker/                 where tenantId == ours   → the Posting tab
 //   leads/                       where tenantId == ours   → seller leads, for
 //                                mapping a listing to the owner who called in
 //
@@ -20,7 +22,7 @@
 
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, query, where
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, deleteField, writeBatch, onSnapshot, getDoc, getDocs, query, where
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -45,6 +47,17 @@ let subscribed = false;
 
 function pipelineRef(tenantId){ return doc(db, 'trackPipelines', tenantId); }
 
+// The update for a posting row: only the given field paths, plus who changed it and when.
+function postingPatch(t, paths){
+  const patch = { updatedAt: t.updatedAt || Date.now(), updatedBy: t.updatedBy || '', tenantId: currentTenantId };
+  for(const path of paths){
+    let v = t;
+    for(const p of path.split('.')) v = v == null ? undefined : v[p];
+    patch[path] = v === undefined ? deleteField() : v;
+  }
+  return patch;
+}
+
 async function seedPipelineIfEmpty(tenantId){
   const snap = await getDoc(pipelineRef(tenantId));
   if(snap.exists()) return;
@@ -62,6 +75,11 @@ function subscribeToData(tenantId){
     onSnapshot(pipelineRef(tenantId),
       snap => { if(window.applyTrackPipelineSnapshot) window.applyTrackPipelineSnapshot((snap.data() && snap.data().stages) || []); },
       err => console.error('Firestore track pipeline sync error:', err));
+
+    // Posting tracker: one doc per property, what has been posted where.
+    onSnapshot(query(collection(db, 'postTracker'), where('tenantId', '==', tenantId)),
+      snap => { if(window.applyPostingSnapshot) window.applyPostingSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id }))); },
+      err => console.error('Firestore postTracker sync error:', err));
 
     // Seller leads, so a listing can name the owner who actually called in.
     // The whole lead set is watched rather than only sellers: which leads
@@ -82,6 +100,35 @@ window.trackFirebase = {
     if(!currentTenantId) throw new Error('No tenant');
     const { notes, history, lead, property, ...rest } = listing;
     await setDoc(doc(db, 'listings', listing.id), { ...rest, tenantId: currentTenantId }, { merge: true });
+  },
+
+  // Posting tracker writes. A new row is written whole; an existing one is sent `paths` — only
+  // the fields that change touched ('note', 'channels.igReel', …) — so two people editing
+  // different fields of one row never overwrite each other. A path whose value is gone is deleted.
+  async savePosting(t, paths){
+    if(!currentTenantId) throw new Error('No tenant');
+    const ref = doc(db, 'postTracker', t.id);
+    if(!paths) return setDoc(ref, { ...t, tenantId: currentTenantId }, { merge: true });
+    await updateDoc(ref, postingPatch(t, paths));
+  },
+  // Many rows in one go (Add schedule, Paste week plan): writes = [{ t, paths? }], same meaning
+  // as savePosting. Sent as batches, so it lands (or fails) as a whole, and is reported once.
+  async savePostings(writes){
+    if(!currentTenantId) throw new Error('No tenant');
+    const list = (writes || []).filter(w => w && w.t && w.t.id);
+    for(let i = 0; i < list.length; i += 450){
+      const batch = writeBatch(db);
+      for(const { t, paths } of list.slice(i, i + 450)){
+        const ref = doc(db, 'postTracker', t.id);
+        if(paths) batch.update(ref, postingPatch(t, paths));
+        else batch.set(ref, { ...t, tenantId: currentTenantId }, { merge: true });
+      }
+      await batch.commit();
+    }
+  },
+  async deletePosting(id){
+    if(!currentTenantId) throw new Error('No tenant');
+    await deleteDoc(doc(db, 'postTracker', id));
   },
 
   async deleteListing(id){
@@ -117,19 +164,20 @@ window.trackFirebase = {
       return {
         id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || '',
         config: p.config || '', startingPrice: p.startingPrice || '', type: p.type || '',
-        photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', soldOut: !!p.soldOut
+        photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut
       };
     });
   },
 
-  // What the owner actually said. TailorTalk's AI writes a profile of every
-  // conversation into leads/{id}/tailortalk/state — for a SELLER that profile
-  // IS the property brief (what they are selling, where, what they want for
-  // it, what they have already been asked). Read on demand when a card is
-  // opened, never watched: it is large and only matters while reading one.
-  async getLeadConversation(leadId){
-    const snap = await getDoc(doc(db, 'leads', leadId, 'tailortalk', 'state'));
-    return snap.exists() ? snap.data() : null;
+  // A dashboard property's internal notes (properties/{id}/internalNotes), joined oldest first —
+  // read once when a listing is linked to that property, so the brochure panel starts filled.
+  // firestore.rules scopes this subcollection by the parent property's tenant, as the dashboard does.
+  async getPropertyInternalNotes(propId){
+    if(!currentTenantId || !propId) return '';
+    const snap = await getDocs(collection(db, 'properties', String(propId), 'internalNotes'));
+    return snap.docs.map(d => d.data()).filter(n => n && String(n.text || '').trim())
+      .sort((a, b) => (a.createdAt || a.at || 0) - (b.createdAt || b.at || 0))
+      .map(n => String(n.text).trim()).join('\n\n');
   },
 
   // Timeline entries live in a subcollection, like a lead's history, so the
@@ -151,7 +199,8 @@ window.trackFirebase = {
 window.trackAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOut(auth),
-  getTenantId: () => currentTenantId
+  getTenantId: () => currentTenantId,
+  getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
 };
 
 onAuthStateChanged(auth, async user => {
