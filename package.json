@@ -15,6 +15,7 @@
     "preview:match": "node tests/match-preview.mjs",
     "preview:map": "node tests/map-preview.mjs",
     "preview:brochure": "node tests/brochure-board.mjs",
+    "preview:brochure-code": "node tests/brochure-code-preview.mjs",
     "preview:shoot": "node tests/shoot-extras.mjs",
     "preview:tags": "node tests/tags-preview.mjs",
     "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs",

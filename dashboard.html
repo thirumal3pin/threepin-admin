@@ -431,7 +431,14 @@
         <div class="bp-row">
           <div class="pf-field">
             <label for="bfTitle">Property ID &amp; title</label>
-            <input type="text" id="bfTitle" placeholder="e.g. NOL002 - 3BHK in Velachery" oninput="saveBrochureDraft()">
+            <div class="bf-code">
+              <input type="text" id="bfTitle" placeholder="e.g. NOL002 - 3BHK in Velachery" autocomplete="off"
+                     role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="bfCodePop"
+                     oninput="saveBrochureDraft(); bfCodeInput()" onfocus="bfCodeInput()" onclick="bfCodeInput()"
+                     onkeydown="bfCodeKey(event)" onkeyup="bfCodeKeyup(event)" onblur="bfCodeClose()">
+              <div class="bf-code-pop" id="bfCodePop" role="listbox" hidden onmousedown="event.preventDefault()" onclick="bfCodePick(event)"></div>
+            </div>
+            <div class="bf-code-v" id="bfCodeVerdict" aria-live="polite"></div>
           </div>
           <div class="pf-field">
             <label for="bfDrive">Google Drive photo folder link</label>
@@ -514,6 +521,8 @@
 <script src="dashboard-assets/property-view.js"></script>
 <script src="dashboard-assets/app.js"></script>
 <script src="dashboard-assets/brochure-form.js"></script>
+<!-- The code rules the Property & Media board's brochure panel uses, so both places agree on what a duplicate is. -->
+<script type="module">import * as B from './track-assets/brochure-flow.js'; window.BrochureCodes = B;</script>
 <script src="shared-assets/appnav.js"></script>
 <script src="dashboard-assets/nav-boot.js"></script>
 <script type="module" src="dashboard-assets/firebase-sync.js"></script>
