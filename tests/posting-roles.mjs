@@ -220,9 +220,8 @@ s = await last();
 ok('A code found in the dashboard links it and fills the title', s.propertyId === 'SKL001' && s.title === 'Shriram King Life');
 ok('…typed in lowercase, saved as the dashboard writes it', s.propertyCode === 'SKL001', s.propertyCode);
 ok('…the plan reference is kept as "plan:" under the title', /Plan: Nandanam 3Bhk brand new/.test(await text(`#pg-${shrId}`)));
-// Brochure tick in the sheet.
-await p.check(`#pg-${edenId} .pg-ck input`);
-ok('Brochure ticked from the sheet', (await last()).brochure.done === true);
+// The brochure is not ticked in the sheet: it is read from the board / Property dashboard.
+ok('No brochure tick box in the sheet — it shows where the brochure stands', !(await p.$(`#pg-${edenId} .pg-bro input`)) && !!(await p.$(`#pg-${edenId} .pg-bro`)));
 // Monday 6pm passes → Due → confirm with link from To do.
 // The clock moves on: put Monday's Story at an hour ago (rescheduled in the sheet, as the media team would).
 await mode(3);

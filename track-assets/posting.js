@@ -233,6 +233,17 @@ export function setListing(tracker, key, status, extra, now) {
   return { ok: true, tracker: t };
 }
 
+// ── Is the brochure created? ──
+// Not this tracker's to say: a property's brochure is made once, through the board or the Create
+// brochure page, and lands on the board listing and in the Property dashboard. The page sets where
+// to read it from (setBrochureSource); without one (the tests, a script), a row's own old tick counts.
+let brochureSource = null;
+export function setBrochureSource(fn) { brochureSource = typeof fn === 'function' ? fn : null; }
+export function brochureDone(t) {
+  if (brochureSource) { try { const s = brochureSource(t); if (s) return !!s.done; } catch (e) { /* fall back below */ } }
+  return !!(t && t.brochure && t.brochure.done);
+}
+
 export function setBrochure(tracker, done, who, now) {
   const t = normalizeTracker(tracker);
   t.brochure = done ? { done: true, at: now || Date.now(), by: str(who) } : { done: false, at: 0, by: '' };
@@ -274,7 +285,7 @@ export function gaps(tracker, now) {
   }
   if (t.repostOf) return out.sort((a, b) => b.sev - a.sev);   // everything else lives on the original row
   if (!t.propertyCode) out.push({ kind: 'code', sev: 1, text: 'Property code not created yet' });
-  if (!t.brochure.done) out.push({ kind: 'brochure', sev: anyOut ? 3 : 1, text: anyOut ? 'Posts are going out but the brochure is not created' : 'Brochure not created' });
+  if (!brochureDone(tracker)) out.push({ kind: 'brochure', sev: anyOut ? 3 : 1, text: anyOut ? 'Posts are going out but the brochure is not created' : 'Brochure not created' });
   for (const { key, label } of LISTINGS) {
     if (t[key].status === LISTING_STATUS.PENDING) out.push({ kind: key, key, sev: 1, text: `${label} not posted` });
     else if (t[key].status === LISTING_STATUS.POSTED && !t[key].url) out.push({ kind: 'link', key, sev: 2, text: `${label} is posted but the link is not shared` });
@@ -701,7 +712,7 @@ export function progress(tracker) {
     if (s === STATUS.NA) continue;
     total++; if (s === STATUS.LIVE) done++;
   }
-  total++; if (t.brochure.done) done++;
+  total++; if (brochureDone(tracker)) done++;
   for (const { key } of LISTINGS) {
     const s = t[key].status;
     if (s === LISTING_STATUS.NA) continue;
@@ -765,7 +776,7 @@ export function matchesFilter(tracker, f, now) {
   const g = gaps(t, now);
   switch (f) {
     case 'due': return g.some(x => x.kind === 'due');
-    case 'nobrochure': return !t.brochure.done;
+    case 'nobrochure': return !brochureDone(tracker);
     case 'nolink': return g.some(x => x.kind === 'link');
     case 'unscheduled': return g.some(x => x.kind === 'yet');
     case 'noacres': return t.acres99.status === LISTING_STATUS.PENDING;
@@ -792,10 +803,10 @@ export function toCsv(trackers) {
   head.push('Brochure created', 'Brochure by');
   for (const l of LISTINGS) head.push(l.label + ' status', l.label + ' link');
   head.push('Progress');
-  const rows = (trackers || []).map(normalizeTracker).map(t => {
+  const rows = (trackers || []).map(raw => [raw, normalizeTracker(raw)]).map(([raw, t]) => {
     const r = [dateOnly(t.plannedDate), t.reference, t.repostOf, t.propertyCode, t.title, t.location, t.propertyId ? 'Yes' : 'No', t.photosLink, t.details, t.note];
     for (const c of CHANNELS) { const x = t.channels[c.key]; r.push(STATUS_LABEL[x.status], when(x.at), x.url); }
-    r.push(t.brochure.done ? 'Yes' : 'No', t.brochure.by);
+    r.push(brochureDone(raw) ? 'Yes' : 'No', t.brochure.by);
     for (const l of LISTINGS) r.push(LISTING_LABEL[t[l.key].status], t[l.key].url);
     const p = progress(t); r.push(`${p.done}/${p.total}`);
     return r;

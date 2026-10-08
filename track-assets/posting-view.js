@@ -281,10 +281,63 @@ function tagsOf(t) {
   if (!m.tags.has(t.id)) { const l = listingOf(t); m.tags.set(t.id, TG.cleanTags(l ? l.tags : ((t.repostOf && origOf(t)) || t).tags)); }
   return m.tags.get(t.id);
 }
+// ── The brochure: made once per property, read from where it is made ──
+// The board listing for this property (its brochure panel, fed by the brochure queue), else the
+// Property dashboard's delivered brochure. A row ticked here before this was read from the board
+// still counts. Nothing about the brochure is saved on a Posting row any more.
+const BRO_LABEL = { created: 'Created', building: 'Built — being delivered', requested: 'Requested', none: 'Not created' };
+let broMemo = null;
+function broState(t) {
+  if (!t) return { done: false, state: 'none' };
+  const root = (t.repostOf && origOf(t)) || t;
+  if (!broMemo) broMemo = new Map();
+  if (broMemo.has(root.id)) return broMemo.get(root.id);
+  const api = window.trackApi;
+  const l = listingOf(root);
+  const code = G.codeKey(root.propertyCode);
+  const list = (api && api.inventory && api.inventory()) || inv || [];
+  const prop = code ? list.find(q => G.codeKey(q.propertyCode) === code) : null;
+  const url = v => (/^https?:\/\/\S+$/i.test(String(v || '').trim()) ? String(v).trim() : '');
+  const link = url(l && l.brochureLink) || url(prop && prop.brochureLink);
+  let r;
+  const board = l && api && api.brochureOf ? api.brochureOf(l) : null;
+  if (board === 'created') r = { state: 'created', src: 'board', link };
+  else if (link) r = { state: 'created', src: 'dashboard', link };
+  else if (board === 'building' || (prop && String(prop.brochureLink || '').trim())) r = { state: 'building', src: board === 'building' ? 'board' : 'dashboard' };
+  else if (board === 'requested') r = { state: 'requested', src: 'board' };
+  else if (root.brochure && root.brochure.done) r = { state: 'created', src: 'marked', by: root.brochure.by, at: root.brochure.at };
+  else r = { state: 'none', src: l ? 'board' : '' };
+  r.done = r.state === 'created';
+  r.listingId = l ? l.id : null;
+  broMemo.set(root.id, r);
+  return r;
+}
+G.setBrochureSource(broState);
+// The one place a brochure is made: the property's listing on the board, else the Create brochure page.
+const broWhere = b => b.src === 'board' ? 'from the board' : b.src === 'dashboard' ? 'from the Property dashboard' : b.src === 'marked' ? 'marked here earlier' : '';
+function broCell(t, small) {
+  const b = broState(t);
+  const open = b.link ? ` <a href="${href(b.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">open ↗</a>` : '';
+  const go = !b.done && b.state === 'none'
+    ? (b.listingId ? `<button type="button" class="tk-link" onclick="pgBrochureGo(${jsq(b.listingId)})">Create on the board</button>` : '<a class="tk-link" href="dashboard.html?nav=brochure">Create brochure ↗</a>')
+    : '';
+  return `<span class="ps-ro pg-bro ${b.done ? 'ok' : b.state === 'none' ? '' : 'warn'}">${b.done ? '✓ ' : ''}${esc(BRO_LABEL[b.state])}${open}</span>${small !== false ? `<div class="ps-sub">${esc(broWhere(b))}${go ? (broWhere(b) ? ' · ' : '') + go : ''}</div>` : ''}`;
+}
+// Voice-over for a post, from the listing's Shoot for on the board: a V/O to be made separately
+// shows here until it is made.
+function voiceTag(t, key) {
+  const l = listingOf(t), api = window.trackApi;
+  if (!l || !api || !api.voiceOf) return '';
+  const v = api.voiceOf(l, key);
+  if (v.voice !== 'vo') return '';
+  return v.made ? '<span class="pg-vo ok" title="Voice-over made (from the board)">🎙 V/O made</span>' : '<span class="pg-vo warn" title="Voice-over required separately and not made yet (from the board)">🎙 V/O pending</span>';
+}
+window.pgBrochureGo = listingId => { if (window.toggleView) window.toggleView('board'); if (window.openDetail) window.openDetail(listingId); };
+
 // The tag picker changed a listing's tags: show them here at once.
 window.pgRedraw = () => { tagMemo = null; if (isOpen() && !dlg) renderPosting(); else stale = true; };
 // A listings snapshot: tags may have changed — redraw on the next refresh (through the typing guard).
-window.pgListingsChanged = () => { tagMemo = null; stale = true; };
+window.pgListingsChanged = () => { tagMemo = null; broMemo = null; stale = true; badge(); };
 function tagTarget(t) { const l = listingOf(t); return l ? 'l:' + l.id : 'p:' + (((t.repostOf && origOf(t)) || t).id); }
 // Small and inline (it sits inside buttons): the week tiles, Today and the lists.
 const miniTags = t => { const l = tagsOf(t); return l.length ? `<span class="tk-tags sm">${l.map(x => `<span class="tk-tag ${TG.tagClass(x)}">${esc(x)}</span>`).join('')}</span>` : ''; };
@@ -324,6 +377,7 @@ function renderPosting() {
   renderWaiting = false; stale = false; shownQ = searchText();
   famIdx = G.familyIndex(trackers);
   tagMemo = null;   // listings and tags are looked up once per render (see listingOf)
+  broMemo = null;   // …and each property's brochure state
   try { drawPosting(el); } finally { famIdx = null; }
 }
 function drawPosting(el) {
@@ -397,7 +451,7 @@ function taskActions(g, it) {
     case 'due': return it.keys.map(k => b('Mark ' + labelOf(k) + ' posted', `pgChannel(${jsq(id)},${jsq(k)},'live')`, 'primary') + b('Reschedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`)).join('');
     case 'link': return it.keys.map(k => b('Add ' + labelOf(k) + ' link', G.CHANNEL_KEYS.includes(k) ? `pgLink(${jsq(id)},${jsq(k)})` : `pgListing(${jsq(id)},${jsq(k)},'posted')`, 'primary')).join('');
     case 'plan': return G.CHANNELS.map(c => `<button type="button" class="tk-btn sm" onclick="pgChannel(${jsq(id)},${jsq(c.key)},'scheduled')">${chLabel(c.key, c.label)}</button>`).join('');
-    case 'brochure': return b('Mark brochure created', `pgBrochure(${jsq(id)},true)`, 'primary');
+    case 'brochure': { const bs = broState(byId(id)); return bs.listingId ? b('Create on the board', `pgBrochureGo(${jsq(bs.listingId)})`, 'primary') : '<a class="tk-btn sm primary" href="dashboard.html?nav=brochure">Create brochure ↗</a>'; }
     case 'photos': case 'details': return b('Add it', `pgOpenEdit(${jsq(id)})`, 'primary');
     case 'code': return b('Add code', `pgOpenEdit(${jsq(id)})`, 'primary') + b('Tag a property…', `pgOpenTag(${jsq(id)})`);
     case 'yet': return it.keys.map(k => `<span class="pg-pair"><span class="pg-pair-n">${chLabel(k, labelOf(k))}</span>${b('Schedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`, 'primary')}${b('N/A', `pgChannel(${jsq(id)},${jsq(k)},'na')`)}</span>`).join('');
@@ -651,18 +705,18 @@ function sheetCell(t, key, label, t0, focus) {
     const others = hist.filter(x => x.rowId !== id);
     const before = others.filter(x => (x.when || 0) <= myWhen), after = others.filter(x => (x.when || 0) > myWhen);
     const pill = `<select class="pg-sel ps-pill t-${tone}" aria-label="${esc(label)} status" title="${esc(G.STATUS_LABEL[v.status])}" onchange="pgChannel(${jsq(id)},${jsq(key)},this.value)">${opts}</select>`;
-    return cell(v.due || v.linkMissing || lateDay ? 'hot' : '', `${histLines(before)}${pill}${sub(h)}${histLines(after)}`);
+    return cell(v.due || v.linkMissing || lateDay ? 'hot' : '', `${histLines(before)}${pill}${sub(h)}${voiceTag(t, key) ? `<div class="ps-sub">${voiceTag(t, key)}</div>` : ''}${histLines(after)}`);
   }
   if (t.repostOf) {
     const o = origOf(t);
     if (!o) return cell('ps-orig', '<span class="ps-faint">Original deleted</span>');
-    if (key === 'brochure') return cell('ps-orig', `<span class="ps-ro ${o.brochure.done ? 'ok' : ''}" title="From the original row">${o.brochure.done ? '✓ Created' : 'Not yet'}</span><div class="ps-sub">from original</div>`);
+    if (key === 'brochure') return cell('ps-orig', broCell(o));
     const x = o[key];
     const txt = x.status === 'posted' ? (x.url ? `<a class="ps-ro ok" href="${href(x.url)}" target="_blank" rel="noopener">✓ Posted ↗</a>` : '<span class="ps-ro warn">Posted, no link</span>') : x.status === 'na' ? '<span class="ps-ro">N/A</span>' : '<span class="ps-ro">Not posted</span>';
     return cell('ps-orig', `${txt}<div class="ps-sub">from original</div>`);
   }
   if (key === 'brochure') {
-    return cell('', `<label class="pg-ck ps-check"><input type="checkbox" ${t.brochure.done ? 'checked' : ''} onchange="pgBrochure(${jsq(id)},this.checked)"><span>${t.brochure.done ? 'Created' : 'Not yet'}</span></label>`);
+    return cell('', broCell(t));
   }
   const x = t[key];
   const tone = x.status === 'posted' ? (x.url ? 'live' : 'bad') : x.status === 'na' ? 'na' : 'yet';
@@ -801,7 +855,7 @@ function sheetFoot(list, cols, t0) {
       for (const t of list) { const v = G.channelView(t.channels[k], t0); if (v.status === 'live') live++; else if (v.status === 'scheduled') sch++; else if (v.status === 'yet') todo++; }
       big = `${live} live`; small = `${sch} sched · ${todo} to do`;
     } else if (k === 'brochure') {
-      big = `${own.filter(t => t.brochure.done).length} of ${own.length}`; small = 'created';
+      big = `${own.filter(t => broState(t).done).length} of ${own.length}`; small = 'created';
     } else {
       const d = own.filter(t => t[k].status === 'posted').length, na = own.filter(t => t[k].status === 'na').length;
       big = `${d} posted`; small = na ? `${na} not needed` : `of ${own.length}`;
@@ -947,7 +1001,7 @@ function channelRow(t, c) {
   return `<div class="pg-ch${v.due || v.linkMissing || lateDay ? ' hot' : ''}">
     <span class="pg-ch-n">${chLabel(c.key, c.label)}</span>
     <select class="pg-sel s-${v.status}" aria-label="${esc(c.label)} status" onchange="pgChannel(${jsq(t.id)},${jsq(c.key)},this.value)">${opts}</select>
-    <span class="pg-ch-i">${info}${v.status === 'live' && v.at ? `<span class="pg-sub"> planned ${esc(fmt(v.at))}</span>` : ''}</span>
+    <span class="pg-ch-i">${info}${voiceTag(t, c.key) ? ' ' + voiceTag(t, c.key) : ''}${v.status === 'live' && v.at ? `<span class="pg-sub"> planned ${esc(fmt(v.at))}</span>` : ''}</span>
   </div>`;
 }
 function listingRow(t, l) {
@@ -1003,11 +1057,11 @@ function cardHtml(t) {
     <div class="pg-sec">Posts</div>
     ${G.CHANNELS.map(c => channelRow(t, c)).join('')}
     <div class="pg-sec">Brochure &amp; listings</div>
-    <label class="pg-ch pg-brochure${t.brochure.done ? '' : (g.some(x => x.kind === 'brochure' && x.sev >= 3) ? ' hot' : '')}">
-      <span class="pg-ch-n">Brochure created</span>
-      <span class="pg-ck"><input type="checkbox" ${t.brochure.done ? 'checked' : ''} onchange="pgBrochure(${jsq(t.id)},this.checked)"> ${t.brochure.done ? 'Yes' : 'Not yet'}</span>
-      <span class="pg-ch-i pg-sub">${t.brochure.done ? esc((t.brochure.by || '').split('@')[0]) + (t.brochure.at ? ' · ' + esc(fmt(t.brochure.at)) : '') : ''}</span>
-    </label>
+    <div class="pg-ch pg-brochure${broState(t).done ? '' : (g.some(x => x.kind === 'brochure' && x.sev >= 3) ? ' hot' : '')}">
+      <span class="pg-ch-n">Brochure</span>
+      <span class="pg-ck">${broCell(t, false)}</span>
+      <span class="pg-ch-i pg-sub">${esc(broWhere(broState(t)))}</span>
+    </div>
     ${G.LISTINGS.map(l => listingRow(t, l)).join('')}
     <div class="pg-dash">${dash}</div>
     ${gapList}
@@ -1089,10 +1143,6 @@ window.pgListing = (id, key, status) => {
   const r = G.setListing(t, key, status, {}, now());
   if (!r.ok) { toast(r.error); return renderPosting(); }
   persist(r.tracker);
-};
-window.pgBrochure = (id, on) => {
-  const t = byId(id); if (!t) return;
-  persist(G.setBrochure(t, on, who(), now()), on ? 'Brochure marked created' : null);
 };
 window.pgUnlink = id => { const t = byId(id); if (t) persist({ ...t, propertyId: '' }); };
 window.pgLinkTo = (id, propId) => {

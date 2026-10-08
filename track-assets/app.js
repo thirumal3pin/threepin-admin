@@ -1983,6 +1983,8 @@ window.trackApi = {
   loadInventory: force => loadInventory(force),
   mutate: (id, fn, text) => mutate(id, fn, text),
   brochureOf: x => brochureOf(x),
+  // Voice-over per outlet, as set on the listing's Shoot for: 'live' (with V/O), 'vo' (V/O made separately) or '' — and whether that V/O is made.
+  voiceOf: (x, k) => ({ voice: forVoice(x, k), made: forVoMade(x, k), planned: forPlanned(x, k) }),
   refreshFilters: () => renderFilterBar(),   // the Tags dropdown, after a tag is added or removed
   openDetail: id => openDetail(id),
   currentDetailId: () => currentDetailId,
@@ -2256,7 +2258,8 @@ function loadInventory(force) {
   if (!window.trackFirebase) return Promise.resolve(inventory || []);
   return window.trackFirebase.getInventory()
     // Tiles read their brochure state from the inventory, so they are redrawn when it arrives.
-    .then(list => { inventory = list; inventoryAt = Date.now(); if (seenListings) applyFilters(); return list; })
+    // Posting reads each property's brochure from the inventory too: tell it.
+    .then(list => { inventory = list; inventoryAt = Date.now(); if (window.pgListingsChanged) window.pgListingsChanged(); if (seenListings) applyFilters(); return list; })
     // A failed refresh must not empty a picker that already had something in
     // it — better slightly stale than suddenly blank.
     .catch(e => { console.error('inventory read failed:', e); return inventory || []; });

@@ -1540,3 +1540,12 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 
 /* In a dialog the suggestions open in the flow (not over the dialog's edge), so nothing is cut off. */
 #pgModal .tg-sug.open { position: static; margin-top: 4px; max-width: 100%; box-shadow: none; }
+
+/* Posting: the brochure, read from where it is made (never ticked here), and voice-over per post from the board */
+.pg-bro { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink3); }
+.pg-bro.ok { color: var(--green); }
+.pg-bro.warn { color: var(--amber); }
+.pg-bro a { font-weight: 500; }
+.pg-vo { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 99px; white-space: nowrap; }
+.pg-vo.warn { background: var(--amber-bg); color: var(--amber); }
+.pg-vo.ok { background: var(--green-bg); color: var(--green); }

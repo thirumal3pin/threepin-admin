@@ -21,14 +21,14 @@ const TRACKERS = [
   mk({ id: 'VLCA002', propertyCode: 'VLCA002', title: 'Velachery 3BHK', location: 'Velachery' })
 ];
 const STUB = `
-window.__saved = []; window.__deleted = []; window.__paths = [];
+window.__saved = []; window.__deleted = []; window.__paths = []; window.__inv = ${JSON.stringify(INV)};
 window.trackFirebase = {
   // Same shapes as firebase-sync: savePosting(t, paths?) and savePostings([{ t, paths? }]).
   savePosting: async (t, paths) => { window.__saved.push(JSON.parse(JSON.stringify(t))); window.__paths.push(paths || null); },
   savePostings: async ws => { for (const w of ws) { window.__saved.push(JSON.parse(JSON.stringify(w.t))); window.__paths.push(w.paths || null); } },
   deletePosting: async id => { window.__deleted.push(id); },
   saveListing: async () => {}, savePipeline: async () => {}, patchLead: async () => {},
-  getInventory: async () => ${JSON.stringify(INV)}, getListingHistory: async () => [], saveHistory: async () => {}, deleteHistory: async () => {}, getLeadConversation: async () => null
+  getInventory: async () => JSON.parse(JSON.stringify(window.__inv)), getListingHistory: async () => [], saveHistory: async () => {}, deleteHistory: async () => {}, getLeadConversation: async () => null
 };
 window.trackAuth = { login: async () => {}, logout: async () => {}, getTenantId: () => '${T}' };
 setTimeout(() => {
@@ -82,21 +82,17 @@ for (const [name, vp] of [['desk', { width: 1440, height: 950 }], ['phone', { wi
   ok('A post due today is not listed twice', !nowTags.includes('Overdue'));
   ok('Routine work is folded away under "Everything else"', !!(await p.$('details.pt-later:not([open])')) && /Everything else/.test(await p.textContent('.pt-later summary')));
   await p.screenshot({ path: OUT + '/' + name + '-today.png', fullPage: true });
-  // one click from Today does the job, with Undo
-  await p.click('#pg-now .pt-now:has-text("2BHK T Nagar") button:has-text("Mark brochure created")');
-  let s0 = await p.evaluate(() => window.__saved.slice(-1)[0]);
-  ok('Marking brochure from Today saves it', s0.id === 'TNAG0002' && s0.brochure.done === true);
-  ok('…writing only the brochure field', JSON.stringify(await p.evaluate(() => window.__paths.slice(-1)[0])) === '["brochure"]', JSON.stringify(await p.evaluate(() => window.__paths.slice(-1)[0])));
-  ok('…offers Undo', /Undo/.test(await p.textContent('#pgUndo')));
-  await p.click('#pgUndo button');
-  s0 = await p.evaluate(() => window.__saved.slice(-1)[0]);
-  ok('Undo puts it back', s0.id === 'TNAG0002' && s0.brochure.done === false);
-  await p.click('#pg-now .pt-now:has-text("2BHK T Nagar") button:has-text("Mark brochure created")');
-  ok('…and it leaves the list', !(await p.$('#pg-now .pt-now:has-text("Brochure needed"):has-text("2BHK T Nagar")')));
+  // The brochure is made once, where brochures are made — Posting reads it, never ticks it.
+  ok('Brochure needed: Today sends you to create it — nothing to tick here', !(await p.$('#pg-now button:has-text("Mark brochure created")')) && !!(await p.$('#pg-now .pt-now:has-text("2BHK T Nagar") :is(a,button):has-text("Create")')));
+  const before0 = await p.evaluate(() => window.__saved.length);
+  await p.evaluate(async () => { window.__inv.find(x => x.id === 'TNAG0002').brochureLink = 'https://drive.google.com/file/d/tnag'; await window.trackLoadInventory(true); window.pgRedraw(); });
+  await p.waitForTimeout(250);
+  ok('Delivered in the Property dashboard: created here too, and it leaves the list', !(await p.$('#pg-now .pt-now:has-text("Brochure needed"):has-text("2BHK T Nagar")')));
+  ok('…without anything saved on the Posting row', (await p.evaluate(() => window.__saved.length)) === before0);
   // everything else, unfolded
   await p.click('.pt-later summary');
   await p.click('.pt-later .tk-group:has(.tk-group-hdr:text("Schedule the posts")) .pg-task:has-text("VLCA002") .pg-pair:has-text("YouTube") button:has-text("N/A")');
-  s0 = await p.evaluate(() => window.__saved.slice(-1)[0]);
+  let s0 = await p.evaluate(() => window.__saved.slice(-1)[0]);
   ok('N/A on one channel from "Everything else"', s0.channels.yt.status === 'na' && s0.channels.igReel.status === 'yet');
   ok('"Everything else" stays open after a change', !!(await p.$('details.pt-later[open]')));
   // Mark live from Today: paste helper + wrong-platform warning
@@ -124,8 +120,7 @@ for (const [name, vp] of [['desk', { width: 1440, height: 950 }], ['phone', { wi
   await p.selectOption('#pg-VLCA002 select[aria-label="Insta Reel status"]', 'scheduled');
   await p.fill('#pgAt', '2031-02-02T10:00'); await p.click('#pgSave');
   ok('List: scheduling opens the same dialog and saves', (await p.evaluate(() => window.__saved.slice(-1)[0])).channels.igReel.status === 'scheduled');
-  await p.check('#pg-VLCA002 .pg-ck input');
-  ok('List: tick the brochure', (await p.evaluate(() => window.__saved.slice(-1)[0])).brochure.done === true);
+  ok('List: the brochure is read from where it is made — Created (open) or Not created, no tick box', !(await p.$('#pg-VLCA002 .pg-bro input, #pg-TNAG0002 .pg-bro input')) && /Not created/.test(await p.textContent('#pg-VLCA002 .pg-bro')) && /Created/.test(await p.textContent('#pg-TNAG0002 .pg-bro')) && !!(await p.$('#pg-TNAG0002 .pg-bro a')));
   await p.selectOption('#pg-TNAG0002 select[aria-label="99 Acres status"]', 'na');
   ok('List: 99 Acres N/A', (await p.evaluate(() => window.__saved.slice(-1)[0])).acres99.status === 'na');
   await p.selectOption('#pg-VLCA002 select[aria-label="Facebook Reel status"]', 'live'); await p.click('#pgSave');
@@ -148,7 +143,9 @@ for (const [name, vp] of [['desk', { width: 1440, height: 950 }], ['phone', { wi
   ok('Attention card sorts first', await p.$eval('.pg-card', c => c.classList.contains('attention')));
   ok('Due reel is flagged', /due — confirm posted/.test(await p.$eval('.pg-card', c => c.textContent)));
   ok('Live story without a link warns', /link not shared/.test(await p.$eval('.pg-card', c => c.textContent)));
-  ok('Nav badge counts attention', (await p.$$eval('.rl-badge', e => e.map(x => x.textContent))).includes('1'));
+  // Two: the due Reel on T Nagar, and Velachery — a Reel booked while its brochure is not created (read from
+  // the board / dashboard; it can no longer be ticked away here).
+  ok('Nav badge counts attention', (await p.$$eval('.rl-badge', e => e.map(x => x.textContent))).includes('2'), JSON.stringify(await p.$$eval('.rl-badge', e => e.map(x => x.textContent))));
   const wide = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   ok('No sideways scroll', wide <= 2, wide + ' ' + JSON.stringify(await p.evaluate(() => [...document.querySelectorAll('#postingView *')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1).slice(0, 4).map(e => e.tagName + '.' + e.className + ':' + Math.round(e.getBoundingClientRect().right)))));
   await p.screenshot({ path: `${OUT}/${name}-cards.png`, fullPage: true });
@@ -175,9 +172,7 @@ for (const [name, vp] of [['desk', { width: 1440, height: 950 }], ['phone', { wi
   ok('Link saved, flag gone', s.channels.igReel.url.includes('instagram') && !/Live — link not shared/.test(await p.$eval(card2, c => c.textContent)));
 
   ok('Card order holds while editing', (await p.$$eval('.pg-card', c => c.map(x => x.id))).join() === cardOrder, cardOrder);
-  await p.check(`${card2} .pg-brochure input`);
-  s = await saved(p);
-  ok('Brochure ticked records who', s.brochure.done && s.brochure.by === 'admin@example.com');
+  ok('Card: the brochure is shown, not ticked', !(await p.$(`${card2} .pg-brochure input`)) && !!(await p.$(`${card2} .pg-brochure .pg-bro`)));
 
   await p.selectOption(`${card2} select[aria-label="99 Acres status"]`, 'na');
   s = await saved(p);
@@ -322,7 +317,7 @@ console.log('scenarios');
 
   // a failed save tells the user
   await p.evaluate(() => { window.trackFirebase.savePosting = async () => { throw new Error('offline'); }; });
-  await p.check('#pg-VLCA002 .pg-brochure input');
+  await p.selectOption('#pg-VLCA002 select[aria-label="3 PIN website status"]', 'na');
   await p.waitForTimeout(150);
   ok('A failed save shows a message', /Could not save/.test(await p.textContent('#toast')));
   await p.evaluate(() => { window.trackFirebase.savePosting = async (t, paths) => { window.__saved.push(JSON.parse(JSON.stringify(t))); window.__paths.push(paths || null); }; });
@@ -400,14 +395,35 @@ console.log('scenarios');
   await p.click('#pgSave');
   ok('Saving a dialog for a row deleted elsewhere says so and writes nothing', /deleted by someone else/.test(await p.textContent('#toast')) && (await count()) === n2 && !(await p.$eval('#pgModal', e => e.classList.contains('open'))));
   await p.evaluate(() => { window.trackFirebase.savePosting = async t => { window.applyPostingSnapshot([]); throw Object.assign(new Error('denied'), { code: 'permission-denied' }); }; });
-  await p.click('#pg-R1 .ps-check input');   // click, not check: the row is meant to vanish
+  await p.selectOption('#pg-R1 select[aria-label="3 PIN website status"]', 'na');   // any change: the row is meant to vanish
   await p.waitForTimeout(100);
   ok('An update refused because the row is gone says it was deleted, not "no permission"', /deleted by someone else/.test(await p.textContent('#toast')) && !(await p.$('#pg-R1')));
   await snap(ROWS);
   await p.evaluate(() => { window.trackFirebase.savePosting = async () => { throw Object.assign(new Error('denied'), { code: 'permission-denied' }); }; });
-  await p.click('#pg-R1 .ps-check input');
+  await p.selectOption('#pg-R1 select[aria-label="3 PIN website status"]', 'na');
   await p.waitForTimeout(100);
   ok('…while a real refusal still says no permission', /do not have permission/.test(await p.textContent('#toast')));
+  await p.close();
+}
+
+// ── The brochure and the voice-over come from the board ──
+console.log('from the board');
+{
+  const p = await open({ width: 1440, height: 950 });
+  await p.evaluate(() => window.pgMode('sheet')); await p.waitForTimeout(150);
+  const base = { tenantId: T, stageId: '', media: {}, createdAt: 1, updatedAt: 1, stageChangedAt: 1 };
+  // Velachery's listing on the board: its Reel needs a voice-over made separately (not made yet), its Story
+  // is shot with V/O, and its brochure is created there.
+  await p.evaluate(b => window.applyListingsSnapshot([{ ...b, id: 'L-V', title: 'Velachery 3BHK', propertyCode: 'VLCA002', forPlan: { igReel: true, igStory: true }, forVoice: { igReel: 'vo', igStory: 'live' }, forVo: {}, brochure: { code: 'VLCA002', doneAt: Date.now() }, brochureLink: 'https://drive.google.com/file/d/vlca' }]), base);
+  await p.evaluate(() => window.pgRedraw()); await p.waitForTimeout(200);
+  const reel = await p.textContent('#pg-VLCA002 .ps-cell[data-l="Insta Reel"]');
+  ok('Voice-over pending shows on the post that needs it', /V\/O pending/.test(reel), reel);
+  ok('…and not on a post shot with V/O', !/V\/O pending/.test(await p.textContent('#pg-VLCA002 .ps-cell[data-l="Insta Story"]')));
+  ok('The brochure created on the board shows here, with its link', /Created/.test(await p.textContent('#pg-VLCA002 .pg-bro')) && /from the board/.test(await p.textContent('#pg-VLCA002 .ps-cell[data-l="Brochure"]')) && !!(await p.$('#pg-VLCA002 .pg-bro a')));
+  await p.screenshot({ path: OUT + '/from-board.png' });
+  await p.evaluate(b => window.applyListingsSnapshot([{ ...b, id: 'L-V', title: 'Velachery 3BHK', propertyCode: 'VLCA002', forPlan: { igReel: true }, forVoice: { igReel: 'vo' }, forVo: { igReel: true } }]), base);
+  await p.evaluate(() => window.pgRedraw()); await p.waitForTimeout(200);
+  ok('Once the V/O is made on the board, it says so', /V\/O made/.test(await p.textContent('#pg-VLCA002 .ps-cell[data-l="Insta Reel"]')));
   await p.close();
 }
 
@@ -433,7 +449,7 @@ console.log('300 rows');
   // 800 ms: still well under a second, with headroom for a slower machine. (600 failed now and
   // then on the office PC even before tags — Sheet measured 376–513 there; with tags 470–610.)
   ok('300 rows: every view draws in well under a second', Object.values(times).every(v => v < 800), JSON.stringify(times));
-  await p.evaluate(() => { let n = 0; const el = document.getElementById('postingView'); const mo = new MutationObserver(r => { if (r.some(x => x.target === el)) n++; }); mo.observe(el, { childList: true }); window.__draws = () => { mo.disconnect(); return n; }; window.pgBrochure('m1', true); });
+  await p.evaluate(() => { let n = 0; const el = document.getElementById('postingView'); const mo = new MutationObserver(r => { if (r.some(x => x.target === el)) n++; }); mo.observe(el, { childList: true }); window.__draws = () => { mo.disconnect(); return n; }; window.pgListing('m1', 'acres99', 'na'); });
   await p.waitForTimeout(300);
   ok('300 rows: an edit draws once (its own echo does not draw again)', (await p.evaluate(() => window.__draws())) === 1);
   await p.evaluate(() => window.pgOpenPlan());
