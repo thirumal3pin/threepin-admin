@@ -14,6 +14,7 @@
 // the filter buttons wrap, and every dialog is a single column.
 
 import * as G from './posting.js';
+import * as TG from './tags.js';
 
 let trackers = [];
 const MODES = ['today', 'week', 'sheet', 'cards'];
@@ -252,7 +253,53 @@ window.postingOpened = () => {
 function matchesSearch(t, q) {
   if (!q) return true;
   const o = origOf(t);
-  return [t.propertyCode, t.title, t.reference, t.location, t.details, t.note, o && o.title, o && o.propertyCode].join(' ').toLowerCase().includes(q);
+  return [t.propertyCode, t.title, t.reference, t.location, t.details, t.note, o && o.title, o && o.propertyCode, ...tagsOf(t)].join(' ').toLowerCase().includes(q);
+}
+
+// ── Tags ──
+// A property has one set of tags: those of its listing on the board when there is one (matched by
+// property code — a repost by its original's), else the row's own. Editing here edits that same set.
+// Built once per render: property code → listing (the first listing with that code, as the board
+// shows it), and each row's tags as worked out.
+let tagMemo = null;
+function memo() {
+  if (tagMemo) return tagMemo;
+  const byCode = new Map();
+  for (const l of (window.trackApi && window.trackApi.listings()) || []) {
+    for (const c of [l.propertyCode, l.brochure && l.brochure.code]) { const k = G.codeKey(c); if (k && !byCode.has(k)) byCode.set(k, l); }
+  }
+  return (tagMemo = { byCode, tags: new Map() });
+}
+function listingOf(t) {
+  const root = (t && t.repostOf && origOf(t)) || t;
+  const k = G.codeKey(root && root.propertyCode);
+  return k ? memo().byCode.get(k) || null : null;
+}
+function tagsOf(t) {
+  if (!t) return [];
+  const m = memo();
+  if (!m.tags.has(t.id)) { const l = listingOf(t); m.tags.set(t.id, TG.cleanTags(l ? l.tags : ((t.repostOf && origOf(t)) || t).tags)); }
+  return m.tags.get(t.id);
+}
+// The tag picker changed a listing's tags: show them here at once.
+window.pgRedraw = () => { tagMemo = null; if (isOpen() && !dlg) renderPosting(); else stale = true; };
+// A listings snapshot: tags may have changed — redraw on the next refresh (through the typing guard).
+window.pgListingsChanged = () => { tagMemo = null; stale = true; };
+function tagTarget(t) { const l = listingOf(t); return l ? 'l:' + l.id : 'p:' + (((t.repostOf && origOf(t)) || t).id); }
+// Small and inline (it sits inside buttons): the week tiles, Today and the lists.
+const miniTags = t => { const l = tagsOf(t); return l.length ? `<span class="tk-tags sm">${l.map(x => `<span class="tk-tag ${TG.tagClass(x)}">${esc(x)}</span>`).join('')}</span>` : ''; };
+// The picker for a row's property (its listing's tags when it has one).
+const tagPicker = (t, small, lazy) => window.tagEditorHtml ? window.tagEditorHtml(tagTarget(t), tagsOf(t), { small, lazy }) : tagChipsHtml(t);
+const tagChipsHtml = t => { const l = tagsOf(t); return l.length ? `<div class="tk-tags">${l.map(x => `<span class="tk-tag ${TG.tagClass(x)}">${esc(x)}</span>`).join('')}</div>` : ''; };
+// What the tag picker (tag-editor.js) needs from this tab.
+window.pgOwnTags = id => (byId(id) || {}).tags || [];
+window.pgOwnTagLists = () => trackers.map(t => t.tags);
+window.pgSetTags = (id, list, what) => { const t = byId(id); if (t) { tagMemo = null; persist({ ...t, tags: TG.cleanTags(list) }, String(what || 'Tags saved')); } };
+// Filters: the fixed ones must all hold; tag filters ('tag:<key>') — any one of them.
+function passes(t, t0) {
+  const keys = [...filters], tags = keys.filter(k => k.startsWith('tag:'));
+  if (!keys.filter(k => !k.startsWith('tag:')).every(k => G.matchesFilter(t, k, t0))) return false;
+  return !tags.length || tagsOf(t).some(x => tags.includes('tag:' + TG.tagKey(x)));
 }
 function worst(t) { const g = G.gaps(t, now()); return g.length ? g[0].sev : 0; }
 
@@ -276,6 +323,7 @@ function renderPosting() {
   if (!el) return;
   renderWaiting = false; stale = false; shownQ = searchText();
   famIdx = G.familyIndex(trackers);
+  tagMemo = null;   // listings and tags are looked up once per render (see listingOf)
   try { drawPosting(el); } finally { famIdx = null; }
 }
 function drawPosting(el) {
@@ -366,7 +414,7 @@ function taskGroupsHtml(groups) {
     <div class="tk-rows">${g.items.map(it => `<div class="tk-row pg-task${it.sev >= 3 ? ' hot' : ''}">
       <div class="tk-row-main">
         <div class="tk-row-top">${codeBadge(it.tracker, true)}<span class="tk-row-title">${esc(dn(it.tracker))}</span>${planBit(it.tracker)}</div>
-        <div class="tk-row-meta"><span>${esc(it.tracker.location)}</span>${it.tracker.note ? `<span class="pg-note">“${esc(it.tracker.note)}”</span>` : ''}</div>
+        <div class="tk-row-meta"><span>${esc(it.tracker.location)}</span>${miniTags(it.tracker)}${it.tracker.note ? `<span class="pg-note">“${esc(it.tracker.note)}”</span>` : ''}</div>
       </div>
       <div class="pg-acts">${taskActions(g, it)}</div>
     </div>`).join('')}</div>
@@ -516,7 +564,7 @@ function nowListHtml(groups) {
   return `<div class="pt-list">${rows.map(({ g, it }) => `<div class="pt-now">
     <span class="pt-tag">${esc(NOW_TAG[g.kind] || g.title)}</span>
     <span class="pt-what">${it.keys.filter(k => G.CHANNEL_KEYS.includes(k)).map(k => chIcon(k)).join('')}
-      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}</button>
+      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${miniTags(it.tracker)}</button>
       ${planBit(it.tracker)}</span>
     <span class="pt-acts">${taskActions(g, it)}</span>
   </div>`).join('')}</div>`;
@@ -529,7 +577,7 @@ function todayRow(it) {
   return `<div class="pt-row ws-${it.state}">
     <span class="pt-time">${esc(time)}</span>
     <span class="pt-type">${chLabel(it.key, type)}</span>
-    <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}</button>
+    <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${miniTags(it.tracker)}</button>
     <span class="pt-state">${esc(STATE_TXT[it.state])}</span>
     <span class="pt-acts">${itemActions(it)}</span>
   </div>`;
@@ -664,7 +712,7 @@ function sheetRow(t, cols, t0, wk) {
         <textarea class="pg-in pg-name ps-name" rows="1" placeholder="Reference or title" aria-label="${nameField === 'title' ? 'Title' : 'Reference'}" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" onchange="pgSetName(${jsq(id)},this.value)">${esc(t[nameField])}</textarea>
         <button type="button" class="ps-icon ps-edit" onclick="pgOpenEdit(${jsq(id)})" title="Edit details" aria-label="Edit details">${ICON_EDIT}</button>
       </div>
-      ${refLine}${sheetIdentity(t)}${note}
+      ${refLine}${sheetIdentity(t)}<div class="ps-tags">${tagPicker(t, true, true)}</div>${note}
     </div>
     ${cols.map(([k, label]) => sheetCell(t, k, label, t0, focus)).join('')}
   </div>`;
@@ -690,6 +738,7 @@ function weekStrip(base, hideable) {
     return `<button type="button" class="wk-it ws-${it.state}" onclick="pgTile(${jsq(it.id)},${jsq(it.key || '')},${jsq(it.state)})" title="${esc(type + ' · ' + dn(it.tracker) + ' · ' + STATE_TXT[it.state])}">
       <span class="wk-row1"><span class="wk-ch ch-${it.key || 'none'}">${chIcon(it.key)}${esc(type)}</span>${time ? `<span class="wk-tm">${esc(time)}</span>` : ''}</span>
       <span class="wk-nm">${esc(dn(it.tracker))}</span>
+      ${miniTags(it.tracker)}
     </button>`;
   };
   return `<section class="wk" aria-label="Week at a glance">
@@ -707,7 +756,7 @@ function weekStrip(base, hideable) {
         <div class="wk-dh"><span>${G.formatDate(d.day, F_WD)}</span><b>${new Date(d.day).getDate()}</b></div>
         <div class="wk-items">${d.items.length ? d.items.map(item).join('') : '<span class="wk-empty">—</span>'}</div>
       </div>`).join('')}</div>
-    ${a.weekItems.length ? `<div class="wk-week">Also this week: ${a.weekItems.map(it => `<button type="button" class="wk-it ws-planned inline" onclick="pgJump(${jsq(it.id)})"><span class="wk-ch ch-${it.key}">${chIcon(it.key)}${esc(G.SHORT_CH[it.key])}</span><span class="wk-nm">${esc(dn(it.tracker))}</span></button>`).join('')}</div>` : ''}
+    ${a.weekItems.length ? `<div class="wk-week">Also this week: ${a.weekItems.map(it => `<button type="button" class="wk-it ws-planned inline" onclick="pgJump(${jsq(it.id)})"><span class="wk-ch ch-${it.key}">${chIcon(it.key)}${esc(G.SHORT_CH[it.key])}</span><span class="wk-nm">${esc(dn(it.tracker))}</span>${miniTags(it.tracker)}</button>`).join('')}</div>` : ''}
     <div class="wk-legend"><span class="lg live">Live</span><span class="lg scheduled">Scheduled</span><span class="lg planned">Planned, time not set</span><span class="lg due">Due / day passed / link missing</span></div>
   </section>`;
 }
@@ -727,6 +776,7 @@ window.pgTile = (id, key, state) => {
       <div class="qk-meta">${when ? esc(when) + ' · ' : ''}<span class="qk-state ws-${state}">${esc(STATE_TXT[state] || '')}</span></div>
       ${key ? '' : '<p class="tk-hint">Pick what it will go out as — you set the time next.</p>'}
       <div class="qk-acts">${itemActions(it, true)}</div>
+      <div class="qk-tags"><span class="qk-l">Tags</span>${tagPicker(t, true)}</div>
       <button type="button" class="tk-link qk-open" onclick="pgJump(${jsq(id)})">Open the row in the sheet</button>
     </div>`;
   $('pgModal').classList.add('open');
@@ -768,7 +818,7 @@ function sheetHtml(base) {
   if (!trackers.length) return emptyAll();
   const t0 = now();
   const cols = [...G.CHANNELS.map(c => [c.key, c.label]), ['brochure', 'Brochure'], ...G.LISTINGS.map(l => [l.key, l.label])];
-  const list = sortList(base.filter(t => [...filters].every(k => G.matchesFilter(t, k, t0))));
+  const list = sortList(base.filter(t => passes(t, t0)));
   const head = `<div class="ps-head ps-grid" role="row"><div role="columnheader">Planned</div><div role="columnheader">Property</div>${cols.map(c => `<div role="columnheader">${CH_ICON[c[0]] ? chLabel(c[0], c[1]) : esc(c[1])}</div>`).join('')}</div>`;
   const thisWeek = G.mondayOf(t0);
   let rows = '';
@@ -810,15 +860,25 @@ function filterBar(base) {
     const on = filters.has(k);
     return `<button type="button" class="pg-f${on ? ' on' : ''}" aria-pressed="${on}" onclick="pgFilter(${jsq(k)})">${on ? '✓ ' : ''}${esc(label)} <span class="tk-n">${n}</span></button>`;
   }).join('');
+  const cat = window.tagCatalog ? window.tagCatalog() : TG.DEFAULT_TAGS;
+  // Counts in one pass over the rows, and only while the list is open.
+  const tagN = new Map();
+  if (filtersOpen) for (const t of base) for (const x of tagsOf(t)) tagN.set(TG.tagKey(x), (tagN.get(TG.tagKey(x)) || 0) + 1);
+  const tagBtns = !filtersOpen ? '' : cat.map(tag => {
+    const k = 'tag:' + TG.tagKey(tag), on = filters.has(k);
+    const n = tagN.get(TG.tagKey(tag)) || 0;
+    return `<button type="button" class="pg-f pg-ftag${on ? ' on' : ''}" aria-pressed="${on}" onclick="pgFilter(${jsq(k)})"><i class="tg-dot ${TG.tagClass(tag)}" aria-hidden="true"></i>${on ? '✓ ' : ''}${esc(tag)} <span class="tk-n">${n}</span></button>`;
+  }).join('');
+  const labelOf = k => k.startsWith('tag:') ? 'Tag: ' + (cat.find(t => 'tag:' + TG.tagKey(t) === k) || k.slice(4)) : (G.FILTERS.find(f => f[0] === k) || [])[1];
   // Active filters are always on screen as chips you can remove, even with the list folded away.
-  const chips = [...filters].map(k => { const l = (G.FILTERS.find(f => f[0] === k) || [])[1]; return l ? `<button type="button" class="pg-fchip" onclick="pgFilter(${jsq(k)})" title="Remove this filter">${esc(l)} <span aria-hidden="true">✕</span></button>` : ''; }).join('');
+  const chips = [...filters].map(k => { const l = labelOf(k); return l ? `<button type="button" class="pg-fchip" onclick="pgFilter(${jsq(k)})" title="Remove this filter">${esc(l)} <span aria-hidden="true">✕</span></button>` : ''; }).join('');
   return `<div class="pg-filters">
     <div class="pg-fbar">
       <button type="button" class="pg-fbtn${filtersOpen ? ' open' : ''}${filters.size ? ' has' : ''}" aria-expanded="${filtersOpen}" onclick="pgFiltersToggle()"><i class="fa-solid fa-sliders" aria-hidden="true"></i> Filters${filters.size ? ` <span class="pg-fcount">${filters.size}</span>` : ''}</button>
       ${filters.size ? `<div class="pg-active">${chips}<button type="button" class="tk-link" onclick="pgClearFilters()">Clear all</button></div>` : ''}
       <label class="pg-sort">Sort <select onchange="pgSort(this.value)" aria-label="Sort">${SORTS.map(([k, l]) => `<option value="${k}"${sortKey === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
-    ${filtersOpen ? `<div class="pg-fbtns">${btns}</div>` : ''}
+    ${filtersOpen ? `<div class="pg-fbtns">${btns}<div class="pg-fgroup"><span class="pg-fgl">Tags</span>${tagBtns}</div></div>` : ''}
   </div>`;
 }
 
@@ -828,7 +888,7 @@ function filterBar(base) {
 function propsHtml(base) {
   if (!trackers.length) return emptyAll();
   const t0 = now();
-  const list = sortList(base.filter(t => [...filters].every(k => G.matchesFilter(t, k, t0))));
+  const list = sortList(base.filter(t => passes(t, t0)));
   const seen = new Set(), blocks = [];
   for (const t of list) {
     const fam = G.familyOf(trackers, t.id, fams());
@@ -860,7 +920,8 @@ function familyHtml(fam) {
     <div class="pf-head">
       <div><div class="pf-name">${esc(G.nameOf(root))}</div>
         <div class="pf-meta">${root.propertyCode ? `<span class="ps-code">${esc(root.propertyCode)}</span>` : '<span class="tk-code none">no code</span>'}
-          ${root.location ? `<span>${esc(root.location)}</span>` : ''}<span>${rounds} round${rounds === 1 ? '' : 's'} of posting</span></div></div>
+          ${root.location ? `<span>${esc(root.location)}</span>` : ''}<span>${rounds} round${rounds === 1 ? '' : 's'} of posting</span></div>
+        <div class="pf-tags">${tagPicker(root, true, true)}</div></div>
       <button type="button" class="tk-btn sm" onclick="pgJump(${jsq(root.id)})">Open in sheet</button>
     </div>
     <div class="pf-tally">${tally}</div>
@@ -972,7 +1033,7 @@ function queueHtml(base) {
   const row = r => `<div class="tk-row">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span><span>${esc(r.tracker.location)}</span></div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span><span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
     </div>
     <div class="tk-row-side">
       <span class="tk-when${r.due ? ' bad' : ''}">${esc(fmt(r.at))}<br><span class="pg-sub">${esc(rel(r.at))}</span></span>
@@ -983,7 +1044,7 @@ function queueHtml(base) {
   const planRow = r => `<div class="tk-row${r.late ? ' pg-task hot' : ''}">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${esc(r.key ? r.label : 'Channel not chosen')}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span></div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${miniTags(r.tracker)}</div>
     </div>
     <div class="tk-row-side pg-acts">
       <span class="tk-when${r.late ? ' bad' : ''}">${esc(G.dayLabel(r.day))}<br><span class="pg-sub">${r.late ? 'day passed' : 'time not set'}</span></span>
@@ -1115,7 +1176,8 @@ function openDlg(kind, id, key) {
     title = t.repostOf ? 'Repost' : 'Property details';
     const common = `<label for="pgRefIn">Reference <span class="tk-opt">as it was in the plan</span></label><input id="pgRefIn" type="text" value="${esc(t.reference)}" placeholder="Lux49 4Bhk">
       <label for="pgDayIn">Planned date</label><input id="pgDayIn" type="date" value="${dateInput(t.plannedDate)}">
-      <label for="pgNote">Notes <span class="tk-opt">e.g. what the CEO asked for, timing reference</span></label><input id="pgNote" type="text" value="${esc(t.note)}" placeholder="CEO: Reel Friday 6pm, Story same day">`;
+      <label for="pgNote">Notes <span class="tk-opt">e.g. what the CEO asked for, timing reference</span></label><input id="pgNote" type="text" value="${esc(t.note)}" placeholder="CEO: Reel Friday 6pm, Story same day">
+      <label>Tags <span class="tk-opt">saved as you add them</span></label>${tagPicker(t, false)}`;
     if (t.repostOf) {
       body = `<p class="tk-hint" style="margin-top:0">↺ Repost of <b>${esc(o ? G.nameOf(o) : 'a deleted row')}</b>${o && o.propertyCode ? ' (' + esc(o.propertyCode) + ')' : ''}. Brochure, photos, details, 99 Acres, website and the dashboard link are kept on the original.</p>
         ${common}
@@ -1519,6 +1581,7 @@ window.pgSave = () => {
 // Enter confirms a single-field dialog; Escape closes the dialog without saving.
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && dlg && ['schedule', 'live', 'link', 'listing'].includes(dlg.kind) && e.target.tagName === 'INPUT') { e.preventDefault(); window.pgSave(); }
+  if (e.key === 'Escape' && e.target && e.target.matches && e.target.matches('.tg-in') && (e.target.value || (e.target.parentElement.querySelector('.tg-sug.open')))) return;   // the tag box clears first
   if (e.key === 'Escape' && dlg && $('pgModal').classList.contains('open')) { e.stopPropagation(); window.pgClose(); }
 }, true);
 document.addEventListener('mousedown', e => { if (e.target === $('pgModal')) window.pgClose(); });

@@ -14,22 +14,22 @@ const H = 3600000, D = 24 * H, NOW = Date.now(), T = 'demo';
 const mk = o => ({ tenantId: T, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' }, createdAt: NOW - 3 * D, updatedAt: NOW - H, ...o });
 
 let postings = [
-  mk({ id: 'TNAG0002', propertyCode: 'TNAG0002', title: '2BHK Apartment, T Nagar', location: 'T Nagar', propertyId: 'TNAG0002',
+  mk({ id: 'TNAG0002', propertyCode: 'TNAG0002', tags: ['Resale'], title: '2BHK Apartment, T Nagar', location: 'T Nagar', propertyId: 'TNAG0002',
     photosLink: 'https://drive.google.com/drive/folders/demo1', details: '2BHK · 1100 sqft · 3rd floor · east facing · ₹2.25 Cr', note: 'CEO: Reel Friday 6pm, Story same day',
     channels: { igStory: { status: 'live', at: NOW - 5 * H, liveAt: NOW - 5 * H, url: '' }, igReel: { status: 'scheduled', at: NOW - 2 * H }, fbReel: { status: 'scheduled', at: NOW + 26 * H }, yt: { status: 'na' } } }),
-  mk({ id: 'VLCA002', propertyCode: 'VLCA002', title: 'Velachery 3BHK', location: 'Velachery', propertyId: 'VLCA002',
+  mk({ id: 'VLCA002', propertyCode: 'VLCA002', tags: ['Resale', 'Collab'], title: 'Velachery 3BHK', location: 'Velachery', propertyId: 'VLCA002',
     photosLink: 'https://drive.google.com/drive/folders/demo2', details: '3BHK · 1450 sqft · gated community',
     brochure: { done: true, at: NOW - D, by: 'admin@3pin.in' },
     channels: { igStory: { status: 'live', at: NOW - D, liveAt: NOW - D, url: 'https://instagram.com/stories/demo/1' }, igReel: { status: 'live', at: NOW - 60 * D, liveAt: NOW - 60 * D, url: 'https://instagram.com/reel/demo2' }, fbReel: { status: 'scheduled', at: NOW + 3 * H }, yt: { status: 'yet' } },
     acres99: { status: 'posted', url: 'https://99acres.com/demo-velachery', at: NOW - D } }),
-  mk({ id: 'NOL001', propertyCode: 'NOL001', title: '4BHK Individual house', location: 'Nolambur', photosLink: '', details: '',
+  mk({ id: 'NOL001', propertyCode: 'NOL001', tags: ['New Dev.'], title: '4BHK Individual house', location: 'Nolambur', photosLink: '', details: '',
     note: 'Owner wants it posted only after the weekend' }),
-  mk({ id: 'ADB014', propertyCode: 'ADB014', title: 'Adambakkam 2BHK', location: 'Adambakkam', propertyId: 'ADB014',
+  mk({ id: 'ADB014', propertyCode: 'ADB014', tags: ['Resale'], title: 'Adambakkam 2BHK', location: 'Adambakkam', propertyId: 'ADB014',
     photosLink: 'https://drive.google.com/drive/folders/demo4', details: '2BHK · 950 sqft · ready to move',
     brochure: { done: true, at: NOW - 2 * D, by: 'admin@3pin.in' },
     channels: { igStory: { status: 'live', at: NOW - 2 * D, liveAt: NOW - 2 * D, url: 'https://instagram.com/stories/demo/4' }, igReel: { status: 'live', at: NOW - 2 * D, liveAt: NOW - 2 * D, url: 'https://instagram.com/reel/demo4' }, fbReel: { status: 'live', at: NOW - 2 * D, liveAt: NOW - 2 * D, url: 'https://facebook.com/reel/demo4' }, yt: { status: 'live', at: NOW - 2 * D, liveAt: NOW - 2 * D, url: 'https://youtube.com/watch?v=demo4' } },
     acres99: { status: 'posted', url: 'https://99acres.com/demo-adambakkam', at: NOW - 2 * D }, website: { status: 'posted', url: 'https://3pinrealty.com/p/ADB014', at: NOW - 2 * D } }),
-  mk({ id: 'KOT007', propertyCode: 'KOT007', title: 'Plot, Kottivakkam', location: 'Kottivakkam',
+  mk({ id: 'KOT007', propertyCode: 'KOT007', tags: ['Plot'], title: 'Plot, Kottivakkam', location: 'Kottivakkam',
     photosLink: 'https://drive.google.com/drive/folders/demo5', details: '2400 sqft plot · DTCP approved',
     channels: { igStory: { status: 'scheduled', at: NOW + 2 * D }, igReel: { status: 'scheduled', at: NOW + 2 * D + 2 * H }, fbReel: { status: 'yet' }, yt: { status: 'na' } },
     acres99: { status: 'na' } })
@@ -60,9 +60,9 @@ Youtube - T nagar series`;
 // new, one whose owner typed the code with an extra zero.
 const stageId = k => (defaultStages().find(s => s.key === k) || {}).id;
 let listings = [
-  { id: 'demo_l1', tenantId: T, title: '2BHK in T Nagar', location: 'T Nagar', config: '2 BHK', stageId: stageId('shoot_done'), media: {}, ownerInformed: true, createdAt: NOW - 6 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
-  { id: 'demo_l2', tenantId: T, title: 'Villa near ECR', location: 'Kottivakkam', config: '4 BHK', stageId: stageId('shoot_done'), media: {}, createdAt: NOW - 4 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
-  { id: 'demo_l4', tenantId: T, title: '3BHK sea view, Besant Nagar', location: 'Besant Nagar', config: '3 BHK', stageId: stageId('media_ready'), media: { photos: true, floorPlan: true, video: true }, need: { photos: true, floorPlan: true, video: true }, photosLink: 'https://drive.google.com/drive/folders/demo4', voice: 'vo', voDone: true, forPlan: { insta: true, yt: true }, forDone: { insta: true }, brochure: { code: 'TBES0004', doneAt: NOW - D }, brochureLink: 'https://drive.google.com/file/d/demo4', ownerInformed: true, createdAt: NOW - 9 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
+  { id: 'demo_l1', tenantId: T, title: '2BHK in T Nagar', location: 'T Nagar', config: '2 BHK', stageId: stageId('shoot_done'), media: {}, tags: ['Resale'], ownerInformed: true, createdAt: NOW - 6 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
+  { id: 'demo_l2', tenantId: T, title: 'Villa near ECR', location: 'Kottivakkam', config: '4 BHK', stageId: stageId('shoot_done'), media: {}, tags: ['New Dev.', 'Collab'], createdAt: NOW - 4 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
+  { id: 'demo_l4', tenantId: T, title: '3BHK sea view, Besant Nagar', location: 'Besant Nagar', config: '3 BHK', stageId: stageId('media_ready'), tags: ['Resale', 'Sea view'], media: { photos: true, floorPlan: true, video: true }, need: { photos: true, floorPlan: true, video: true }, photosLink: 'https://drive.google.com/drive/folders/demo4', forPlan: { igStory: true, igReel: true, yt: true }, forDone: { igStory: true, igReel: true }, forVoice: { igStory: 'vo', igReel: 'vo', yt: 'live' }, forVo: { igReel: true }, brochure: { code: 'TBES0004', doneAt: NOW - D }, brochureLink: 'https://drive.google.com/file/d/demo4', ownerInformed: true, createdAt: NOW - 9 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
   { id: 'demo_l3', tenantId: T, title: 'LUX 49 apartment', location: 'Thiruvanmiyur', stageId: stageId('details'), media: {}, brochure: { code: 'THVA0001' }, createdAt: NOW - 2 * D, updatedAt: NOW - D, stageChangedAt: NOW - 2 * D }
 ];
 

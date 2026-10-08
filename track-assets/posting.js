@@ -29,6 +29,8 @@
 // Confirming without a link is allowed but stays flagged until one is pasted.
 // ═══════════════════════════════════════════════════════════════════════
 
+import { cleanTags } from './tags.js';
+
 export const CHANNELS = [
   { key: 'igStory', label: 'Insta Story' },
   { key: 'igReel', label: 'Insta Reel' },
@@ -115,7 +117,8 @@ export function normalizeTracker(t) {
     channels,
     brochure: { done: !!(t.brochure && t.brochure.done), at: Number(t.brochure && t.brochure.at) || 0, by: str(t.brochure && t.brochure.by) },
     acres99: normalizeListing(t.acres99),
-    website: normalizeListing(t.website)
+    website: normalizeListing(t.website),
+    tags: cleanTags(t.tags)
   };
 }
 

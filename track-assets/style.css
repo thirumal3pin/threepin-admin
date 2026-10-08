@@ -1395,10 +1395,94 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 .tk-prev-desc { margin-top: 2px; padding-top: 9px; border-top: 1px dashed var(--border); font-size: 12.5px; line-height: 1.5; color: var(--ink3); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
 
 /* Shoot: voice, and the "Shoot for" outlets */
-.tk-voice, .tk-pickrow { align-items: center; }
-.tk-voice .tk-sel, .tk-pickrow .tk-sel { width: auto; max-width: 60%; }
+.tk-pickrow { align-items: center; }
+.tk-pickrow .tk-sel { width: auto; max-width: 60%; }
 .tk-check.tk-pending { color: var(--amber); font-weight: 600; }
 .tk-for-i { width: 16px; text-align: center; }
-.tk-for-insta { color: #d62976; }
+.tk-for-igStory, .tk-for-igReel { color: #d62976; }
+.tk-for-fbReel { color: #1877F2; }
+/* Shoot for: outlet · planned · done · voice · voice-over made */
+.tk-forgrid .tk-brief-hd, .tk-forgrid .tk-brief-r { grid-template-columns: minmax(0, 1fr) 64px 48px 118px 60px; }
+.tk-forgrid .tk-brief-r > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-for-v .tk-sel { width: 100%; font-weight: 500; }
+.tk-forgrid .tk-muted { color: var(--ink4); font-weight: 400; }
+.tk-for-legacy { margin: 0 0 8px; }
+.tk-for-vo label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tk-m { display: none; font-style: normal; }
+/* Phone: outlet · planned · done on one line; a planned outlet's voice (full width) and
+   "VO made" on a second line under it, so nothing is squeezed or cut off. */
+@media (max-width: 520px) {
+  .tk-forgrid .tk-brief-hd, .tk-forgrid .tk-brief-r { grid-template-columns: minmax(0, 1fr) 64px 48px; row-gap: 6px; }
+  .tk-forgrid .tk-brief-hd span:nth-child(n+4) { display: none; }
+  .tk-forgrid .tk-brief-r .tk-for-v { grid-column: 1; text-align: left; }
+  .tk-forgrid .tk-brief-r .tk-for-vo { grid-column: 2 / span 2; text-align: left; }
+  .tk-forgrid .tk-brief-r.np .tk-for-v, .tk-forgrid .tk-brief-r.np .tk-for-vo { display: none; }
+  .tk-forgrid .tk-for-vo .tk-muted { display: none; }
+  .tk-m { display: inline; font-size: 12px; }
+}
 .tk-for-yt { color: #FF0000; }
 .tk-for-collab { color: var(--ink3); }
+
+/* ── Tags: chips on tiles and rows; the picker (tag-editor.js) on a listing and a Posting property ── */
+.tk-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tk-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; line-height: 1; padding: 4px 8px;
+  border-radius: 99px; color: var(--brand); background: color-mix(in srgb, var(--brand) 10%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, transparent); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.tg .tk-tag { font-size: 12px; padding: 5px 6px 5px 10px; }
+.tg-x { border: 0; background: none; color: inherit; opacity: .55; cursor: pointer; font-size: 10px; padding: 0 2px; line-height: 1; }
+.tg-x:hover, .tg-x:focus-visible { opacity: 1; }
+.tg-add { position: relative; flex: 0 1 140px; min-width: 110px; }
+.tg-in { width: 100%; font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 99px; border: 1px dashed var(--border); background: transparent; color: var(--ink); }
+.tg-in:focus { outline: none; border-style: solid; border-color: var(--brand); box-shadow: var(--ring); background: var(--card); }
+.tg-sug { display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 160; min-width: 180px; max-width: min(260px, 80vw); max-height: 240px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r2, 10px); box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.15)); padding: 4px; }
+.tg-sug.open { display: flex; flex-direction: column; }
+.tg-opt { text-align: left; font: inherit; font-size: 13px; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer; }
+.tg-opt:hover, .tg-opt:focus-visible { background: var(--bg2); outline: none; }
+.tg-new { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--brand); margin-right: 4px; }
+.tg.sm .tk-tag { font-size: 11px; }
+.tk-sum-tags { display: flex; align-items: flex-start; gap: 12px; }
+.tk-sum-k { font-size: 11px; color: var(--ink3); padding-top: 6px; min-width: 36px; }
+.pf-tags { margin-top: 8px; }
+.pg-fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding-top: 6px; margin-top: 2px; border-top: 1px dashed var(--border); }
+.pg-fgl { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink4); margin-right: 2px; }
+.ps-prop .tk-tags { margin: 4px 0 2px; }
+
+.tg .tk-tag { min-width: 0; }
+.tg-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tg-x { flex: none; }
+.pg-ftag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A colour per tag (tags.js tagColor): Collab violet, New Dev. blue, Resale green, Plot amber, then
+   six more for every other tag. Text stays readable in both themes; the fill is a light tint. */
+.tc0 { --tg: #7C3AED; } .tc1 { --tg: #2563EB; } .tc2 { --tg: #15803D; } .tc3 { --tg: #B45309; } .tc4 { --tg: #0F766E; }
+.tc5 { --tg: #BE185D; } .tc6 { --tg: #C2410C; } .tc7 { --tg: #4338CA; } .tc8 { --tg: #0E7490; } .tc9 { --tg: #4D7C0F; }
+.tk-tag[class*="tc"] { color: var(--tg); background: color-mix(in srgb, var(--tg) 11%, var(--card)); border-color: color-mix(in srgb, var(--tg) 30%, transparent); }
+.tg-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--tg, var(--ink4)); margin-right: 6px; vertical-align: 1px; flex: none; }
+.tk-cdot.tg-dot { margin-right: 0; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tk-tag[class*="tc"] { color: color-mix(in srgb, var(--tg) 55%, #fff); background: color-mix(in srgb, var(--tg) 22%, var(--card)); border-color: color-mix(in srgb, var(--tg) 45%, transparent); }
+  :root:not([data-theme="light"]) .tg-dot { background: color-mix(in srgb, var(--tg, #888) 70%, #fff); }
+}
+:root[data-theme="dark"] .tk-tag[class*="tc"] { color: color-mix(in srgb, var(--tg) 55%, #fff); background: color-mix(in srgb, var(--tg) 22%, var(--card)); border-color: color-mix(in srgb, var(--tg) 45%, transparent); }
+:root[data-theme="dark"] .tg-dot { background: color-mix(in srgb, var(--tg, #888) 70%, #fff); }
+
+/* Tags inside week tiles, Today and the lists: small, on their own line under the name. */
+.tk-tags.sm { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.tk-tags.sm .tk-tag { font-size: 10px; padding: 2px 6px; font-weight: 600; }
+.wk-it .tk-tags.sm, .pt-name .tk-tags.sm { pointer-events: none; }
+.pt-name .tk-tags.sm { margin-top: 3px; }
+.tk-row-meta .tk-tags.sm { margin-top: 0; }
+.ps-tags { margin-top: 4px; }
+.ps-tags .tg-add { flex-basis: 96px; min-width: 84px; }
+.ps-tags .tg-in { font-size: 11px; padding: 3px 8px; }
+.qk-tags { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0 4px; }
+.qk-l { font-size: 11px; color: var(--ink3); padding-top: 6px; }
+#pgModal .tg { margin-top: 4px; }
+
+.tg-plus { font: inherit; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; border: 1px dashed var(--border); background: transparent; color: var(--ink3); cursor: pointer; }
+.tg-plus:hover, .tg-plus:focus-visible { border-style: solid; border-color: var(--brand); color: var(--brand); outline: none; }
+
+/* In a dialog the suggestions open in the flow (not over the dialog's edge), so nothing is cut off. */
+#pgModal .tg-sug.open { position: static; margin-top: 4px; max-width: 100%; box-shadow: none; }

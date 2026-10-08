@@ -1,5 +1,5 @@
-// Listing detail → Shoot: Voice (shot with voice / voice-over separately + "made"),
-// and "Shoot for" (Instagram / YouTube / Collab, planned + done). Runs the real board
+// Listing detail → "Shoot for": each outlet (Insta Story / Insta Reel / FB Reel / YouTube /
+// Collab) planned, done, its voice and voice-over made; Media ready; who goes on the shoot. Runs the real board
 // with firebase-sync stubbed, and checks what is saved and what the tile warns about.
 import { chromium } from 'playwright';
 import { readFileSync, existsSync } from 'node:fs';
@@ -36,31 +36,62 @@ const last = () => p.evaluate(() => window.__saved[window.__saved.length - 1]);
 const tile = () => p.$eval('.tk-card[data-id="v1"]', c => c.textContent);
 const settle = () => p.waitForTimeout(150);
 
-console.log('Voice');
-ok('starts Not decided, no voice-over tick', await p.$eval('.tk-voice select', s => s.value) === '' && !(await p.$('label:has-text("Voice-over made")')));
-await p.selectOption('.tk-voice select', 'vo'); await settle();
-ok('Voice-over separately: saved, and "Voice-over made" appears', (await last()).voice === 'vo' && !!(await p.$('label:has-text("Voice-over made")')));
-ok('…the tile says voice-over not made', /voice-over not made/.test(await tile()));
-await p.check('label:has-text("Voice-over made") input'); await settle();
-ok('ticking it saves and clears the tile warning', (await last()).voDone === true && !/voice-over not made/.test(await tile()));
-await p.selectOption('.tk-voice select', 'live'); await settle();
-ok('Shot with voice: the voice-over tick goes and is reset', (await last()).voice === 'live' && (await last()).voDone === false && !(await p.$('label:has-text("Voice-over made")')));
-
-console.log('Shoot for');
-const rows = await p.$$eval('#dpFor .tk-brief-r', r => r.map(x => x.textContent.trim()));
-ok('lists Instagram, YouTube, Collab', rows.length === 3 && /Instagram/.test(rows[0]) && /YouTube/.test(rows[1]) && /Collab/.test(rows[2]), JSON.stringify(rows));
-await p.check('#dpFor input[aria-label="Instagram planned"]'); await settle();
+console.log('Shoot for — each outlet: planned, done, voice, voice-over made');
+const blk = () => p.$eval('.tk-card[data-id="v1"] .tk-blockers', c => c.textContent).catch(() => '');
+const sel = l => `#dpFor select[aria-label="${l} voice"]`;
+ok('the Shoot section has no single whole-shoot Voice any more', !(await p.$('select[aria-label="Voice"]')));
+const rows = await p.$$eval('#dpFor .tk-brief-r', r => r.map(x => x.textContent.trim().split(/\s+/).slice(0, 2).join(' ')));
+ok('lists Insta Story, Insta Reel, FB Reel, YouTube, Collab', JSON.stringify(rows.map(r => r.replace(/\s*(Voice\?|—).*$/, ''))) === JSON.stringify(['Insta Story', 'Insta Reel', 'FB Reel', 'YouTube', 'Collab']), JSON.stringify(rows));
+ok('…voice is asked only for what is planned (none yet)', !(await p.$('#dpFor select')));
+await p.check('#dpFor input[aria-label="Insta Reel planned"]'); await settle();
 await p.check('#dpFor input[aria-label="YouTube planned"]'); await settle();
-const s = await last();
-ok('several can be planned at once', s.forPlan.insta && s.forPlan.yt && !s.forPlan.collab);
-ok('…the tile says what is still to make', /Instagram \+ YouTube not done/.test(await tile()));
-await p.check('#dpFor input[aria-label="Instagram done"]'); await settle();
-ok('Done ticks; the tile narrows to what is left', (await last()).forDone.insta && /YouTube not done/.test(await tile()) && !/Instagram/.test(await p.$eval('.tk-card[data-id="v1"] .tk-blockers', c => c.textContent)));
+let s = await last();
+ok('several can be planned at once', s.forPlan.igReel && s.forPlan.yt && !s.forPlan.collab);
+ok('…the tile says what is still to make', /Insta Reel \+ YouTube not done/.test(await tile()), await tile());
+ok('…and each planned one now asks for its voice', !!(await p.$(sel('Insta Reel'))) && !!(await p.$(sel('YouTube'))) && !(await p.$(sel('Insta Story'))));
+await p.selectOption(sel('YouTube'), 'live'); await settle();
+ok('YouTube shot with voice: saved, no voice-over tick for it', (await last()).forVoice.yt === 'live' && !(await p.$('#dpFor input[aria-label="YouTube voice-over made"]')));
+await p.selectOption(sel('Insta Reel'), 'vo'); await settle();
+ok('Insta Reel voice-over: saved, and its "VO made" tick appears', (await last()).forVoice.igReel === 'vo' && !!(await p.$('#dpFor input[aria-label="Insta Reel voice-over made"]')));
+ok('…the tile names it: voice-over not made: Insta Reel', /voice-over not made: Insta Reel/.test(await blk()), await blk());
+await p.check('#dpFor input[aria-label="Insta Story planned"]'); await settle();
+await p.selectOption(sel('Insta Story'), 'vo'); await settle();
+ok('a second outlet needing a voice-over is listed too', /voice-over not made: Insta Story, Insta Reel/.test(await blk()), await blk());
+await p.check('#dpFor input[aria-label="Insta Reel voice-over made"]'); await settle();
+const voChip = async () => (await p.$$eval('.tk-card[data-id="v1"] .tk-blockers > *', c => c.map(e => e.textContent.trim()))).find(t => /^voice-over/.test(t)) || '';
+ok('ticking Insta Reel\'s VO made leaves only Insta Story', (await last()).forVo.igReel === true && await voChip() === 'voice-over not made: Insta Story', await voChip());
+await p.selectOption(sel('Insta Reel'), 'live'); await settle();
+ok('switching an outlet to "With voice" resets its VO made', (await last()).forVo.igReel === false);
+await p.selectOption(sel('Insta Reel'), 'vo'); await settle();
+await p.check('#dpFor input[aria-label="Insta Reel voice-over made"]'); await settle();
+await p.check('#dpFor input[aria-label="Insta Reel done"]'); await settle();
+ok('Done ticks; the tile narrows to what is left', (await last()).forDone.igReel && /YouTube/.test(await blk()) && !/Insta Reel/.test(await blk()), await blk());
 await p.check('#dpFor input[aria-label="Collab done"]'); await settle();
 ok('ticking Done on something not planned plans it too', (await last()).forPlan.collab && (await last()).forDone.collab);
+await p.uncheck('#dpFor input[aria-label="Insta Story planned"]'); await settle();
+s = await last();
+ok('un-planning an outlet clears its done, voice and voice-over (and its warning)', !s.forPlan.igStory && s.forVoice.igStory === '' && s.forVo.igStory === false && !/Insta Story/.test(await blk()), JSON.stringify({ v: s.forVoice, b: await blk() }));
 await p.uncheck('#dpFor input[aria-label="YouTube planned"]'); await settle();
-const blk = () => p.$eval('.tk-card[data-id="v1"] .tk-blockers', c => c.textContent).catch(() => '');
-ok('un-planning clears its Done and its warning — only the brochure is left', !(await last()).forPlan.yt && !(await last()).forDone.yt && (await blk()).trim() === 'no brochure', await blk());
+ok('with everything planned made — only the brochure is left', !(await last()).forPlan.yt && (await blk()).trim() === 'no brochure', await blk());
+// The single whole-shoot voice set before this change (one live listing has it).
+await p.evaluate(s => window.applyListingsSnapshot([...window.trackApi.listings(), s]), { id: 'vL', tenantId: T, title: 'Legacy voice', stageId: 'shoot_done', media: {}, voice: 'vo', createdAt: 1, updatedAt: 1, stageChangedAt: 1 }); await settle();
+ok('an old whole-shoot "voice-over" still shows on the tile until it is set per outlet', /voice-over not made/.test(await p.$eval('.tk-card[data-id="vL"]', c => c.textContent)));
+await p.evaluate(() => openDetail('vL')); await settle();
+ok('…and the detail says so above Shoot for', /Set before for the whole shoot/.test(await p.$eval('#dpFor', e => e.textContent)));
+await p.evaluate(() => setForVoice('vL', 'yt', 'live')); await settle();
+const vL = await p.evaluate(() => window.trackApi.listings().find(l => l.id === 'vL'));
+ok('…choosing a voice for an outlet replaces it (note gone, old field cleared)', vL.voice === '' && vL.forVoice.yt === 'live' && vL.forPlan.yt && !/Set before/.test(await p.$eval('#dpFor', e => e.textContent)) && !/voice-over not made/.test(await p.$eval('.tk-card[data-id="vL"]', c => c.textContent)));
+// "Instagram" ticked in the day before the outlets were split: it is the Reel, and can be unticked.
+await p.evaluate(s => window.applyListingsSnapshot([...window.trackApi.listings(), s]), { id: 'vI', tenantId: T, title: 'Old insta', stageId: 'shoot_done', media: {}, forPlan: { insta: true }, createdAt: 1, updatedAt: 1, stageChangedAt: 1 }); await settle();
+await p.evaluate(() => openDetail('vI')); await settle();
+const reelBox = n => p.$eval(`#dpFor input[aria-label="Insta Reel ${n}"]`, i => i.checked);
+ok('an old "Instagram" tick shows as Insta Reel planned, and counts as not done', await reelBox('planned') && /Insta Reel not done/.test(await p.$eval('.tk-card[data-id="vI"]', c => c.textContent)));
+await p.check('#dpFor input[aria-label="Insta Reel done"]'); await settle();
+const vI = () => p.evaluate(() => window.trackApi.listings().find(l => l.id === 'vI'));
+ok('…ticking it done folds it into the Reel for good', (await vI()).forPlan.igReel && !(await vI()).forPlan.insta && (await vI()).forDone.igReel && !/Insta Reel not done/.test(await p.$eval('.tk-card[data-id="vI"]', c => c.textContent)));
+await p.uncheck('#dpFor input[aria-label="Insta Reel planned"]'); await settle();
+ok('…and un-planning it really un-plans it (nothing left stuck)', !(await reelBox('planned')) && !/Insta Reel/.test(await p.$eval('.tk-card[data-id="vI"]', c => c.textContent)));
+await p.evaluate(() => openDetail('v1')); await settle();
 
 console.log('Media ready');
 const stageOf = () => p.evaluate(() => window.trackApi.listings().find(l => l.id === 'v1').stageId);

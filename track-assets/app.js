@@ -29,6 +29,7 @@ import * as BF from './brochure-flow.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
 import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
 import { displayName } from '../crm-assets/mentions.js';
+import * as TG from './tags.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -76,6 +77,9 @@ function renderModeToggle() {
 window.applyListingsSnapshot = function (list) {
   listings = Array.isArray(list) ? list : [];
   seenListings = true;
+  // The Posting tab shows each property's tags from its listing: tell it to redraw (it still waits
+  // while someone is typing there).
+  if (window.pgListingsChanged) window.pgListingsChanged();
   refreshAll();
 };
 window.applyTrackPipelineSnapshot = function (list) {
@@ -259,18 +263,19 @@ function applyFilters() {
     if (stageFilter.size && !stageFilter.has(x.stageId)) return false;
     if (brochureFilter && brochureOf(x) !== brochureFilter) return false;
     if (ownerAgentFilter.size) { const ag = listingAgents(x); if (!(ag.length ? ag.some(e => ownerAgentFilter.has(e)) : ownerAgentFilter.has('none'))) return false; }
+    if (tagFilter.size && !TG.cleanTags(x.tags).some(t => tagFilter.has(TG.tagKey(t)))) return false;
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
     const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone,
       x.askingPrice, x.shootAssignee, x.remarks, x.lastNote && x.lastNote.text, l && l.name, l && l.phone, l && l.propertyInterest,
-      l && l.assignedAgent, l && l.secondaryAgent].join(' ').toLowerCase();
+      l && l.assignedAgent, l && l.secondaryAgent, ...TG.cleanTags(x.tags)].join(' ').toLowerCase();
     return hay.includes(q);
   });
   fitBoard();
   if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
   // The Posting tab redraws through its own guard: never while someone is typing in it or has a
-  // dialog open (it only needs this call for the search text — it has no use for listings or leads).
+  // dialog open. It redraws when its rows, the search text or the listings (their tags) changed.
   else if (currentView === 'posting') { const r = window.refreshPosting || window.renderPosting; if (r) r(); }
   else renderSellers();
 }
@@ -316,6 +321,7 @@ window.onSearch = onSearch;
 // Stage and Agent are multi-select dropdowns, and Sort is one choice shared by the board and the
 // list. Ten stage chips ran off the edge of the bar and overlapped the Board/List switch.
 let ownerAgentFilter = new Set();     // emails, or 'none' for Unassigned
+let tagFilter = new Set();           // tag keys (lower case); a listing with any of them shows
 // The brochure is a filter, not a column: '' (all) · none · requested · building · created.
 let brochureFilter = '';
 const BROCHURE_FILTERS = [['', 'All'], ['none', 'Not started'], ['requested', 'Requested'], ['building', 'On its way'], ['created', 'Created']];
@@ -379,7 +385,16 @@ function toggleAgentFilter(v) {
   renderFilterBar(); applyFilters();
 }
 function clearAgentFilter() { ownerAgentFilter = new Set(); renderFilterBar(); applyFilters(); }
-Object.assign(window, { toggleStageFilter, clearStageFilter, toggleAgentFilter, clearAgentFilter });
+function toggleTagFilter(k) {
+  if (tagFilter.has(k)) tagFilter.delete(k); else tagFilter.add(k);
+  renderFilterBar(); applyFilters();
+}
+function clearTagFilter() { tagFilter = new Set(); renderFilterBar(); applyFilters(); }
+Object.assign(window, { toggleStageFilter, clearStageFilter, toggleAgentFilter, clearAgentFilter, toggleTagFilter, clearTagFilter });
+// Every tag in use — the starting four, on listings, and on Posting rows of their own.
+const allTags = () => TG.catalog(...listings.map(l => l.tags), ...((window.pgOwnTagLists && window.pgOwnTagLists()) || []));
+// A listing's tags as chips (on the tile, the list row, the Posting tab).
+const tagChips = list => { const l = TG.cleanTags(list); return l.length ? `<div class="tk-tags">${l.map(t => `<span class="tk-tag ${TG.tagClass(t)}">${esc(t)}</span>`).join('')}</div>` : ''; };
 
 function renderFilterBar() {
   const el = document.getElementById('tkFilterBar');
@@ -394,6 +409,9 @@ function renderFilterBar() {
   const names = (set, all, nameOf) => !set.size ? all : set.size <= 2 ? [...set].map(nameOf).join(', ') : set.size + ' selected';
   const stageLabel = names(stageFilter, 'All stages', id => (stageById(id) || {}).name || id);
   const agentLabel = names(ownerAgentFilter, 'Everyone', e => e === 'none' ? 'Unassigned' : personName(e));
+  const tagCat = allTags();
+  const tagRows = tagCat.map(t => row(tagFilter.has(TG.tagKey(t)), `toggleTagFilter(${jsq(TG.tagKey(t))})`, `<i class="tk-cdot tg-dot ${TG.tagClass(t)}"></i>`, t, listings.filter(x => TG.hasTag(x.tags, t)).length)).join('');
+  const tagLabel = names(tagFilter, 'All', k => (tagCat.find(t => TG.tagKey(t) === k) || k));
   el.innerHTML = `
     <details class="tk-dd${stageFilter.size ? ' on' : ''}" id="ddStage"${openId === 'ddStage' ? ' open' : ''}>
       <summary><span class="tk-dd-k">Stage</span><span class="tk-dd-v">${esc(stageLabel)}</span><span class="tk-caret">▾</span></summary>
@@ -404,6 +422,11 @@ function renderFilterBar() {
       <summary><span class="tk-dd-k">Agent</span><span class="tk-dd-v">${esc(agentLabel)}</span><span class="tk-caret">▾</span></summary>
       <div class="tk-dd-pop">${agentRows}
         ${ownerAgentFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearAgentFilter()">Show everyone</button>` : ''}</div>
+    </details>
+    <details class="tk-dd${tagFilter.size ? ' on' : ''}" id="ddTag"${openId === 'ddTag' ? ' open' : ''}>
+      <summary><span class="tk-dd-k">Tags</span><span class="tk-dd-v">${esc(tagLabel)}</span><span class="tk-caret">▾</span></summary>
+      <div class="tk-dd-pop">${tagRows}
+        ${tagFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearTagFilter()">Show all tags</button>` : ''}</div>
     </details>
     <label class="tk-dd tk-dd-pick tk-dd-bro${brochureFilter ? ' on' : ''}"><span class="tk-dd-k">Brochure</span>
       <select onchange="setBrochureFilter(this.value)" aria-label="Brochure">${BROCHURE_FILTERS.map(([k, l]) => `<option value="${k}"${brochureFilter === k ? ' selected' : ''}>${esc(l)}${k ? ' (' + listings.filter(x => brochureOf(x) === k).length + ')' : ''}</option>`).join('')}</select>
@@ -511,6 +534,7 @@ function listRowHtml(x) {
       <b>${esc(it.locality || x.title || 'Area not given')}</b>
       <span class="tk-sub2">${[it.f.deal && (it.f.deal === 'rent' ? 'For rent' : 'For sale'), it.f.type && (TYPE_LABELS[it.f.type] || it.f.type), it.f.config, it.f.sizes[0] && it.f.sizes[0].label, it.f.price].filter(Boolean).map(esc).join(' · ') || '—'}</span>
       ${codeChip(x)}
+      ${tagChips(x.tags)}
     </span>
     <span role="cell">
       ${st ? `<span class="tk-pill" style="background:${st.color}22;color:${st.color}">${esc(st.name)}</span>` : '—'}
@@ -594,6 +618,7 @@ function cardHtml(x) {
     <div class="sl-prop">
       <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}${codeChip(x)}</div>
       ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
+      ${tagChips(x.tags)}
       ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
     </div>
     ${shootLine(x)}
@@ -701,9 +726,12 @@ function mediaGaps(x) {
   const { done, total } = mediaProgress(x);
   if (done < total) out.push(`${total - done} of ${total} media missing`);
   if (!x.photosLink) out.push('photos not uploaded');
-  if (x.voice === 'vo' && !x.voDone) out.push('voice-over not made');
-  const forLeft = FOR_KEYS.filter(([k]) => x.forPlan && x.forPlan[k] && !(x.forDone && x.forDone[k])).map(([, l]) => l);
+  const forLeft = FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k)).map(([, l]) => l);
   if (forLeft.length) out.push(`${forLeft.join(' + ')} not done`);
+  // Voice-over per outlet: every planned outlet that needs one, until it is made.
+  const voLeft = FOR_KEYS.filter(([k]) => forPlanned(x, k) && forVoice(x, k) === 'vo' && !forVoMade(x, k)).map(([, l]) => l);
+  if (voLeft.length) out.push(`voice-over not made: ${voLeft.join(', ')}`);
+  else if (legacyVoice(x) && !x.voDone) out.push('voice-over not made');
   if (brochureOf(x) !== 'created') out.push(GAP_BROCHURE);
   return out;
 }
@@ -1429,6 +1457,7 @@ function summaryHtml(x, lead, stage) {
       ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
       ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))} — add it with Edit details at the bottom</div>` : ''}
     </div>
+    <div class="tk-sum-tags"><span class="tk-sum-k">Tags</span>${window.tagEditorHtml ? window.tagEditorHtml('l:' + x.id, x.tags) : tagChips(x.tags)}</div>
     <div class="tk-sum-grid">
       <div class="tk-sum-f"><span>Agent</span><b class="${agents.length ? '' : 'none'}">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</b>${lead ? '<span class="tk-sum-sub">set on the CRM lead</span>' : ''}</div>
       <div class="tk-sum-f stage"><span>Stage</span>
@@ -1496,13 +1525,6 @@ function openDetail(id) {
       ${x.rescheduled ? `<div class="tk-kv"><span>Rescheduled</span>${x.rescheduled} time${x.rescheduled === 1 ? '' : 's'}${x.rescheduleReason ? ' — ' + esc(x.rescheduleReason) : ''}</div>` : ''}
       <label class="tk-check"><input type="checkbox" ${x.ownerInformed ? 'checked' : ''} onchange="setFlag('${x.id}','ownerInformed',this.checked)"> Owner told we are coming</label>
       <label class="tk-check"><input type="checkbox" ${x.ownerApproved ? 'checked' : ''} onchange="setFlag('${x.id}','ownerApproved',this.checked)"> Owner approved the photos / brochure</label>
-      <div class="tk-kv tk-voice"><span>Voice</span>
-        <select class="tk-sel sm" aria-label="Voice" onchange="setVoice('${x.id}', this.value)">
-          <option value=""${!x.voice ? ' selected' : ''}>Not decided</option>
-          <option value="live"${x.voice === 'live' ? ' selected' : ''}>Shot with voice</option>
-          <option value="vo"${x.voice === 'vo' ? ' selected' : ''}>Voice-over separately</option>
-        </select></div>
-      ${x.voice === 'vo' ? `<label class="tk-check${x.voDone ? '' : ' tk-pending'}"><input type="checkbox" ${x.voDone ? 'checked' : ''} onchange="setVoDone('${x.id}', this.checked)"> Voice-over made</label>` : ''}
       <div class="tk-btnrow">
         <button class="tk-btn" onclick="openShootModal('${x.id}')">${x.shootAt ? 'Reschedule' : 'Book the shoot'}</button>
         ${x.shootAt && !x.shootDoneAt ? `<button class="tk-btn primary" onclick="openWrapModal('${x.id}')">Shoot done →</button>` : ''}
@@ -1528,15 +1550,23 @@ function openDetail(id) {
 
     <div class="tk-sec" id="dpFor">
       <div class="tk-sec-hdr">Shoot for</div>
-      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. Tick what is planned on the left, and what has been made on the right.</div>
-      <div class="tk-brief">
-        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span></div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. For each: planned, made, and its voice — shot with voice, or a voice-over made separately.</div>
+      ${legacyVoice(x) ? `<div class="tk-hint warn tk-for-legacy">Set before for the whole shoot: <b>voice-over separately</b>${x.voDone ? ' (made)' : ''}. Pick the voice for each one below.</div>` : ''}
+      <div class="tk-brief tk-forgrid">
+        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span><span>Voice</span><span>VO made</span></div>
         ${FOR_KEYS.map(([k, label]) => {
-          const plan = !!(x.forPlan && x.forPlan[k]), done = !!(x.forDone && x.forDone[k]);
-          return `<div class="tk-brief-r${plan && !done ? ' open' : ''}">
+          const plan = forPlanned(x, k), done = forMade(x, k), v = forVoice(x, k), vo = forVoMade(x, k);
+          const voLeft = plan && v === 'vo' && !vo;
+          return `<div class="tk-brief-r${(plan && !done) || voLeft ? ' open' : ''}${plan ? '' : ' np'}">
             <span><i class="${FOR_ICON[k]} tk-for-i tk-for-${k}" aria-hidden="true"></i> ${esc(label)}</span>
             <span><input type="checkbox" ${plan ? 'checked' : ''} onchange="setForPlan('${x.id}','${k}',this.checked)" aria-label="${esc(label)} planned"></span>
             <span><input type="checkbox" ${done ? 'checked' : ''} ${!plan ? 'class="dim"' : ''} onchange="setForDone('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
+            <span class="tk-for-v">${plan ? `<select class="tk-sel sm" aria-label="${esc(label)} voice" onchange="setForVoice('${x.id}','${k}',this.value)">
+                <option value=""${!v ? ' selected' : ''}>Voice?</option>
+                <option value="live"${v === 'live' ? ' selected' : ''}>With voice</option>
+                <option value="vo"${v === 'vo' ? ' selected' : ''}>Voice-over</option>
+              </select>` : '<span class="tk-muted">—</span>'}</span>
+            <span class="tk-for-vo">${v === 'vo' && plan ? `<label><input type="checkbox" ${vo ? 'checked' : ''} onchange="setForVo('${x.id}','${k}',this.checked)" aria-label="${esc(label)} voice-over made"><em class="tk-m"> VO made</em></label>` : '<span class="tk-muted">—</span>'}</span>
           </div>`;
         }).join('')}
       </div>
@@ -1901,6 +1931,7 @@ window.trackApi = {
   loadInventory: force => loadInventory(force),
   mutate: (id, fn, text) => mutate(id, fn, text),
   brochureOf: x => brochureOf(x),
+  refreshFilters: () => renderFilterBar(),   // the Tags dropdown, after a tag is added or removed
   openDetail: id => openDetail(id),
   currentDetailId: () => currentDetailId,
   editingId: () => (mModalMode === 'edit' ? mModalEditId : null),
@@ -1925,30 +1956,55 @@ function setNeed(id, key, on) {
 }
 window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRemarks; window.setNeed = setNeed;
 
-// ── Voice: recorded on the shoot, or a voice-over made separately (and whether it is made yet) ──
-const VOICE = { live: 'Shot with voice', vo: 'Voice-over separately' };
-function setVoice(id, v) {
-  const val = VOICE[v] ? v : '';
-  mutate(id, x => { x.voice = val; if (val !== 'vo') x.voDone = false; }, val ? `Voice: ${VOICE[val].toLowerCase()}` : 'Voice: not decided');
-  if (currentDetailId === id) openDetail(id);
+// ── Shoot for: each outlet this shoot is cut for — planned, done, and its voice ──
+// The same outlets as the Posting tab, plus collabs. Voice is per outlet: a YouTube walkthrough
+// is often shot with voice while the Reel gets a voice-over made separately, so "voice-over
+// made" is ticked per outlet too.
+const FOR_KEYS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
+const FOR_ICON = { igStory: 'fa-brands fa-instagram', igReel: 'fa-brands fa-instagram', fbReel: 'fa-brands fa-facebook', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake' };
+const VOICE = { live: 'With voice', vo: 'Voice-over' };
+const forLabel = key => (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
+// "Instagram" ticked before the outlets were split (shipped for a day) reads as the Reel, and the
+// first edit of the section folds it in for good — so it can always be unticked.
+const forPlanned = (x, k) => !!(x.forPlan && (x.forPlan[k] || (k === 'igReel' && x.forPlan.insta)));
+const forMade = (x, k) => !!(x.forDone && (x.forDone[k] || (k === 'igReel' && x.forDone.insta)));
+function foldInsta(x) {
+  for (const f of ['forPlan', 'forDone']) if (x[f] && x[f].insta) x[f] = { ...x[f], igReel: true, insta: false };
 }
-function setVoDone(id, on) {
-  mutate(id, x => { x.voDone = !!on; }, on ? 'Voice-over made' : 'Voice-over not made yet');
-}
-// ── Shoot for: which outlets this shoot is cut for, planned and done — the same two ticks as the brief ──
-const FOR_KEYS = [['insta', 'Instagram'], ['yt', 'YouTube'], ['collab', 'Collab']];
-const FOR_ICON = { insta: 'fa-brands fa-instagram', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake' };
+const forVoice = (x, k) => (x.forVoice && VOICE[x.forVoice[k]]) ? x.forVoice[k] : '';
+const forVoMade = (x, k) => !!(x.forVo && x.forVo[k]);
+// The single whole-shoot voice from before (x.voice / x.voDone) still counts until voice is set
+// per outlet; the first per-outlet choice retires it.
+const legacyVoice = x => x.voice === 'vo' && !(x.forVoice && Object.values(x.forVoice).some(v => VOICE[v]));
 function setForPlan(id, key, on) {
-  const label = (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
-  mutate(id, x => { x.forPlan = { ...(x.forPlan || {}), [key]: !!on }; if (!on) x.forDone = { ...(x.forDone || {}), [key]: false }; }, `Shoot for ${label}: ${on ? 'planned' : 'not planned'}`);
+  mutate(id, x => {
+    foldInsta(x);
+    x.forPlan = { ...(x.forPlan || {}), [key]: !!on };
+    // Not planned any more: its done, voice and voice-over go with it.
+    if (!on) { x.forDone = { ...(x.forDone || {}), [key]: false }; x.forVoice = { ...(x.forVoice || {}), [key]: '' }; x.forVo = { ...(x.forVo || {}), [key]: false }; }
+  }, `Shoot for ${forLabel(key)}: ${on ? 'planned' : 'not planned'}`);
   if (currentDetailId === id) openDetail(id);
 }
 function setForDone(id, key, on) {
-  const label = (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
-  mutate(id, x => { x.forDone = { ...(x.forDone || {}), [key]: !!on }; if (on) x.forPlan = { ...(x.forPlan || {}), [key]: true }; }, `${label} cut: ${on ? 'done' : 'not done'}`);
+  mutate(id, x => { foldInsta(x); x.forDone = { ...(x.forDone || {}), [key]: !!on }; if (on) x.forPlan = { ...(x.forPlan || {}), [key]: true }; }, `${forLabel(key)} cut: ${on ? 'done' : 'not done'}`);
   if (currentDetailId === id) openDetail(id);
 }
-Object.assign(window, { setVoice, setVoDone, setForPlan, setForDone });
+function setForVoice(id, key, v) {
+  const val = VOICE[v] ? v : '';
+  mutate(id, x => {
+    foldInsta(x);
+    x.forVoice = { ...(x.forVoice || {}), [key]: val };
+    if (val !== 'vo') x.forVo = { ...(x.forVo || {}), [key]: false };
+    x.forPlan = { ...(x.forPlan || {}), [key]: true };
+    if (val) { x.voice = ''; x.voDone = false; }   // the old whole-shoot setting is replaced
+  }, `${forLabel(key)}: ${val ? VOICE[val].toLowerCase() : 'voice not decided'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+function setForVo(id, key, on) {
+  mutate(id, x => { foldInsta(x); x.forVo = { ...(x.forVo || {}), [key]: !!on }; }, `${forLabel(key)}: voice-over ${on ? 'made' : 'not made yet'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+Object.assign(window, { setForPlan, setForDone, setForVoice, setForVo });
 
 // ═══════ ACCESS DETAILS ═══════
 // The block that decides whether a shoot happens at all. Kept as its own
