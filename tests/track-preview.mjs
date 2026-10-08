@@ -188,7 +188,18 @@ ok('Card: then the owner with the number and WhatsApp', meena.name === 'Meenaksh
   ok('…Escape leaves it as it was', /3BHK Apartment, Nungambakkam/.test(await page.textContent(sel + ' .tk-pname')) && !(await page.$(sel + ' .tk-pname-in')));
   const tag = await page.evaluate(() => { const t = document.querySelector('.tk-card .tk-tag'); if (!t) return null; const cs = getComputedStyle(t); return { clip: cs.clipPath, hole: getComputedStyle(t, '::before').content }; });
   ok('Tags look like tags: pointed end with a hole', !tag || (/polygon/.test(tag.clip) && tag.hole !== 'none'), JSON.stringify(tag));
-}ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
+
+  // A long property name (or one long word) must never widen its column: every column is the same width.
+  const keptTitles = await page.evaluate(() => window.trackApi.listings().slice(0, 2).map(l => [l.id, l.title]));
+  await page.evaluate(() => { const ls = window.trackApi.listings(); window.trackApi.mutate(ls[0].id, l => { l.title = '2 Grounds for sale in Shenoy nagar with individual house, corner plot, east facing'; }, null); window.trackApi.mutate(ls[1].id, l => { l.title = 'AVERYLONGPROPERTYNAMEWITHNOSPACESATALLTHATWOULDPUSHTHECOLUMN'; }, null); });
+  await page.waitForTimeout(200);
+  const widths = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => Math.round(c.getBoundingClientRect().width)));
+  ok('Every board column is the same width, whatever the names in it', widths.length > 3 && new Set(widths).size === 1, JSON.stringify(widths));
+  const clamp = await page.evaluate(() => { const t = [...document.querySelectorAll('.tk-pname-t')].find(e => /Shenoy/.test(e.textContent)); return t && { h: t.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(t).lineHeight) }; });
+  ok('…a long name wraps to at most two lines', clamp && clamp.h <= clamp.lh * 2 + 2, JSON.stringify(clamp));
+  await page.screenshot({ path: 'tests/out/board-even.png' });
+  await page.evaluate(k => k.forEach(([id, t]) => window.trackApi.mutate(id, l => { l.title = t; }, null)), keptTitles);
+  await page.waitForTimeout(150);}ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
 ok('Card: the assigned agents', /Agent\.a \+ Agent\.b/.test(meena.agent), meena.agent);
 ok('Card: last updated, and by whom', /Updated 1h ago by Agent\.a/.test(meena.upd), meena.upd);
 ok('Card: days in this column', /2d here/.test(meena.age), meena.age);

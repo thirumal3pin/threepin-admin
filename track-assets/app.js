@@ -610,12 +610,13 @@ function cardHtml(x) {
       data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
-    <div class="sl-head">
-      <div class="sl-who tk-pwho">
-        <div class="tk-pname">${codeChip(x)}${propNameHtml(x, it)}
-          <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
+    <div class="sl-head tk-chead">
+      <div class="tk-ctop">
+        <span class="tk-pcode">${codeChip(x)}</span>
+        <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
       </div>
-      <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
+      <div class="tk-pname">${propNameHtml(x, it)}
+        <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
     </div>
     <div class="sl-prop">
       <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}</div>
