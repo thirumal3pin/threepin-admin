@@ -122,7 +122,7 @@
     <div class="tk-box-hdr"><b id="mmTitle">New listing</b><button type="button" class="tk-x" onclick="closeModal()">✕</button></div>
     <div class="tk-box-body">
       <label for="mm_title">Title</label><input id="mm_title" type="text" placeholder="3BHK in Nungambakkam">
-      <label for="mm_propertyCode">Property ID</label><input id="mm_propertyCode" type="text" placeholder="TNAG0002 — blank if not decided yet" autocomplete="off" spellcheck="false" oninput="window.bpModalCode && bpModalCode(this.value)"><div id="mmCodeHint" class="bp-mmhint"></div>
+      <label for="mm_propertyCode">Property ID</label><div class="bp-codewrap"><input id="mm_propertyCode" type="text" placeholder="TNAG0002 — type to see existing codes" autocomplete="off" spellcheck="false" role="combobox" aria-controls="mmCodeSug" oninput="window.bpModalCode && bpModalCode(this.value)" onfocus="window.bpModalCode && bpModalCode(this.value)" onblur="window.bpModalSugClose && bpModalSugClose()"><div id="mmCodeSug" class="bp-sug" role="listbox"></div></div><div id="mmCodeHint" class="bp-mmhint"></div>
       <label for="mm_location">Location</label><input id="mm_location" type="text" placeholder="Nungambakkam">
       <label for="mm_config">Configuration</label><input id="mm_config" type="text" placeholder="3 BHK">
       <label for="mm_askingPrice">Asking price</label><input id="mm_askingPrice" type="text" placeholder="₹2.1 Cr">

@@ -82,7 +82,8 @@ export function similarCodes(code, inventory, limit = 3) {
     if (!o) continue;
     if (o.n !== me.n) continue;
     const padding = o.a === me.a && o.d !== me.d;              // THVA0001 vs THVA001
-    if (padding || (o.d === me.d && lettersSlip(o.a, me.a))) out.push(p);
+    // A letter slip, whatever the padding: VLC0002 for VLCA002 is the same property, slipped twice.
+    if (padding || lettersSlip(o.a, me.a)) out.push(p);
   }
   return out.slice(0, limit);
 }
@@ -97,6 +98,38 @@ export function codeSuggestions(typed, inventory, limit = 6) {
   const has = real.filter(p => !codeKey(p.propertyCode).startsWith(k) && codeKey(p.propertyCode).includes(k));
   const byCode = (a, b) => String(a.propertyCode).localeCompare(String(b.propertyCode), undefined, { numeric: true });
   return [...starts.sort(byCode), ...has.sort(byCode)].slice(0, limit);
+}
+
+// Each series of codes (TNAG0001, TNAG0002 … is the TNAG series): how many, the latest, and the
+// next free code — so a new property takes the next number instead of a guessed one.
+export function codeSeries(inventory) {
+  const m = new Map();
+  for (const p of inventory || []) {
+    if (!isRealCode(p.propertyCode) || /_/.test(p.propertyCode) || !looksLikeCode(p.propertyCode)) continue;
+    const s = split(codeKey(p.propertyCode));
+    if (!s) continue;
+    const g = m.get(s.a) || { letters: s.a, count: 0, max: -1, width: s.d.length, last: '' };
+    g.count++;
+    if (s.n > g.max) { g.max = s.n; g.width = s.d.length; g.last = p.propertyCode; }
+    m.set(s.a, g);
+  }
+  const taken = new Set((inventory || []).map(p => codeKey(p.propertyCode)));
+  for (const g of m.values()) {
+    let n = g.max + 1;
+    while (taken.has(g.letters + String(n).padStart(g.width, '0'))) n++;
+    g.next = g.letters + String(n).padStart(g.width, '0');
+  }
+  return m;
+}
+// The series a typed code belongs to: letters only ("TNA") — every series it could be; letters and a
+// number — exactly that series.
+export function seriesFor(typed, inventory) {
+  const k = codeKey(typed);
+  if (!k) return [];
+  const letters = (k.match(/^[A-Z]+/) || [''])[0];
+  return [...codeSeries(inventory).values()]
+    .filter(g => /\d/.test(k) ? g.letters === letters : g.letters.startsWith(k))
+    .sort((a, b) => a.letters.localeCompare(b.letters));
 }
 
 // Bring a dashboard property's details onto the listing. Blanks only — a photos link someone

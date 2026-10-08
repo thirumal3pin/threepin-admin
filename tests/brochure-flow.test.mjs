@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {
   codeKey, normCode, looksLikeCode, isUrl, findCode, similarCodes, codeSuggestions,
   fillFromProperty, brochureCheck, brochureTitle, brochureState, reconcileBrochures, listingCode, isLocked, FORM_ACTION, FORM_FIELDS, formBody,
-  awaitingBrochure, recordFetched, unmapPatch, queueEntryFor, takenMessage
+  awaitingBrochure, recordFetched, unmapPatch, queueEntryFor, takenMessage, codeSeries, seriesFor
 } from '../track-assets/brochure-flow.js';
 
 let failed = 0;
@@ -53,6 +53,14 @@ eq('The next number in a series is a new property, not a slip', similarCodes('TN
 eq('…nor is THVA002 after THVA001', similarCodes('THVA002', INV), []);
 eq('…nor EGM0003 after EGM0001 and EGM0002', similarCodes('EGM0003', INV), []);
 eq('A letter slip with a different number is not a near-miss', similarCodes('TNGA0003', INV), []);
+eq('A letter left out AND padded differently is still caught (VLC0002 for VLCA002)', similarCodes('VLC0002', [{ propertyCode: 'VLCA002' }, { propertyCode: 'VLCA003' }]).map(p => p.propertyCode), ['VLCA002']);
+{
+  const S = codeSeries([{ propertyCode: 'VLCA002' }, { propertyCode: 'VLCA003' }, { propertyCode: 'SRS_OMR001' }, { propertyCode: '17' }]);
+  eq('Series: VLCA is at VLCA003, next VLCA004', [S.get('VLCA').last, S.get('VLCA').next, S.get('VLCA').count], ['VLCA003', 'VLCA004', 2]);
+  check('Underscore codes and bare numbers are not series', !S.has('SRSOMR') && S.size === 1);
+  eq('Letters typed: every series they could be', seriesFor('vl', [{ propertyCode: 'VLCA002' }, { propertyCode: 'VELA001' }]).map(g => g.letters), ['VLCA']);
+  eq('Letters and a number: exactly that series', seriesFor('VLCA9', [{ propertyCode: 'VLCA002' }]).map(g => g.next), ['VLCA003']);
+}
 eq('The exact code is not its own near-miss', similarCodes('THVA001', INV).map(p => p.propertyCode), []);
 eq('A genuinely new code has none', similarCodes('ADYR0001', INV), []);
 eq('Garbage has none', similarCodes('hello', INV), []);

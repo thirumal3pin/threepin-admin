@@ -445,21 +445,51 @@ const keptLink = (code, editId) => {
   const x = editId ? byId(editId) : null;
   return x && String(x.propertyCode || '').trim() && B.codeKey(code) === B.codeKey(x.propertyCode) ? x : null;
 };
+// As the Property ID is typed: the codes that already exist (pick one to map this listing to it),
+// the next free code in the series, and a line under the box saying what saving will do.
 window.bpModalCode = value => {
   const el = $('mmCodeHint'); if (!el) return;
   const editId = api().editingId();
   const c = String(value || '').trim();
+  modalSug(c, editId);
   if (!c) { el.innerHTML = ''; return; }
   const kept = keptLink(c, editId);
   if (kept) { el.innerHTML = `<div class="bp-v ok">✓ Linked to ${esc(kept.propertyCode)} in the Property dashboard — saving keeps the link.</div>`; return; }
   const f = B.findCode(c, inv(), listingsNow(), editId);
-  if (f.listing) el.innerHTML = `<div class="bp-v dup">${esc(B.takenMessage(B.normCode(c), f.listing))}</div>`;
-  else if (f.inventory) el.innerHTML = `<div class="bp-v dup"><b>Already in the dashboard:</b> ${esc(f.inventory.name || '')}. Saving links this listing to it and brings its photos, brochure and details. <button type="button" class="tk-link" onclick="bpPreview(${jsq(f.inventory.propertyCode)})">Preview</button></div>`;
-  else if (f.listing) el.innerHTML = `<div class="bp-v dup"><b>Already used</b> by “${esc(f.listing.title || 'another listing')}” on this board — use a different code.</div>`;
-  else if (!B.looksLikeCode(c)) el.innerHTML = '<div class="bp-v warn">Codes look like <b>TNAG0002</b> — letters, then numbers.</div>';
-  else { const sim = B.similarCodes(c, inv()); el.innerHTML = sim.length ? `<div class="bp-v warn"><b>Did you mean ${sim.map(p => esc(p.propertyCode)).join(' or ')}?</b> ${sim.map(p => `<button type="button" class="tk-link" onclick="bpModalUse(${jsq(p.propertyCode)})">Use ${esc(p.propertyCode)}</button>`).join(' ')}</div>` : `<div class="bp-v ok">✓ New code — the listing keeps it for its brochure.</div>`; }
+  const g = B.seriesFor(c, inv()).find(s => /\d/.test(B.codeKey(c)));
+  if (f.listing) el.innerHTML = `<div class="bp-v dup">${esc(B.takenMessage(B.normCode(c), f.listing))}${g ? ` For a new property use <b>${esc(g.next)}</b>.` : ''}</div>`;
+  else if (f.inventory) el.innerHTML = `<div class="bp-v ok">✓ <b>${esc(f.inventory.propertyCode)} exists</b> — ${esc([f.inventory.name, f.inventory.location].filter(Boolean).join(', '))}. Saving maps this listing to it and brings its photos, brochure and details. <button type="button" class="tk-link" onclick="bpPreview(${jsq(f.inventory.propertyCode)})">Preview</button></div>`;
+  else if (!B.looksLikeCode(c)) el.innerHTML = g || B.seriesFor(c, inv()).length ? `<div class="bp-v warn">Add the number — the next free code is <b>${esc((g || B.seriesFor(c, inv())[0]).next)}</b>.</div>` : '<div class="bp-v warn">Codes look like <b>TNAG0002</b> — letters, then numbers.</div>';
+  else {
+    const sim = B.similarCodes(c, inv());
+    if (sim.length) el.innerHTML = `<div class="bp-v warn"><b>Did you mean ${sim.map(p => esc(p.propertyCode)).join(' or ')}?</b> ${sim.map(p => `${esc(p.name || '')} <button type="button" class="tk-link" onclick="bpModalUse(${jsq(p.propertyCode)})">Use ${esc(p.propertyCode)}</button>`).join(' · ')} — if ${esc(B.normCode(c))} really is a new property, carry on.</div>`;
+    else if (g && B.codeKey(c) !== g.next) el.innerHTML = `<div class="bp-v warn">${esc(B.normCode(c))} is not in the dashboard, but the ${esc(g.letters)} series is at ${esc(g.last)} — the next free code is <b>${esc(g.next)}</b>. <button type="button" class="tk-link" onclick="bpModalUse(${jsq(g.next)})">Use ${esc(g.next)}</button></div>`;
+    else el.innerHTML = `<div class="bp-v ok">✓ ${esc(B.normCode(c))} is a new code — not in the dashboard. The listing keeps it for its brochure.</div>`;
+  }
 };
-window.bpModalUse = code => { const el = $('mm_propertyCode'); if (el) { el.value = code; window.bpModalCode(code); } };
+// The list under the box. Codes on another listing are shown but cannot be picked: one property,
+// one seller, one listing.
+let mmSug = [];
+function modalSug(c, editId) {
+  const box = $('mmCodeSug'); if (!box) return;
+  const inp = $('mm_propertyCode');
+  if (!c || document.activeElement !== inp) { box.classList.remove('open'); box.innerHTML = ''; mmSug = []; return; }
+  const k = B.codeKey(c);
+  const next = B.seriesFor(c, inv()).slice(0, 3).filter(g => g.next !== k)
+    .map(g => ({ code: g.next, main: g.next, sub: `Next free in ${g.letters} · ${g.count} propert${g.count === 1 ? 'y' : 'ies'}, latest ${g.last}`, tag: 'New', kind: 'new' }));
+  const have = B.codeSuggestions(c, inv(), 12).map(p => {
+    const on = B.findCode(p.propertyCode, inv(), listingsNow(), editId).listing;
+    return { code: p.propertyCode, main: p.propertyCode, sub: on ? `${p.name || ''} — on “${on.title || 'another listing'}”` : [p.name, p.location].filter(Boolean).join(' · '), tag: on ? 'Taken' : 'Already exists', kind: on ? 'taken' : 'have' };
+  });
+  mmSug = [...next, ...have];
+  box.innerHTML = mmSug.map((o, i) => o.kind === 'taken'
+    ? `<div class="bp-opt row taken" aria-disabled="true"><span class="bp-opt-m"><b>${esc(o.main)}</b><span>${esc(o.sub)}</span></span><em class="bp-tag ${o.kind}">${esc(o.tag)}</em></div>`
+    : `<button type="button" class="bp-opt row" role="option" data-i="${i}" onmousedown="event.preventDefault()" onclick="bpModalPick(${i})"><span class="bp-opt-m"><b>${esc(o.main)}</b><span>${esc(o.sub)}</span></span><em class="bp-tag ${o.kind}">${esc(o.tag)}</em></button>`).join('');
+  box.classList.toggle('open', mmSug.length > 0);
+}
+window.bpModalPick = i => { const o = mmSug[i]; if (o) window.bpModalUse(o.code); };
+window.bpModalSugClose = () => setTimeout(() => { const box = $('mmCodeSug'); if (box) box.classList.remove('open'); }, 150);
+window.bpModalUse = code => { const el = $('mm_propertyCode'); if (el) { el.value = code; window.bpModalCode(code); const box = $('mmCodeSug'); if (box) box.classList.remove('open'); } };
 // Called by saveModal: decides what a typed Property ID means. Returns { error } or the patch.
 window.bpResolveFormCode = (form, editId) => {
   const code = B.normCode(form.propertyCode);
