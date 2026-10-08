@@ -198,8 +198,44 @@ function bfCodeVerdict(){
     off: () => `${e(c.code)} is not taken, but the ${e(c.g.letters)} series is at ${e(c.g.last)} — the next free code is <b>${e(c.g.next)}</b>.`,
     new: () => `✓ ${e(c.code)} is a new code — not in the inventory yet.`
   }[c.kind]();
+  // Which existing properties this message is about — each can be previewed.
+  const shown = (c.kind === 'dup' ? [c.prop] : c.kind === 'near' ? c.sim : []).filter(p => bfFull(p.propertyCode));
+  if (!shown.some(p => bfRules().codeKey(p.propertyCode) === bfRules().codeKey(bfPrev))) bfPrev = '';
   box.className = 'bf-code-v ' + ({ dup: 'dup', near: 'warn', off: 'warn', shape: 'hint', new: 'ok' }[c.kind]);
-  box.innerHTML = html;
+  box.innerHTML = html + (shown.length ? `<div class="bf-prev-row">${shown.map(p => bfPreviewBtn(p.propertyCode)).join('')}</div>${bfPrev ? bfPreviewCard(bfPrev) : ''}` : '');
+}
+
+// A small preview of an existing property, opened from the message under the field: the details
+// that tell you whether it is the property you mean, and a link that opens it in a new tab.
+let bfPrev = '';
+const bfFull = code => (typeof properties !== 'undefined' ? properties : [])
+  .find(p => bfRules().codeKey(p.propertyCode || p.id) === bfRules().codeKey(code));
+function bfPreviewToggle(code){
+  bfPrev = bfRules().codeKey(bfPrev) === bfRules().codeKey(code) ? '' : code;
+  bfCodeVerdict();
+  // The message is redrawn, button included — keep the keyboard where it was.
+  const again = [...document.querySelectorAll('#bfCodeVerdict .bf-prev-btn')].find(b => b.dataset.code === code);
+  if (again) again.focus();
+}
+function bfPreviewBtn(code){
+  const e = escapeHtml, on = bfRules().codeKey(bfPrev) === bfRules().codeKey(code);
+  return `<button type="button" class="bf-prev-btn" data-code="${e(code)}" aria-expanded="${on}" onclick="bfPreviewToggle(this.dataset.code)">${on ? 'Hide preview' : 'Preview ' + e(code)}</button>`;
+}
+function bfPreviewCard(code){
+  const p = bfFull(code); if (!p) return '';
+  const e = escapeHtml, B = bfRules();
+  const meta = [p.location, p.config, p.type, p.status].filter(Boolean).map(e).join(' · ');
+  const link = (href, label) => B.isUrl(href) ? `<a href="${e(href)}" target="_blank" rel="noopener">${label} ↗</a>` : '';
+  const extra = [link(p.photosLink, '📷 Photos'), link(p.brochureLink, '📄 Brochure')].filter(Boolean).join('');
+  const details = String(p.detailsText || '').replace(/\s+/g, ' ').trim();
+  return `<div class="bf-prev">
+    <div class="bf-prev-top"><span class="bf-prev-code">${e(p.propertyCode || p.id)}</span>${p.soldOut ? '<span class="bf-prev-sold">Sold</span>' : ''}</div>
+    <div class="bf-prev-name">${e(p.name || p.propertyCode || p.id)}</div>
+    ${meta ? `<div class="bf-prev-meta">${meta}</div>` : ''}
+    ${p.startingPrice ? `<div class="bf-prev-price">${e(p.startingPrice)}</div>` : ''}
+    ${details ? `<div class="bf-prev-text">${e(details.length > 160 ? details.slice(0, 160) + '…' : details)}</div>` : ''}
+    <div class="bf-prev-acts"><a class="bf-prev-open" href="property.html?id=${encodeURIComponent(p.id)}" target="_blank" rel="noopener">Open property ↗</a>${extra}</div>
+  </div>`;
 }
 
 // The team's log: title, who, when — and a link once the brochure is on that property.

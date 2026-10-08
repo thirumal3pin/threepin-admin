@@ -50,7 +50,7 @@ async function open(viewport, scheme = 'light') {
   const pg = await ctx.newPage();
   pg.on('pageerror', e => { console.log('  PAGEERROR ' + e.message); errors.push('pageerror: ' + e.message); });
   pg.__posts = [];
-  await pg.route('**/*', route => {
+  await ctx.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.hostname === 'docs.google.com') { pg.__posts.push(route.request().postData()); return route.fulfill({ status: 200, body: '' }); }
     if (url.hostname !== 'dash.local') return route.abort();
@@ -128,6 +128,29 @@ ok('the next free code is new', /✓ TNAG0003 is a new code/.test(s.verdict) && 
 await typeFresh(pg, 'ZZQ0001');
 s = await state(pg);
 ok('a brand-new series is simply new', /✓ ZZQ0001 is a new code/.test(s.verdict) && !s.open, JSON.stringify(s));
+
+// preview of the existing property, with a way to open it in a new tab
+await typeFresh(pg, 'NOL002');
+await pg.evaluate(() => document.activeElement.blur());
+ok('a taken code offers a preview button, card closed', await pg.locator('.bf-prev-btn').count() === 1 && await pg.locator('.bf-prev').count() === 0);
+await pg.click('.bf-prev-btn');
+const card = await pg.evaluate(() => { const c = document.querySelector('.bf-prev'); const a = c && c.querySelector('.bf-prev-open'); return c && { text: c.textContent.replace(/\s+/g, ' '), href: a.getAttribute('href'), target: a.target, rel: a.rel, btn: document.querySelector('.bf-prev-btn').textContent }; });
+ok('the preview shows the property', card && /NOL002/.test(card.text) && /3BHK in Velachery/.test(card.text), JSON.stringify(card));
+ok('"Open property" opens that property in a new tab', card && card.href === 'property.html?id=NOL002' && card.target === '_blank' && /noopener/.test(card.rel), JSON.stringify(card));
+ok('the button now hides it', card && card.btn === 'Hide preview');
+await pg.screenshot({ path: join(OUT, '6-preview.png') });
+const [tab] = await Promise.all([pg.context().waitForEvent('page'), pg.click('.bf-prev-open')]);
+ok('clicking it opens a second tab on property.html?id=NOL002', /property\.html\?id=NOL002$/.test(tab.url()), tab.url());
+await tab.close();
+await pg.click('.bf-prev-btn');
+ok('keyboard focus stays on the button after toggling', await pg.evaluate(() => document.activeElement && document.activeElement.classList.contains('bf-prev-btn')));
+ok('Hide preview closes the card', await pg.locator('.bf-prev').count() === 0);
+await pg.click('.bf-prev-btn');
+await pg.fill('#bfTitle', 'NOL001 - x'); await pg.evaluate(() => bfCodeVerdict());
+ok('a different code does not keep the old preview open', await pg.locator('.bf-prev').count() === 0);
+await typeFresh(pg, 'THVA0001');
+await pg.evaluate(() => document.activeElement.blur());
+ok('a "did you mean" message can preview the near-miss', await pg.locator('.bf-prev-btn').count() === 1 && /THVA001/.test(await pg.locator('.bf-prev-btn').textContent()));
 
 // keyboard
 await typeFresh(pg, 'tnag');

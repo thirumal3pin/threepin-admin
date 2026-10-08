@@ -287,6 +287,23 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 .bf-code-v.warn{background:var(--amber-bg);box-shadow:inset 3px 0 0 var(--amber);}
 .bf-code-v.ok{background:var(--green-bg);color:var(--green);font-weight:600;}
 .bf-code-v.hint{color:var(--ink3);}
+.bf-prev-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.bf-prev-btn{max-width:100%;overflow-wrap:anywhere;text-align:left;font:inherit;font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:7px;border:1.5px solid var(--border2);background:var(--white);color:var(--ink);cursor:pointer;}
+.bf-prev-btn:hover{border-color:var(--ink);}
+.bf-prev-btn[aria-expanded="true"]{background:var(--ink);border-color:var(--ink);color:var(--white);}
+.bf-prev{margin-top:10px;padding:12px 14px;border-radius:10px;background:var(--white);border:1.5px solid var(--border);color:var(--ink);display:flex;flex-direction:column;gap:4px;min-width:0;}
+.bf-prev-top{display:flex;align-items:center;gap:8px;}
+.bf-prev-code{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--ink2);}
+.bf-prev-sold{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--bg2);color:var(--ink3);}
+.bf-prev-name{font-size:14.5px;font-weight:700;line-height:1.35;overflow-wrap:anywhere;}
+.bf-prev-meta{font-size:12.5px;color:var(--ink3);overflow-wrap:anywhere;}
+.bf-prev-price{font-size:13.5px;font-weight:700;color:var(--gold);overflow-wrap:anywhere;}
+.bf-prev-text{font-size:12.5px;color:var(--ink2);line-height:1.5;overflow-wrap:anywhere;}
+.bf-prev-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:6px;}
+.bf-prev-acts a{font-size:12.5px;font-weight:600;color:var(--blue);text-decoration:none;}
+.bf-prev-acts a:hover{text-decoration:underline;}
+a.bf-prev-open{padding:6px 12px;border-radius:7px;background:var(--ink);color:var(--white);}
+a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
 .bp-form textarea{width:100%;font:inherit;font-size:14px;line-height:1.55;resize:vertical;}
 .bp-count{font-size:11.5px;color:var(--ink3);text-align:right;margin-top:4px;}
 .bp-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;border-top:1px solid var(--border);padding-top:14px;}
