@@ -104,7 +104,8 @@ export function newListingFor(lead, firstStage, now, by) {
     title: clean(lead.propertyInterest) || clean(lead.name) || 'New listing',
     location: clean(lead.propertyInterest),
     askingPrice: clean(lead.budget),
-    propertyCode: (lead.propertyCodes && lead.propertyCodes[0]) || '',
+    // Never mapped from the lead (its links come from the conversation, or the AI): the board maps by hand.
+    propertyCode: '',
     // The board's own, untouched by anything here.
     media: {}, own: {}, ownerInformed: false, ownerApproved: false,
     stageChangedAt: now, stageChangedBy: by,

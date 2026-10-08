@@ -314,11 +314,13 @@ const ph = await open({ width: 390, height: 844 });
 await ph.evaluate(() => window.openDetail('l2')); await ph.waitForSelector('#bpSec'); await ph.waitForTimeout(200);
 const wide = await ph.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 ok('Listing with the brochure panel does not scroll sideways', wide <= 2, wide);
-section('No hand-mapping on the board');
+section('Mapping is by hand: set it, change it, remove it');
 const um = await ph.evaluate(() => ({ t: /Map to a property|Change mapping/.test(document.body.innerText), b: !!document.querySelector('[onclick*="openMapProperty"]'), h: /maps from the customer conversation/i.test(document.body.innerText) }));
-ok('An unmapped listing has no Map button, and says where mapping comes from', !um.t && !um.b && um.h, JSON.stringify(um));
+ok('An unmapped listing offers Map to a property', um.t && um.b, JSON.stringify(um));
 await ph.evaluate(() => window.openDetail('l5')); await ph.waitForTimeout(200);
-ok('A mapped listing has no Change button either', await ph.evaluate(() => !document.querySelector('[onclick*="openMapProperty"]')));
+ok('A mapped listing can be changed or removed', await ph.evaluate(() => document.querySelectorAll('[onclick*="openMapProperty"]').length >= 1 && /Change or remove mapping/.test(document.body.innerText)));
+await ph.evaluate(() => window.openMapProperty('l5')); await ph.waitForTimeout(200);
+ok('…and the picker offers to unmap it', await ph.evaluate(() => !!document.querySelector('#mapList .tk-pick.clear')));
 await ph.screenshot({ path: OUT + '/5-phone.png', fullPage: true });
 await ph.close();
 

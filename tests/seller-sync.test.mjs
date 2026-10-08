@@ -47,7 +47,7 @@ section('The card a seller gets');
   eq('The lead is linked', x.leadId, 'L1');
   eq('Locality seeds the title and location', [x.title, x.location], ['Adambakkam 2BHK', 'Adambakkam 2BHK']);
   eq('Budget seeds the asking price', x.askingPrice, '85 L');
-  eq('A property already linked on the lead is carried over', x.propertyCode, 'ADB001');
+  eq('A property linked on the lead is NOT carried over — mapping is by hand', x.propertyCode, '');
   eq('It starts in the first column', x.stageId, FIRST.id);
   eq('…and that milestone is stamped', x.reached[FIRST.key], NOW);
   check('The board\'s own fields start empty', JSON.stringify(x.media) === '{}' && x.ownerApproved === false);
