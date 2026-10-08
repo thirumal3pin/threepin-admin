@@ -301,7 +301,7 @@ await p.evaluate(() => window.bpReconcile(true)); await p.waitForTimeout(300);
 s = await last('l5');
 ok('…and the background check does not link it straight back', !s.propertyCode && !(s.brochure && s.brochure.code), JSON.stringify(s.brochure));
 
-section('Map to a property brings the same details');
+section('Mapping through the shared path still brings the same details');
 await openListing('l3');
 await p.evaluate(() => window.openMapProperty('l3')); await p.waitForTimeout(200);
 await p.click('#mapList .tk-pick:has-text("EGM0001")'); await p.waitForTimeout(400);
@@ -314,6 +314,11 @@ const ph = await open({ width: 390, height: 844 });
 await ph.evaluate(() => window.openDetail('l2')); await ph.waitForSelector('#bpSec'); await ph.waitForTimeout(200);
 const wide = await ph.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 ok('Listing with the brochure panel does not scroll sideways', wide <= 2, wide);
+section('No hand-mapping on the board');
+const um = await ph.evaluate(() => ({ t: /Map to a property|Change mapping/.test(document.body.innerText), b: !!document.querySelector('[onclick*="openMapProperty"]'), h: /maps from the customer conversation/i.test(document.body.innerText) }));
+ok('An unmapped listing has no Map button, and says where mapping comes from', !um.t && !um.b && um.h, JSON.stringify(um));
+await ph.evaluate(() => window.openDetail('l5')); await ph.waitForTimeout(200);
+ok('A mapped listing has no Change button either', await ph.evaluate(() => !document.querySelector('[onclick*="openMapProperty"]')));
 await ph.screenshot({ path: OUT + '/5-phone.png', fullPage: true });
 await ph.close();
 

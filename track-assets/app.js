@@ -1497,7 +1497,7 @@ function openDetail(id) {
     <div class="tk-sec">
       <div class="tk-sec-hdr">Inventory</div>
       <div class="tk-kv"><span>Property ID</span>${x.propertyCode ? `<b>${esc(x.propertyCode)}</b>` : '<i>not mapped</i>'}</div>
-      <button class="tk-btn" onclick="openMapProperty('${x.id}')">${x.propertyCode ? 'Change mapping' : 'Map to a property'}</button>
+      ${x.propertyCode ? '' : '<div class="tk-hint">Not mapped by hand here. It maps from the customer conversation, or when its brochure is created.</div>'}
       ${x.propertyCode ? `<a class="tk-btn ghost" href="dashboard.html?property=${encodeURIComponent(x.propertyCode)}" target="_blank" rel="noopener" title="The full record: notes, internal notes, matching buyers">Open property →</a>` : ''}
     </div>
 

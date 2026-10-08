@@ -64,8 +64,7 @@ window.bpPanelHtml = x0 => {
     <label class="bp-l" for="bpCode">Property code</label>
     ${mapped
       ? `<div class="bp-mapped"><span class="tk-code">${esc(x.propertyCode)}</span><span class="bp-ok">✓ Linked to the Property dashboard</span>
-           <button type="button" class="tk-link" onclick="bpPreview(${jsq(x.propertyCode)})">Preview</button>
-           <button type="button" class="tk-link" onclick="openMapProperty(${id})">Change</button></div>`
+           <button type="button" class="tk-link" onclick="bpPreview(${jsq(x.propertyCode)})">Preview</button></div>`
       : `<div class="bp-codewrap">
            <input id="bpCode" class="tk-in bp-in" type="text" value="${esc(code)}" placeholder="e.g. TNAG0002" autocomplete="off" spellcheck="false"
              oninput="bpCodeInput(${id}, this.value)" onfocus="bpCodeInput(${id}, this.value)" onblur="setTimeout(() => bpSug(false), 150)" onchange="bpSaveCode(${id}, this.value)">
