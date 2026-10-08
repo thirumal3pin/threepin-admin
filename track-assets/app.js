@@ -1550,10 +1550,10 @@ function openDetail(id) {
 
     <div class="tk-sec" id="dpFor">
       <div class="tk-sec-hdr">Shoot for</div>
-      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. For each: planned, made, and its voice — shot with voice, or a voice-over made separately.</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. For each: planned, made, and its voice over — with V/O, or V/O required separately.</div>
       ${legacyVoice(x) ? `<div class="tk-hint warn tk-for-legacy">Set before for the whole shoot: <b>voice-over separately</b>${x.voDone ? ' (made)' : ''}. Pick the voice for each one below.</div>` : ''}
       <div class="tk-brief tk-forgrid">
-        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span><span>Voice</span><span>VO made</span></div>
+        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span><span>Voice over</span><span>VO made</span></div>
         ${FOR_KEYS.map(([k, label]) => {
           const plan = forPlanned(x, k), done = forMade(x, k), v = forVoice(x, k), vo = forVoMade(x, k);
           const voLeft = plan && v === 'vo' && !vo;
@@ -1562,9 +1562,9 @@ function openDetail(id) {
             <span><input type="checkbox" ${plan ? 'checked' : ''} onchange="setForPlan('${x.id}','${k}',this.checked)" aria-label="${esc(label)} planned"></span>
             <span><input type="checkbox" ${done ? 'checked' : ''} ${!plan ? 'class="dim"' : ''} onchange="setForDone('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
             <span class="tk-for-v">${plan ? `<select class="tk-sel sm" aria-label="${esc(label)} voice" onchange="setForVoice('${x.id}','${k}',this.value)">
-                <option value=""${!v ? ' selected' : ''}>Voice?</option>
-                <option value="live"${v === 'live' ? ' selected' : ''}>With voice</option>
-                <option value="vo"${v === 'vo' ? ' selected' : ''}>Voice-over</option>
+                <option value=""${!v ? ' selected' : ''}>–</option>
+                <option value="live"${v === 'live' ? ' selected' : ''}>With V/O</option>
+                <option value="vo"${v === 'vo' ? ' selected' : ''}>V/O Reqd. separately</option>
               </select>` : '<span class="tk-muted">—</span>'}</span>
             <span class="tk-for-vo">${v === 'vo' && plan ? `<label><input type="checkbox" ${vo ? 'checked' : ''} onchange="setForVo('${x.id}','${k}',this.checked)" aria-label="${esc(label)} voice-over made"><em class="tk-m"> VO made</em></label>` : '<span class="tk-muted">—</span>'}</span>
           </div>`;
@@ -1962,7 +1962,7 @@ window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRem
 // made" is ticked per outlet too.
 const FOR_KEYS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
 const FOR_ICON = { igStory: 'fa-brands fa-instagram', igReel: 'fa-brands fa-instagram', fbReel: 'fa-brands fa-facebook', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake' };
-const VOICE = { live: 'With voice', vo: 'Voice-over' };
+const VOICE = { live: 'With V/O', vo: 'V/O Reqd. separately' };
 const forLabel = key => (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
 // "Instagram" ticked before the outlets were split (shipped for a day) reads as the Reel, and the
 // first edit of the section folds it in for good — so it can always be unticked.
@@ -1997,7 +1997,7 @@ function setForVoice(id, key, v) {
     if (val !== 'vo') x.forVo = { ...(x.forVo || {}), [key]: false };
     x.forPlan = { ...(x.forPlan || {}), [key]: true };
     if (val) { x.voice = ''; x.voDone = false; }   // the old whole-shoot setting is replaced
-  }, `${forLabel(key)}: ${val ? VOICE[val].toLowerCase() : 'voice not decided'}`);
+  }, `${forLabel(key)}: ${val ? VOICE[val] : 'voice over not set'}`);
   if (currentDetailId === id) openDetail(id);
 }
 function setForVo(id, key, on) {

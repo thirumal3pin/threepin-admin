@@ -61,7 +61,7 @@ await p.check('#dpFor input[aria-label="Insta Reel voice-over made"]'); await se
 const voChip = async () => (await p.$$eval('.tk-card[data-id="v1"] .tk-blockers > *', c => c.map(e => e.textContent.trim()))).find(t => /^voice-over/.test(t)) || '';
 ok('ticking Insta Reel\'s VO made leaves only Insta Story', (await last()).forVo.igReel === true && await voChip() === 'voice-over not made: Insta Story', await voChip());
 await p.selectOption(sel('Insta Reel'), 'live'); await settle();
-ok('switching an outlet to "With voice" resets its VO made', (await last()).forVo.igReel === false);
+ok('switching an outlet to "With V/O" resets its VO made', (await last()).forVo.igReel === false);
 await p.selectOption(sel('Insta Reel'), 'vo'); await settle();
 await p.check('#dpFor input[aria-label="Insta Reel voice-over made"]'); await settle();
 await p.check('#dpFor input[aria-label="Insta Reel done"]'); await settle();
