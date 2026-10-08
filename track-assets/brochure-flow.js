@@ -37,6 +37,10 @@ export const normCode = c => { const n = str(c).toUpperCase().replace(/\s+/g, ''
 export const isRealCode = c => !!str(c) && !/^\d+$/.test(str(c));
 export const isUrl = v => /^https?:\/\/\S+$/i.test(str(v));
 
+// One property, one seller, one listing: a code mapped to (or claimed for a brochure by) one
+// listing on the board can never be mapped to another. The message says which listing has it.
+export const takenMessage = (code, listing) => `${code} is already mapped to “${str(listing && listing.title) || 'another listing'}” on this board — one property has one seller, one listing.`;
+
 // Is this code already in the dashboard, or claimed by another listing here?
 export function findCode(code, inventory, listings, selfId) {
   const k = codeKey(code);
@@ -116,6 +120,63 @@ export function fillFromProperty(listing, prop, internalNotes) {
   if (isUrl(p.brochureLink) && str(p.brochureLink) !== str(x.brochureLink)) { patch.brochureLink = str(p.brochureLink); filled.push('Brochure'); }
   if (!str(x.internalNotes) && str(internalNotes)) { patch.internalNotes = str(internalNotes); filled.push('Internal notes'); }
   return { patch, filled };
+}
+
+// ── What a mapping brought, and what unmapping takes back ──
+// Mapping a listing to a dashboard property fills its blanks from that property. Each filled field
+// is recorded on the listing as fetched: { field: { value, was } } — what it got, and what it held
+// before. Unmapping puts back every field that still holds exactly what the mapping brought; a
+// field typed, pasted or changed by a person is theirs and stays. Once a brochure has been
+// generated from the listing, its details are what that brochure was made from: they all stay,
+// and only the code goes with the mapping.
+export const FETCHED_FIELDS = ['title', 'location', 'config', 'askingPrice', 'description', 'photosLink', 'internalNotes'];
+export function recordFetched(prev, before, patch) {
+  const out = { ...(prev || {}) };
+  for (const f of FETCHED_FIELDS) {
+    if (!patch || !(f in patch)) continue;
+    // Filled again: what it held first is still what it goes back to — unless a person changed it
+    // in between (cleared it, say), in which case theirs is what it held.
+    const cur = str(before && before[f]);
+    out[f] = { value: str(patch[f]), was: out[f] && cur === out[f].value ? out[f].was : cur };
+  }
+  return out;
+}
+// `cur` is the listing as it will be saved (an edit form's values over it); `oldProp` the property
+// it was mapped to, for listings mapped before fields were recorded.
+export function unmapPatch(cur, oldProp) {
+  const x = cur || {};
+  const patch = { brochureLink: '', fetched: null };
+  const generated = !!(x.brochure && x.brochure.requestedAt);
+  if (!generated) {
+    // A card is never left without a name.
+    const back = (f, v) => (f === 'title' && !str(v) ? 'New listing' : v);
+    if (x.fetched) {
+      // Recorded: exactly what the mapping filled, where it still holds that.
+      for (const f of FETCHED_FIELDS) {
+        const r = x.fetched[f];
+        if (r && str(x[f]) === r.value) patch[f] = back(f, r.was);
+      }
+    } else {
+      // Mapped before fields were recorded: what is identical to the old property came from it.
+      for (const f of ['title', 'description', 'photosLink']) {
+        const from = oldProp && { title: oldProp.name, description: oldProp.detailsText, photosLink: oldProp.photosLink }[f];
+        if (from && str(x[f]) === str(from)) patch[f] = back(f, '');
+      }
+    }
+  }
+  return { patch, brochure: { doneAt: null, requestedAt: null, requestedCode: '', unlockedAt: null, unlockedLink: '' } };
+}
+
+// Where a brochure for this code stands in the pipeline's queue (the team's brochure log, with the
+// Queue sheet's status): the newest entry for this code — asked for from this listing (not before
+// it was asked), or from the Create brochure page for the property it is mapped to.
+export function queueEntryFor(listing, log) {
+  const x = listing || {};
+  const k = codeKey(listingCode(x));
+  if (!k || !Array.isArray(log)) return null;
+  const since = x.brochure && x.brochure.requestedAt ? x.brochure.requestedAt - 60000 : (str(x.propertyCode) ? 0 : Infinity);
+  return log.filter(e => e && e.at >= since && codeKey(str(e.title).split(/\s+/)[0]) === k)
+    .sort((a, b) => b.at - a.at)[0] || null;
 }
 
 // The code this listing will be — or already is — known by.
@@ -213,6 +274,8 @@ export function reconcileBrochures(listings, inventory, now) {
     if (!p) continue;
     const patch = {}, notes = [];
     if (asked) {
+      // Another listing already has this property: one property, one listing — leave this one unlinked.
+      if ((listings || []).some(o => o.id !== x.id && codeKey(o.propertyCode) === codeKey(p.propertyCode))) continue;
       patch.propertyCode = p.propertyCode;
       notes.push(`Linked to <b>${esc(p.propertyCode)}</b> — it is now in the Property dashboard`);
     }

@@ -206,7 +206,10 @@
 .tk-box-ftr { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
 
 .tk-picklist { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; max-height: 52vh; overflow-y: auto; }
+/* One property, one listing: a property already on another listing is shown, not pickable */
+.tk-pick.taken { opacity: .55; cursor: not-allowed; }
 .tk-pick { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r1); background: var(--card); color: var(--ink); cursor: pointer; }
+.tk-pick.taken:hover { border-color: var(--border); background: var(--card); }
 .tk-pick:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--card)); }
 .tk-pick.clear { color: var(--red, #B91C1C); justify-content: center; border-style: dashed; }
 .tk-pick-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
@@ -1310,6 +1313,16 @@ html.pg-on #pgModal label.tk-check input { width: 17px; height: 17px; margin: 0;
 .bp-state.ok { background: var(--green-bg); color: var(--green); }
 .bp-state.warn { background: var(--amber-bg); color: var(--amber); }
 .bp-done { margin: 2px 0 6px; font-weight: 600; }
+/* "Brochure created" is information from the pipeline, not a box to tick */
+.bp-status { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 8px; min-width: 0; }
+.bp-q { font-size: 13.5px; font-weight: 600; color: var(--ink2); overflow-wrap: anywhere; }
+.bp-q.ok { color: var(--green); }
+.bp-q.warn { color: var(--amber); }
+.bp-q.bad { color: var(--red, #B91C1C); }
+.bp-q.muted { color: var(--ink3); }
+.bp-q a { font-weight: 500; }
+.bp-q-sub { font-size: 12px; color: var(--ink3); overflow-wrap: anywhere; }
+.bp-redo { margin-left: 4px; }
 .bp-done a { font-weight: 500; }
 .bp-l { display: block; font-size: 12px; font-weight: 600; color: var(--ink3); margin: 12px 0 5px; }
 .bp-l .tk-opt { font-weight: 400; }

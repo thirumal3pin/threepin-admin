@@ -4,8 +4,10 @@
 // things the brochure pipeline needs — kept on the listing itself, so the brochure
 // can be asked for from here instead of retyping it all on the Create brochure page.
 //
-//   • Linked to a dashboard property: everything fills from that property, and the
-//     "Brochure created" box ticks itself when its brochure has been delivered.
+//   • Linked to a dashboard property: its blanks fill from that property (recorded as fetched,
+//     so unmapping takes back exactly that), and the panel locks once its brochure is delivered.
+//   • "Brochure created" is information, never a box to tick: the status line says where the
+//     brochure stands in the pipeline's queue.
 //   • Not linked: fill it in and Generate. The request goes to the same Google Form
 //     as the Create brochure page. When the property arrives in the dashboard, the
 //     listing links to it on its own, pulls in the brochure, and ticks the box.
@@ -29,7 +31,7 @@ const listingsNow = () => (api() && api().listings()) || [];
 const byId = id => listingsNow().find(l => l.id === id) || null;
 const fmt = ts => ts ? new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
 const STATE = {
-  none: ['Not started', 'muted'],
+  none: ['Brochure not created', 'muted'],
   requested: ['Requested — waiting for it to reach the dashboard', 'warn'],
   building: ['Built — waiting for delivery from the Mac', 'warn'],
   ready: ['Brochure created', 'ok']
@@ -58,7 +60,7 @@ window.bpPanelHtml = x0 => {
   const id = jsq(x.id);
   return `<div class="tk-sec bp" id="bpSec">
     <div class="tk-sec-hdr bp-hdr">Brochure <span class="bp-state ${STATE[done ? 'ready' : st][1]}">${esc(STATE[done ? 'ready' : st][0])}</span></div>
-    <label class="tk-check bp-done"><input type="checkbox" ${done ? 'checked' : ''} onchange="bpMarkDone(${id}, this.checked)"> Brochure created${link ? ` — <a href="${esc(link)}" target="_blank" rel="noopener">open ↗</a>` : ''}</label>
+    <div id="bpStatus" class="bp-status">${statusHtml(x0)}</div>
     ${x.brochure && x.brochure.requestedAt ? `<div class="tk-hint">Requested ${esc(fmt(x.brochure.requestedAt))}${x.brochure.by ? ' by ' + esc(String(x.brochure.by).split('@')[0]) : ''} as <b>${esc(x.brochure.title || B.brochureTitle(x))}</b>.${st === 'requested' && code ? ' This listing links to the property on its own once it is in the dashboard.' : ''}</div>` : ''}
 
     <label class="bp-l" for="bpCode">Property code</label>
@@ -90,7 +92,7 @@ window.bpPanelHtml = x0 => {
 };
 
 // Once the brochure is created, what it was made from is a record: shown, copyable, not editable.
-// Unticking "Brochure created" is the one way back (for a genuine re-do).
+// "Redo brochure" (asked first) is the one way back, for a genuine re-do.
 const FROZEN = [['code', 'Property code'], ['title', 'Title'], ['photosLink', 'Photos link'], ['description', 'Description'], ['internalNotes', 'Internal notes']];
 let frozenText = {};
 function frozenHtml(x, code, link) {
@@ -99,8 +101,8 @@ function frozenHtml(x, code, link) {
   const when = x.brochure && x.brochure.doneAt;
   return `<div class="tk-sec bp frozen" id="bpSec">
     <div class="tk-sec-hdr bp-hdr">Brochure <span class="bp-state ok">✓ Brochure created</span></div>
-    <label class="tk-check bp-done"><input type="checkbox" checked onchange="bpUnfreeze(${jsq(x.id)}, this)"> Brochure created${link ? ` — <a href="${esc(link)}" target="_blank" rel="noopener">open ↗</a>` : ''}</label>
-    <div class="tk-hint">Locked${when ? ' since ' + esc(fmt(when)) : ''} — this is what the brochure was made from. Copy anything you need; untick above only to redo it.</div>
+    <div id="bpStatus" class="bp-status">${statusHtml(x)}</div>
+    <div class="tk-hint">Locked${when ? ' since ' + esc(fmt(when)) : ''} — this is what the brochure was made from. Copy anything you need. <button type="button" class="tk-link bp-redo" onclick="bpUnfreeze(${jsq(x.id)})">Redo brochure</button></div>
     ${FROZEN.map(([k, label]) => `<div class="bp-ro">
       <div class="bp-ro-h"><span class="bp-l">${esc(label)}</span>${val[k] ? `<button type="button" class="bp-copy" onclick="bpCopy(${jsq(k)}, this)">Copy</button>` : ''}</div>
       <div class="bp-ro-v${k === 'description' || k === 'internalNotes' ? ' long' : ''}">${val[k] ? (k === 'photosLink' && B.isUrl(val[k]) ? `<a href="${esc(val[k])}" target="_blank" rel="noopener">${esc(val[k])}</a>` : esc(val[k])) : '<span class="bp-muted">—</span>'}</div>
@@ -120,13 +122,52 @@ function fallbackCopy(text, ok) {
   try { document.execCommand('copy'); ok(); } catch (e) { api().toast('Could not copy — select the text instead'); }
   ta.remove();
 }
-window.bpUnfreeze = (id, box) => {
-  if (!confirm('Unlock the brochure details?\n\n“Brochure created” is unticked and the fields become editable, so the brochure can be redone. The delivered brochure itself is not deleted.')) { box.checked = true; return; }
+window.bpUnfreeze = id => {
+  if (!confirm('Redo the brochure?\n\nThe details become editable so a new brochure can be generated. The delivered brochure itself is not deleted.')) return;
   const p = inv().find(q => B.codeKey(q.propertyCode) === B.codeKey(B.listingCode(byId(id))));
   const showing = (p && B.isUrl(p.brochureLink) && p.brochureLink) || (byId(id) || {}).brochureLink || '';
   api().mutate(id, l => { l.brochure = { ...(l.brochure || {}), doneAt: null, unlockedAt: Date.now(), unlockedLink: showing }; }, 'Brochure details unlocked for a redo');
   if (api().currentDetailId() === id) api().openDetail(id);
 };
+
+// ── Where the brochure stands: read from the pipeline, never ticked by hand ──
+// The team's brochure log with the Queue sheet's status (the Create brochure page's "Recent
+// brochures"), read at most once a minute and only while a listing's panel is open.
+let qLog = null, qAt = 0, qBusy = false;
+function loadQueue() {
+  if (qBusy || window.__demoMode || Date.now() - qAt < 60000) return;
+  qBusy = true; qAt = Date.now();
+  Promise.resolve(window.trackAuth && window.trackAuth.getIdToken ? window.trackAuth.getIdToken() : null)
+    .then(token => token ? fetch('/api/brochure?op=log', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json()) : null)
+    .then(d => {
+      if (!d || !d.ok || !Array.isArray(d.entries)) return;
+      qLog = d.entries;
+      const id = api() && api().currentDetailId(), el = $('bpStatus'), x = id ? byId(id) : null;
+      if (el && x) el.innerHTML = statusHtml(x);
+    })
+    .catch(e => console.error('brochure queue read failed:', e))
+    .finally(() => { qBusy = false; });
+}
+// Read the queue again now (just asked for one, so it should show without waiting a minute).
+window.bpQueueRefresh = () => { qAt = 0; loadQueue(); };
+const Q_CLASS = { queued: 'warn', generated: 'warn', delivered: 'ok', error: 'bad' };
+function statusHtml(x) {
+  loadQueue();
+  const shared = api() && api().brochureOf ? api().brochureOf(x) : null;
+  const created = shared === 'created' || B.isLocked(x, inv());
+  const p = B.isRealCode(x.propertyCode) ? inv().find(q => B.codeKey(q.propertyCode) === B.codeKey(x.propertyCode)) : null;
+  const link = B.isUrl(x.brochureLink) ? x.brochureLink : (p && B.isUrl(p.brochureLink) ? p.brochureLink : '');
+  const e = B.queueEntryFor(x, qLog);
+  const who = e && e.by ? ' by ' + esc(String(e.by).split('@')[0]) : '';
+  const open = link ? ` — <a href="${esc(link)}" target="_blank" rel="noopener">open ↗</a>` : '';
+  if (created) return `<span class="bp-q ok">✓ Brochure created${open}</span>${e && e.status && e.status.state === 'delivered' && e.status.at ? `<span class="bp-q-sub">Delivered ${esc(fmt(e.status.at))}</span>` : ''}`;
+  if (e) {
+    const st = e.status || { state: 'queued', label: 'In queue' };
+    return `<span class="bp-q ${Q_CLASS[st.state] || 'warn'}">${esc(st.label || 'In queue')}${st.state === 'delivered' ? open : ''}</span><span class="bp-q-sub">Asked for ${esc(fmt(e.at))}${who}${st.detail ? ' — ' + esc(st.detail) : ''}</span>`;
+  }
+  if (x.brochure && x.brochure.requestedAt) return '<span class="bp-q warn">Requested — waiting for the queue</span>';
+  return '<span class="bp-q muted">Brochure not created</span>';
+}
 
 // The checklist and the Generate button. Split in two so a save can repaint the list without
 // replacing the button (see paintCheck).
@@ -189,16 +230,17 @@ function verdictHtml(id, code) {
   const c = String(code || '').trim();
   if (!c) return '<span class="bp-muted">Type the code for this property. Existing codes are suggested as you type.</span>';
   const f = B.findCode(c, inv(), listingsNow(), id);
+  // Already on another listing: one property, one seller, one listing — never a second link.
+  if (f.listing) {
+    return `<div class="bp-v dup"><b>Already used on this board</b> by “${esc(f.listing.title || 'another listing')}”. One property has one seller, one listing — use a different code, or open that listing.
+      <div class="bp-v-acts"><button type="button" class="tk-btn sm" onclick="openDetail(${jsq(f.listing.id)})">Open that listing</button></div></div>`;
+  }
   if (f.inventory) {
     const p = f.inventory;
     return `<div class="bp-v dup"><b>Duplicate code found.</b> ${esc(p.propertyCode)} is already in the Property dashboard — ${esc(p.name || '')}${p.location ? ', ' + esc(p.location) : ''}.
       <div class="bp-v-acts"><button type="button" class="tk-btn sm" onclick="bpPreview(${jsq(p.propertyCode)})">Preview property</button>
       <button type="button" class="tk-btn sm primary" onclick="bpLink(${jsq(id)}, ${jsq(p.propertyCode)})">Link this listing to it</button></div>
       <div class="bp-muted">Linking brings its photos, brochure, description and internal notes here. If this is a different property, use a different code.</div></div>`;
-  }
-  if (f.listing) {
-    return `<div class="bp-v dup"><b>Already used on this board</b> by “${esc(f.listing.title || 'another listing')}”. One code, one property — use a different code, or open that listing.
-      <div class="bp-v-acts"><button type="button" class="tk-btn sm" onclick="openDetail(${jsq(f.listing.id)})">Open that listing</button></div></div>`;
   }
   if (!B.looksLikeCode(c)) return '<div class="bp-v warn">Codes look like <b>TNAG0002</b> — letters, then numbers.</div>';
   const sim = B.similarCodes(c, inv());
@@ -231,11 +273,11 @@ window.bpPickSug = (id, code) => {
 // What a listing carries from the property it was linked to: its delivered brochure (and the
 // brochure's state), and its photos link if that is the property's. Dropped when the link goes or
 // moves to another property — they belong to the old one.
-function fromOldProperty(x) {
+// `cur` is what will be saved (an edit form's values over the listing), so a field changed in that
+// same edit counts as typed and stays. The rule itself: B.unmapPatch.
+function fromOldProperty(x, cur) {
   const old = x && String(x.propertyCode || '').trim() ? inv().find(q => B.codeKey(q.propertyCode) === B.codeKey(x.propertyCode)) : null;
-  const patch = { brochureLink: '' };
-  if (old && B.isUrl(old.photosLink) && String(old.photosLink).trim() === String(x.photosLink || '').trim()) patch.photosLink = '';
-  return { patch, brochure: { doneAt: null, requestedAt: null, requestedCode: '', unlockedAt: null, unlockedLink: '' } };
+  return B.unmapPatch({ ...x, ...(cur || {}) }, old);
 }
 
 // ── Link a listing to a dashboard property: the shared path (also used by "Map to a property") ──
@@ -245,17 +287,20 @@ window.bpLink = async (id, code) => {
   const p = inv().find(q => B.codeKey(q.propertyCode) === B.codeKey(code));
   if (!x || !p) return false;
   const taken = B.findCode(p.propertyCode, inv(), listingsNow(), id).listing;
-  if (taken && !confirm(`${p.propertyCode} is already linked to “${taken.title || 'another listing'}”.\n\nLink this listing to it as well?`)) return false;
+  if (taken) { api().toast(B.takenMessage(p.propertyCode, taken)); return false; }
   let notes = '';
   try { notes = window.trackFirebase && window.trackFirebase.getPropertyInternalNotes ? await window.trackFirebase.getPropertyInternalNotes(p.id) : ''; } catch (e) { console.error('internal notes read failed:', e); }
   // Moving from one property to another: start from what is the listing's own, not the old property's.
   const switching = String(x.propertyCode || '').trim() && B.codeKey(x.propertyCode) !== B.codeKey(p.propertyCode);
   const reset = switching ? fromOldProperty(x) : null;
-  const f = B.fillFromProperty(reset ? { ...x, ...reset.patch } : x, p, notes);
+  const before = reset ? { ...x, ...reset.patch } : x;
+  const f = B.fillFromProperty(before, p, notes);
   drafts.delete(id);
   api().mutate(id, l => {
     if (reset) { Object.assign(l, reset.patch); l.brochure = { ...(l.brochure || {}), ...reset.brochure }; }
     l.propertyCode = p.propertyCode;
+    // What this mapping filled in, so unmapping takes exactly that back.
+    l.fetched = B.recordFetched(reset ? null : l.fetched, before, f.patch);
     Object.assign(l, f.patch);
     l.brochure = { ...(l.brochure || {}), code: p.propertyCode };
     // Unlocked for a redo and linked back to the same property: the brochure that was showing
@@ -287,18 +332,14 @@ window.bpPreview = code => {
     ${p.detailsText ? `<div class="bp-pv-desc">${esc(p.detailsText)}</div>` : '<div class="bp-muted">No description in the dashboard yet.</div>'}
     <div class="bp-pv-acts">
       <a class="tk-btn" href="dashboard.html?property=${encodeURIComponent(p.propertyCode)}" target="_blank" rel="noopener">Open in the dashboard ↗</a>
-      ${forX && !linked ? `<button type="button" class="tk-btn primary" onclick="bpLink(${jsq(forX.id)}, ${jsq(p.propertyCode)})">Link this listing to it</button>` : ''}
+      ${forX && !linked ? (B.findCode(p.propertyCode, inv(), listingsNow(), forX.id).listing
+        ? `<span class="bp-muted">${esc(B.takenMessage(p.propertyCode, B.findCode(p.propertyCode, inv(), listingsNow(), forX.id).listing))}</span>`
+        : `<button type="button" class="tk-btn primary" onclick="bpLink(${jsq(forX.id)}, ${jsq(p.propertyCode)})">Link this listing to it</button>`) : ''}
     </div>`;
   el.classList.add('open');
 };
 function closePreview() { const el = $('bpPrev'); if (el) el.classList.remove('open'); }
 window.bpClosePreview = closePreview;
-
-// ── Ticking "Brochure created" by hand (for a brochure made outside the pipeline) ──
-window.bpMarkDone = (id, on) => {
-  api().mutate(id, l => { l.brochure = { ...(l.brochure || {}), doneAt: on ? Date.now() : null }; }, on ? 'Brochure marked created' : 'Brochure un-marked');
-  if (api().currentDetailId() === id) api().openDetail(id);
-};
 
 // ── Generate: the same Google Form as the Create brochure page ──
 window.bpGenerate = async id => {
@@ -347,6 +388,7 @@ window.bpGenerate = async id => {
       const token = window.trackAuth && window.trackAuth.getIdToken ? await window.trackAuth.getIdToken() : null;
       if (token) await fetch('/api/brochure?op=log', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
     } catch (e) { /* the request went; the log line is a nicety */ }
+    qAt = 0;   // the status line reads the queue afresh on the redraw below
     api().toast(window.__demoMode ? 'Demo: request recorded here only — nothing was sent' : '✓ Sent — the brochure is ready in about 30 minutes');
   } finally {
     sending.delete(id);
@@ -383,6 +425,10 @@ window.bpReconcile = force => {
     for (const u of B.reconcileBrochures(listingsNow(), list || [], Date.now())) {
       api().mutate(u.id, l => {
         const { brochure, ...rest } = u.patch;
+        // Filled from the property it is (now) mapped to: recorded, so unmapping takes it back.
+        // (Only when one of those fields was filled — a bare brochure-link update must not turn a
+        // listing mapped before records began into an empty record, which would stop its fallback.)
+        if ((rest.propertyCode || String(l.propertyCode || '').trim()) && B.FETCHED_FIELDS.some(f => f in rest)) l.fetched = B.recordFetched(l.fetched, l, rest);
         Object.assign(l, rest);
         if (brochure) l.brochure = { ...(l.brochure || {}), ...brochure };
       }, u.history);
@@ -407,7 +453,8 @@ window.bpModalCode = value => {
   const kept = keptLink(c, editId);
   if (kept) { el.innerHTML = `<div class="bp-v ok">✓ Linked to ${esc(kept.propertyCode)} in the Property dashboard — saving keeps the link.</div>`; return; }
   const f = B.findCode(c, inv(), listingsNow(), editId);
-  if (f.inventory) el.innerHTML = `<div class="bp-v dup"><b>Already in the dashboard:</b> ${esc(f.inventory.name || '')}. Saving links this listing to it and brings its photos, brochure and details. <button type="button" class="tk-link" onclick="bpPreview(${jsq(f.inventory.propertyCode)})">Preview</button></div>`;
+  if (f.listing) el.innerHTML = `<div class="bp-v dup">${esc(B.takenMessage(B.normCode(c), f.listing))}</div>`;
+  else if (f.inventory) el.innerHTML = `<div class="bp-v dup"><b>Already in the dashboard:</b> ${esc(f.inventory.name || '')}. Saving links this listing to it and brings its photos, brochure and details. <button type="button" class="tk-link" onclick="bpPreview(${jsq(f.inventory.propertyCode)})">Preview</button></div>`;
   else if (f.listing) el.innerHTML = `<div class="bp-v dup"><b>Already used</b> by “${esc(f.listing.title || 'another listing')}” on this board — use a different code.</div>`;
   else if (!B.looksLikeCode(c)) el.innerHTML = '<div class="bp-v warn">Codes look like <b>TNAG0002</b> — letters, then numbers.</div>';
   else { const sim = B.similarCodes(c, inv()); el.innerHTML = sim.length ? `<div class="bp-v warn"><b>Did you mean ${sim.map(p => esc(p.propertyCode)).join(' or ')}?</b> ${sim.map(p => `<button type="button" class="tk-link" onclick="bpModalUse(${jsq(p.propertyCode)})">Use ${esc(p.propertyCode)}</button>`).join(' ')}</div>` : `<div class="bp-v ok">✓ New code — the listing keeps it for its brochure.</div>`; }
@@ -421,19 +468,23 @@ window.bpResolveFormCode = (form, editId) => {
     // Box emptied on a linked listing: an unlink. Its code goes too, or the background check would
     // link it straight back to the property its brochure was requested for.
     // What came with the old property (its brochure, its photos link) goes with the link.
-    if (x && String(x.propertyCode || '').trim()) { const r = fromOldProperty(x); return { propertyCode: '', brochure: { ...r.brochure, code: '' }, patch: r.patch }; }
+    if (x && String(x.propertyCode || '').trim()) { const r = fromOldProperty(x, formView(form)); return { propertyCode: '', brochure: { ...r.brochure, code: '' }, patch: r.patch }; }
     return { propertyCode: '', brochure: null };
   }
   // The code it is already linked to: kept exactly as it is. Older properties have a bare number
-  // for an id (not a code findCode matches), and two listings may share a property on purpose.
+  // for an id (not a code findCode matches).
   if (keptLink(code, editId)) return { propertyCode: x.propertyCode };
   const f = B.findCode(code, inv(), listingsNow(), editId);
-  // In the dashboard: link it — even if another listing is linked too (bpLink asks about that).
+  // In the dashboard and not on another listing: link it. On another listing: refused — one
+  // property has one seller, one listing.
+  if (f.inventory && f.listing) return { error: B.takenMessage(f.inventory.propertyCode, f.listing) };
   if (f.inventory) return { propertyCode: f.inventory.propertyCode, link: f.inventory.propertyCode };
   const unchanged = x && x.brochure && B.codeKey(code) === B.codeKey(x.brochure.code);
   if (f.listing && !unchanged) return { error: `${code} is already used by “${f.listing.title || 'another listing'}” on this board.` };
   // Not in the dashboard yet: kept as the brochure's code, not as a dashboard link. A listing that
   // was linked to another property leaves that property's brochure and photos behind.
-  if (x && String(x.propertyCode || '').trim()) { const r = fromOldProperty(x); return { propertyCode: '', brochure: { ...r.brochure, code }, patch: r.patch }; }
+  if (x && String(x.propertyCode || '').trim()) { const r = fromOldProperty(x, formView(form)); return { propertyCode: '', brochure: { ...r.brochure, code }, patch: r.patch }; }
   return { propertyCode: '', brochure: { code } };
 };
+// The edit form's own values for the fields a mapping fills (pickProperty passes none).
+const formView = form => Object.fromEntries(B.FETCHED_FIELDS.filter(f => form && f in form).map(f => [f, form[f]]));

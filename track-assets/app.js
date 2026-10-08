@@ -2248,7 +2248,11 @@ function renderMapList(q) {
   const list = all.slice(0, CAP);
   const x = listings.find(l => l.id === mapFor);
   el.innerHTML = (x && x.propertyCode ? `<button type="button" class="tk-pick clear" onclick="pickProperty('')">✕ Unmap from ${esc(x.propertyCode)}</button>` : '')
-    + (list.length ? list.map(p => `<button type="button" class="tk-pick" onclick="pickProperty('${esc(p.propertyCode)}')">
+    // One property, one seller, one listing: a property already on another listing cannot be picked.
+    + (list.length ? list.map(p => (o => o ? `<div class="tk-pick taken" aria-disabled="true">
+        ${realCode(p.propertyCode) ? `<span class="tk-code">${esc(p.propertyCode)}</span>` : ''}
+        <span class="tk-pick-main"><b>${esc(p.name || p.propertyCode || '—')}</b><span>Mapped to “${esc(o.title || 'another listing')}” — one property, one listing</span></span>
+      </div>` : null)(BF.findCode(p.propertyCode, inventory, listings, mapFor).listing) || `<button type="button" class="tk-pick" onclick="pickProperty('${esc(p.propertyCode)}')">
         ${realCode(p.propertyCode) ? `<span class="tk-code">${esc(p.propertyCode)}</span>` : ''}
         <span class="tk-pick-main"><b>${esc(p.name || p.propertyCode || '—')}</b><span>${esc([p.location, p.config, p.startingPrice].filter(Boolean).join(' · ')) || '<i>older listing</i>'}</span></span>
         ${p.soldOut ? '<span class="tk-pill muted">sold</span>' : ''}

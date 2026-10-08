@@ -69,6 +69,7 @@ const problems = [];
 const ok = (l, c, d) => { if (c) console.log('  ok  ' + l); else { console.log('  FAIL ' + l + (d !== undefined ? ' — ' + d : '')); problems.push(l); } };
 const section = n => console.log('\n── ' + n);
 const formPosts = [], logPosts = [];
+let LOG_ENTRIES = [];
 let formHold = null;
 
 async function open(viewport) {
@@ -86,7 +87,10 @@ async function open(viewport) {
     // The form can be held unanswered (formHold), as on a slow phone: time to click twice or redraw meanwhile.
     if (url.hostname === 'docs.google.com' && url.pathname.endsWith('/formResponse')) { formPosts.push(req.postData() || ''); return (formHold || Promise.resolve()).then(() => route.fulfill({ status: 200, body: '' })); }
     if (url.hostname !== 'track.local') return route.abort();
-    if (url.pathname === '/api/brochure') { logPosts.push(req.postData() || ''); return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }); }
+    if (url.pathname === '/api/brochure') {
+      if (req.method() === 'GET') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, entries: LOG_ENTRIES, sheet: true }) });
+      logPosts.push(req.postData() || ''); return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
+    }
     if (url.pathname === '/track-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: STUB });
     const file = join(ROOT, decodeURIComponent(url.pathname));
     if (!existsSync(file)) return route.fulfill({ status: 404, body: '' });
@@ -109,7 +113,8 @@ await openListing('l1');
 ok('The owner conversation is gone', !(await p.$('#dpConvo')) && !/SHOULD NOT BE SHOWN/.test(await p.textContent('#dpBody')));
 const order = await p.$$eval('.tk-dp-side > .tk-sec', s => s.map(e => (e.querySelector('.tk-sec-hdr') || {}).textContent.trim().split(/\s/)[0]));
 ok('Right pane: Notes, then Brochure, then Timeline', order.join() === 'Notes,Brochure,Timeline', JSON.stringify(order));
-ok('Not started, Generate disabled until filled', /Not started/.test(await p.textContent('#bpSec')) && await p.$eval('#bpCheck .tk-btn.primary', b => b.disabled));
+ok('"Brochure created" is information, not a box to tick', !(await p.$('#bpSec input[type=checkbox]')) && /Brochure not created/.test(await p.textContent('#bpStatus')));
+ok('Brochure not created, Generate disabled until filled', /Brochure not created/.test(await p.textContent('#bpSec')) && await p.$eval('#bpCheck .tk-btn.primary', b => b.disabled));
 ok('The checklist names what is missing', /Property code/.test(await p.textContent('#bpCheck')) && /Photos link/.test(await p.textContent('#bpCheck')) && /Description/.test(await p.textContent('#bpCheck')));
 await p.screenshot({ path: OUT + '/1-panel.png', fullPage: true });
 
@@ -136,6 +141,7 @@ ok('…and its tile shows Brochure ✓', /Brochure ✓/.test(await p.$eval('.tk-
 ok('Preview closed after linking', !(await p.$eval('#bpPrev', e => e.classList.contains('open'))));
 
 section('Locked once created: copy, not edit');
+ok('Locked: says Brochure created, with the link — nothing to tick', !(await p.$('#bpSec input[type=checkbox]')) && /✓ Brochure created/.test(await p.textContent('#bpStatus')) && !!(await p.$('#bpStatus a')));
 ok('Panel is locked: no inputs, Copy buttons', !!(await p.$('#bpSec.frozen')) && !(await p.$('#bpSec input[type=text], #bpSec textarea')) && (await p.$$('#bpSec .bp-copy')).length >= 4);
 await p.click('#bpSec .bp-ro:has-text("Description") .bp-copy');
 ok('Copy puts the text on the clipboard', /1650 sqft/.test(await p.evaluate(() => navigator.clipboard.readText())));
@@ -145,7 +151,7 @@ ok('Copy all: code - title, photos, description, internal notes', /^EGM0001 - Eg
 await p.screenshot({ path: OUT + '/3-locked.png', fullPage: true });
 
 section('Unlocking for a redo');
-await p.uncheck('#bpSec .bp-done input');
+await p.click('#bpSec .bp-redo');
 await p.waitForTimeout(200);
 s = await last('l1');
 ok('Unlocked: fields editable again', !!(await p.$('#bpTitle')) && !(await p.$('#bpSec.frozen')) && s.brochure.unlockedLink === INV[0].brochureLink);
@@ -176,6 +182,8 @@ await typeCode('THVA0001');
 ok('"Did you mean THVA001?" with Preview and Link', /Did you mean THVA001/.test(await p.textContent('#bpVerdict')) && !!(await p.$('#bpVerdict button:has-text("Link to THVA001")')));
 await typeCode('ADYR0001');
 ok('A code another listing already uses is refused', /Already used on this board/.test(await p.textContent('#bpVerdict')) && /Plot, Adyar/.test(await p.textContent('#bpVerdict')) && await p.$eval('#bpCheck .tk-btn.primary', b => b.disabled));
+await typeCode('egm0002');
+ok('A dashboard property another listing has: Already used on this board, no Link button', /Already used on this board/.test(await p.textContent('#bpVerdict')) && /Egmore villa, asked for/.test(await p.textContent('#bpVerdict')) && !(await p.$('#bpVerdict button:has-text("Link")')));
 await typeCode('12345');
 ok('Not a code: says what codes look like', /letters, then numbers/.test(await p.textContent('#bpVerdict')));
 
@@ -196,6 +204,7 @@ await p.fill('#bpDesc', '4BHK villa, 2800 sqft, 400m from ECR. Price ₹3.4 Cr.'
 await p.fill('#bpInternal', 'Owner Suresh 9840022222');
 ok('Ready: shows exactly what goes to the pipeline', /KOTV0007 - 4BHK Villa near ECR/.test(await p.textContent('#bpCheck')) && !(await p.$eval('#bpCheck .tk-btn.primary', b => b.disabled)));
 await p.screenshot({ path: OUT + '/4-ready.png', fullPage: true });
+LOG_ENTRIES = [{ id: 'q1', title: 'KOTV0007 - 4BHK Villa near ECR', by: 'admin@3pin.in', at: Date.now(), status: { state: 'queued', label: 'In queue' } }];
 let releaseForm;
 formHold = new Promise(r => { releaseForm = r; });
 await p.click('#bpCheck .tk-btn.primary');
@@ -216,6 +225,11 @@ s = await last('l2');
 ok('Listing records the request', s.brochure.requestedAt && s.brochure.code === 'KOTV0007' && s.brochure.by === 'admin@3pin.in' && !s.propertyCode);
 ok('Stays in Shoot done; the tile says Brochure requested', await stageKey('l2') === 'shoot_done' && /Brochure requested/.test(await p.$eval('.tk-card[data-id="l2"]', c => c.textContent)));
 ok('Panel says it is waiting for the dashboard', /Requested — waiting/.test(await p.textContent('#bpSec')) && /Send again/.test(await p.textContent('#bpCheck')));
+await p.waitForTimeout(300);
+ok('The status line reads the pipeline\'s queue: In queue, asked for by whom', /In queue/.test(await p.textContent('#bpStatus')) && /by admin/.test(await p.textContent('#bpStatus')), await p.textContent('#bpStatus'));
+LOG_ENTRIES[0].status = { state: 'error', label: 'Needs attention', detail: 'Drive folder not shared' };
+await p.evaluate(() => window.bpQueueRefresh()); await p.waitForTimeout(300);
+ok('…and follows it: Needs attention, with the reason', /Needs attention/.test(await p.textContent('#bpStatus')) && /Drive folder not shared/.test(await p.textContent('#bpStatus')), await p.textContent('#bpStatus'));
 
 section('The property reaches the dashboard → links itself, ticks done, locks');
 await p.evaluate(() => { window.__inv.push({ id: 'KOTV0007', propertyCode: 'KOTV0007', name: 'Villa near ECR', location: 'Kottivakkam', photosLink: 'https://drive.google.com/drive/folders/kotv', brochureLink: 'KOTV0007_villa.pdf', detailsText: '4BHK villa…' }); });
@@ -258,11 +272,16 @@ await p.evaluate(() => window.closeDetail && window.closeDetail());
 await p.evaluate(() => window.openAddModal());
 await p.fill('#mm_title', 'Egmore villa (owner wording)');
 await p.fill('#mm_propertyCode', 'egm0002'); await p.dispatchEvent('#mm_propertyCode', 'input');
-ok('Existing code: "Already in the dashboard"', /Already in the dashboard/.test(await p.textContent('#mmCodeHint')));
-const before = await p.evaluate(() => window.__saved.length);
+ok('A property another listing has: says so — one property, one seller, one listing', /already mapped to “Egmore villa, asked for”/.test(await p.textContent('#mmCodeHint')), await p.textContent('#mmCodeHint'));
+let before = await p.evaluate(() => window.__saved.length);
+await p.click('#mModal .tk-btn.primary'); await p.waitForTimeout(300);
+ok('…and saving is refused, nothing created', /already mapped to “Egmore villa, asked for”/.test(await p.textContent('#mmErr')) && !(await p.evaluate(b => window.__saved.slice(b), before)).some(x => x.title === 'Egmore villa (owner wording)'));
+await p.fill('#mm_propertyCode', 'thva001'); await p.dispatchEvent('#mm_propertyCode', 'input');
+ok('A property no listing has: "Already in the dashboard"', /Already in the dashboard/.test(await p.textContent('#mmCodeHint')));
+before = await p.evaluate(() => window.__saved.length);
 await p.click('#mModal .tk-btn.primary'); await p.waitForTimeout(400);
 const created = (await p.evaluate(b => window.__saved.slice(b), before)).filter(x => x.title === 'Egmore villa (owner wording)').pop();
-ok('Saved and linked to EGM0002, its photos filled', created && created.propertyCode === 'EGM0002' && created.photosLink === INV[1].photosLink);
+ok('Saved and linked to THVA001', created && created.propertyCode === 'THVA001', JSON.stringify(created && [created.propertyCode, created.photosLink]));
 await p.evaluate(() => window.closeDetail && window.closeDetail());
 await p.evaluate(() => window.openAddModal());
 await p.fill('#mm_title', 'Typo test');
@@ -290,7 +309,7 @@ const editSave = async (id, fields) => {
 };
 let err = await editSave(created.id, { title: 'Egmore villa (renamed)' });
 s = await last(created.id);
-ok('Two listings on one property: either can still be edited', !err && s.title === 'Egmore villa (renamed)' && s.propertyCode === 'EGM0002', err || JSON.stringify(s.propertyCode));
+ok('A linked listing can still be edited, and keeps its link', !err && s.title === 'Egmore villa (renamed)' && s.propertyCode === 'THVA001', err || JSON.stringify(s.propertyCode));
 err = await editSave('l4', { title: 'Old flat (renamed)' });
 s = await last('l4');
 ok('An older property with a bare-number id keeps its link through an edit', !err && s.title === 'Old flat (renamed)' && s.propertyCode === '123', err || JSON.stringify([s.propertyCode, s.brochure]));
@@ -304,9 +323,48 @@ ok('…and the background check does not link it straight back', !s.propertyCode
 section('Mapping through the shared path still brings the same details');
 await openListing('l3');
 await p.evaluate(() => window.openMapProperty('l3')); await p.waitForTimeout(200);
-await p.click('#mapList .tk-pick:has-text("EGM0001")'); await p.waitForTimeout(400);
+const takenRow = await p.$eval('#mapList .tk-pick:has-text("EGM0001")', e => ({ tag: e.tagName, text: e.textContent }));
+ok('One property, one listing: EGM0001 (on Egmore flat) cannot be picked for another listing', takenRow.tag !== 'BUTTON' && /Mapped to “Egmore flat”/.test(takenRow.text), JSON.stringify(takenRow));
+const refused = await p.evaluate(() => window.bpLink('l3', 'EGM0001'));
+ok('…nor linked by any other route', refused === false && !(await last('l3') || {}).propertyCode);
+await p.evaluate(() => window.closeMapModal());
+await p.evaluate(() => { window.openMapProperty('l1'); window.pickProperty(''); }); await p.waitForTimeout(400);
+await p.evaluate(() => window.openMapProperty('l3')); await p.waitForTimeout(200);
+await p.click('#mapList button.tk-pick:has-text("EGM0001")'); await p.waitForTimeout(400);
 s = await last('l3');
 ok('Mapping fills description and internal notes too', s.propertyCode === 'EGM0001' && /1650 sqft/.test(s.description) && /call after 6pm/.test(s.internalNotes));
+ok('…its brochure exists, so the panel shows it, locked — no Generate', !!(await p.$('#bpSec.frozen')) && !(await p.$('#bpCheck')) && /✓ Brochure created/.test(await p.textContent('#bpStatus')));
+
+section('Unmapping clears what the mapping brought; what was typed stays');
+await p.evaluate(() => { window.openMapProperty('l3'); window.pickProperty(''); }); await p.waitForTimeout(400);
+s = await last('l3');
+ok('Unmapped: no code, and the fetched description, photos, internal notes and brochure are gone', !s.propertyCode && !s.description && !s.photosLink && !s.internalNotes && !s.brochureLink && !(s.brochure && s.brochure.code), JSON.stringify({ d: s.description, ph: s.photosLink, n: s.internalNotes, b: s.brochure }));
+ok('…the title typed on the listing stays', s.title === 'Plot, Adyar', s.title);
+await openListing('l3');
+ok('…the panel is editable again and says Brochure not created', !(await p.$('#bpSec.frozen')) && /Brochure not created/.test(await p.textContent('#bpStatus')));
+await p.evaluate(() => window.bpReconcile(true)); await p.waitForTimeout(300);
+ok('…and nothing maps it back', !(await last('l3')).propertyCode);
+
+section('Mapping a property with no brochure yet: its details come, Generate stays');
+await p.fill('#bpDesc', 'My own words for the plot'); await p.dispatchEvent('#bpDesc', 'change'); await p.waitForTimeout(150);
+await p.evaluate(() => { window.openMapProperty('l3'); }); await p.waitForTimeout(200);
+await p.click('#mapList .tk-pick:has-text("EGM0002")'); await p.waitForTimeout(400);
+s = await last('l3');
+ok('Mapped to EGM0002: photos fetched, the description I typed kept', s.propertyCode === 'EGM0002' && s.photosLink === INV[1].photosLink && s.description === 'My own words for the plot', JSON.stringify({ c: s.propertyCode, ph: s.photosLink, d: s.description }));
+await openListing('l3');
+ok('…editable, Brochure not created, Generate offered', !(await p.$('#bpSec.frozen')) && /Brochure not created/.test(await p.textContent('#bpStatus')) && !!(await p.$('#bpCheck .bp-gen')));
+await p.evaluate(() => { window.openMapProperty('l3'); window.pickProperty(''); }); await p.waitForTimeout(400);
+s = await last('l3');
+ok('Unmapped again: the fetched photos go, my description stays', !s.propertyCode && !s.photosLink && s.description === 'My own words for the plot', JSON.stringify({ ph: s.photosLink, d: s.description }));
+
+section('Generated from the listing, then unmapped: details stay, only the code goes');
+s = await last('l2');
+ok('(l2 was generated here and linked to KOTV0007)', s.propertyCode === 'KOTV0007' && !!s.brochure.requestedAt);
+await p.evaluate(() => { window.openMapProperty('l2'); window.pickProperty(''); }); await p.waitForTimeout(400);
+s = await last('l2');
+ok('Unmapped: no code; title, photos, description and internal notes all kept', !s.propertyCode && !(s.brochure && s.brochure.code) && s.title === '4BHK Villa near ECR' && s.photosLink === 'https://drive.google.com/drive/folders/kotv' && /2800 sqft/.test(s.description) && /Suresh/.test(s.internalNotes), JSON.stringify({ c: s.propertyCode, b: s.brochure, t: s.title }));
+await openListing('l2');
+ok('…editable, ready for a new code', !(await p.$('#bpSec.frozen')) && await p.$eval('#bpCode', e => e.value) === '' && await p.$eval('#bpTitle', e => e.value) === '4BHK Villa near ECR');
 await p.close();
 
 section('On a phone');

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {
   codeKey, normCode, looksLikeCode, isUrl, findCode, similarCodes, codeSuggestions,
   fillFromProperty, brochureCheck, brochureTitle, brochureState, reconcileBrochures, listingCode, isLocked, FORM_ACTION, FORM_FIELDS, formBody,
-  awaitingBrochure
+  awaitingBrochure, recordFetched, unmapPatch, queueEntryFor, takenMessage
 } from '../track-assets/brochure-flow.js';
 
 let failed = 0;
@@ -116,16 +116,17 @@ const asked = [
   { id: 'D', title: 'Mapped long ago', propertyCode: 'EGM0001', location: 'Egmore', description: 'x', photosLink: 'https://drive.google.com/drive/folders/egm', brochureLink: 'https://drive.google.com/file/d/egm', brochure: { doneAt: NOW - 9e9 } },  // already done, fully filled
   { id: 'E', title: 'Typed code, never asked', brochure: { code: 'EGM0002' } }                    // must not be linked silently
 ];
-const r = reconcileBrochures(asked, INV, NOW);
+// D holds EGM0001, which A asks for — one property, one listing — so D is checked on its own.
+const r = reconcileBrochures(asked.filter(x => x.id !== 'D'), INV, NOW);
 const A = r.find(u => u.id === 'A'), B = r.find(u => u.id === 'B');
 check('Delivered: linked to the code', A && A.patch.propertyCode === 'EGM0001');
 check('…brochure link and photos pulled in', A.patch.brochureLink === INV[1].brochureLink && A.patch.photosLink === INV[1].photosLink);
 check('…and marked done, with a note for the timeline', A.patch.brochure.doneAt === NOW && /marked done/.test(A.history));
 check('Built but not delivered: linked, NOT marked done', B && B.patch.propertyCode === 'THVA001' && !B.patch.brochure);
 check('Not in the dashboard yet: left alone', !r.some(u => u.id === 'C'));
-check('Already done: not touched again', !r.some(u => u.id === 'D'));
+check('Already done: not touched again', !reconcileBrochures(asked.filter(x => x.id === 'D'), INV, NOW).length);
 check('A code typed but never sent is not touched at all — no link, no photos copied in', !r.some(u => u.id === 'E'));
-eq('Running it again changes nothing', reconcileBrochures(asked.map(x => { const u = r.find(y => y.id === x.id); return u ? { ...x, ...u.patch } : x; }), INV, NOW + 1), []);
+eq('Running it again changes nothing', reconcileBrochures(asked.filter(x => x.id !== 'D').map(x => { const u = r.find(y => y.id === x.id); return u ? { ...x, ...u.patch } : x; }), INV, NOW + 1), []);
 {
   // The "duplicate — use a different code" case: typing or picking a code that already has a
   // delivered brochure must not copy that property in and freeze the panel as created.
@@ -173,6 +174,65 @@ section('Same form as the Create brochure page');
   check('Title goes as CODE - Title', b.get(FORM_FIELDS.title) === 'KOTV0007 - Villa');
   check('Empty internal notes are not sent (no blank Queue cell)', !b.has(FORM_FIELDS.internal));
   check('A code typed with a dash goes as the pipeline files it', formBody({ title: 'Villa', brochure: { code: 'thva-001' } }).get(FORM_FIELDS.title) === 'THVA001 - Villa');
+}
+
+section('Unmapping takes back what the mapping brought — and only that');
+{
+  const P = { propertyCode: 'VLCA003', name: 'Velachery 2BHK', detailsText: 'From the dashboard', photosLink: 'https://drive.google.com/p' };
+  // Mapped with a typed title and description; the mapping filled photos and internal notes.
+  const before = { title: 'Anna Nagar', description: 'Typed by me', photosLink: '', internalNotes: '' };
+  const fetched = recordFetched(null, before, { photosLink: P.photosLink, internalNotes: 'Owner: Raman' });
+  eq('Recorded: each filled field, with what it held before', fetched, { photosLink: { value: P.photosLink, was: '' }, internalNotes: { value: 'Owner: Raman', was: '' } });
+  const x = { ...before, photosLink: P.photosLink, internalNotes: 'Owner: Raman', propertyCode: 'VLCA003', fetched, brochure: { code: 'VLCA003', doneAt: 5 } };
+  const u = unmapPatch(x, P);
+  eq('Not generated here: the fetched fields go, the typed ones stay', [u.patch.photosLink, u.patch.internalNotes, 'title' in u.patch, 'description' in u.patch], ['', '', false, false]);
+  check('…the old property\'s brochure goes too, and the record is cleared', u.patch.brochureLink === '' && u.patch.fetched === null && u.brochure.doneAt === null);
+  const edited = unmapPatch({ ...x, internalNotes: 'Owner: Raman — call after 6' }, P);
+  check('A fetched field changed by hand since is theirs and stays', !('internalNotes' in edited.patch) && edited.patch.photosLink === '');
+  const t = recordFetched(null, { title: 'New listing' }, { title: 'Velachery 2BHK' });
+  eq('A title filled over "New listing" goes back to it', unmapPatch({ title: 'Velachery 2BHK', fetched: t }, P).patch.title, 'New listing');
+  const gen = unmapPatch({ ...x, brochure: { code: 'VLCA003', requestedAt: 99 } }, P);
+  check('Generated from this listing: every detail stays (only the code and the old brochure go)', !('photosLink' in gen.patch) && !('internalNotes' in gen.patch) && gen.patch.brochureLink === '' && gen.brochure.requestedAt === null);
+  const legacy = unmapPatch({ title: 'Anna Nagar', description: 'From the dashboard', photosLink: P.photosLink, propertyCode: 'VLCA003' }, P);
+  check('Mapped before fields were recorded: what is identical to the old property goes', legacy.patch.description === '' && legacy.patch.photosLink === '' && !('title' in legacy.patch));
+  const again = recordFetched(fetched, { photosLink: P.photosLink }, { photosLink: 'https://drive.google.com/new' });
+  eq('Filled again later (the dashboard changed it): still remembers what it held first', again.photosLink, { value: 'https://drive.google.com/new', was: '' });
+}
+
+section('Unmapping: what was typed is never taken, even when it matches the property');
+{
+  const P = { propertyCode: 'PRES0001', name: 'Prestige Lakeside', detailsText: 'Lake view', photosLink: 'https://drive.google.com/pres' };
+  // Typed "Prestige Lakeside" and pasted its Drive link before mapping; the mapping only filled the location.
+  const x = { title: 'Prestige Lakeside', photosLink: P.photosLink, location: 'Kelambakkam', propertyCode: 'PRES0001', fetched: recordFetched(null, { location: '' }, { location: 'Kelambakkam' }) };
+  const u = unmapPatch(x, P);
+  check('The typed title and pasted link stay; only the fetched location goes', !('title' in u.patch) && !('photosLink' in u.patch) && u.patch.location === '', JSON.stringify(u.patch));
+  check('Mapping that filled nothing: nothing is taken', Object.keys(unmapPatch({ ...x, fetched: {} }, P).patch).sort().join() === 'brochureLink,fetched');
+  const named = unmapPatch({ title: 'Prestige Lakeside', fetched: recordFetched(null, { title: '' }, { title: 'Prestige Lakeside' }) }, P);
+  eq('A card that got its only name from the mapping is not left blank', named.patch.title, 'New listing');
+  const cleared = recordFetched(recordFetched(null, { photosLink: 'mine' }, { photosLink: P.photosLink }), { photosLink: '' }, { photosLink: P.photosLink });
+  eq('Cleared by a person, then filled again: unmapping goes back to their blank', cleared.photosLink.was, '');
+}
+
+section('One property, one seller, one listing');
+{
+  const INV1 = [{ id: 'EGM0001', propertyCode: 'EGM0001', brochureLink: 'https://drive.google.com/file/d/egm' }];
+  const others = [{ id: 'A', title: 'Egmore flat', propertyCode: 'EGM0001' }, { id: 'B', title: 'Asked for it', brochure: { code: 'EGM0001', requestedCode: 'EGM0001', requestedAt: 5 } }];
+  check('The message names the listing that has it', /already mapped to “Egmore flat”/.test(takenMessage('EGM0001', others[0])));
+  eq('A brochure arriving for a property another listing has: not linked to it', reconcileBrochures(others, INV1, 10).filter(u => u.id === 'B' && u.patch.propertyCode), []);
+}
+
+section('The queue status for a listing');
+{
+  const LOG = [
+    { title: 'KOTV0007 - Villa', at: 1000, status: { state: 'queued', label: 'In queue' } },
+    { title: 'KOTV0007 - Villa', at: 5000, status: { state: 'generated', label: 'Generated — being sent' } },
+    { title: 'EGM0001 - Egmore', at: 6000, status: { state: 'delivered', label: 'Delivered' } }
+  ];
+  eq('Asked for here: the newest entry for its code, not one from before it was asked', queueEntryFor({ brochure: { code: 'kotv0007', requestedAt: 4000 } }, LOG).at, 5000);
+  check('…nothing from before the request', queueEntryFor({ brochure: { code: 'KOTV0007', requestedAt: 90000 } }, LOG) === null);
+  eq('Mapped: the property\'s brochure asked for from the Create brochure page', queueEntryFor({ propertyCode: 'EGM0001' }, LOG).status.state, 'delivered');
+  check('A code merely typed, never asked for: no status', queueEntryFor({ brochure: { code: 'EGM0001' } }, LOG) === null);
+  check('No log yet: no status', queueEntryFor({ propertyCode: 'EGM0001' }, null) === null);
 }
 
 console.log(failed ? `\n${failed} failure(s)` : '\nAll good.');
