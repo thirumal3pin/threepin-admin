@@ -79,8 +79,12 @@ section('The board owns the property and the work');
   eq('A mapping on the board is never overwritten by the lead',
     listingPatchFor(lead({ propertyCodes: ['OTHER001'] }), x), null);
   const blank = newListingFor(lead(), FIRST, NOW, 'sync');
-  eq('…but a blank mapping is filled from the lead',
-    listingPatchFor(lead({ propertyCodes: ['OTHER001'] }), blank), { propertyCode: 'OTHER001' });
+  eq('…and a blank mapping is NOT filled from the lead — mapping is by hand',
+    listingPatchFor(lead({ propertyCodes: ['OTHER001'] }), blank), null);
+  // Unmapped by hand on the board while the lead still lists the code: it stays unmapped.
+  const unmapped = { ...newListingFor(lead(), FIRST, NOW, 'sync'), propertyCode: '' };
+  const p = planSync([lead({ listingId: unmapped.id, propertyCodes: ['VLCA003'] })], [unmapped], FIRST, NOW, 'sync');
+  check('An unmapped listing is not mapped back from the lead', !p.updateListings.some(u => 'propertyCode' in u.patch), JSON.stringify(p.updateListings));
 }
 
 section('What flows back to the lead');

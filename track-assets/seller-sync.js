@@ -33,8 +33,8 @@
 //     corrected on the board ("Adambakkam 2BHK" → "2BHK Flat, Adambakkam
 //     Main Road"), and a later CRM edit must not undo that.
 //
-//   propertyCode — filled from the lead's linked property if the listing has
-//     none, never overwritten. Mapping on the board is the deliberate act.
+//   propertyCode — never set from the lead, not even when the listing has
+//     none. Mapping on the board is by hand: set, changed and removed there.
 //
 // ── OVERRIDES ──────────────────────────────────────────────────────────
 // Editing an owner's name or phone ON THE BOARD sets own.<field> = true, and
@@ -131,9 +131,9 @@ export function listingPatchFor(lead, listing) {
     if (clean(listing[listField]) === want) continue;
     patch[listField] = want;
   }
-  // Fill a blank property mapping from the lead's own link; never overwrite.
-  const code = (lead.propertyCodes && lead.propertyCodes[0]) || '';
-  if (code && !clean(listing.propertyCode)) patch.propertyCode = code;
+  // The property mapping is never touched from the lead (its links come from the conversation, or
+  // the AI) — it is set, changed and removed by hand on the board. Filling a blank one from here
+  // is what put an unmapped listing straight back.
   return Object.keys(patch).length ? patch : null;
 }
 
