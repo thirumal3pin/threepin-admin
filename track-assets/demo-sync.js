@@ -117,5 +117,6 @@ setTimeout(() => {
   window.applyTrackPipelineSnapshot(defaultStages());
   window.applyListingsSnapshot(clone(listings));
   window.applyTrackLeadsSnapshot([]);
+  if (window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot({ a: { email: 'swami@3pin.in' }, b: { email: 'pradeep.kumar@3pin.in' }, c: { email: 'anu@3pin.in' } });
   push();
 }, 0);

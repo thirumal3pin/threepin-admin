@@ -9,10 +9,11 @@
 // Firebase is initialised with getApps()[0] when it already exists, so this
 // module can sit on a page beside another sync module without a second app.
 //
-// Four live subscriptions:
+// Five live subscriptions:
 //   listings/                    where tenantId == ours   → the board's cards
 //   trackPipelines/{tenantId}    the board's own columns
 //   postTracker/                 where tenantId == ours   → the Posting tab
+//   settings/{tenantId}          the team, for "Shoot assigned to"
 //   leads/                       where tenantId == ours   → seller leads, for
 //                                mapping a listing to the owner who called in
 //
@@ -80,6 +81,11 @@ function subscribeToData(tenantId){
     onSnapshot(query(collection(db, 'postTracker'), where('tenantId', '==', tenantId)),
       snap => { if(window.applyPostingSnapshot) window.applyPostingSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id }))); },
       err => console.error('Firestore postTracker sync error:', err));
+
+    // The team (settings/{tenant}.team, set by the owner in the CRM), for "Shoot assigned to".
+    onSnapshot(doc(db, 'settings', tenantId),
+      snap => { if(window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot((snap.data() && snap.data().team) || {}); },
+      err => console.error('Firestore team sync error:', err));
 
     // Seller leads, so a listing can name the owner who actually called in.
     // The whole lead set is watched rather than only sellers: which leads

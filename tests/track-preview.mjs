@@ -240,6 +240,8 @@ await page.waitForTimeout(200);
 const saved = await page.evaluate(() => window.__saved.map(s => [s.id, s.stageId]));
 ok('Dragging a card to another column saves the move', saved.some(([id, st]) => id === 'l2' && st === 'shoot_scheduled'), JSON.stringify(saved));
 ok('…and records it on the timeline', (await page.evaluate(() => window.__history.map(h => h.text))).some(t => /Moved from/.test(t)));
+ok('…and, with no shoot date yet, opens the booking to pick one', await page.$eval('#shModal', e => e.classList.contains('open')));
+await page.evaluate(() => closeShootModal());
 
 // ── A stage needing a reason must ask first ──
 await page.evaluate(() => changeStage('l1', 'dropped'));
@@ -368,7 +370,7 @@ ok('…filling blanks without clobbering what was typed by hand',
 await page.evaluate(() => { closeDetail(); openShootModal('l2'); });
 await page.waitForTimeout(200);
 await page.fill('#shDate', new Date(NOW + 2 * D).toISOString().slice(0, 10));
-await page.fill('#shWho', 'Ravi');
+await page.selectOption('#shWho', 'Ravi');
 await page.click('#shModal .tk-btn.primary');
 await page.waitForTimeout(250);
 const l2 = await page.evaluate(() => window.__saved.filter(s => s.id === 'l2').pop());
@@ -434,7 +436,7 @@ const clashAt = new Date(NOW + 3 * H);
 const pad = n => String(n).padStart(2, '0');
 await page.fill('#shDate', `${clashAt.getFullYear()}-${pad(clashAt.getMonth() + 1)}-${pad(clashAt.getDate())}`);
 await page.fill('#shTime', `${pad(clashAt.getHours())}:${pad(clashAt.getMinutes())}`);
-await page.fill('#shWho', 'Ravi');
+await page.selectOption('#shWho', 'Ravi');
 await page.waitForTimeout(300);
 ok('Booking one agent twice at once warns rather than clashing silently',
   /also at/.test(await page.$eval('#shClash', e => e.textContent)), await page.$eval('#shClash', e => e.textContent));

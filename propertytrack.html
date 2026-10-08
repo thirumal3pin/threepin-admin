@@ -128,7 +128,7 @@
       <label for="mm_askingPrice">Asking price</label><input id="mm_askingPrice" type="text" placeholder="₹2.1 Cr">
       <label for="mm_sellerName">Owner name</label><input id="mm_sellerName" type="text">
       <label for="mm_sellerPhone">Owner phone</label><input id="mm_sellerPhone" type="tel">
-      <label for="mm_shootAssignee">Shoot assigned to</label><input id="mm_shootAssignee" type="text">
+      <label for="mm_shootAssignee">Shoot assigned to</label><select id="mm_shootAssignee" onchange="shooterPicked(this)"></select>
     </div>
     <div class="tk-box-err" id="mmErr"></div>
     <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveModal()">Save</button></div>
@@ -142,8 +142,7 @@
       <label for="shDate">Date</label><input id="shDate" type="date">
       <label for="shTime">Time</label><input id="shTime" type="time" value="10:00">
       <label for="shWho">Assigned to</label>
-      <input id="shWho" type="text" list="shAgents" placeholder="Photographer / videographer" oninput="checkClash()">
-      <datalist id="shAgents"></datalist>
+      <select id="shWho" onchange="shooterPicked(this)"></select>
       <label for="shContact">Site contact</label><input id="shContact" type="tel" placeholder="Who opens the door">
       <div id="shWhyRow"><label for="shWhy">Why is it moving?</label><input id="shWhy" type="text" placeholder="Owner asked to postpone, rain, tenant unavailable…"></div>
       <p class="tk-hint bad" id="shClash"></p>

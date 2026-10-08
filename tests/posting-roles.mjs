@@ -233,7 +233,11 @@ await p.click('#pgSave');
 ok('Scheduling in the past warns that it shows as due', /shows as due/.test(await text('#pgUndo')));
 await mode(1);
 ok('The Story whose time passed today shows as Due in Today', /Due — confirm posted/.test(await text('#pg-today .pt-row:has-text("Lux49"):has-text("Story")')));
-ok('…counted in the "Due now" box', /^1/.test((await text('.kpi')).trim()));
+// The plan is "this week" on the real clock, so how many other posts are already past due depends
+// on the day the suite runs — the box must count exactly the Due rows Today shows, and include this one.
+const dueBox = parseInt((await text('.kpi')).trim(), 10);
+const dueRows = await p.$$eval('#pg-today .pt-row', rs => rs.filter(r => /Due — confirm posted/.test(r.textContent)).length);
+ok('…counted in the "Due now" box', dueBox >= 1 && dueBox === dueRows, `box ${dueBox}, due rows ${dueRows}`);
 await p.click('#pg-today .pt-row:has-text("Lux49"):has-text("Story") button:has-text("Mark live")');
 await p.fill('#pgUrl', 'instagram.com/stories/3pin/123');
 await p.click('#pgSave');

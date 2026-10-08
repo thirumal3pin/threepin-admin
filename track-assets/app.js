@@ -28,6 +28,7 @@ import * as P from './track-pipeline.js';
 import * as BF from './brochure-flow.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
 import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
+import { displayName } from '../crm-assets/mentions.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -194,6 +195,9 @@ function reconcileSellers() {
 
 // ═══════ HELPERS ═══════
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// A value inside an inline handler: JSON-quoted, then attribute-escaped (esc alone is undone by the
+// browser before the handler runs).
+const jsq = v => esc(JSON.stringify(String(v == null ? '' : v)));
 
 function stageById(id) { return stages.find(s => s.id === id) || null; }
 function stageKindOfId(id) { return P.stageKindOf(stageById(id)); }
@@ -639,7 +643,7 @@ function shootLine(x) {
     const key = P.stageKeyOf(stageById(x.stageId));
     // Only nag about a missing shoot where one is actually the next step.
     if (!['new_listing', 'details', 'shoot_scheduled'].includes(key)) return '';
-    return `<div class="tk-card-row muted">📸 No shoot booked</div>`;
+    return `<div class="tk-card-row muted">📸 No shoot booked <button type="button" class="tk-link" onclick="event.stopPropagation();openShootModal('${x.id}')">Book →</button></div>`;
   }
   const late = x.shootAt < Date.now();
   const soon = !late && x.shootAt < Date.now() + DAY;
@@ -774,14 +778,99 @@ function mediaProgress(x) {
   return { done: req.filter(([k]) => done[k]).length, total: req.length, req };
 }
 
-// Who can be sent on a shoot — the set actually in use, so a handler picks
-// rather than retypes. A typo in a free-text name silently splits one
-// person's day into two and neither looks wrong.
-function shootAgents() {
-  const set = new Set();
-  for (const x of listings) if (x.shootAssignee) set.add(String(x.shootAssignee).trim());
-  return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+// Who can be sent on a shoot — picked, never retyped: a typo in a free-text name silently splits
+// one person's day into two and neither looks wrong. The team is the CRM's (settings.team, set by
+// the owner — the same people a lead can be assigned to), named the way the CRM names them; anyone
+// already sent who is not on it (an outside photographer) stays pickable too. A shoot keeps the
+// name (the Shoots view and "this is me" go by it) and, for a teammate, their email.
+let team = [], teamKey = '';   // [{ name, email }]
+// Names are compared trimmed and case-blind everywhere ("swami" on an older listing is Swami).
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+// Shoots are done by the media people. Shared mailboxes on the team (sales@, admin@…) are not
+// people anyone sends to a property, so they are not offered; a new teammate added in the CRM is.
+const ROLE_MAILBOX = /^(sales|admin|info|support|accounts?|hr|office|contact|hello|no-?reply)$/;
+window.applyTrackTeamSnapshot = map => {
+  const seenE = new Set(), seenN = new Set();
+  const next = Object.values(map && typeof map === 'object' ? map : {})
+    .map(m => String((m && m.email) || '').trim().toLowerCase())
+    .filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !ROLE_MAILBOX.test(e.split('@')[0]) && !seenE.has(e) && seenE.add(e))
+    .map(email => ({ name: displayName(email), email }))
+    // Two emails that read as the same name: the first is the one offered (no twin options).
+    .filter(t => !seenN.has(t.name.toLowerCase()) && seenN.add(t.name.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  // The settings document changes for many reasons (CRM views, run stamps…): only a change to the
+  // team itself redraws anything, so a half-typed note or an open dropdown is never disturbed.
+  const key = next.map(t => t.email).join(',');
+  if (key === teamKey) return;
+  team = next; teamKey = key;
+  // A picker open right now gets the new list, keeping what is chosen in it.
+  for (const id of ['shWho', 'mm_shootAssignee']) {
+    const sel = document.getElementById(id), box = sel && sel.closest('.tk-ov, .tk-modal');
+    if (sel && sel.tagName === 'SELECT' && box && box.classList.contains('open') && sel.value !== OTHER) { const v = sel.value; sel.innerHTML = shooterOptions(v); sel.dataset.was = sel.value; }
+  }
+  if (currentView === 'shoots') renderShoots();
+  if (currentDetailId && document.getElementById('dp')?.classList.contains('open')) openDetail(currentDetailId);
+};
+function shootPeople() {
+  const out = team.slice(), names = new Set(team.map(t => t.name.toLowerCase()));
+  for (const x of listings) {
+    const n = String(x.shootAssignee || '').trim();
+    if (n && !names.has(n.toLowerCase())) { names.add(n.toLowerCase()); out.push({ name: n, email: '' }); }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+// "Whose day" lists only people who actually have shoots — not every mailbox on the team.
+function shootAgents() {
+  const seen = new Map();
+  for (const x of listings) {
+    const n = String(x.shootAssignee || '').trim();
+    if (!n) continue;
+    // One button per person: a teammate by their email (whatever the spelling), anyone else by name.
+    const mate = team.find(t => (x.shootAssigneeEmail && t.email === x.shootAssigneeEmail) || sameName(t.name, n));
+    const key = mate ? mate.email : n.toLowerCase();
+    if (!seen.has(key)) seen.set(key, mate ? mate.name : n);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+const emailOfShooter = name => (team.find(t => sameName(t.name, name)) || {}).email || '';
+// The email to keep with a choice: the teammate's, or — same person as before but the team not
+// loaded yet / since edited — the one the listing already had.
+const shooterEmail = (x, who) => emailOfShooter(who) || (x && sameName(who, x.shootAssignee) ? x.shootAssigneeEmail || null : null);
+const OTHER = '__other';
+// The name as the list shows it (the team's spelling when it is a teammate).
+const shownShooter = cur => { const n = String(cur || '').trim(); return (shootPeople().find(p => sameName(p.name, n)) || {}).name || n; };
+// The options of an "Assigned to" picker: nobody, the team, others already sent, then someone new.
+function shooterOptions(current) {
+  const cur = String(current || '').trim();
+  const people = shootPeople();
+  if (cur && !people.some(p => p.name.toLowerCase() === cur.toLowerCase())) people.push({ name: cur, email: '' });
+  const opt = p => `<option value="${esc(p.name)}"${sameName(p.name, cur) ? ' selected' : ''}>${esc(p.name)}</option>`;
+  const mates = people.filter(p => p.email), others = people.filter(p => !p.email);
+  return `<option value=""${cur ? '' : ' selected'}>Not assigned</option>
+    ${mates.length ? `<optgroup label="Media team">${mates.map(opt).join('')}</optgroup>` : ''}
+    ${others.length ? `<optgroup label="Also sent before">${others.map(opt).join('')}</optgroup>` : ''}
+    <option value="${OTHER}">Someone else…</option>`;
+}
+// "Someone else…": ask for the name once, then it is in the list for next time.
+function pickedShooter(sel) {
+  if (sel.value !== OTHER) return sel.value;
+  const n = (prompt('Who is going? (an outside photographer, for example)') || '').trim();
+  if (!n) { sel.value = sel.dataset.was || ''; return null; }
+  // A name already in the list (in any case) is that person, not a second spelling of them.
+  const known = [...sel.options].find(o => o.value !== OTHER && o.value && sameName(o.value, n));
+  if (!known) sel.querySelector('option[value="' + OTHER + '"]').insertAdjacentHTML('beforebegin', `<option value="${esc(n)}">${esc(n)}</option>`);
+  sel.value = known ? known.value : n;
+  return sel.value;
+}
+function setShooter(id, sel) {
+  const who = pickedShooter(sel);
+  if (who === null) return;
+  sel.dataset.was = who;
+  mutate(id, x => { x.shootAssigneeEmail = shooterEmail(x, who); x.shootAssignee = who; },
+    who ? `Shoot assigned to <b>${esc(who)}</b>` : 'Shoot unassigned');
+  if (currentDetailId === id) openDetail(id);
+}
+window.setShooter = setShooter;
 
 // Where the property actually is, and how to get in. None of this existed —
 // and without it a shoot agent cannot do the job, because "Nungambakkam" is
@@ -821,6 +910,8 @@ function onColDrop(e, stageId) {
   if (id) changeStage(id, stageId);
 }
 function onCardKeydown(e, id) {
+  // A button or link inside the card (Book →, Preview) does its own thing on Enter.
+  if (e.target !== e.currentTarget) return;
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(id); }
 }
 window.onCardDragStart = onCardDragStart; window.onCardDragEnd = onCardDragEnd;
@@ -866,6 +957,8 @@ function changeStage(id, stageId, opts) {
   // Moved into Media ready by hand with things still open: say so, rather than let the column lie.
   const gaps = key === 'media_ready' ? mediaGaps(x) : [];
   toast(gaps.length ? `Moved to ${to.name} — still missing: ${gaps.join(', ')}` : `Moved to ${to.name}`);
+  // "Shoot scheduled" without a date is not scheduled: ask for the date and who goes, right away.
+  if (key === 'shoot_scheduled' && !x.shootAt) openShootModal(id);
   // Brought into Shoot done with everything already in hand (forward, or back from On hold): on to
   // Media ready. Moved back from further on, it is held (above).
   if (key === 'shoot_done') promoteIfMediaReady(x);
@@ -951,7 +1044,9 @@ window.setAgentFilter = setAgentFilter; window.setMyAgent = setMyAgent;
 function renderShoots() {
   const el = document.getElementById('shootsView');
   if (!el) return;
-  const mine = x => !agentFilter || (x.shootAssignee || '').trim() === agentFilter;
+  // A media person's shoots: by name, and by their email when the name was ever spelled differently.
+  const fEmail = agentFilter ? emailOfShooter(agentFilter) : '';
+  const mine = x => !agentFilter || sameName(x.shootAssignee, agentFilter) || (!!fEmail && x.shootAssigneeEmail === fEmail);
   const open = listings.filter(x => stageKindOfId(x.stageId) === 'open' && mine(x));
   const withShoot = open.filter(x => x.shootAt).sort((a, b) => a.shootAt - b.shootAt);
   const now = Date.now();
@@ -975,10 +1070,10 @@ function renderShoots() {
     ${agents.length ? `<div class="tk-agentbar">
       <span class="tk-lab">Whose day</span>
       <button type="button" class="tk-sbtn${!agentFilter ? ' on' : ''}" onclick="setAgentFilter('')">Everyone</button>
-      ${agents.map(a => `<button type="button" class="tk-sbtn${agentFilter === a ? ' on' : ''}" onclick="setAgentFilter('${esc(a).replace(/'/g, "\\'")}')">${esc(a)}</button>`).join('')}
+      ${agents.map(a => `<button type="button" class="tk-sbtn${sameName(agentFilter, a) ? ' on' : ''}" onclick="setAgentFilter(${jsq(a)})">${esc(a)}</button>`).join('')}
       ${myAgent
         ? `<button type="button" class="tk-link" onclick="setMyAgent('')">not ${esc(myAgent)}?</button>`
-        : (agentFilter ? `<button type="button" class="tk-link" onclick="setMyAgent('${esc(agentFilter).replace(/'/g, "\\'")}')">this is me — open here every time</button>` : '')}
+        : (agentFilter ? `<button type="button" class="tk-link" onclick="setMyAgent(${jsq(agentFilter)})">this is me — open here every time</button>` : '')}
     </div>` : ''}
 
     ${notReady.length ? `<div class="tk-note bad">
@@ -1393,8 +1488,11 @@ function openDetail(id) {
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Shoot</div>
-      <div class="tk-kv"><span>When</span><b>${x.shootAt ? esc(fmtDateTime(x.shootAt)) + ` <span class="tk-rel">${esc(relDays(x.shootAt))}</span>` : '—'}</b></div>
-      <div class="tk-kv"><span>Assigned to</span>${esc(x.shootAssignee || '—')}</div>
+      <div class="tk-kv"><span>When</span>${x.shootAt
+        ? `<b>${esc(fmtDateTime(x.shootAt))} <span class="tk-rel">${esc(relDays(x.shootAt))}</span></b>`
+        : `<button type="button" class="tk-link" onclick="openShootModal('${x.id}')">Pick a date →</button>`}</div>
+      <div class="tk-kv tk-pickrow"><span>Assigned to</span>
+        <select class="tk-sel sm" aria-label="Shoot assigned to" data-was="${esc(shownShooter(x.shootAssignee))}" onchange="setShooter('${x.id}', this)">${shooterOptions(x.shootAssignee)}</select></div>
       ${x.rescheduled ? `<div class="tk-kv"><span>Rescheduled</span>${x.rescheduled} time${x.rescheduled === 1 ? '' : 's'}${x.rescheduleReason ? ' — ' + esc(x.rescheduleReason) : ''}</div>` : ''}
       <label class="tk-check"><input type="checkbox" ${x.ownerInformed ? 'checked' : ''} onchange="setFlag('${x.id}','ownerInformed',this.checked)"> Owner told we are coming</label>
       <label class="tk-check"><input type="checkbox" ${x.ownerApproved ? 'checked' : ''} onchange="setFlag('${x.id}','ownerApproved',this.checked)"> Owner approved the photos / brochure</label>
@@ -1968,10 +2066,11 @@ function openShootModal(id) {
   const d = x.shootAt ? new Date(x.shootAt) : null;
   document.getElementById('shDate').value = d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   document.getElementById('shTime').value = d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '10:00';
-  document.getElementById('shWho').value = x.shootAssignee || '';
+  // Picked from the team (and anyone sent before), never retyped.
+  const who = document.getElementById('shWho');
+  who.innerHTML = shooterOptions(x.shootAssignee);
+  who.dataset.was = who.value;   // the spelling the list shows, so a cancelled "Someone else…" comes back to it
   document.getElementById('shContact').value = x.siteContact || x.sellerPhone || '';
-  // Pick from who is already being sent out, rather than retyping a name.
-  document.getElementById('shAgents').innerHTML = shootAgents().map(a => `<option value="${esc(a)}">`).join('');
   // Moving an existing booking asks why: a shoot rescheduled three times is a
   // problem with the owner, and only the reasons show that.
   document.getElementById('shWhyRow').style.display = x.shootAt ? '' : 'none';
@@ -1991,14 +2090,17 @@ function checkClash() {
   const who = document.getElementById('shWho').value.trim().toLowerCase();
   if (!date || !who) { el.textContent = ''; return; }
   const at = new Date(date + 'T' + time).getTime();
+  const whoEmail = emailOfShooter(who);
   const clash = listings.filter(l => l.id !== shootFor && l.shootAt && l.shootAssignee
-    && l.shootAssignee.trim().toLowerCase() === who
+    && (sameName(l.shootAssignee, who) || (!!whoEmail && l.shootAssigneeEmail === whoEmail))
     && Math.abs(l.shootAt - at) < 2 * 3600000);
   el.textContent = clash.length
     ? `Heads up: ${document.getElementById('shWho').value.trim()} is also at "${clash[0].title || 'another listing'}" around then.`
     : '';
 }
 window.checkClash = checkClash;
+// The dialog's picker: "Someone else…" asks for the name, then the clash check runs on the choice.
+window.shooterPicked = sel => { const n = pickedShooter(sel); if (n !== null) sel.dataset.was = n; checkClash(); };
 function closeShootModal() { document.getElementById('shModal').classList.remove('open'); shootFor = null; }
 function saveShoot() {
   if (!shootFor) return;
@@ -2012,7 +2114,7 @@ function saveShoot() {
   const prev = listings.find(l => l.id === id);
   const moving = !!(prev && prev.shootAt && at && prev.shootAt !== at);
   mutate(id, x => {
-    x.shootAt = at; x.shootAssignee = who; x.siteContact = contact;
+    x.shootAt = at; x.shootAssigneeEmail = shooterEmail(x, who); x.shootAssignee = who; x.siteContact = contact;
     if (moving) { x.rescheduled = (x.rescheduled || 0) + 1; x.rescheduleReason = why || null; }
   }, at
     ? (moving
@@ -2186,10 +2288,16 @@ const FORM_FIELDS = [
   ['sellerPhone', 'Owner phone', 'tel', ''],
   ['shootAssignee', 'Shoot assigned to', 'text', '']
 ];
+// The form's "Shoot assigned to" is the same picker as the shoot's own.
+function fillShooterPick(current) {
+  const el = document.getElementById('mm_shootAssignee');
+  if (el && el.tagName === 'SELECT') { el.innerHTML = shooterOptions(current); el.dataset.was = el.value; }
+}
 function openAddModal() {
   mModalMode = 'add'; mModalEditId = null;
   document.getElementById('mmTitle').textContent = 'New listing';
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = ''; });
+  fillShooterPick('');
   document.getElementById('mmErr').textContent = '';
   const hint = document.getElementById('mmCodeHint'); if (hint) hint.innerHTML = '';
   // The code check needs the inventory; read it now so it is there by the time a code is typed.
@@ -2202,6 +2310,8 @@ function openEditModal(id) {
   mModalMode = 'edit'; mModalEditId = id;
   document.getElementById('mmTitle').textContent = 'Edit listing';
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = x[k] || ''; });
+  // After the loop: the picker selects the person whatever the stored spelling ("swami" is Swami).
+  fillShooterPick(x.shootAssignee);
   // A code kept for the brochure (not yet in the dashboard) shows in the same box.
   if (!x.propertyCode && x.brochure && x.brochure.code) document.getElementById('mm_propertyCode').value = x.brochure.code;
   document.getElementById('mmErr').textContent = '';
@@ -2231,6 +2341,8 @@ function saveModal(retried) {
   document.getElementById('mmErr').textContent = '';
   const form = {};
   FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); form[k] = el ? el.value.trim() : ''; });
+  if (form.shootAssignee === OTHER) form.shootAssignee = '';
+  form.shootAssigneeEmail = shooterEmail(mModalMode === 'edit' ? listings.find(l => l.id === mModalEditId) : null, form.shootAssignee);
   if (!form.title && !form.propertyCode) {
     document.getElementById('mmErr').textContent = 'Give it a title, or a Property ID.';
     return;
