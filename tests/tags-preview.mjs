@@ -48,9 +48,10 @@ const lst = id => p.evaluate(i => window.trackApi.listings().find(l => l.id === 
 const tileTags = id => p.$$eval(`.tk-card[data-id="${id}"] .tk-tags .tk-tag`, t => t.map(e => e.textContent.trim()));
 
 console.log('On the board');
+await p.screenshot({ path: 'tests/out/tags-board.png' });
 ok('a tile shows its tags', JSON.stringify(await tileTags('a')) === '["Resale"]', JSON.stringify(await tileTags('a')));
 ok('…a tile with none shows none', (await tileTags('b')).length === 0);
-ok('…each tag in its own colour (Resale is green)', await p.$eval('.tk-card[data-id="a"] .tk-tag', e => e.classList.contains('tc2') && getComputedStyle(e).color === 'rgb(21, 128, 61)'), await p.$eval('.tk-card[data-id="a"] .tk-tag', e => e.className + ' ' + getComputedStyle(e).color));
+ok('…each tag in its own colour, shaped like a tag (Resale is a green tag, white text)', await p.$eval('.tk-card[data-id="a"] .tk-tag', e => e.classList.contains('tc2') && getComputedStyle(e).backgroundColor === 'rgb(21, 128, 61)' && getComputedStyle(e).color === 'rgb(255, 255, 255)' && /polygon/.test(getComputedStyle(e).clipPath)), await p.$eval('.tk-card[data-id="a"] .tk-tag', e => e.className + ' ' + getComputedStyle(e).color));
 await p.evaluate(() => openDetail('a')); await settle();
 ok('the listing\'s summary has the tag picker with its tags', await p.$eval('#dpBody .tk-sum-tags', e => /Resale/.test(e.textContent)) && !!(await p.$('#dpBody .tk-sum-tags .tg-in')));
 await p.focus('#dpBody .tg-in'); await settle();

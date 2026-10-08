@@ -601,25 +601,32 @@ function cardHtml(x) {
   const chips = factChips(it.f, 2);
   const agents = agentsOf(it);
   const by = personName(x.updatedBy);
+  // The owner, when there is one — a card added by hand may have none yet (it.name then falls back to the title).
+  const owner = String((it.lead && it.lead.name) || x.sellerName || '').trim();
   // A card added by hand on the board may have no owner yet: its title is then all it has.
   it.locality = it.locality || (it.name !== x.title ? x.title || '' : '');
   return `<div class="tk-card${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
-      aria-label="Open ${esc(it.name)}${it.locality ? ', ' + esc(it.locality) : ''}"
+      aria-label="Open ${esc(propName(x, it) || it.locality || it.name)}${it.name ? ', owner ' + esc(it.name) : ''}"
       data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="sl-head">
-      <div class="sl-who">
-        <div class="sl-name" title="${esc(it.name)}">${esc(it.name)}</div>
-        ${it.phone ? `<div class="sl-phone"><a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? ` · <a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}${x.leadId ? ` · <button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance">Preview</button>` : ''}</div>` : '<div class="sl-phone none">No number</div>'}
+      <div class="sl-who tk-pwho">
+        <div class="tk-pname">${codeChip(x)}${propNameHtml(x, it)}
+          <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
       </div>
       <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
     </div>
     <div class="sl-prop">
-      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}${codeChip(x)}</div>
+      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}</div>
       ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
       ${tagChips(x.tags)}
       ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
+    </div>
+    <div class="tk-seller">
+      ${owner ? `<span class="tk-seller-n" title="The owner">${esc(owner)}</span>` : '<span class="tk-seller-none">No owner yet</span>'}
+      ${it.phone ? `<a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? `<a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}` : '<span class="tk-seller-none">No number</span>'}
+      ${x.leadId ? `<button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance">Preview</button>` : ''}
     </div>
     ${shootLine(x)}
     ${mediaBar(x)}
@@ -653,6 +660,50 @@ function codeChip(x) {
     ? `<span class="tk-code none" title="This stage cannot proceed without an inventory mapping">unmapped</span>`
     : '';
 }
+
+// The property comes first on a card; the seller is second. Its name is the listing's title — the
+// mapped property's name when the listing has none of its own — and is renamed right on the card.
+function propName(x, it) {
+  const t = String(x.title || '').trim();
+  // A lead with no area of interest seeds the title with the owner's name — that is not a property name.
+  const owner = String((it && it.lead && it.lead.name) || x.sellerName || '').trim();
+  if (t && t !== 'New listing' && t !== owner) return t;
+  const p = realCode(x.propertyCode) && inventory ? inventory.find(q => q.propertyCode === x.propertyCode) : null;
+  return (p && p.name) || '';
+}
+function propNameHtml(x, it) {
+  const n = propName(x, it);
+  return n ? `<span class="tk-pname-t" title="${esc(n)}">${esc(n)}</span>` : '<span class="tk-pname-t none">Add the property name</span>';
+}
+function editCardTitle(id) {
+  const x = listings.find(l => l.id === id);
+  const card = document.querySelector(`.tk-card[data-id="${CSS.escape(id)}"]`);
+  const slot = card && card.querySelector('.tk-pname-t');
+  if (!x || !slot) return;
+  card.draggable = false;
+  const inp = document.createElement('input');
+  inp.className = 'tk-pname-in'; inp.type = 'text'; inp.maxLength = 120;
+  inp.value = propName(x, sellerItem(x)); inp.placeholder = 'e.g. 2BHK Apartment, Anna Nagar';
+  inp.setAttribute('aria-label', 'Property name');
+  let done = false;
+  const finish = save => {
+    if (done) return; done = true;
+    const v = inp.value.replace(/\s+/g, ' ').trim();
+    if (save && v && v !== String(x.title || '').trim()) mutate(id, l => { l.title = v; }, `Renamed to <b>${esc(v)}</b>`);
+    else applyFilters();
+  };
+  for (const ev of ['click', 'mousedown', 'pointerdown', 'dblclick']) inp.addEventListener(ev, e => e.stopPropagation());
+  inp.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  inp.addEventListener('blur', () => finish(true));
+  slot.replaceWith(inp);
+  const ed = card.querySelector('.tk-pname-ed'); if (ed) ed.hidden = true;
+  inp.focus(); inp.select();
+}
+window.editCardTitle = editCardTitle;
 
 const telOf = p => String(p || '').replace(/[^\d+]/g, '');
 function initials(name) {

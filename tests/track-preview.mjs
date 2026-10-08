@@ -159,21 +159,41 @@ const shot = async (name) => { await page.waitForTimeout(180); await page.screen
 const cols = await text(page, '.tk-col-title');
 ok('Nine columns, in pipeline order — Media ready after Shoot done, no brochure columns', cols.length === 9 && cols[0] === 'New listing' && cols[3] === 'Shoot done' && cols[4] === 'Media ready' && cols[8] === 'Dropped' && !cols.some(c => /Brochure/.test(c)), JSON.stringify(cols));
 ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 9);
-ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card .sl-name'))[0] === 'Suresh');
+ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card .tk-seller-n'))[0] === 'Suresh');
 // The card reads like the Sellers tile: who and their number, then the property, then who owns
 // the work and when it was last touched.
 const meena = await page.evaluate(() => {
   const c = [...document.querySelectorAll('.tk-card')].find(e => /Meenakshi/.test(e.textContent));
   const t = s => (c.querySelector(s) || {}).textContent || '';
-  return { name: t('.sl-name'), phone: t('.sl-phone'), loc: t('.sl-loc'), chips: [...c.querySelectorAll('.sl-chip')].map(e => e.textContent), agent: t('.tk-agent'), upd: t('.tk-upd'), age: t('.tk-age-pill') };
+  return { prop: t('.tk-pname'), first: (c.querySelector('.sl-head') || {}).textContent || '', name: t('.tk-seller-n'), phone: t('.tk-seller'), loc: t('.sl-loc'), chips: [...c.querySelectorAll('.sl-chip')].map(e => e.textContent), agent: t('.tk-agent'), upd: t('.tk-upd'), age: t('.tk-age-pill') };
 });
-ok('Card: name, then the number with WhatsApp', meena.name === 'Meenakshi' && /9840011111/.test(meena.phone) && /WhatsApp/.test(meena.phone), JSON.stringify(meena));
-ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
+ok('Card: the property first — its name on top, the owner below it', !/Meenakshi/.test(meena.first) && !!meena.prop.trim(), JSON.stringify(meena));
+ok('Card: then the owner with the number and WhatsApp', meena.name === 'Meenakshi' && /9840011111/.test(meena.phone) && /WhatsApp/.test(meena.phone), JSON.stringify(meena));
+
+// Renamed right on the card: Enter saves (with a timeline line), Escape leaves it as it was, and
+// clicking into the box does not open the listing or start a drag.
+{
+  const sel = '.tk-card:has(.tk-seller-n:text-is("Meenakshi"))';
+  await page.click(sel + ' .tk-pname-ed');
+  await page.click(sel + ' .tk-pname-in');
+  const opened = await page.evaluate(() => !!document.querySelector('.tk-dp.open, #dp.open, .tk-detail.open'));
+  await page.fill(sel + ' .tk-pname-in', '3BHK Apartment, Nungambakkam');
+  await page.keyboard.press('Enter'); await page.waitForTimeout(150);
+  const renamed = await page.evaluate(() => { const l = window.trackApi.listings().find(x => (x.sellerName || '') === 'Meenakshi' || /Nungambakkam/.test(x.title || '')); return l && l.title; });
+  ok('Rename on the card: Enter saves the property name', renamed === '3BHK Apartment, Nungambakkam' && /3BHK Apartment, Nungambakkam/.test(await page.textContent(sel + ' .tk-pname')), renamed);
+  ok('…clicking into the box does not open the listing', !opened);
+  await page.click(sel + ' .tk-pname-ed');
+  await page.fill(sel + ' .tk-pname-in', 'Something else');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  ok('…Escape leaves it as it was', /3BHK Apartment, Nungambakkam/.test(await page.textContent(sel + ' .tk-pname')) && !(await page.$(sel + ' .tk-pname-in')));
+  const tag = await page.evaluate(() => { const t = document.querySelector('.tk-card .tk-tag'); if (!t) return null; const cs = getComputedStyle(t); return { clip: cs.clipPath, hole: getComputedStyle(t, '::before').content }; });
+  ok('Tags look like tags: pointed end with a hole', !tag || (/polygon/.test(tag.clip) && tag.hole !== 'none'), JSON.stringify(tag));
+}ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
 ok('Card: the assigned agents', /Agent\.a \+ Agent\.b/.test(meena.agent), meena.agent);
 ok('Card: last updated, and by whom', /Updated 1h ago by Agent\.a/.test(meena.upd), meena.upd);
 ok('Card: days in this column', /2d here/.test(meena.age), meena.age);
 ok('A card with no agent says Unassigned', (await text(page, '.tk-agent.none')).some(t => /Unassigned/.test(t)));
-ok('A card with no owner keeps its title', await page.evaluate(() => [...document.querySelectorAll('.tk-card .sl-name')].some(e => e.textContent === 'Flat, Adyar')));
+ok('A card with no owner keeps its title', await page.evaluate(() => [...document.querySelectorAll('.tk-card .tk-pname-t')].some(e => e.textContent === 'Flat, Adyar')));
 ok('A listing past its stage target is marked late', (await page.$$('.tk-card.late')).length >= 1);
 // Unmapped is normal early on and only matters once a stage needs it, so the
 // chip is silent on a new listing and loud on one at the brochure stages.
@@ -222,11 +242,11 @@ ok('…a click elsewhere closes it', !(await page.$('#ddStage[open]')));
 await page.click('#ddAgent summary');
 await page.click('#ddAgent .tk-dd-row:has-text("Agent.b") input');
 await page.waitForTimeout(150);
-ok('Picking an agent shows only their listings', JSON.stringify(await text(page, '.tk-card .sl-name')) === '["Meenakshi"]', JSON.stringify(await text(page, '.tk-card .sl-name')));
+ok('Picking an agent shows only their listings', JSON.stringify(await text(page, '.tk-card .tk-seller-n')) === '["Meenakshi"]', JSON.stringify(await text(page, '.tk-card .tk-seller-n')));
 await page.evaluate(() => clearAgentFilter());
 await page.selectOption('.tk-dd-sort select', 'name');
 await page.waitForTimeout(150);
-const sortedCol = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => [...c.querySelectorAll('.tk-card .sl-name')].map(e => e.textContent)).find(a => a.length > 1));
+const sortedCol = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => [...c.querySelectorAll('.tk-card .tk-seller-n')].map(e => e.textContent)).find(a => a.length > 1));
 ok('Sorting by name orders the cards in each column', sortedCol && sortedCol.join() === [...sortedCol].sort((a, b) => a.localeCompare(b)).join(), JSON.stringify(sortedCol));
 await page.selectOption('.tk-dd-sort select', 'urgency');
 await page.waitForTimeout(150);
