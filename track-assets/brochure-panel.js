@@ -359,16 +359,27 @@ window.bpGenerate = async id => {
 // ── Keep listings in step with the dashboard: link on arrival, tick on delivery ──
 // The properties collection is re-read only while some brochure is actually on its way; linked
 // listings are otherwise kept in step from the inventory already loaded.
-let reconciling = false, lastRun = 0;
+let reconciling = false, lastRun = 0, lastLate = 0;
+const LATE_EVERY = 30 * 60000, LATE_FOR = 14 * 86400000;
 window.bpReconcile = force => {
   if (reconciling || !api()) return;
   if (!force && Date.now() - lastRun < 60000) return;
   const now = Date.now();
   const waiting = listingsNow().some(x => B.awaitingBrochure(x, now));
+  // Asked for more than two days ago and still not in (the Mac was off, say): keep looking, but only
+  // every half hour, and for two weeks — so a late brochure still links its listing on its own.
+  const late = !waiting && now - lastLate > LATE_EVERY && listingsNow().some(x => {
+    const b = x.brochure || {};
+    if (!b.requestedAt || b.doneAt || now - b.requestedAt >= LATE_FOR) return false;
+    // Not if that request was set aside since: unlocked after it, or re-coded without a link.
+    if (b.unlockedAt && b.requestedAt < b.unlockedAt) return false;
+    return !!String(x.propertyCode || '').trim() || B.codeKey(b.code) === B.codeKey(b.requestedCode);
+  });
   const cached = api().inventory();
-  if (!waiting && !cached) return;
-  reconciling = true; lastRun = Date.now();
-  (waiting ? api().loadInventory(true) : Promise.resolve(cached)).then(list => {
+  if (!waiting && !late && !cached) return;
+  reconciling = true; lastRun = now;
+  if (late) lastLate = now;
+  (waiting || late ? api().loadInventory(true) : Promise.resolve(cached)).then(list => {
     for (const u of B.reconcileBrochures(listingsNow(), list || [], Date.now())) {
       api().mutate(u.id, l => {
         const { brochure, ...rest } = u.patch;

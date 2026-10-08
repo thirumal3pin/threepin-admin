@@ -227,6 +227,19 @@ await p.evaluate(() => window.bpReconcile(true)); await p.waitForTimeout(300);
 s = await last('l2');
 ok('Delivered: brochure link pulled in and ticked done', s.brochureLink === 'https://drive.google.com/file/d/kotv-brochure' && !!s.brochure.doneAt);
 ok('…still in Shoot done, tile now Brochure ✓', await stageKey('l2') === 'shoot_done' && /Brochure ✓/.test(await p.$eval('.tk-card[data-id="l2"]', c => c.textContent)));
+
+// Asked for three days ago and only delivered now (the Mac was off): still links on its own.
+await p.evaluate(() => {
+  window.__reads = 0;
+  const get = window.trackFirebase.getInventory;
+  window.trackFirebase.getInventory = async () => { window.__reads++; return JSON.parse(JSON.stringify(await get())); };
+  window.applyListingsSnapshot([...window.trackApi.listings(), { id: 'late', tenantId: window.trackApi.listings()[0].tenantId, title: 'Late flat', stageId: window.trackApi.listings()[0].stageId, media: {}, brochure: { code: 'LATE0001', requestedCode: 'LATE0001', requestedAt: Date.now() - 3 * 86400000 }, createdAt: 1, updatedAt: 1, stageChangedAt: 1 }]);
+  window.__inv.push({ id: 'LATE0001', propertyCode: 'LATE0001', name: 'Late flat', brochureLink: 'https://drive.google.com/file/d/late' });
+});
+await p.evaluate(() => window.bpReconcile(true)); await p.waitForTimeout(400);
+const late = await p.evaluate(() => window.trackApi.listings().find(l => l.id === 'late'));
+ok('A brochure delivered days later still links the listing and ticks it done (the dashboard is re-read)', late.propertyCode === 'LATE0001' && !!late.brochure.doneAt && await p.evaluate(() => window.__reads) >= 1, JSON.stringify({ pc: late.propertyCode, done: late.brochure.doneAt, reads: await p.evaluate(() => window.__reads) }));
+await p.evaluate(() => window.applyListingsSnapshot(window.trackApi.listings().filter(l => l.id !== 'late'))); await p.waitForTimeout(150);
 await p.evaluate(() => window.setBrochureFilter('created')); await p.waitForTimeout(150);
 const createdCards = await p.$$eval('.tk-card', c => c.map(x => x.dataset.id));
 ok('The Brochure filter shows only listings with a brochure', createdCards.length && createdCards.every(id => ['l1', 'l2'].includes(id)), JSON.stringify(createdCards));
