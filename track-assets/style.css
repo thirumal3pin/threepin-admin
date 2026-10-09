@@ -1566,3 +1566,7 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 .pg-ref { font-size: 12px; font-style: italic; color: var(--ink4); }
 .pg-ref::before { content: '· '; font-style: normal; }
 .pt-name .pg-ref { margin-left: 6px; font-weight: 500; }
+
+/* Posting: when a live post went live (and when it was scheduled), changeable */
+.ps-livet { font-size: 11.5px; color: var(--ink3); margin-top: 3px; }
+.ps-livet .tk-link { font-size: 11.5px; }

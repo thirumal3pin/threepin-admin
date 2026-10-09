@@ -699,7 +699,8 @@ function sheetCell(t, key, label, t0, focus) {
     const opts = G.STATUS_ORDER.map(s => `<option value="${s}"${v.status === s ? ' selected' : ''}>${s === 'yet' && v.day ? 'Planned' : SHORT[s]}</option>`).join('');
     let h = '';
     if (v.status === 'scheduled') h = v.due ? `<span class="ps-bad">Due · ${esc(shortWhen(v.at))}</span>` : esc(shortWhen(v.at));
-    else if (v.status === 'live') h = v.url ? `<a class="ps-link" href="${href(v.url)}" target="_blank" rel="noopener">View post ↗</a>` : `<button type="button" class="pg-warnbtn ps-bad" onclick="pgLink(${jsq(id)},${jsq(key)})">Add link</button>`;
+    else if (v.status === 'live') h = (v.url ? `<a class="ps-link" href="${href(v.url)}" target="_blank" rel="noopener">View post ↗</a>` : `<button type="button" class="pg-warnbtn ps-bad" onclick="pgLink(${jsq(id)},${jsq(key)})">Add link</button>`)
+      + `<div class="ps-livet">Live ${esc(shortWhen(v.liveAt || v.at))}${v.at && G.startOfDay(v.at) !== G.startOfDay(v.liveAt || v.at) ? ` · sched. ${esc(shortWhen(v.at))}` : ''} <button type="button" class="tk-link" onclick="pgLiveEdit(${jsq(id)},${jsq(key)})" title="Change when it went live, or its link">change</button></div>`;
     else if (v.status === 'yet' && v.day) h = `<span class="${lateDay ? 'ps-bad' : 'ps-planned'}">Plan ${esc(G.dayLabel(v.day))}</span>`;
     // Other rounds of the same property on this channel: earlier ones above this round's pill,
     // later ones below — so a repost reads "Live 12 Aug ↗" then "Scheduled 9 Oct", in one cell.
@@ -1009,6 +1010,7 @@ function channelRow(t, c) {
   else if (v.status === 'live') info = v.url
     ? `<a href="${href(v.url)}" target="_blank" rel="noopener">Open post ↗</a>`
     : `<button type="button" class="pg-warnbtn" onclick="pgLink(${jsq(t.id)},${jsq(c.key)})">⚠ Live — link not shared · add</button>`;
+  if (v.status === 'live') info += ` <span class="pg-sub">live ${esc(fmt(v.liveAt || v.at))}</span> <button type="button" class="tk-link" onclick="pgLiveEdit(${jsq(t.id)},${jsq(c.key)})">change</button>`;
   else if (v.status === 'yet' && v.day) info = `<span class="${lateDay ? 'pg-bad' : 'pg-planned'}">Planned ${esc(G.dayLabel(v.day))} — set the time</span>`;
   return `<div class="pg-ch${v.due || v.linkMissing || lateDay ? ' hot' : ''}">
     <span class="pg-ch-n">${chLabel(c.key, c.label)}</span>
@@ -1166,6 +1168,7 @@ window.pgUnschedule = status => {
   persist(dropEmptyPlan(r.tracker), status === 'na' ? label + ' — not posting' : label + ' — schedule cancelled');
 };
 window.pgLink = (id, key) => openDlg('link', id, key);
+window.pgLiveEdit = (id, key) => openDlg('live', id, key);
 window.pgListing = (id, key, status) => {
   const t = byId(id); if (!t) return;
   if (status === 'posted') return openDlg('listing', id, key);
@@ -1241,12 +1244,17 @@ function openDlg(kind, id, key) {
     title = c && c.status === 'scheduled' ? `Reschedule ${chan.label}` : title;
   } else if (kind === 'live') {
     const c = t.channels && t.channels[key];
-    title = `${chan.label} — confirm it is live`;
-    body = `<p class="tk-hint" style="margin-top:0">${nm}${c && c.at ? ' · planned ' + esc(fmt(c.at)) : ''}</p>
+    const already = c && c.status === 'live';
+    title = already ? `${chan.label} — live` : `${chan.label} — confirm it is live`;
+    // When it actually went out: now by default, or what is already recorded — change it when the post
+    // went out earlier and is only being confirmed now. The scheduled time is kept and shown apart.
+    body = `<p class="tk-hint" style="margin-top:0">${nm}${c && c.at ? ' · scheduled for ' + esc(fmt(c.at)) : ''}</p>
+      <label for="pgLiveAt">Went live at</label><input id="pgLiveAt" type="datetime-local" value="${localInput(already && c.liveAt ? c.liveAt : now())}" max="${localInput(now() + 60000)}">
+      <p class="tk-hint" style="margin-top:4px">Now, unless it went out earlier — then pick when.</p>
       <label for="pgUrl">Link to the live post</label><input id="pgUrl" type="url" value="${esc((c && c.url) || '')}" placeholder="Open the post, copy its link and paste it here" oninput="pgCheckUrl()">
       <div class="pg-pasterow"><button type="button" class="tk-btn sm" onclick="pgPasteLink()"><i class="fa-regular fa-clipboard" aria-hidden="true"></i> Paste copied link</button><span id="pgUrlHint" class="pg-urlhint" role="status"></span></div>
       <p class="tk-hint warn">You can confirm without the link, but it stays flagged <b>Live — link not shared</b> until you add it.</p>`;
-    save.textContent = 'Confirm posted';
+    save.textContent = already ? 'Save' : 'Confirm posted';
   } else if (kind === 'link') {
     const c = t.channels && t.channels[key];
     title = `${chan.label} — post link`;
@@ -1575,7 +1583,10 @@ window.pgSave = () => {
       persist(r.tracker, at < now() ? 'Scheduled — that time has passed, so it shows as due' : 'Scheduled'); break;
     }
     case 'live': {
-      r = G.setChannel(t, k, 'live', { url: val('pgUrl') }, now());
+      const liveAt = $('pgLiveAt') && $('pgLiveAt').value ? new Date($('pgLiveAt').value).getTime() : now();
+      if (!liveAt || isNaN(liveAt)) return err('Pick when it went live.');
+      if (liveAt > now() + 5 * 60000) return err('That time has not come yet — a post goes live when it is out.');
+      r = G.setChannel(t, k, 'live', { url: val('pgUrl'), liveAt }, now());
       if (!r.ok) return err(r.error);
       persist(r.tracker, r.tracker.channels[k].url ? 'Marked live' : 'Marked live — remember to add the link'); break;
     }

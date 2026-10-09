@@ -445,6 +445,41 @@ console.log('cancel a schedule');
   await p.close();
 }
 
+// ── When a post went live: now by default, or earlier when it is only confirmed now ──
+console.log('went live at');
+{
+  const p = await open({ width: 1440, height: 950 });
+  await p.evaluate(() => window.pgMode('sheet')); await p.waitForTimeout(150);
+  const sched = await p.evaluate(() => window.__inv && null);
+  // T Nagar's Reel was scheduled two hours ago (due). It actually went out yesterday.
+  await p.evaluate(() => window.pgChannel('TNAG0002', 'igReel', 'live')); await p.waitForTimeout(150);
+  const def = await p.$eval('#pgLiveAt', e => new Date(e.value).getTime());
+  await (await p.$('#pgModal .tk-box')).screenshot({ path: OUT + '/live-dialog.png' });
+  ok('Mark live asks when it went live — now by default', Math.abs(def - Date.now()) < 120000 && /scheduled for/.test(await p.textContent('#pgBody')));
+  const local = ts => { const d = new Date(ts), q = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + q(d.getMonth() + 1) + '-' + q(d.getDate()) + 'T' + q(d.getHours()) + ':' + q(d.getMinutes()); };
+  await p.fill('#pgLiveAt', local(Date.now() + 2 * 86400000));
+  await p.click('#pgSave'); await p.waitForTimeout(100);
+  ok('A time that has not come yet is refused', /has not come yet/.test(await p.textContent('#pgErr')));
+  const yday = Date.now() - 26 * 3600000;
+  await p.fill('#pgLiveAt', local(yday));
+  await p.fill('#pgUrl', 'https://www.instagram.com/reel/abc');
+  await p.click('#pgSave'); await p.waitForTimeout(200);
+  let s = await p.evaluate(() => window.__saved.filter(x => x.id === 'TNAG0002').slice(-1)[0]);
+  ok('Live at the time picked, the scheduled time kept apart', s.channels.igReel.status === 'live' && Math.abs(s.channels.igReel.liveAt - yday) < 60000 && s.channels.igReel.at > 0 && Math.abs(s.channels.igReel.at - s.channels.igReel.liveAt) > 3600000, JSON.stringify(s.channels.igReel));
+  const cellTxt = await p.textContent('#pg-TNAG0002 .ps-cell[data-l="Insta Reel"]');
+  await (await p.$('#pg-TNAG0002')).screenshot({ path: OUT + '/live-cell.png' });
+  ok('The sheet shows when it went live, and when it was scheduled', /Live /.test(cellTxt) && /change/.test(cellTxt), cellTxt);
+  // Marked live earlier with the wrong time: change it.
+  await p.click('#pg-TNAG0002 .ps-cell[data-l="Insta Reel"] .ps-livet button:has-text("change")'); await p.waitForTimeout(150);
+  ok('A live post can be opened again to change its time', /live/.test(await p.textContent('#pgTitle')) && Math.abs((await p.$eval('#pgLiveAt', e => new Date(e.value).getTime())) - yday) < 60000 && (await p.$eval('#pgUrl', e => e.value)) === 'https://www.instagram.com/reel/abc');
+  const lastWeek = Date.now() - 6 * 86400000;
+  await p.fill('#pgLiveAt', local(lastWeek));
+  await p.click('#pgSave'); await p.waitForTimeout(200);
+  s = await p.evaluate(() => window.__saved.filter(x => x.id === 'TNAG0002').slice(-1)[0]);
+  ok('…saved: live last week, link and scheduled time untouched', Math.abs(s.channels.igReel.liveAt - lastWeek) < 60000 && s.channels.igReel.url === 'https://www.instagram.com/reel/abc' && s.channels.igReel.at > 0);
+  await p.close();
+}
+
 // ── The reference: one name for a property, shared with the board ──
 console.log('reference');
 {
