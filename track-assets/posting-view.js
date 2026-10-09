@@ -336,6 +336,22 @@ function voiceTag(t, key) {
   if (v.voice !== 'vo') return '';
   return v.made ? '<span class="pg-vo ok" title="Voice-over made (from the board)">🎙 V/O made</span>' : '<span class="pg-vo warn" title="Voice-over required separately and not made yet (from the board)">🎙 V/O pending</span>';
 }
+// What a post still lacks, on its own row: photos, details and the brochure (from the original row for
+// a repost), and — once it is live — its link. A brochure already asked for says where it stands instead.
+function needsHtml(t, key) {
+  if (!t) return '';
+  const root = (t.repostOf && origOf(t)) || t;
+  const miss = [];
+  if (!String(root.photosLink || '').trim()) miss.push('Photos');
+  if (!String(root.details || '').trim()) miss.push('Details');
+  const b = broState(t);
+  if (b.state === 'none') miss.push('Brochure');
+  const c = key && t.channels && t.channels[key];
+  if (c && c.status === 'live' && !c.url) miss.push('Link');
+  const bro = b.state === 'requested' ? 'Brochure in queue' : b.state === 'building' ? 'Brochure being delivered' : '';
+  if (!miss.length && !bro) return '';
+  return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${bro ? `<span class="pg-need bro">${esc(bro)}</span>` : ''}</div>`;
+}
 window.pgBrochureGo = listingId => { if (window.toggleView) window.toggleView('board'); if (window.openDetail) window.openDetail(listingId); };
 
 // The tag picker changed a listing's tags: show them here at once.
@@ -635,7 +651,7 @@ function todayRow(it) {
   return `<div class="pt-row ws-${it.state}">
     <span class="pt-time">${esc(time)}</span>
     <span class="pt-type">${chLabel(it.key, type)}</span>
-    <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>
+    <span class="pt-namecol"><button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>${needsHtml(it.tracker, it.key)}</span>
     <span class="pt-state">${esc(STATE_TXT[it.state])}</span>
     <span class="pt-acts">${itemActions(it)}</span>
   </div>`;
@@ -1102,6 +1118,7 @@ function queueHtml(base) {
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div>
       <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}<span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
+      ${needsHtml(r.tracker, r.key)}
     </div>
     <div class="tk-row-side">
       <span class="tk-when${r.due ? ' bad' : ''}">${esc(fmt(r.at))}<br><span class="pg-sub">${esc(rel(r.at))}</span></span>
@@ -1113,6 +1130,7 @@ function queueHtml(base) {
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${esc(r.key ? r.label : 'Channel not chosen')}</span>${codeBadge(r.tracker, true)}</div>
       <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}${miniTags(r.tracker)}</div>
+      ${needsHtml(r.tracker, r.key)}
     </div>
     <div class="tk-row-side pg-acts">
       <span class="tk-when${r.late ? ' bad' : ''}">${esc(G.dayLabel(r.day))}<br><span class="pg-sub">${r.late ? 'day passed' : 'time not set'}</span></span>
@@ -1127,7 +1145,7 @@ function queueHtml(base) {
     <div class="pg-hint">From the weekly plan. Pick the time once it is fixed.</div><div class="tk-rows">${plan.map(planRow).join('')}</div></div>`);
   for (const [label, cls, arr] of groups.slice(1)) out.push(`<div class="tk-group"><div class="tk-group-hdr ${cls}">${label} <span class="tk-count">${arr.length}</span></div><div class="tk-rows">${arr.map(row).join('')}</div></div>`);
   if (missing.length) out.push(`<div class="tk-group"><div class="tk-group-hdr bad">Live, link not shared <span class="tk-count">${missing.length}</span></div>
-    <div class="tk-rows">${missing.map(r => `<div class="tk-row"><div class="tk-row-main"><div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div><div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span></div></div>
+    <div class="tk-rows">${missing.map(r => `<div class="tk-row"><div class="tk-row-main"><div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div><div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}</div>${needsHtml(r.tracker, r.key)}</div>
       <div class="tk-row-side"><button type="button" class="tk-btn sm primary" onclick="pgLink(${jsq(r.id)},${jsq(r.key)})">Add link</button></div></div>`).join('')}</div></div>`);
   return out.length > 1 ? out.join('') : out[0] +
     `<div class="tk-empty"><div class="tk-empty-i">🗓️</div><div class="tk-empty-t">Nothing scheduled or planned</div><div class="tk-empty-s">Paste the week's plan, or set a post to Scheduled, and it appears here in time order.</div></div>`;

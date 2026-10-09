@@ -445,6 +445,36 @@ console.log('cancel a schedule');
   await p.close();
 }
 
+// ── What a post still lacks, on its row ──
+console.log('what a post lacks');
+{
+  const p = await open({ width: 1440, height: 950 });
+  await p.evaluate(() => window.pgMode('week')); await p.waitForTimeout(150);
+  const rowsOf = sel => p.$$eval(sel, x => x.map(e => e.textContent.replace(/\s+/g, ' ')));
+  let tn = (await rowsOf('#postingView .tk-group .tk-row')).filter(t => /2BHK T Nagar/.test(t));
+  ok('A T Nagar post says the brochure is missing — photos and details are there', tn.length >= 1 && tn.every(t => /Missing:/.test(t) && /Brochure/.test(t) && !/Photos/.test(t) && !/Details/.test(t)), JSON.stringify(tn));
+  ok('…and the post that went live without its link says Link as well', tn.some(t => /Insta Story/.test(t) && /Missing:/.test(t) && /Link/.test(t)), JSON.stringify(tn));
+  // Velachery: a post planned, with nothing in yet.
+  await p.evaluate(() => { const t = window.__lastRow = null; });
+  await p.evaluate(at => window.pgChannel && window.applyPostingSnapshot([
+    { id: 'TNAG0002', tenantId: 't_3pinrealty', propertyCode: 'TNAG0002', title: '2BHK T Nagar', location: 'T Nagar', photosLink: 'https://drive.google.com/x', details: 'text', propertyId: 'TNAG0002', channels: { igReel: { status: 'scheduled', at } }, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' } },
+    { id: 'VLCA002', tenantId: 't_3pinrealty', propertyCode: 'VLCA002', title: 'Velachery 3BHK', location: 'Velachery', channels: { igStory: { status: 'scheduled', at: at + 3600000 } }, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' } }
+  ]), Date.now() + 4 * 3600000);
+  await p.waitForTimeout(200);
+  const vl = (await rowsOf('#postingView .tk-group .tk-row')).filter(t => /Velachery 3BHK/.test(t));
+  ok('A Velachery post lists everything missing: photos, details, brochure', vl.length === 1 && /Photos/.test(vl[0]) && /Details/.test(vl[0]) && /Brochure/.test(vl[0]), JSON.stringify(vl));
+  // Its brochure asked for on the board: the line says it is in the queue, not missing.
+  await p.evaluate(() => window.applyListingsSnapshot([{ tenantId: 't_3pinrealty', id: 'L-T', title: '2BHK T Nagar', propertyCode: 'TNAG0002', stageId: '', media: {}, brochure: { code: 'TNAG0002', requestedCode: 'TNAG0002', requestedAt: Date.now() - 600000 }, createdAt: 1, updatedAt: 1, stageChangedAt: 1 }]));
+  await p.evaluate(() => window.pgRedraw()); await p.waitForTimeout(200);
+  tn = (await rowsOf('#postingView .tk-group .tk-row')).filter(t => /2BHK T Nagar/.test(t));
+  ok('Brochure asked for: "Brochure in queue" instead of missing', tn.length >= 1 && tn.every(t => /Brochure in queue/.test(t) && !/Missing:/.test(t)), JSON.stringify(tn));
+  await p.screenshot({ path: OUT + '/needs.png', fullPage: true });
+  // Today's rows say it too.
+  await p.evaluate(() => window.pgMode('today')); await p.waitForTimeout(150);
+  ok("Today's post rows carry the same line", /Brochure in queue|Missing:/.test(await p.textContent('#pg-today')));
+  await p.close();
+}
+
 // ── When a post went live: now by default, or earlier when it is only confirmed now ──
 console.log('went live at');
 {

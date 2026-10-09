@@ -1217,6 +1217,7 @@ a.ps-ro:hover { text-decoration: underline; }
   .pt-row { grid-template-columns: 70px minmax(0, 1fr); gap: 4px 10px; }
   .pt-type { grid-column: 2; }
   .pt-name { grid-column: 1 / -1; white-space: normal; }
+  .pt-namecol { grid-column: 1 / -1; }
   .pt-state { grid-column: 1 / -1; }
   .pt-acts { grid-column: 1 / -1; justify-content: flex-start; }
   .pt-now { grid-template-columns: 1fr; gap: 6px; }
@@ -1570,3 +1571,12 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 /* Posting: when a live post went live (and when it was scheduled), changeable */
 .ps-livet { font-size: 11.5px; color: var(--ink3); margin-top: 3px; }
 .ps-livet .tk-link { font-size: 11.5px; }
+
+/* Posting: what a post still lacks, on its row */
+.pg-needs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; }
+.pg-needs-l { font-size: 11.5px; font-weight: 600; color: var(--amber); }
+.pg-need { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--amber-bg); color: var(--amber); white-space: nowrap; }
+.pg-need.bro { background: var(--blue-bg, #EFF6FF); color: var(--blue, #1D4ED8); }
+.pt-namecol { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.pt-namecol .pt-name { max-width: 100%; }
+.pt-namecol .pg-needs { margin-top: 3px; }
