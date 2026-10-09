@@ -233,10 +233,12 @@ ok('Scheduling in the past warns that it shows as due', /shows as due/.test(awai
 await mode(1);
 ok('The Story whose time passed today shows as Due in Today', /Due — confirm posted/.test(await text('#pg-today .pt-row:has-text("Lux49"):has-text("Story")')));
 // The plan is "this week" on the real clock, so how many other posts are already past due depends
-// on the day the suite runs — the box must count exactly the Due rows Today shows, and include this one.
+// on the day the suite runs — the box must count exactly the Due posts Today shows, and include this one:
+// today's under "Today", an earlier day's under "Needs you now" as Overdue (from Friday on, Thursday's is).
 const dueBox = parseInt((await text('.kpi')).trim(), 10);
 const dueRows = await p.$$eval('#pg-today .pt-row', rs => rs.filter(r => /Due — confirm posted/.test(r.textContent)).length);
-ok('…counted in the "Due now" box', dueBox >= 1 && dueBox === dueRows, `box ${dueBox}, due rows ${dueRows}`);
+const overdueRows = await p.$$eval('#pg-now .pt-now', rs => rs.filter(r => /Overdue/.test(r.textContent)).length);
+ok('…counted in the "Due now" box', dueRows >= 1 && dueBox === dueRows + overdueRows, `box ${dueBox}, due today ${dueRows}, overdue from earlier ${overdueRows}`);
 await p.click('#pg-today .pt-row:has-text("Lux49"):has-text("Story") button:has-text("Mark live")');
 await p.fill('#pgUrl', 'instagram.com/stories/3pin/123');
 await p.click('#pgSave');
