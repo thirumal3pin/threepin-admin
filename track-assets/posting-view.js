@@ -56,6 +56,10 @@ const toast = m => { if (window.trackToast) window.trackToast(m); };
 const byId = id => trackers.find(t => t.id === id) || null;
 const isOpen = () => { const el = $('postingView'); return !!el && el.style.display !== 'none'; };
 const dn = t => G.displayName(t, trackers);
+// The reference (the plan's name for a property), shown under its name wherever the name is shown —
+// when it says something the name does not. A repost's name already carries its reference.
+const refOf = t => { if (!t || t.repostOf) return ''; const r = String(t.reference || '').trim(); return r && r !== G.nameOf(t) ? r : ''; };
+const refHtml = (t, cls) => refOf(t) ? `<span class="${cls}" title="Reference">${esc(refOf(t))}</span>` : '';
 const origOf = t => (t && t.repostOf ? byId(t.repostOf) : null);
 const codeOf = t => (t.repostOf ? (origOf(t) || {}).propertyCode || '' : t.propertyCode);
 
@@ -618,7 +622,7 @@ function nowListHtml(groups) {
   return `<div class="pt-list">${rows.map(({ g, it }) => `<div class="pt-now">
     <span class="pt-tag">${esc(NOW_TAG[g.kind] || g.title)}</span>
     <span class="pt-what">${it.keys.filter(k => G.CHANNEL_KEYS.includes(k)).map(k => chIcon(k)).join('')}
-      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${miniTags(it.tracker)}</button>
+      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>
       ${planBit(it.tracker)}</span>
     <span class="pt-acts">${taskActions(g, it)}</span>
   </div>`).join('')}</div>`;
@@ -631,7 +635,7 @@ function todayRow(it) {
   return `<div class="pt-row ws-${it.state}">
     <span class="pt-time">${esc(time)}</span>
     <span class="pt-type">${chLabel(it.key, type)}</span>
-    <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${miniTags(it.tracker)}</button>
+    <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>
     <span class="pt-state">${esc(STATE_TXT[it.state])}</span>
     <span class="pt-acts">${itemActions(it)}</span>
   </div>`;
@@ -791,6 +795,7 @@ function weekStrip(base, hideable) {
     return `<button type="button" class="wk-it ws-${it.state}" onclick="pgTile(${jsq(it.id)},${jsq(it.key || '')},${jsq(it.state)})" title="${esc(type + ' · ' + dn(it.tracker) + ' · ' + STATE_TXT[it.state])}">
       <span class="wk-row1"><span class="wk-ch ch-${it.key || 'none'}">${chIcon(it.key)}${esc(type)}</span>${time ? `<span class="wk-tm">${esc(time)}</span>` : ''}</span>
       <span class="wk-nm">${esc(dn(it.tracker))}</span>
+      ${refHtml(it.tracker, 'wk-ref')}
       ${miniTags(it.tracker)}
     </button>`;
   };
@@ -1094,7 +1099,7 @@ function queueHtml(base) {
   const row = r => `<div class="tk-row">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span><span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}<span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
     </div>
     <div class="tk-row-side">
       <span class="tk-when${r.due ? ' bad' : ''}">${esc(fmt(r.at))}<br><span class="pg-sub">${esc(rel(r.at))}</span></span>
@@ -1105,7 +1110,7 @@ function queueHtml(base) {
   const planRow = r => `<div class="tk-row${r.late ? ' pg-task hot' : ''}">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${esc(r.key ? r.label : 'Channel not chosen')}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${miniTags(r.tracker)}</div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}${miniTags(r.tracker)}</div>
     </div>
     <div class="tk-row-side pg-acts">
       <span class="tk-when${r.late ? ' bad' : ''}">${esc(G.dayLabel(r.day))}<br><span class="pg-sub">${r.late ? 'day passed' : 'time not set'}</span></span>
@@ -1354,7 +1359,7 @@ window.pgOpenBulk = () => openDlg('bulk', '', '');
 
 // ── Add schedule: the entries ──
 let entrySeq = 0;
-function newEntry(day) { return { n: ++entrySeq, text: '', sel: null, keys: new Set(), day: day || dateInput(G.startOfDay(now())), time: '' }; }
+function newEntry(day) { return { n: ++entrySeq, text: '', ref: '', sel: null, keys: new Set(), day: day || dateInput(G.startOfDay(now())), time: '' }; }
 const entryAt = n => (dlg && dlg.entries || []).find(e => e.n === n);
 function pgBulkRender() {
   const host = $('pgBulkList'); if (!host || !dlg || !dlg.entries) return;
@@ -1367,7 +1372,8 @@ function pgBulkRender() {
           : `<input class="bk-in" type="text" value="${esc(e.text)}" placeholder="Search a property, or type a reference" aria-label="Property or reference ${i + 1}" autocomplete="off"
               oninput="pgBulkType(${e.n}, this.value)" onfocus="pgBulkType(${e.n}, this.value)" onblur="setTimeout(() => pgBulkSug(${e.n}, false), 120)"
               onkeydown="if (event.key === 'Enter') { event.preventDefault(); pgBulkAdd(); }"><div class="bk-sug" id="bkSug-${e.n}" role="listbox"></div>`}
-        ${!e.sel ? `<div class="bk-note" id="bkNote-${e.n}" ${e.text.trim() ? '' : 'hidden'}>New reference — code, photos and brochure can come later</div>` : ''}
+        ${!e.sel ? `<div class="bk-note" id="bkNote-${e.n}" ${e.text.trim() ? '' : 'hidden'}>New reference — code, photos and brochure can come later</div>`
+          : `<input class="bk-ref" type="text" value="${esc(e.ref)}" placeholder="Reference (optional) — e.g. how the plan names it" aria-label="Reference for entry ${i + 1}, optional" autocomplete="off" oninput="pgBulkRef(${e.n}, this.value)">`}
       </div>
       <div class="bk-types" role="group" aria-label="Goes out as">${G.CHANNELS.map(c => `<button type="button" class="bk-type${e.keys.has(c.key) ? ' on' : ''}" aria-pressed="${e.keys.has(c.key)}" onclick="pgBulkKey(${e.n}, ${jsq(c.key)})">${chIcon(c.key)}<span>${esc(G.SHORT_CH[c.key])}</span></button>`).join('')}</div>
       <button type="button" class="bk-x" onclick="pgBulkRemove(${e.n})" aria-label="Remove this entry" ${dlg.entries.length === 1 ? 'disabled' : ''}>✕</button>
@@ -1398,13 +1404,29 @@ window.pgBulkSug = (n, open) => {
     `<div class="bk-sh">Or</div><button type="button" class="bk-opt new" onmousedown="event.preventDefault()" onclick="pgBulkSug(${n}, false)"><b>Keep “${esc(e.text.trim())}” as a reference</b><span>add the code and photos later</span></button>`;
   box.classList.add('open');
 };
+// The reference for a picked property, one name everywhere: the board listing's name for it when it
+// has a listing, else the reference this tracker already carries.
+function referenceFor(code, tracker) {
+  const k = G.codeKey(code);
+  const l = k ? memo().byCode.get(k) : null;
+  const name = l && String(l.title || '').trim();
+  if (name && name !== 'New listing') return name;
+  return String((tracker && tracker.reference) || '').trim();
+}
+// For the board's New listing: the reference Posting has for a code (its listing title, if empty).
+window.pgReferenceFor = code => {
+  const k = G.codeKey(code);
+  const t = k ? trackers.find(x => !x.repostOf && G.codeKey(x.propertyCode) === k) : null;
+  return t ? String(t.reference || '').trim() : '';
+};
 window.pgBulkPick = (n, kind, id) => {
   const e = entryAt(n); if (!e) return;
-  if (kind === 't') { const t = byId(id); if (!t) return; e.sel = { kind, id, label: (t.propertyCode ? t.propertyCode + ' · ' : '') + G.nameOf(t) }; }
-  else { const p = (inv || []).find(x => x.id === id); if (!p) return; e.sel = { kind, id, label: p.propertyCode + ' · ' + p.name }; }
+  if (kind === 't') { const t = byId(id); if (!t) return; e.sel = { kind, id, label: (t.propertyCode ? t.propertyCode + ' · ' : '') + G.nameOf(t) }; if (!e.ref.trim()) e.ref = referenceFor(t.propertyCode, t); }
+  else { const p = (inv || []).find(x => x.id === id); if (!p) return; e.sel = { kind, id, label: p.propertyCode + ' · ' + p.name }; if (!e.ref.trim()) e.ref = referenceFor(p.propertyCode, null); }
   pgBulkRender();
 };
 window.pgBulkUnpick = n => { const e = entryAt(n); if (!e) return; e.sel = null; pgBulkRender(); const inp = document.querySelector(`.bk-row[data-n="${n}"] .bk-in`); if (inp) inp.focus(); };
+window.pgBulkRef = (n, v) => { const e = entryAt(n); if (e) e.ref = v; };
 window.pgBulkWhen = (n, field, v) => { const e = entryAt(n); if (!e) return; e[field] = v; pgBulkCount(); };
 window.pgBulkKey = (n, k) => { const e = entryAt(n); if (!e) return; e.keys.has(k) ? e.keys.delete(k) : e.keys.add(k); pgBulkRender(); };
 window.pgBulkAdd = () => {
@@ -1614,8 +1636,8 @@ window.pgSave = () => {
       const timeOf = (day, hm) => { if (!hm) return 0; const [h, m] = hm.split(':').map(Number); const d = new Date(day); d.setHours(h, m, 0, 0); return d.getTime(); };
       const entries = dlg.entries.filter(e => e.sel || e.text.trim()).map(e => {
         const keys = [...e.keys], day = fromDateInput(e.day), at = day ? timeOf(day, e.time) : 0;
-        if (e.sel && e.sel.kind === 't') return { trackerId: e.sel.id, keys, day, at };
-        if (e.sel && e.sel.kind === 'i') { const p = (inv || []).find(x => x.id === e.sel.id); return p ? { inv: { propertyCode: p.propertyCode, title: p.name, propertyId: p.id, location: p.location, photosLink: G.webLink(p.photosLink), details: p.detailsText }, keys, day, at } : null; }
+        if (e.sel && e.sel.kind === 't') return { trackerId: e.sel.id, keys, day, at, ref: (e.ref || '').trim() };
+        if (e.sel && e.sel.kind === 'i') { const p = (inv || []).find(x => x.id === e.sel.id); return p ? { inv: { propertyCode: p.propertyCode, title: p.name, propertyId: p.id, location: p.location, photosLink: G.webLink(p.photosLink), details: p.detailsText }, keys, day, at, ref: (e.ref || '').trim() } : null; }
         return { ref: e.text.trim(), keys, day, at };
       }).filter(Boolean);
       const r = G.bulkSchedule(trackers, entries, {}, now(), who());

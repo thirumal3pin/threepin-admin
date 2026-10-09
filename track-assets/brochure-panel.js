@@ -489,7 +489,14 @@ function modalSug(c, editId) {
 }
 window.bpModalPick = i => { const o = mmSug[i]; if (o) window.bpModalUse(o.code); };
 window.bpModalSugClose = () => setTimeout(() => { const box = $('mmCodeSug'); if (box) box.classList.remove('open'); }, 150);
-window.bpModalUse = code => { const el = $('mm_propertyCode'); if (el) { el.value = code; window.bpModalCode(code); const box = $('mmCodeSug'); if (box) box.classList.remove('open'); } };
+window.bpModalUse = code => {
+  const el = $('mm_propertyCode'); if (!el) return;
+  el.value = code; window.bpModalCode(code);
+  const box = $('mmCodeSug'); if (box) box.classList.remove('open');
+  // One name for the property everywhere: an empty title takes the reference Posting already has for it.
+  const t = $('mm_title'), ref = window.pgReferenceFor ? window.pgReferenceFor(code) : '';
+  if (t && !t.value.trim() && ref) t.value = ref;
+};
 // Called by saveModal: decides what a typed Property ID means. Returns { error } or the patch.
 window.bpResolveFormCode = (form, editId) => {
   const code = B.normCode(form.propertyCode);

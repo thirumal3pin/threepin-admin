@@ -422,6 +422,8 @@ export function weekKey(tracker) {
 //              otherwise as a new repost round, so earlier posts are never overwritten),
 //   inv: { propertyCode, title, propertyId, location, photosLink, details } (a dashboard property),
 //   ref: 'free text' (a plain reference row) }
+//   — with a trackerId or inv, ref is optional too: the plan's own name for it, kept as the row's
+//     reference ("Plan: …" under the title).
 // when = { day } (planned for the day) or { day, at } (scheduled at that time) — the default for
 // entries that do not carry their own { day, at }.
 // Returns { create: [rows], update: [rows], errors: [text] } — nothing is saved here.
@@ -453,13 +455,13 @@ export function bulkSchedule(trackers, entries, when, now, who) {
       const latest = touched.get(fam[fam.length - 1].id) || fam[fam.length - 1];
       const untouched = keys.length && keys.every(k => { const c = latest.channels[k]; return c.status === STATUS.YET && !c.day && !c.at; });
       if (untouched && (!latest.plannedDate || latest.plannedDate === day)) {
-        const row = applyKeys(latest, keys);
+        const row = applyKeys(str(e.ref) ? { ...latest, reference: str(e.ref) } : latest, keys);
         touched.set(row.id, row);
         const i = out.update.findIndex(r => r.id === row.id);
         if (i >= 0) out.update[i] = row; else out.update.push(row);
       } else {
         const root = fam[0];
-        const base = blankTracker({ reference: nameOf(root), repostOf: root.id, plannedDate: day }, now + (n++), who);
+        const base = blankTracker({ reference: str(e.ref) || nameOf(root), repostOf: root.id, plannedDate: day }, now + (n++), who);
         out.create.push(applyKeys(base, keys));
       }
     } else if (e && e.inv && e.inv.propertyCode) {
@@ -469,8 +471,8 @@ export function bulkSchedule(trackers, entries, when, now, who) {
       // The same dashboard property twice in one submit: the first line is its row, later ones are reposts of it.
       const first = out.create.find(t => !t.repostOf && codeKey(t.propertyCode) === codeKey(p.propertyCode));
       const row = first
-        ? blankTracker({ reference: nameOf(first), repostOf: first.id, plannedDate: day }, now + (n++), who)
-        : blankTracker({ propertyCode: p.propertyCode, title: p.title, location: p.location, photosLink: webLink(p.photosLink), details: p.details, propertyId: p.propertyId, plannedDate: day }, now + (n++), who);
+        ? blankTracker({ reference: str(e.ref) || nameOf(first), repostOf: first.id, plannedDate: day }, now + (n++), who)
+        : blankTracker({ reference: str(e.ref), propertyCode: p.propertyCode, title: p.title, location: p.location, photosLink: webLink(p.photosLink), details: p.details, propertyId: p.propertyId, plannedDate: day }, now + (n++), who);
       out.create.push(applyKeys(row, keys));
     } else if (e && str(e.ref)) {
       out.create.push(applyKeys(blankTracker({ reference: str(e.ref), plannedDate: day }, now + (n++), who), keys));

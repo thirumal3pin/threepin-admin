@@ -445,6 +445,34 @@ console.log('cancel a schedule');
   await p.close();
 }
 
+// ── The reference: one name for a property, shared with the board ──
+console.log('reference');
+{
+  const p = await open({ width: 1440, height: 950 });
+  const base = { tenantId: T, stageId: '', media: {}, createdAt: 1, updatedAt: 1, stageChangedAt: 1 };
+  await p.evaluate(b => window.applyListingsSnapshot([{ ...b, id: 'L-V', title: 'Velachery 3BHK — Vijay Nagar', propertyCode: 'VLCA002' }]), base);
+  await p.evaluate(() => window.pgOpenBulk()); await p.waitForTimeout(150);
+  await p.fill('#pgBulkList .bk-in', 'VLCA'); await p.waitForTimeout(100);
+  await p.click('#pgBulkList .bk-opt:has-text("VLCA002")'); await p.waitForTimeout(100);
+  ok('Add schedule: picking a property that has a board listing fills the reference with its name', (await p.$eval('#pgBulkList .bk-ref', e => e.value)) === 'Velachery 3BHK — Vijay Nagar');
+  await p.fill('#pgBulkList .bk-ref', 'Vijay Nagar 3BHK — plan'); await p.dispatchEvent('#pgBulkList .bk-ref', 'input');
+  await p.click('#pgBulkList .bk-type:has-text("Story")');
+  await p.click('#pgSave'); await p.waitForTimeout(200);
+  const saved = await p.evaluate(() => window.__saved.filter(x => x.id === 'VLCA002').slice(-1)[0]);
+  ok('…and the reference typed there is kept on the row', saved && saved.reference === 'Vijay Nagar 3BHK — plan', JSON.stringify(saved && saved.reference));
+  await p.evaluate(() => window.pgMode('week')); await p.waitForTimeout(150);
+  ok('The reference shows under the name on the week tile', /Vijay Nagar 3BHK — plan/.test(await p.textContent('.wk')) && !!(await p.$('.wk .wk-ref')));
+  ok('…and in the list below', (await p.$$eval('#postingView .tk-group .tk-row-meta .pg-ref', x => x.map(e => e.textContent))).includes('Vijay Nagar 3BHK — plan'), JSON.stringify(await p.$$eval('#postingView .tk-group .tk-row-meta', x => x.map(e => e.textContent.replace(/s+/g, ' ')))));
+  await (await p.$('.wk')).screenshot({ path: OUT + '/reference-week.png' });
+  // The board's New listing: picking that code fills an empty title with the reference Posting has.
+  await p.evaluate(() => window.applyListingsSnapshot([]));
+  await p.evaluate(() => { window.toggleView('board'); window.openAddModal(); }); await p.waitForTimeout(150);
+  await p.click('#mm_propertyCode'); await p.fill('#mm_propertyCode', 'vlca'); await p.waitForTimeout(100);
+  await p.click('#mmCodeSug .bp-opt:has(b:text-is("VLCA002"))'); await p.waitForTimeout(100);
+  ok("Board New listing: picking the code fills the title with Posting's reference", (await p.$eval('#mm_title', e => e.value)) === 'Vijay Nagar 3BHK — plan', await p.$eval('#mm_title', e => e.value));
+  await p.close();
+}
+
 // ── The brochure and the voice-over come from the board ──
 console.log('from the board');
 {

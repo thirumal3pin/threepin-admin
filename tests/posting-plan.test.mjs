@@ -272,6 +272,16 @@ check('Normalising keeps plan fields', normalizeTracker({ reference: ' R ', plan
   const timed = bulkSchedule([fresh], [{ trackerId: fresh.id, keys: ['igReel', 'fbReel'] }], { day: FRI, at: FRI6 }, NOW, 'a');
   check('With a time, each type is Scheduled at that time', timed.update[0].channels.igReel.status === 'scheduled' && timed.update[0].channels.igReel.at === FRI6 && timed.update[0].channels.fbReel.at === FRI6);
   check('No date is refused', bulkSchedule(all, [{ ref: 'x', keys: [] }], {}, NOW, 'a').errors.length === 1);
+  // A picked property can carry the plan's reference too.
+  const withRef = bulkSchedule(all, [
+    { trackerId: fresh.id, keys: ['igReel'], ref: 'Eden villas — corner unit' },
+    { inv: { propertyCode: 'BRG001', title: 'Brigade Stellaris', propertyId: 'BRG001' }, keys: ['igStory'], ref: 'Brigade stellaris velachery' },
+    { trackerId: done.id, keys: ['igReel'], ref: 'Velachery 2BHK — second round' }
+  ], { day: FRI }, NOW, 'a');
+  eq('A tracked property picked with a reference keeps it on its row', withRef.update.find(x => x.id === fresh.id).reference, 'Eden villas — corner unit');
+  eq('A dashboard property picked with a reference keeps it, beside its code', [withRef.create.find(x => x.propertyCode === 'BRG001').reference, withRef.create.find(x => x.propertyCode === 'BRG001').title], ['Brigade stellaris velachery', 'Brigade Stellaris']);
+  eq('A repost round takes the reference given', withRef.create.find(x => x.repostOf === done.id).reference, 'Velachery 2BHK — second round');
+  eq('No reference given: a tracked row keeps the one it had', bulkSchedule(all, [{ trackerId: fresh.id, keys: ['igReel'] }], { day: FRI }, NOW, 'a').update[0].reference, 'Eden villas rent');
   // Each entry on its own day (the dialog sends a date per line).
   const multi = bulkSchedule([fresh], [
     { ref: 'Mogappair 2 prop', keys: ['igStory'], day: day(1) },

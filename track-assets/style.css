@@ -1556,3 +1556,13 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 .pg-unsched-b { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0 6px; }
 .pg-unsched .tk-hint { margin: 0; }
 
+
+/* Add schedule: a picked property can carry the plan's reference too */
+.bk-ref { width: 100%; margin-top: 6px; font: inherit; font-size: 13px; padding: 8px 11px; border: 1px dashed var(--border); border-radius: var(--r1, 8px); background: transparent; color: var(--ink); }
+.bk-ref:focus { outline: none; border-style: solid; border-color: var(--brand); box-shadow: var(--ring); background: var(--card); }
+
+/* Posting: the reference under a property's name */
+.wk-ref { display: block; font-size: 11px; font-weight: 500; color: var(--ink4); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pg-ref { font-size: 12px; font-style: italic; color: var(--ink4); }
+.pg-ref::before { content: '· '; font-style: normal; }
+.pt-name .pg-ref { margin-left: 6px; font-weight: 500; }
