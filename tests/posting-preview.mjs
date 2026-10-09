@@ -406,6 +406,32 @@ console.log('scenarios');
   await p.close();
 }
 
+// ── A schedule can be cancelled from its dialog ──
+console.log('cancel a schedule');
+{
+  const p = await open({ width: 1440, height: 950 });
+  await p.evaluate(() => window.pgMode('sheet')); await p.waitForTimeout(150);
+  // T Nagar's Facebook Reel is scheduled: its dialog offers to cancel.
+  await p.evaluate(() => window.pgReschedule ? window.pgReschedule('TNAG0002', 'fbReel') : window.pgChannel('TNAG0002', 'fbReel', 'scheduled'));
+  await p.waitForTimeout(150);
+  ok('The schedule dialog of a scheduled post says when, and offers to cancel', /Reschedule Facebook Reel/.test(await p.textContent('#pgTitle')) && !!(await p.$('#pgModal button:has-text("Cancel this schedule")')) && !!(await p.$('#pgModal button:has-text("N/A")')));
+  await p.screenshot({ path: OUT + '/cancel-schedule.png' });
+  await p.click('#pgModal button:has-text("Cancel this schedule")'); await p.waitForTimeout(200);
+  let s = await p.evaluate(() => window.__saved.slice(-1)[0]);
+  ok('Cancel this schedule: back to To schedule, the time cleared', s.id === 'TNAG0002' && s.channels.fbReel.status === 'yet' && !s.channels.fbReel.at && !(await p.evaluate(() => document.getElementById('pgModal').classList.contains('open'))), JSON.stringify(s.channels.fbReel));
+  ok('…with Undo', /schedule cancelled/.test(await p.textContent('#pgUndo')) && !!(await p.$('#pgUndo button')));
+  await p.click('#pgUndo button'); await p.waitForTimeout(200);
+  s = await p.evaluate(() => window.__saved.slice(-1)[0]);
+  ok('…and Undo puts the schedule back', s.channels.fbReel.status === 'scheduled' && !!s.channels.fbReel.at);
+  await p.evaluate(() => window.pgChannel('TNAG0002', 'fbReel', 'scheduled')); await p.waitForTimeout(150);
+  await p.click('#pgModal button:has-text("N/A")'); await p.waitForTimeout(200);
+  s = await p.evaluate(() => window.__saved.slice(-1)[0]);
+  ok("Won't post: N/A", s.channels.fbReel.status === 'na');
+  await p.evaluate(() => window.pgChannel('VLCA002', 'igStory', 'scheduled')); await p.waitForTimeout(150);
+  ok('A post not scheduled yet has no cancel button', !(await p.$('#pgModal button:has-text("Cancel this schedule")')) && /Schedule Insta Story/.test(await p.textContent('#pgTitle')));
+  await p.close();
+}
+
 // ── The brochure and the voice-over come from the board ──
 console.log('from the board');
 {

@@ -1136,6 +1136,16 @@ window.pgChannel = (id, key, status) => {
   if (!r.ok) { toast(r.error); return renderPosting(); }
   persist(r.tracker);
 };
+// Cancel a schedule from its dialog: back to To schedule (its planned day kept), or N/A — with Undo.
+window.pgUnschedule = status => {
+  if (!dlg || dlg.kind !== 'schedule') return;
+  const t = byId(dlg.id), k = dlg.key; if (!t) return;
+  const r = G.setChannel(t, k, status === 'na' ? 'na' : 'yet', {}, now());
+  if (!r.ok) { $('pgErr').textContent = r.error; return; }
+  const label = (G.CHANNELS.find(c => c.key === k) || {}).label || 'Post';
+  closeQuiet();
+  persist(r.tracker, status === 'na' ? label + ' — not posting' : label + ' — schedule cancelled');
+};
 window.pgLink = (id, key) => openDlg('link', id, key);
 window.pgListing = (id, key, status) => {
   const t = byId(id); if (!t) return;
@@ -1202,8 +1212,14 @@ function openDlg(kind, id, key) {
     title = `Schedule ${chan.label}`;
     body = `<p class="tk-hint" style="margin-top:0">${nm}${dayBase ? ' · planned ' + esc(G.dayLabel(dayBase)) : ''}</p>
       <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" value="${localInput(start)}">
-      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>`;
-    save.textContent = 'Schedule';
+      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${c && c.status === 'scheduled' ? `
+      <div class="pg-unsched">
+        <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
+        <div class="pg-unsched-b"><button type="button" class="tk-btn sm" onclick="pgUnschedule('yet')">Cancel this schedule</button><button type="button" class="tk-btn sm ghost" onclick="pgUnschedule('na')">Won't post (N/A)</button></div>
+        <div class="tk-hint">Cancelling puts it back to <b>To schedule</b>${c.day ? ' (still planned for ' + esc(G.dayLabel(c.day)) + ')' : ''}. N/A takes it off altogether.</div>
+      </div>` : ''}`;
+    save.textContent = c && c.status === 'scheduled' ? 'Reschedule' : 'Schedule';
+    title = c && c.status === 'scheduled' ? `Reschedule ${chan.label}` : title;
   } else if (kind === 'live') {
     const c = t.channels && t.channels[key];
     title = `${chan.label} — confirm it is live`;
