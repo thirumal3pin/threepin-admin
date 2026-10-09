@@ -1555,3 +1555,10 @@ textarea.bp-in { resize: vertical; line-height: 1.45; }
 .pg-unsched-t { font-size: 13px; color: var(--ink2); }
 .pg-unsched-b { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0 6px; }
 .pg-unsched .tk-hint { margin: 0; }
+
+/* Week strip: plan lines with no type yet wait under the week, not in a day */
+.wk-undec { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wk-undec-l { font-size: 12px; color: var(--ink3); }
+.wk-undec .wk-it.inline { display: inline-flex; align-items: center; gap: 6px; width: auto; max-width: 100%; }
+.wk-undec .wk-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.wk-undec-d { font-size: 11px; color: var(--ink4); flex: none; }

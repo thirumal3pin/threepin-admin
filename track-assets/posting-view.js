@@ -640,7 +640,7 @@ function todayRow(it) {
 function itemActions(it, big) {
   const id = it.id, k = it.key, sz = big ? '' : ' sm';
   const b = (label, js, cls) => `<button type="button" class="tk-btn${sz}${cls ? ' ' + cls : ''}" onclick="${js}">${label}</button>`;
-  if (!k) return G.CHANNELS.map(c => b(chLabel(c.key, c.label), `pgChannel(${jsq(id)},${jsq(c.key)},'scheduled')`)).join('');
+  if (!k) return G.CHANNELS.map(c => b(chLabel(c.key, c.label), `pgChannel(${jsq(id)},${jsq(c.key)},'scheduled')`)).join('') + b('Not posting — take it off the plan', `pgUnplan(${jsq(id)})`, 'ghost');
   const c = it.tracker.channels[k];
   switch (it.state) {
     case 'due': return b('Mark live', `pgChannel(${jsq(id)},${jsq(k)},'live')`, 'primary') + b('Reschedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`);
@@ -806,13 +806,21 @@ function weekStrip(base, hideable) {
       </div>
       <div class="wk-counts">${counts || '<span class="wk-c none">Nothing planned or scheduled</span>'}</div>
     </div>
-    <div class="wk-days">${a.days.map(d => `<div class="wk-day${d.day === today ? ' today' : ''}${d.day < today ? ' past' : ''}">
+    <div class="wk-days">${a.days.map(d => { const shown = d.items.filter(it => it.key); return `<div class="wk-day${d.day === today ? ' today' : ''}${d.day < today ? ' past' : ''}">
         <div class="wk-dh"><span>${G.formatDate(d.day, F_WD)}</span><b>${new Date(d.day).getDate()}</b></div>
-        <div class="wk-items">${d.items.length ? d.items.map(item).join('') : '<span class="wk-empty">—</span>'}</div>
-      </div>`).join('')}</div>
+        <div class="wk-items">${shown.length ? shown.map(item).join('') : '<span class="wk-empty">—</span>'}</div>
+      </div>`; }).join('')}</div>
+    ${undecidedLine(a)}
     ${a.weekItems.length ? `<div class="wk-week">Also this week: ${a.weekItems.map(it => `<button type="button" class="wk-it ws-planned inline" onclick="pgJump(${jsq(it.id)})"><span class="wk-ch ch-${it.key}">${chIcon(it.key)}${esc(G.SHORT_CH[it.key])}</span><span class="wk-nm">${esc(dn(it.tracker))}</span>${miniTags(it.tracker)}</button>`).join('')}</div>` : ''}
     <div class="wk-legend"><span class="lg live">Live</span><span class="lg scheduled">Scheduled</span><span class="lg planned">Planned, time not set</span><span class="lg due">Due / day passed / link missing</span></div>
   </section>`;
+}
+// A plan line with no type yet is not a post: it does not hold a day, so the day stays free to plan
+// something else. They wait here, under the week — pick a type, or take it off the plan.
+function undecidedLine(a) {
+  const list = a.days.flatMap(d => d.items.filter(it => !it.key).map(it => ({ ...it, day: d.day })));
+  if (!list.length) return '';
+  return `<div class="wk-week wk-undec"><span class="wk-undec-l">Type not decided:</span> ${list.map(it => `<button type="button" class="wk-it ws-${it.state} inline" onclick="pgTile(${jsq(it.id)},'',${jsq(it.state)})" title="Pick a type, or take it off the plan"><span class="wk-nm">${esc(dn(it.tracker))}</span><span class="wk-undec-d">${esc(G.formatDate(it.day, F_WD))}</span></button>`).join('')}</div>`;
 }
 // A week tile → the actions for that post, right there.
 window.pgTile = (id, key, state) => {
@@ -834,6 +842,12 @@ window.pgTile = (id, key, state) => {
       <button type="button" class="tk-link qk-open" onclick="pgJump(${jsq(id)})">Open the row in the sheet</button>
     </div>`;
   $('pgModal').classList.add('open');
+};
+// Not posting this one: it leaves the plan (its day is free again); the row itself stays, with Undo.
+window.pgUnplan = id => {
+  const t = byId(id); if (!t) return;
+  if (dlg) closeQuiet();
+  persist({ ...t, plannedDate: 0 }, 'Taken off the plan');
 };
 window.pgSheetWeek = on => { sheetWeek = !!on; try { localStorage.setItem('posting.sheetWeek', on ? 'on' : 'off'); } catch (e) {} renderPosting(); };
 window.pgWeek = d => { weekOffset = d === 0 ? 0 : weekOffset + d; renderPosting(); };
