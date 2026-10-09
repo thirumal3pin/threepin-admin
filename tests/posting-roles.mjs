@@ -320,7 +320,7 @@ ok('…and counts as needing attention in the menu badge', Number((await p.$$eva
 await mode(2);
 const wkCounts = await text('.wk-counts');
 ok('Week strip totals posts by type', /Stor(y|ies)/.test(wkCounts) && /Reel/.test(wkCounts), wkCounts);
-ok('…and counts the lines whose type is not decided', /type not decided/.test(wkCounts));
+ok('…and shows posts only — no count of lines whose type is not decided', !/type not decided/.test(wkCounts), wkCounts);
 const monTypes = await p.$$eval('.wk-day.today .wk-it.ws-live .wk-ch', x => x.map(e => e.textContent));
 ok('The Lux49 Story confirmed live today shows on today, as Live', monTypes.includes('Story'), JSON.stringify(monTypes));
 ok('The YouTube series sits under "Also this week"', /T nagar series/.test(await text('.wk-week:not(.wk-undec)')));
@@ -343,17 +343,16 @@ await p.screenshot({ path: OUT + '/4-monitor.png', fullPage: true });
 const wide = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 ok('No sideways scroll on desktop', wide <= 2, wide);
 
-// A plan line whose type is not decided does not hold a day: the slot stays free to plan something
-// else. It waits under the week — pick a type, or take it off the plan.
+// A plan line whose type is not decided is not on the week at all (the week shows posts only, so the
+// day stays free). It is listed under "Planned — time not set": pick a type, or Not posting.
 await mode(2); await p.evaluate(() => window.pgWeek(0)); await p.waitForTimeout(100);
-ok('Undecided plan lines are not in the day slots', !(await p.$('.wk-day .wk-ch.ch-none')));
-await (await p.$('.wk')).screenshot({ path: OUT + '/8-week-undecided.png' });
-const undec = await p.$$eval('.wk-undec .wk-it', x => x.length);
-ok('…they wait under the week, under "Type not decided"', undec >= 1 && /Type not decided/.test(await text('.wk-undec')), undec);
-await p.click('.wk-undec .wk-it');
-ok('…a click offers the types, and "Not posting"', !!(await p.$('#pgModal button:has-text("Not posting")')) && !!(await p.$('#pgModal button:has-text("Story")')));
-await p.click('#pgModal button:has-text("Not posting")'); await p.waitForTimeout(150);
-ok('Not posting: taken off the plan (the row stays), the line gone from the week', !(await last()).plannedDate && (await p.$$eval('.wk-undec .wk-it', x => x.length)) === undec - 1 && /Taken off the plan/.test(await text('#pgUndo')));
+ok('Undecided plan lines are not on the week', !(await p.$('.wk .wk-ch.ch-none')) && !(await p.$('.wk-undec')) && !/not decided/i.test(await text('.wk')));
+await (await p.$('.wk')).screenshot({ path: OUT + '/8-week-posts-only.png' });
+const undecRow = '.tk-group:has(.tk-group-hdr:text("Planned — time not set")) .tk-row:has-text("Channel not chosen")';
+const undec = await p.$$eval(undecRow, x => x.length);
+ok('…they are listed under "Planned — time not set", with the types and Not posting', undec >= 1 && !!(await p.$(undecRow + ' button:has-text("Not posting")')) && !!(await p.$(undecRow + ' button:has-text("Insta Story")')), undec);
+await p.click(undecRow + ' button:has-text("Not posting")'); await p.waitForTimeout(150);
+ok('Not posting: taken off the plan (the row stays), gone from the list', !(await last()).plannedDate && (await p.$$eval(undecRow, x => x.length)) === undec - 1 && /Taken off the plan/.test(await text('#pgUndo')));
 await p.close();
 
 // ─────────────────────────────────────────────────────────────

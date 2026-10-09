@@ -429,6 +429,19 @@ console.log('cancel a schedule');
   ok("Won't post: N/A", s.channels.fbReel.status === 'na');
   await p.evaluate(() => window.pgChannel('VLCA002', 'igStory', 'scheduled')); await p.waitForTimeout(150);
   ok('A post not scheduled yet has no cancel button', !(await p.$('#pgModal button:has-text("Cancel this schedule")')) && /Schedule Insta Story/.test(await p.textContent('#pgTitle')));
+  await p.evaluate(() => window.pgClose());
+  // The only post on a row planned for a day is cancelled: the post is gone, and the row does not come
+  // back as a "type not decided" plan line.
+  await p.evaluate(at => {
+    const rows = JSON.parse(JSON.stringify(window.__lastSnap || []));
+    window.applyPostingSnapshot([{ id: 'ONE', tenantId: 't_3pinrealty', propertyCode: 'ONE0001', title: 'One post only', plannedDate: new Date(at).setHours(0, 0, 0, 0), channels: { igStory: { status: 'scheduled', at, day: new Date(at).setHours(0, 0, 0, 0) } }, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' } }, ...rows]);
+  }, Date.now() + 3 * 3600000);
+  await p.evaluate(() => window.pgChannel('ONE', 'igStory', 'scheduled')); await p.waitForTimeout(150);
+  await p.click('#pgModal button:has-text("Cancel this schedule")'); await p.waitForTimeout(200);
+  s = await p.evaluate(() => window.__saved.slice(-1)[0]);
+  ok('Cancelling the only post on a planned row: the post and its plan both go', s.id === 'ONE' && s.channels.igStory.status === 'yet' && !s.channels.igStory.day && !s.plannedDate, JSON.stringify({ p: s.plannedDate, c: s.channels.igStory }));
+  await p.evaluate(() => window.pgMode('week')); await p.waitForTimeout(150);
+  ok('…so it does not come back as a plan line anywhere', !(await p.$('.tk-group:has-text("Planned — time not set") .tk-row:has-text("One post only")')) && !/One post only/.test(await p.textContent('.wk')));
   await p.close();
 }
 

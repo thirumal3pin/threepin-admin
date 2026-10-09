@@ -783,8 +783,7 @@ function weekStrip(base, hideable) {
   const range = G.formatDate(monday, F_DM) + ' – ' + G.formatDate(sun, F_DM);
   const name = weekOffset === 0 ? 'This week' : weekOffset === 1 ? 'Next week' : weekOffset === -1 ? 'Last week' : 'Week';
   const c = a.counts;
-  const counts = G.CHANNELS.filter(ch => c[ch.key]).map(ch => `<span class="wk-c">${chIcon(ch.key)}<b>${c[ch.key]}</b> ${PLURAL[ch.key][c[ch.key] === 1 ? 0 : 1]}</span>`).join('') +
-    (c.undecided ? `<span class="wk-c undecided">${chIcon(null)}<b>${c.undecided}</b> type not decided</span>` : '');
+  const counts = G.CHANNELS.filter(ch => c[ch.key]).map(ch => `<span class="wk-c">${chIcon(ch.key)}<b>${c[ch.key]}</b> ${PLURAL[ch.key][c[ch.key] === 1 ? 0 : 1]}</span>`).join('');
   const today = G.startOfDay(t0);
   const item = it => {
     const time = it.at ? timeOf(it.at) : '';
@@ -810,18 +809,12 @@ function weekStrip(base, hideable) {
         <div class="wk-dh"><span>${G.formatDate(d.day, F_WD)}</span><b>${new Date(d.day).getDate()}</b></div>
         <div class="wk-items">${shown.length ? shown.map(item).join('') : '<span class="wk-empty">—</span>'}</div>
       </div>`; }).join('')}</div>
-    ${undecidedLine(a)}
     ${a.weekItems.length ? `<div class="wk-week">Also this week: ${a.weekItems.map(it => `<button type="button" class="wk-it ws-planned inline" onclick="pgJump(${jsq(it.id)})"><span class="wk-ch ch-${it.key}">${chIcon(it.key)}${esc(G.SHORT_CH[it.key])}</span><span class="wk-nm">${esc(dn(it.tracker))}</span>${miniTags(it.tracker)}</button>`).join('')}</div>` : ''}
     <div class="wk-legend"><span class="lg live">Live</span><span class="lg scheduled">Scheduled</span><span class="lg planned">Planned, time not set</span><span class="lg due">Due / day passed / link missing</span></div>
   </section>`;
 }
-// A plan line with no type yet is not a post: it does not hold a day, so the day stays free to plan
-// something else. They wait here, under the week — pick a type, or take it off the plan.
-function undecidedLine(a) {
-  const list = a.days.flatMap(d => d.items.filter(it => !it.key).map(it => ({ ...it, day: d.day })));
-  if (!list.length) return '';
-  return `<div class="wk-week wk-undec"><span class="wk-undec-l">Type not decided:</span> ${list.map(it => `<button type="button" class="wk-it ws-${it.state} inline" onclick="pgTile(${jsq(it.id)},'',${jsq(it.state)})" title="Pick a type, or take it off the plan"><span class="wk-nm">${esc(dn(it.tracker))}</span><span class="wk-undec-d">${esc(G.formatDate(it.day, F_WD))}</span></button>`).join('')}</div>`;
-}
+// A plan line with no type yet is not a post: the week shows posts only, so it is not on the week at
+// all — it is listed under "Planned — time not set", where its type is picked or it is taken off the plan.
 // A week tile → the actions for that post, right there.
 window.pgTile = (id, key, state) => {
   const t = byId(id); if (!t) return;
@@ -1117,7 +1110,7 @@ function queueHtml(base) {
     <div class="tk-row-side pg-acts">
       <span class="tk-when${r.late ? ' bad' : ''}">${esc(G.dayLabel(r.day))}<br><span class="pg-sub">${r.late ? 'day passed' : 'time not set'}</span></span>
       ${r.key ? `<button type="button" class="tk-btn sm primary" onclick="pgChannel(${jsq(r.id)},${jsq(r.key)},'scheduled')">Set time</button>`
-        : G.CHANNELS.map(c => `<button type="button" class="tk-btn sm" onclick="pgChannel(${jsq(r.id)},${jsq(c.key)},'scheduled')">${esc(c.label)}</button>`).join('')}
+        : G.CHANNELS.map(c => `<button type="button" class="tk-btn sm" onclick="pgChannel(${jsq(r.id)},${jsq(c.key)},'scheduled')">${esc(c.label)}</button>`).join('') + `<button type="button" class="tk-btn sm ghost" onclick="pgUnplan(${jsq(r.id)})">Not posting</button>`}
     </div>
   </div>`;
   const out = [weekStrip(base)];
@@ -1144,6 +1137,7 @@ window.pgChannel = (id, key, status) => {
   if (status === 'scheduled') return openDlg('schedule', id, key);
   if (status === 'live') return openDlg('live', id, key);
   const r = G.setChannel(t, key, status, {}, now());
+  if (r.ok) r.tracker = dropEmptyPlan(r.tracker);
   // From a week tile's quick menu: the menu has done its job, and left open it would show the old
   // state and hold back every refresh.
   if (dlg && dlg.kind === 'quick') closeQuiet();
@@ -1151,14 +1145,20 @@ window.pgChannel = (id, key, status) => {
   persist(r.tracker);
 };
 // Cancel a schedule from its dialog: back to To schedule (its planned day kept), or N/A — with Undo.
+// A post taken off (cancelled, N/A, or back to To schedule with no day) leaves nothing behind: once no
+// post on the row is scheduled, live or planned for a day, the row's planned day goes too — otherwise
+// the bare plan line would come back as "type not decided" for a post that was removed.
+const nothingPlanned = t => !G.CHANNEL_KEYS.some(k => { const c = t.channels[k]; return c.status === 'scheduled' || c.status === 'live' || c.day; });
+function dropEmptyPlan(t) { return t.plannedDate && nothingPlanned(t) ? { ...t, plannedDate: 0 } : t; }
 window.pgUnschedule = status => {
   if (!dlg || dlg.kind !== 'schedule') return;
   const t = byId(dlg.id), k = dlg.key; if (!t) return;
   const r = G.setChannel(t, k, status === 'na' ? 'na' : 'yet', {}, now());
   if (!r.ok) { $('pgErr').textContent = r.error; return; }
+  r.tracker.channels = { ...r.tracker.channels, [k]: { ...r.tracker.channels[k], day: 0 } };
   const label = (G.CHANNELS.find(c => c.key === k) || {}).label || 'Post';
   closeQuiet();
-  persist(r.tracker, status === 'na' ? label + ' — not posting' : label + ' — schedule cancelled');
+  persist(dropEmptyPlan(r.tracker), status === 'na' ? label + ' — not posting' : label + ' — schedule cancelled');
 };
 window.pgLink = (id, key) => openDlg('link', id, key);
 window.pgListing = (id, key, status) => {
@@ -1230,7 +1230,7 @@ function openDlg(kind, id, key) {
       <div class="pg-unsched">
         <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
         <div class="pg-unsched-b"><button type="button" class="tk-btn sm" onclick="pgUnschedule('yet')">Cancel this schedule</button><button type="button" class="tk-btn sm ghost" onclick="pgUnschedule('na')">Won't post (N/A)</button></div>
-        <div class="tk-hint">Cancelling puts it back to <b>To schedule</b>${c.day ? ' (still planned for ' + esc(G.dayLabel(c.day)) + ')' : ''}. N/A takes it off altogether.</div>
+        <div class="tk-hint">Cancelling takes this post off the calendar (it can be scheduled again later). N/A marks it as not posting.</div>
       </div>` : ''}`;
     save.textContent = c && c.status === 'scheduled' ? 'Reschedule' : 'Schedule';
     title = c && c.status === 'scheduled' ? `Reschedule ${chan.label}` : title;
