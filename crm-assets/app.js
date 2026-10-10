@@ -4866,7 +4866,7 @@ function renderDetailInfo(l){
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
     <div class="info-b pl-row" id="dpPropLinks">${propertyLinksInner(l)}</div>
     ${isSellerLead(l) ? `<div class="info-b pl-row"><div class="info-b-l">Listing</div><div class="info-b-v pl-chips">
-      <span class="pl-chip"><a href="propertytrack.html?nav=sellers" title="Track this property's details, shoot and brochure on the Property &amp; Media board">🏷️ Track this listing →</a></span>
+      <span class="pl-chip"><a href="propertytrack.html?nav=sellers" title="Track this property's details, shoot and brochure on the Shoot &amp; Media board">🏷️ Track this listing →</a></span>
     </div></div>` : ''}
   `;
   // A snapshot redraw must not throw away a property search being typed.
@@ -5046,7 +5046,7 @@ function trackBackHtml(l){
     : 'propertytrack.html?nav=sellers';
   const label = cameFromTrack ? '← Back to the property card'
     : (listingId ? '🏷️ Open its property card' : '🏷️ Track this listing');
-  return `<a class="dp-track-link" href="${href}" title="Property &amp; Media Track">${label}</a>`
+  return `<a class="dp-track-link" href="${href}" title="Shoot &amp; Media Track">${label}</a>`
     + `<button type="button" class="dp-track-link not" onclick="markNotSeller('${escapeHtml(l.id)}')" title="This person is a buyer or tenant, not the owner">Not a seller? Move back to leads</button>`;
 }
 
@@ -5057,7 +5057,7 @@ function trackBackHtml(l){
 async function markNotSeller(leadId){
   const l = leads.find(x => x.id === leadId);
   if(!l) return;
-  if(!confirm(`Move ${l.name || 'this lead'} back to leads as a buyer/tenant enquiry? It comes off the Property & Media board.`)) return;
+  if(!confirm(`Move ${l.name || 'this lead'} back to leads as a buyer/tenant enquiry? It comes off the Shoot & Media board.`)) return;
   const enquiryType = (typeof enquiryTypes !== 'undefined' && enquiryTypes.find(t => /^property enquiry$/i.test(t))) || 'Property Enquiry';
   const listingId = l.listingId || null;
   let cardNote = '';
@@ -5066,8 +5066,8 @@ async function markNotSeller(leadId){
       const card = await window.crmFirebase.getListing(listingId);
       const untouched = card && !Object.values(card.media || {}).some(Boolean) && !card.shootAt && !card.remarks && !card.noteCount &&!card.brochureLink && !card.propertyCode;
       if(card && untouched){ await window.crmFirebase.deleteListing(listingId); cardNote = ' Its empty board card was removed.'; }
-      else if(card){ cardNote = ' Its board card has work on it, so it was kept — delete it on the Property & Media board if it should go.'; }
-    }catch(e){ cardNote = ' Its board card could not be checked — delete it on the Property & Media board if it is still there.'; }
+      else if(card){ cardNote = ' Its board card has work on it, so it was kept — delete it on the Shoot & Media board if it should go.'; }
+    }catch(e){ cardNote = ' Its board card could not be checked — delete it on the Shoot & Media board if it is still there.'; }
   }
   l.enquiryType = enquiryType;
   l.ttHold = { ...(l.ttHold || {}), enquiryType: true };

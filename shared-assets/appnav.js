@@ -113,7 +113,7 @@
       }),
     },
     {
-      id: 'track', label: 'Property & Media', icon: 'fa-solid fa-camera-retro', page: 'track',
+      id: 'track', label: 'Shoot & Media', icon: 'fa-solid fa-camera-retro', page: 'track',
       note: 'Listings from owner yes to brochure out, the shoots, and where each is posted',
       items: [
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },

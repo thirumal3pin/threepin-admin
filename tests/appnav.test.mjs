@@ -98,7 +98,7 @@ test('…and each one is a page in the repo', () => {
 
 // ── The pages that draw the rail have to load it ──
 console.log('\nEvery console loads the rail');
-for (const [page, file] of [['Properties', 'dashboard.html'], ['CRM', 'crm.html'], ['Finance', '3pinfinance.html'], ['Property & Media', 'propertytrack.html']]) {
+for (const [page, file] of [['Properties', 'dashboard.html'], ['CRM', 'crm.html'], ['Finance', '3pinfinance.html'], ['Shoot & Media', 'propertytrack.html']]) {
   const html = read(file);
   test(page + ' loads the stylesheet, the script and has a menu button', () => {
     assert.match(html, /shared-assets\/appnav\.css/, file + ' is missing appnav.css');

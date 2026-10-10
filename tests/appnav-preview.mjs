@@ -188,7 +188,7 @@ const clickItem = (page, name) => page.evaluate(n => {
 // Daily task and Team calendar are the pair at the top: one is my day, the
 // other is everyone's. Neither is buried inside a console, because both are
 // things people open first thing rather than navigate to.
-const SECTIONS = ['Daily task', 'Team calendar', 'Properties', 'CRM', 'Finance', 'Property & Media', 'Create brochure'];
+const SECTIONS = ['Daily task', 'Team calendar', 'Properties', 'CRM', 'Finance', 'Shoot & Media', 'Create brochure'];
 
 // ═══════ CRM ═══════
 console.log('\nCRM — desktop');
