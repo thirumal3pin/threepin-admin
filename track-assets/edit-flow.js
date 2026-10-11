@@ -363,7 +363,8 @@ export function editorTrack(items, now) {
     const done = [...(e.status === EDIT_STATUS.DONE ? [e] : []), ...editLogOf(it.x)];
     for (const d of done) {
       const r = get(d.by);
-      r.done.push({ id: it.x.id, title: it.title, startedAt: d.startedAt, doneAt: d.doneAt });
+      // k: the cut; earlier: from its history (an edit since redone — the one that can be taken out).
+      r.done.push({ id: it.x.id, k: it.x.k, title: it.title, by: d.by, startedAt: d.startedAt, doneAt: d.doneAt, earlier: d !== e });
       if (d.startedAt && d.doneAt > d.startedAt) { r.hours += (d.doneAt - d.startedAt) / 3600000; r.timed++; }
     }
   }

@@ -203,6 +203,7 @@ await p.click('.ed-tile:has-text("Anu")'); await p.waitForTimeout(120);
 // Anu: her YouTube cut, TNAG0005 to shoot (and the series waiting on it), Adyar's booked post.
 ok('Tap an editor: only their work', JSON.stringify((await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))).sort()) === JSON.stringify(['3BHK T Nagar', 'Adyar villa', 'Studio T Nagar', 'T Nagar series']), JSON.stringify(await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))));
 ok('…and their past edits, with how long each took', /past edits/.test(await p.textContent('.ed-past')) && (await p.$$('.ed-prow')).length === 2 && /took 3h/.test(await p.textContent('.ed-past')));
+ok('…an earlier edit (since redone) can be removed right there; the current one cannot', (await p.$$('.ed-prow .ed-prow-x')).length === 1);
 await p.click('.ed-tile:has-text("Anu")'); await p.waitForTimeout(100);
 ok('Tap again: everyone', !(await p.$('.ed-past')));
 await p.screenshot({ path: join(OUT, 'desk-editor-cuts.png'), fullPage: true });

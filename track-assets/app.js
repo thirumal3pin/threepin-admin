@@ -3192,7 +3192,7 @@ function editorPeople(withPast) {
 }
 const cutsLeft = x => FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k)).length;
 // A cut as the edit rules read it (the card's own source for "edited before" kept).
-const cutPseudo = (x, k) => ({ id: x.id, edit: EF.cutEdit(x, k), editLog: EF.cutLog(x, k), source: x.source });
+const cutPseudo = (x, k) => ({ id: x.id, k, edit: EF.cutEdit(x, k), editLog: EF.cutLog(x, k), source: x.source });
 // Whose an item is: a cut's editor; before that, whoever shoots the property.
 // The outlets an Editor card's V/O is about: its cut's; a property card in the shoot columns, the cuts it
 // still lists (those with a card of their own say it there).
@@ -3321,7 +3321,7 @@ function edTrackHtml() {
   };
   const me = edPerson ? tr.find(r => sameName(r.name, edPerson)) : null;
   const past = me && me.done.length ? `<div class="ed-past"><div class="ed-past-h">${esc(me.name)} — past edits <span class="tk-count">${me.done.length}</span></div>
-    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<button type="button" class="ed-prow" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${took(d.startedAt, d.doneAt) ? ' · took ' + esc(took(d.startedAt, d.doneAt)) : ''}</span></button>`).join('')}</div>
+    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<div class="ed-prow"><button type="button" class="ed-prow-o" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${took(d.startedAt, d.doneAt) ? ' · took ' + esc(took(d.startedAt, d.doneAt)) : ''}</span></button>${d.earlier && d.k ? `<button type="button" class="tk-link ed-prow-x" title="Not ${esc(d.by || 'their')} edit — done by mistake, redone since: take it out of the history" onclick="edForget('${d.id}','${d.k}',${jsq(d.by)},${Number(d.doneAt)})">Remove</button>` : ''}</div>`).join('')}</div>
     ${me.done.length > 6 ? `<button type="button" class="tk-link" onclick="edPastToggle()">${edPastAll ? 'Show fewer' : `Show all ${me.done.length}`}</button>` : ''}</div>` : '';
   return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">live · tap one to see only their work and past edits</span></div>
     <div class="ed-tiles">${tr.map(tile).join('')}</div>${past}</section>`;

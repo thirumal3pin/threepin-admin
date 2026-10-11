@@ -229,6 +229,13 @@
   width: 100%; font: inherit; font-size: 13.5px; padding: 9px 11px;
   border: 1px solid var(--border); border-radius: var(--r1); background: var(--card); color: var(--ink);
 }
+/* A tick box in a dialog is a tick box, not a text field: its row is box · icon · name · note, in one line */
+.tk-box-body input[type=checkbox], .tk-box-body input[type=radio] { width: 16px; height: 16px; padding: 0; margin: 0; flex: none; border: 0; accent-color: var(--brand); }
+.tk-box-body label.tk-check { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 2px; font-size: 13.5px; font-weight: 500; color: var(--ink); border-bottom: 1px solid var(--border); }
+.tk-box-body .tk-checks label.tk-check:last-child { border-bottom: 0; }
+.tk-box-body label.tk-check.req { font-weight: 600; }
+.tk-box-body label.tk-check .tk-req { margin-left: auto; }
+.tk-box-body .tk-checks { margin: 2px 0 8px; gap: 0; }
 .tk-box-err { color: var(--red, #B91C1C); font-size: 12.5px; padding: 0 18px; }
 .tk-box-err:empty { display: none; }
 .tk-box-ftr { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
@@ -1696,9 +1703,11 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .ed-past { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .ed-past-h { font-size: 12px; font-weight: 600; color: var(--ink2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .ed-prows { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 14px; }
-.ed-prow { font: inherit; display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--ink); cursor: pointer; text-align: left; min-width: 0; font-size: 12.5px; }
-.ed-prow span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ed-prow { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); min-width: 0; }
+.ed-prow-o { font: inherit; flex: 1; display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border: 0; background: none; color: var(--ink); cursor: pointer; text-align: left; min-width: 0; font-size: 12.5px; }
+.ed-prow-o span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ed-prow .tk-sub2 { flex: none; }
+.ed-prow-x { flex: none; font-size: 11.5px; color: var(--red, #B91C1C); }
 .ed-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 var(--pad, 18px); }
 /* A shoot phone: whose it is, the day one tap away, the way out — thumb-sized. */
 .ed-agent { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin: 0 var(--pad, 18px); padding: 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r2, 12px); font-size: 13px; color: var(--ink2); }

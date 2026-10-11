@@ -449,6 +449,10 @@ await page.waitForTimeout(200);
 await page.evaluate(() => openWrapModal('l1'));
 await page.waitForTimeout(250);
 ok('The wrap-up marks what was asked for', /asked for/.test((await text(page, '#wrapModal'))[0] || ''));
+// Each tick row is one line: the box, then its name (not a full-width box on a line of its own).
+const wrapRow = await page.$eval('#wrapList label.tk-check', l => { const i = l.querySelector('input').getBoundingClientRect(), r = l.getBoundingClientRect(); return { iw: Math.round(i.width), rh: Math.round(r.height) }; });
+ok('…each item is one neat row: the tick box beside its name', wrapRow.iw <= 20 && wrapRow.rh <= 44, JSON.stringify(wrapRow));
+await page.screenshot({ path: `${OUT}/desk-wrap.png` });
 await page.check('#wrap_photos');
 await page.fill('#wrapPhotos', 'https://drive.google.com/drive/folders/abc123');
 await page.fill('#wrapNotes', 'Bedroom not shot — tenant asleep');
