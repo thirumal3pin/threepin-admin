@@ -33,6 +33,10 @@ export const ED_COLS = [
   { key: 'posted', label: 'Posted', hint: 'Live — shown here for a week' }
 ];
 export const POSTED_FOR = 7 * 86400000;   // how long a posted card stays in view
+// The Editor view went live on 11 Oct 2026: a card from before it may have been edited with nothing
+// recorded ("edited before"). One made since has every edit recorded — nothing is taken as done.
+export const EDITOR_SINCE = Date.UTC(2026, 9, 10, 18, 30);   // 11 Oct 2026, 00:00 IST
+export const isLegacy = x => !!x && (x.source === 'posting' || !(Number(x.createdAt) >= EDITOR_SINCE));
 export const ED_KEYS = ED_COLS.map(c => c.key);
 // The columns a card can be dragged into: the editor's own. The others are read, never set.
 export const ED_DROP = { planned: 'plan', active: 'start', done: 'done', shoot_done: 'reset' };
@@ -58,6 +62,7 @@ export function editLogOf(x) {
 }
 
 // ── Moving an edit along ──
+// The order is fixed: plan (who, which day) → start (editing) → done. Nothing jumps a step.
 // action: 'plan' ({ by, planAt }) · 'start' ({ by }) · 'done' · 'reset' (back to not planned) · 'assign' ({ by })
 //   · 'details' ({ by, planAt, dueAt, note } — the status kept) · 'reopen' (done taken back a step).
 // A finished edit that is planned or started again is a new edit: the finished one goes to the log
@@ -76,6 +81,8 @@ export function setEdit(x, action, opts, now, who) {
       next = { status: EDIT_STATUS.PLANNED, by, planAt: num(o.planAt), dueAt: num(o.dueAt), startedAt: 0, doneAt: 0, note: str(o.note !== undefined ? o.note : e.status === EDIT_STATUS.DONE ? '' : e.note) };
       break;
     case 'start': {
+      // An edit is planned first (who, which day); a finished one can be edited again.
+      if (!e.status) return { ok: false, error: 'Plan the edit first.' };
       if (!by) return { ok: false, error: 'Pick who edits it.' };
       if (e.status === EDIT_STATUS.ACTIVE) return { ok: false, error: 'Already being edited.' };
       const fresh = e.status === EDIT_STATUS.DONE;
@@ -84,7 +91,10 @@ export function setEdit(x, action, opts, now, who) {
       break;
     }
     case 'done':
+      // Done only after the editor has started it: planned → editing → done.
       if (e.status === EDIT_STATUS.DONE) return { ok: false, error: 'Already done.' };
+      if (!e.status) return { ok: false, error: 'Plan the edit first.' };
+      if (e.status !== EDIT_STATUS.ACTIVE) return { ok: false, error: 'Start editing first.' };
       if (!by) return { ok: false, error: 'Pick who edited it.' };
       next = { status: EDIT_STATUS.DONE, by, planAt: e.planAt, dueAt: e.dueAt, startedAt: e.startedAt || 0, doneAt: now, note: str(o.note !== undefined ? o.note : e.note) };
       break;
@@ -126,8 +136,11 @@ export function editColumn(x, ctx) {
   const c = ctx || {}, e = editOf(x), p = c.posts || {};
   const parked = ['on_hold', 'dropped'].includes(c.stageKey);
   if (e.status === EDIT_STATUS.ACTIVE) return 'active';      // being edited shows wherever the card is
-  if (parked) return null;
+  if (parked || c.stageKey === 'closed') return null;
   if (e.status === EDIT_STATUS.PLANNED) return 'planned';
+  // A "done" edit on a card whose shoot is not done is not an edit (ticked by mistake): the card is
+  // where its shoot is.
+  if (e.status === EDIT_STATUS.DONE && c.shot === false) return c.shootPlanned ? 'shoot_planned' : null;
   if (e.status === EDIT_STATUS.DONE) {
     // It follows Posting: a post with a time → Post scheduled; one only planned for a day → waiting
     // to be scheduled; posted since this edit → Posted (for a week after, then off the view).
@@ -151,11 +164,11 @@ export function editColumn(x, ctx) {
   // Shot, edit never recorded. A card already live from before the editor's view existed is not new
   // work — its posts with a time are taken as edited. Otherwise a post planned or scheduled in Posting
   // puts it in "Planned to edit / post": the post day is fixed, the edit has to be planned for it.
-  if (c.stageKey === 'live') return p.scheduled ? 'scheduled' : null;
+  if (c.stageKey === 'live' && c.legacy !== false) return p.scheduled ? 'scheduled' : null;
   // Every post out and nothing left to cut: done before. A cut still to make is still work.
   if (p.total && p.live >= p.total && !c.cutsLeft) return null;
   // Already in Media ready with every planned cut made: edited before this view existed.
-  if (c.stageKey === 'media_ready' && !c.cutsLeft) return p.scheduled ? 'scheduled' : null;
+  if (c.stageKey === 'media_ready' && !c.cutsLeft && c.legacy !== false) return p.scheduled ? 'scheduled' : null;
   if (p.scheduled || p.planned) return 'planned';
   return 'shoot_done';
 }
@@ -327,6 +340,8 @@ export const editPlanned = x => !!editOf(x).status;
 // ctx = { stageKey, cutsLeft } (the board's edCtx).
 export function editedBefore(x, ctx) {
   if (editOf(x).status) return false;
+  if (x && x.createdAt !== undefined && !isLegacy(x)) return false;   // made since edits are recorded
+  if (ctx && ctx.legacy === false) return false;
   const c = ctx || {};
   return c.stageKey === 'live' || (c.stageKey === 'media_ready' && !c.cutsLeft) || (!!x && x.source === 'posting');
 }

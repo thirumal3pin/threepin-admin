@@ -196,6 +196,7 @@ function stage(t) {
   const i = trackers.findIndex(x => x.id === t.id);
   if (i >= 0) trackers[i] = t; else trackers.push(t);
   postsIdx = null;
+  if (window.trackPostingChanged) setTimeout(() => window.trackPostingChanged(), 0);
   return { t, paths, prev };
 }
 // An update to a row someone else deleted comes back as permission-denied (the rule reads a
@@ -1878,20 +1879,25 @@ function gateFor(t, action, key) {
   const l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
   if (!l || !api || !api.cutEdit || !key) return { ok: true };
   const k = api.cutOfChannel(l, key);
-  const g = postGate({ id: l.id, edit: api.cutEdit(l, k), source: l.source }, action, api.edCtx ? api.edCtx(l, k) : null);
+  const g = postGate({ id: l.id, edit: api.cutEdit(l, k), source: l.source, createdAt: l.createdAt || 0 }, action, api.edCtx ? api.edCtx(l, k) : null);
   return g.ok ? g : { ...g, text: `${api.cutLabel(l, k)}: ${g.text}` };
 }
 function gateHtml(t, action, key) {
   const g = gateFor(t, action, key);
   if (g.ok) return '';
-  return `<div class="pg-gate" id="pgGate">${esc(g.text)}<div>${g.need === 'done'
+  const st = (() => { const t2 = t && listingOf(rootOf(t)), api = window.trackApi; return t2 && api && api.cutEdit ? api.cutEdit(t2, api.cutOfChannel(t2, key)).status : ''; })();
+  return `<div class="pg-gate" id="pgGate">${esc(g.text)}<div>${g.need === 'done' && st
     ? '<button type="button" class="tk-btn sm primary" onclick="pgEditDone()">The edit is done — mark it</button>'
     : '<button type="button" class="tk-btn sm" onclick="pgPlanEdit()">Plan the edit</button>'}</div></div>`;
 }
 window.pgEditDone = () => {
   const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
   if (!l || !api || !api.editStep) return;
-  api.editStep(l.id, 'done', api.cutOfChannel(l, dlg.key));
+  // A planned edit the post is going out with: it was edited — started and finished now.
+  if (api.shot && !api.shot(l)) { $('pgErr').textContent = 'The shoot is not marked done on the board yet.'; return; }
+  const k = api.cutOfChannel(l, dlg.key);
+  if (api.cutEdit(l, k).status === 'planned') api.editStep(l.id, 'start', k);
+  api.editStep(l.id, 'done', k);
   const el = $('pgGate');
   if (el && gateFor(t, 'live', dlg.key).ok) { el.className = 'pg-gate ok'; el.textContent = '✓ Edit marked done — confirm the post below.'; $('pgErr').textContent = ''; }
 };
@@ -2232,8 +2238,42 @@ window.pgOpenPlan = () => openDlg('plan', '', '');
 
 // The dialog's Save button is shared by every dialog: a send that disabled it gives it back on close.
 const freeSave = () => { const s = $('pgSave'); if (s) s.disabled = false; };
-window.pgClose = () => { if (dlg && dlg.sending) return; dlg = null; freeSave(); $('pgModal').classList.remove('open'); renderPosting(); };
-function closeQuiet() { dlg = null; freeSave(); $('pgModal').classList.remove('open'); }
+window.pgClose = () => {
+  if (dlg && dlg.sending) return;
+  dlg = null; freeSave(); $('pgModal').classList.remove('open');
+  // Opened from a card that had no row: nothing was scheduled, so the row made for it goes again.
+  if (madeForCard) { const id = madeForCard; madeForCard = null; removeRow(id); }
+  renderPosting(); backToCard();
+};
+function closeQuiet() { madeForCard = null; dlg = null; freeSave(); $('pgModal').classList.remove('open'); backToCard(); }
+// A post planned from a board card: Posting's own schedule dialog, on the property's row (made from
+// the card when it has none). Posts live in one place; the card reads them back.
+let fromCard = null, madeForCard = null;
+function backToCard() {
+  const id = fromCard; fromCard = null;
+  if (id && window.openDetail && document.getElementById('dp') && document.getElementById('dp').classList.contains('open')) setTimeout(() => window.openDetail(id), 0);
+}
+window.pgPlanPost = (listingId, key) => {
+  const api = window.trackApi, l = api && api.listings().find(x => x.id === listingId);
+  if (!l || !G.CHANNELS.some(c => c.key === key)) return;
+  if (!loaded) return toast('Posting is still loading — try again in a moment');
+  const series = l.kind === 'series', code = l.propertyCode || (l.brochure && l.brochure.code) || '', ck = G.codeKey(code);
+  let t = trackers.find(r => !r.repostOf && (r.id === l.postingId || (series ? r.listingId === l.id : (ck && G.codeKey(r.propertyCode) === ck))));
+  let made = null;
+  if (!t) {
+    if (series) return toast('This series has no Posting row yet — make it from Posting (New series)');
+    if (!G.trackerId(code)) return toast('Give the card its property code first — Posting keeps a property by its code');
+    t = G.blankTracker({ propertyCode: code, title: l.title, location: l.location || '', photosLink: G.webLink(l.photosLink || ''), propertyId: (l.brochure && l.brochure.propertyId) || '' }, now(), who());
+    persist(t, 'Added to Posting', true);
+    made = t.id;
+  }
+  // The post to move is where it is: on a repost row of this property, if it is scheduled or planned there.
+  const fam = trackers.filter(r => r.id === t.id || r.repostOf === t.id);
+  const on = fam.find(r => r.channels && r.channels[key] && (r.channels[key].status === 'scheduled' || r.channels[key].day)) || t;
+  fromCard = listingId;
+  openDlg('schedule', on.id, key);
+  madeForCard = made;
+};
 
 window.pgSearchInv = q => {
   const host = $('pgPickList'); if (!host) return;
@@ -2370,7 +2410,10 @@ window.pgSave = () => {
       if (liveAt > now() + 5 * 60000) return err('That time has not come yet — a post goes live when it is out.');
       r = G.setChannel(t, k, 'live', { url: val('pgUrl'), liveAt }, now());
       if (!r.ok) return err(r.error);
-      persist(r.tracker, r.tracker.channels[k].url ? 'Marked live' : 'Marked live — remember to add the link'); break;
+      persist(r.tracker, r.tracker.channels[k].url ? 'Marked live' : 'Marked live — remember to add the link');
+      // Out in the world: its board card is Live (forward only — a card already further on stays).
+      { const l = listingOf(rootOf(r.tracker)); if (l && window.trackApi && window.trackApi.advance) window.trackApi.advance(l.id, 'live', 'a post went live (Posting)'); }
+      break;
     }
     case 'link': {
       r = G.setChannelUrl(t, k, val('pgUrl'));

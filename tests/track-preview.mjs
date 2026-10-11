@@ -30,7 +30,7 @@ const sid = key => STAGES.find(s => s.key === key).id;
 const LISTINGS = [
   { id: 'l1', tenantId: T, title: '3BHK in Nungambakkam', propertyCode: 'TNAG0002', location: 'Nungambakkam',
     config: '3 BHK', askingPrice: '₹2.1 Cr', sellerName: 'Meenakshi', sellerPhone: '9840011111', leadId: 'sd1',
-    stageId: sid('shoot_scheduled'), shootAt: NOW + 3 * H, shootAssignee: 'Ravi', ownerInformed: true,
+    stageId: sid('shoot_scheduled'), shootAt: NOW + Math.min(3 * H, Math.floor((new Date(NOW).setHours(23, 59, 0, 0) - NOW) / 2)), shootAssignee: 'Ravi', ownerInformed: true,   // later today, whatever the hour
     address: 'Flat 3B, Sai Apartments, 12 Wallace Garden 2nd St, Nungambakkam',
     siteContact: '9840011111', occupancy: 'tenant', bestTime: 'Morning light', accessNotes: 'Gate code 4417',
     need: { photos: true, floorPlan: true, video: true },

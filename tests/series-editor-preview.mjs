@@ -262,6 +262,53 @@ await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(150);
 ok('Posting: the same property sheet below', !!(await p.$('#postingView .pg-edsheet .sh-wrap')));
 await p.close();
 
+// ─────────────────────────── The lifecycle: edit steps, posts from the card, live → Live ───────────────────────────
+console.log('Lifecycle: edit steps, posts from the card, live → Live');
+p = await open({ width: 1440, height: 950 }, 'light', '');
+await p.click('#tkModeTog .tk-sbtn:has-text("Board")'); await p.waitForTimeout(120);
+// Not shot yet: an edit can be planned, not started.
+await p.evaluate(() => { edStep('lB', 'plan', { by: 'Anu' }, 'yt'); edStep('lB', 'start', null, 'yt'); }); await p.waitForTimeout(150);
+let lBx = await savedListing(p, "l.id === 'lB'");
+ok('Shoot not done: the edit is planned, but cannot be started', lBx && lBx.cuts && lBx.cuts.yt.status === 'planned', JSON.stringify(lBx && lBx.cuts));
+await p.evaluate(() => openDetail('lB')); await p.waitForTimeout(150);
+ok('…the card says so and offers no "Start editing"', /Not shot yet/.test(await p.textContent('#dpEdit')) && !(await p.$('#dpEdit .tk-btn:has-text("Start editing")')));
+ok('Shoot for has no "Done" tick — its Edit column shows where the edit stands', !(await p.$('#dpFor input[aria-label$=" done"]')) && !!(await p.$('#dpFor .tk-for-ed.plan')));
+await p.evaluate(() => closeDetail());
+// Done straight from planned is refused; planned → start → done works.
+await p.evaluate(() => { edStep('lF', 'plan', { by: 'Ravi' }, 'yt'); edStep('lF', 'done', null, 'yt'); }); await p.waitForTimeout(150);
+ok('Edit done straight from planned: refused (start editing first)', (await savedListing(p, "l.id === 'lF'")).cuts.yt.status === 'planned');
+// Plan the post from the card: Posting's schedule dialog, on the property's row.
+await p.evaluate(() => openDetail('lF')); await p.waitForTimeout(150);
+ok('The card\'s Edit section offers "Plan post" for an outlet', !!(await p.$('#dpEdit .tk-btn:has-text("Plan post")')));
+await p.click('#dpEdit .tk-btn:has-text("Plan post") >> nth=0'); await p.waitForTimeout(150);
+ok('…it opens Posting\'s schedule for that outlet, over the board', await p.evaluate(() => document.getElementById('pgModal').classList.contains('open')) && /Schedule YouTube/.test(await p.textContent('#pgTitle')));
+const when = new Date(day0 + 3 * DAY + 18 * H), pad = n => String(n).padStart(2, '0');
+await p.fill('#pgAt', `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T18:00`);
+await p.click('#pgSave'); await p.waitForTimeout(250);
+const pF = await p.evaluate(() => window.__lastRows().find(r => r.id === 'pF'));
+ok('…saved on the property\'s Posting row: YouTube scheduled', pF && pF.channels.yt && pF.channels.yt.status === 'scheduled' && pF.channels.yt.at === day0 + 3 * DAY + 18 * H, JSON.stringify(pF && pF.channels.yt));
+ok('…and the card shows it at once', /Post /.test(await p.textContent('#dpEdit')) && !!(await p.$('#dpEdit .tk-btn:has-text("Move post")')), await p.textContent('#dpEdit'));
+await p.evaluate(() => closeDetail());
+// A card with no Posting row yet gets one (by its code).
+await p.evaluate(() => pgPlanPost('lE', 'igStory')); await p.waitForTimeout(150);
+ok('A card with no Posting row: the row is made from the card (its code)', await p.evaluate(() => (window.__lastRows() || []).some(r => r.propertyCode === 'LIVE0001')) && await p.evaluate(() => document.getElementById('pgModal').classList.contains('open')));
+await p.evaluate(() => pgClose()); await p.waitForTimeout(150);
+ok('…cancelled: the row made for it goes again (nothing left empty in Posting)', await p.evaluate(() => !window.pgPostsFor(window.trackApi.listings().find(l => l.id === 'lE')).rowId));
+// A post live in Posting: the card moves to Live.
+await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(150);
+await p.evaluate(() => pgChannel('pD', 'igReel', 'live')); await p.waitForTimeout(150);
+await p.fill('#pgUrl', 'https://www.instagram.com/reel/adyar'); await p.click('#pgSave'); await p.waitForTimeout(250);
+ok('A post marked live in Posting moves its card to Live', (await savedListing(p, "l.id === 'lD'")).stageId === sid('live'));
+// Moved back before the shoot: it is not shot any more (a reshoot); before Shoot scheduled, the shoot is off.
+await p.evaluate(sd => changeStage('lF', sd), sid('shoot_scheduled')); await p.waitForTimeout(200);
+await p.evaluate(() => { const m = document.getElementById('shModal'); if (m) m.classList.remove('open'); });
+const lFb = await savedListing(p, "l.id === 'lF'");
+ok('Dragged back to Shoot scheduled: not shot any more (the old wrap kept aside)', lFb && !lFb.shootDoneAt && lFb.prevShootDoneAt > 0, JSON.stringify(lFb && { d: lFb.shootDoneAt, p: lFb.prevShootDoneAt }));
+await p.evaluate(sd => changeStage('lB', sd), sid('details')); await p.waitForTimeout(200);
+const lBb = await savedListing(p, "l.id === 'lB'");
+ok('Dragged back to Details: the booked shoot is off, the owner to be told again', lBb && !lBb.shootAt && lBb.ownerInformed === false && lBb.shootCancelled === 1);
+await p.close();
+
 // ─────────────────────────── Settings → Configurations ───────────────────────────
 console.log('Settings → Configurations');
 p = await open({ width: 1440, height: 950 }, 'light', 'settings');
@@ -392,6 +439,10 @@ console.log('fixes from review');
   // A shoot already done can only be opened; one still to happen can be moved or called off.
   ok('Every shoot row: Open; one still to happen also Reschedule · Cancel shoot', more.length && more.every(t => /Open/.test(t)) && more.some(t => /Reschedule/.test(t) && /Cancel shoot/.test(t)), JSON.stringify(more));
   ok('The next-up card has them too, and still only Call / Directions / Done as big buttons', !!(await p.$('.tk-next .tk-shoot-more')) && (await p.$$('.tk-next-acts a, .tk-next-acts button')).length <= 3);
+  await p.click('.tk-row.shoot .tk-shoot-more .tk-link:has-text("Open") >> nth=0'); await p.waitForTimeout(150);
+  ok('Open shows the property', await p.evaluate(() => document.getElementById('dp').classList.contains('open')));
+  await p.evaluate(() => closeDetail()); await p.waitForTimeout(100);
+  ok('A shoot already done is not "Missed" (judged by the shoot, not the media list)', !/Missed[^]*3BHK T Nagar/.test(await p.textContent('#shootsView')));
   await p.click('.tk-row.shoot:has-text("Studio T Nagar") .tk-shoot-more .tk-link:has-text("Reschedule")'); await p.waitForTimeout(100);
   ok('Reschedule opens the booking, with "Cancel this shoot"', await p.evaluate(() => document.getElementById('shModal').classList.contains('open')) && await p.isVisible('#shCancelShoot'));
   await p.evaluate(() => closeShootModal());
@@ -399,8 +450,6 @@ console.log('fixes from review');
   const lb = await savedListing(p, "l.id === 'lB'");
   ok('Cancel shoot: date cleared, logged, back to Details & docs', lb && !lb.shootAt && lb.shootCancelled === 1 && lb.stageId === sid('details'), JSON.stringify(lb && { at: lb.shootAt, st: lb.stageId }));
   ok('…and gone from the Shoots list', !/Studio T Nagar/.test(await p.textContent('#shootsView')));
-  await p.click('.tk-row.shoot .tk-shoot-more .tk-link:has-text("Open") >> nth=0'); await p.waitForTimeout(150);
-  ok('Open shows the property', await p.evaluate(() => document.getElementById('dp').classList.contains('open')));
   await p.screenshot({ path: join(OUT, 'desk-shoots.png') });
   await p.close();
 }

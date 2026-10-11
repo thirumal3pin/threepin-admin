@@ -1,5 +1,5 @@
 // The editor's flow.   node tests/edit-flow.test.mjs
-import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority, checks, postGate, cutKeys, cutOfChannel, cutEdit, cutLog, setCut, materializeCuts, ownCuts, cutsView, cutShared, editorTrack as track2, forgetEdit } from '../track-assets/edit-flow.js';
+import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority, checks, postGate, cutKeys, cutOfChannel, cutEdit, cutLog, setCut, materializeCuts, ownCuts, cutsView, cutShared, editorTrack as track2, forgetEdit, isLegacy, editedBefore, EDITOR_SINCE, postGate as gate2 } from '../track-assets/edit-flow.js';
 
 let failed = 0;
 const check = (label, cond, detail) => { if (!cond) { failed++; console.log('  FAIL  ' + label + (detail !== undefined ? ' — ' + detail : '')); } };
@@ -23,9 +23,14 @@ check('Cannot start twice', !setEdit(x, 'start', {}, NOW + 2 * H).ok);
 x = apply(x, setEdit(x, 'done', {}, NOW + 3 * H, 'admin@x'));
 eq('Done stamps the time, keeps when it started', [x.edit.status, x.edit.startedAt, x.edit.doneAt], ['done', NOW + H, NOW + 3 * H]);
 check('Cannot finish twice', !setEdit(x, 'done', {}, NOW + 4 * H).ok);
-const quick = apply({ id: 'Q' }, setEdit({ id: 'Q' }, 'start', { by: 'Anu' }, NOW, ''));
-check('Started without a plan', quick.edit.status === 'active' && quick.edit.by === 'Anu' && !quick.edit.planAt);
-check('The person signed in edits when nobody is named', setEdit({}, 'start', {}, NOW, 'Anu').edit.by === 'Anu');
+// The order is fixed: nothing starts unplanned, nothing is done unstarted.
+check('Start without a plan: refused — plan it first', /Plan the edit first/.test(setEdit({}, 'start', { by: 'Anu' }, NOW, '').error || ''));
+check('Done without a plan: refused', /Plan the edit first/.test(setEdit({}, 'done', { by: 'Anu' }, NOW, '').error || ''));
+check('Done straight from planned: refused — start editing first', /Start editing first/.test(setEdit({ edit: { status: 'planned', by: 'Anu' } }, 'done', {}, NOW, '').error || ''));
+const qp = apply({ id: 'Q' }, setEdit({ id: 'Q' }, 'plan', { by: 'Anu' }, NOW, ''));
+const quick = apply(qp, setEdit(qp, 'start', {}, NOW, ''));
+check('Planned with no day, then started', quick.edit.status === 'active' && quick.edit.by === 'Anu' && !quick.edit.planAt);
+check('The person signed in edits when nobody is named', setEdit({ edit: { status: 'planned' } }, 'start', {}, NOW, 'Anu').edit.by === 'Anu');
 
 // a re-edit keeps the first edit
 const re = apply(x, setEdit(x, 'start', { by: 'Anu' }, NOW + DAY, ''));
@@ -104,7 +109,7 @@ eq('Spans read plainly', [span(35 * 60000), span(130 * 60000), span(2 * H), span
   eq('FB Reel its own cut when the card says so', cutKeys({ ...card, fbOwnCut: true, forPlan: { ...card.forPlan, fbReel: true } }), ['igStory', 'igReel', 'fbReel', 'yt']);
   check('FB Reel follows the Insta Reel cut by default', cutOfChannel(card, 'fbReel') === 'igReel' && cutOfChannel({ fbOwnCut: true }, 'fbReel') === 'fbReel');
   // The Reel edited on Monday, YouTube on Thursday: each its own.
-  let x = card;
+  let x = { ...card, ...setCut(card, 'igReel', 'plan', { by: 'Rajesh' }, NOW - H, '').patch };   // planned first
   const r1 = setCut(x, 'igReel', 'start', { by: 'Rajesh' }, NOW, '');
   x = { ...x, ...r1.patch };
   const r2 = setCut(x, 'igReel', 'done', {}, NOW + H, '');
@@ -146,6 +151,7 @@ eq('Spans read plainly', [span(35 * 60000), span(130 * 60000), span(2 * H), span
   check('Cleared and unticked: the cut goes', cutKeys(c5).length === 0);
   // 6. Edit again after an earlier post: waiting for its own post, not Posted.
   let r6 = { forPlan: { igReel: true } };
+  r6 = { ...r6, ...setCut(r6, 'igReel', 'plan', { by: 'R' }, NOW - 31 * DAY, '').patch };
   r6 = { ...r6, ...setCut(r6, 'igReel', 'start', { by: 'R' }, NOW - 30 * DAY, '').patch };
   r6 = { ...r6, ...setCut(r6, 'igReel', 'done', {}, NOW - 29 * DAY, '').patch };
   r6 = { ...r6, ...setCut(r6, 'igReel', 'start', { by: 'R' }, NOW - H, '').patch };
@@ -206,11 +212,19 @@ eq('Spans read plainly', [span(35 * 60000), span(130 * 60000), span(2 * H), span
   const fy = forgetEdit({ ...va, cuts: materializeCuts(va) }, 'yt', { by: 'Z', doneAt: 2 });
   check('…from an outlet reading the Video edit: taken out of the Video edit, nothing split', fy && fy.all.log.length === 0 && !fy.yt);
   check('…on a Video edit too', fv && fv.all.log.length === 0 && fv.all.status === 'done');
+  // The lifecycle: an edit is real only once the shoot is done; new cards are never "edited before".
+  check('A "done" edit on a card not shot: not done — the card is where its shoot is', editColumn({ edit: { status: 'done', by: 'R', startedAt: 1, doneAt: 2 } }, { shot: false, shootPlanned: true, stageKey: 'shoot_scheduled' }) === 'shoot_planned');
+  check('A planned edit on a closed card: off the view', editColumn({ edit: { status: 'planned', by: 'R' } }, { stageKey: 'closed', shot: true }) === null);
+  check('Legacy: made before the Editor view, or from Posting', isLegacy({ createdAt: EDITOR_SINCE - 1 }) && isLegacy({ createdAt: EDITOR_SINCE + 1, source: 'posting' }) && !isLegacy({ createdAt: EDITOR_SINCE + 1 }));
+  check('A new card in Live with no edit is not "edited before" — its posts wait for an edit', !editedBefore({ createdAt: EDITOR_SINCE + 1 }, { stageKey: 'live' }) && editedBefore({ createdAt: 1 }, { stageKey: 'live' }));
+  check('The Posting gate on a new card in Live: the edit is needed (not "edited before")', !gate2({ edit: {} }, 'live', { stageKey: 'live', legacy: false }).ok && gate2({ edit: {} }, 'live', { stageKey: 'live' }).ok);
+  check('…and on the Editor view it is work, not off the view', editColumn({}, { stageKey: 'live', shot: true, legacy: false, posts: { total: 1, planned: 1 } }) === 'planned');
   // 7. Re-planning Video does not tick an "all" outlet.
   const r7 = setCut({ edit: { status: 'planned', by: 'R' } }, 'all', 'details', { by: 'A' }, NOW, '');
   check('Re-plan Video: no forPlan.all', r7.ok && !('all' in r7.patch.forPlan));
   // 8. "Made" unticked: back a step, editor and days kept.
   let c8 = { forPlan: { yt: true } };
+  c8 = { ...c8, ...setCut(c8, 'yt', 'plan', { by: 'R', dueAt: NOW + DAY }, NOW - 2 * H, '').patch };
   c8 = { ...c8, ...setCut(c8, 'yt', 'start', { by: 'R', dueAt: NOW + DAY }, NOW - H, '').patch };
   c8 = { ...c8, ...setCut(c8, 'yt', 'done', {}, NOW, '').patch };
   const r8 = setCut(c8, 'yt', 'reopen', {}, NOW, '');

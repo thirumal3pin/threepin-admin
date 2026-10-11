@@ -632,7 +632,7 @@ html.pg-on body, html.pg-on #main { background: var(--card); }
 html.pg-on #hdr { background: var(--card); border-bottom-color: color-mix(in srgb, var(--ink) 8%, transparent); }
 /* Instrument Sans for everything on the page and in its dialogs — inputs, selects and codes
    included (icon fonts are left alone). */
-#postingView, #postingView *:not([class*="fa-"]), html.pg-on #pgModal, html.pg-on #pgModal *:not([class*="fa-"]) { font-family: var(--sans); }
+#postingView, #postingView *:not([class*="fa-"]), #pgModal, #pgModal *:not([class*="fa-"]) { font-family: var(--sans); }
 
 /* Motion: each block fades in, one after another. Off when the OS asks for less motion. */
 @keyframes pgFade { from { opacity: 0; } to { opacity: 1; } }
@@ -697,15 +697,15 @@ html.pg-on #hdr { background: var(--card); border-bottom-color: color-mix(in srg
 #postingView .tk-btn.sm { border-color: color-mix(in srgb, var(--border) 85%, transparent); }
 #postingView .tk-btn:hover { border-color: var(--ink); background: var(--card); }
 #postingView .tk-btn:active { transform: translateY(1px); }
-#postingView .tk-btn.primary, #postingView .tk-btn.sm.primary, html.pg-on #pgModal .tk-btn.primary {
+#postingView .tk-btn.primary, #postingView .tk-btn.sm.primary, #pgModal .tk-btn.primary {
   border-color: var(--ink); color: var(--card);
   background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 78%, var(--card)) 0%, var(--ink) 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 1px 2px rgba(0, 0, 0, .18);
 }
-#postingView .tk-btn.primary:hover, #postingView .tk-btn.sm.primary:hover, html.pg-on #pgModal .tk-btn.primary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--card)); }
-:root[data-theme="dark"] #postingView .tk-btn.primary, :root.pg-on[data-theme="dark"] #pgModal .tk-btn.primary { box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .15); }
+#postingView .tk-btn.primary:hover, #postingView .tk-btn.sm.primary:hover, #pgModal .tk-btn.primary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--card)); }
+:root[data-theme="dark"] #postingView .tk-btn.primary, :root[data-theme="dark"] #pgModal .tk-btn.primary { box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .15); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) #postingView .tk-btn.primary, :root.pg-on:not([data-theme="light"]) #pgModal .tk-btn.primary { box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .15); }
+  :root:not([data-theme="light"]) #postingView .tk-btn.primary, :root:not([data-theme="light"]) #pgModal .tk-btn.primary { box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .15); }
 }
 #postingView .pt-acts .tk-btn { border-radius: 9px; }
 #postingView .tk-link { color: var(--ink); text-decoration: underline; text-decoration-color: var(--hair-strong); text-underline-offset: 3px; }
@@ -1277,23 +1277,23 @@ a.ps-ro:hover { text-decoration: underline; }
 }
 
 /* ═══════ DIALOGS ON THE POSTING PAGE ═══════ */
-html.pg-on #pgModal .tk-box { border-radius: 12px; box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .35), 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); }
-html.pg-on #pgModal .tk-box-hdr { padding: 20px 24px; border-bottom-color: color-mix(in srgb, var(--ink) 8%, transparent); }
-html.pg-on #pgModal .tk-box-hdr b, html.pg-on #pgModal #pgTitle { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
-html.pg-on #pgModal .tk-box-body { padding: 20px 24px; }
-html.pg-on #pgModal .tk-box-ftr { padding: 16px 24px; border-top-color: color-mix(in srgb, var(--ink) 8%, transparent); }
-html.pg-on #pgModal .tk-box-body label { margin: 16px 0 7px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--ink3); }
-html.pg-on #pgModal .tk-box-body label .tk-opt { font-weight: 500; }
-html.pg-on #pgModal input[type="text"], html.pg-on #pgModal input[type="url"], html.pg-on #pgModal input[type="date"], html.pg-on #pgModal input[type="time"], html.pg-on #pgModal input[type="datetime-local"], html.pg-on #pgModal input[type="search"], html.pg-on #pgModal select, html.pg-on #pgModal textarea {
+#pgModal .tk-box { border-radius: 12px; box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .35), 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); }
+#pgModal .tk-box-hdr { padding: 20px 24px; border-bottom-color: color-mix(in srgb, var(--ink) 8%, transparent); }
+#pgModal .tk-box-hdr b, #pgModal #pgTitle { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+#pgModal .tk-box-body { padding: 20px 24px; }
+#pgModal .tk-box-ftr { padding: 16px 24px; border-top-color: color-mix(in srgb, var(--ink) 8%, transparent); }
+#pgModal .tk-box-body label { margin: 16px 0 7px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--ink3); }
+#pgModal .tk-box-body label .tk-opt { font-weight: 500; }
+#pgModal input[type="text"], #pgModal input[type="url"], #pgModal input[type="date"], #pgModal input[type="time"], #pgModal input[type="datetime-local"], #pgModal input[type="search"], #pgModal select, #pgModal textarea {
   border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent); border-radius: 6px; background: var(--card); box-shadow: none; font-size: 14px;
 }
-html.pg-on #pgModal input:focus, html.pg-on #pgModal select:focus, html.pg-on #pgModal textarea:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 10%, transparent); }
-html.pg-on #pgModal .tk-btn { border-radius: 6px; font-weight: 500; border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent); background: var(--card); color: var(--ink); box-shadow: none; }
-html.pg-on #pgModal .tk-btn:hover { border-color: var(--ink); }
-html.pg-on #pgModal .tk-link { color: var(--ink); }
+#pgModal input:focus, #pgModal select:focus, #pgModal textarea:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 10%, transparent); }
+#pgModal .tk-btn { border-radius: 6px; font-weight: 500; border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent); background: var(--card); color: var(--ink); box-shadow: none; }
+#pgModal .tk-btn:hover { border-color: var(--ink); }
+#pgModal .tk-link { color: var(--ink); }
 /* The "It is an Insta Story that day" tick: on one line with its words. */
-html.pg-on #pgModal label.tk-check { display: flex; align-items: center; gap: 10px; text-transform: none; letter-spacing: 0; font-size: 13.5px; font-weight: 500; color: var(--ink2); margin: 14px 0 0; }
-html.pg-on #pgModal label.tk-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--ink); }
+#pgModal label.tk-check { display: flex; align-items: center; gap: 10px; text-transform: none; letter-spacing: 0; font-size: 13.5px; font-weight: 500; color: var(--ink2); margin: 14px 0 0; }
+#pgModal label.tk-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--ink); }
 
 /* ── Add schedule: one line per post day — date · time · property · ✕, the types underneath ── */
 #pgModal .bk-head { display: grid; grid-template-columns: 150px 118px minmax(0, 1fr) 34px; gap: 14px; margin: 18px 0 6px; font-size: 12px; font-weight: 500; color: var(--ink3); }
@@ -1921,3 +1921,10 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .tk-card:hover .tk-qa { color: var(--ink3); }
 .tk-qa:hover, .tk-qa:focus-visible { background: var(--bg2); color: var(--ink); }
 .tk-av { width: 24px; height: 24px; margin-left: 4px; border-radius: 99px; background: var(--bg2); color: var(--ink2); font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; letter-spacing: .02em; }
+
+/* Shoot for's Edit column: where the outlet's edit stands (moved in the Edit section, by its steps) */
+.tk-for-ed { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 99px; font-size: 12px; font-weight: 700; }
+.tk-for-ed.ok { background: var(--green-bg, #E3F6E9); color: var(--green, #137A3B); }
+.tk-for-ed.act { background: color-mix(in srgb, var(--accent, #EA6A00) 14%, var(--card)); color: var(--accent, #EA6A00); }
+.tk-for-ed.plan { background: var(--bg2); color: var(--ink2); }
+.tk-for-ed.none { color: var(--ink4); }
