@@ -34,7 +34,7 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
   page.on('pageerror', e => errors.push(String(e).slice(0, 300)));
   // Read-only: Firestore writes go over the Write channel (and commit for batches) — cut them off.
   await page.route(/firestore\.googleapis\.com\/.*(\/Write\/|:commit|:batchWrite)/, r => { writesBlocked++; return r.abort(); });
-  await page.goto(BASE + (/localhost|127.0.0.1/.test(BASE) ? '/propertytrack.html' : '/propertytrack'), { waitUntil: 'networkidle' });
+  await page.goto(BASE + '/propertytrack.html', { waitUntil: 'networkidle' });
   // The page's modules wait on Firebase's own scripts: sign in once they are all in.
   await page.waitForFunction(() => window.trackApi && window.trackAuth && typeof window.toggleView === 'function', null, { timeout: 30000 });
   await page.evaluate(async t => {
