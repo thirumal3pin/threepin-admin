@@ -1593,8 +1593,8 @@ function openDlg(kind, id, key) {
     } else {
       body = `${common}
         <label for="pgCodeIn">Property code</label>${t.propertyCode
-          ? `<input id="pgCodeIn" type="text" value="${esc(t.propertyCode)}" autocomplete="off" spellcheck="false"><p class="tk-hint">Wrong property? Change the code — this row moves to that property: what came from ${esc(t.propertyCode)} (its title, location, photos, details, brochure) goes, the new one's comes in if it is in the dashboard. Clear it to remove the code and what came with it. Its posts stay.</p>`
-          : `<input id="pgCodeIn" type="text" placeholder="Add it once created, e.g. TNAG0002"><p class="tk-hint">Already tracked or in the dashboard? <button type="button" class="tk-link" onclick="pgOpenTag(${jsq(t.id)})">Tag that property instead</button> · Several properties in one video? <button type="button" class="tk-link" onclick="pgOpenSeriesDlg(${jsq(t.id)})">Make it a series</button></p>`}
+          ? `${codeBox(t, t.propertyCode, true)}<p class="tk-hint" id="pgCodeHint">Wrong property? <b>Change code</b> — this row moves to that property: what came from ${esc(t.propertyCode)} (its title, location, photos, details, brochure) goes, the new one's comes in if it is in the dashboard. Its posts stay.</p>`
+          : `${codeBox(t, '')}<p class="tk-hint">Already tracked or in the dashboard? <button type="button" class="tk-link" onclick="pgOpenTag(${jsq(t.id)})">Tag that property instead</button> · Several properties in one video? <button type="button" class="tk-link" onclick="pgOpenSeriesDlg(${jsq(t.id)})">Make it a series</button></p>`}
         <label for="pgTitleIn">Title</label><input id="pgTitleIn" type="text" value="${esc(t.title)}" placeholder="3BHK in T Nagar">
         <label for="pgLocIn">Location</label><input id="pgLocIn" type="text" value="${esc(t.location)}">
         <label for="pgPhotos">Photos link <span class="tk-opt">${shared ? 'the same link as its board card' : 'from the media team'}</span></label><input id="pgPhotos" type="url" value="${esc(inp.photosLink)}" placeholder="Drive folder link"${frozen ? ' readonly title="Its brochure is made from these — redo it on the board to change them"' : ''}>
@@ -1649,6 +1649,7 @@ function openDlg(kind, id, key) {
   $('pgBody').innerHTML = body;
   $('pgModal').classList.add('open');
   if (kind === 'add' || kind === 'linkpick') { pgSearchInv(''); loadInv(); }
+  if (kind === 'edit' && $('pgCodeIn')) { loadInv(); pgCodeVerdict(); }
   if (kind === 'tag') { pgSearchTag(''); loadInv(); }
   if (kind === 'plan') { pgPlanPreview(); loadInv(); }
   if (kind === 'bulk') { loadInv(); pgBulkRender(); const first = document.querySelector('#pgBulkList .bk-in'); if (first) setTimeout(() => first.focus(), 0); }
@@ -1769,6 +1770,62 @@ window.pgBulkCount = () => {
   const days = new Set(dlg.entries.filter(e => e.sel || e.text.trim()).map(e => e.day)).size;
   $('pgSave').textContent = ready ? `Add ${posts} post${posts === 1 ? '' : 's'}${days > 1 ? ` on ${days} days` : ''}` : 'Add to schedule';
 };
+// ═══════ THE PROPERTY CODE BOX (Property details) ═══════
+// Like the board's Property ID box: as a code is typed, the codes already in the Property dashboard
+// (and whether a Posting row has one) and the next free code in its series — and, under the box, what
+// saving does with the code typed.
+// locked: a code already set shows read-only, with "Change code" to unlock it — a code is not changed
+// by a stray keystroke in a dialog used for everyday edits.
+function codeBox(t, code, locked) {
+  return `<div class="sd-pick pg-codebox"><input id="pgCodeIn" type="text" value="${esc(code)}" placeholder="e.g. ADB0002 — type the letters to see the codes" autocomplete="off" spellcheck="false"${locked ? ' readonly' : ''}
+      oninput="pgCodeSug(this.value)" onfocus="if (!this.readOnly) pgCodeSug(this.value)" onblur="setTimeout(() => { const s = document.getElementById('pgCodeSug'); if (s) s.classList.remove('open'); }, 150)">
+    ${locked ? '<button type="button" class="tk-btn sm" id="pgCodeUnlock" onclick="pgCodeUnlock()">Change code</button>' : ''}
+    <div id="pgCodeSug" class="bk-sug" role="listbox"></div></div><div id="pgCodeV" class="pb-check" role="status"></div>`;
+}
+window.pgCodeUnlock = () => {
+  const i = $('pgCodeIn'), b = $('pgCodeUnlock'); if (!i) return;
+  i.readOnly = false; if (b) b.remove();
+  i.focus(); i.select();
+  window.pgCodeSug(i.value);
+};
+const rowWithCode = (code, selfId) => trackers.find(x => x.id !== selfId && !x.repostOf && !G.isSeries(x) && G.codeKey(x.propertyCode) && G.codeKey(x.propertyCode) === G.codeKey(code)) || null;
+window.pgCodeSug = v => {
+  const box = $('pgCodeSug'); if (!box || !dlg || dlg.kind !== 'edit') return;
+  const invL = invList();
+  if (!invL.length) { const api = window.trackApi; if (api && api.loadInventory) api.loadInventory().then(() => { if (dlg && dlg.kind === 'edit') window.pgCodeSug(($('pgCodeIn') || {}).value || ''); }).catch(() => {}); }
+  pgCodeVerdict();
+  const q = String(v || '').trim();
+  // Nothing typed, or a whole code that is in the dashboard: no list — the line under the box says it.
+  if (!q || invL.some(p => G.codeKey(p.propertyCode) === G.codeKey(q))) { box.innerHTML = ''; box.classList.remove('open'); return; }
+  const opt = (code, sub, cls) => `<button type="button" class="bk-opt${cls ? ' ' + cls : ''}" role="option" onmousedown="event.preventDefault()" onclick="pgCodePick(${jsq(code)})"><b>${esc(code)}</b><span>${esc(sub)}</span></button>`;
+  const next = B.seriesFor(q, invL).slice(0, 4).map(g => opt(g.next, `next free in ${g.letters} · ${g.count} so far, last ${g.last}`)).join('');
+  const have = B.codeSuggestions(q, invL, 8).map(p => {
+    const r = rowWithCode(p.propertyCode, dlg.id);
+    return opt(p.propertyCode, `in the dashboard — ${[p.name, p.location].filter(Boolean).join(' · ')}${r ? ' · on Posting: ' + G.nameOf(r) : ''}`, r ? 'used' : '');
+  }).join('');
+  box.innerHTML = (have ? '<div class="bk-sh">In the Property dashboard</div>' + have : '') + (next ? '<div class="bk-sh">Next free code</div>' + next : '')
+    || `<div class="bk-sh">${invL.length ? 'No code in the dashboard starts like that' : 'Reading the dashboard…'}</div>`;
+  box.classList.add('open');
+};
+window.pgCodePick = c => { const i = $('pgCodeIn'); if (i) i.value = c; const box = $('pgCodeSug'); if (box) box.classList.remove('open'); pgCodeVerdict(); };
+// What saving does with the code in the box.
+function pgCodeVerdict() {
+  const el = $('pgCodeV'); if (!el || !dlg || dlg.kind !== 'edit') return;
+  const t = byId(dlg.id); if (!t) return;
+  const raw = (($('pgCodeIn') || {}).value || '').trim(), cur = t.propertyCode;
+  const line = (cls, html) => `<div class="pb-v ${cls}">${html}</div>`;
+  if (G.codeKey(raw) === G.codeKey(cur)) { el.innerHTML = ''; return; }
+  if (!raw) { el.innerHTML = cur ? line('warn', `Saving removes the code <b>${esc(cur)}</b> and what came with it (title, location, photos, details, brochure). Its posts stay.`) : ''; return; }
+  const code = raw.toUpperCase();
+  if (!B.looksLikeCode(code)) { el.innerHTML = line('warn', 'A property code is letters, then numbers — like ADB0003.'); return; }
+  const r = rowWithCode(code, t.id);
+  if (r) { el.innerHTML = line('bad', `<b>${esc(code)}</b> is already used by “${esc(G.nameOf(r))}” on Posting — saving is refused. Pick another code.`); return; }
+  const p = invList().find(q => G.codeKey(q.propertyCode) === G.codeKey(code));
+  el.innerHTML = p
+    ? line('info', `<b>${esc(p.propertyCode)}</b> is in the Property dashboard — ${esc([p.name, p.location].filter(Boolean).join(', '))}${B.isUrl(p.brochureLink) ? ' · brochure made' : ''}. Saving moves this row to it${cur ? `: what came from ${esc(cur)} goes, its own comes in` : ' and fills in its details'}. Posts stay.`)
+    : line('warn', `<b>${esc(code)}</b> is not in the Property dashboard yet — a new code.${cur ? ` Saving unlinks this row from ${esc(cur)} and removes what came from it.` : ''} Create its brochure to add it to the dashboard. Posts stay.`);
+}
+
 // ═══════ THE EDIT BEFORE THE POST ═══════
 // A post with a time needs its edit planned; a post goes live once its edit is done. Read from the
 // property's board card (a series: its card); a property with no card is not held back.

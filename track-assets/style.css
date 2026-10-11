@@ -1789,3 +1789,13 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .pg-gate { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber); font-size: 12.5px; line-height: 1.45; }
 .pg-gate.ok { background: var(--green-bg); color: var(--green); }
 .pg-gate .tk-btn { margin-top: 8px; }
+
+/* Property details: a code already on another Posting row */
+.bk-opt.used b { color: var(--ink4); }
+.bk-opt.used span { color: var(--amber); }
+
+/* Property details: a set code is read-only until "Change code" */
+.pg-codebox { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pg-codebox input { flex: 1 1 200px; }
+.pg-codebox input[readonly] { background: var(--bg2); color: var(--ink2); cursor: default; }
+.pg-codebox .bk-sug { flex-basis: 100%; }

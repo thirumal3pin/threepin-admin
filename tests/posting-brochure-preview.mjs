@@ -206,20 +206,36 @@ console.log('a wrong code on a row whose posts are right → change the code, th
 {
   const q = await open({ width: 1440, height: 950 });
   // pV is TNAG0003 with a live Story; the code was a mistake — the property is TNAG0007.
-  await q.evaluate(() => pgOpenEdit('pV')); await q.waitForTimeout(120);
-  ok('Property details: the code can be changed (not locked any more)', await q.$eval('#pgCodeIn', i => !i.disabled) && /Wrong property\? Change the code/.test(await q.textContent('#pgBody')));
+  await q.evaluate(() => pgOpenEdit('pV')); await q.waitForTimeout(150);
+  ok('A set code is read-only, with "Change code"', await q.$eval('#pgCodeIn', i => i.readOnly) && !!(await q.$('#pgCodeUnlock')));
+  await q.click('#pgCodeUnlock'); await q.waitForTimeout(80);
+  ok('…"Change code" unlocks it', await q.$eval('#pgCodeIn', i => !i.readOnly) && !(await q.$('#pgCodeUnlock')));
+  // Typing a code shows what exists, like the board's Property ID box.
+  await q.fill('#pgCodeIn', 'TNAG'); await q.dispatchEvent('#pgCodeIn', 'input'); await q.waitForTimeout(120);
+  const sugg = await q.$$eval('#pgCodeSug .bk-opt', o => o.map(x => x.textContent.replace(/\s+/g, ' ').trim()));
+  ok('Property code: typing shows the codes in the dashboard and the next free one', sugg.some(t => /^TNAG0007s*in the dashboard — Villa T Nagar/.test(t)) && sugg.some(t => /next free in TNAG/.test(t)), JSON.stringify(sugg));
+  await q.$eval('#pgCodeIn', i => i.scrollIntoView({ block: 'center' })); await q.screenshot({ path: join(OUT, 'code-suggestions.png') });
+  await q.fill('#pgCodeIn', 'TNAG0007'); await q.dispatchEvent('#pgCodeIn', 'input'); await q.waitForTimeout(80);
+  await q.screenshot({ path: join(OUT, 'code-verdict.png') });
+  ok('…and says what saving does: in the dashboard, the row moves to it', /TNAG0007 is in the Property dashboard — Villa T Nagar/.test(await q.textContent('#pgCodeV')) && /moves this row to it/.test(await q.textContent('#pgCodeV')));
+  await q.fill('#pgCodeIn', 'ZZZ0001'); await q.dispatchEvent('#pgCodeIn', 'input'); await q.waitForTimeout(80);
+  ok('…not in the dashboard: a new code', /not in the Property dashboard yet/.test(await q.textContent('#pgCodeV')));
+  await q.fill('#pgCodeIn', 'TNAG0005'); await q.dispatchEvent('#pgCodeIn', 'input'); await q.waitForTimeout(80);
+  ok('…a code another Posting row has: refused, naming that row', /already used by “Studio T Nagar”/.test(await q.textContent('#pgCodeV')));
+  await q.fill('#pgCodeIn', 'TNAG0003'); await q.dispatchEvent('#pgCodeIn', 'input');
+  ok('Property details: the code can be changed (not locked any more)', await q.$eval('#pgCodeIn', i => !i.disabled) && /Wrong property\?/.test(await q.textContent('#pgBody')));
   await q.fill('#pgCodeIn', 'TNAG0007');
   await q.click('#pgSave'); await q.waitForTimeout(200);
   const r = await q.evaluate(() => window.__saved.filter(x => x.id === 'pV').pop());
   ok('Moved to TNAG0007 and linked to it; title and details taken from it', r && r.propertyCode === 'TNAG0007' && r.propertyId === 'TNAG0007' && r.title === 'Villa T Nagar' && r.details === 'villa', JSON.stringify(r && { c: r.propertyCode, id: r.propertyId, t: r.title }));
   ok('…its live Story and link untouched', r && r.channels.igStory.status === 'live' && r.channels.igStory.url === 'https://instagram.com/s/v');
   await q.evaluate(() => pgOpenEdit('pB')); await q.waitForTimeout(120);
-  await q.fill('#pgCodeIn', 'TNAG0007'); await q.click('#pgSave'); await q.waitForTimeout(120);
+  await q.click('#pgCodeUnlock'); await q.fill('#pgCodeIn', 'TNAG0007'); await q.click('#pgSave'); await q.waitForTimeout(120);
   ok('A code another row has is refused', /already used by/.test(await q.textContent('#pgErr')));
   await q.evaluate(() => pgClose());
   // Clearing the code takes off what came with it (photos, details, brochure); the posts stay.
   await q.evaluate(() => pgOpenEdit('pV')); await q.waitForTimeout(120);
-  await q.fill('#pgCodeIn', ''); await q.click('#pgSave'); await q.waitForTimeout(200);
+  await q.click('#pgCodeUnlock'); await q.fill('#pgCodeIn', ''); await q.click('#pgSave'); await q.waitForTimeout(200);
   const r2 = await q.evaluate(() => window.__saved.filter(x => x.id === 'pV').pop());
   ok('Code removed: unlinked, the property\'s photos and details gone, posts kept', r2 && !r2.propertyCode && !r2.propertyId && !r2.photosLink && !r2.details && r2.channels.igStory.status === 'live', JSON.stringify(r2 && { c: r2.propertyCode, p: r2.photosLink, d: r2.details }));
   ok('…and its brochure no longer shows as created', !/Created/.test(await q.$eval('#pg-pV', e => e.textContent)));
