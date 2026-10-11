@@ -20,6 +20,14 @@
 //                                   Linking is optional and can happen any time — an unlinked
 //                                   property is a pending item, not an error.
 //   acres99, website: { status: 'pending'|'posted'|'na', url, at }
+//   kind: 'series', members        a SERIES ("T Nagar series"): several properties, each shot on its own,
+//                                   edited into one video and posted as ONE post — on every channel and the
+//                                   website, never 99 Acres. members = [{ trackerId, propertyCode, title }]:
+//                                   a member's own row when it is tracked, else a dashboard property by code.
+//                                   A series has no code, brochure, photos or dashboard record of its own;
+//                                   each member's are read from where they live. A member's own posts stay
+//                                   its own: TNAG0003's Reel and the T Nagar series Reel are two posts.
+//   listingId                       a series' card on the Shoot & Media board, where its edit is tracked.
 //
 // Every channel is independent: a Story can be Scheduled while the Reel is
 // still "Yet to schedule" and YouTube is N/A.
@@ -95,11 +103,28 @@ export function normalizeListing(l) {
   return { status: s, url: str(l && l.url), at: Number(l && l.at) || 0 };
 }
 
+// ── Series ──
+export const isSeries = t => !!t && t.kind === 'series';
+// A member is a tracked row (by id) or a dashboard property (by code); the same property is in once.
+export function cleanMembers(list) {
+  const out = [], seen = new Set();
+  for (const m of Array.isArray(list) ? list : []) {
+    const x = { trackerId: str(m && m.trackerId), propertyCode: str(m && m.propertyCode), title: str(m && m.title) };
+    if (!x.trackerId && !x.propertyCode) continue;
+    const keys = [x.trackerId && 'id:' + x.trackerId, codeKey(x.propertyCode) && 'code:' + codeKey(x.propertyCode)].filter(Boolean);
+    if (keys.some(k => seen.has(k))) continue;
+    keys.forEach(k => seen.add(k));
+    out.push(x);
+  }
+  return out;
+}
+
 // Every field has a default, so a half-written or older document never throws.
 export function normalizeTracker(t) {
   t = t || {};
   const channels = {};
   for (const k of CHANNEL_KEYS) channels[k] = normalizeChannel(t.channels && t.channels[k]);
+  const series = isSeries(t);
   return {
     ...t,
     id: str(t.id),
@@ -116,9 +141,13 @@ export function normalizeTracker(t) {
     propertyId: str(t.propertyId),
     channels,
     brochure: { done: !!(t.brochure && t.brochure.done), at: Number(t.brochure && t.brochure.at) || 0, by: str(t.brochure && t.brochure.by) },
-    acres99: normalizeListing(t.acres99),
+    // A series is never listed on 99 Acres.
+    acres99: series ? { status: LISTING_STATUS.NA, url: '', at: 0 } : normalizeListing(t.acres99),
     website: normalizeListing(t.website),
-    tags: cleanTags(t.tags)
+    tags: cleanTags(t.tags),
+    kind: series ? 'series' : '',
+    members: series ? cleanMembers(t.members) : [],
+    listingId: str(t.listingId)
   };
 }
 
@@ -138,6 +167,9 @@ export function blankTracker(seed, now, who) {
     weekOf: seed && seed.weekOf,
     channels: seed && seed.channels,
     photosLink: seed && seed.photosLink,
+    kind: seed && seed.kind,
+    members: seed && seed.members,
+    listingId: seed && seed.listingId,
     createdAt: now, createdBy: who || '', updatedAt: now, updatedBy: who || ''
   });
 }
@@ -225,6 +257,7 @@ export function setListing(tracker, key, status, extra, now) {
   if (!LISTINGS.some(l => l.key === key)) return { ok: false, error: 'Unknown listing' };
   if (!Object.values(LISTING_STATUS).includes(status)) return { ok: false, error: 'Unknown status' };
   const t = normalizeTracker(tracker);
+  if (key === 'acres99' && isSeries(t)) return { ok: false, error: 'A series is not listed on 99 Acres' };
   const url = extra && extra.url !== undefined ? cleanUrl(extra.url) : t[key].url;
   if (status === LISTING_STATUS.POSTED && url && !isUrl(url)) return { ok: false, error: BAD_URL };
   t[key] = status === LISTING_STATUS.POSTED
@@ -242,6 +275,61 @@ export function setBrochureSource(fn) { brochureSource = typeof fn === 'function
 export function brochureDone(t) {
   if (brochureSource) { try { const s = brochureSource(t); if (s) return !!s.done; } catch (e) { /* fall back below */ } }
   return !!(t && t.brochure && t.brochure.done);
+}
+
+// ── A series' properties, as they stand ──
+// For each member: its own row (if tracked), its code and name, and whether its photos are in and its
+// brochure is made — read from its own row and the Property dashboard, never kept on the series.
+export function memberStatus(series, trackers, inventory) {
+  const list = trackers || [];
+  return normalizeTracker(series).members.map(m => {
+    const k = codeKey(m.propertyCode);
+    const row = (m.trackerId && list.find(x => x.id === m.trackerId)) ||
+      (k && list.find(x => !x.repostOf && !isSeries(x) && codeKey(x.propertyCode) === k)) || null;
+    const code = str((row && row.propertyCode) || m.propertyCode);
+    const p = codeKey(code) ? (inventory || []).find(q => codeKey(q.propertyCode) === codeKey(code)) : null;
+    const stub = row || { id: 'code:' + codeKey(code), propertyCode: code };
+    return {
+      key: row ? row.id : 'code:' + codeKey(code), trackerId: row ? row.id : '', propertyCode: code,
+      name: row ? nameOf(row) : (m.title || (p && p.name) || code || 'Property'), row,
+      photosLink: str(row && row.photosLink) || webLink(p && p.photosLink),
+      details: !!(str(row && row.details) || str(p && p.detailsText)),
+      brochure: brochureDone(stub)
+    };
+  });
+}
+// The page sets where members are looked up (its rows and the dashboard); without it (a test that has
+// not set one) a series' members are read from nothing — no photos, no brochure.
+let memberSource = null;
+export function setMemberSource(fn) { memberSource = typeof fn === 'function' ? fn : null; }
+function membersOf(t) {
+  if (memberSource) { try { return memberSource(t) || []; } catch (e) { /* fall back below */ } }
+  return memberStatus(t, [], []);
+}
+const memberLabel = m => m.propertyCode || m.name;
+
+// Every series a property is in, by its row id and by its code — built once, looked up per row.
+export function seriesIndex(trackers) {
+  const idx = new Map();
+  const add = (k, s) => { if (!idx.has(k)) idx.set(k, []); if (!idx.get(k).includes(s)) idx.get(k).push(s); };
+  for (const raw of trackers || []) {
+    if (!isSeries(raw) || raw.repostOf) continue;
+    const s = normalizeTracker(raw);
+    for (const m of s.members) {
+      if (m.trackerId) add('id:' + m.trackerId, s);
+      if (codeKey(m.propertyCode)) add('code:' + codeKey(m.propertyCode), s);
+    }
+  }
+  return idx;
+}
+// The series a property (or a repost of it) is in.
+export function seriesOf(trackers, tracker, index) {
+  if (!tracker || isSeries(tracker)) return [];
+  const root = (tracker.repostOf && (trackers || []).find(x => x.id === tracker.repostOf)) || tracker;
+  const idx = index || seriesIndex(trackers);
+  const out = (idx.get('id:' + root.id) || []).slice();
+  for (const s of idx.get('code:' + codeKey(root.propertyCode)) || []) if (codeKey(root.propertyCode) && !out.includes(s)) out.push(s);
+  return out;
 }
 
 export function setBrochure(tracker, done, who, now) {
@@ -284,6 +372,19 @@ export function gaps(tracker, now) {
     out.push({ kind: 'plan', sev: late ? 3 : t.plannedDate === today ? 2 : 1, text: `Planned for ${dayLabel(t.plannedDate)} — no channel chosen yet` });
   }
   if (t.repostOf) return out.sort((a, b) => b.sev - a.sev);   // everything else lives on the original row
+  if (isSeries(t)) {
+    // A series is checked through its properties: each one's photos and brochure. It has no code,
+    // dashboard record or 99 Acres listing of its own; the website it does have.
+    const ms = membersOf(t);
+    if (ms.length < 2) out.push({ kind: 'members', sev: 1, text: ms.length ? 'Only one property in this series — add the others' : 'Add the properties in this series' });
+    const noPhotos = ms.filter(m => !m.photosLink).map(memberLabel);
+    if (noPhotos.length) out.push({ kind: 'photos', sev: 2, text: 'Photos not received: ' + noPhotos.join(', ') });
+    const noBro = ms.filter(m => !m.brochure).map(memberLabel);
+    if (noBro.length) out.push({ kind: 'brochure', sev: anyOut ? 3 : 1, text: (anyOut ? 'Series posts are going out but the brochure is not created: ' : 'Brochure not created: ') + noBro.join(', ') });
+    if (t.website.status === LISTING_STATUS.PENDING) out.push({ kind: 'website', key: 'website', sev: 1, text: '3 PIN website not posted' });
+    else if (t.website.status === LISTING_STATUS.POSTED && !t.website.url) out.push({ kind: 'link', key: 'website', sev: 2, text: '3 PIN website is posted but the link is not shared' });
+    return out.sort((a, b) => b.sev - a.sev);
+  }
   if (!t.propertyCode) out.push({ kind: 'code', sev: 1, text: 'Property code not created yet' });
   if (!brochureDone(tracker)) out.push({ kind: 'brochure', sev: anyOut ? 3 : 1, text: anyOut ? 'Posts are going out but the brochure is not created' : 'Brochure not created' });
   for (const { key, label } of LISTINGS) {
@@ -350,10 +451,14 @@ export function parsePlan(text, monday) {
   return { items, skipped };
 }
 
+export const isSeriesName = ref => /\bseries\b/i.test(str(ref));
+
 // Parsed items → new rows, leaving out any already there (same reference and day / week), so
 // pasting the same week twice is harmless. A code tagged on a line when that property already has
 // a first row (saved, or earlier in this same paste) makes the line a repost of that row.
-export function planRows(items, monday, existing, now, who) {
+// opts.autoSeries === false: a line that says "series" stays a plain line (Settings → Configurations).
+export function planRows(items, monday, existing, now, who, opts) {
+  const autoSeries = !(opts && opts.autoSeries === false);
   const keyOf = (ref, day, week) => ref.toLowerCase() + '|' + day + '|' + week;
   const ex = (existing || []).map(normalizeTracker);
   const seen = new Set(ex.map(t => keyOf(t.reference, t.plannedDate, t.weekOf)));
@@ -371,9 +476,20 @@ export function planRows(items, monday, existing, now, who) {
     const base = { reference: it.reference, plannedDate: yt ? 0 : it.day, weekOf: yt ? monday : 0, channels };
     const first = tag.propertyCode && ex.concat(rows)
       .find(x => !x.repostOf && codeKey(x.propertyCode) && codeKey(x.propertyCode) === codeKey(tag.propertyCode));
-    if (tag.repostOf) base.repostOf = tag.repostOf;
+    if (tag.repostOf) {
+      base.repostOf = tag.repostOf;
+      // Another round of a series is a series too.
+      if (isSeries(ex.concat(rows).find(x => x.id === tag.repostOf))) base.kind = 'series';
+    }
     else if (first) base.repostOf = first.id;
     else if (tag.propertyCode) Object.assign(base, { propertyCode: tag.propertyCode, title: tag.title || '', propertyId: tag.propertyId || '' });
+    // "Youtube - T nagar series": a line that says series, not tagged to a property, is a series. Its
+    // properties are picked afterwards. A series of that name already here: another round of it.
+    else if (autoSeries && isSeriesName(it.reference)) {
+      const same = ex.concat(rows).find(x => isSeries(x) && !x.repostOf && [x.title, x.reference].some(n => n && n.toLowerCase() === it.reference.toLowerCase()));
+      if (same) base.repostOf = same.id;
+      base.kind = 'series';
+    }
     rows.push(blankTracker(base, now + (n++), who));
   }
   return rows;
@@ -437,14 +553,7 @@ export function bulkSchedule(trackers, entries, when, now, who) {
   const touched = new Map();   // rows updated in this same submit, so two entries do not fight
   let n = 0;
   let day = defDay, at = defAt;
-  const applyKeys = (row, keys) => {
-    const channels = { ...row.channels };
-    for (const k of keys) {
-      if (!CHANNEL_KEYS.includes(k)) continue;
-      channels[k] = at ? { ...channels[k], status: STATUS.SCHEDULED, at, liveAt: 0, day } : { ...channels[k], status: STATUS.YET, at: 0, liveAt: 0, day };
-    }
-    return { ...row, channels, plannedDate: row.plannedDate || day };
-  };
+  const applyKeys = (row, keys) => planOn(row, keys, day, at);
   for (const e of entries || []) {
     const keys = (e && e.keys || []).filter(k => CHANNEL_KEYS.includes(k));
     // This entry's own date and time, when it has one.
@@ -461,7 +570,7 @@ export function bulkSchedule(trackers, entries, when, now, who) {
         if (i >= 0) out.update[i] = row; else out.update.push(row);
       } else {
         const root = fam[0];
-        const base = blankTracker({ reference: str(e.ref) || nameOf(root), repostOf: root.id, plannedDate: day }, now + (n++), who);
+        const base = blankTracker({ reference: str(e.ref) || nameOf(root), repostOf: root.id, plannedDate: day, kind: root.kind }, now + (n++), who);
         out.create.push(applyKeys(base, keys));
       }
     } else if (e && e.inv && e.inv.propertyCode) {
@@ -480,6 +589,30 @@ export function bulkSchedule(trackers, entries, when, now, who) {
   }
   if (!out.create.length && !out.update.length && !out.errors.length) out.errors.push('Add at least one property or reference.');
   return out;
+}
+// The channels picked for a day: Scheduled at `at` when there is a time, else Planned for the day.
+export function planOn(row, keys, day, at) {
+  const channels = { ...row.channels };
+  for (const k of keys || []) {
+    if (!CHANNEL_KEYS.includes(k)) continue;
+    channels[k] = at ? { ...channels[k], status: STATUS.SCHEDULED, at, liveAt: 0, day } : { ...channels[k], status: STATUS.YET, at: 0, liveAt: 0, day };
+  }
+  return { ...row, channels, plannedDate: row.plannedDate || day };
+}
+
+// ── A new series ──
+// seed = { title, members, note }; keys = the channels it goes out on; when = { day, at } (optional —
+// a series can be made first and scheduled later). Returns { ok, tracker } or { ok:false, error }.
+export function newSeries(seed, keys, when, now, who) {
+  const title = str(seed && seed.title);
+  if (!title) return { ok: false, error: 'Name the series — e.g. T Nagar series.' };
+  const members = cleanMembers(seed && seed.members);
+  if (members.length < 2) return { ok: false, error: 'Pick at least two properties for the series.' };
+  const day = Number(when && when.day) ? startOfDay(Number(when.day)) : 0, at = day ? Number(when && when.at) || 0 : 0;
+  if ((keys || []).length && !day) return { ok: false, error: 'Pick the date it goes out, or leave the channels for later.' };
+  let t = blankTracker({ kind: 'series', title, members, note: seed && seed.note }, now, who);
+  if (day) t = normalizeTracker(planOn(t, keys, day, at));
+  return { ok: true, tracker: t };
 }
 
 // ── A property across all its rounds ──
@@ -665,6 +798,7 @@ export const TASK_DEFS = [
   { kind: 'photos', title: 'Waiting for photos', who: 'Media team', hint: 'No photos link shared yet.' },
   { kind: 'details', title: 'Waiting for property details', who: 'Media team', hint: 'No details shared yet.' },
   { kind: 'code', title: 'Create the property code', who: 'Admin', hint: 'These started as a reference from the weekly plan.' },
+  { kind: 'members', title: 'Add the properties to the series', who: 'Admin', hint: 'A series is several properties, each shot on its own, edited into one video.' },
   { kind: 'yet', title: 'Schedule the posts', who: 'Media team', hint: 'Pick a date and time, or mark N/A if it will not be posted.' },
   { kind: 'acres99', title: 'Post on 99 Acres', who: 'Admin', hint: 'Mark N/A to skip it for a property.' },
   { kind: 'website', title: 'Post on the 3 PIN website', who: 'Admin', hint: 'Mark N/A to skip it for a property.' },
@@ -714,7 +848,8 @@ export function progress(tracker) {
     if (s === STATUS.NA) continue;
     total++; if (s === STATUS.LIVE) done++;
   }
-  total++; if (brochureDone(tracker)) done++;
+  // A series' own work is its posts and its website listing; the brochures are its properties'.
+  if (!isSeries(t)) { total++; if (brochureDone(tracker)) done++; }
   for (const { key } of LISTINGS) {
     const s = t[key].status;
     if (s === LISTING_STATUS.NA) continue;
@@ -764,6 +899,7 @@ export function liveMissingLink(trackers) {
 // ── Filters shown as one row of counted buttons ──
 export const FILTERS = [
   ['thisweek', 'This week'],
+  ['series', 'Series'],
   ['due', 'Due now'],
   ['nocode', 'No code yet'],
   ['nobrochure', 'Brochure not created'],
@@ -776,16 +912,19 @@ export const FILTERS = [
 export function matchesFilter(tracker, f, now) {
   const t = normalizeTracker(tracker);
   const g = gaps(t, now);
+  const series = isSeries(t);
   switch (f) {
     case 'due': return g.some(x => x.kind === 'due');
-    case 'nobrochure': return !brochureDone(tracker);
+    case 'series': return series;
+    // A series: any of its properties without a brochure / photos.
+    case 'nobrochure': return series ? (!t.repostOf && g.some(x => x.kind === 'brochure')) : !brochureDone(tracker);
     case 'nolink': return g.some(x => x.kind === 'link');
     case 'unscheduled': return g.some(x => x.kind === 'yet');
-    case 'noacres': return t.acres99.status === LISTING_STATUS.PENDING;
-    case 'nodash': return !t.repostOf && !t.propertyId;
-    case 'nocode': return !t.repostOf && !t.propertyCode;
+    case 'noacres': return !series && t.acres99.status === LISTING_STATUS.PENDING;
+    case 'nodash': return !series && !t.repostOf && !t.propertyId;
+    case 'nocode': return !series && !t.repostOf && !t.propertyCode;
     case 'thisweek': return inWeek(t, mondayOf(now));
-    case 'noinputs': return !t.photosLink || !t.details;
+    case 'noinputs': return series ? (!t.repostOf && g.some(x => x.kind === 'photos')) : (!t.photosLink || !t.details);
     default: return true;
   }
 }
@@ -800,15 +939,19 @@ const when = ts => {
 };
 const dateOnly = ts => when(ts).slice(0, 10);
 export function toCsv(trackers) {
-  const head = ['Planned date', 'Reference', 'Repost of', 'Property code', 'Title', 'Location', 'In Property dashboard', 'Photos link', 'Details', 'Notes'];
+  const head = ['Planned date', 'Reference', 'Repost of', 'Property code', 'Title', 'Location', 'In Property dashboard', 'Photos link', 'Details', 'Notes', 'Series of'];
   for (const c of CHANNELS) head.push(c.label + ' status', c.label + ' date/time', c.label + ' link');
   head.push('Brochure created', 'Brochure by');
   for (const l of LISTINGS) head.push(l.label + ' status', l.label + ' link');
   head.push('Progress');
   const rows = (trackers || []).map(raw => [raw, normalizeTracker(raw)]).map(([raw, t]) => {
-    const r = [dateOnly(t.plannedDate), t.reference, t.repostOf, t.propertyCode, t.title, t.location, t.propertyId ? 'Yes' : 'No', t.photosLink, t.details, t.note];
+    const series = isSeries(t);
+    const r = [dateOnly(t.plannedDate), t.reference, t.repostOf, t.propertyCode, t.title, t.location, t.propertyId ? 'Yes' : 'No', t.photosLink, t.details, t.note,
+      series ? t.members.map(m => m.propertyCode || m.title).join('; ') : ''];
     for (const c of CHANNELS) { const x = t.channels[c.key]; r.push(STATUS_LABEL[x.status], when(x.at), x.url); }
-    r.push(brochureDone(raw) ? 'Yes' : 'No', t.brochure.by);
+    // A series' brochures are its properties': "2 of 3" rather than a yes or no.
+    if (series) { const ms = membersOf(raw); r.push(`${ms.filter(m => m.brochure).length} of ${ms.length}`, ''); }
+    else r.push(brochureDone(raw) ? 'Yes' : 'No', t.brochure.by);
     for (const l of LISTINGS) r.push(LISTING_LABEL[t[l.key].status], t[l.key].url);
     const p = progress(t); r.push(`${p.done}/${p.total}`);
     return r;

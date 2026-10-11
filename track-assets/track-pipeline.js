@@ -137,14 +137,19 @@ export function furthestStep(listing, stages) {
   return key ? ladderIndex(key) : -1;
 }
 
+// The admin can set each stage's target (Settings → Configurations); unset, the stage's own applies.
+let TARGETS = {};
+export function setTargetDays(map) { TARGETS = map && typeof map === 'object' ? { ...map } : {}; }
+
 // How long this listing has sat where it is, against the stage's own target.
 // The board turns the chip amber past target and red at double it — a listing
 // parked in "Shoot scheduled" for a fortnight is the thing worth seeing.
 export function stageAge(listing, stages, now) {
   const since = (listing && (listing.stageChangedAt || listing.createdAt)) || now;
   const days = Math.floor((now - since) / 86400000);
-  const def = stageDef(stageKeyOf((stages || []).find(s => s.id === (listing && listing.stageId))));
-  const target = def && def.targetDays ? def.targetDays : null;
+  const key = stageKeyOf((stages || []).find(s => s.id === (listing && listing.stageId)));
+  const def = stageDef(key);
+  const target = (key && Number(TARGETS[key]) > 0 ? Number(TARGETS[key]) : 0) || (def && def.targetDays ? def.targetDays : null);
   return { days, since, target, over: !!(target && days > target), farOver: !!(target && days > target * 2) };
 }
 

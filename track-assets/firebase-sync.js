@@ -13,7 +13,7 @@
 //   listings/                    where tenantId == ours   → the board's cards
 //   trackPipelines/{tenantId}    the board's own columns
 //   postTracker/                 where tenantId == ours   → the Posting tab
-//   settings/{tenantId}          the team, for "Shoot assigned to"
+//   settings/{tenantId}          the team, for "Shoot assigned to"; trackConfig, this page's settings
 //   leads/                       where tenantId == ours   → seller leads, for
 //                                mapping a listing to the owner who called in
 //
@@ -84,7 +84,11 @@ function subscribeToData(tenantId){
 
     // The team (settings/{tenant}.team, set by the owner in the CRM), for "Shoot assigned to".
     onSnapshot(doc(db, 'settings', tenantId),
-      snap => { if(window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot((snap.data() && snap.data().team) || {}); },
+      snap => {
+        if(window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot((snap.data() && snap.data().team) || {});
+        // Settings → Configurations on this page (editors, deadlines, series, stage targets, tags).
+        if(window.applyTrackConfigSnapshot) window.applyTrackConfigSnapshot((snap.data() && snap.data().trackConfig) || {});
+      },
       err => console.error('Firestore team sync error:', err));
 
     // Seller leads, so a listing can name the owner who actually called in.
@@ -131,6 +135,17 @@ window.trackFirebase = {
       }
       await batch.commit();
     }
+  },
+  // Settings → Configurations. Each setting is replaced whole (a removed editor or stage target must
+  // go), never the rest of the settings document; a tenant with no settings yet gets one.
+  // keys: only those settings are written (trackConfig.<key>), so two people changing different
+  // settings at once never overwrite each other.
+  async saveTrackConfig(cfg, keys){
+    if(!currentTenantId) throw new Error('No tenant');
+    const ref = doc(db, 'settings', currentTenantId);
+    const patch = keys && keys.length ? Object.fromEntries(keys.map(k => ['trackConfig.' + k, cfg[k]])) : { trackConfig: cfg };
+    try { await updateDoc(ref, patch); }
+    catch(e){ if(e && e.code === 'not-found') await setDoc(ref, { trackConfig: cfg }, { merge: true }); else throw e; }
   },
   async deletePosting(id){
     if(!currentTenantId) throw new Error('No tenant');

@@ -530,8 +530,12 @@ await page.evaluate(() => { toggleView('shoots'); setAgentFilter('Ravi'); });
 await page.waitForTimeout(250);
 await page.evaluate(() => setMyAgent('Ravi'));
 await page.waitForTimeout(350);
-ok('Saying "this is me" puts the agent on their own day',
-  await page.$eval('#shootsView', e => e.style.display !== 'none'));
+// A shoot phone opens on the Editor view, the agent's own work (shoots to do, edits, dates) — the
+// day's run sheet one tap away.
+ok('Saying "this is me" puts the agent on their own work (Editor view, theirs only)',
+  await page.evaluate(() => !!document.querySelector('#boardView .ed-board') && /This phone is Ravi/.test(document.querySelector('.ed-agent').textContent)));
+await page.click('.ed-agent .tk-btn'); await page.waitForTimeout(250);
+ok('…and "Today’s shoots" opens their day', await page.$eval('#shootsView', e => e.style.display !== 'none'));
 const day = (await text(page, '.tk-day'))[0] || '';
 ok('The day opens with what is next, not a board', /Next up/.test(day), day.slice(0, 200));
 ok('…naming the property and its address', /Kottivakkam|Nungambakkam/.test(day), day.slice(0, 220));
@@ -547,9 +551,12 @@ const agentPage = await open({ width: 390, height: 844 }, () => {
   try { localStorage.setItem('track.me', 'Ravi'); localStorage.setItem('track.agent', 'Ravi'); } catch (e) {}
 });
 await agentPage.waitForTimeout(400);
-ok('Reopening a shoot phone lands on the day, never the board',
-  await agentPage.$eval('#shootsView', e => e.style.display !== 'none')
-  && await agentPage.$eval('#boardView', e => e.style.display === 'none'));
+ok('Reopening a shoot phone lands on their own work, never the full board',
+  await agentPage.evaluate(() => !!document.querySelector('#boardView .ed-board') && !document.querySelector('#boardView .tk-board:not(.ed-board)')));
+await agentPage.evaluate(() => toggleView('board', true)); await agentPage.waitForTimeout(150);
+ok('…even "Board" from the menu shows their work, not the full board', await agentPage.evaluate(() => !!document.querySelector('#boardView .ed-board')));
+await agentPage.click('.ed-agent .tk-btn'); await agentPage.waitForTimeout(250);
+ok('…their day one tap away', await agentPage.$eval('#shootsView', e => e.style.display !== 'none'));
 const tap = await agentPage.$$eval('.tk-next-acts .tk-btn', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
 ok('…with thumb-sized actions', tap.length && tap.every(h => h >= 44), JSON.stringify(tap));
 ok('…and no sideways scroll', !(await agentPage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));

@@ -17,7 +17,7 @@ import * as G from './posting.js';
 import * as TG from './tags.js';
 
 let trackers = [];
-const MODES = ['today', 'week', 'sheet', 'cards'];
+const MODES = ['today', 'week', 'sheet', 'cards', 'series'];
 // Older saved choices map onto the new tabs, so nobody lands somewhere unexpected after the update.
 const OLD_MODE = { tasks: 'today', upcoming: 'week', props: 'cards', matrix: 'sheet' };
 const K_MODE = 'posting.mode', K_SORT = 'posting.sort';
@@ -62,6 +62,9 @@ const refOf = t => { if (!t || t.repostOf) return ''; const r = String(t.referen
 const refHtml = (t, cls) => refOf(t) ? `<span class="${cls}" title="Reference">${esc(refOf(t))}</span>` : '';
 const origOf = t => (t && t.repostOf ? byId(t.repostOf) : null);
 const codeOf = t => (t.repostOf ? (origOf(t) || {}).propertyCode || '' : t.propertyCode);
+// A series row (or a round of one), and the series row itself for a round.
+const rootOf = t => (t && t.repostOf && origOf(t)) || t;
+const isSer = t => !!t && G.isSeries(rootOf(t));
 
 // Date formats, each built once (see G.formatDate) — toLocale*String per cell was most of a render.
 const F_FULL = { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
@@ -99,15 +102,20 @@ const weekLabel = ts => 'Week of ' + G.formatDate(ts, F_DM);
 
 // ═══════ DATA ═══════
 let snapIds = new Set();        // the rows in the latest snapshot, to tell "deleted" from "no permission"
+let loaded = false;             // the first snapshot has arrived (before it, a series is unknown, not gone)
+window.pgLoaded = () => loaded;
 window.applyPostingSnapshot = list => {
   const next = (Array.isArray(list) ? list : []).map(G.normalizeTracker);
-  const same = sameRows(trackers, next);
+  const same = loaded && sameRows(trackers, next);
   trackers = next;
+  loaded = true;
   snapIds = new Set(next.map(t => t.id));
   // Our own write coming back (Firestore echoes every local write): the page already shows it.
   if (same) return;
   badge();
   refresh();
+  // The board's series cards and Editor view read these rows (names, post dates).
+  if (window.trackPostingChanged) window.trackPostingChanged();
 };
 function sameRows(a, b) {
   if (a.length !== b.length) return false;
@@ -151,6 +159,7 @@ document.addEventListener('pointerup', released, true);
 document.addEventListener('pointercancel', released, true);
 document.addEventListener('click', released, true);    // in case a native popup kept the pointerup
 function badge() {
+  memMemo = null; serIdx = null;   // rows changed: series members are read again
   const n = trackers.filter(t => G.overall(t, now()) === 'attention').length;
   if (window.AppNav) window.AppNav.setBadge('posting', n);
 }
@@ -236,7 +245,7 @@ function offerUndo(msg, fn) {
 window.pgUndo = () => { const fn = undoFn; undoFn = null; const el = $('pgUndo'); if (el) el.classList.remove('show'); if (fn) fn(); };
 function loadInv() {
   if (!window.trackLoadInventory) return;
-  window.trackLoadInventory().then(l => { inv = l || []; refresh(); if (dlg && dlg.kind === 'plan') pgPlanPreview(); });
+  window.trackLoadInventory().then(l => { inv = l || []; memMemo = null; refresh(); if (dlg && dlg.kind === 'plan') pgPlanPreview(); });
 }
 const invFor = t => inv && t.propertyCode ? inv.find(p => G.codeKey(p.propertyCode) === G.codeKey(t.propertyCode)) : null;
 const trackedByCode = code => trackers.find(t => !t.repostOf && G.codeKey(t.propertyCode) && G.codeKey(t.propertyCode) === G.codeKey(code)) || null;
@@ -257,8 +266,113 @@ window.postingOpened = () => {
 function matchesSearch(t, q) {
   if (!q) return true;
   const o = origOf(t);
-  return [t.propertyCode, t.title, t.reference, t.location, t.details, t.note, o && o.title, o && o.propertyCode, ...tagsOf(t)].join(' ').toLowerCase().includes(q);
+  // A series is found by any of its properties too ("tnag0003" finds the T Nagar series).
+  const mem = isSer(t) ? rootOf(t).members.flatMap(m => [m.propertyCode, m.title]) : [];
+  return [t.propertyCode, t.title, t.reference, t.location, t.details, t.note, o && o.title, o && o.propertyCode, ...mem, ...tagsOf(t)].join(' ').toLowerCase().includes(q);
 }
+
+// ── Series: its properties, as they stand ──
+// Each member read from its own row and the Property dashboard (G.memberStatus), once per render.
+let memMemo = null, serIdx = null;
+const invList = () => (window.trackApi && window.trackApi.inventory && window.trackApi.inventory()) || inv || [];
+function membersOf(t) {
+  const s = rootOf(t);
+  if (!s || !G.isSeries(s)) return [];
+  if (!memMemo) memMemo = new Map();
+  if (!memMemo.has(s.id)) {
+    // Photos uploaded at the shoot sit on the property's board card: those count too.
+    const ms = G.memberStatus(s, trackers, invList()).map(m => {
+      if (m.photosLink) return m;
+      const l = memo().byCode.get(G.codeKey(m.propertyCode));
+      return l && G.isUrl(l.photosLink) ? { ...m, photosLink: l.photosLink } : m;
+    });
+    memMemo.set(s.id, ms);
+  }
+  return memMemo.get(s.id);
+}
+G.setMemberSource(membersOf);
+// The series a property is in (by its row, or by its code).
+const seriesFor = t => (t && !isSer(t) ? G.seriesOf(trackers, t, serIdx || (serIdx = G.seriesIndex(trackers))) : []);
+const serName = s => G.nameOf(s);
+// The small "Series · 3" mark beside a series' name, wherever its name is shown.
+const serBadge = t => (isSer(t) ? `<span class="pg-ser" title="A series: ${membersOf(t).length} properties in one video">Series · ${membersOf(t).length}</span>` : '');
+
+// ── The edit, from the Shoot & Media board ──
+// Where the video for a post stands: planned, being edited (and by whom, for how long), or done.
+function editTag(t) {
+  const l = listingOf(t), api = window.trackApi;
+  if (!l || !api || !api.editOf) return '';
+  const e = api.editOf(l);
+  if (e.status === 'active') return `<span class="pg-ed act" title="Being edited now (from the board's Editor view)">✂ Editing${e.by ? ' · ' + esc(e.by) : ''}${e.startedAt ? ' · ' + esc(api.span(now() - e.startedAt)) : ''}</span>`;
+  if (e.status === 'planned') return `<span class="pg-ed plan" title="Edit planned (from the board's Editor view)">✂ Edit planned${e.by ? ' · ' + esc(e.by) : ''}${e.planAt ? ' · ' + esc(G.dayLabel(e.planAt)) : ''}</span>`;
+  if (e.status === 'done') return `<span class="pg-ed ok" title="Edit done${e.by ? ' by ' + esc(e.by) : ''}">✂ Edit done</span>`;
+  return '';
+}
+
+// Every post of a board card's property (all its rounds) — or of a series card's series — for the
+// board's Editor view: how many, how many with a time, how many live, and the next one.
+window.pgPostsFor = l => {
+  if (!l) return null;
+  let rows;
+  if (l.kind === 'series') {
+    const sid = l.postingId || (trackers.find(t => G.isSeries(t) && t.listingId === l.id) || {}).id;
+    rows = sid ? trackers.filter(t => t.id === sid || t.repostOf === sid) : [];
+  } else {
+    const k = G.codeKey(l.propertyCode) || G.codeKey(l.brochure && l.brochure.code);
+    const root = k ? trackers.find(t => !t.repostOf && !G.isSeries(t) && G.codeKey(t.propertyCode) === k) : null;
+    rows = root ? trackers.filter(t => t.id === root.id || t.repostOf === root.id) : [];
+  }
+  const out = { total: 0, scheduled: 0, live: 0, planned: 0, nextAt: 0, nextKey: '', planDay: 0, lastLiveAt: 0, rowId: rows[0] ? rows[0].id : '' };
+  for (const t of rows) for (const k of G.CHANNEL_KEYS) {
+    const c = t.channels[k];
+    if (c.status === 'live') { out.total++; out.live++; out.lastLiveAt = Math.max(out.lastLiveAt, c.liveAt || c.at || 0); }
+    else if (c.status === 'scheduled') { out.total++; out.scheduled++; if (!out.nextAt || c.at < out.nextAt) { out.nextAt = c.at; out.nextKey = k; } }
+    else if (c.status === 'yet' && c.day) { out.total++; out.planned++; if (!out.planDay || c.day < out.planDay) out.planDay = c.day; }
+  }
+  return out;
+};
+// A series, for its board card: its name and its properties.
+window.pgSeriesInfo = id => {
+  const s = byId(id);
+  if (!s || !G.isSeries(s)) return null;
+  return { id: s.id, name: serName(s), members: membersOf(s), listingId: s.listingId };
+};
+// From the board: a series' row in the Series tab.
+window.pgOpenSeries = id => {
+  if (window.closeDetail && document.getElementById('dp') && document.getElementById('dp').classList.contains('open')) window.closeDetail();
+  if (window.toggleView) window.toggleView('posting');
+  mode = 'series'; try { localStorage.setItem(K_MODE, mode); } catch (e) {}
+  filters = new Set(); focusId = id && byId(id) ? id : null; renderPosting();
+};
+// The board card a series is edited on: made with the series, and for a series that has none yet.
+// Only from this tab's own actions (never off a snapshot), so two open tabs cannot make two cards.
+// Returns the new card's id, or '' when none was made. `asked`: the "Add to the board" button — made
+// even when Settings says new series get no card. A card that was deleted on the board counts as none.
+function ensureCard(t, asked) {
+  const api = window.trackApi;
+  if (!t || !G.isSeries(t) || t.repostOf || !api || !api.createSeriesCard) return '';
+  if (t.listingId && (!asked || listingOf(t))) return '';
+  if (!asked && window.trackConfig && window.trackConfig().seriesBoardCard === false) return '';   // Settings → Configurations
+  // Never two cards for one series: wait for the board's cards, and relink to one already made for it.
+  if (api.listingsLoaded && !api.listingsLoaded()) return '';
+  const had = (api.listings() || []).find(l => l.kind === 'series' && l.postingId === t.id);
+  if (had) { tagMemo = null; const cur = byId(t.id); if (cur && cur.listingId !== had.id) persist({ ...cur, listingId: had.id }, '', true); return had.id; }
+  const id = api.createSeriesCard({ title: serName(t), postingId: t.id });
+  if (!id) return '';
+  tagMemo = null;
+  const cur = byId(t.id);
+  if (cur) persist({ ...cur, listingId: id }, '', true);
+  return id;
+}
+window.pgSeriesCard = id => {
+  const t = byId(id); if (!t) return;
+  toast(ensureCard(t, true) ? 'Added to the Shoot & Media board' : 'Could not add it to the board — try again once the board has loaded');
+  renderPosting();
+};
+// Undo for an action that also made a board card: the card goes too.
+const dropCard = id => { if (id && window.trackApi && window.trackApi.removeSeriesCard) window.trackApi.removeSeriesCard(id); };
+// The board renamed a series card: the series is renamed with it, so it has one name everywhere.
+window.pgSeriesRename = (id, name) => { const t = byId(id), v = String(name || '').trim(); if (t && v && G.isSeries(t) && v !== t.title) persist({ ...t, title: v }, '', true); };
 
 // ── Tags ──
 // A property has one set of tags: those of its listing on the board when there is one (matched by
@@ -268,14 +382,18 @@ function matchesSearch(t, q) {
 let tagMemo = null;
 function memo() {
   if (tagMemo) return tagMemo;
-  const byCode = new Map();
+  const byCode = new Map(), byId = new Map();
   for (const l of (window.trackApi && window.trackApi.listings()) || []) {
+    byId.set(l.id, l);
+    if (l.kind === 'series') continue;   // a series card is found by its id, never by a code
     for (const c of [l.propertyCode, l.brochure && l.brochure.code]) { const k = G.codeKey(c); if (k && !byCode.has(k)) byCode.set(k, l); }
   }
-  return (tagMemo = { byCode, tags: new Map() });
+  return (tagMemo = { byCode, byId, tags: new Map() });
 }
 function listingOf(t) {
   const root = (t && t.repostOf && origOf(t)) || t;
+  // A series' board card is the one it was made with.
+  if (G.isSeries(root)) return root.listingId ? memo().byId.get(root.listingId) || null : null;
   const k = G.codeKey(root && root.propertyCode);
   return k ? memo().byCode.get(k) || null : null;
 }
@@ -319,7 +437,15 @@ function broState(t) {
 G.setBrochureSource(broState);
 // The one place a brochure is made: the property's listing on the board, else the Create brochure page.
 const broWhere = b => b.src === 'board' ? 'from the board' : b.src === 'dashboard' ? 'from the Property dashboard' : b.src === 'marked' ? 'marked here earlier' : '';
+// A series' brochures are its properties': "2 of 3 created", and which are missing.
+function serBroCell(t) {
+  const ms = membersOf(t), done = ms.filter(m => m.brochure).length;
+  const miss = ms.filter(m => !m.brochure).map(m => m.propertyCode || m.name);
+  if (!ms.length) return '<span class="ps-ro">No properties yet</span>';
+  return `<span class="ps-ro pg-bro ${done === ms.length ? 'ok' : 'warn'}">${done === ms.length ? '✓ ' : ''}${done} of ${ms.length} created</span>${miss.length ? `<div class="ps-sub">Missing: ${esc(miss.join(', '))}</div>` : '<div class="ps-sub">each property\'s own</div>'}`;
+}
 function broCell(t, small) {
+  if (isSer(t)) return serBroCell(t);
   const b = broState(t);
   const open = b.link ? ` <a href="${href(b.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">open ↗</a>` : '';
   const go = !b.done && b.state === 'none'
@@ -341,6 +467,20 @@ function voiceTag(t, key) {
 function needsHtml(t, key) {
   if (!t) return '';
   const root = (t.repostOf && origOf(t)) || t;
+  const ed = editTag(t);
+  if (G.isSeries(root)) {
+    // A series: which of its properties still lack photos or a brochure.
+    const ms = membersOf(t), miss = [];
+    if (ms.length < 2) miss.push(ms.length ? 'More properties' : 'Properties');
+    const np = ms.filter(m => !m.photosLink).map(m => m.propertyCode || m.name);
+    const nb = ms.filter(m => !m.brochure).map(m => m.propertyCode || m.name);
+    if (np.length) miss.push('Photos: ' + np.join(', '));
+    if (nb.length) miss.push('Brochure: ' + nb.join(', '));
+    const c = key && t.channels && t.channels[key];
+    if (c && c.status === 'live' && !c.url) miss.push('Link');
+    if (!miss.length && !ed) return '';
+    return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${ed}</div>`;
+  }
   const miss = [];
   if (!String(root.photosLink || '').trim()) miss.push('Photos');
   if (!String(root.details || '').trim()) miss.push('Details');
@@ -349,15 +489,15 @@ function needsHtml(t, key) {
   const c = key && t.channels && t.channels[key];
   if (c && c.status === 'live' && !c.url) miss.push('Link');
   const bro = b.state === 'requested' ? 'Brochure in queue' : b.state === 'building' ? 'Brochure being delivered' : '';
-  if (!miss.length && !bro) return '';
-  return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${bro ? `<span class="pg-need bro">${esc(bro)}</span>` : ''}</div>`;
+  if (!miss.length && !bro && !ed) return '';
+  return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${bro ? `<span class="pg-need bro">${esc(bro)}</span>` : ''}${ed}</div>`;
 }
 window.pgBrochureGo = listingId => { if (window.toggleView) window.toggleView('board'); if (window.openDetail) window.openDetail(listingId); };
 
 // The tag picker changed a listing's tags: show them here at once.
 window.pgRedraw = () => { tagMemo = null; if (isOpen() && !dlg) renderPosting(); else stale = true; };
 // A listings snapshot: tags may have changed — redraw on the next refresh (through the typing guard).
-window.pgListingsChanged = () => { tagMemo = null; broMemo = null; stale = true; badge(); };
+window.pgListingsChanged = () => { tagMemo = null; broMemo = null; memMemo = null; stale = true; badge(); };
 function tagTarget(t) { const l = listingOf(t); return l ? 'l:' + l.id : 'p:' + (((t.repostOf && origOf(t)) || t).id); }
 // Small and inline (it sits inside buttons): the week tiles, Today and the lists.
 const miniTags = t => { const l = tagsOf(t); return l.length ? `<span class="tk-tags sm">${l.map(x => `<span class="tk-tag ${TG.tagClass(x)}">${esc(x)}</span>`).join('')}</span>` : ''; };
@@ -376,7 +516,7 @@ function passes(t, t0) {
 }
 function worst(t) { const g = G.gaps(t, now()); return g.length ? g[0].sev : 0; }
 
-const MODE_LABEL = { today: 'Today', week: 'Week', sheet: 'Sheet', cards: 'Properties' };
+const MODE_LABEL = { today: 'Today', week: 'Week', sheet: 'Sheet', cards: 'Properties', series: 'Series' };
 // The number on each tab answers that tab's question: Today = how many things need you,
 // Week = how many posts this week, Sheet / Cards = how many rows.
 function urgentCount(base, t0) { return G.tasks(base, t0).reduce((n, g) => n + g.items.filter(i => i.sev >= 3).length, 0); }
@@ -384,7 +524,9 @@ function modeCount(m, base) {
   const t0 = now();
   if (m === 'today') return urgentCount(base, t0);
   if (m === 'week') { const a = G.weekAgenda(base, G.mondayOf(t0), t0); return a.days.reduce((n, d) => n + d.items.length, 0) + a.weekItems.length; }
-  if (m === 'cards') return new Set(base.map(t => (G.familyOf(trackers, t.id, fams())[0] || t).id)).size;
+  // Properties are properties; a series has its own tab.
+  if (m === 'cards') return new Set(base.filter(t => !isSer(t)).map(t => (G.familyOf(trackers, t.id, fams())[0] || t).id)).size;
+  if (m === 'series') return new Set(base.filter(isSer).map(t => rootOf(t).id)).size;
   return base.length;
 }
 // Every row's family, built once per render: the Sheet asks for it in every channel cell.
@@ -398,6 +540,7 @@ function renderPosting() {
   famIdx = G.familyIndex(trackers);
   tagMemo = null;   // listings and tags are looked up once per render (see listingOf)
   broMemo = null;   // …and each property's brochure state
+  memMemo = null; serIdx = null;   // …and each series' properties
   try { drawPosting(el); } finally { famIdx = null; }
 }
 function drawPosting(el) {
@@ -421,11 +564,12 @@ function drawPosting(el) {
         <button type="button" class="tk-btn" onclick="pgExport()">Export CSV</button>
         <button type="button" class="tk-btn" onclick="pgOpenPlan()">Paste week plan</button>
         <button type="button" class="tk-btn" onclick="pgOpenAdd()">Add property</button>
+        <button type="button" class="tk-btn" onclick="pgOpenSeriesDlg('')">New series</button>
         <button type="button" class="tk-btn primary" onclick="pgOpenBulk()">+ Add schedule</button>
       </div>
     </div>
     ${line && mode !== 'today' ? `<div class="pg-summary">${line}</div>` : ''}
-    ${mode === 'today' ? todayHtml(base) : mode === 'cards' ? propsHtml(base) : mode === 'sheet' ? sheetHtml(base) : queueHtml(base)}`;
+    ${mode === 'today' ? todayHtml(base) : mode === 'cards' ? propsHtml(base) : mode === 'sheet' ? sheetHtml(base) : mode === 'series' ? seriesHtml(base) : queueHtml(base)}`;
   if (focusId) {
     const c = document.getElementById('pg-' + focusId);
     if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('pg-flash'); }
@@ -440,6 +584,10 @@ const noMatch = () => `<div class="tk-empty"><div class="tk-empty-t">Nothing mat
 
 // The little code badge every view shows: the code, the original's code for a repost, or "no code".
 function codeBadge(t, clickable) {
+  if (isSer(t)) {
+    const txt = (t.repostOf ? '↺ ' : '') + 'Series';
+    return clickable ? `<button type="button" class="tk-code pg-codebtn ser" title="A series — open it" onclick="pgOpenSeries(${jsq(rootOf(t).id)})">${txt}</button>` : `<span class="tk-code ser">${txt}</span>`;
+  }
   const o = origOf(t);
   const txt = t.repostOf ? '↺ ' + (codeOf(t) || 'repost') : (t.propertyCode || 'no code');
   const cls = 'tk-code' + (t.propertyCode || t.repostOf ? '' : ' none') + (clickable ? ' pg-codebtn' : '');
@@ -467,7 +615,10 @@ window.addEventListener('resize', pinBelowHeader);
 const labelOf = k => (G.CHANNELS.find(c => c.key === k) || G.LISTINGS.find(c => c.key === k) || {}).label || k;
 function taskActions(g, it) {
   const id = it.id, b = (label, js, cls) => `<button type="button" class="tk-btn sm${cls ? ' ' + cls : ''}" onclick="${js}">${esc(label)}</button>`;
+  // A series' photos and brochures are its properties': open the series to see which and go to them.
+  if (isSer(it.tracker) && (g.kind === 'photos' || g.kind === 'brochure')) return b('See its properties', `pgOpenSeries(${jsq(rootOf(it.tracker).id)})`, 'primary');
   switch (g.kind) {
+    case 'members': return b('Add properties', `pgOpenSeriesDlg(${jsq(id)})`, 'primary');
     case 'due': return it.keys.map(k => b('Mark ' + labelOf(k) + ' posted', `pgChannel(${jsq(id)},${jsq(k)},'live')`, 'primary') + b('Reschedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`)).join('');
     case 'link': return it.keys.map(k => b('Add ' + labelOf(k) + ' link', G.CHANNEL_KEYS.includes(k) ? `pgLink(${jsq(id)},${jsq(k)})` : `pgListing(${jsq(id)},${jsq(k)},'posted')`, 'primary')).join('');
     case 'plan': return G.CHANNELS.map(c => `<button type="button" class="tk-btn sm" onclick="pgChannel(${jsq(id)},${jsq(c.key)},'scheduled')">${chLabel(c.key, c.label)}</button>`).join('');
@@ -638,7 +789,7 @@ function nowListHtml(groups) {
   return `<div class="pt-list">${rows.map(({ g, it }) => `<div class="pt-now">
     <span class="pt-tag">${esc(NOW_TAG[g.kind] || g.title)}</span>
     <span class="pt-what">${it.keys.filter(k => G.CHANNEL_KEYS.includes(k)).map(k => chIcon(k)).join('')}
-      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>
+      <button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${serBadge(it.tracker)}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>
       ${planBit(it.tracker)}</span>
     <span class="pt-acts">${taskActions(g, it)}</span>
   </div>`).join('')}</div>`;
@@ -651,7 +802,7 @@ function todayRow(it) {
   return `<div class="pt-row ws-${it.state}">
     <span class="pt-time">${esc(time)}</span>
     <span class="pt-type">${chLabel(it.key, type)}</span>
-    <span class="pt-namecol"><button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>${needsHtml(it.tracker, it.key)}</span>
+    <span class="pt-namecol"><button type="button" class="pt-name" onclick="pgJump(${jsq(it.id)})" title="Open in the sheet">${esc(dn(it.tracker))}${serBadge(it.tracker)}${refHtml(it.tracker, 'pg-ref')}${miniTags(it.tracker)}</button>${needsHtml(it.tracker, it.key)}</span>
     <span class="pt-state">${esc(STATE_TXT[it.state])}</span>
     <span class="pt-acts">${itemActions(it)}</span>
   </div>`;
@@ -728,6 +879,7 @@ function sheetCell(t, key, label, t0, focus) {
     const pill = `<select class="pg-sel ps-pill t-${tone}" aria-label="${esc(label)} status" title="${esc(G.STATUS_LABEL[v.status])}" onchange="pgChannel(${jsq(id)},${jsq(key)},this.value)">${opts}</select>`;
     return cell(v.due || v.linkMissing || lateDay ? 'hot' : '', `${histLines(before)}${pill}${sub(h)}${voiceTag(t, key) ? `<div class="ps-sub">${voiceTag(t, key)}</div>` : ''}${histLines(after)}`);
   }
+  if (key === 'acres99' && isSer(t)) return cell('ps-orig', '<span class="ps-faint">Not for a series</span>');
   if (t.repostOf) {
     const o = origOf(t);
     if (!o) return cell('ps-orig', '<span class="ps-faint">Original deleted</span>');
@@ -747,8 +899,31 @@ function sheetCell(t, key, label, t0, focus) {
 }
 
 // Under the name: the code (or a field to add it), the dashboard state, what media has sent.
+// A series' properties as chips: amber when one still lacks photos or a brochure. Each opens that
+// property's own row, where its own posts are.
+function memberChips(t) {
+  const ms = membersOf(t);
+  if (!ms.length) return '<span class="ps-faint">No properties yet</span>';
+  return ms.map(m => {
+    const miss = [!m.photosLink && 'photos', !m.brochure && 'brochure'].filter(Boolean);
+    const tip = `${m.name}${m.propertyCode ? ' (' + m.propertyCode + ')' : ''} — ${miss.length ? 'missing ' + miss.join(' and ') : 'photos and brochure in'}${m.trackerId ? ' · open its own row' : ' · not on the tracker'}`;
+    const lbl = esc(m.propertyCode || m.name) + (miss.length ? ' <i aria-hidden="true">!</i>' : '');
+    return m.trackerId
+      ? `<button type="button" class="ps-mem${miss.length ? ' warn' : ' ok'}" title="${esc(tip)}" onclick="pgJump(${jsq(m.trackerId)})">${lbl}</button>`
+      : `<span class="ps-mem${miss.length ? ' warn' : ' ok'}" title="${esc(tip)}">${lbl}</span>`;
+  }).join('');
+}
+// Where a property's series are named on its own row: "In: T Nagar series".
+const inSeries = t => seriesFor(t).map(s => `<button type="button" class="ps-mini ser" onclick="pgOpenSeries(${jsq(s.id)})" title="This property is also in a series — its own posts stay its own">In: ${esc(serName(s))}</button>`).join('');
 function sheetIdentity(t) {
   const id = t.id;
+  if (isSer(t)) {
+    const s = rootOf(t), l = listingOf(t);
+    const card = l ? `<button type="button" class="ps-mini ok" onclick="pgBrochureGo(${jsq(l.id)})" title="Its edit, on the Shoot & Media board">On the board</button>`
+      : !t.repostOf ? `<button type="button" class="ps-mini warn" onclick="pgSeriesCard(${jsq(s.id)})">Add to the board</button>` : '';
+    return `<div class="ps-ident">${t.repostOf ? `<button type="button" class="ps-tag ps-repost" onclick="pgOpenSeries(${jsq(s.id)})">↺ Again: ${esc(serName(s))}</button>` : `<span class="ps-code ser">Series · ${membersOf(t).length}</span><button type="button" class="ps-mini" onclick="pgOpenSeriesDlg(${jsq(s.id)})">Properties</button>${card}`}</div>
+      <div class="ps-ident ps-mems">${memberChips(t)}</div>${editTag(t) ? `<div class="ps-ident">${editTag(t)}</div>` : ''}`;
+  }
   if (t.repostOf) {
     const o = origOf(t);
     return `<button type="button" class="ps-tag ps-repost" onclick="pgFocus(${jsq(t.repostOf)})" title="Open the original">↺ Repost of ${esc(o ? (o.propertyCode || G.nameOf(o)) : 'a deleted row')}</button>`;
@@ -765,7 +940,7 @@ function sheetIdentity(t) {
         : `<button type="button" class="ps-mini warn" onclick="pgOpenLink(${jsq(id)})">Not in dashboard</button>`);
   }
   const dot = (ok, label) => `<button type="button" class="ps-dot pg-chip ${ok ? 'ok' : 'no'}" onclick="pgOpenEdit(${jsq(id)})" title="${label} ${ok ? 'received — click to edit' : 'not received — click to add'}">${label}</button>`;
-  return `<div class="ps-ident">${code}</div><div class="ps-ident">${dot(!!t.photosLink, 'Photos')}${dot(!!t.details, 'Details')}</div>`;
+  return `<div class="ps-ident">${code}</div><div class="ps-ident">${dot(!!t.photosLink, 'Photos')}${dot(!!t.details, 'Details')}${inSeries(t)}</div>${editTag(t) ? `<div class="ps-ident">${editTag(t)}</div>` : ''}`;
 }
 
 function sheetRow(t, cols, t0, wk) {
@@ -812,7 +987,7 @@ function weekStrip(base, hideable) {
     return `<button type="button" class="wk-it ws-${it.state}" onclick="pgTile(${jsq(it.id)},${jsq(it.key || '')},${jsq(it.state)})" title="${esc(type + ' · ' + dn(it.tracker) + ' · ' + STATE_TXT[it.state])}">
       <span class="wk-row1"><span class="wk-ch ch-${it.key || 'none'}">${chIcon(it.key)}${esc(type)}</span>${time ? `<span class="wk-tm">${esc(time)}</span>` : ''}</span>
       <span class="wk-nm">${esc(dn(it.tracker))}</span>
-      ${refHtml(it.tracker, 'wk-ref')}
+      ${serBadge(it.tracker)}${refHtml(it.tracker, 'wk-ref')}
       ${miniTags(it.tracker)}
     </button>`;
   };
@@ -884,7 +1059,8 @@ function sheetFoot(list, cols, t0) {
       for (const t of list) { const v = G.channelView(t.channels[k], t0); if (v.status === 'live') live++; else if (v.status === 'scheduled') sch++; else if (v.status === 'yet') todo++; }
       big = `${live} live`; small = `${sch} sched · ${todo} to do`;
     } else if (k === 'brochure') {
-      big = `${own.filter(t => broState(t).done).length} of ${own.length}`; small = 'created';
+      const props = own.filter(t => !isSer(t));   // a series' brochures are its properties'
+      big = `${props.filter(t => broState(t).done).length} of ${props.length}`; small = 'created';
     } else {
       const d = own.filter(t => t[k].status === 'posted').length, na = own.filter(t => t[k].status === 'na').length;
       big = `${d} posted`; small = na ? `${na} not needed` : `of ${own.length}`;
@@ -932,14 +1108,17 @@ function sortList(list) {
 window.pgSort = k => { sortKey = k; try { localStorage.setItem(K_SORT, k); } catch (e) {} order = null; renderPosting(); };
 window.pgFocus = id => {
   const t = byId(id); if (!t) return;
+  if (isSer(t)) return window.pgOpenSeries(rootOf(t).id);
   mode = 'cards'; try { localStorage.setItem(K_MODE, mode); } catch (e) {}
   filters = new Set(); focusId = id; renderPosting();
 };
 
 function filterBar(base) {
   const t0 = now();
+  // Counted over what this tab lists: series on the Series tab, properties on Properties.
+  const inTab = mode === 'series' ? base.filter(isSer) : mode === 'cards' ? base.filter(t => !isSer(t)) : base;
   const btns = G.FILTERS.map(([k, label]) => {
-    const n = base.filter(t => G.matchesFilter(t, k, t0)).length;
+    const n = inTab.filter(t => G.matchesFilter(t, k, t0)).length;
     const on = filters.has(k);
     return `<button type="button" class="pg-f${on ? ' on' : ''}" aria-pressed="${on}" onclick="pgFilter(${jsq(k)})">${on ? '✓ ' : ''}${esc(label)} <span class="tk-n">${n}</span></button>`;
   }).join('');
@@ -971,7 +1150,7 @@ function filterBar(base) {
 function propsHtml(base) {
   if (!trackers.length) return emptyAll();
   const t0 = now();
-  const list = sortList(base.filter(t => passes(t, t0)));
+  const list = sortList(base.filter(t => passes(t, t0) && !isSer(t)));
   const seen = new Set(), blocks = [];
   for (const t of list) {
     const fam = G.familyOf(trackers, t.id, fams());
@@ -1010,6 +1189,76 @@ function familyHtml(fam) {
     <div class="pf-tally">${tally}</div>
     ${history && fam.length > 1 ? `<div class="pf-hist"><div class="pf-histt">Every time it went out</div>${history}</div>` : ''}
     <div class="pg-grid pf-rounds">${fam.map((t, i) => `<div class="pf-round"><div class="pf-rl">${i === 0 ? 'Round 1 · original' : `Round ${i + 1} · repost`}</div>${cardHtml(t)}</div>`).join('')}</div>
+  </section>`;
+}
+
+// ── Series: several properties, shot one by one, edited into one video ──
+// One block per series: its posts on every channel (all its rounds), its website listing, then each
+// property — photos, brochure, and that property's OWN posts, which stay apart from the series'.
+function seriesHtml(base) {
+  const t0 = now();
+  const list = sortList(base.filter(t => isSer(t) && passes(t, t0)));
+  const seen = new Set(), blocks = [];
+  for (const t of list) { const s = rootOf(t); if (!s || seen.has(s.id)) continue; seen.add(s.id); blocks.push(seriesBlock(s, t0)); }
+  const intro = `<div class="sr-intro"><div><b>Series</b><span>Several properties, each shot on its own, edited into one video and posted as one post — on any channel and the website. Each property keeps its own posts.</span></div>
+    <button type="button" class="tk-btn primary" onclick="pgOpenSeriesDlg('')">+ New series</button></div>`;
+  if (!trackers.some(t => G.isSeries(t))) return `${intro}<div class="tk-empty"><div class="tk-empty-i">🎞️</div><div class="tk-empty-t">No series yet</div>
+    <div class="tk-empty-s">Club properties shot separately — “T Nagar series”, “Studio series” — and schedule them as one post. A plan line that says “series” becomes one too.</div></div>`;
+  return `${intro}${filterBar(base)}${blocks.length ? `<div class="sr-list">${blocks.join('')}</div>` : noMatch()}`;
+}
+function seriesBlock(s, t0) {
+  const fam = G.familyOf(trackers, s.id, fams());
+  const ms = membersOf(s), l = listingOf(s);
+  // Each channel: every round of the series on it, newest round's state leading.
+  const chans = G.CHANNELS.map(c => {
+    const h = G.channelHistory(trackers, s.id, c.key, fams());
+    const cur = G.channelView(s.channels[c.key], t0);
+    const lateDay = cur.status === 'yet' && cur.day && cur.day < G.startOfDay(t0);
+    const state = cur.due ? `<span class="ps-bad">Due · ${esc(shortWhen(cur.at))}</span>` : cur.status === 'scheduled' ? esc(shortWhen(cur.at))
+      : cur.status === 'live' ? (cur.url ? `<a class="ps-link" href="${href(cur.url)}" target="_blank" rel="noopener">Live ↗</a>` : `<button type="button" class="pg-warnbtn ps-bad" onclick="pgLink(${jsq(s.id)},${jsq(c.key)})">Live — add link</button>`)
+      : cur.status === 'yet' && cur.day ? `<span class="${lateDay ? 'ps-bad' : 'ps-planned'}">Plan ${esc(G.dayLabel(cur.day))}</span>` : cur.status === 'na' ? '<span class="ps-faint">N/A</span>' : '<span class="ps-faint">To schedule</span>';
+    const act = cur.status === 'live' || cur.status === 'na' ? '' : `<button type="button" class="tk-link" onclick="pgChannel(${jsq(s.id)},${jsq(c.key)},'scheduled')">${cur.status === 'scheduled' ? 'Reschedule' : 'Schedule'}</button>`;
+    const others = h.filter(x => x.rowId !== s.id);
+    return `<div class="sr-ch${cur.due || lateDay || cur.linkMissing ? ' hot' : ''}"><span class="sr-chn">${chLabel(c.key, c.label)}</span><span class="sr-chs">${state}${voiceTag(s, c.key) ? ' ' + voiceTag(s, c.key) : ''}</span>${act}${others.length ? histLines(others) : ''}</div>`;
+  }).join('');
+  const w = s.website;
+  const web = `<div class="sr-ch"><span class="sr-chn">3 PIN website</span><span class="sr-chs">${w.status === 'posted' ? (w.url ? `<a class="ps-link" href="${href(w.url)}" target="_blank" rel="noopener">Posted ↗</a>` : '<span class="ps-bad">Posted, no link</span>') : w.status === 'na' ? '<span class="ps-faint">N/A</span>' : '<span class="ps-faint">Not posted</span>'}</span>
+    <select class="pg-sel ps-pill t-${w.status === 'posted' ? (w.url ? 'live' : 'bad') : w.status === 'na' ? 'na' : 'yet'}" aria-label="3 PIN website status" onchange="pgListing(${jsq(s.id)},'website',this.value)">${Object.keys(G.LISTING_LABEL).map(k => `<option value="${k}"${w.status === k ? ' selected' : ''}>${SHORT_L[k]}</option>`).join('')}</select></div>`;
+  const mrows = ms.map(m => {
+    const b = m.row ? broState(m.row) : broState({ id: m.key, propertyCode: m.propertyCode });
+    // The property's own posts: every round of it, on every channel — apart from the series.
+    const own = m.row ? G.CHANNELS.map(c => ({ c, h: G.channelHistory(trackers, m.row.id, c.key, fams()) })).filter(x => x.h.length) : [];
+    const ownTxt = !m.row ? '<span class="ps-faint">Not on the tracker — no own posts</span>'
+      : own.length ? own.map(({ c, h }) => { const last = h[h.length - 1]; return `<span class="sr-own h-${last.status}">${chIcon(c.key)}${esc(G.SHORT_CH[c.key])} · ${esc(H_TXT[last.status] || last.status)} ${esc(shortDate(last.when))}${h.length > 1 ? ` <em>${h.length}×</em>` : ''}</span>`; }).join('')
+      : '<span class="ps-faint">No individual posts yet</span>';
+    return `<div class="sr-m">
+      <div class="sr-mn">${m.propertyCode ? `<span class="ps-code">${esc(m.propertyCode)}</span>` : ''}<b>${esc(m.name)}</b></div>
+      <div class="sr-mf"><span class="sr-k">Photos</span>${m.photosLink ? (G.isUrl(m.photosLink) ? `<a class="pg-ok" href="${href(m.photosLink)}" target="_blank" rel="noopener">✓ Open ↗</a>` : '<span class="pg-ok">✓ Received</span>') : '<span class="pg-pend">Not received</span>'}</div>
+      <div class="sr-mf"><span class="sr-k">Brochure</span><span class="${b.done ? 'pg-ok' : 'pg-pend'}">${b.done ? '✓ ' : ''}${esc(BRO_LABEL[b.state])}</span>${b.link ? ` <a href="${href(b.link)}" target="_blank" rel="noopener">open ↗</a>` : ''}</div>
+      <div class="sr-mf sr-mown"><span class="sr-k">Own posts</span><span class="sr-owns">${ownTxt}</span></div>
+      <div class="sr-ma">${m.row ? `<button type="button" class="tk-btn sm" onclick="pgJump(${jsq(m.row.id)})">Its own row</button>` : ''}</div>
+    </div>`;
+  }).join('');
+  const ed = editTag(s);
+  const p = G.progress(s), st = STATE_PILL[G.overall(s, t0)];
+  return `<section class="sr" id="pg-${esc(s.id)}">
+    <div class="sr-head">
+      <div class="sr-ht">
+        <div class="sr-name">${esc(serName(s))}</div>
+        <div class="sr-meta"><span class="tk-code ser">Series · ${ms.length} propert${ms.length === 1 ? 'y' : 'ies'}</span>${planBit(s)}${fam.length > 1 ? `<span>${fam.length} rounds of posting</span>` : ''}<span class="tk-pill ${st[1]}">${st[0]}</span><span class="pg-sub">${p.done}/${p.total} done</span>${ed}</div>
+        ${s.note ? `<div class="pg-notebox">📝 ${esc(s.note)}</div>` : ''}
+        <div class="pf-tags">${tagPicker(s, true, true)}</div>
+      </div>
+      <div class="sr-acts">
+        <button type="button" class="tk-btn sm" onclick="pgOpenSeriesDlg(${jsq(s.id)})">Edit series</button>
+        <button type="button" class="tk-btn sm" onclick="pgJump(${jsq(s.id)})">Open in sheet</button>
+        ${l ? `<button type="button" class="tk-btn sm" onclick="pgBrochureGo(${jsq(l.id)})">Board card</button>` : `<button type="button" class="tk-btn sm" onclick="pgSeriesCard(${jsq(s.id)})">Add to the board</button>`}
+      </div>
+    </div>
+    <div class="sr-sec">Series posts <span class="pg-sub">— one video, posted as its own post</span></div>
+    <div class="sr-chs-grid">${chans}${web}</div>
+    <div class="sr-sec">Properties in it <span class="pg-sub">— shot separately; photos and brochure are each property's</span></div>
+    <div class="sr-ms">${mrows || `<div class="pt-clear muted">No properties yet. <button type="button" class="tk-link" onclick="pgOpenSeriesDlg(${jsq(s.id)})">Add them</button></div>`}</div>
   </section>`;
 }
 
@@ -1117,7 +1366,7 @@ function queueHtml(base) {
   const row = r => `<div class="tk-row">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}<span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${serBadge(r.tracker)}${refHtml(r.tracker, 'pg-ref')}<span>${esc(r.tracker.location)}</span>${miniTags(r.tracker)}</div>
       ${needsHtml(r.tracker, r.key)}
     </div>
     <div class="tk-row-side">
@@ -1129,7 +1378,7 @@ function queueHtml(base) {
   const planRow = r => `<div class="tk-row${r.late ? ' pg-task hot' : ''}">
     <div class="tk-row-main">
       <div class="tk-row-top"><span class="tk-row-title">${esc(r.key ? r.label : 'Channel not chosen')}</span>${codeBadge(r.tracker, true)}</div>
-      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}${miniTags(r.tracker)}</div>
+      <div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${serBadge(r.tracker)}${refHtml(r.tracker, 'pg-ref')}${miniTags(r.tracker)}</div>
       ${needsHtml(r.tracker, r.key)}
     </div>
     <div class="tk-row-side pg-acts">
@@ -1145,7 +1394,7 @@ function queueHtml(base) {
     <div class="pg-hint">From the weekly plan. Pick the time once it is fixed.</div><div class="tk-rows">${plan.map(planRow).join('')}</div></div>`);
   for (const [label, cls, arr] of groups.slice(1)) out.push(`<div class="tk-group"><div class="tk-group-hdr ${cls}">${label} <span class="tk-count">${arr.length}</span></div><div class="tk-rows">${arr.map(row).join('')}</div></div>`);
   if (missing.length) out.push(`<div class="tk-group"><div class="tk-group-hdr bad">Live, link not shared <span class="tk-count">${missing.length}</span></div>
-    <div class="tk-rows">${missing.map(r => `<div class="tk-row"><div class="tk-row-main"><div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div><div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${refHtml(r.tracker, 'pg-ref')}</div>${needsHtml(r.tracker, r.key)}</div>
+    <div class="tk-rows">${missing.map(r => `<div class="tk-row"><div class="tk-row-main"><div class="tk-row-top"><span class="tk-row-title">${r.key ? chLabel(r.key, r.label) : esc(r.label)}</span>${codeBadge(r.tracker, true)}</div><div class="tk-row-meta"><span>${esc(dn(r.tracker))}</span>${serBadge(r.tracker)}${refHtml(r.tracker, 'pg-ref')}</div>${needsHtml(r.tracker, r.key)}</div>
       <div class="tk-row-side"><button type="button" class="tk-btn sm primary" onclick="pgLink(${jsq(r.id)},${jsq(r.key)})">Add link</button></div></div>`).join('')}</div></div>`);
   return out.length > 1 ? out.join('') : out[0] +
     `<div class="tk-empty"><div class="tk-empty-i">🗓️</div><div class="tk-empty-t">Nothing scheduled or planned</div><div class="tk-empty-s">Paste the week's plan, or set a post to Scheduled, and it appears here in time order.</div></div>`;
@@ -1298,7 +1547,7 @@ function openDlg(kind, id, key) {
       body = `${common}
         <label for="pgCodeIn">Property code</label>${t.propertyCode
           ? `<input id="pgCodeIn" type="text" value="${esc(t.propertyCode)}" disabled><p class="tk-hint">The code is set. To change it, delete this row and add it again.</p>`
-          : `<input id="pgCodeIn" type="text" placeholder="Add it once created, e.g. TNAG0002"><p class="tk-hint">Already tracked or in the dashboard? <button type="button" class="tk-link" onclick="pgOpenTag(${jsq(t.id)})">Tag that property instead</button></p>`}
+          : `<input id="pgCodeIn" type="text" placeholder="Add it once created, e.g. TNAG0002"><p class="tk-hint">Already tracked or in the dashboard? <button type="button" class="tk-link" onclick="pgOpenTag(${jsq(t.id)})">Tag that property instead</button> · Several properties in one video? <button type="button" class="tk-link" onclick="pgOpenSeriesDlg(${jsq(t.id)})">Make it a series</button></p>`}
         <label for="pgTitleIn">Title</label><input id="pgTitleIn" type="text" value="${esc(t.title)}" placeholder="3BHK in T Nagar">
         <label for="pgLocIn">Location</label><input id="pgLocIn" type="text" value="${esc(t.location)}">
         <label for="pgPhotos">Photos link <span class="tk-opt">from the media team</span></label><input id="pgPhotos" type="url" value="${esc(t.photosLink)}" placeholder="Drive folder link">
@@ -1344,7 +1593,7 @@ function openDlg(kind, id, key) {
     dlg.tags = {};
     body = `<label for="pgMonday">Week starting (Monday)</label><input id="pgMonday" type="date" value="${dateInput(G.mondayOf(now()))}" onchange="pgPlanPreview()">
       <label for="pgPlanText">Plan</label><textarea id="pgPlanText" class="tk-area" rows="9" oninput="pgPlanPreview()" placeholder="Monday -S- Lux49 - 4Bhk&#10;Tuesday - Velachery 2Bhk&#10;…&#10;Youtube - T nagar series"></textarea>
-      <p class="tk-hint"><b>-S-</b> = Insta Story that day. A line without S gets only the day; the channel is picked later. A <b>Youtube - …</b> line is that week's YouTube item. Tag a line to a property you already have to make it a repost.</p>
+      <p class="tk-hint"><b>-S-</b> = Insta Story that day. A line without S gets only the day; the channel is picked later. A <b>Youtube - …</b> line is that week's YouTube item. A line that says <b>series</b> (“T nagar series”) becomes a series — pick its properties after. Tag a line to a property you already have to make it a repost.</p>
       <div id="pgPlanPreview"></div>`;
     save.textContent = 'Add rows';
   }
@@ -1472,7 +1721,113 @@ window.pgBulkCount = () => {
   const days = new Set(dlg.entries.filter(e => e.sel || e.text.trim()).map(e => e.day)).size;
   $('pgSave').textContent = ready ? `Add ${posts} post${posts === 1 ? '' : 's'}${days > 1 ? ` on ${days} days` : ''}` : 'Add to schedule';
 };
-window.pgOpenEdit = id => openDlg('edit', id, '');
+// A series is edited in its own dialog; a round of one, like any repost.
+window.pgOpenEdit = id => { const t = byId(id); if (t && G.isSeries(t) && !t.repostOf) return window.pgOpenSeriesDlg(id); openDlg('edit', id, ''); };
+
+// ── New series / Edit series ──
+// id '' = a new series. The id of a series = edit its name and properties. The id of a plain row with
+// no code (a plan line like "T nagar series") = make that row a series, keeping its posts.
+window.pgOpenSeriesDlg = id => {
+  const t = id ? byId(id) : null;
+  if (id && !t) return;
+  const editing = !!(t && G.isSeries(t)), converting = !!(t && !editing);
+  dlg = { kind: 'series', id: t ? t.id : '', converting, q: '',
+    members: editing ? t.members.map(m => ({ ...m })) : [], keys: new Set(editing || converting ? [] : ['igReel', 'fbReel', 'yt']) };
+  const save = $('pgSave'); save.style.display = ''; save.textContent = editing ? 'Save' : converting ? 'Make it a series' : 'Create series';
+  $('pgErr').textContent = '';
+  $('pgModal').querySelector('.tk-box').classList.add('wide');
+  $('pgTitle').textContent = editing ? 'Edit series' : converting ? 'Make it a series' : 'New series';
+  const name = editing ? t.title || t.reference : converting ? t.title || t.reference : '';
+  $('pgBody').innerHTML = `<p class="tk-hint" style="margin-top:0">${converting ? `<b>${esc(G.nameOf(t))}</b> becomes a series — its posts stay as they are. ` : ''}Several properties, each shot on its own, edited into <b>one video</b> and posted as one post. Photos and brochures are checked on each property; each keeps its own posts.</p>
+    <label for="pgSerName">Series name</label><input id="pgSerName" type="text" value="${esc(name)}" placeholder="T Nagar series, Studio series…" maxlength="120">
+    <label for="pgSerQ">Properties <span class="tk-opt">at least two — tracked here or in the Property dashboard</span></label>
+    <div class="sd-pick"><input id="pgSerQ" type="search" placeholder="Search a code, name or area…" autocomplete="off" oninput="pgSerSearch(this.value)" onfocus="pgSerSearch(this.value)" onblur="setTimeout(() => { const b = document.getElementById('pgSerSug'); if (b) b.classList.remove('open'); }, 150)"><div id="pgSerSug" class="bk-sug" role="listbox"></div></div>
+    <div id="pgSerMembers" class="sd-mems"></div>
+    ${editing || converting ? '' : `<div class="sd-when">
+      <div><label for="pgSerDay">Goes out on <span class="tk-opt">optional — or schedule later</span></label><input id="pgSerDay" type="date"></div>
+      <div><label for="pgSerTime">Time <span class="tk-opt">empty = planned for the day</span></label><input id="pgSerTime" type="time"></div>
+    </div>
+    <label>Goes out as</label><div class="bk-types sd-types" id="pgSerTypes"></div>`}
+    <label for="pgSerNote">Notes <span class="tk-opt">optional</span></label><input id="pgSerNote" type="text" value="${esc(t ? t.note : '')}" placeholder="e.g. CEO: one Reel for all three, Friday">
+    ${editing ? `<p style="margin:14px 0 0"><button type="button" class="tk-btn danger sm" onclick="pgDelete(${jsq(t.id)})">Delete this series</button></p>` : ''}`;
+  $('pgModal').classList.add('open');
+  loadInv(); pgSerRender();
+  setTimeout(() => { const f = $(name ? 'pgSerQ' : 'pgSerName'); if (f) f.focus(); }, 0);
+};
+function pgSerRender() {
+  if (!dlg || dlg.kind !== 'series') return;
+  const host = $('pgSerMembers');
+  if (host) {
+    const ms = G.memberStatus({ kind: 'series', members: dlg.members }, trackers, invList());
+    host.innerHTML = ms.length ? ms.map((m, i) => `<div class="sd-mem"><span class="sd-n">${i + 1}</span>${m.propertyCode ? `<span class="ps-code">${esc(m.propertyCode)}</span>` : ''}<b>${esc(m.name)}</b>
+        <span class="sd-st"><span class="${m.photosLink ? 'pg-ok' : 'pg-pend'}">${m.photosLink ? '✓ Photos' : 'No photos'}</span><span class="${m.brochure ? 'pg-ok' : 'pg-pend'}">${m.brochure ? '✓ Brochure' : 'No brochure'}</span></span>
+        <button type="button" class="bk-x" onclick="pgSerRemove(${i})" aria-label="Remove ${esc(m.name)}">✕</button></div>`).join('')
+      : '<div class="tk-hint">No properties picked yet.</div>';
+  }
+  const types = $('pgSerTypes');
+  if (types) types.innerHTML = G.CHANNELS.map(c => `<button type="button" class="bk-type${dlg.keys.has(c.key) ? ' on' : ''}" aria-pressed="${dlg.keys.has(c.key)}" onclick="pgSerKey(${jsq(c.key)})">${chIcon(c.key)}<span>${esc(G.SHORT_CH[c.key])}</span></button>`).join('');
+}
+const inMembers = (code, id) => dlg.members.some(m => (id && m.trackerId === id) || (G.codeKey(code) && G.codeKey(m.propertyCode) === G.codeKey(code)));
+window.pgSerSearch = v => {
+  const box = $('pgSerSug'); if (!box || !dlg) return;
+  dlg.q = v;
+  const q = String(v || '').trim().toLowerCase();
+  if (!q) { box.innerHTML = ''; box.classList.remove('open'); return; }
+  const tracked = trackers.filter(t => !t.repostOf && !G.isSeries(t) && t.id !== dlg.id && !inMembers(t.propertyCode, t.id) && [t.propertyCode, t.title, t.reference, t.location].join(' ').toLowerCase().includes(q)).slice(0, 6);
+  const has = trackedCodes();
+  const fromInv = invList().filter(p => G.trackerId(p.propertyCode) && !has.has(G.codeKey(p.propertyCode)) && !inMembers(p.propertyCode) && [p.propertyCode, p.name, p.location].join(' ').toLowerCase().includes(q)).slice(0, 6);
+  const opt = (kind, id, code, name, sub) => `<button type="button" class="bk-opt" role="option" onmousedown="event.preventDefault()" onclick="pgSerAdd(${jsq(kind)}, ${jsq(id)})"><b>${esc(code ? code + ' · ' + name : name)}</b><span>${esc(sub)}</span></button>`;
+  box.innerHTML = (tracked.length ? '<div class="bk-sh">Tracked</div>' + tracked.map(t => opt('t', t.id, t.propertyCode, G.nameOf(t), t.location || 'on the tracker')).join('') : '') +
+    (fromInv.length ? '<div class="bk-sh">Property dashboard</div>' + fromInv.map(p => opt('i', p.id, p.propertyCode, p.name, p.location || '')).join('') : '') +
+    (!tracked.length && !fromInv.length ? `<div class="bk-sh">${inv ? 'Nothing matches' : 'Reading the dashboard…'}</div>` : '');
+  box.classList.add('open');
+};
+window.pgSerAdd = (kind, id) => {
+  if (!dlg || dlg.kind !== 'series') return;
+  if (kind === 't') { const t = byId(id); if (t) dlg.members.push({ trackerId: t.id, propertyCode: t.propertyCode, title: G.nameOf(t) }); }
+  else { const p = invList().find(x => x.id === id); if (p) dlg.members.push({ trackerId: '', propertyCode: p.propertyCode, title: p.name }); }
+  dlg.members = G.cleanMembers(dlg.members);
+  const q = $('pgSerQ'); if (q) { q.value = ''; q.focus(); }
+  window.pgSerSearch('');
+  pgSerRender();
+};
+window.pgSerRemove = i => { if (!dlg || dlg.kind !== 'series') return; dlg.members.splice(i, 1); pgSerRender(); };
+window.pgSerKey = k => { if (!dlg || dlg.kind !== 'series') return; dlg.keys.has(k) ? dlg.keys.delete(k) : dlg.keys.add(k); pgSerRender(); };
+function saveSeries() {
+  const err = m => { $('pgErr').textContent = m; };
+  const name = ($('pgSerName').value || '').replace(/\s+/g, ' ').trim(), note = ($('pgSerNote').value || '').trim();
+  const t = dlg.id ? byId(dlg.id) : null;
+  if (dlg.id && !t) { toast('This row was deleted by someone else'); return window.pgClose(); }
+  if (!t) {
+    const day = fromDateInput(($('pgSerDay') || {}).value), hm = ($('pgSerTime') || {}).value;
+    let at = 0;
+    if (day && hm) { const [h, m] = hm.split(':').map(Number); const d = new Date(day); d.setHours(h, m, 0, 0); at = d.getTime(); }
+    const r = G.newSeries({ title: name, members: dlg.members, note }, day ? [...dlg.keys] : [], { day, at }, now(), who());
+    if (!r.ok) return err(r.error);
+    closeQuiet();
+    persist(r.tracker, 'Series created', false, true);
+    const card = ensureCard(byId(r.tracker.id));
+    offerUndo('Series created', () => { removeRow(r.tracker.id, 'Undone'); dropCard(card); });
+    mode = 'series'; try { localStorage.setItem(K_MODE, mode); } catch (e) {}
+    focusId = r.tracker.id; renderPosting();
+    return;
+  }
+  const conv = dlg.converting;
+  if (!name) return err('Name the series — e.g. T Nagar series.');
+  if (conv && dlg.members.length < 2) return err('Pick at least two properties for the series.');
+  // Onto the row as it is now: its name, notes and properties (a plan line keeps its reference).
+  const nt = { ...t, kind: 'series', members: G.cleanMembers(dlg.members), note, [t.title || conv ? 'title' : 'reference']: name };
+  closeQuiet();
+  persist(nt, '', false, true);
+  const card = nt.listingId ? '' : ensureCard(byId(nt.id));
+  // Undo puts back what this save changed (and the card it made), on the row as it is now.
+  offerUndo(conv ? 'Now a series' : 'Series saved', () => {
+    const cur = byId(t.id);
+    if (cur) persist(G.copyPaths(cur, t, ['kind', 'members', 'note', 'title', 'reference', 'listingId']), 'Undone', false, true);
+    dropCard(card);
+  });
+  renderPosting();
+}
 window.pgOpenLink = id => openDlg('linkpick', id, '');
 window.pgOpenTag = id => openDlg('tag', id, '');
 window.pgOpenPlan = () => openDlg('plan', '', '');
@@ -1526,7 +1881,8 @@ window.pgTagTo = (kind, ref) => {
   if (!t) { toast('This row was deleted by someone else'); return window.pgClose(); }
   if (kind === 't') {
     const o = byId(ref); if (!o) return;
-    persist({ ...t, repostOf: o.id, propertyCode: '', propertyId: '' }, 'Tagged as a repost of ' + G.nameOf(o));
+    // Tagged to a series: another round of the series, and a series itself.
+    persist({ ...t, repostOf: o.id, propertyCode: '', propertyId: '', kind: G.isSeries(o) ? 'series' : '' }, 'Tagged as a repost of ' + G.nameOf(o));
   } else {
     const p = inv && inv.find(x => x.id === ref); if (!p) return;
     const existing = trackedByCode(p.propertyCode);
@@ -1548,11 +1904,13 @@ function planState() {
   return { monday: G.mondayOf(monday), parsed };
 }
 const tagKey = it => it.reference.toLowerCase() + '|' + it.day + '|' + it.kind;
+// Settings → Configurations: whether a line that says "series" becomes a series.
+const planOpts = () => ({ autoSeries: !(window.trackConfig && window.trackConfig().seriesAutoDetect === false) });
 window.pgPlanPreview = () => {
   const host = $('pgPlanPreview'); if (!host || !dlg) return;
   const { monday, parsed } = planState();
   if (!parsed.items.length && !parsed.skipped.length) { host.innerHTML = ''; return; }
-  const existing = new Set(G.planRows(parsed.items, monday, trackers, now(), '').map(r => r.reference.toLowerCase() + '|' + (r.plannedDate || 0)));
+  const existing = new Set(G.planRows(parsed.items, monday, trackers, now(), '', planOpts()).map(r => r.reference.toLowerCase() + '|' + (r.plannedDate || 0)));
   // The option list is the same for every line: built once per preview, and each line only
   // marks its own choice.
   const own = trackers.filter(t => !t.repostOf && (t.propertyCode || t.title)), free = untrackedInv();
@@ -1567,7 +1925,7 @@ window.pgPlanPreview = () => {
       const dup = !existing.has(it.reference.toLowerCase() + '|' + (it.kind === 'youtube' ? 0 : it.day));
       return `<div class="pg-planrow${dup ? ' dup' : ''}">
         <span class="pg-planday">${it.kind === 'youtube' ? 'YouTube · week' : esc(G.dayLabel(it.day))}${it.story ? ` <span class="pg-sbadge" title="Insta Story">${chIcon('igStory')}Story</span>` : ''}</span>
-        <span class="pg-planref">${esc(it.reference)}${dup ? ' <span class="pg-sub">· already added</span>' : ''}</span>
+        <span class="pg-planref">${esc(it.reference)}${planOpts().autoSeries && G.isSeriesName(it.reference) && !dlg.tags[k] ? ' <span class="pg-ser">Series</span>' : ''}${dup ? ' <span class="pg-sub">· already added</span>' : ''}</span>
         <select class="pg-plantag" aria-label="Property for ${esc(it.reference)}" data-k="${esc(k)}" onchange="pgPlanTag(this)" ${dup ? 'disabled' : ''}>${opts(dlg.tags[k])}</select>
       </div>`;
     }).join('')}</div>
@@ -1578,7 +1936,8 @@ window.pgPlanTag = sel => { if (dlg && dlg.tags) dlg.tags[sel.getAttribute('data
 
 window.pgDelete = id => {
   const reposts = trackers.filter(t => t.repostOf === id);
-  if (!confirm('Delete this row from the posting tracker? Its posts and links recorded here will be lost.' + (reposts.length ? `\n\n${reposts.length} repost row(s) point at it; they will stay but lose their original.` : ''))) return;
+  const ser = G.isSeries(byId(id));
+  if (!confirm((ser ? 'Delete this series? Its posts and links recorded here will be lost. Its properties and their own posts are not touched; its card on the board stays until you delete it there.' : 'Delete this row from the posting tracker? Its posts and links recorded here will be lost.') + (reposts.length ? `\n\n${reposts.length} repost row(s) point at it; they will stay but lose their original.` : ''))) return;
   const gone = byId(id);
   closeQuiet();
   removeRow(id, null);
@@ -1591,6 +1950,7 @@ window.pgSave = () => {
   const err = m => { $('pgErr').textContent = m; };
   const t = byId(dlg.id), k = dlg.key, val = id => ($(id) ? $(id).value.trim() : '');
   // A dialog about one row, and that row was deleted while it was open: nothing to save onto.
+  if (dlg.kind === 'series') return saveSeries();
   if (!t && !['add', 'bulk', 'plan'].includes(dlg.kind)) { toast('This row was deleted by someone else'); window.pgClose(); return; }
   let r;
   switch (dlg.kind) {
@@ -1691,12 +2051,14 @@ window.pgSave = () => {
           if (p) it.tag = { propertyCode: p.propertyCode, title: p.name, propertyId: p.id };
         }
       }
-      const rows = G.planRows(parsed.items, monday, trackers, now(), who());
+      const rows = G.planRows(parsed.items, monday, trackers, now(), who(), planOpts());
       if (!rows.length) return err('Every line here is already on the tracker.');
       persistAll(rows.map(row => {
         const p = row.propertyId && (inv || []).find(x => x.id === row.propertyId);
         return stage(p ? fillFrom(row, p) : row);
       }));
+      // A "… series" line is a series: it gets its board card, where its edit is tracked.
+      rows.filter(r => G.isSeries(r) && !r.repostOf).forEach(r => ensureCard(byId(r.id)));
       order = null; mode = 'sheet'; sortKey = 'planned';
       try { localStorage.setItem(K_MODE, mode); localStorage.setItem(K_SORT, sortKey); } catch (e) {}
       badge(); renderPosting();

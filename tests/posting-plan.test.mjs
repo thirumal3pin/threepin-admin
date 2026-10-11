@@ -97,7 +97,9 @@ check('Name falls back from title to reference to code', nameOf(rows[0]) === 'Lu
   check('A YouTube week row only asks about YouTube-ish things', !gaps(rows[7], today).some(g => g.kind === 'yet' && g.key !== 'yt'));
   check('Late plan makes the row need attention', overall(rows[0], addDays(MON, 2)) === 'attention');
   const t = tasks(rows, today);
-  check('Tasks include code and plan groups', t.some(g => g.kind === 'code' && g.items.length === 8) && t.some(g => g.kind === 'plan' && g.items.length === 4));
+  // "Youtube - T nagar series" is a series: it asks for its properties, not a code.
+  check('Tasks include code and plan groups', t.some(g => g.kind === 'code' && g.items.length === 7) && t.some(g => g.kind === 'plan' && g.items.length === 4));
+  check('…and the series line asks for its properties', t.some(g => g.kind === 'members' && g.items.length === 1 && g.items[0].tracker.reference === 'T nagar series'));
 }
 
 // ── planned list ──

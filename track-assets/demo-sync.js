@@ -90,6 +90,7 @@ window.trackFirebase = {
   },
   async savePostings(writes) { for (const w of writes || []) await window.trackFirebase.savePosting(w.t, w.paths); },
   async deletePosting(id) { postings = postings.filter(x => x.id !== id); push(); },
+  async saveTrackConfig(cfg) { setTimeout(() => window.applyTrackConfigSnapshot && window.applyTrackConfigSnapshot(clone(cfg)), 0); },
   async saveListing(l) { const i = listings.findIndex(x => x.id === l.id); const c = { ...clone(l), tenantId: T }; if (i >= 0) listings[i] = c; else listings.push(c); },
   async deleteListing(id) { listings = listings.filter(x => x.id !== id); window.applyListingsSnapshot(clone(listings)); },
   async savePipeline() {}, async patchLead() {},

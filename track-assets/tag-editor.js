@@ -17,8 +17,9 @@ const jsq = v => esc(JSON.stringify(String(v == null ? '' : v)));
 const api = () => window.trackApi;
 const listing = id => ((api() && api().listings()) || []).find(l => l.id === id) || null;
 
-// Every tag in use, on listings and on Posting rows of their own.
+// Every tag in use, on listings and on Posting rows of their own, and those set in Settings.
 window.tagCatalog = () => TG.catalog(
+  (window.trackConfig && window.trackConfig().tags) || [],
   ...((api() && api().listings()) || []).map(l => l.tags),
   ...((window.pgOwnTagLists && window.pgOwnTagLists()) || [])
 );

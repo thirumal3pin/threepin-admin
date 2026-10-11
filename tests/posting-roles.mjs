@@ -288,7 +288,12 @@ ok('"This week" shows this week\'s rows only (not last week\'s finished one)', w
 await p.click('.pg-active .tk-link');
 await openFilters(); await p.click('.pg-f:has-text("No code yet")');
 const nocode = await p.$$eval('.ps-row', r => r.length);
-ok('"No code yet" lists the reference-only rows (reposts excluded)', nocode === 4, nocode);
+// "Youtube - T nagar series" is a series, which has no code of its own: not listed.
+ok('"No code yet" lists the reference-only rows (reposts and the series excluded)', nocode === 3, nocode);
+await p.click('.pg-active .tk-link');
+await openFilters(); await p.click('.pg-f:has-text("Series")');
+const serRows = await p.$$eval('.ps-row', r => r.map(x => x.textContent.replace(/\s+/g, ' ')));
+ok('"Series" filter: the T nagar series line, marked as a series', serRows.length === 1 && /T nagar series/.test(serRows[0]) && /Series · 0/.test(serRows[0]), JSON.stringify(serRows));
 await p.click('.pg-active .tk-link');
 // Search finds a row by its plan reference and by the original's name.
 await p.fill('#searchInput', 'pushkar'); await p.waitForTimeout(100);

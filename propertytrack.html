@@ -89,6 +89,7 @@
     <div id="shootsView" style="display:none"></div>
     <div id="sellersView" style="display:none"></div>
     <div id="postingView" style="display:none"></div>
+    <div id="settingsView" style="display:none"></div>
   </main>
 </div>
 
@@ -152,6 +153,21 @@
   </div>
 </div>
 
+<!-- The edit: who edits it, which day, and when it has to be delivered (the post day comes from Posting). -->
+<div class="tk-ov" id="edModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b id="edTitle">Plan the edit</b><button type="button" class="tk-x" onclick="closeEditPlan()">✕</button></div>
+    <div class="tk-box-body">
+      <label for="edWho">Editor</label><select id="edWho"></select>
+      <label for="edDay">Edit day <span class="tk-opt">optional</span></label><input id="edDay" type="date">
+      <label for="edDue">Deliver by <span class="tk-opt">expected delivery of the edit</span></label><input id="edDue" type="date">
+      <p class="tk-hint" id="edPost"></p>
+      <label for="edNote">Note <span class="tk-opt">optional</span></label><input id="edNote" type="text" placeholder="Music, order of the shots, V/O…">
+    </div>
+    <div class="tk-box-err" id="edErr"></div>
+    <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeEditPlan()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveEditPlan()">Save</button></div>
+  </div>
+</div>
 <!-- Everything a shoot agent needs to reach the property and get inside. -->
 <div class="tk-ov" id="acModal">
   <div class="tk-box">

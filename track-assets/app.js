@@ -30,6 +30,8 @@ import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync
 import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
 import { displayName } from '../crm-assets/mentions.js';
 import * as TG from './tags.js';
+import * as EF from './edit-flow.js';
+import * as CFG from './track-config.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -46,7 +48,7 @@ let currentUserEmail = null;
 let trackInited = false;
 let stageFilter = new Set();
 
-const TRACK_VIEWS = ['board', 'shoots', 'sellers', 'posting'];
+const TRACK_VIEWS = ['board', 'shoots', 'sellers', 'posting', 'settings'];
 const DAY = 86400000;
 
 // Board or list, remembered per device. The board is for moving work along;
@@ -54,19 +56,25 @@ const DAY = 86400000;
 // shoot is late, which owner has not approved. Same data, same filters, two
 // ways of looking, because "where is this one" and "what is the state of
 // everything" are different questions.
+// A third way of looking: Editor — the same cards in the editor's columns (shoot → edit → post).
+const BOARD_MODES = ['board', 'list', 'editor'];
 let boardMode = 'board';
-try { boardMode = localStorage.getItem('track.mode') === 'list' ? 'list' : 'board'; } catch (e) {}
+// The last Board or List choice, so "Board" in the menu leaves the Editor view for it.
+let plainMode = 'board';
+try { const m = localStorage.getItem('track.mode'); boardMode = BOARD_MODES.includes(m) ? m : 'board'; plainMode = localStorage.getItem('track.plainMode') === 'list' ? 'list' : 'board'; } catch (e) {}
 function setBoardMode(m) {
-  boardMode = m === 'list' ? 'list' : 'board';
+  boardMode = BOARD_MODES.includes(m) ? m : 'board';
+  if (boardMode !== 'editor') { plainMode = boardMode; try { localStorage.setItem('track.plainMode', plainMode); } catch (e) {} }
   try { localStorage.setItem('track.mode', boardMode); } catch (e) {}
   renderModeToggle();
+  if (window.AppNav) window.AppNav.setActive(navActive());
   applyFilters();
 }
 window.setBoardMode = setBoardMode;
 function renderModeToggle() {
   const el = document.getElementById('tkModeTog');
   if (!el) return;
-  el.innerHTML = [['board', 'Board'], ['list', 'List']].map(([m, label]) =>
+  el.innerHTML = [['board', 'Board'], ['list', 'List'], ['editor', 'Editor']].map(([m, label]) =>
     `<button type="button" class="tk-sbtn${boardMode === m ? ' on' : ''}" aria-pressed="${boardMode === m}" onclick="setBoardMode('${m}')">${label}</button>`).join('');
 }
 
@@ -266,21 +274,28 @@ function applyFilters() {
     if (tagFilter.size && !TG.cleanTags(x.tags).some(t => tagFilter.has(TG.tagKey(t)))) return false;
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
-    const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone,
+    // A series card is found by its name and any of its properties.
+    const ser = isSeriesCard(x) ? seriesInfo(x) : null;
+    const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone, ser && ser.name, ...(ser ? ser.members.flatMap(m => [m.propertyCode, m.name]) : []), EF.editOf(x).by,
       x.askingPrice, x.shootAssignee, x.remarks, x.lastNote && x.lastNote.text, l && l.name, l && l.phone, l && l.propertyInterest,
       l && l.assignedAgent, l && l.secondaryAgent, ...TG.cleanTags(x.tags)].join(' ').toLowerCase();
     return hay.includes(q);
   });
   fitBoard();
-  if (currentView === 'board') { boardMode === 'list' ? renderList() : renderBoard(); }
+  // A shoot phone (agent mode) sees the Editor view, never the full board.
+  if (currentView === 'board') { const m = myAgent ? 'editor' : boardMode; m === 'list' ? renderList() : m === 'editor' ? renderEditor() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
   // The Posting tab redraws through its own guard: never while someone is typing in it or has a
   // dialog open. It redraws when its rows, the search text or the listings (their tags) changed.
   else if (currentView === 'posting') { const r = window.refreshPosting || window.renderPosting; if (r) r(); }
+  else if (currentView === 'settings') renderSettings();
   else renderSellers();
 }
 
-function toggleView(view) {
+function toggleView(view, fromMenu) {
+  // "Editor" in the menu is the board in its Editor view; "Board" in the menu is the board itself.
+  if (view === 'editor') { view = 'board'; boardMode = 'editor'; try { localStorage.setItem('track.mode', boardMode); } catch (e) {} renderModeToggle(); }
+  else if (fromMenu && view === 'board' && boardMode === 'editor') { boardMode = plainMode; try { localStorage.setItem('track.mode', boardMode); } catch (e) {} renderModeToggle(); }
   currentView = TRACK_VIEWS.includes(view) ? view : 'board';
   document.documentElement.classList.toggle('pg-on', currentView === 'posting');
   TRACK_VIEWS.forEach(v => {
@@ -294,10 +309,11 @@ function toggleView(view) {
   // On a shoot phone the search box is chrome in the way of the day.
   const srch = document.querySelector('.srch-wrap');
   if (srch) srch.style.display = (myAgent && currentView === 'shoots') ? 'none' : '';
-  if (window.AppNav) window.AppNav.setActive(currentView);
+  if (window.AppNav) window.AppNav.setActive(navActive());
   applyFilters();
 }
 window.toggleView = toggleView;
+const navActive = () => currentView === 'board' && (boardMode === 'editor' || myAgent) ? 'editor' : currentView;
 
 function onSearch(v) {
   currentSearch = String(v || '').toLowerCase();
@@ -392,7 +408,7 @@ function toggleTagFilter(k) {
 function clearTagFilter() { tagFilter = new Set(); renderFilterBar(); applyFilters(); }
 Object.assign(window, { toggleStageFilter, clearStageFilter, toggleAgentFilter, clearAgentFilter, toggleTagFilter, clearTagFilter });
 // Every tag in use — the starting four, on listings, and on Posting rows of their own.
-const allTags = () => TG.catalog(...listings.map(l => l.tags), ...((window.pgOwnTagLists && window.pgOwnTagLists()) || []));
+const allTags = () => TG.catalog(config.tags, ...listings.map(l => l.tags), ...((window.pgOwnTagLists && window.pgOwnTagLists()) || []));
 // A listing's tags as chips (on the tile, the list row, the Posting tab).
 const tagChips = list => { const l = TG.cleanTags(list); return l.length ? `<div class="tk-tags">${l.map(t => `<span class="tk-tag ${TG.tagClass(t)}">${esc(t)}</span>`).join('')}</div>` : ''; };
 
@@ -480,7 +496,7 @@ function renderBoard() {
 // The board fills the screen below the header: columns scroll inside themselves, and the page
 // never scrolls on into blank space. Only the board view; list, shoots and sellers scroll as pages.
 function fitBoard() {
-  const on = currentView === 'board' && boardMode !== 'list';
+  const on = currentView === 'board' && boardMode === 'board' && !myAgent;
   document.documentElement.classList.toggle('tk-fit', on);
   const b = on && document.querySelector('#boardView .tk-board');
   if (!b) return;
@@ -521,6 +537,7 @@ function renderList() {
     </div>`;
 }
 function listRowHtml(x) {
+  if (isSeriesCard(x)) return seriesListRowHtml(x);
   const st = stageById(x.stageId);
   const age = P.stageAge(x, stages, Date.now());
   const m = x.media || {};
@@ -593,6 +610,7 @@ function factChips(f, maxSizes) {
   ].join('');
 }
 function cardHtml(x) {
+  if (isSeriesCard(x)) return seriesCardHtml(x);
   const late = isLate(x);
   const age = P.stageAge(x, stages, Date.now());
   const blocked = blockersFor(x);
@@ -637,6 +655,7 @@ function cardHtml(x) {
       <span class="tk-agent${agents.length ? '' : ' none'}" title="The lead's agent (set on the lead in the CRM)">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</span>
       ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
       ${brochureSignal(x)}
+      ${editChip(x)}
       <span class="tk-upd" title="${esc(x.updatedAt ? new Date(x.updatedAt).toLocaleString() : '')}">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span>
       ${it.intake ? `<span title="${esc(new Date(it.intake).toLocaleString())}">Came in ${esc(fmtDate(it.intake))} · ${esc(it.channel)}</span>` : ''}
     </div>
@@ -665,6 +684,7 @@ function codeChip(x) {
 // The property comes first on a card; the seller is second. Its name is the listing's title — the
 // mapped property's name when the listing has none of its own — and is renamed right on the card.
 function propName(x, it) {
+  if (isSeriesCard(x)) return seriesInfo(x).name;
   const t = String(x.title || '').trim();
   // A lead with no area of interest seeds the title with the owner's name — that is not a property name.
   const owner = String((it && it.lead && it.lead.name) || x.sellerName || '').trim();
@@ -690,7 +710,11 @@ function editCardTitle(id) {
   const finish = save => {
     if (done) return; done = true;
     const v = inp.value.replace(/\s+/g, ' ').trim();
-    if (save && v && v !== String(x.title || '').trim()) mutate(id, l => { l.title = v; }, `Renamed to <b>${esc(v)}</b>`);
+    if (save && v && v !== String(propName(x, sellerItem(x)) || '').trim()) {
+      // A series has one name: the Posting tab's series is renamed first, so the card redraws with it.
+      if (isSeriesCard(x) && x.postingId && window.pgSeriesRename) window.pgSeriesRename(x.postingId, v);
+      mutate(id, l => { l.title = v; }, `Renamed to <b>${esc(v)}</b>`);
+    }
     else applyFilters();
   };
   for (const ev of ['click', 'mousedown', 'pointerdown', 'dblclick']) inp.addEventListener(ev, e => e.stopPropagation());
@@ -750,6 +774,7 @@ function mediaBar(x) {
 // without opening anything.
 function blockersFor(x) {
   const key = P.stageKeyOf(stageById(x.stageId));
+  if (isSeriesCard(x)) return ['closed', 'dropped'].includes(key) ? [] : seriesGaps(x);
   const out = [];
   // Before the shoot: the things that make an agent's trip wasted.
   if (['shoot_scheduled'].includes(key)) {
@@ -774,6 +799,7 @@ function blockersFor(x) {
 // "Shoot for" cut that was planned, and the brochure. Empty = ready.
 const GAP_BROCHURE = 'no brochure';
 function mediaGaps(x) {
+  if (isSeriesCard(x)) return seriesGaps(x);
   const out = [];
   const { done, total } = mediaProgress(x);
   if (done < total) out.push(`${total - done} of ${total} media missing`);
@@ -816,6 +842,7 @@ function mediaSweepNow() {
 let broCache = new Map(), broInv = null;
 const forgetBrochures = () => broCache.clear();
 function brochureOf(x) {
+  if (isSeriesCard(x)) return '';   // a series' brochures are its properties' — never one of its own
   if (broInv !== inventory) { broCache.clear(); broInv = inventory; }
   if (broCache.has(x.id)) return broCache.get(x.id);
   let v;
@@ -889,6 +916,7 @@ window.applyTrackTeamSnapshot = map => {
     if (sel && sel.tagName === 'SELECT' && box && box.classList.contains('open') && sel.value !== OTHER) { const v = sel.value; sel.innerHTML = shooterOptions(v); sel.dataset.was = sel.value; }
   }
   if (currentView === 'shoots') renderShoots();
+  if (currentView === 'settings') renderSettings();
   if (currentDetailId && document.getElementById('dp')?.classList.contains('open')) openDetail(currentDetailId);
 };
 function shootPeople() {
@@ -978,6 +1006,9 @@ function onCardDragStart(e, id) {
 }
 function onCardDragEnd(e) {
   e.currentTarget.classList.remove('dragging');
+  // A drag dropped nowhere (or cancelled) must not leave the page thinking one is under way —
+  // the Editor view waits while one is. After the drop handler, which still reads it.
+  setTimeout(() => { draggedId = null; }, 0);
   document.querySelectorAll('.tk-col-body.drag-over').forEach(el => el.classList.remove('drag-over'));
 }
 function onColDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('drag-over'); }
@@ -1038,7 +1069,7 @@ function changeStage(id, stageId, opts) {
   const gaps = key === 'media_ready' ? mediaGaps(x) : [];
   toast(gaps.length ? `Moved to ${to.name} — still missing: ${gaps.join(', ')}` : `Moved to ${to.name}`);
   // "Shoot scheduled" without a date is not scheduled: ask for the date and who goes, right away.
-  if (key === 'shoot_scheduled' && !x.shootAt) openShootModal(id);
+  if (key === 'shoot_scheduled' && !x.shootAt && !isSeriesCard(x)) openShootModal(id);   // a series is not shot
   // Brought into Shoot done with everything already in hand (forward, or back from On hold): on to
   // Media ready. Moved back from further on, it is held (above).
   if (key === 'shoot_done') promoteIfMediaReady(x);
@@ -1116,8 +1147,16 @@ function setMyAgent(v) {
   agentFilter = myAgent;
   try { localStorage.setItem('track.me', myAgent); localStorage.setItem('track.agent', myAgent); } catch (e) {}
   document.body.classList.toggle('agent-mode', !!myAgent);
-  if (myAgent) toggleView('shoots'); else renderShoots();
-  toast(myAgent ? `Your day, ${myAgent}` : 'Back to the full board');
+  const was = edPerson;
+  if (myAgent) { edPerson = myAgent; toggleView('editor'); }
+  else {
+    // Back to the full board: the phone's own filter and the Editor view it was put on go too.
+    if (was) { edPerson = ''; try { localStorage.setItem('track.edPerson', ''); } catch (e) {} }
+    if (boardMode === 'editor') { boardMode = plainMode; try { localStorage.setItem('track.mode', boardMode); } catch (e) {} }
+    renderModeToggle();
+    if (currentView === 'shoots') renderShoots(); else toggleView(currentView);
+  }
+  toast(myAgent ? `Your work, ${myAgent}` : 'Back to the full board');
 }
 window.setAgentFilter = setAgentFilter; window.setMyAgent = setMyAgent;
 
@@ -1153,7 +1192,7 @@ function renderShoots() {
       ${agents.map(a => `<button type="button" class="tk-sbtn${sameName(agentFilter, a) ? ' on' : ''}" onclick="setAgentFilter(${jsq(a)})">${esc(a)}</button>`).join('')}
       ${myAgent
         ? `<button type="button" class="tk-link" onclick="setMyAgent('')">not ${esc(myAgent)}?</button>`
-        : (agentFilter ? `<button type="button" class="tk-link" onclick="setMyAgent(${jsq(agentFilter)})">this is me — open here every time</button>` : '')}
+        : (agentFilter ? `<button type="button" class="tk-link" onclick="setMyAgent(${jsq(agentFilter)})">this is me — open my work every time</button>` : '')}
     </div>` : ''}
 
     ${notReady.length ? `<div class="tk-note bad">
@@ -1368,7 +1407,7 @@ function renderSellers() {
   const el = document.getElementById('sellersView');
   if (!el) return;
   const now = Date.now();
-  const all = listings.map(sellerItem);
+  const all = listings.filter(x => !isSeriesCard(x)).map(sellerItem);   // a series card is no seller
   const q = currentSearch;
   const startOfToday = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
   const since = { today: startOfToday, '7': now - 7 * DAY, '30': now - 30 * DAY }[sellerPrefs.intake] || 0;
@@ -1529,6 +1568,7 @@ function summaryHtml(x, lead, stage) {
 function openDetail(id) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
+  if (isSeriesCard(x)) return openSeriesDetail(x);
   // Redrawing the same listing (a tick, a save) keeps what was open and what was half-typed.
   const same = currentDetailId === id && document.getElementById('dp').classList.contains('open');
   const keep = same ? { buyers: !!document.getElementById('dpBuyers')?.open, note: document.getElementById('dpNoteText')?.value || '' } : null;
@@ -1600,29 +1640,9 @@ function openDetail(id) {
       </div>
     </div>
 
-    <div class="tk-sec" id="dpFor">
-      <div class="tk-sec-hdr">Shoot for</div>
-      <div class="tk-hint" style="margin:-3px 0 9px">Where this shoot is going. For each: planned, made, and its voice over — with V/O, or V/O required separately.</div>
-      ${legacyVoice(x) ? `<div class="tk-hint warn tk-for-legacy">Set before for the whole shoot: <b>voice-over separately</b>${x.voDone ? ' (made)' : ''}. Pick the voice for each one below.</div>` : ''}
-      <div class="tk-brief tk-forgrid">
-        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span><span>Voice over</span><span>VO made</span></div>
-        ${FOR_KEYS.map(([k, label]) => {
-          const plan = forPlanned(x, k), done = forMade(x, k), v = forVoice(x, k), vo = forVoMade(x, k);
-          const voLeft = plan && v === 'vo' && !vo;
-          return `<div class="tk-brief-r${(plan && !done) || voLeft ? ' open' : ''}${plan ? '' : ' np'}">
-            <span><i class="${FOR_ICON[k]} tk-for-i tk-for-${k}" aria-hidden="true"></i> ${esc(label)}</span>
-            <span><input type="checkbox" ${plan ? 'checked' : ''} onchange="setForPlan('${x.id}','${k}',this.checked)" aria-label="${esc(label)} planned"></span>
-            <span><input type="checkbox" ${done ? 'checked' : ''} ${!plan ? 'class="dim"' : ''} onchange="setForDone('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
-            <span class="tk-for-v">${plan ? `<select class="tk-sel sm" aria-label="${esc(label)} voice" onchange="setForVoice('${x.id}','${k}',this.value)">
-                <option value=""${!v ? ' selected' : ''}>–</option>
-                <option value="live"${v === 'live' ? ' selected' : ''}>With V/O</option>
-                <option value="vo"${v === 'vo' ? ' selected' : ''}>V/O Reqd. separately</option>
-              </select>` : '<span class="tk-muted">—</span>'}</span>
-            <span class="tk-for-vo">${v === 'vo' && plan ? `<label><input type="checkbox" ${vo ? 'checked' : ''} onchange="setForVo('${x.id}','${k}',this.checked)" aria-label="${esc(label)} voice-over made"><em class="tk-m"> VO made</em></label>` : '<span class="tk-muted">—</span>'}</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
+    ${forSectionHtml(x)}
+
+    ${editSectionHtml(x)}
 
     <div class="tk-sec">
       <div class="tk-sec-hdr">Deliverables</div>
@@ -1678,6 +1698,33 @@ function openDetail(id) {
   } catch (e) {}
 }
 window.openDetail = openDetail;
+
+// Shoot for: each outlet this shoot (or a series' edit) is cut for — planned, made, and its voice.
+function forSectionHtml(x, intro) {
+  return `<div class="tk-sec" id="dpFor">
+      <div class="tk-sec-hdr">Shoot for</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">${intro || 'Where this shoot is going. For each: planned, made, and its voice over — with V/O, or V/O required separately.'}</div>
+      ${legacyVoice(x) ? `<div class="tk-hint warn tk-for-legacy">Set before for the whole shoot: <b>voice-over separately</b>${x.voDone ? ' (made)' : ''}. Pick the voice for each one below.</div>` : ''}
+      <div class="tk-brief tk-forgrid">
+        <div class="tk-brief-hd"><span></span><span>Planned</span><span>Done</span><span>Voice over</span><span>VO made</span></div>
+        ${FOR_KEYS.map(([k, label]) => {
+          const plan = forPlanned(x, k), done = forMade(x, k), v = forVoice(x, k), vo = forVoMade(x, k);
+          const voLeft = plan && v === 'vo' && !vo;
+          return `<div class="tk-brief-r${(plan && !done) || voLeft ? ' open' : ''}${plan ? '' : ' np'}">
+            <span><i class="${FOR_ICON[k]} tk-for-i tk-for-${k}" aria-hidden="true"></i> ${esc(label)}</span>
+            <span><input type="checkbox" ${plan ? 'checked' : ''} onchange="setForPlan('${x.id}','${k}',this.checked)" aria-label="${esc(label)} planned"></span>
+            <span><input type="checkbox" ${done ? 'checked' : ''} ${!plan ? 'class="dim"' : ''} onchange="setForDone('${x.id}','${k}',this.checked)" aria-label="${esc(label)} done"></span>
+            <span class="tk-for-v">${plan ? `<select class="tk-sel sm" aria-label="${esc(label)} voice" onchange="setForVoice('${x.id}','${k}',this.value)">
+                <option value=""${!v ? ' selected' : ''}>–</option>
+                <option value="live"${v === 'live' ? ' selected' : ''}>With V/O</option>
+                <option value="vo"${v === 'vo' ? ' selected' : ''}>V/O Reqd. separately</option>
+              </select>` : '<span class="tk-muted">—</span>'}</span>
+            <span class="tk-for-vo">${v === 'vo' && plan ? `<label><input type="checkbox" ${vo ? 'checked' : ''} onchange="setForVo('${x.id}','${k}',this.checked)" aria-label="${esc(label)} voice-over made"><em class="tk-m"> VO made</em></label>` : '<span class="tk-muted">—</span>'}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
 
 // ═══════ WHO IS ALREADY WAITING ═══════
 //
@@ -1985,6 +2032,20 @@ window.trackApi = {
   brochureOf: x => brochureOf(x),
   // Voice-over per outlet, as set on the listing's Shoot for: 'live' (with V/O), 'vo' (V/O made separately) or '' — and whether that V/O is made.
   voiceOf: (x, k) => ({ voice: forVoice(x, k), made: forVoMade(x, k), planned: forPlanned(x, k) }),
+  // The edit, for the Posting tab: where the video for a post stands.
+  editOf: x => EF.editOf(x),
+  span: ms => EF.span(ms),
+  createSeriesCard: seed => createSeriesCard(seed),
+  listingsLoaded: () => seenListings,
+  // Undo of making a series: its card, made in the same action, goes too (no confirm — it is new).
+  removeSeriesCard: id => {
+    const x = listings.find(l => l.id === id);
+    if (!x || !isSeriesCard(x)) return;
+    listings = listings.filter(l => l.id !== id);
+    if (window.trackFirebase) window.trackFirebase.deleteListing(id).catch(e => console.error(e));
+    if (currentDetailId === id) closeDetail();
+    applyFilters();
+  },
   refreshFilters: () => renderFilterBar(),   // the Tags dropdown, after a tag is added or removed
   openDetail: id => openDetail(id),
   currentDetailId: () => currentDetailId,
@@ -2528,6 +2589,568 @@ function linkOrSay(id, code, saved) {
 window.openAddModal = openAddModal; window.openEditModal = openEditModal;
 window.closeModal = closeModal; window.saveModal = saveModal;
 
+// ═══════ SERIES CARDS ═══════
+// A series ("T Nagar series") is several properties, each shot on its own card, edited into one
+// video. Its card here tracks that edit: which properties are in it and whether each is shot, the
+// cuts it is made for (Shoot for, with V/O), and the edit itself. It has no owner, shoot, mapping or
+// brochure of its own. Its name and properties live on its Posting row (postingId) — one place.
+const isSeriesCard = x => !!x && x.kind === 'series';
+const keyOfCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+function seriesInfo(x) {
+  const s = x.postingId && window.pgSeriesInfo ? window.pgSeriesInfo(x.postingId) : null;
+  return s || { id: x.postingId || '', name: String(x.title || '').trim() || 'Series', members: [], gone: !!x.postingId && postingLoaded() };
+}
+// "Gone" only once the Posting rows have arrived — before that a series is simply not loaded yet.
+const postingLoaded = () => !!(window.pgLoaded && window.pgLoaded());
+// A property's own card on this board (never a series card).
+function cardForCode(code) {
+  const k = keyOfCode(code);
+  return k ? listings.find(l => !isSeriesCard(l) && (keyOfCode(l.propertyCode) === k || keyOfCode(l.brochure && l.brochure.code) === k)) || null : null;
+}
+// Shot: past the shoot on the board (or its shoot wrapped up). A property with no card here was
+// shot before this board tracked it.
+function isShot(l) {
+  const k = P.stageKeyOf(stageById(l.stageId));
+  return !!l.shootDoneAt || P.ladderIndex(k) >= P.ladderIndex('shoot_done');
+}
+function memberCards(x) {
+  return seriesInfo(x).members.map(m => {
+    const card = cardForCode(m.propertyCode);
+    // No card here: a coded property was shot before this board tracked it; one with no code yet
+    // (a plan line) has not been.
+    return { ...m, card, stage: card ? stageById(card.stageId) : null, shot: card ? isShot(card) : !!keyOfCode(m.propertyCode), shootAt: card ? card.shootAt || 0 : 0, shooter: card ? card.shootAssignee || '' : '' };
+  });
+}
+const memLabel = m => m.propertyCode || m.name;
+// What stands between a series and a finished edit.
+function seriesGaps(x) {
+  const info = seriesInfo(x), ms = memberCards(x), out = [];
+  if (info.gone) return ['removed from Posting'];
+  if (ms.length < 2) out.push(ms.length ? 'only one property' : 'no properties added');
+  const notShot = ms.filter(m => !m.shot).map(memLabel);
+  if (notShot.length) out.push('not shot yet: ' + notShot.join(', '));
+  const noPh = ms.filter(m => !m.photosLink).map(memLabel);
+  if (noPh.length) out.push('photos missing: ' + noPh.join(', '));
+  const forLeft = FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k)).map(([, l]) => l);
+  if (forLeft.length) out.push(`${forLeft.join(' + ')} not done`);
+  const voLeft = FOR_KEYS.filter(([k]) => forPlanned(x, k) && forVoice(x, k) === 'vo' && !forVoMade(x, k)).map(([, l]) => l);
+  if (voLeft.length) out.push(`voice-over not made: ${voLeft.join(', ')}`);
+  // The series' own work is its edit: it is not media-ready until that is done.
+  if (EF.editOf(x).status !== 'done') out.push('edit not done');
+  return out;
+}
+// The cuts a card is made for, as small chips: done ones ticked, a V/O still to make flagged.
+function cutsHtml(x) {
+  const planned = FOR_KEYS.filter(([k]) => forPlanned(x, k));
+  if (!planned.length) return '';
+  return `<div class="ed-cuts" title="Shoot for">${planned.map(([k, l]) => {
+    const vo = forVoice(x, k) === 'vo' && !forVoMade(x, k);
+    return `<span class="ed-cut${forMade(x, k) ? ' ok' : ''}${vo ? ' vo' : ''}" title="${esc(l)}${forMade(x, k) ? ' — done' : ' — to do'}${vo ? ' · V/O to make' : ''}"><i class="${FOR_ICON[k]}" aria-hidden="true"></i>${esc(l.replace('Insta ', ''))}${forMade(x, k) ? ' ✓' : ''}${vo ? ' · V/O' : ''}</span>`;
+  }).join('')}</div>`;
+}
+function memberPills(x) {
+  const ms = memberCards(x);
+  if (!ms.length) return '<div class="tk-sermems"><span class="sl-none">No properties yet — add them in Posting</span></div>';
+  return `<div class="tk-sermems">${ms.map(m => `<span class="tk-sermem${m.shot ? ' ok' : ''}" title="${esc(m.name)} — ${m.card ? esc(m.stage ? m.stage.name : '') : 'not on the board'}${m.photosLink ? '' : ' · no photos'}"><i style="background:${m.stage ? m.stage.color : 'var(--t3, #94a3b8)'}"></i>${esc(memLabel(m))}${m.shot ? '' : ' · to shoot'}</span>`).join('')}</div>`;
+}
+function seriesCardHtml(x) {
+  const age = P.stageAge(x, stages, Date.now());
+  const info = seriesInfo(x), blocked = blockersFor(x), by = personName(x.updatedBy);
+  return `<div class="tk-card ser${isLate(x) ? ' late' : ''}" draggable="true" tabindex="0" role="link" aria-label="Open series ${esc(info.name)}" data-id="${x.id}"
+      ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+    <div class="sl-head tk-chead">
+      <div class="tk-ctop"><span class="tk-pcode"><span class="tk-code ser" title="Several properties, one video">Series · ${info.members.length}</span></span>
+        <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days === 0 ? 'today' : age.days + 'd here'}</span></div>
+      <div class="tk-pname"><span class="tk-pname-t" title="${esc(info.name)}">${esc(info.name)}</span>
+        <button type="button" class="tk-pname-ed" title="Rename this series" aria-label="Rename this series" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
+    </div>
+    ${memberPills(x)}
+    ${cutsHtml(x)}
+    ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
+    ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span></div>` : ''}
+    ${tagChips(x.tags)}
+    <div class="tk-card-meta">${editChip(x)}<span class="tk-upd">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span></div>
+  </div>`;
+}
+function seriesListRowHtml(x) {
+  const st = stageById(x.stageId), age = P.stageAge(x, stages, Date.now()), info = seriesInfo(x), blocked = blockersFor(x);
+  const ms = memberCards(x), shot = ms.filter(m => m.shot).length;
+  return `<div class="tk-tr${isLate(x) ? ' late' : ''}" role="row" tabindex="0" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+    <span role="cell"><b>${esc(info.name)}</b><span class="tk-sub2">${ms.map(memLabel).map(esc).join(' · ') || 'no properties yet'}</span><span class="tk-code ser">Series · ${ms.length}</span>${tagChips(x.tags)}</span>
+    <span role="cell">${st ? `<span class="tk-pill" style="background:${st.color}22;color:${st.color}">${esc(st.name)}</span>` : '—'}<span class="tk-sub2${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days}d here</span></span>
+    <span role="cell"><span class="tk-sub2">Series — no owner</span></span>
+    <span role="cell"><span class="tk-sub2">${shot} of ${ms.length} shot</span></span>
+    <span role="cell">${editChip(x) || '<span class="tk-sub2">edit not planned</span>'}</span>
+    <span role="cell">${blocked.length ? blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('') : '<span class="tk-sub2">—</span>'}</span>
+  </div>`;
+}
+function openSeriesDetail(x) {
+  const same = currentDetailId === x.id && document.getElementById('dp').classList.contains('open');
+  const keepNote = same ? document.getElementById('dpNoteText')?.value || '' : '';
+  currentDetailId = x.id;
+  const info = seriesInfo(x), ms = memberCards(x), age = P.stageAge(x, stages, Date.now());
+  document.getElementById('dpTitle').textContent = info.name;
+  document.getElementById('dpSub').innerHTML = `<span class="tk-code ser">Series · ${ms.length} propert${ms.length === 1 ? 'y' : 'ies'}</span> · edited into one video`;
+  const memRows = ms.map(m => `<div class="tk-sermrow">
+      <div class="tk-sermrow-n"><b>${esc(m.name)}</b>${m.propertyCode ? ` <span class="tk-code">${esc(m.propertyCode)}</span>` : ''}</div>
+      <div class="tk-sub2">${m.card ? `${m.stage ? `<span class="tk-pill" style="background:${m.stage.color}22;color:${m.stage.color}">${esc(m.stage.name)}</span> ` : ''}${m.shot ? '✓ shot' : m.shootAt ? '📸 ' + esc(fmtDateTime(m.shootAt)) + (m.shooter ? ' · ' + esc(m.shooter) : '') : 'shoot not booked'}` : 'Not on this board — taken as shot'}
+        · ${m.photosLink ? '✓ photos' : '<span class="tk-miss">no photos</span>'} · ${m.brochure ? '✓ brochure' : '<span class="tk-miss">no brochure</span>'}</div>
+      ${m.card ? `<button type="button" class="tk-btn sm" onclick="openDetail('${m.card.id}')">Open its card</button>` : ''}
+    </div>`).join('');
+  const posts = window.pgPostsFor ? window.pgPostsFor(x) : null;
+  document.getElementById('dpBody').innerHTML = `
+    <div class="tk-dp-main">
+    <div class="tk-sec tk-sum">
+      ${info.gone ? '<div class="tk-hint bad">This series was deleted from Posting. Delete this card too if it is not needed.</div>' : ''}
+      <div class="tk-sum-tags"><span class="tk-sum-k">Tags</span>${window.tagEditorHtml ? window.tagEditorHtml('l:' + x.id, x.tags) : tagChips(x.tags)}</div>
+      <div class="tk-sum-grid">
+        <div class="tk-sum-f stage"><span>Stage</span>
+          <select class="tk-sel sm" aria-label="Stage" onchange="changeStage('${x.id}', this.value)">${stages.map(s => `<option value="${s.id}"${s.id === x.stageId ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+          <span class="tk-sum-sub${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days === 0 ? 'moved here today' : age.days + (age.days === 1 ? ' day' : ' days') + ' in this stage'}</span></div>
+        <div class="tk-sum-f"><span>Posting</span><b>${posts && posts.total ? `${posts.live} of ${posts.total} live` : 'Nothing scheduled'}</b>${posts && posts.nextAt ? `<span class="tk-sum-sub">next ${esc(fmtDateTime(posts.nextAt))}</span>` : ''}</div>
+        <div class="tk-sum-f"><span>Created</span><b>${esc(fmtDateTime(x.createdAt))}</b></div>
+        <div class="tk-sum-f"><span>Last updated</span><b>${esc(fmtDateTime(x.updatedAt))}</b></div>
+      </div>
+      ${x.postingId ? `<div class="tk-btnrow"><button type="button" class="tk-btn" onclick="pgOpenSeries(${jsq(x.postingId)})">Open in Posting →</button></div>` : ''}
+    </div>
+    <div class="tk-sec">
+      <div class="tk-sec-hdr">Properties in it</div>
+      <div class="tk-hint" style="margin:-3px 0 9px">Each is shot on its own card. Add or remove properties in Posting → Series.</div>
+      ${memRows || '<div class="tk-hint">No properties yet.</div>'}
+    </div>
+    ${forSectionHtml(x, 'The cuts this series is edited into. For each: planned, made, and its voice over.')}
+    ${editSectionHtml(x)}
+    <div class="tk-sec tk-danger"><button class="tk-btn danger" onclick="deleteListing('${x.id}')">Delete series card</button></div>
+    </div>
+    <aside class="tk-dp-side">
+      <div class="tk-sec tk-notes-sec">
+        <div class="tk-sec-hdr">Notes <span class="tk-count" id="dpNoteCount"></span></div>
+        <div class="tk-note-add">
+          <textarea id="dpNoteText" class="tk-area" rows="3" placeholder="What the edit needs — music, order of the properties…"
+            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();addNote('${x.id}')}"></textarea>
+          <div class="tk-note-bar"><span class="tk-hint">Ctrl + Enter to add</span><button type="button" class="tk-btn primary sm" onclick="addNote('${x.id}')">Add note</button></div>
+        </div>
+        <div id="dpNotes" class="tk-notes"><div class="tk-hint">Loading…</div></div>
+      </div>
+      <div class="tk-sec"><div class="tk-sec-hdr">Timeline</div><div id="dpHistory" class="tk-hist"><div class="tk-hint">Loading…</div></div></div>
+    </aside>`;
+  document.getElementById('dp').classList.add('open');
+  if (keepNote) document.getElementById('dpNoteText').value = keepNote;
+  loadHistory(x.id);
+  try { const u = new URL(location.href); u.searchParams.set('listing', x.id); history.replaceState(null, '', u.pathname + u.search); } catch (e) {}
+}
+// Made from the Posting tab when a series is created there; starts in Shoot done (its properties are
+// shot on their own cards — this card is the edit).
+function createSeriesCard(seed) {
+  const st = P.stageForKey(stages, 'shoot_done') || stages[0];
+  if (!st || !window.trackFirebase) return null;
+  const now = Date.now();
+  const x = {
+    id: newId('lst_'), kind: 'series', title: String((seed && seed.title) || 'Series').trim(), postingId: String((seed && seed.postingId) || ''),
+    stageId: st.id, media: {}, tags: [],
+    stageChangedAt: now, stageChangedBy: currentUserEmail || 'team', reached: { [P.stageKeyOf(st) || 'shoot_done']: now },
+    createdAt: now, createdBy: currentUserEmail || 'team', updatedAt: now, updatedBy: currentUserEmail || null
+  };
+  listings.push(x);
+  persist(x);   // the card first: its timeline's rule reads the card
+  addHistory(x, 'created', 'Series card created from Posting');
+  applyFilters();
+  return x.id;
+}
+
+// ═══════ THE EDIT ═══════
+// Who edits a card, when it is planned and due, and where it stands — the same record for a
+// property's card and a series card. The Editor view moves it along; Posting reads it.
+const fmtDay = ts => ts ? new Date(ts).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+function editChip(x) {
+  const e = EF.editOf(x);
+  if (e.status === 'active') return `<span class="tk-ed act" title="Being edited">✂ Editing${e.by ? ' · ' + esc(e.by) : ''}${e.startedAt ? ' · ' + esc(EF.span(Date.now() - e.startedAt)) : ''}</span>`;
+  if (e.status === 'planned') return `<span class="tk-ed plan" title="Edit planned">✂ ${esc(e.by || 'Edit')}${e.planAt ? ' · ' + esc(fmtDay(e.planAt)) : ''}</span>`;
+  if (e.status === 'done') return `<span class="tk-ed ok" title="Edit done${e.by ? ' by ' + esc(e.by) : ''}">✂ Edit done</span>`;
+  return '';
+}
+const meName = () => myAgent || personName(currentUserEmail);
+function editSectionHtml(x) {
+  const e = EF.editOf(x), log = EF.editLogOf(x), c = edCtx(x), pr = EF.priority(x, c, Date.now(), config.dueSoonDays);
+  const kv = (k, v) => `<div class="tk-kv"><span>${k}</span>${v}</div>`;
+  const btn = (label, js, cls) => `<button type="button" class="tk-btn${cls ? ' ' + cls : ''}" onclick="${js}">${label}</button>`;
+  return `<div class="tk-sec" id="dpEdit">
+    <div class="tk-sec-hdr">Edit</div>
+    ${kv('Status', `<b class="tk-ed-s ${e.status || 'none'}">${esc(EF.EDIT_LABEL[e.status])}</b>${e.status === 'active' && e.startedAt ? ` <span class="tk-rel">for ${esc(EF.span(Date.now() - e.startedAt))}</span>` : ''}`)}
+    ${kv('Editor', e.by ? `<b>${esc(e.by)}</b>` : '<i>not assigned</i>')}
+    ${e.planAt ? kv('Edit day', esc(fmtDay(e.planAt))) : ''}
+    ${kv('Deliver by', e.dueAt ? `<b class="${pr.what === 'delivery' && pr.late ? 'tk-miss' : ''}">${esc(fmtDay(e.dueAt))}</b>` : '<i>not set</i>')}
+    ${kv('Post date', c.postAt ? `${esc(postWhen(c))} <span class="tk-sub2">from Posting</span>` : '<i>not planned in Posting</i>')}
+    ${e.startedAt ? kv('Started', esc(fmtDateTime(e.startedAt))) : ''}${e.doneAt ? kv('Finished', esc(fmtDateTime(e.doneAt)) + (e.startedAt ? ` <span class="tk-sub2">took ${esc(EF.span(e.doneAt - e.startedAt))}</span>` : '')) : ''}
+    <div class="tk-btnrow">
+      ${btn(e.status && e.status !== 'done' ? 'Change plan' : 'Plan the edit', `openEditPlan('${x.id}')`)}
+      ${e.status !== 'active' ? btn(e.status === 'done' ? 'Edit again' : 'Start editing', `edStep('${x.id}','start')`, e.status === 'planned' ? 'primary' : '') : ''}
+      ${e.status === 'active' ? btn('Edit done', `edStep('${x.id}','done')`, 'primary') : ''}
+      ${e.status ? btn('Clear', `edStep('${x.id}','reset')`, 'ghost') : ''}
+    </div>
+    ${log.length ? `<div class="tk-hint" style="margin-top:8px">Earlier edits: ${log.slice(0, 5).map(l => `${esc(l.by || '—')} · ${esc(fmtDay(l.doneAt))}${l.startedAt ? ' (' + esc(EF.span(l.doneAt - l.startedAt)) + ')' : ''}`).join(' · ')}</div>` : ''}
+  </div>`;
+}
+const ED_HIST = { plan: 'Edit planned', start: 'Editing started', done: 'Edit done', reset: 'Edit plan cleared', assign: 'Editor changed' };
+function edStep(id, action, opts) {
+  const x = listings.find(l => l.id === id); if (!x) return;
+  if (action === 'reset' && EF.editOf(x).status === 'active' && !confirm('This card is being edited. Clear its edit?')) return;
+  const r = EF.setEdit(x, action, opts || {}, Date.now(), meName());
+  if (!r.ok) { if (/Pick who/.test(r.error)) return openEditPlan(id); return toast(r.error); }
+  mutate(id, l => { l.edit = r.edit; l.editLog = r.editLog; }, `${ED_HIST[action]}${r.edit.by ? ' — <b>' + esc(r.edit.by) + '</b>' : ''}`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast(ED_HIST[action]);
+}
+window.edStep = edStep;
+
+// ── Plan the edit: who, which day, delivered by when ──
+let edPlanFor = null;
+const dateIn = ts => { if (!ts) return ''; const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+function openEditPlan(id) {
+  const x = listings.find(l => l.id === id); if (!x) return;
+  edPlanFor = id;
+  const e = EF.editOf(x), c = edCtx(x);
+  const people = editorPeople();
+  const cur = e.by || (isSeriesCard(x) ? '' : x.shootAssignee) || myAgent || '';
+  if (cur && !people.some(n => sameName(n, cur))) people.unshift(cur);
+  document.getElementById('edTitle').textContent = 'Plan the edit — ' + cardName(x);
+  document.getElementById('edWho').innerHTML = '<option value="">Pick the editor…</option>' + people.map(n => `<option value="${esc(n)}"${sameName(n, cur) ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  document.getElementById('edDay').value = dateIn(e.planAt);
+  // Deliver by: as set, else from the post day in Posting (Settings → Configurations says how).
+  document.getElementById('edDue').value = dateIn(e.dueAt || CFG.defaultDelivery(config, c.postAt));
+  document.getElementById('edNote').value = e.note || '';
+  document.getElementById('edPost').innerHTML = c.postAt ? `Post <b>${esc(postWhen(c))}</b> in Posting — deliver before it.` : 'No post date in Posting yet.';
+  document.getElementById('edErr').textContent = '';
+  document.getElementById('edModal').classList.add('open');
+}
+function closeEditPlan() { document.getElementById('edModal').classList.remove('open'); edPlanFor = null; }
+function saveEditPlan() {
+  const x = listings.find(l => l.id === edPlanFor); if (!x) return closeEditPlan();
+  const v = id => document.getElementById(id).value.trim();
+  const day = s => { if (!s) return 0; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+  const by = v('edWho'), planAt = day(v('edDay')), dueAt = day(v('edDue')), note = v('edNote');
+  if (!by) { document.getElementById('edErr').textContent = 'Pick who edits it.'; return; }
+  if (planAt && dueAt && dueAt < planAt) { document.getElementById('edErr').textContent = 'The delivery date is before the edit day.'; return; }
+  const e = EF.editOf(x);
+  // Planned or being edited: change the plan and keep where it stands. Otherwise plan it.
+  const r = e.status === 'planned' || e.status === 'active'
+    ? { ok: true, edit: { ...e, by, planAt, dueAt, note }, editLog: EF.editLogOf(x) }
+    : EF.setEdit(x, 'plan', { by, planAt, dueAt, note }, Date.now(), meName());
+  if (!r.ok) { document.getElementById('edErr').textContent = r.error; return; }
+  const id = x.id;
+  closeEditPlan();
+  mutate(id, l => { l.edit = r.edit; l.editLog = r.editLog; }, `Edit planned — <b>${esc(by)}</b>${planAt ? ', ' + esc(fmtDay(planAt)) : ''}${dueAt ? ', deliver by ' + esc(fmtDay(dueAt)) : ''}`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast('Edit planned');
+}
+Object.assign(window, { openEditPlan, closeEditPlan, saveEditPlan });
+
+// ═══════ EDITOR VIEW ═══════
+// The same cards in the editor's columns — what to shoot, what to edit, what is done and booked to
+// post — each with its next deadline (shoot day, delivery date or post day), nearest first, so the
+// person doing the work can put first things first. A track of every editor sits on top: who is
+// editing what right now and for how long, what each has assigned, and what each has delivered.
+let edPerson = '';
+try { edPerson = localStorage.getItem('track.edPerson') || ''; } catch (e) {}
+let edPastAll = false;
+function setEdPerson(v) {
+  edPerson = edPerson && sameName(edPerson, v) ? '' : String(v || '');
+  try { localStorage.setItem('track.edPerson', edPerson); } catch (e) {}
+  renderEditor();
+}
+window.setEdPerson = setEdPerson;
+window.edPastToggle = () => { edPastAll = !edPastAll; renderEditor(); };
+// What the Editor view needs to know about a card: its stage, whether it is shot (a series: all its
+// properties), its shoot date, and its posts in Posting.
+function edCtx(x) {
+  const stageKey = P.stageKeyOf(stageById(x.stageId));
+  const posts = (window.pgPostsFor && window.pgPostsFor(x)) || { total: 0, scheduled: 0, live: 0, planned: 0 };
+  const postAt = posts.nextAt || posts.planDay || 0;
+  if (isSeriesCard(x)) {
+    const ms = memberCards(x), left = ms.filter(m => !m.shot);
+    const next = left.map(m => m.shootAt).filter(Boolean).sort((a, b) => a - b)[0] || 0;
+    return { stageKey, shot: ms.length >= 2 && !left.length, shootPlanned: true, shootAt: next, posts, postAt, postTimed: !!posts.nextAt, cutsLeft: cutsLeft(x) };
+  }
+  return { stageKey, shot: isShot(x), shootPlanned: !!x.shootAt || stageKey === 'shoot_scheduled', shootAt: x.shootAt || 0, posts, postAt, postTimed: !!posts.nextAt, cutsLeft: cutsLeft(x) };
+}
+// Who can edit: the editors set in Settings first, then the shoot team (and anyone already editing).
+function editorPeople(withPast) {
+  const out = [];
+  for (const n of [...config.editors, ...shootPeople().map(p => p.name), ...(withPast ? listings.map(x => EF.editOf(x).by) : [])]) {
+    if (n && !out.some(o => sameName(o, n))) out.push(n);
+  }
+  return out;
+}
+const cutsLeft = x => FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k)).length;
+// Whose a card is, in the editor's eyes: the editor once there is one, before that whoever shoots it.
+function edWho(x) {
+  const e = EF.editOf(x);
+  if (e.by) return [e.by];
+  if (isSeriesCard(x)) return memberCards(x).filter(m => !m.shot).map(m => m.shooter).filter(Boolean);
+  return x.shootAssignee ? [x.shootAssignee] : [];
+}
+const cardName = x => isSeriesCard(x) ? seriesInfo(x).name : (propName(x, sellerItem(x)) || x.title || x.propertyCode || 'Untitled');
+const WHAT = { shoot: 'Shoot', delivery: 'Deliver by', post: 'Post' };
+// A post with a time shows its time; one only planned for a day shows the day.
+const postWhen = c => c.postTimed ? fmtDateTime(c.postAt) : fmtDay(c.postAt) + ' (planned)';
+function edCardHtml(it) {
+  const { x, col, c, pr } = it, e = EF.editOf(x), ser = isSeriesCard(x), now = Date.now();
+  const code = ser ? `<span class="tk-code ser">Series · ${seriesInfo(x).members.length}</span>` : (codeChip(x) || '');
+  const due = pr.at ? `<span class="ed-due${pr.late ? ' bad' : pr.today ? ' hot' : pr.soon ? ' warn' : ''}" title="The next deadline for this card">${esc(WHAT[pr.what])} ${esc(pr.what === 'delivery' ? fmtDay(pr.at) : pr.what === 'post' ? postWhen(c) : fmtDateTime(pr.at))}${pr.late ? ' · late' : pr.today ? ' · today' : ''}</span>` : '';
+  const lines = [];
+  if (col === 'shoot_planned') {
+    if (ser) { const left = memberCards(x).filter(m => !m.shot); lines.push(`📸 ${left.length ? 'To shoot: ' + left.map(m => esc(memLabel(m)) + (m.shootAt ? ' (' + esc(fmtDay(m.shootAt)) + ')' : '')).join(', ') : 'Add the properties in Posting'}`); }
+    else lines.push(x.shootAt ? `📸 ${esc(fmtDateTime(x.shootAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}` : '📸 Shoot not booked');
+  } else if (e.status === 'active') lines.push(`✂ <b>${esc(e.by || '—')}</b> · editing for ${esc(EF.span(now - e.startedAt))}`);
+  else if (e.status === 'planned') lines.push(`✂ <b>${esc(e.by)}</b>${e.planAt ? ' · edit ' + esc(fmtDay(e.planAt)) : ''}`);
+  else if (e.status === 'done') lines.push(`✂ Done${e.by ? ' by ' + esc(e.by) : ''} · ${esc(fmtDay(e.doneAt))}`);
+  else if (col === 'planned') lines.push('<span class="ed-warn">✂ Post day fixed — edit not planned</span>');
+  else if (col === 'shoot_done' && x.shootDoneAt) lines.push(`📸 Shot ${esc(fmtDay(x.shootDoneAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}`);
+  // The two dates the editor plans by, whichever are known.
+  // (the one already in the deadline chip is not repeated)
+  const dates = [e.dueAt && col !== 'done' && col !== 'scheduled' && pr.what !== 'delivery' ? `Deliver by ${esc(fmtDay(e.dueAt))}` : '', c.postAt && pr.what !== 'post' ? `Post ${esc(postWhen(c))}` : ''].filter(Boolean);
+  const b = (label, js, cls) => `<button type="button" class="tk-btn sm${cls ? ' ' + cls : ''}" onclick="event.stopPropagation();${js}">${label}</button>`;
+  const act = {
+    shoot_planned: !ser && x.shootAt && !x.shootDoneAt ? b('Shoot done →', `openWrapModal('${x.id}')`) : '',
+    shoot_done: b('Plan edit', `openEditPlan('${x.id}')`, 'primary'),
+    planned: e.status === 'planned' ? b('Start editing', `edStep('${x.id}','start')`, 'primary') + b('Plan…', `openEditPlan('${x.id}')`, 'ghost') : b('Plan edit', `openEditPlan('${x.id}')`, 'primary'),
+    active: b('Edit done', `edStep('${x.id}','done')`, 'primary') + b('Plan…', `openEditPlan('${x.id}')`, 'ghost'),
+    done: b('Schedule in Posting', `edPosting('${x.id}')`, 'primary'),
+    scheduled: b('Open in Posting', `edPosting('${x.id}')`)
+  }[col] || '';
+  return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"
+      aria-label="Open ${esc(cardName(x))}" ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+    <div class="ed-top">${code}${due}</div>
+    <div class="ed-name">${esc(cardName(x))}</div>
+    ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
+    ${dates.length ? `<div class="ed-dates">${dates.join(' · ')}</div>` : ''}
+    ${cutsHtml(x)}
+    ${act ? `<div class="ed-acts">${act}</div>` : ''}
+  </div>`;
+}
+// Every card in the editor's world, with its column and deadline.
+function edItems(list) {
+  const now = Date.now(), out = [];
+  for (const x of list) {
+    const c = edCtx(x), col = EF.editColumn(x, c);
+    if (!col) continue;
+    out.push({ x, col, c, pr: EF.priority(x, { ...c, column: col }, now, config.dueSoonDays) });
+  }
+  return out;
+}
+function edTrackHtml() {
+  const now = Date.now();
+  const tr = EF.editorTrack(listings.filter(x => EF.editOf(x).status || EF.editLogOf(x).length).map(x => ({ x, title: cardName(x) })), now).filter(r => r.name);
+  if (!tr.length) return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">Nobody has an edit yet — plan one from a card in Shoot done.</span></div></section>`;
+  const tile = r => {
+    const on = edPerson && sameName(edPerson, r.name), a = r.active[0];
+    return `<button type="button" class="ed-tile${on ? ' on' : ''}${r.active.length ? ' live' : ''}" aria-pressed="${!!on}" onclick="setEdPerson(${jsq(r.name)})" title="${on ? 'Show everyone' : 'Show only ' + esc(r.name) + '’s work'}">
+      <span class="ed-tn">${r.active.length ? '<i class="ed-dot" aria-hidden="true"></i>' : ''}${esc(r.name)}</span>
+      <span class="ed-tnow">${a ? `Editing <b>${esc(a.title)}</b> · ${esc(EF.span(now - a.since))}${r.active.length > 1 ? ` +${r.active.length - 1}` : ''}` : 'Not editing now'}</span>
+      <span class="ed-tstats"><span><b>${r.planned.length}</b> assigned</span><span><b>${r.doneWeek}</b> done this week</span>${r.avgHours ? `<span>~${esc(EF.span(r.avgHours * 3600000))} each</span>` : ''}</span>
+    </button>`;
+  };
+  const me = edPerson ? tr.find(r => sameName(r.name, edPerson)) : null;
+  const past = me && me.done.length ? `<div class="ed-past"><div class="ed-past-h">${esc(me.name)} — past edits <span class="tk-count">${me.done.length}</span></div>
+    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<button type="button" class="ed-prow" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${d.startedAt ? ' · took ' + esc(EF.span(d.doneAt - d.startedAt)) : ''}</span></button>`).join('')}</div>
+    ${me.done.length > 6 ? `<button type="button" class="tk-link" onclick="edPastToggle()">${edPastAll ? 'Show fewer' : `Show all ${me.done.length}`}</button>` : ''}</div>` : '';
+  return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">live · tap one to see only their work and past edits</span></div>
+    <div class="ed-tiles">${tr.map(tile).join('')}</div>${past}</section>`;
+}
+function renderEditor() {
+  const host = document.getElementById('boardView');
+  if (!host || currentView !== 'board') return;
+  if (!stages.length) { host.innerHTML = '<div class="tk-empty"><div class="tk-empty-t">Setting up the board…</div></div>'; return; }
+  const all = edItems(filtered);
+  const mine = edPerson ? all.filter(it => edWho(it.x).some(n => sameName(n, edPerson))) : all;
+  const people = editorPeople(true);
+  const late = mine.filter(it => it.pr.late).length, today = mine.filter(it => it.pr.today).length;
+  const sx = host.querySelector('.ed-board') ? host.querySelector('.ed-board').scrollLeft : 0;
+  // A shoot phone: whose it is, the day's run sheet one tap away, and the way out of "this is me".
+  const agentBar = myAgent ? `<div class="ed-agent"><span>This phone is <b>${esc(myAgent)}</b>'s</span><button type="button" class="tk-btn sm" onclick="toggleView('shoots')">Today's shoots →</button><button type="button" class="tk-link" onclick="setMyAgent('')">not ${esc(myAgent)}?</button></div>` : '';
+  host.innerHTML = `<div class="ed-wrap">
+    ${agentBar}
+    ${myAgent ? '' : edTrackHtml()}
+    <div class="ed-bar">
+      <label class="tk-dd tk-dd-pick${edPerson ? ' on' : ''}"><span class="tk-dd-k">Person</span>
+        <select onchange="setEdPerson(this.value || '')" aria-label="Show the work of">${['', ...people].map(n => `<option value="${esc(n)}"${(n === '' ? !edPerson : sameName(n, edPerson)) ? ' selected' : ''}>${n ? esc(n) : 'Everyone'}</option>`).join('')}</select></label>
+      <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''} · nearest deadline first</span>
+    </div>
+    <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
+      const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || ((b.x.updatedAt || 0) - (a.x.updatedAt || 0)));
+      const nLate = cards.filter(it => it.pr.late).length;
+      return `<div class="tk-col ed-col ed-${col.key}">
+        <div class="tk-col-hdr"><div class="tk-col-head"><span class="tk-col-title">${esc(col.label)}</span></div><div class="tk-col-rule">${esc(col.hint)}</div>
+          <div class="tk-col-counts">${nLate ? `<span class="tk-late">${nLate} late</span>` : ''}<span class="tk-count">${cards.length}</span></div></div>
+        <div class="tk-col-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="edColDrop(event,'${col.key}')">
+          ${cards.map(edCardHtml).join('') || '<div class="tk-col-none">Nothing here</div>'}
+        </div></div>`;
+    }).join('')}</div>
+  </div>`;
+  const b = host.querySelector('.ed-board'); if (b && sx) b.scrollLeft = sx;
+}
+// Dropping a card on one of the editor's own columns moves its edit; the others follow the shoot and Posting.
+function edColDrop(e, colKey) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const id = draggedId;
+  draggedId = null;
+  const x = listings.find(l => l.id === id); if (!x) return;
+  const action = EF.ED_DROP[colKey];
+  if (!action) return toast(colKey === 'scheduled' ? 'Schedule it in Posting — it moves here by itself' : 'This column follows the shoot');
+  const e0 = EF.editOf(x);
+  if (action === 'plan' && (e0.status === 'planned' || !e0.by)) return e0.status === 'planned' ? null : openEditPlan(id);
+  if (action === 'reset' && !e0.status) return;
+  if (action === 'reset' && !confirm('Clear the edit plan for this card?')) return;
+  if (action === 'done' && e0.status === 'done') return;
+  edStep(id, action, action === 'plan' ? { by: e0.by, planAt: e0.planAt, dueAt: e0.dueAt } : {});
+}
+window.edColDrop = edColDrop;
+// To the card's posts in Posting: a series to its block, a property to its row.
+function edPosting(id) {
+  const x = listings.find(l => l.id === id); if (!x) return;
+  if (isSeriesCard(x)) return window.pgOpenSeries && window.pgOpenSeries(x.postingId);
+  const p = window.pgPostsFor && window.pgPostsFor(x);
+  toggleView('posting');
+  if (p && p.rowId && window.pgJump) setTimeout(() => window.pgJump(p.rowId), 0);
+  else toast('Not on the Posting tab yet — use + Add schedule there');
+}
+window.edPosting = edPosting;
+// Someone is using a field in that view (a picker open, a box half-typed): a redraw would take it away.
+const inUse = id => { const a = document.activeElement, el = document.getElementById(id); return !!(a && el && el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); };
+// Editing times tick: the Editor view redraws each minute while it is showing (not mid-drag, not
+// under an open dialog).
+setInterval(() => {
+  if (currentView === 'board' && (boardMode === 'editor' || myAgent) && !draggedId && !document.querySelector('.tk-ov.open') && document.visibilityState === 'visible' && !inUse('boardView')) renderEditor();
+}, 60000);
+// The Posting tab's rows changed: series names, post dates and "Post scheduled" follow.
+window.trackPostingChanged = () => {
+  if (currentView !== 'board' || draggedId) return;
+  const m = myAgent ? 'editor' : boardMode;
+  if (m === 'list') renderList(); else if (m === 'editor') renderEditor(); else renderBoard();
+};
+
+// ═══════ SETTINGS → CONFIGURATIONS ═══════
+// Everything the admin sets for this page, in one place: who the editors are (the Editor view opens
+// first for them), edit deadlines, series, the board's stage targets, the standard tags. Saved in
+// settings/{tenant}.trackConfig for the whole team; every field has a default (track-config.js).
+let config = CFG.normalizeConfig({});
+let configLoaded = false;
+window.trackConfig = () => config;
+window.applyTrackConfigSnapshot = raw => {
+  const next = CFG.normalizeConfig(raw);
+  const changed = JSON.stringify(next) !== JSON.stringify(config);
+  config = next;
+  P.setTargetDays(config.targetDays);
+  const first = !configLoaded;
+  configLoaded = true;
+  if (first) editorDefault();
+  if (changed) {
+    if (window.pgListingsChanged) window.pgListingsChanged();
+    // Someone else's change while a field here is in use: redraw once it is left, not under the typing.
+    if (currentView === 'settings') { if (inUse('settingsView')) cfStale = true; else renderSettings(); }
+    else if (!document.querySelector('.tk-ov.open')) applyFilters();
+  }
+};
+// The person signed in, by the team's name for them (as editors are named).
+const signedInName = () => {
+  const e = String(currentUserEmail || '').toLowerCase();
+  return (team.find(t => t.email === e) || {}).name || (e ? displayName(e) : '');
+};
+// An editor opens on the Editor view, showing their own work — once per visit, and only when no view
+// was asked for (a link, the menu). Anyone can still switch to Board or List, and back.
+let editorDefaultDone = false;
+function editorDefault() {
+  if (editorDefaultDone || !trackInited || !configLoaded) return;
+  editorDefaultDone = true;
+  const me = signedInName();
+  if (myAgent || window.__trackInitialView || currentView !== 'board' || !CFG.isEditor(config, me)) return;
+  boardMode = 'editor';
+  if (!edPerson) edPerson = config.editors.find(n => sameName(n, me)) || me;
+  renderModeToggle();
+  if (window.AppNav) window.AppNav.setActive(navActive());
+  applyFilters();
+}
+function saveConfig(patch, what) {
+  const before = config;
+  const next = CFG.normalizeConfig({ ...config, ...patch });
+  config = next;
+  P.setTargetDays(config.targetDays);
+  renderSettings();
+  if (!window.trackFirebase || !window.trackFirebase.saveTrackConfig) return;
+  window.trackFirebase.saveTrackConfig(next, Object.keys(patch)).then(() => toast(what || 'Saved')).catch(e => {
+    console.error('Settings save failed:', e);
+    // Not saved: show what is really stored again.
+    config = before; P.setTargetDays(config.targetDays); renderSettings();
+    toast(e && e.code === 'permission-denied' ? 'You do not have permission to change settings' : 'Could not save — check your connection');
+  });
+}
+window.cfAddEditor = () => {
+  const sel = document.getElementById('cfEdPick'), typed = document.getElementById('cfEdName');
+  const name = String((typed && typed.value) || (sel && sel.value) || '').trim();
+  if (!name) return;
+  if (config.editors.some(n => sameName(n, name))) return toast(name + ' is already an editor');
+  saveConfig({ editors: [...config.editors, name] }, name + ' added as an editor');
+};
+window.cfRemoveEditor = name => saveConfig({ editors: config.editors.filter(n => !sameName(n, name)) }, name + ' removed');
+window.cfSet = (key, value) => saveConfig({ [key]: value });
+window.cfTarget = (key, v) => {
+  const n = Math.round(Number(v));
+  const t = { ...config.targetDays };
+  if (n > 0) t[key] = n; else delete t[key];
+  saveConfig({ targetDays: t }, 'Stage target saved');
+};
+window.cfAddTag = () => {
+  const inp = document.getElementById('cfTag'), v = TG.normTag(inp && inp.value);
+  if (!v) return;
+  if ([...TG.DEFAULT_TAGS, ...config.tags].some(t => TG.tagKey(t) === TG.tagKey(v))) return toast('That tag is already offered');
+  saveConfig({ tags: [...config.tags, v] }, 'Tag added');
+};
+window.cfRemoveTag = t => saveConfig({ tags: config.tags.filter(x => TG.tagKey(x) !== TG.tagKey(t)) }, 'Tag removed');
+// A field's change can fire again as the redraw takes it away (it loses focus): one redraw at a time.
+let cfDrawing = false, cfStale = false;
+document.addEventListener('focusout', e => {
+  const el = document.getElementById('settingsView');
+  if (cfStale && el && el.contains(e.target)) setTimeout(() => { if (cfStale && !inUse('settingsView')) { cfStale = false; renderSettings(); } }, 0);
+});
+function renderSettings() {
+  const host = document.getElementById('settingsView');
+  if (!host) return;
+  if (cfDrawing) { setTimeout(renderSettings, 0); return; }
+  cfDrawing = true;
+  try { drawSettings(host); } finally { cfDrawing = false; }
+}
+function drawSettings(host) {
+  const people = shootPeople().map(p => p.name).filter(n => !config.editors.some(e => sameName(e, n)));
+  const chip = (label, js, cls) => `<span class="cf-chip${cls ? ' ' + cls : ''}">${esc(label)}${js ? `<button type="button" onclick="${js}" aria-label="Remove ${esc(label)}">✕</button>` : ''}</span>`;
+  const sec = (title, hint, body) => `<section class="cf-sec"><div class="cf-sh"><h3>${title}</h3>${hint ? `<p>${hint}</p>` : ''}</div><div class="cf-sb">${body}</div></section>`;
+  const tog = (key, label, sub) => `<label class="cf-tog"><input type="checkbox" ${config[key] ? 'checked' : ''} onchange="cfSet('${key}', this.checked)"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span></label>`;
+  host.innerHTML = `<div class="cf-wrap">
+    <header class="cf-head"><div class="eyebrow">Settings</div><h2>Configurations</h2><p>Shoot &amp; Media, for the whole team. Changes save at once.</p></header>
+    ${sec('Editors', 'The <b>Editor view</b> opens first for these people, with their own work. Anyone can open it from <b>Board · List · Editor</b>, or from the menu.', `
+      <div class="cf-chips">${config.editors.length ? config.editors.map(n => chip(n, `cfRemoveEditor(${jsq(n)})`)).join('') : '<span class="cf-none">No editors yet</span>'}</div>
+      <div class="cf-add">
+        <select id="cfEdPick" aria-label="Pick a team member">${people.length ? '<option value="">Pick from the team…</option>' + people.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') : '<option value="">Everyone on the team is an editor</option>'}</select>
+        <span class="cf-or">or</span><input id="cfEdName" type="text" placeholder="Type a name" maxlength="60" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddEditor()}">
+        <button type="button" class="tk-btn primary" onclick="cfAddEditor()">Add editor</button>
+      </div>`)}
+    ${sec('Edit deadlines', 'How the Editor view dates and orders the work.', `
+      <label class="cf-row"><span>Deliver by, when not typed</span><select onchange="cfSet('deliverDefault', this.value)" aria-label="Default delivery date">${CFG.DELIVER_DEFAULTS.map(([k, l]) => `<option value="${k}"${config.deliverDefault === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+      <label class="cf-row"><span>Flag a deadline as "soon" when it is within</span><span class="cf-num"><input type="number" min="0" max="14" value="${config.dueSoonDays}" onchange="cfSet('dueSoonDays', this.value)" aria-label="Days for soon"> days</span></label>`)}
+    ${sec('Series', 'Several properties, shot separately, edited into one video.', `
+      ${tog('seriesAutoDetect', 'Plan lines that say "series" become a series', 'Pasting "Youtube - T nagar series" makes a series; its properties are picked after.')}
+      ${tog('seriesBoardCard', 'A new series gets a card on the board', 'Its edit is then tracked on the board and in the Editor view.')}`)}
+    ${sec('Board — stage targets', 'Days a card can sit in a stage before it shows as late (red at double).', `
+      <div class="cf-targets">${CFG.TARGET_STAGES.map(([k, l, d]) => `<label class="cf-row"><span>${esc((P.stageForKey(stages, k) || {}).name || l)}</span><span class="cf-num"><input type="number" min="1" max="365" value="${config.targetDays[k] || ''}" placeholder="${d}" onchange="cfTarget('${k}', this.value)" aria-label="${esc(l)} target days"> days${config.targetDays[k] ? '' : ' <em>default</em>'}</span></label>`).join('')}</div>`)}
+    ${sec('Tags', 'Offered on every card and Posting row, besides the four starting tags and any in use.', `
+      <div class="cf-chips">${TG.DEFAULT_TAGS.map(t => chip(t, '', 'fixed')).join('')}${config.tags.map(t => chip(t, `cfRemoveTag(${jsq(t)})`)).join('')}</div>
+      <div class="cf-add"><input id="cfTag" type="text" placeholder="New tag" maxlength="32" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddTag()}"><button type="button" class="tk-btn" onclick="cfAddTag()">Add tag</button></div>`)}
+    ${sec('Team', 'Who can be picked for a shoot or an edit. The team is kept in the CRM by the owner.', `
+      <div class="cf-chips">${team.length ? team.map(t => `<span class="cf-chip" title="${esc(t.email)}">${esc(t.name)}</span>`).join('') : '<span class="cf-none">No team set yet</span>'}</div>`)}
+  </div>`;
+}
+window.renderSettings = renderSettings;
+
 // ═══════ TOAST ═══════
 let toastTimer = null;
 function toast(msg) {
@@ -2557,7 +3180,10 @@ window.onTrackAuthChange = function (user, tenantId) {
       trackInited = true;
       // A shoot phone opens on its own day. Everyone else gets the board.
       document.body.classList.toggle('agent-mode', !!myAgent);
-      toggleView(myAgent ? 'shoots' : (window.__trackInitialView || 'board'));
+      // A shoot phone opens on its own work in the Editor view (the Shoots run sheet is in the menu).
+      if (myAgent && !window.__trackInitialView) edPerson = myAgent;
+      toggleView(myAgent && !window.__trackInitialView ? 'editor' : (window.__trackInitialView || 'board'));
+      editorDefault();
     }
   } else {
     currentUserEmail = null;
@@ -2583,7 +3209,7 @@ window.attemptLogin = attemptLogin; window.trackLogout = trackLogout;
 const TRACK_LAYERS = [
   ['acModal', () => closeAccessModal()], ['wrapModal', () => closeWrapModal()],
   ['rsModal', () => closeReasonModal()], ['shModal', () => closeShootModal()],
-  ['mModal', () => closeModal()], ['mapModal', null], ['linkModal', null],
+  ['mModal', () => closeModal()], ['edModal', () => closeEditPlan()], ['mapModal', null], ['linkModal', null],
   ['sellerPrev', () => closeSellerPreview()], ['bpPrev', () => window.bpClosePreview && window.bpClosePreview()]
 ];
 function closeTrackLayer(id) {
@@ -2613,9 +3239,9 @@ document.addEventListener('mousedown', e => {
 // them is a display swap rather than a navigation.
 window.AppNav.boot({
   console: 'track',
-  select: view => toggleView(view),
+  select: view => toggleView(view, true),
   signOut: () => trackLogout()
 });
 window.AppNav.setActive(currentView);
 const pendingNav = window.AppNav.takeNav();
-if (pendingNav) { window.__trackInitialView = pendingNav; setTimeout(() => toggleView(pendingNav), 0); }
+if (pendingNav) { window.__trackInitialView = pendingNav; setTimeout(() => toggleView(pendingNav, true), 0); }
