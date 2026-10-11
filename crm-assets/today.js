@@ -92,6 +92,37 @@
     return String(email || '').toLowerCase() === String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase();
   }
 
+  // ── Shoot & Media: voice-overs asked for ──
+  // The cards come read-only from Shoot & Media (firebase-sync.js, from the first time this view opens);
+  // which voice-overs are waiting is track-assets/voiceover.js, the same reading the board uses. A
+  // voice-over is asked for by the editor once the rough cut is ready — only then is it the voice-over
+  // person's (Settings → Configurations on Shoot & Media). Everyone sees them; theirs are marked.
+  var vo = { listings: [], stages: [], by: '', email: '' };
+  function redraw() { if (typeof currentView !== 'undefined' && currentView === 'today' && window.renderTodayView) window.renderTodayView(); }
+  window.applyTrackTaskListings = function (list) { vo.listings = list || []; redraw(); };
+  window.applyTrackTaskStages = function (list) { vo.stages = list || []; redraw(); };
+  window.applyTrackTaskConfig = function (cfg) {
+    var b = String((cfg && cfg.voiceBy) || '').trim(), e = String((cfg && cfg.voiceByEmail) || '').trim().toLowerCase();
+    if (b !== vo.by || e !== vo.email) { vo.by = b; vo.email = e; redraw(); }
+  };
+  var VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+  // By email when Settings has it (picked from the team); by name otherwise.
+  function voIsMe() {
+    if (vo.email) return isMe(vo.email);
+    var V = window.trackVO; return !!(V && vo.by && V.isVoicePerson(vo.by, currentUserEmail));
+  }
+  function voiceOvers() {
+    var V = window.trackVO;
+    if (!V) return [];
+    var me = voIsMe();
+    return V.voTasks(vo.listings, vo.stages, { asked: true }).map(function (t) {
+      return { kind: 'vo', x: t.x, left: t.left, at: t.at, mine: me, lead: null };
+    });
+  }
+  function cardTitle(x) {
+    return String(x.title || x.seriesName || x.propertyCode || 'A property');
+  }
+
   function closedLead(l) {
     var key = typeof stageKeyOfId === 'function' ? stageKeyOfId(l.stageId) : null;
     return key === 'won' || key === 'lost';
@@ -195,7 +226,7 @@
     var l = item.lead;
     // A meeting belongs to the calendar, not to a lead. Everything below that
     // reaches for l.id has to cope with there being none.
-    var id = esc(l ? l.id : item.meeting.id);
+    var id = esc(l ? l.id : item.meeting ? item.meeting.id : item.x.id);
     var head, body, cls = 'td-row';
 
     if (item.kind === 'visit') {
@@ -219,6 +250,21 @@
         + field('Looking for', l.propertyInterest)
         + field('Budget', l.budget)
         + field('Notes', latestNote(l));
+    } else if (item.kind === 'vo') {
+      var x = item.x, outs = item.left.map(function (o) { return VO_SHORT[o.k] || o.label; }).join(', ');
+      if (item.mine) cls += ' is-mine';
+      var asks = item.left.map(function (o) { return o.ask; }).filter(Boolean);
+      var notes = asks.map(function (a) { return a.note; }).filter(Boolean).join(' · ');
+      var askers = asks.map(function (a) { return a.by; }).filter(Boolean).filter(function (n, i, all) { return all.indexOf(n) === i; }).join(', ');
+      head = '<span class="td-time td-time-ask">V/O' + (item.mine ? mineMark(false) : '') + '</span>'
+        + '<span class="td-main"><span class="td-what">Voice-over — <b>' + esc(outs) + '</b></span>'
+        + '<span class="td-who">' + esc(cardTitle(x)) + (x.propertyCode && cardTitle(x) !== x.propertyCode ? ' · ' + esc(x.propertyCode) : '')
+        + (askers ? ' · asked by ' + esc(askers) : '') + '</span></span>';
+      body = field('For', outs)
+        + field('Asked', (askers ? askers + ', ' : '') + new Date(item.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))
+        + field('Note', notes)
+        + field('Who makes it', vo.by || 'Not set — Shoot & Media → Settings → Configurations')
+        + '<div class="td-f"><dt>When it is made</dt><dd>Tick <b>V/O made</b> on the card in Shoot &amp; Media.</dd></div>';
     } else if (item.kind === 'meeting') {
       var m = item.meeting;
       var ANS = { accepted: 'you are coming', declined: 'you said no', tentative: 'you said maybe', needsAction: 'you have not answered' };
@@ -285,7 +331,9 @@
     var acts = '<div class="td-acts">' + answer
       // A meeting has no lead to open. It opens in the calendar, which is
       // where it can be answered.
-      + (item.kind === 'meeting'
+      + (item.kind === 'vo'
+          ? '<a class="td-act go" href="propertytrack.html?listing=' + encodeURIComponent(item.x.id) + '">Open the card</a>'
+          : item.kind === 'meeting'
           ? '<button type="button" class="td-act" onclick="PinToday.openMeeting(\'' + id + '\')">Open it</button>'
           : '<button type="button" class="td-act" onclick="openDetail(\'' + id + '\')">Open lead</button>')
       + (item.kind === 'ask' ? '<button type="button" class="td-act done" onclick="markMentionDone(\'' + id + '\')">✓ Done</button>' : '')
@@ -314,6 +362,8 @@
         if (it.meeting.mine === 'needsAction') { mine++; waiting++; }
       } else if (it.kind === 'call') {
         if (it.mine) { mine++; if (it.overdue) waiting++; }
+      } else if (it.kind === 'vo') {
+        if (it.mine) mine++;
       }
     });
     return { mine: mine, waiting: waiting };
@@ -362,7 +412,9 @@
     var meetings = meetingsToday().map(function (m) { return { kind: 'meeting', meeting: m, at: m.at, lead: null }; });
     var calls = callsDue();
     var asks = askedOfMe();
-    var total = visits.length + meetings.length + calls.length + asks.length;
+    if (window.crmFirebase && window.crmFirebase.watchTrackTasks) window.crmFirebase.watchTrackTasks();
+    var vos = voiceOvers();
+    var total = visits.length + meetings.length + calls.length + asks.length + (voIsMe() ? vos.length : 0);
 
     var me = person(currentUserEmail);
     var late = calls.filter(function (c) { return c.overdue; }).length;
@@ -377,6 +429,7 @@
       if (meetings.length) bits.push(meetings.length + (meetings.length === 1 ? ' meeting' : ' meetings'));
       if (calls.length) bits.push(calls.length + (calls.length === 1 ? ' call' : ' calls') + (late ? ' (' + late + ' late)' : ''));
       if (asks.length) bits.push(asks.length + (asks.length === 1 ? ' thing asked of you' : ' things asked of you'));
+      if (vos.length && voIsMe()) bits.push(vos.length + (vos.length === 1 ? ' voice-over' : ' voice-overs') + ' to make');
       summary = bits.join(' · ');
     }
 
@@ -399,6 +452,9 @@
         calls, 'Nothing due ' + spanWord() + '.')
       + sectionHtml('Asked of you', 'Where a colleague put your name in a note on a lead.',
         asks, 'Nobody is waiting on you.')
+      // Shoot & Media: shown to the voice-over person always, to everyone else while there are some.
+      + (vos.length || voIsMe() ? sectionHtml('Voice-overs to make', 'Asked for by the editor once the rough cut is ready'
+          + (vo.by ? ' — ' + vo.by + '\u2019s to make' : '') + '. Oldest ask first.', vos, 'No voice-over asked for.') : '')
       + '</div>';
   };
 })();

@@ -64,7 +64,7 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
   await page.evaluate(() => setBoardMode('board')); await page.waitForTimeout(200);
 
   await page.evaluate(() => toggleView('settings', true)); await page.waitForTimeout(400);
-  ok('Settings → Configurations draws', /Configurations/.test(await page.textContent('#settingsView')) && (await page.$$('.cf-sec')).length === 6);
+  ok('Settings → Configurations draws', /Configurations/.test(await page.textContent('#settingsView')) && (await page.$$('.cf-sec')).length === 7 && /Voice-over by/.test(await page.textContent('#settingsView')));
   ok('Settings: no sideways scroll', !(await wide()));
   await page.screenshot({ path: `tests/out/live-${name}-settings.png` });
 

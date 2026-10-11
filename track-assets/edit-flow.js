@@ -258,6 +258,18 @@ const recordFor = (x, k) => cutRecord(x, k) || (k !== 'all' ? cutRecord(x, 'all'
 export function cutEdit(x, k) { return normalizeEdit(recordFor(x, k)); }
 export const cutLog = (x, k) => editLogOf({ editLog: (recordFor(x, k) || {}).log });
 export const cutShared = (x, k) => !!(cutRecord(x, k) || {}).shared;
+// An earlier edit taken out of a cut's history (a "done" by mistake, redone by someone else): the cuts
+// to write, or null if it is not there. The entry is named by who and when it was done.
+export function forgetEdit(x, k, entry) {
+  // The record that holds the history: the outlet's own, else the old whole-video edit it reads from.
+  const base = { ...cutsView(x) }, key = cutRecord(x, k) || k === 'all' ? k : 'all';
+  const rec = base[key];
+  if (!rec || !entry) return null;
+  const log = Array.isArray(rec.log) ? rec.log : [];
+  const i = log.findIndex(l => l && Number(l.doneAt) === Number(entry.doneAt) && str(l.by) === str(entry.by));
+  if (i < 0) return null;
+  return { ...base, [key]: { ...rec, log: log.filter((_, j) => j !== i) } };
+}
 // The cuts a card has: planned on Shoot for, with an edit under way or done, or with a post in Posting
 // (postChannels: the channels with a planned, scheduled or live post), in the outlets' order. A cut
 // cleared and no longer planned goes. "Video" only while no outlet is.

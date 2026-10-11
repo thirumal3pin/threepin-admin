@@ -1,5 +1,5 @@
 // The editor's flow.   node tests/edit-flow.test.mjs
-import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority, checks, postGate, cutKeys, cutOfChannel, cutEdit, cutLog, setCut, materializeCuts, ownCuts, cutsView, cutShared, editorTrack as track2 } from '../track-assets/edit-flow.js';
+import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority, checks, postGate, cutKeys, cutOfChannel, cutEdit, cutLog, setCut, materializeCuts, ownCuts, cutsView, cutShared, editorTrack as track2, forgetEdit } from '../track-assets/edit-flow.js';
 
 let failed = 0;
 const check = (label, cond, detail) => { if (!cond) { failed++; console.log('  FAIL  ' + label + (detail !== undefined ? ' — ' + detail : '')); } };
@@ -196,6 +196,16 @@ eq('Spans read plainly', [span(35 * 60000), span(130 * 60000), span(2 * H), span
   // 6b. The real TNagar series: posted in the morning, then edits recorded (a quick redo) that evening.
   const redo = { edit: { status: 'done', by: 'Rajesh', startedAt: NOW - 60000, doneAt: NOW }, editLog: [{ by: 'T', startedAt: 0, doneAt: NOW - 120000 }] };
   check('Edits recorded after the post went live (a redo): Posted', editColumn(redo, { shot: true, now: NOW, stageKey: 'media_ready', posts: { total: 1, live: 1, lastLiveAt: NOW - 8 * H } }) === 'posted');
+  // A "done" by mistake, redone by someone else: taken out of the history.
+  const tn = { kind: 'series', forPlan: { yt: true }, edit: { status: 'done', by: 'Rajesh', startedAt: NOW - 60000, doneAt: NOW }, editLog: [{ by: 'Thirumal', startedAt: 0, doneAt: NOW - 120000 }] };
+  const fc = forgetEdit(tn, 'yt', { by: 'Thirumal', doneAt: NOW - 120000 });
+  check('Remove an earlier edit: gone from the history, the current edit kept', fc && fc.yt.log.length === 0 && fc.yt.status === 'done' && fc.yt.by === 'Rajesh');
+  check('…an edit not in the history: nothing to write', forgetEdit(tn, 'yt', { by: 'Anu', doneAt: 1 }) === null);
+  const va = { edit: { status: 'done', by: 'R', startedAt: 1, doneAt: 5 }, editLog: [{ by: 'Z', startedAt: 0, doneAt: 2 }] };
+  const fv = forgetEdit({ ...va, cuts: materializeCuts(va) }, 'all', { by: 'Z', doneAt: 2 });
+  const fy = forgetEdit({ ...va, cuts: materializeCuts(va) }, 'yt', { by: 'Z', doneAt: 2 });
+  check('…from an outlet reading the Video edit: taken out of the Video edit, nothing split', fy && fy.all.log.length === 0 && !fy.yt);
+  check('…on a Video edit too', fv && fv.all.log.length === 0 && fv.all.status === 'done');
   // 7. Re-planning Video does not tick an "all" outlet.
   const r7 = setCut({ edit: { status: 'planned', by: 'R' } }, 'all', 'details', { by: 'A' }, NOW, '');
   check('Re-plan Video: no forPlan.all', r7.ok && !('all' in r7.patch.forPlan));

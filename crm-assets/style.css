@@ -2223,3 +2223,4 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 @media (max-width: 720px) {
   .lcard-phone a { min-height: 30px; }
 }
+a.td-act{text-decoration:none;display:inline-flex;align-items:center;}

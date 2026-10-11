@@ -321,6 +321,34 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...then the leads', bell.groups.some(g => /lead/i.test(g)), JSON.stringify(bell.groups));
   await page.evaluate(() => closeAlerts());
 
+  // ── VOICE-OVERS TO MAKE (from Shoot & Media, read only) ──
+  const vo = await page.evaluate(() => {
+    window.applyTrackTaskStages([{ id: 's4', key: 'shoot_done', name: 'Shoot done' }, { id: 's9', key: 'closed', name: 'Sold / Rented' }]);
+    window.applyTrackTaskConfig({ voiceBy: 'Thirumal', voiceByEmail: 'thirumal@threepin.in' });
+    window.applyTrackTaskListings([
+      { id: 'l1', title: '3BHK T Nagar', propertyCode: 'TNAG0003', stageId: 's4', shootDoneAt: Date.now() - 86400000, forPlan: { igReel: true, yt: true }, forVoice: { igReel: 'vo', yt: 'vo' }, forVo: { yt: true }, forVoAsk: { igReel: { at: Date.now() - 3600000, by: 'Rajesh', note: '30 sec' } } },
+      { id: 'l4', title: 'Rough cut not ready', stageId: 's4', shootDoneAt: 1, forPlan: { yt: true }, forVoice: { yt: 'vo' } },
+      { id: 'l2', title: 'Sold one', stageId: 's9', shootDoneAt: 1, forPlan: { yt: true }, forVoice: { yt: 'vo' } },
+      { id: 'l3', title: 'Not shot yet', stageId: 's4x', forPlan: { yt: true }, forVoice: { yt: 'vo' } }
+    ]);
+    window.renderTodayView();
+    const sec = [...document.querySelectorAll('#todayView .td-sec')].find(x => /Voice-overs to make/.test(x.textContent));
+    const out = { sec: !!sec, rows: sec ? [...sec.querySelectorAll('.td-row')].map(r => r.textContent.replace(/\s+/g, ' ')) : [],
+      mine: sec ? sec.querySelectorAll('.td-row.is-mine').length : 0, href: sec && sec.querySelector('a.td-act') ? sec.querySelector('a.td-act').getAttribute('href') : '',
+      sub: document.querySelector('#todayView .td-sub').textContent };
+    window.applyTrackTaskConfig({ voiceBy: 'Swami', voiceByEmail: 'swami@threepin.in' });
+    window.renderTodayView();
+    const sec2 = [...document.querySelectorAll('#todayView .td-sec')].find(x => /Voice-overs to make/.test(x.textContent));
+    out.otherMine = sec2 ? sec2.querySelectorAll('.td-row.is-mine').length : -1;
+    out.otherSub = document.querySelector('#todayView .td-sub').textContent;
+    return out;
+  });
+  ok('Voice-overs to make: a section in Daily task', vo.sec);
+  ok('...only what the editor asked for: the Reel (YouTube made; not asked, sold and unshot left out), who asked and the note', vo.rows.length === 1 && /Voice-over — Reel/.test(vo.rows[0]) && /3BHK T Nagar/.test(vo.rows[0]) && /asked by Rajesh/.test(vo.rows[0]) && /30 sec/.test(vo.rows[0]), JSON.stringify(vo.rows));
+  ok('...marked yours when you make the voice-overs, and counted in your day', vo.mine === 1 && /1 voice-over to make/.test(vo.sub), JSON.stringify(vo));
+  ok('...it opens the card on Shoot & Media', vo.href === 'propertytrack.html?listing=l1', vo.href);
+  ok('...someone else makes them: still listed, not marked yours, not in your count', vo.otherMine === 0 && !/voice-over/.test(vo.otherSub), JSON.stringify(vo));
+
   await page.screenshot({ path: join(ROOT, 'tests/out/today-' + viewport.width + '.png') });
   await ctx.close();
 }

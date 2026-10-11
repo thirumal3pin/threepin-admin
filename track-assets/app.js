@@ -26,6 +26,7 @@
 
 import * as P from './track-pipeline.js';
 import * as BF from './brochure-flow.js';
+import * as VO from './voiceover.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
 import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
 import { displayName } from '../crm-assets/mentions.js';
@@ -615,7 +616,7 @@ function cardHtml(x) {
   if (isSeriesCard(x)) return seriesCardHtml(x);
   const late = isLate(x);
   const age = P.stageAge(x, stages, Date.now());
-  const blocked = blockersFor(x);
+  const blocked = cardBlockers(x);
   const it = sellerItem(x);
   const wa = telOf(it.phone).replace(/^\+/, '');
   const chips = factChips(it.f, 2);
@@ -651,6 +652,7 @@ function cardHtml(x) {
     </div>
     ${shootLine(x)}
     ${mediaBar(x)}
+    ${voRow(x)}
     ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
     ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span><span class="tk-card-note-m">${esc(personName(x.lastNote.by))} · ${esc(timeAgo(x.lastNote.at))}${x.noteCount > 1 ? ` · ${x.noteCount} notes` : ''}</span></div>` : ''}
     <div class="tk-card-meta">
@@ -1740,6 +1742,13 @@ function openDetail(id) {
 }
 window.openDetail = openDetail;
 
+// An outlet whose voice-over is still to make: asked for or not — the editor asks once the rough cut is ready.
+function voAskLine(x, k) {
+  const a = VO.voAsk(x, k), who = config.voiceBy;
+  return `<div class="tk-for-ask">${a
+    ? `<span class="tk-vo">🎙 V/O asked by <b>${esc(a.by || '—')}</b> · ${esc(timeAgo(a.at))}${who ? ` — ${esc(who)}` : ''}</span>${a.note ? `<span class="tk-for-note">“${esc(a.note)}”</span>` : ''}<button type="button" class="tk-link" onclick="voUnask('${x.id}','${k}')">Take back</button>`
+    : `<span class="tk-vo need">🎙 V/O not asked yet</span><button type="button" class="tk-vo-ask" onclick="voAskFor('${x.id}','${k}')">Ask for V/O</button><span class="tk-sub2">once the rough cut is ready</span>`}</div>`;
+}
 // Shoot for: each outlet this shoot (or a series' edit) is cut for — planned, made, and its voice.
 function forSectionHtml(x, intro) {
   return `<div class="tk-sec" id="dpFor">
@@ -1761,6 +1770,7 @@ function forSectionHtml(x, intro) {
                 <option value="vo"${v === 'vo' ? ' selected' : ''}>V/O Reqd. separately</option>
               </select>` : '<span class="tk-muted">—</span>'}</span>
             <span class="tk-for-vo">${v === 'vo' && plan ? `<label><input type="checkbox" ${vo ? 'checked' : ''} onchange="setForVo('${x.id}','${k}',this.checked)" aria-label="${esc(label)} voice-over made"><em class="tk-m"> VO made</em></label>` : '<span class="tk-muted">—</span>'}</span>
+            ${voLeft ? voAskLine(x, k) : ''}
           </div>`;
         }).join('')}
       </div>
@@ -2071,6 +2081,7 @@ function advanceTo(id, key, why) {
 // What the brochure panel (brochure-panel.js) needs from the board.
 window.trackApi = {
   listings: () => listings,
+  editSheetHtml: () => edSheetHtml(listings),
   inventory: () => inventory,
   loadInventory: force => loadInventory(force),
   mutate: (id, fn, text) => mutate(id, fn, text),
@@ -2159,6 +2170,79 @@ function foldInsta(x) {
 }
 const forVoice = (x, k) => (x.forVoice && VOICE[x.forVoice[k]]) ? x.forVoice[k] : '';
 const forVoMade = (x, k) => !!(x.forVo && x.forVo[k]);
+// ── Voice-overs still to make (voiceover.js — the same reading as the CRM's Daily task) ──
+// On a shot, open card: the outlets whose V/O is still to make. The editor asks for it once the rough
+// cut is ready ("Ask for V/O"); only then is it the voice-over person's (Settings → Configurations →
+// Voice-over by) — with their name here, and in their Daily task. Shown on the board card, the series
+// card, the Editor view's cards and the card's Shoot for.
+const voFor = x => (VO.voDue(x, stages) ? VO.voLeft(x) : []);
+const VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+const voNames = list => list.map(o => VO_SHORT[o.k] || o.label).join(', ');
+// keys: only these outlets (an Editor card's cut); none: all of them.
+const voOf = (x, keys) => voFor(x).filter(o => !keys || o.k === 'all' || keys.includes(o.k));
+function voChip(x, keys) {
+  const left = voOf(x, keys);
+  if (!left.length) return '';
+  const asked = left.filter(o => o.ask), need = left.filter(o => !o.ask), who = config.voiceBy;
+  const since = asked.length ? Math.min(...asked.map(o => o.ask.at)) : 0;
+  return (asked.length ? `<span class="tk-vo" title="Asked for by ${esc(asked.map(o => o.ask.by).filter(Boolean).join(', ') || 'the editor')}${asked.some(o => o.ask.note) ? ' — ' + esc(asked.map(o => o.ask.note).filter(Boolean).join(' · ')) : ''}"><i class="fa-solid fa-microphone" aria-hidden="true"></i> V/O asked: <b>${esc(voNames(asked))}</b>${who ? ` · ${esc(who)}` : ''} · ${esc(timeAgo(since))}</span>` : '')
+    + (need.length ? `<span class="tk-vo need" title="Needs a voice-over made separately — ask once the rough cut is ready"><i class="fa-solid fa-microphone" aria-hidden="true"></i> V/O needed: <b>${esc(voNames(need))}</b> · not asked yet</span>` : '');
+}
+// The buttons: ask for the ones not asked yet; "made" for the ones asked.
+function voBtns(x, keys) {
+  const left = voOf(x, keys), need = left.filter(o => !o.ask).map(o => o.k), asked = left.filter(o => o.ask).map(o => o.k);
+  return (need.length ? `<button type="button" class="tk-vo-ask" onclick="event.stopPropagation();voAskFor('${x.id}',${jsq(need.join(','))})" title="The rough cut is ready — ask ${esc(config.voiceBy || 'for the voice-over')}">Ask for V/O</button>` : '')
+    + (asked.length ? `<button type="button" class="tk-vo-done" onclick="event.stopPropagation();voMade('${x.id}',${jsq(asked.join(','))})" title="The voice-over is made">V/O made ✓</button>` : '');
+}
+function voRow(x) {
+  const chip = voChip(x);
+  return chip ? `<div class="tk-vo-row">${chip}${voBtns(x)}</div>` : '';
+}
+// "Ask for V/O": the rough cut is ready — the voice-over person is asked (with a note for them).
+function voAskFor(id, keys) {
+  const x0 = listings.find(l => l.id === id); if (!x0) return;
+  const want = String(keys || '').split(',').filter(Boolean);
+  const left = voFor(x0).filter(o => !o.ask && (!want.length || want.includes(o.k)));
+  if (!left.length) return;
+  const who = config.voiceBy || 'the voice-over person';
+  const note = prompt(`Ask ${who} for the voice-over — ${voNames(left)}, ${cardName(x0)}.\nAnything for them (script, length)? Optional.`, '');
+  if (note === null) return;
+  const at = Date.now(), by = meName();
+  mutate(id, x => {
+    foldInsta(x);
+    const a = { ...(x.forVoAsk || {}) };
+    for (const o of left) a[o.k] = { at, by, note: String(note).trim().slice(0, 300) };
+    x.forVoAsk = a;
+  }, `Voice-over asked for: ${esc(voNames(left))}${note.trim() ? ' — ' + esc(note.trim().slice(0, 300)) : ''}`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast(config.voiceBy ? `${config.voiceBy} is asked — it is in their Daily task` : 'Asked — set who makes voice-overs in Settings → Configurations');
+}
+window.voAskFor = voAskFor;
+// Taken back (asked by mistake, or the cut is being redone first).
+function voUnask(id, k) {
+  mutate(id, x => { x.forVoAsk = { ...(x.forVoAsk || {}), [k]: null }; }, `Voice-over request taken back: ${esc(VO_SHORT[k] || k)}`);
+  if (currentDetailId === id) openDetail(id);
+}
+window.voUnask = voUnask;
+// The card's blockers, without the voice-over line when the V/O row shows it.
+const cardBlockers = x => { const b = blockersFor(x); return voFor(x).length ? b.filter(t => !/^voice-over not made/.test(t)) : b; };
+// "V/O made" from a card: those outlets (none named: every one still to make) ticked made.
+function voMade(id, keys) {
+  const x0 = listings.find(l => l.id === id); if (!x0) return;
+  const want = String(keys || '').split(',').filter(Boolean);
+  const left = voFor(x0).filter(o => !want.length || o.k === 'all' || want.includes(o.k));
+  if (!left.length) return;
+  mutate(id, x => {
+    foldInsta(x);
+    for (const o of left) {
+      if (o.k === 'all') x.voDone = true;
+      else x.forVo = { ...(x.forVo || {}), [o.k]: true };
+    }
+  }, `Voice-over made: ${esc(left.map(o => VO_SHORT[o.k] || o.label).join(', '))}`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast(`Voice-over made: ${left.map(o => VO_SHORT[o.k] || o.label).join(', ')}`);
+}
+window.voMade = voMade;
 // The single whole-shoot voice from before (x.voice / x.voDone) still counts until voice is set
 // per outlet; the first per-outlet choice retires it.
 const legacyVoice = x => x.voice === 'vo' && !(x.forVoice && Object.values(x.forVoice).some(v => VOICE[v]));
@@ -2174,7 +2258,7 @@ function setForPlan(id, key, on) {
     }
     x.forPlan = { ...(x.forPlan || {}), [key]: !!on };
     // Not planned any more: its done, voice and voice-over go with it.
-    if (!on) { x.forDone = { ...(x.forDone || {}), [key]: false }; x.forVoice = { ...(x.forVoice || {}), [key]: '' }; x.forVo = { ...(x.forVo || {}), [key]: false }; }
+    if (!on) { x.forDone = { ...(x.forDone || {}), [key]: false }; x.forVoice = { ...(x.forVoice || {}), [key]: '' }; x.forVo = { ...(x.forVo || {}), [key]: false }; if (x.forVoAsk && x.forVoAsk[key]) x.forVoAsk = { ...x.forVoAsk, [key]: null }; }
   }, `Shoot for ${forLabel(key)}: ${on ? 'planned' : 'not planned'}`);
   if (currentDetailId === id) openDetail(id);
 }
@@ -2183,7 +2267,8 @@ function setForDone(id, key, on) {
   // (being edited, or planned — its editor and days kept).
   const x0 = listings.find(l => l.id === id); if (!x0) return;
   const k = EF.cutOfChannel(x0, key), st = EF.cutEdit(x0, k).status;
-  const r = on && st !== 'done' ? EF.setCut(x0, k, 'done', {}, Date.now(), meName()) : !on && st === 'done' ? EF.setCut(x0, k, 'reopen', {}, Date.now(), meName()) : null;
+  const who = EF.cutEdit(x0, k).by || (isSeriesCard(x0) ? '' : x0.shootAssignee) || meName();
+  const r = on && st !== 'done' ? EF.setCut(x0, k, 'done', { by: who }, Date.now(), meName()) : !on && st === 'done' ? EF.setCut(x0, k, 'reopen', {}, Date.now(), meName()) : null;
   mutate(id, x => {
     if (r && r.ok) Object.assign(x, r.patch);
     foldInsta(x);   // after the cut's patch, which still carries an old "Instagram" tick
@@ -2197,14 +2282,15 @@ function setForVoice(id, key, v) {
   mutate(id, x => {
     foldInsta(x);
     x.forVoice = { ...(x.forVoice || {}), [key]: val };
-    if (val !== 'vo') x.forVo = { ...(x.forVo || {}), [key]: false };
+    if (val !== 'vo') { x.forVo = { ...(x.forVo || {}), [key]: false }; if (x.forVoAsk && x.forVoAsk[key]) x.forVoAsk = { ...x.forVoAsk, [key]: null }; }
     x.forPlan = { ...(x.forPlan || {}), [key]: true };
     if (val) { x.voice = ''; x.voDone = false; }   // the old whole-shoot setting is replaced
   }, `${forLabel(key)}: ${val ? VOICE[val] : 'voice over not set'}`);
   if (currentDetailId === id) openDetail(id);
 }
 function setForVo(id, key, on) {
-  mutate(id, x => { foldInsta(x); x.forVo = { ...(x.forVo || {}), [key]: !!on }; }, `${forLabel(key)}: voice-over ${on ? 'made' : 'not made yet'}`);
+  // Made taken back: the old request goes too — the editor asks again when the cut is ready for it.
+  mutate(id, x => { foldInsta(x); x.forVo = { ...(x.forVo || {}), [key]: !!on }; if (!on && x.forVoAsk && x.forVoAsk[key]) x.forVoAsk = { ...x.forVoAsk, [key]: null }; }, `${forLabel(key)}: voice-over ${on ? 'made' : 'not made yet'}`);
   if (currentDetailId === id) openDetail(id);
 }
 Object.assign(window, { setForPlan, setForDone, setForVoice, setForVo });
@@ -2746,7 +2832,7 @@ function memberPills(x) {
 }
 function seriesCardHtml(x) {
   const age = P.stageAge(x, stages, Date.now());
-  const info = seriesInfo(x), blocked = blockersFor(x), by = personName(x.updatedBy);
+  const info = seriesInfo(x), blocked = cardBlockers(x), by = personName(x.updatedBy);
   return `<div class="tk-card ser${isLate(x) ? ' late' : ''}" draggable="true" tabindex="0" role="link" aria-label="Open series ${esc(info.name)}" data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="sl-head tk-chead">
@@ -2757,6 +2843,7 @@ function seriesCardHtml(x) {
     </div>
     ${memberPills(x)}
     ${cutsHtml(x)}
+    ${voRow(x)}
     ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
     ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span></div>` : ''}
     ${tagChips(x.tags)}
@@ -2869,6 +2956,8 @@ function editChip(x) {
   return `<span class="tk-ed${act ? ' act' : done === ks.length ? ' ok' : ' plan'}" title="${esc(ks.map(k => EF.cutLabel(x, k) + ': ' + EF.EDIT_LABEL[EF.cutEdit(x, k).status]).join(' · '))}">✂ ${act ? act + ' editing · ' : ''}${done}/${ks.length} cut${ks.length === 1 ? '' : 's'} done</span>`;
 }
 const meName = () => myAgent || personName(currentUserEmail);
+// How long an edit took — nothing for under a minute (marked done straight after starting).
+const took = (a, b) => (a && b && b - a >= 60000 ? EF.span(b - a) : '');
 // The card's Edit section: a row per cut — editor, days, status, its post date — and the FB switch.
 function editSectionHtml(x) {
   const now = Date.now(), ks = cutsOfCard(x);
@@ -2878,8 +2967,9 @@ function editSectionHtml(x) {
     const st = e.status === 'active' && e.startedAt ? `Editing · ${EF.span(now - e.startedAt)}` : EF.EDIT_LABEL[e.status];
     return `<div class="tk-cutrow">
       <div class="tk-cut-n">${cutIcon(k)} <b>${esc(EF.cutLabel(x, k))}</b></div>
-      <div class="tk-cut-s"><b class="tk-ed-s ${e.status || 'none'}">${esc(st)}</b>${e.by ? ` · ${esc(e.by)}` : ''}${e.planAt ? ` · edit ${esc(fmtDay(e.planAt))}` : ''}${e.dueAt ? ` · deliver ${esc(fmtDay(e.dueAt))}` : ''}${e.doneAt ? ` · done ${esc(fmtDay(e.doneAt))}${e.startedAt ? ' (' + esc(EF.span(e.doneAt - e.startedAt)) + ')' : ''}` : ''}
-        <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : k === 'collab' ? '' : 'No post in Posting yet'}${log.length ? ` · ${log.length} earlier edit${log.length === 1 ? '' : 's'}` : ''}</span></div>
+      <div class="tk-cut-s"><b class="tk-ed-s ${e.status || 'none'}">${esc(st)}</b>${e.by ? ` · ${esc(e.by)}` : ''}${e.planAt ? ` · edit ${esc(fmtDay(e.planAt))}` : ''}${e.dueAt ? ` · deliver ${esc(fmtDay(e.dueAt))}` : ''}${e.doneAt ? ` · done ${esc(fmtDay(e.doneAt))}${took(e.startedAt, e.doneAt) ? ' (' + esc(took(e.startedAt, e.doneAt)) + ')' : ''}` : ''}
+        <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : k === 'collab' ? '' : 'No post in Posting yet'}</span>
+        ${log.length ? `<details class="tk-cutlog"><summary>${log.length} earlier edit${log.length === 1 ? '' : 's'}</summary>${log.map(l => `<div class="tk-cutlog-r"><span>${esc(l.by || '—')} · done ${esc(fmtDay(l.doneAt))}${took(l.startedAt, l.doneAt) ? ' (' + esc(took(l.startedAt, l.doneAt)) + ')' : ''}</span><button type="button" class="tk-link" title="Not a real edit — take it out of the history" onclick="edForget('${x.id}','${k}',${jsq(l.by)},${Number(l.doneAt)})">Remove</button></div>`).join('')}</details>` : ''}</div>
       <div class="tk-cut-a">
         ${btn(e.status && e.status !== 'done' ? 'Plan…' : 'Plan', `openEditPlan('${x.id}','${k}')`)}
         ${e.status !== 'active' ? btn(e.status === 'done' ? 'Edit again' : 'Start', `edStep('${x.id}','start',null,'${k}')`, e.status === 'planned' ? 'primary' : '') : ''}
@@ -2909,6 +2999,17 @@ function setFbOwnCut(id, on) {
   if (currentDetailId === id) openDetail(id);
 }
 window.setFbOwnCut = setFbOwnCut;
+// An earlier edit that was not real (marked done by mistake, then redone): out of the history and the
+// editor's count.
+function edForget(id, k, by, doneAt) {
+  const x0 = listings.find(l => l.id === id); if (!x0) return;
+  if (!confirm(`Remove the ${EF.cutLabel(x0, k)} edit done by ${by || 'nobody'} on ${fmtDay(doneAt)} from the history? It stops counting for ${by || 'them'}.`)) return;
+  if (!EF.forgetEdit(x0, k, { by, doneAt })) return toast('That edit is not in the history any more');
+  mutate(id, x => { const c = EF.forgetEdit(x, k, { by, doneAt }); if (c) x.cuts = c; }, `${EF.cutLabel(x0, k)}: earlier edit by <b>${esc(by || '—')}</b> removed from the history`);
+  if (currentDetailId === id) openDetail(id);
+  toast('Removed from the history');
+}
+window.edForget = edForget;
 const ED_HIST = { plan: 'Edit planned', start: 'Editing started', done: 'Edit done', reset: 'Edit plan cleared', assign: 'Editor changed' };
 // One cut moved along. With no cut named, the card's only cut — or the plan, to pick.
 function edStep(id, action, opts, k) {
@@ -2989,7 +3090,7 @@ try { edPerson = localStorage.getItem('track.edPerson') || ''; } catch (e) {}
 let edPastAll = false;
 let edCheck = '';   // the checklist filter: '' · 'post' (no post planned yet) · 'edit' (no edit planned)
 let edDragCut = null;   // the cut a dragged Editor card is
-window.setEdCheck = v => { edCheck = ['post', 'edit'].includes(v) ? v : ''; renderEditor(); };
+window.setEdCheck = v => { edCheck = ['post', 'edit', 'vo'].includes(v) ? v : ''; renderEditor(); };
 function setEdPerson(v) {
   edPerson = edPerson && sameName(edPerson, v) ? '' : String(v || '');
   try { localStorage.setItem('track.edPerson', edPerson); } catch (e) {}
@@ -3012,6 +3113,54 @@ function edCtx(x, k) {
   }
   return { ...base, shot: isShot(x), shootPlanned: !!x.shootAt || stageKey === 'shoot_scheduled', shootAt: x.shootAt || 0 };
 }
+// ── The property sheet: every shot property, outlet by outlet — edited or not, its V/O, its post ──
+// Below the Editor view and the Posting tab, folded away until opened (the choice is remembered).
+let sheetOpen = false, sheetLeft = false;
+try { sheetOpen = localStorage.getItem('track.sheetOpen') === '1'; sheetLeft = localStorage.getItem('track.sheetLeft') === '1'; } catch (e) {}
+window.edSheetToggle = el => {
+  const was = sheetOpen;
+  sheetOpen = !!el.open;
+  try { localStorage.setItem('track.sheetOpen', sheetOpen ? '1' : ''); } catch (e) {}
+  // Folded, its rows are not built (every redraw would pay for them): opened, they are drawn now.
+  if (sheetOpen && !was && !el.querySelector('.sh-grid, .sh-body')) { if (currentView === 'posting') { if (window.renderPosting) window.renderPosting(); } else applyFilters(); }
+};
+window.edSheetLeft = on => {
+  sheetLeft = !!on;
+  try { localStorage.setItem('track.sheetLeft', sheetLeft ? '1' : ''); } catch (e) {}
+  if (currentView === 'posting') { if (window.renderPosting) window.renderPosting(); } else applyFilters();
+};
+function edSheetHtml(list) {
+  if (!sheetOpen) return `<details class="sh-wrap" ontoggle="edSheetToggle(this)"><summary><span class="sh-t">Property sheet</span><span class="tk-sub2">Shot properties, outlet by outlet — edited or not, V/O, post</span></summary></details>`;
+  const PARKED = ['on_hold', 'dropped', 'closed'];
+  // Shot — or edited already (an edit means there was footage, whatever the card's stage says).
+  const rows = (list || listings).map(x => ({ x, c: edCtx(x), ks: cutsOfCard(x) }))
+    .filter(r => !PARKED.includes(r.c.stageKey) && (r.c.shot || r.ks.some(k => EF.cutEdit(r.x, k).status === 'done' || EF.cutEdit(r.x, k).status === 'active')));
+  const done = r => r.ks.length > 0 && r.ks.every(k => EF.cutEdit(r.x, k).status === 'done');
+  const cols = [...(rows.some(r => r.ks.includes('all')) ? ['all'] : []), 'igStory', 'igReel', ...(rows.some(r => EF.fbOwnCut(r.x)) ? ['fbReel'] : []), 'yt', 'collab'];
+  const nDone = rows.filter(done).length;
+  const shown = (sheetLeft ? rows.filter(r => !done(r)) : rows)
+    .sort((a, b) => (done(a) - done(b)) || ((b.x.shootDoneAt || 0) - (a.x.shootDoneAt || 0)));
+  const ST = { done: ['ok', '✓ Edited'], active: ['act', 'Editing'], planned: ['plan', 'Planned'], '': ['none', 'Not planned'] };
+  const cell = (x, k, ks) => {
+    if (!ks.includes(k)) return `<div class="sh-c sh-na" data-l="${esc(VO_SHORT[k])}">—</div>`;
+    const e = EF.cutEdit(x, k), [cls, label] = ST[e.status] || ST[''], p = edCtx(x, k).posts;
+    const vl = voOf(x, k === 'all' ? null : [k, ...EF.channelsOfCut(x, k)]);
+    const vo = vl.length ? (vl.some(o => o.ask) ? 'V/O asked' : 'V/O needed') : '';
+    const post = p.live ? '<span class="sh-p live">● Live</span>' : p.scheduled ? '<span class="sh-p sch">Scheduled</span>' : p.planned ? '<span class="sh-p">Post planned</span>' : '';
+    return `<div class="sh-c" data-l="${esc(k === 'igReel' && !EF.fbOwnCut(x) ? 'Reel + FB' : VO_SHORT[k])}"><span class="sh-s ${cls}">${label}</span>${e.by ? `<span class="sh-by">${esc(e.by)}</span>` : ''}${vo ? `<span class="sh-vo${vo === 'V/O needed' ? ' need' : ''}" title="Voice-over still to make">🎙 ${vo}</span>` : ''}${post}</div>`;
+  };
+  const head = `<div class="sh-r sh-h"><div>Property</div><div>Shot</div>${cols.map(k => `<div>${esc(k === 'igReel' ? 'Reel (+FB)' : VO_SHORT[k])}</div>`).join('')}</div>`;
+  const body = shown.map(r => `<div class="sh-r${done(r) ? ' all-done' : ''}" onclick="openDetail('${r.x.id}')">
+      <div class="sh-n" role="button" tabindex="0" onkeydown="if(event.key==='Enter')openDetail('${r.x.id}')">${isSeriesCard(r.x) ? '<span class="tk-code ser">Series</span>' : (codeChip(r.x) || '')}<b>${esc(cardName(r.x))}</b></div>
+      <div class="sh-d" data-l="Shot">${r.x.shootDoneAt ? esc(fmtDay(r.x.shootDoneAt)) : '—'}</div>
+      ${r.ks.length ? cols.map(k => cell(r.x, k, r.ks)).join('') : `<div class="sh-c sh-warn" style="grid-column: span ${cols.length}">Nothing ticked in Shoot for yet</div>`}
+    </div>`).join('');
+  return `<details class="sh-wrap"${sheetOpen ? ' open' : ''} ontoggle="edSheetToggle(this)">
+    <summary><span class="sh-t">Property sheet</span><span class="tk-sub2">Shot properties, outlet by outlet — edited or not, V/O, post</span><span class="sh-cnt"><b>${nDone}</b> of ${rows.length} fully edited</span></summary>
+    <div class="sh-tools"><label class="tk-check"><input type="checkbox" ${sheetLeft ? 'checked' : ''} onchange="edSheetLeft(this.checked)"> Only those not fully edited</label></div>
+    ${shown.length ? `<div class="sh-grid" style="--sh-n:${cols.length}">${head}${body}</div>` : `<div class="tk-hint sh-body" style="padding:8px 2px">${rows.length ? 'Every shot property is fully edited.' : 'No property shot yet.'}</div>`}
+  </details>`;
+}
 // Who can edit: the editors set in Settings first, then the shoot team (and anyone already editing).
 function editorPeople(withPast) {
   const out = [];
@@ -3025,7 +3174,21 @@ const cutsLeft = x => FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k
 // A cut as the edit rules read it (the card's own source for "edited before" kept).
 const cutPseudo = (x, k) => ({ id: x.id, edit: EF.cutEdit(x, k), editLog: EF.cutLog(x, k), source: x.source });
 // Whose an item is: a cut's editor; before that, whoever shoots the property.
+// The outlets an Editor card's V/O is about: its cut's; a property card in the shoot columns, the cuts it
+// still lists (those with a card of their own say it there).
+function edVoKeys(it) {
+  const of = c => (c === 'all' ? ['all'] : [c, ...EF.channelsOfCut(it.x, c)]);
+  if (it.k) return it.k === 'all' ? null : of(it.k);
+  return (it.cuts || []).flatMap(of);
+}
+const edVoList = it => (it.col !== 'shoot_planned' && it.col !== 'posted' ? voOf(it.x, edVoKeys(it)) : []);
+const edVo = it => edVoList(it).length > 0;
+const edVoAsked = it => edVoList(it).some(o => o.ask);
 function edWho(it) {
+  const vo = config.voiceBy && edVoAsked(it) ? [config.voiceBy] : [];
+  return [...edWhoEdit(it), ...vo];
+}
+function edWhoEdit(it) {
   if (it.k) { const e = EF.cutEdit(it.x, it.k); if (e.by) return [e.by]; }
   const x = it.x;
   if (isSeriesCard(x)) return memberCards(x).filter(m => !m.shot).map(m => m.shooter).filter(Boolean);
@@ -3072,12 +3235,15 @@ function edCardHtml(it) {
   const checklist = !ck || col === 'posted' ? '' : `<div class="ed-checks">
     <span class="ed-ck${ck.edit ? ' ok' : ck.gap === 'edit' ? ' bad' : ''}">${ck.edit ? '✓' : '○'} Edit planned</span>
     <span class="ed-ck${ck.post ? ' ok' : ''}">${ck.post ? '✓' : '○'} Post planned</span></div>`;
-  const vo = k && !['done', 'scheduled', 'posted'].includes(col) && forVoice(x, k) === 'vo' && !forVoMade(x, k) ? '<span class="ed-cut vo">V/O to make</span>' : '';
+  // The voice-over still to make for this cut (its outlets), from Shoot done until it is posted.
+  const voKeys = edVoKeys(it);
+  const vo = col !== 'shoot_planned' && col !== 'posted' ? voChip(x, voKeys) : '';
   return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"${k ? ` data-cut="${k}"` : ''}
       aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="ed-top">${code}${due}</div>
     <div class="ed-name">${esc(cardName(x))}</div>
-    ${k ? `<div class="ed-cutname">${cutIcon(k)} ${esc(EF.cutLabel(x, k))}${vo}</div>` : ''}
+    ${k ? `<div class="ed-cutname">${cutIcon(k)} ${esc(EF.cutLabel(x, k))}</div>` : ''}
+    ${vo ? `<div class="tk-vo-row">${vo}${voBtns(x, voKeys)}</div>` : ''}
     ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
     ${dates.length ? `<div class="ed-dates">${dates.join(' · ')}</div>` : ''}
     ${checklist}
@@ -3135,7 +3301,7 @@ function edTrackHtml() {
   };
   const me = edPerson ? tr.find(r => sameName(r.name, edPerson)) : null;
   const past = me && me.done.length ? `<div class="ed-past"><div class="ed-past-h">${esc(me.name)} — past edits <span class="tk-count">${me.done.length}</span></div>
-    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<button type="button" class="ed-prow" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${d.startedAt ? ' · took ' + esc(EF.span(d.doneAt - d.startedAt)) : ''}</span></button>`).join('')}</div>
+    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<button type="button" class="ed-prow" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${took(d.startedAt, d.doneAt) ? ' · took ' + esc(took(d.startedAt, d.doneAt)) : ''}</span></button>`).join('')}</div>
     ${me.done.length > 6 ? `<button type="button" class="tk-link" onclick="edPastToggle()">${edPastAll ? 'Show fewer' : `Show all ${me.done.length}`}</button>` : ''}</div>` : '';
   return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">live · tap one to see only their work and past edits</span></div>
     <div class="ed-tiles">${tr.map(tile).join('')}</div>${past}</section>`;
@@ -3148,9 +3314,13 @@ function renderEditor() {
   const byPerson = edPerson ? all.filter(it => edWho(it).some(n => sameName(n, edPerson))) : all;
   // The checklist filter: edited (or edit planned) with no post planned yet, or a post planned with no edit.
   const gapOf = it => it.k ? EF.checks(cutPseudo(it.x, it.k), it.c).gap : '';
-  const mine = edCheck ? byPerson.filter(it => gapOf(it) === edCheck) : byPerson;
+  const mine = edCheck === 'vo' ? byPerson.filter(edVo) : edCheck ? byPerson.filter(it => gapOf(it) === edCheck) : byPerson;
   const nGap = k => byPerson.filter(it => gapOf(it) === k).length;
+  // Counted per voice-over (a card can have one asked and one still to ask); the filter is by card.
+  const nVo = byPerson.filter(edVo).length;
+  const vos = byPerson.flatMap(edVoList), nVoAsked = vos.filter(o => o.ask).length, nVoNeed = vos.length - nVoAsked;
   const people = editorPeople(true);
+  if (config.voiceBy && !people.some(n => sameName(n, config.voiceBy))) people.push(config.voiceBy);   // their V/O work
   const late = mine.filter(it => it.pr.late).length, today = mine.filter(it => it.pr.today).length;
   const sx = host.querySelector('.ed-board') ? host.querySelector('.ed-board').scrollLeft : 0;
   // A shoot phone: whose it is, the day's run sheet one tap away, and the way out of "this is me".
@@ -3166,8 +3336,9 @@ function renderEditor() {
           <option value=""${!edCheck ? ' selected' : ''}>All</option>
           <option value="post"${edCheck === 'post' ? ' selected' : ''}>Edit planned, post not planned (${nGap('post')})</option>
           <option value="edit"${edCheck === 'edit' ? ' selected' : ''}>Post planned, edit not planned (${nGap('edit')})</option>
+          <option value="vo"${edCheck === 'vo' ? ' selected' : ''}>V/O needed or asked (${nVo})</option>
         </select></label>
-      <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''} · nearest deadline first</span>
+      <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''}${nVo && edCheck !== 'vo' ? ` · <button type="button" class="tk-link ed-vo-n" onclick="setEdCheck('vo')"><i class="fa-solid fa-microphone" aria-hidden="true"></i> ${nVoAsked ? `${nVoAsked} V/O asked${config.voiceBy ? ' · ' + esc(config.voiceBy) : ''}` : ''}${nVoAsked && nVoNeed ? ', ' : ''}${nVoNeed ? `${nVoNeed} to ask` : ''}</button>` : ''} · nearest deadline first</span>
     </div>
     <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
       const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || EF.CUTS.findIndex(c => c[0] === a.k) - EF.CUTS.findIndex(c => c[0] === b.k));
@@ -3179,6 +3350,7 @@ function renderEditor() {
           ${cards.map(edCardHtml).join('') || '<div class="tk-col-none">Nothing here</div>'}
         </div></div>`;
     }).join('')}</div>
+    ${edSheetHtml(filtered)}
   </div>`;
   const b = host.querySelector('.ed-board'); if (b && sx) b.scrollLeft = sx;
 }
@@ -3288,6 +3460,11 @@ window.cfAddEditor = () => {
 };
 window.cfRemoveEditor = name => saveConfig({ editors: config.editors.filter(n => !sameName(n, name)) }, name + ' removed');
 window.cfSet = (key, value) => saveConfig({ [key]: value });
+// Who makes the voice-overs, by name and — from the team — email (Daily task finds them by it).
+window.cfVoiceBy = name => {
+  const t = team.find(m => sameName(m.name, name));
+  saveConfig({ voiceBy: name || '', voiceByEmail: t ? t.email : '' }, name ? name + ' makes the voice-overs' : 'Voice-over person cleared');
+};
 window.cfTarget = (key, v) => {
   const n = Math.round(Number(v));
   const t = { ...config.targetDays };
@@ -3328,6 +3505,11 @@ function drawSettings(host) {
         <span class="cf-or">or</span><input id="cfEdName" type="text" placeholder="Type a name" maxlength="60" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddEditor()}">
         <button type="button" class="tk-btn primary" onclick="cfAddEditor()">Add editor</button>
       </div>`)}
+    ${sec('Voice-over', 'Who makes the voice-overs. Every V/O still to make shows on the cards with their name, in the Editor view (Checklist → V/O to make), and in their <b>Daily task</b>.', `
+      <label class="cf-row"><span>Voice-over by</span><select onchange="cfVoiceBy(this.value)" aria-label="Voice-over by">
+        <option value=""${config.voiceBy ? '' : ' selected'}>Nobody set</option>
+        ${[...new Set([...(config.voiceBy ? [config.voiceBy] : []), ...team.map(t => t.name), ...config.editors])].map(n => `<option value="${esc(n)}"${sameName(n, config.voiceBy) ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+      </select></label>`)}
     ${sec('Edit deadlines', 'How the Editor view dates and orders the work.', `
       <label class="cf-row"><span>Deliver by, when not typed</span><select onchange="cfSet('deliverDefault', this.value)" aria-label="Default delivery date">${CFG.DELIVER_DEFAULTS.map(([k, l]) => `<option value="${k}"${config.deliverDefault === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
       <label class="cf-row"><span>Flag a deadline as "soon" when it is within</span><span class="cf-num"><input type="number" min="0" max="14" value="${config.dueSoonDays}" onchange="cfSet('dueSoonDays', this.value)" aria-label="Days for soon"> days</span></label>`)}

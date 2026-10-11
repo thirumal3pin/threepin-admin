@@ -646,7 +646,8 @@ function drawPosting(el) {
       </div>
     </div>
     ${line && mode !== 'today' ? `<div class="pg-summary">${line}</div>` : ''}
-    ${mode === 'today' ? todayHtml(base) : mode === 'cards' ? propsHtml(base) : mode === 'sheet' ? sheetHtml(base) : mode === 'series' ? seriesHtml(base) : queueHtml(base)}`;
+    ${mode === 'today' ? todayHtml(base) : mode === 'cards' ? propsHtml(base) : mode === 'sheet' ? sheetHtml(base) : mode === 'series' ? seriesHtml(base) : queueHtml(base)}
+    ${window.trackApi && window.trackApi.editSheetHtml ? `<div class="pg-edsheet">${window.trackApi.editSheetHtml()}</div>` : ''}`;
   if (focusId) {
     const c = document.getElementById('pg-' + focusId);
     if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('pg-flash'); }

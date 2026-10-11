@@ -187,6 +187,7 @@ ok('…the Reel is its own card in Planned to edit; YouTube still to plan in Sho
 await p.dragAndDrop(cutCard('lA', 'igReel'), '.ed-active .tk-col-body'); await p.waitForTimeout(200);
 lA = await savedListing(p, "l.id === 'lA'");
 ok('Start editing the Reel (dragged onto Editing): active, time stamped', lA.cuts.igReel.status === 'active' && lA.cuts.igReel.startedAt > NOW - 60000 && !!(await p.$(`.ed-active ${cutCard('lA', 'igReel')}`)));
+ok('…while being edited, the card shows its V/O needed, with "Ask for V/O"', !!(await p.$(`.ed-active ${cutCard('lA', 'igReel')} .tk-vo`)) && !!(await p.$(`.ed-active ${cutCard('lA', 'igReel')} .tk-vo-ask`)));
 ok('…Ravi\'s tile now shows two edits going', (await p.$$eval('.ed-tile', t => t.map(x => x.textContent))).some(t => /Ravi/.test(t) && /\+1/.test(t)));
 await p.click(`${cutCard('lA', 'igReel')} .tk-btn:has-text("Edit done")`); await p.waitForTimeout(150);
 lA = await savedListing(p, "l.id === 'lA'");
@@ -208,9 +209,56 @@ await p.screenshot({ path: join(OUT, 'desk-editor-cuts.png'), fullPage: true });
 await p.evaluate(() => openDetail('lA')); await p.waitForTimeout(150);
 ok('The card\'s Edit section: one row per outlet with its own status', /Reel \+ FB/.test(await p.textContent('#dpEdit')) && /YouTube/.test(await p.textContent('#dpEdit')) && /Edit done/.test(await p.textContent('#dpEdit')) && /Planned to edit/.test(await p.textContent('#dpEdit')));
 await p.evaluate(() => closeDetail());
+// An earlier edit that was not real: removed from the history from the card's Edit section.
+await p.evaluate(() => openDetail('lD')); await p.waitForTimeout(150);
+await p.click('#dpEdit .tk-cutlog summary'); await p.waitForTimeout(80);
+ok('Earlier edits listed under the outlet: Anu, with how long it took', /Anu · done .*\(2h\)/.test(await p.textContent('#dpEdit .tk-cutlog')), await p.textContent('#dpEdit .tk-cutlog'));
+await p.click('#dpEdit .tk-cutlog .tk-link:has-text("Remove")'); await p.waitForTimeout(150);
+const lD = await savedListing(p, "l.id === 'lD'");
+ok('…Remove: out of the history, the current edit kept', lD && lD.cuts && lD.cuts.all.log.length === 0 && lD.cuts.all.status === 'done' && lD.cuts.all.by === 'Anu' && !(await p.$('#dpEdit .tk-cutlog')), JSON.stringify(lD && lD.cuts));
+await p.evaluate(() => closeDetail());
 await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(120);
 await p.click('.pg-bar .tk-sbtn:has-text("Sheet")'); await p.waitForTimeout(120);
 ok('Posting shows each outlet\'s edit: TNAG0003 Reel done, YouTube planned by Anu', /Reel \+ FB done/.test(await p.$eval('#pg-pA', e => e.textContent)) && /YouTube planned · Anu/.test(await p.$eval('#pg-pA', e => e.textContent)), await p.$eval('#pg-pA', e => e.textContent.replace(/\s+/g, ' ')));
+await p.close();
+
+// ─────────────────────────── Voice-overs, and the property sheet ───────────────────────────
+console.log('Voice-overs and the property sheet');
+p = await open({ width: 1440, height: 950 }, 'light', '', { voiceBy: 'Anu' });
+await p.click('#tkModeTog .tk-sbtn:has-text("Board")'); await p.waitForTimeout(120);
+ok('Board card: V/O needed, not asked yet — with "Ask for V/O" for the editor', /V\/O needed: Reel · not asked yet/.test(await p.$eval('.tk-card[data-id="lA"] .tk-vo', e => e.textContent.replace(/\s+/g, ' ').trim())) && !!(await p.$('.tk-card[data-id="lA"] .tk-vo-ask')), await p.$eval('.tk-card[data-id="lA"]', e => e.textContent.replace(/\s+/g, ' ')).catch(() => 'no chip'));
+ok('…its line not repeated in the blockers', !/voice-over not made/.test(await p.$eval('.tk-card[data-id="lA"]', e => e.textContent)));
+await p.click('#tkModeTog .tk-sbtn:has-text("Editor")'); await p.waitForTimeout(150);
+ok('Editor view: the shot card shows the V/O to make', !!(await p.$('.ed-shoot_done .tk-card[data-id="lA"] .tk-vo')));
+ok('…the summary counts it (to ask), a tap filters to them', /1 to ask/.test(await p.textContent('.ed-sum')), await p.textContent('.ed-sum'));
+await p.click('.ed-vo-n'); await p.waitForTimeout(120);
+ok('Checklist → V/O to make: only cards with one', JSON.stringify(await p.$$eval('.ed-board .tk-card', c => [...new Set(c.map(x => x.dataset.id))])) === '["lA"]', JSON.stringify(await p.$$eval('.ed-board .tk-card', c => c.map(x => x.dataset.id))));
+await p.evaluate(() => setEdCheck('')); await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(120);
+ok('Not asked yet: not Anu\'s work', !(await p.$('.ed-board .tk-card[data-id="lA"]')));
+await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(80);
+// The editor asks once the rough cut is ready (the note box is answered with nothing).
+await p.click('.ed-board .tk-card[data-id="lA"] .tk-vo-ask'); await p.waitForTimeout(150);
+let lAa = await savedListing(p, "l.id === 'lA'");
+ok('"Ask for V/O": asked, stamped with who and when', lAa && lAa.forVoAsk && lAa.forVoAsk.igReel && lAa.forVoAsk.igReel.at > NOW - 60000 && !!lAa.forVoAsk.igReel.by, JSON.stringify(lAa && lAa.forVoAsk));
+ok('…the card now says V/O asked · Anu, with "V/O made"', /V\/O asked: Reel · Anu/.test(await p.$eval('.ed-board .tk-card[data-id="lA"] .tk-vo', e => e.textContent.replace(/\s+/g, ' '))) && !!(await p.$('.ed-board .tk-card[data-id="lA"] .tk-vo-done')));
+await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(120);
+ok('Person → Anu (the voice-over person): asked, so it is in her work', !!(await p.$('.ed-board .tk-card[data-id="lA"]')));
+await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(80);
+await p.evaluate(() => openDetail('lA')); await p.waitForTimeout(150);
+ok('The card\'s Shoot for: the Reel\'s V/O asked, with "Take back"', /V\/O asked by/.test(await p.textContent('#dpFor')) && !!(await p.$('#dpFor .tk-for-ask .tk-link')));
+await p.evaluate(() => closeDetail());
+// The property sheet, folded until opened.
+ok('Property sheet below the board, folded', !!(await p.$('.ed-wrap .sh-wrap:not([open])')));
+await p.click('.ed-wrap .sh-wrap > summary'); await p.waitForTimeout(80);
+const shRow = await p.$$eval('.sh-r:not(.sh-h)', rs => rs.map(r => r.textContent.replace(/\s+/g, ' ').trim()));
+ok('…opened: shot properties, outlet by outlet — TNAG0003 Reel not planned with its V/O asked, YouTube not planned', shRow.some(t => /3BHK T Nagar/.test(t) && /Not planned/.test(t) && /V\/O asked/.test(t)), JSON.stringify(shRow));
+ok('…not-yet-shot properties are not in it', !shRow.some(t => /Studio T Nagar|TNAG0005/.test(t)), JSON.stringify(shRow));
+await p.click('.ed-board .tk-card[data-id="lA"] .tk-vo-done'); await p.waitForTimeout(150);
+const lAv = await savedListing(p, "l.id === 'lA'");
+ok('"V/O made" on the card: ticked made, the reminder gone', lAv && lAv.forVo && lAv.forVo.igReel === true && !(await p.$('.ed-board .tk-card[data-id="lA"] .tk-vo')));
+ok('…the sheet stays open across redraws', !!(await p.$('.ed-wrap .sh-wrap[open]')));
+await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(150);
+ok('Posting: the same property sheet below', !!(await p.$('#postingView .pg-edsheet .sh-wrap')));
 await p.close();
 
 // ─────────────────────────── Settings → Configurations ───────────────────────────
@@ -219,7 +267,9 @@ p = await open({ width: 1440, height: 950 }, 'light', 'settings');
 ok('Settings opens from the menu', await p.evaluate(() => document.getElementById('settingsView').style.display !== 'none') && /Configurations/.test(await p.textContent('#settingsView')));
 await p.selectOption('#cfEdPick', 'Rajesh'); await p.click('.cf-add .tk-btn:has-text("Add editor")'); await p.waitForTimeout(80);
 ok('Add Rajesh as an editor: saved for the team', JSON.stringify((await p.evaluate(() => window.__cfg)).editors) === '["Rajesh"]');
-await p.selectOption('.cf-row select', 'same'); await p.waitForTimeout(60);
+await p.selectOption('select[aria-label="Default delivery date"]', 'same'); await p.waitForTimeout(60);
+await p.selectOption('select[aria-label="Voice-over by"]', 'Anu'); await p.waitForTimeout(60);
+ok('Voice-over by: Anu, saved for the team', (await p.evaluate(() => window.__cfg)).voiceBy === 'Anu');
 await p.fill('input[aria-label="Shoot done target days"]', '4'); await p.dispatchEvent('input[aria-label="Shoot done target days"]', 'change'); await p.waitForTimeout(60);
 const cfg = await p.evaluate(() => window.__cfg);
 ok('Deliver-by default and a stage target saved', cfg.deliverDefault === 'same' && cfg.targetDays.shoot_done === 4, JSON.stringify(cfg));

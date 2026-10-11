@@ -112,13 +112,30 @@ function subscribeToData(tenantId){
         if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
         if (window.applyViewsSnapshot) window.applyViewsSnapshot(data.views || {});
         if (window.applyTeamSnapshot) window.applyTeamSnapshot(data.team || {});
+        // Shoot & Media's configuration — Daily task reads who makes the voice-overs.
+        if (window.applyTrackTaskConfig) window.applyTrackTaskConfig(data.trackConfig || {});
         if (window.applyDefaultLeadAgent) window.applyDefaultLeadAgent(data.defaultLeadAgent || null);
         // The slug in TailorTalk's own dashboard URL
         // (dashboard.tailortalk.ai/<workspace>/leads). TailorTalk does not send
         // it with a lead, so it is configuration rather than data.
         if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
       }, (err) => console.error('Firestore settings sync error:', err));
+
     });
+}
+
+// Shoot & Media's cards and stages, read only, for Daily task's voice-overs (track-assets/voiceover.js).
+// Watched from the first time Daily task is opened — not on every CRM page — and never written here.
+let trackTasksWatched = false;
+function watchTrackTasks(){
+  if(trackTasksWatched || !currentTenantId) return;
+  trackTasksWatched = true;
+  onSnapshot(query(collection(db, 'listings'), where('tenantId', '==', currentTenantId)), (snap) => {
+    if (window.applyTrackTaskListings) window.applyTrackTaskListings(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+  }, (err) => console.error('Firestore listings (Daily task) sync error:', err));
+  onSnapshot(doc(db, 'trackPipelines', currentTenantId), (snap) => {
+    if (window.applyTrackTaskStages) window.applyTrackTaskStages((snap.exists() && snap.data().stages) || []);
+  }, (err) => console.error('Firestore track stages (Daily task) sync error:', err));
 }
 
 // The lead fields TailorTalk keeps current until someone edits them here (see
@@ -163,6 +180,7 @@ window.crmFirebase = {
   // the empty one made automatically. A card someone has worked on is never deleted from here.
   setLeadFields: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
   getListing: (id) => getDoc(doc(db, 'listings', id)).then(s => (s.exists() ? { id: s.id, ...s.data() } : null)),
+  watchTrackTasks: () => watchTrackTasks(),
   deleteListing: (id) => deleteDoc(doc(db, 'listings', id)),
   releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
     .catch(e => { console.error('Firestore release field error:', e); throw e; }),

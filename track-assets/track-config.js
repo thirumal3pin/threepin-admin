@@ -16,6 +16,8 @@ export const DELIVER_DEFAULTS = [['before', 'The day before the post'], ['same',
 
 export const DEFAULTS = Object.freeze({
   editors: [],              // people for whom the Editor view opens first (anyone can open it)
+  voiceBy: '',              // who makes the voice-overs: every V/O asked for is theirs (Daily task, boards)
+  voiceByEmail: '',         // …and their email, from the team: how the CRM's Daily task knows them
   deliverDefault: 'before', // an edit planned without a delivery date: the day before the post
   dueSoonDays: 2,           // a deadline this many days away is flagged "soon"
   seriesAutoDetect: true,   // a pasted plan line that says "series" becomes a series
@@ -38,6 +40,8 @@ export function normalizeConfig(c) {
   for (const [k] of TARGET_STAGES) { const n = int(c.targetDays && c.targetDays[k], 1, 365, 0); if (n) targetDays[k] = n; }
   return {
     editors: names(c.editors),
+    voiceBy: str(c.voiceBy).slice(0, 60),
+    voiceByEmail: str(c.voiceByEmail).toLowerCase().slice(0, 120),
     deliverDefault: DELIVER_DEFAULTS.some(([k]) => k === c.deliverDefault) ? c.deliverDefault : DEFAULTS.deliverDefault,
     dueSoonDays: int(c.dueSoonDays, 0, 14, DEFAULTS.dueSoonDays),
     seriesAutoDetect: c.seriesAutoDetect !== false,
