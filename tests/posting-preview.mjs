@@ -458,7 +458,8 @@ console.log('what a post lacks');
   await p.evaluate(at => window.pgChannel && window.applyPostingSnapshot([
     { id: 'TNAG0002', tenantId: 't_3pinrealty', propertyCode: 'TNAG0002', title: '2BHK T Nagar', location: 'T Nagar', photosLink: 'https://drive.google.com/x', details: 'text', propertyId: 'TNAG0002', channels: { igReel: { status: 'scheduled', at } }, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' } },
     { id: 'VLCA002', tenantId: 't_3pinrealty', propertyCode: 'VLCA002', title: 'Velachery 3BHK', location: 'Velachery', channels: { igStory: { status: 'scheduled', at: at + 3600000 } }, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' } }
-  ]), Date.now() + 4 * 3600000);
+  // Both posts today, whatever the hour the test runs (late in the evening: already due, earlier today).
+  ]), new Date().getHours() >= 12 ? Date.now() - 2 * 3600000 : Date.now() + 4 * 3600000);
   await p.waitForTimeout(200);
   const vl = (await rowsOf('#postingView .tk-group .tk-row')).filter(t => /Velachery 3BHK/.test(t));
   ok('A Velachery post lists everything missing: photos, details, brochure', vl.length === 1 && /Photos/.test(vl[0]) && /Details/.test(vl[0]) && /Brochure/.test(vl[0]), JSON.stringify(vl));

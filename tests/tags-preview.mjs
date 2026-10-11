@@ -153,7 +153,7 @@ await addIn('#pf-pt_1 .pf-tags', 'Collab');
 ok('tagging a listed property here tags the listing itself (one set of tags)', (await lst('a')).tags.includes('Collab'), JSON.stringify((await lst('a')).tags));
 ok('…and shows at once here, with the box open and empty for the next one', (await p.$$eval('#pf-pt_1 .pf-tags .tk-tag', t => t.map(e => e.textContent.replace('✕', '').trim()))).includes('Collab') && await p.$eval('#pf-pt_1 .pf-tags .tg-in', i => i.value) === '');
 await p.evaluate(() => { toggleView('board'); }); await settle();
-ok('…the board tile shows it', (await tileTags('a')).includes('Collab'));
+ok('…the board tile shows it (three tags, the rest behind "+n" on hover)', (await tileTags('a')).includes('Collab') || /Collab/.test(await p.$eval('.tk-card[data-id="a"] .tk-more', e => e.title).catch(() => '')));
 await p.evaluate(() => { toggleView('posting'); pgMode('cards'); }); await p.waitForTimeout(400);
 await addIn('#pf-pt_2 .pf-tags', 'Plot');
 const lastPost = await p.evaluate(() => window.__posts[window.__posts.length - 1]);

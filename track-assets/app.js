@@ -612,58 +612,77 @@ function factChips(f, maxSizes) {
     f.price ? chip(f.price, 'price') : ''
   ].join('');
 }
+// ── The board card: what it is, where it stands, what is next — nothing more ──
+// A busy office reads a column in seconds. The card says: the code and how long it has sat here; the
+// property's name; one quiet line (area · type · price); the ONE next thing for its stage; a voice-over
+// still to make; what is stuck, in one line; and a footer of tags, a note mark and the agent. Numbers,
+// the owner, sizes, the full note and the history are one tap away in the card's panel (call and
+// WhatsApp also show on hover).
 function cardHtml(x) {
   if (isSeriesCard(x)) return seriesCardHtml(x);
-  const late = isLate(x);
+  const late = isLate(x), key = P.stageKeyOf(stageById(x.stageId));
   const age = P.stageAge(x, stages, Date.now());
   const blocked = cardBlockers(x);
-  const it = sellerItem(x);
-  const wa = telOf(it.phone).replace(/^\+/, '');
-  const chips = factChips(it.f, 2);
+  const it = sellerItem(x), f = it.f || {};
+  const tel = it.phone ? telOf(it.phone) : '', wa = tel.replace(/^\+/, '');
   const agents = agentsOf(it);
   const by = personName(x.updatedBy);
-  // The owner, when there is one — a card added by hand may have none yet (it.name then falls back to the title).
   const owner = String((it.lead && it.lead.name) || x.sellerName || '').trim();
   // A card added by hand on the board may have no owner yet: its title is then all it has.
   it.locality = it.locality || (it.name !== x.title ? x.title || '' : '');
-  return `<div class="tk-card${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
-      aria-label="Open ${esc(propName(x, it) || it.locality || it.name)}${it.name ? ', owner ' + esc(it.name) : ''}"
+  const kind = f.config && f.config !== 'Commercial' ? f.config : (TYPE_LABELS[f.type] || f.type || '');
+  const deal = f.deal === 'rent' ? 'Rent' : f.deal === 'sale' ? 'Sale' : '';
+  const nm = String(propName(x, it) || '').toLowerCase(), loc = String(it.locality || '').trim();
+  const meta = [loc && !nm.includes(loc.toLowerCase()) ? loc : '', kind, f.price ? `${deal ? deal + ' ' : ''}${f.price}` : deal ? 'For ' + deal.toLowerCase() : ''].filter(Boolean).join(' · ');
+  const ageTitle = [age.target ? `About ${age.target} days in this column` : 'Days in this column',
+    `Updated ${timeAgo(x.updatedAt) || '—'}${by ? ' by ' + by : ''}`, it.intake ? `Came in ${fmtDate(it.intake)} · ${it.channel}` : ''].filter(Boolean).join('\n');
+  // The code and the days here share the top row; with no code, the days sit beside the name.
+  const code = codeChip(x);
+  const pill = `<span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${esc(ageTitle)}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>`;
+  return `<div class="tk-card cmp${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
+      aria-label="Open ${esc(propName(x, it) || it.locality || it.name)}${owner ? ', owner ' + esc(owner) : ''}"
       data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)"
       onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
-    <div class="sl-head tk-chead">
-      <div class="tk-ctop">
-        <span class="tk-pcode">${codeChip(x)}</span>
-        <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${age.target ? 'This column should take about ' + age.target + ' days' : 'Days in this column'}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>
-      </div>
-      <div class="tk-pname">${propNameHtml(x, it)}
-        <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
-    </div>
-    <div class="sl-prop">
-      <div class="sl-loc">${it.locality ? '📍 ' + esc(it.locality) : '<span class="sl-none">Area not given</span>'}</div>
-      ${chips ? `<div class="sl-chips">${chips}</div>` : ''}
-      ${tagChips(x.tags)}
-      ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))}</div>` : ''}
-    </div>
-    <div class="tk-seller">
-      ${owner ? `<span class="tk-seller-n" title="The owner">${esc(owner)}</span>` : '<span class="tk-seller-none">No owner yet</span>'}
-      ${it.phone ? `<a href="tel:${esc(telOf(it.phone))}" onclick="event.stopPropagation()" title="Call">${esc(it.phone)}</a>${wa ? `<a href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>` : ''}` : '<span class="tk-seller-none">No number</span>'}
-      ${x.leadId ? `<button type="button" class="sl-link" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance">Preview</button>` : ''}
-    </div>
-    ${shootLine(x)}
-    ${mediaBar(x)}
+    ${code ? `<div class="tk-ctop"><span class="tk-pcode">${code}</span>${pill}</div>` : ''}
+    <div class="tk-pname">${propNameHtml(x, it)}
+      <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button>${code ? '' : pill}</div>
+    ${meta ? `<div class="tk-meta1" title="${esc(meta)}">${esc(meta)}</div>` : loc ? '' : '<div class="tk-meta1 none">Area not given</div>'}
+    ${nextLine(x, it, key)}
     ${voRow(x)}
-    ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
-    ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span><span class="tk-card-note-m">${esc(personName(x.lastNote.by))} · ${esc(timeAgo(x.lastNote.at))}${x.noteCount > 1 ? ` · ${x.noteCount} notes` : ''}</span></div>` : ''}
-    <div class="tk-card-meta">
-      <span class="tk-agent${agents.length ? '' : ' none'}" title="The lead's agent (set on the lead in the CRM)">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</span>
-      ${x.ownerApproved ? '<span class="tk-ok" title="Owner approved the photos / brochure">owner ✓</span>' : ''}
-      ${brochureSignal(x)}
-      ${editChip(x)}
-      <span class="tk-upd" title="${esc(x.updatedAt ? new Date(x.updatedAt).toLocaleString() : '')}">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span>
-      ${it.intake ? `<span title="${esc(new Date(it.intake).toLocaleString())}">Came in ${esc(fmtDate(it.intake))} · ${esc(it.channel)}</span>` : ''}
-    </div>
+    ${stuckLine(blocked)}
+    ${cardFoot(x, { tel, wa, owner, agents, preview: !!x.leadId })}
   </div>`;
+}
+// The one next thing, by stage: what is missing → the shoot → the media, cuts and brochure → the brochure.
+function nextLine(x, it, key) {
+  if (['closed', 'on_hold', 'dropped'].includes(key)) return '';
+  if (['new_listing', 'details', 'shoot_scheduled'].includes(key)) {
+    const miss = ['new_listing', 'details'].includes(key) && it.missing.length ? `<span class="tk-miss">Missing: ${esc(it.missing.join(', '))}</span>` : '';
+    return shootLine(x, miss);
+  }
+  const parts = key === 'live' ? [brochureSignal(x), editChip(x)] : [mediaBar(x), editChip(x), brochureSignal(x)];
+  const html = parts.filter(Boolean).join('');
+  return html ? `<div class="tk-next">${html}</div>` : '';
+}
+// Two letters for an agent, from their name or email ("agent.a" → AA, "Ravi Kumar" → RK, "rajesh" → RA).
+function avInitials(email) {
+  const parts = String(personName(email) || email || '').split(/[\s._-]+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || '?').slice(0, 2)).toUpperCase();
+}
+// What is stuck, in one line (all of it on hover).
+const stuckLine = blocked => (blocked.length ? `<div class="tk-blockers tk-stuck" title="${esc(blocked.join('\n'))}">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : '');
+// Tags (two, then a count), a note mark (the note on hover), quick call / WhatsApp on hover, the agent.
+function cardFoot(x, o) {
+  const tags = TG.cleanTags(x.tags), n = x.lastNote && x.lastNote.text;
+  const left = (tags.length ? `<div class="tk-tags">${tags.slice(0, 3).map(t => `<span class="tk-tag ${TG.tagClass(t)}">${esc(t)}</span>`).join('')}</div>${tags.length > 3 ? `<span class="tk-more" title="${esc(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}` : '')
+    + (n ? `<span class="tk-noteic" title="${esc(n)} — ${esc(personName(x.lastNote.by))}, ${esc(timeAgo(x.lastNote.at))}${x.noteCount > 1 ? ` (${x.noteCount} notes)` : ''}"><i class="fa-regular fa-note-sticky" aria-hidden="true"></i>${x.noteCount > 1 ? ' ' + x.noteCount : ''}</span>` : '');
+  const quick = (o.tel ? `<a class="tk-qa" href="tel:${esc(o.tel)}" onclick="event.stopPropagation()" title="Call ${esc(o.owner || 'the owner')}" aria-label="Call"><i class="fa-solid fa-phone" aria-hidden="true"></i></a>` : '')
+    + (o.wa ? `<a class="tk-qa" href="https://wa.me/${esc(o.wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="WhatsApp ${esc(o.owner || 'the owner')}" aria-label="WhatsApp"><i class="fa-brands fa-whatsapp" aria-hidden="true"></i></a>` : '')
+    + (o.preview ? `<button type="button" class="tk-qa" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance" aria-label="Preview"><i class="fa-regular fa-eye" aria-hidden="true"></i></button>` : '');
+  const av = (o.agents || []).map(e => `<span class="tk-av" title="Agent: ${esc(personName(e))}">${esc(avInitials(e))}</span>`).join('');
+  if (!left && !quick && !av) return '';
+  return `<div class="tk-cfoot">${left}<span class="tk-cfoot-r">${quick ? `<span class="tk-qas">${quick}</span>` : ''}${av}</span></div>`;
 }
 
 // Being unmapped is NORMAL for a listing nobody has worked yet — it is how
@@ -743,12 +762,13 @@ function initials(name) {
 
 // The one physical commitment on a card, said the way it matters: not the
 // date, but whether it has been missed.
-function shootLine(x) {
+// extra: said at the end of the same line (the card's "Missing: …" before the shoot).
+function shootLine(x, extra) {
   if (!x.shootAt) {
     const key = P.stageKeyOf(stageById(x.stageId));
     // Only nag about a missing shoot where one is actually the next step.
-    if (!['new_listing', 'details', 'shoot_scheduled'].includes(key)) return '';
-    return `<div class="tk-card-row muted">📸 No shoot booked <button type="button" class="tk-link" onclick="event.stopPropagation();openShootModal('${x.id}')">Book →</button></div>`;
+    if (!['new_listing', 'details', 'shoot_scheduled'].includes(key)) return extra ? `<div class="tk-card-row">${extra}</div>` : '';
+    return `<div class="tk-card-row muted">📸 No shoot booked <button type="button" class="tk-link" onclick="event.stopPropagation();openShootModal('${x.id}')">Book →</button>${extra || ''}</div>`;
   }
   const late = x.shootAt < Date.now();
   const soon = !late && x.shootAt < Date.now() + DAY;
@@ -756,6 +776,7 @@ function shootLine(x) {
     <span class="tk-rel">${esc(relDays(x.shootAt))}</span>
     ${x.shootAssignee ? `<span class="tk-who">· ${esc(x.shootAssignee)}</span>` : ''}
     ${!x.ownerInformed && P.stageKeyOf(stageById(x.stageId)) !== 'shoot_scheduled' ? '<span class="tk-blk sm" title="The owner has not been told we are coming">owner not told</span>' : ''}
+    ${extra || ''}
   </div>`;
 }
 
@@ -2833,21 +2854,20 @@ function memberPills(x) {
 function seriesCardHtml(x) {
   const age = P.stageAge(x, stages, Date.now());
   const info = seriesInfo(x), blocked = cardBlockers(x), by = personName(x.updatedBy);
-  return `<div class="tk-card ser${isLate(x) ? ' late' : ''}" draggable="true" tabindex="0" role="link" aria-label="Open series ${esc(info.name)}" data-id="${x.id}"
+  return `<div class="tk-card cmp ser${isLate(x) ? ' late' : ''}" draggable="true" tabindex="0" role="link" aria-label="Open series ${esc(info.name)}" data-id="${x.id}"
       ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="sl-head tk-chead">
       <div class="tk-ctop"><span class="tk-pcode"><span class="tk-code ser" title="Several properties, one video">Series · ${info.members.length}</span></span>
-        <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}">${age.days === 0 ? 'today' : age.days + 'd here'}</span></div>
+        <span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${esc(`Updated ${timeAgo(x.updatedAt) || '—'}${by ? ' by ' + by : ''}`)}">${age.days === 0 ? 'today' : age.days + 'd here'}</span></div>
       <div class="tk-pname"><span class="tk-pname-t" title="${esc(info.name)}">${esc(info.name)}</span>
         <button type="button" class="tk-pname-ed" title="Rename this series" aria-label="Rename this series" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button></div>
     </div>
     ${memberPills(x)}
     ${cutsHtml(x)}
+    ${editChip(x) ? `<div class="tk-next">${editChip(x)}</div>` : ''}
     ${voRow(x)}
-    ${blocked.length ? `<div class="tk-blockers">${blocked.map(b => `<span class="tk-blk">${esc(b)}</span>`).join('')}</div>` : ''}
-    ${x.lastNote && x.lastNote.text ? `<div class="tk-card-note" title="${esc(x.lastNote.text)}"><span class="tk-card-note-t">📝 ${esc(x.lastNote.text)}</span></div>` : ''}
-    ${tagChips(x.tags)}
-    <div class="tk-card-meta">${editChip(x)}<span class="tk-upd">Updated ${esc(timeAgo(x.updatedAt) || '—')}${by ? ' by ' + esc(by) : ''}</span></div>
+    ${stuckLine(blocked)}
+    ${cardFoot(x, {})}
   </div>`;
 }
 function seriesListRowHtml(x) {

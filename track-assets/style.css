@@ -1885,3 +1885,30 @@ button.ps-mem:hover { border-color: var(--ink3); }
   .sh-c.sh-na { display: none; }
   .sh-c::before, .sh-d::before { content: attr(data-l); font-size: 10px; font-weight: 700; color: var(--ink4); text-transform: uppercase; }
 }
+
+/* ── The board card, compact: name, one quiet line, the next thing, what is stuck, a quiet footer ── */
+.tk-card.cmp { gap: 6px; padding: 12px 13px 10px; }
+.tk-card.cmp .tk-pname-t { font-size: 14px; }
+.tk-meta1 { font-size: 12px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tk-meta1.none { color: var(--ink4); font-style: italic; }
+.tk-next { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; font-size: 12px; color: var(--ink2); min-width: 0; }
+.tk-next .tk-mbar { flex: 1 1 90px; min-width: 90px; }
+.tk-card.cmp .tk-card-row { font-size: 12px; }
+.tk-stuck { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; font-weight: 600; color: var(--red, #B91C1C); min-width: 0; }
+.tk-stuck::before { content: '⚠'; margin-right: 5px; }
+.tk-miss { color: var(--amber, #B45309); font-weight: 600; font-style: normal; margin-left: 4px; }
+.tk-card.cmp .tk-pname > .tk-age-pill { margin-left: auto; }
+.tk-stuck .tk-blk { all: unset; display: inline; }
+.tk-stuck .tk-blk + .tk-blk::before { content: ' · '; }
+.tk-cfoot { display: flex; align-items: center; gap: 6px; min-height: 24px; padding-top: 7px; margin-top: 1px; border-top: 1px solid var(--border); min-width: 0; }
+.tk-cfoot .tk-tags { margin: 0; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.tk-cfoot .tk-tag { font-size: 10.5px; }
+.tk-more { font-size: 10.5px; font-weight: 600; color: var(--ink4); align-self: center; }
+.tk-noteic { font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.tk-cfoot-r { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
+/* call · WhatsApp · preview: quiet icons in the footer, darker on hover */
+.tk-qas { display: flex; gap: 0; }
+.tk-qa { width: 26px; height: 26px; display: inline-grid; place-items: center; border: 0; border-radius: 99px; background: none; color: var(--ink4); font-size: 12.5px; text-decoration: none; cursor: pointer; transition: background .12s, color .12s; }
+.tk-card:hover .tk-qa { color: var(--ink3); }
+.tk-qa:hover, .tk-qa:focus-visible { background: var(--bg2); color: var(--ink); }
+.tk-av { width: 24px; height: 24px; margin-left: 4px; border-radius: 99px; background: var(--bg2); color: var(--ink2); font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; letter-spacing: .02em; }

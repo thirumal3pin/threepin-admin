@@ -149,6 +149,8 @@ async function open(viewport, seedStorage) {
 }
 
 const text = (page, sel) => page.$$eval(sel, els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+// The owner is in the panel, not on the compact card: a card names it in its label ("…, owner Meenakshi").
+const owners = (page, sel) => page.$$eval(sel, els => els.map(e => ((e.getAttribute('aria-label') || '').match(/, owner (.+)$/) || [])[1] || ''));
 
 // ── Desktop ──
 console.log('Property & Media Track — the board');
@@ -159,21 +161,22 @@ const shot = async (name) => { await page.waitForTimeout(180); await page.screen
 const cols = await text(page, '.tk-col-title');
 ok('Nine columns, in pipeline order — Media ready after Shoot done, no brochure columns', cols.length === 9 && cols[0] === 'New listing' && cols[3] === 'Shoot done' && cols[4] === 'Media ready' && cols[8] === 'Dropped' && !cols.some(c => /Brochure/.test(c)), JSON.stringify(cols));
 ok('Every column states its rule', (await page.$$('.tk-col-rule')).length === 9);
-ok('A card sits in its stage', (await text(page, '.tk-col:nth-child(2) .tk-card .tk-seller-n'))[0] === 'Suresh');
-// The card reads like the Sellers tile: who and their number, then the property, then who owns
-// the work and when it was last touched.
+ok('A card sits in its stage', (await owners(page, '.tk-col:nth-child(2) .tk-card'))[0] === 'Suresh');
+// The card is compact: the property, one quiet line, the next thing, a footer. The owner and their
+// number are in the panel; call and WhatsApp show on hover.
 const meena = await page.evaluate(() => {
-  const c = [...document.querySelectorAll('.tk-card')].find(e => /Meenakshi/.test(e.textContent));
+  const c = [...document.querySelectorAll('.tk-card')].find(e => /owner Meenakshi/.test(e.getAttribute('aria-label') || ''));
   const t = s => (c.querySelector(s) || {}).textContent || '';
-  return { prop: t('.tk-pname'), first: (c.querySelector('.sl-head') || {}).textContent || '', name: t('.tk-seller-n'), phone: t('.tk-seller'), loc: t('.sl-loc'), chips: [...c.querySelectorAll('.sl-chip')].map(e => e.textContent), agent: t('.tk-agent'), upd: t('.tk-upd'), age: t('.tk-age-pill') };
+  return { prop: t('.tk-pname'), all: c.textContent.replace(/\s+/g, ' '), meta: t('.tk-meta1'), tel: !!c.querySelector('.tk-qa[href^="tel:"]'), wa: !!c.querySelector('.tk-qa[href*="wa.me"]'),
+    av: [...c.querySelectorAll('.tk-av')].map(e => e.getAttribute('title')), age: t('.tk-age-pill'), ageTitle: (c.querySelector('.tk-age-pill') || {}).title || '' };
 });
-ok('Card: the property first — its name on top, the owner below it', !/Meenakshi/.test(meena.first) && !!meena.prop.trim(), JSON.stringify(meena));
-ok('Card: then the owner with the number and WhatsApp', meena.name === 'Meenakshi' && /9840011111/.test(meena.phone) && /WhatsApp/.test(meena.phone), JSON.stringify(meena));
+ok('Card: the property name, no phone numbers or owner on the card', !!meena.prop.trim() && !/9840011111|Meenakshi/.test(meena.all), JSON.stringify(meena));
+ok('Card: call and WhatsApp on hover', meena.tel && meena.wa, JSON.stringify(meena));
 
 // Renamed right on the card: Enter saves (with a timeline line), Escape leaves it as it was, and
 // clicking into the box does not open the listing or start a drag.
 {
-  const sel = '.tk-card:has(.tk-seller-n:text-is("Meenakshi"))';
+  const sel = '.tk-card[aria-label*="owner Meenakshi"]';
   await page.click(sel + ' .tk-pname-ed');
   await page.click(sel + ' .tk-pname-in');
   const opened = await page.evaluate(() => !!document.querySelector('.tk-dp.open, #dp.open, .tk-detail.open'));
@@ -199,11 +202,19 @@ ok('Card: then the owner with the number and WhatsApp', meena.name === 'Meenaksh
   ok('…a long name wraps to at most two lines', clamp && clamp.h <= clamp.lh * 2 + 2, JSON.stringify(clamp));
   await page.screenshot({ path: 'tests/out/board-even.png' });
   await page.evaluate(k => k.forEach(([id, t]) => window.trackApi.mutate(id, l => { l.title = t; }, null)), keptTitles);
-  await page.waitForTimeout(150);}ok('Card: area, configuration and price', /Nungambakkam/.test(meena.loc) && meena.chips.includes('3 BHK') && meena.chips.some(c => /2\.1 Cr/.test(c)), JSON.stringify(meena));
-ok('Card: the assigned agents', /Agent\.a \+ Agent\.b/.test(meena.agent), meena.agent);
-ok('Card: last updated, and by whom', /Updated 1h ago by Agent\.a/.test(meena.upd), meena.upd);
+  await page.waitForTimeout(150);}ok('Card: one quiet line — configuration · price (the area is in the name already, not said twice)', /^3 BHK · Sale ₹2\.1 Cr$/.test(meena.meta), meena.meta);
+{
+  // A name that does not say the area: the quiet line starts with it.
+  const kept = await page.evaluate(() => { const l = window.trackApi.listings().find(x => (x.sellerName || '') === 'Meenakshi'); const t = l.title; window.trackApi.mutate(l.id, y => { y.title = 'Sea-facing flat'; }, null); return [l.id, t]; });
+  await page.waitForTimeout(150);
+  const m2 = await page.$eval(`.tk-card[data-id="${kept[0]}"] .tk-meta1`, e => e.textContent).catch(() => '');
+  ok('…a card whose name does not say its area shows the area first', /^Nungambakkam · 3 BHK · Sale ₹2\.1 Cr$/.test(m2), m2);
+  await page.evaluate(k => window.trackApi.mutate(k[0], y => { y.title = k[1]; }, null), kept); await page.waitForTimeout(100);
+}
+ok('Card: the assigned agents, as initials', meena.av.join() === 'Agent: Agent.a,Agent: Agent.b', JSON.stringify(meena.av));
+ok('Card: last updated, and by whom — on the days pill', /Updated 1h ago by Agent\.a/.test(meena.ageTitle), meena.ageTitle);
 ok('Card: days in this column', /2d here/.test(meena.age), meena.age);
-ok('A card with no agent says Unassigned', (await text(page, '.tk-agent.none')).some(t => /Unassigned/.test(t)));
+ok('A card with no agent has no initials', await page.evaluate(() => [...document.querySelectorAll('.tk-card')].some(c => !c.querySelector('.tk-av'))));
 ok('A card with no owner keeps its title', await page.evaluate(() => [...document.querySelectorAll('.tk-card .tk-pname-t')].some(e => e.textContent === 'Flat, Adyar')));
 ok('A listing past its stage target is marked late', (await page.$$('.tk-card.late')).length >= 1);
 // Unmapped is normal early on and only matters once a stage needs it, so the
@@ -253,11 +264,11 @@ ok('…a click elsewhere closes it', !(await page.$('#ddStage[open]')));
 await page.click('#ddAgent summary');
 await page.click('#ddAgent .tk-dd-row:has-text("Agent.b") input');
 await page.waitForTimeout(150);
-ok('Picking an agent shows only their listings', JSON.stringify(await text(page, '.tk-card .tk-seller-n')) === '["Meenakshi"]', JSON.stringify(await text(page, '.tk-card .tk-seller-n')));
+ok('Picking an agent shows only their listings', JSON.stringify(await owners(page, '.tk-card')) === '["Meenakshi"]', JSON.stringify(await owners(page, '.tk-card')));
 await page.evaluate(() => clearAgentFilter());
 await page.selectOption('.tk-dd-sort select', 'name');
 await page.waitForTimeout(150);
-const sortedCol = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => [...c.querySelectorAll('.tk-card .tk-seller-n')].map(e => e.textContent)).find(a => a.length > 1));
+const sortedCol = await page.evaluate(() => [...document.querySelectorAll('.tk-col')].map(c => [...c.querySelectorAll('.tk-card')].map(e => ((e.getAttribute('aria-label') || '').match(/, owner (.+)$/) || [])[1] || '')).find(a => a.length > 1));
 ok('Sorting by name orders the cards in each column', sortedCol && sortedCol.join() === [...sortedCol].sort((a, b) => a.localeCompare(b)).join(), JSON.stringify(sortedCol));
 await page.selectOption('.tk-dd-sort select', 'urgency');
 await page.waitForTimeout(150);
@@ -322,7 +333,7 @@ ok('…while the timeline keeps only what the board recorded', !/away till Monda
 await shot('detail');
 await page.evaluate(() => closeDetail());
 await page.waitForTimeout(150);
-ok('The board card shows the latest note', (await text(page, '.tk-card-note')).some(t => /away till Monday/.test(t) && /Agent\.a/.test(t)));
+ok('The board card marks the latest note (read on hover)', (await page.$$eval('.tk-card .tk-noteic', e => e.map(x => x.title))).some(t => /away till Monday/.test(t) && /Agent\.a/.test(t)));
 const fit = await page.evaluate(() => { const b = document.querySelector('.tk-board').getBoundingClientRect(); return { bottom: Math.round(b.bottom), vh: innerHeight, sh: document.documentElement.scrollHeight }; });
 ok('The board fills the screen to the bottom, with no blank page below', Math.abs(fit.bottom - fit.vh) <= 2 && fit.sh <= fit.vh + 2, JSON.stringify(fit));
 await page.evaluate(() => openDetail('l3'));
