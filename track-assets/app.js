@@ -72,6 +72,8 @@ function setBoardMode(m) {
 }
 window.setBoardMode = setBoardMode;
 function renderModeToggle() {
+  const fb = document.getElementById('tkFilterBar');
+  if (fb) fb.classList.toggle('ed-mode', boardMode === 'editor');   // its own order there: Sort hidden
   const el = document.getElementById('tkModeTog');
   if (!el) return;
   el.innerHTML = [['board', 'Board'], ['list', 'List'], ['editor', 'Editor']].map(([m, label]) =>
@@ -3041,7 +3043,9 @@ function edCardHtml(it) {
   const lines = [];
   if (col === 'shoot_planned') {
     if (ser) { const left = memberCards(x).filter(m => !m.shot); lines.push(`📸 ${left.length ? 'To shoot: ' + left.map(m => esc(memLabel(m)) + (m.shootAt ? ' (' + esc(fmtDay(m.shootAt)) + ')' : '')).join(', ') : 'Add the properties in Posting'}`); }
-    else lines.push(x.shootAt ? `📸 ${esc(fmtDateTime(x.shootAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}` : '📸 Shoot not booked');
+    else if (!x.shootAt) lines.push('📸 Shoot not booked');
+    else if (pr.what === 'shoot') { if (x.shootAssignee) lines.push(`📸 ${esc(x.shootAssignee)}`); }
+    else lines.push(`📸 ${esc(fmtDateTime(x.shootAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}`);
   } else if (col === 'shoot_done') {
     if (x.shootDoneAt) lines.push(`📸 Shot ${esc(fmtDay(x.shootDoneAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}`);
     lines.push(it.cuts && it.cuts.length ? `To plan: ${it.cuts.map(c2 => cutIcon(c2) + ' ' + esc(EF.cutLabel(x, c2))).join(' · ')}` : '<span class="ed-warn">Tick what it is cut for (Shoot for)</span>');
@@ -3068,7 +3072,7 @@ function edCardHtml(it) {
   const checklist = !ck || col === 'posted' ? '' : `<div class="ed-checks">
     <span class="ed-ck${ck.edit ? ' ok' : ck.gap === 'edit' ? ' bad' : ''}">${ck.edit ? '✓' : '○'} Edit planned</span>
     <span class="ed-ck${ck.post ? ' ok' : ''}">${ck.post ? '✓' : '○'} Post planned</span></div>`;
-  const vo = k && forVoice(x, k) === 'vo' && !forVoMade(x, k) ? '<span class="ed-cut vo">V/O to make</span>' : '';
+  const vo = k && !['done', 'scheduled', 'posted'].includes(col) && forVoice(x, k) === 'vo' && !forVoMade(x, k) ? '<span class="ed-cut vo">V/O to make</span>' : '';
   return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"${k ? ` data-cut="${k}"` : ''}
       aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="ed-top">${code}${due}</div>
@@ -3126,7 +3130,7 @@ function edTrackHtml() {
     return `<button type="button" class="ed-tile${on ? ' on' : ''}${r.active.length ? ' live' : ''}" aria-pressed="${!!on}" onclick="setEdPerson(${jsq(r.name)})" title="${on ? 'Show everyone' : 'Show only ' + esc(r.name) + '’s work'}">
       <span class="ed-tn">${r.active.length ? '<i class="ed-dot" aria-hidden="true"></i>' : ''}${esc(r.name)}</span>
       <span class="ed-tnow">${a ? `Editing <b>${esc(a.title)}</b> · ${esc(EF.span(now - a.since))}${r.active.length > 1 ? ` +${r.active.length - 1}` : ''}` : 'Not editing now'}</span>
-      <span class="ed-tstats"><span><b>${r.planned.length}</b> assigned</span><span><b>${r.doneWeek}</b> done this week</span>${r.avgHours ? `<span>~${esc(EF.span(r.avgHours * 3600000))} each</span>` : ''}</span>
+      <span class="ed-tstats"><span><b>${r.planned.length}</b> assigned</span><span><b>${r.doneWeek}</b> done this week</span>${r.avgHours * 60 >= 1 ? `<span>~${esc(EF.span(r.avgHours * 3600000))} each</span>` : ''}</span>
     </button>`;
   };
   const me = edPerson ? tr.find(r => sameName(r.name, edPerson)) : null;

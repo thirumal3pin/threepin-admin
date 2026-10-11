@@ -1709,6 +1709,9 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .ed-sum .bad { color: var(--red); }
 .ed-sum .hot { color: var(--amber); }
 .ed-board .tk-col { flex-basis: 268px; width: 268px; }
+/* every column's hint takes two lines, so the counts and the first cards line up across the board */
+.ed-board .tk-col-rule { min-height: 2.7em; }
+#tkFilterBar.ed-mode .tk-dd-sort { display: none; }
 .ed-card { gap: 6px; padding: 11px 12px; }
 .ed-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; min-height: 20px; }
 .ed-due { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 99px; background: var(--bg2); color: var(--ink3); white-space: nowrap; margin-left: auto; }

@@ -117,8 +117,8 @@
       note: 'Listings from owner yes to brochure out, the shoots, and where each is posted',
       items: [
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
-        { id: 'editor', label: 'Editor', icon: 'fa-solid fa-scissors', page: 'track', nav: 'editor' },
         { id: 'shoots', label: 'Shoots', icon: 'fa-regular fa-calendar-check', page: 'track', nav: 'shoots' },
+        { id: 'editor', label: 'Editor', icon: 'fa-solid fa-scissors', page: 'track', nav: 'editor' },
         { id: 'posting', label: 'Posting', icon: 'fa-solid fa-bullhorn', page: 'track', nav: 'posting', badge: 'posting' },
         { id: 'sellers', label: 'Sellers', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
         { id: 'settings', label: 'Settings', icon: 'fa-solid fa-sliders', page: 'track', nav: 'settings' },

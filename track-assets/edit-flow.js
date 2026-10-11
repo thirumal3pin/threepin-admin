@@ -30,7 +30,7 @@ export const ED_COLS = [
   { key: 'active', label: 'Editing', hint: 'Being edited right now' },
   { key: 'done', label: 'Edit done', hint: 'Ready — schedule it in Posting' },
   { key: 'scheduled', label: 'Post scheduled', hint: 'In Posting with a date and time' },
-  { key: 'posted', label: 'Posted', hint: 'Live — shown for a week, then it leaves the view' }
+  { key: 'posted', label: 'Posted', hint: 'Live — shown here for a week' }
 ];
 export const POSTED_FOR = 7 * 86400000;   // how long a posted card stays in view
 export const ED_KEYS = ED_COLS.map(c => c.key);
