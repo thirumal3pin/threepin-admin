@@ -28,7 +28,7 @@ const INV = [
 ];
 const mk = o => ({ tenantId: T, channels: {}, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' }, createdAt: NOW - 5 * DAY, ...o });
 const TRACKERS = [
-  mk({ id: 'pA', propertyCode: 'TNAG0003', title: '3BHK T Nagar', photosLink: 'https://drive.google.com/a', details: 'x', propertyId: 'TNAG0003', channels: { igReel: { status: 'live', at: NOW - 3 * DAY, liveAt: NOW - 3 * DAY, url: 'https://instagram.com/reel/a' } } }),
+  mk({ id: 'pA', propertyCode: 'TNAG0003', title: '3BHK T Nagar', photosLink: 'https://drive.google.com/a', details: 'x', propertyId: 'TNAG0003', channels: { igReel: { status: 'live', at: NOW - 2 * DAY, liveAt: NOW - 2 * DAY, url: 'https://instagram.com/reel/a' } } }),
   mk({ id: 'pB', propertyCode: 'TNAG0005', title: 'Studio T Nagar' }),
   mk({ id: 'pD', propertyCode: 'ADYR0001', title: 'Adyar villa', photosLink: 'https://drive.google.com/d', details: 'x', channels: { igReel: { status: 'scheduled', at: day0 + DAY + 18 * H } } }),
   mk({ id: 'pF', propertyCode: 'ECR0009', title: 'ECR duplex', channels: { igStory: { status: 'yet', day: day0 + 2 * DAY } }, plannedDate: day0 + 2 * DAY })
@@ -151,14 +151,14 @@ ok('…its properties, TNAG0005 still to shoot', /TNAG0005 · to shoot/.test(sc)
 ok('…blocked by what is not shot', /not shot yet: TNAG0005/.test(sc));
 await p.click(`.tk-card[data-id="${card.id}"]`); await p.waitForTimeout(200);
 const dp = await p.textContent('#dpBody');
-ok('Its panel: properties, Shoot for, the edit — no owner, shoot or mapping', /Properties in it/.test(dp) && /Shoot for/.test(dp) && /Plan the edit/.test(dp) && !/Map to a property/.test(dp) && !/Getting there/.test(dp));
+ok('Its panel: properties, Shoot for, the edit — no owner, shoot or mapping', /Properties in it/.test(dp) && /Shoot for/.test(dp) && /Edit — per outlet/.test(dp) && !/Map to a property/.test(dp) && !/Getting there/.test(dp));
 await p.screenshot({ path: join(OUT, 'desk-series-card.png') });
 await p.evaluate(() => closeDetail()); await p.waitForTimeout(100);
 
 console.log('desktop — Editor view');
 await p.click('#tkModeTog .tk-sbtn:has-text("Editor")'); await p.waitForTimeout(200);
 const col = async key => p.$$eval(`.ed-${key} .tk-card`, c => c.map(x => x.querySelector('.ed-name').textContent));
-ok('Six columns: Shoot planned … Post scheduled', (await p.$$eval('.ed-col .tk-col-title', t => t.map(x => x.textContent))).join('|') === 'Shoot planned|Shoot done|Planned to edit / post|Editing|Edit done|Post scheduled');
+ok('Seven columns: Shoot planned … Post scheduled, Posted', (await p.$$eval('.ed-col .tk-col-title', t => t.map(x => x.textContent))).join('|') === 'Shoot planned|Shoot done|Planned to edit / post|Editing|Edit done|Post scheduled|Posted');
 ok('Shoot planned: TNAG0005, and the series (a property still to shoot)', JSON.stringify((await col('shoot_planned')).sort()) === JSON.stringify(['Studio T Nagar', 'T Nagar series']), JSON.stringify(await col('shoot_planned')));
 ok('Shoot done: TNAG0003', JSON.stringify(await col('shoot_done')) === JSON.stringify(['3BHK T Nagar']), JSON.stringify(await col('shoot_done')));
 ok('Planned to edit / post: ECR0009 — post day fixed, edit not planned', JSON.stringify(await col('planned')) === JSON.stringify(['ECR duplex']) && /edit not planned/.test(await p.textContent('.ed-planned')));
@@ -166,37 +166,51 @@ ok('Editing: Velachery, by Ravi, delivery due today', JSON.stringify(await col('
 ok('Post scheduled: Adyar (edit done, post booked in Posting)', JSON.stringify(await col('scheduled')) === JSON.stringify(['Adyar villa']));
 ok('An old live card with nothing booked is not on it', !/Old live flat/.test(await p.textContent('.ed-board')));
 ok('Shoot planned shows the shoot date to prioritise by', /Shoot/.test(await p.textContent('.ed-shoot_planned .ed-due')));
-ok('Cuts and a V/O still to make on the card', /Reel · V\/O/.test(await p.textContent('.ed-shoot_done')));
+ok('Shoot done: one card for the property, listing the outlets still to plan', /To plan:.*Reel \+ FB.*YouTube/.test(await p.textContent('.ed-shoot_done')), await p.textContent('.ed-shoot_done'));
 const tiles = await p.$$eval('.ed-tile', t => t.map(x => x.textContent.replace(/\s+/g, ' ').trim()));
-ok('Editors, live: Ravi editing Velachery now', tiles.some(t => /^Ravi/.test(t) && /Editing Velachery 3BHK · 2h 10m/.test(t)), JSON.stringify(tiles));
+ok('Editors, live: Ravi editing Velachery now', tiles.some(t => /^Ravi/.test(t) && /Editing Velachery 3BHK · Video · 2h 10m/.test(t)), JSON.stringify(tiles));
 ok('…Anu: not editing, 1 done this week', tiles.some(t => /^Anu/.test(t) && /Not editing now/.test(t) && /1 done this week/.test(t)), JSON.stringify(tiles));
 await p.screenshot({ path: join(OUT, 'desk-editor.png'), fullPage: true });
 await noSideways(p, 'Editor view');
 
-console.log('desktop — plan, start and finish an edit');
-await p.click('.tk-card[data-id="lA"] .tk-btn:has-text("Plan edit")'); await p.waitForTimeout(100);
-ok('Plan the edit: the shooter is offered as editor', await p.$eval('#edWho', s => s.value) === 'Ravi');
+console.log('desktop — per outlet: the Reel on its own, YouTube on another day');
+const cutCard = (id, k) => `.tk-card[data-id="${id}"][data-cut="${k}"]`;
+await p.click('.tk-card[data-id="lA"] .tk-btn:has-text("Plan edits")'); await p.waitForTimeout(100);
+ok('Plan edits: the outlets still to plan are ticked (Reel + FB, YouTube); the shooter is offered as editor', await p.$eval('#edCuts input[value="igReel"]', i => i.checked) && await p.$eval('#edCuts input[value="yt"]', i => i.checked) && await p.$eval('#edWho', s => s.value) === 'Ravi');
+await p.uncheck('#edCuts input[value="yt"]');   // only the Reel now; YouTube another day
 const due = new Date(day0 + 2 * DAY); await p.fill('#edDue', `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`);
 await p.click('#edModal .tk-btn.primary'); await p.waitForTimeout(150);
 let lA = await savedListing(p, "l.id === 'lA'");
-ok('Saved: planned, by Ravi, delivery date kept', lA && lA.edit.status === 'planned' && lA.edit.by === 'Ravi' && lA.edit.dueAt === day0 + 2 * DAY, JSON.stringify(lA && lA.edit));
-ok('…moved to Planned to edit / post, with its delivery date', (await col('planned')).includes('3BHK T Nagar') && /Deliver by/.test(await p.$eval('.tk-card[data-id="lA"]', e => e.textContent)));
-await p.click('.tk-card[data-id="lA"] .tk-btn:has-text("Start editing")'); await p.waitForTimeout(150);
+ok('Saved on the Reel only: planned, by Ravi, delivery date kept; YouTube untouched', lA && lA.cuts.igReel.status === 'planned' && lA.cuts.igReel.by === 'Ravi' && lA.cuts.igReel.dueAt === day0 + 2 * DAY && !lA.cuts.yt, JSON.stringify(lA && lA.cuts));
+ok('…the Reel is its own card in Planned to edit; YouTube still to plan in Shoot done', !!(await p.$(`.ed-planned ${cutCard('lA', 'igReel')}`)) && /To plan:.*YouTube/.test(await p.textContent('.ed-shoot_done')) && !/To plan:.*Reel/.test(await p.textContent('.ed-shoot_done')));
+// Dragging the Reel's card onto Editing starts that cut (and only that cut).
+await p.dragAndDrop(cutCard('lA', 'igReel'), '.ed-active .tk-col-body'); await p.waitForTimeout(200);
 lA = await savedListing(p, "l.id === 'lA'");
-ok('Start editing: active, time stamped', lA.edit.status === 'active' && lA.edit.startedAt > NOW - 60000 && (await col('active')).includes('3BHK T Nagar'));
+ok('Start editing the Reel (dragged onto Editing): active, time stamped', lA.cuts.igReel.status === 'active' && lA.cuts.igReel.startedAt > NOW - 60000 && !!(await p.$(`.ed-active ${cutCard('lA', 'igReel')}`)));
 ok('…Ravi\'s tile now shows two edits going', (await p.$$eval('.ed-tile', t => t.map(x => x.textContent))).some(t => /Ravi/.test(t) && /\+1/.test(t)));
-await p.click('.tk-card[data-id="lA"] .tk-btn:has-text("Edit done")'); await p.waitForTimeout(150);
+await p.click(`${cutCard('lA', 'igReel')} .tk-btn:has-text("Edit done")`); await p.waitForTimeout(150);
 lA = await savedListing(p, "l.id === 'lA'");
-ok('Edit done: stamped, in Edit done with "Schedule in Posting"', lA.edit.status === 'done' && lA.edit.doneAt && (await col('done')).includes('3BHK T Nagar') && /Schedule in Posting/.test(await p.$eval('.tk-card[data-id="lA"]', e => e.textContent)));
+ok('Reel edit done: stamped; Shoot for shows the Reel made, YouTube not', lA.cuts.igReel.status === 'done' && lA.cuts.igReel.doneAt && lA.forDone.igReel && !lA.forDone.yt);
+ok('…its Reel is already live in Posting → Posted, with the link', !!(await p.$(`.ed-posted ${cutCard('lA', 'igReel')} a[href="https://instagram.com/reel/a"]`)));
+// YouTube, another day, by Anu.
+await p.evaluate(() => openEditPlan('lA', 'yt')); await p.waitForTimeout(100);
+ok('Planning YouTube: only YouTube ticked', await p.$eval('#edCuts input[value="yt"]', i => i.checked) && !(await p.$eval('#edCuts input[value="igReel"]', i => i.checked)));
+await p.selectOption('#edWho', 'Anu'); await p.click('#edModal .tk-btn.primary'); await p.waitForTimeout(150);
+lA = await savedListing(p, "l.id === 'lA'");
+ok('YouTube planned by Anu, the Reel still done — two cuts, two editors', lA.cuts.yt.status === 'planned' && lA.cuts.yt.by === 'Anu' && lA.cuts.igReel.status === 'done' && !!(await p.$(`.ed-planned ${cutCard('lA', 'yt')}`)) && !!(await p.$(`.ed-posted ${cutCard('lA', 'igReel')}`)));
 await p.click('.ed-tile:has-text("Anu")'); await p.waitForTimeout(120);
-// Anu shoots TNAG0005, which the T Nagar series is waiting on: the series is hers to unblock too.
-ok('Tap an editor: only their work (Anu: TNAG0005 to shoot, the series waiting on it, Adyar booked)', JSON.stringify((await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))).sort()) === JSON.stringify(['Adyar villa', 'Studio T Nagar', 'T Nagar series']), JSON.stringify(await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))));
+// Anu: her YouTube cut, TNAG0005 to shoot (and the series waiting on it), Adyar's booked post.
+ok('Tap an editor: only their work', JSON.stringify((await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))).sort()) === JSON.stringify(['3BHK T Nagar', 'Adyar villa', 'Studio T Nagar', 'T Nagar series']), JSON.stringify(await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))));
 ok('…and their past edits, with how long each took', /past edits/.test(await p.textContent('.ed-past')) && (await p.$$('.ed-prow')).length === 2 && /took 3h/.test(await p.textContent('.ed-past')));
 await p.click('.ed-tile:has-text("Anu")'); await p.waitForTimeout(100);
 ok('Tap again: everyone', !(await p.$('.ed-past')));
+await p.screenshot({ path: join(OUT, 'desk-editor-cuts.png'), fullPage: true });
+await p.evaluate(() => openDetail('lA')); await p.waitForTimeout(150);
+ok('The card\'s Edit section: one row per outlet with its own status', /Reel \+ FB/.test(await p.textContent('#dpEdit')) && /YouTube/.test(await p.textContent('#dpEdit')) && /Edit done/.test(await p.textContent('#dpEdit')) && /Planned to edit/.test(await p.textContent('#dpEdit')));
+await p.evaluate(() => closeDetail());
 await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(120);
 await p.click('.pg-bar .tk-sbtn:has-text("Sheet")'); await p.waitForTimeout(120);
-ok('Posting shows the edit: TNAG0003 "Edit done", Velachery "Editing · Ravi"', /Edit done/.test(await p.$eval('#pg-pA', e => e.textContent)));
+ok('Posting shows each outlet\'s edit: TNAG0003 Reel done, YouTube planned by Anu', /Reel \+ FB done/.test(await p.$eval('#pg-pA', e => e.textContent)) && /YouTube planned · Anu/.test(await p.$eval('#pg-pA', e => e.textContent)), await p.$eval('#pg-pA', e => e.textContent.replace(/\s+/g, ' ')));
 await p.close();
 
 // ─────────────────────────── Settings → Configurations ───────────────────────────
@@ -308,7 +322,7 @@ console.log('fixes from review');
   await p.evaluate(() => { toggleView('board'); editCardTitle('lS4'); }); await p.waitForTimeout(60);
   await p.fill('.tk-pname-in', 'Ready series 2'); await p.press('.tk-pname-in', 'Enter'); await p.waitForTimeout(150);
   const c4 = await savedListing(p, "l.id === 'lS4'");
-  ok('All shot and photos in, edit not done: a change does not move the series card on', c4 && c4.stageId === sid('shoot_done') && /edit not done/.test(await p.$eval('.tk-card[data-id="lS4"]', e => e.textContent)), c4 && c4.stageId);
+  ok('All shot and photos in, edit not done: a change does not move the series card on', c4 && c4.stageId === sid('shoot_done') && /edit not done|outlets not planned/.test(await p.$eval('.tk-card[data-id="lS4"]', e => e.textContent)), c4 && c4.stageId);
   await p.close();
   p = await open({ width: 390, height: 844 }, 'light', '');
   await p.evaluate(() => setMyAgent('Ravi')); await p.waitForTimeout(200);
@@ -373,7 +387,21 @@ console.log('fixes from review');
   await p.click('#pgGate .tk-btn'); await p.waitForTimeout(150);
   await p.click('#pgSave'); await p.waitForTimeout(150);
   const lf = await savedListing(p, "l.id === 'lF'");
-  ok('"The edit is done": the edit is marked done, and the post goes live', lf && lf.edit.status === 'done' && await p.evaluate(() => window.__saved.some(t => t.id === 'pF' && t.channels.igStory.status === 'live')), JSON.stringify(lf && lf.edit));
+  ok('"The edit is done": the Story\'s edit is marked done, and the post goes live', lf && lf.cuts.igStory.status === 'done' && await p.evaluate(() => window.__saved.some(t => t.id === 'pF' && t.channels.igStory.status === 'live')), JSON.stringify(lf && lf.cuts));
+  await p.close();
+}
+
+{
+  console.log('Editor view follows Posting: scheduled → Post scheduled; live → Posted');
+  p = await open({ width: 1440, height: 950 }, 'light', '');
+  await p.evaluate(() => { toggleView('board'); setBoardMode('editor'); }); await p.waitForTimeout(200);
+  ok('Adyar: edit done, its Reel scheduled → Post scheduled', /Adyar villa/.test(await p.textContent('.ed-scheduled')));
+  // The Reel is marked live in Posting (before the edit record was even touched again).
+  await p.evaluate(ts => window.applyPostingSnapshot(ts.map(t => t.id === 'pD' ? { ...t, channels: { igReel: { status: 'live', at: Date.now() - 7200000, liveAt: Date.now() - 3600000, url: 'https://www.youtube.com/watch?v=adyar' } } } : t)), TRACKERS);
+  await p.waitForTimeout(200);
+  ok('…marked live in Posting → moves to Posted by itself', /Adyar villa/.test(await p.textContent('.ed-posted')) && !/Adyar villa/.test(await p.textContent('.ed-scheduled')));
+  ok('…with the post link and when it went live', !!(await p.$('.ed-posted a[href="https://www.youtube.com/watch?v=adyar"]')) && /Live/.test(await p.textContent('.ed-posted')));
+  await p.screenshot({ path: join(OUT, 'desk-posted.png') });
   await p.close();
 }
 
@@ -386,7 +414,7 @@ for (const [name, vp, theme] of [['phone-light', { width: 390, height: 844 }, 'l
   await p.evaluate(([s, ts, card]) => { window.applyListingsSnapshot([...window.trackApi.listings(), card]); window.applyPostingSnapshot([...ts, s]); }, [mk(series), TRACKERS, L({ id: 'lS', kind: 'series', title: 'Studio series', postingId: 'pS', stageId: sid('shoot_done'), edit: { status: 'planned', by: 'Anu', dueAt: day0 + DAY } })]);
   await p.waitForTimeout(150);
   await p.click('.pg-bar .tk-sbtn:has-text("Series")'); await p.waitForTimeout(150);
-  ok(`${name}: Series tab draws`, /Studio series/.test(await p.textContent('#postingView')) && /Edit planned · Anu/.test(await p.textContent('.sr')));
+  ok(`${name}: Series tab draws`, /Studio series/.test(await p.textContent('#postingView')) && /planned · Anu/.test(await p.textContent('.sr')));
   await noSideways(p, `${name} Series tab`);
   await p.screenshot({ path: join(OUT, `${name}-series.png`), fullPage: true });
   await p.click('.sr-acts .tk-btn:has-text("Edit series")'); await p.waitForTimeout(120);

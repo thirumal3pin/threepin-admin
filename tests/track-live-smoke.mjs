@@ -56,7 +56,7 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
   ok('List: no sideways scroll', !(await wide()));
   await page.evaluate(() => setBoardMode('editor')); await page.waitForTimeout(500);
   const cols = await page.$$eval('.ed-col .tk-col-title', t => t.map(x => x.textContent));
-  ok('Editor view: six columns', cols.length === 6, JSON.stringify(cols));
+  ok('Editor view: seven columns', cols.length === 7, JSON.stringify(cols));
   const edCards = await page.$$eval('.ed-board .tk-card', c => c.length);
   console.log(`        Editor view: ${edCards} cards — ${JSON.stringify(await page.$$eval('.ed-col', c => c.map(x => x.querySelector('.tk-count').textContent)))}`);
   ok('Editor view: no sideways page scroll', !(await wide()));

@@ -276,7 +276,7 @@ function applyFilters() {
     const l = x.leadId ? leadById(x.leadId) : null;
     // A series card is found by its name and any of its properties.
     const ser = isSeriesCard(x) ? seriesInfo(x) : null;
-    const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone, ser && ser.name, ...(ser ? ser.members.flatMap(m => [m.propertyCode, m.name]) : []), EF.editOf(x).by,
+    const hay = [x.title, x.propertyCode, x.location, x.config, x.sellerName, x.sellerPhone, ser && ser.name, ...(ser ? ser.members.flatMap(m => [m.propertyCode, m.name]) : []), ...cutsOfCard(x).map(k => EF.cutEdit(x, k).by),
       x.askingPrice, x.shootAssignee, x.remarks, x.lastNote && x.lastNote.text, l && l.name, l && l.phone, l && l.propertyInterest,
       l && l.assignedAgent, l && l.secondaryAgent, ...TG.cleanTags(x.tags)].join(' ').toLowerCase();
     return hay.includes(q);
@@ -2018,6 +2018,10 @@ function mutate(id, fn, historyText) {
   const x = listings.find(l => l.id === id);
   if (!x) return null;
   const hadGaps = mediaGaps(x).length > 0;
+  // A card from before edits were per outlet: what its old edit and "made" ticks meant is written as
+  // cuts now, before this change — so a tick made later never changes what the old edit meant.
+  const m = EF.materializeCuts(x);
+  if (m) x.cuts = m;
   fn(x);
   forgetBrochures();
   x.updatedAt = Date.now();
@@ -2075,8 +2079,12 @@ window.trackApi = {
   editOf: x => EF.editOf(x),
   span: ms => EF.span(ms),
   createSeriesCard: seed => createSeriesCard(seed),
-  editStep: (id, action) => edStep(id, action),
-  edCtx: x => edCtx(x),
+  editStep: (id, action, k) => edStep(id, action, null, k),
+  edCtx: (x, k) => edCtx(x, k),
+  cutOfChannel: (x, ch) => EF.cutOfChannel(x, ch),
+  cutEdit: (x, k) => EF.cutEdit(x, k),
+  cutLabel: (x, k) => EF.cutLabel(x, k),
+  cutsOf: x => cutsOfCard(x),
   listingsLoaded: () => seenListings,
   stageFor: key => P.stageForKey(stages, key),
   // A property's card made from the Posting tab (to make its brochure): placed in the column its posts
@@ -2155,6 +2163,13 @@ const legacyVoice = x => x.voice === 'vo' && !(x.forVoice && Object.values(x.for
 function setForPlan(id, key, on) {
   mutate(id, x => {
     foldInsta(x);
+    // Not cut for this outlet any more: its edit is cleared (kept in its log), unless it still has
+    // another outlet (the FB Reel sharing the Insta Reel's cut).
+    const k = EF.cutOfChannel(x, key);
+    if (!on && EF.cutEdit(x, k).status && !EF.channelsOfCut(x, k).some(ch => ch !== key && forPlanned(x, ch))) {
+      const r = EF.setCut(x, k, 'reset', {}, Date.now(), meName());
+      if (r.ok) x.cuts = r.patch.cuts;
+    }
     x.forPlan = { ...(x.forPlan || {}), [key]: !!on };
     // Not planned any more: its done, voice and voice-over go with it.
     if (!on) { x.forDone = { ...(x.forDone || {}), [key]: false }; x.forVoice = { ...(x.forVoice || {}), [key]: '' }; x.forVo = { ...(x.forVo || {}), [key]: false }; }
@@ -2162,7 +2177,17 @@ function setForPlan(id, key, on) {
   if (currentDetailId === id) openDetail(id);
 }
 function setForDone(id, key, on) {
-  mutate(id, x => { foldInsta(x); x.forDone = { ...(x.forDone || {}), [key]: !!on }; if (on) x.forPlan = { ...(x.forPlan || {}), [key]: true }; }, `${forLabel(key)} cut: ${on ? 'done' : 'not done'}`);
+  // "Made" is that outlet's cut edited: ticking it marks the cut done; unticking takes it back a step
+  // (being edited, or planned — its editor and days kept).
+  const x0 = listings.find(l => l.id === id); if (!x0) return;
+  const k = EF.cutOfChannel(x0, key), st = EF.cutEdit(x0, k).status;
+  const r = on && st !== 'done' ? EF.setCut(x0, k, 'done', {}, Date.now(), meName()) : !on && st === 'done' ? EF.setCut(x0, k, 'reopen', {}, Date.now(), meName()) : null;
+  mutate(id, x => {
+    if (r && r.ok) Object.assign(x, r.patch);
+    foldInsta(x);   // after the cut's patch, which still carries an old "Instagram" tick
+    x.forDone = { ...(x.forDone || {}), [key]: !!on };
+    if (on) x.forPlan = { ...(x.forPlan || {}), [key]: true };
+  }, `${forLabel(key)} cut: ${on ? 'done' : 'not done'}`);
   if (currentDetailId === id) openDetail(id);
 }
 function setForVoice(id, key, v) {
@@ -2697,8 +2722,10 @@ function seriesGaps(x) {
   if (forLeft.length) out.push(`${forLeft.join(' + ')} not done`);
   const voLeft = FOR_KEYS.filter(([k]) => forPlanned(x, k) && forVoice(x, k) === 'vo' && !forVoMade(x, k)).map(([, l]) => l);
   if (voLeft.length) out.push(`voice-over not made: ${voLeft.join(', ')}`);
-  // The series' own work is its edit: it is not media-ready until that is done.
-  if (EF.editOf(x).status !== 'done') out.push('edit not done');
+  // The series' own work is its edits (per outlet): not media-ready until they are done.
+  const ks = cutsOfCard(x), notDone = ks.filter(k => EF.cutEdit(x, k).status !== 'done');
+  if (!ks.length) out.push('outlets not planned');
+  else if (notDone.length) out.push('edit not done: ' + notDone.map(k => EF.cutLabel(x, k)).join(', '));
   return out;
 }
 // The cuts a card is made for, as small chips: done ones ticked, a V/O still to make flagged.
@@ -2820,68 +2847,106 @@ function createSeriesCard(seed) {
   return x.id;
 }
 
-// ═══════ THE EDIT ═══════
-// Who edits a card, when it is planned and due, and where it stands — the same record for a
-// property's card and a series card. The Editor view moves it along; Posting reads it.
+// ═══════ THE EDIT — one per outlet (a cut) ═══════
+// A property is edited per outlet — the Reel on Monday, YouTube on Thursday — so each outlet is a CUT
+// with its own editor, days and status (edit-flow.js: cutEdit / setCut). The Editor view moves cuts
+// along; Posting reads the cut of the outlet it posts to. The FB Reel is the Insta Reel's cut unless
+// the card says it has its own.
 const fmtDay = ts => ts ? new Date(ts).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+const cutIcon = k => `<i class="${FOR_ICON[k] || 'fa-solid fa-film'} tk-for-i tk-for-${k}" aria-hidden="true"></i>`;
+// The card's posts per channel (planned, scheduled or live), for which cuts it has.
+const postChannelsOf = x => { const p = window.pgPostsFor && window.pgPostsFor(x); return p ? p.channels || [] : []; };
+const cutsOfCard = x => EF.cutKeys(x, postChannelsOf(x));
+// On a board card: where its cuts stand, in a few words.
 function editChip(x) {
-  const e = EF.editOf(x);
-  if (e.status === 'active') return `<span class="tk-ed act" title="Being edited">✂ Editing${e.by ? ' · ' + esc(e.by) : ''}${e.startedAt ? ' · ' + esc(EF.span(Date.now() - e.startedAt)) : ''}</span>`;
-  if (e.status === 'planned') return `<span class="tk-ed plan" title="Edit planned">✂ ${esc(e.by || 'Edit')}${e.planAt ? ' · ' + esc(fmtDay(e.planAt)) : ''}</span>`;
-  if (e.status === 'done') return `<span class="tk-ed ok" title="Edit done${e.by ? ' by ' + esc(e.by) : ''}">✂ Edit done</span>`;
-  return '';
+  const ks = cutsOfCard(x);
+  if (!ks.length) return '';
+  const es = ks.map(k => EF.cutEdit(x, k));
+  const act = es.filter(e => e.status === 'active').length, done = es.filter(e => e.status === 'done').length;
+  if (!act && !done && !es.some(e => e.status)) return '';
+  return `<span class="tk-ed${act ? ' act' : done === ks.length ? ' ok' : ' plan'}" title="${esc(ks.map(k => EF.cutLabel(x, k) + ': ' + EF.EDIT_LABEL[EF.cutEdit(x, k).status]).join(' · '))}">✂ ${act ? act + ' editing · ' : ''}${done}/${ks.length} cut${ks.length === 1 ? '' : 's'} done</span>`;
 }
 const meName = () => myAgent || personName(currentUserEmail);
+// The card's Edit section: a row per cut — editor, days, status, its post date — and the FB switch.
 function editSectionHtml(x) {
-  const e = EF.editOf(x), log = EF.editLogOf(x), c = edCtx(x), pr = EF.priority(x, c, Date.now(), config.dueSoonDays);
-  const kv = (k, v) => `<div class="tk-kv"><span>${k}</span>${v}</div>`;
-  const btn = (label, js, cls) => `<button type="button" class="tk-btn${cls ? ' ' + cls : ''}" onclick="${js}">${label}</button>`;
+  const now = Date.now(), ks = cutsOfCard(x);
+  const btn = (label, js, cls) => `<button type="button" class="tk-btn sm${cls ? ' ' + cls : ''}" onclick="${js}">${label}</button>`;
+  const rows = ks.map(k => {
+    const e = EF.cutEdit(x, k), c = edCtx(x, k), log = EF.cutLog(x, k);
+    const st = e.status === 'active' && e.startedAt ? `Editing · ${EF.span(now - e.startedAt)}` : EF.EDIT_LABEL[e.status];
+    return `<div class="tk-cutrow">
+      <div class="tk-cut-n">${cutIcon(k)} <b>${esc(EF.cutLabel(x, k))}</b></div>
+      <div class="tk-cut-s"><b class="tk-ed-s ${e.status || 'none'}">${esc(st)}</b>${e.by ? ` · ${esc(e.by)}` : ''}${e.planAt ? ` · edit ${esc(fmtDay(e.planAt))}` : ''}${e.dueAt ? ` · deliver ${esc(fmtDay(e.dueAt))}` : ''}${e.doneAt ? ` · done ${esc(fmtDay(e.doneAt))}${e.startedAt ? ' (' + esc(EF.span(e.doneAt - e.startedAt)) + ')' : ''}` : ''}
+        <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : k === 'collab' ? '' : 'No post in Posting yet'}${log.length ? ` · ${log.length} earlier edit${log.length === 1 ? '' : 's'}` : ''}</span></div>
+      <div class="tk-cut-a">
+        ${btn(e.status && e.status !== 'done' ? 'Plan…' : 'Plan', `openEditPlan('${x.id}','${k}')`)}
+        ${e.status !== 'active' ? btn(e.status === 'done' ? 'Edit again' : 'Start', `edStep('${x.id}','start',null,'${k}')`, e.status === 'planned' ? 'primary' : '') : ''}
+        ${e.status === 'active' ? btn('Done', `edStep('${x.id}','done',null,'${k}')`, 'primary') : ''}
+        ${e.status ? btn('Clear', `edStep('${x.id}','reset',null,'${k}')`, 'ghost') : ''}
+      </div>
+    </div>`;
+  }).join('');
   return `<div class="tk-sec" id="dpEdit">
-    <div class="tk-sec-hdr">Edit</div>
-    ${kv('Status', `<b class="tk-ed-s ${e.status || 'none'}">${esc(EF.EDIT_LABEL[e.status])}</b>${e.status === 'active' && e.startedAt ? ` <span class="tk-rel">for ${esc(EF.span(Date.now() - e.startedAt))}</span>` : ''}`)}
-    ${kv('Editor', e.by ? `<b>${esc(e.by)}</b>` : '<i>not assigned</i>')}
-    ${e.planAt ? kv('Edit day', esc(fmtDay(e.planAt))) : ''}
-    ${kv('Deliver by', e.dueAt ? `<b class="${pr.what === 'delivery' && pr.late ? 'tk-miss' : ''}">${esc(fmtDay(e.dueAt))}</b>` : '<i>not set</i>')}
-    ${kv('Post date', c.postAt ? `${esc(postWhen(c))} <span class="tk-sub2">from Posting</span>` : '<i>not planned in Posting</i>')}
-    ${e.startedAt ? kv('Started', esc(fmtDateTime(e.startedAt))) : ''}${e.doneAt ? kv('Finished', esc(fmtDateTime(e.doneAt)) + (e.startedAt ? ` <span class="tk-sub2">took ${esc(EF.span(e.doneAt - e.startedAt))}</span>` : '')) : ''}
-    <div class="tk-btnrow">
-      ${btn(e.status && e.status !== 'done' ? 'Change plan' : 'Plan the edit', `openEditPlan('${x.id}')`)}
-      ${e.status !== 'active' ? btn(e.status === 'done' ? 'Edit again' : 'Start editing', `edStep('${x.id}','start')`, e.status === 'planned' ? 'primary' : '') : ''}
-      ${e.status === 'active' ? btn('Edit done', `edStep('${x.id}','done')`, 'primary') : ''}
-      ${e.status ? btn('Clear', `edStep('${x.id}','reset')`, 'ghost') : ''}
-    </div>
-    ${log.length ? `<div class="tk-hint" style="margin-top:8px">Earlier edits: ${log.slice(0, 5).map(l => `${esc(l.by || '—')} · ${esc(fmtDay(l.doneAt))}${l.startedAt ? ' (' + esc(EF.span(l.doneAt - l.startedAt)) + ')' : ''}`).join(' · ')}</div>` : ''}
+    <div class="tk-sec-hdr">Edit — per outlet</div>
+    <div class="tk-hint" style="margin:-3px 0 9px">Each outlet is its own cut: its own editor, days and status. Plan the outlets on Shoot for above, or here.</div>
+    ${rows || '<div class="tk-hint">No outlet planned yet — tick what this is cut for in Shoot for, or plan an edit.</div>'}
+    <div class="tk-btnrow">${btn('Plan edits…', `openEditPlan('${x.id}')`)}</div>
+    <label class="tk-check" style="margin-top:8px"><input type="checkbox" ${EF.fbOwnCut(x) ? 'checked' : ''} onchange="setFbOwnCut('${x.id}', this.checked)"> FB Reel has its own cut <span class="tk-sub2">(otherwise it is the Insta Reel's video)</span></label>
   </div>`;
 }
+function setFbOwnCut(id, on) {
+  const x0 = listings.find(l => l.id === id); if (!x0) return;
+  if (!on && EF.cutEdit({ ...x0, fbOwnCut: true }, 'fbReel').status === 'active' && !confirm('The FB Reel is being edited as its own cut. Make it the Insta Reel’s video again?')) { openDetail(id); return; }
+  mutate(id, l => {
+    const reel = (l.cuts || {}).igReel;
+    // Its own cut now: it starts where the Insta Reel's stands. Back to the Reel's: "made" follows the Reel.
+    if (on && reel && !(l.cuts || {}).fbReel) l.cuts = { ...l.cuts, fbReel: { ...reel, log: [], shared: true } };
+    l.fbOwnCut = !!on;
+    if (!on && forPlanned(l, 'fbReel')) l.forDone = { ...(l.forDone || {}), fbReel: EF.cutEdit(l, 'igReel').status === 'done' };
+  }, on ? 'FB Reel: its own cut' : 'FB Reel: the Insta Reel’s cut');
+  if (currentDetailId === id) openDetail(id);
+}
+window.setFbOwnCut = setFbOwnCut;
 const ED_HIST = { plan: 'Edit planned', start: 'Editing started', done: 'Edit done', reset: 'Edit plan cleared', assign: 'Editor changed' };
-function edStep(id, action, opts) {
+// One cut moved along. With no cut named, the card's only cut — or the plan, to pick.
+function edStep(id, action, opts, k) {
   const x = listings.find(l => l.id === id); if (!x) return;
-  if (action === 'reset' && EF.editOf(x).status === 'active' && !confirm('This card is being edited. Clear its edit?')) return;
-  const r = EF.setEdit(x, action, opts || {}, Date.now(), meName());
-  if (!r.ok) { if (/Pick who/.test(r.error)) return openEditPlan(id); return toast(r.error); }
-  mutate(id, l => { l.edit = r.edit; l.editLog = r.editLog; }, `${ED_HIST[action]}${r.edit.by ? ' — <b>' + esc(r.edit.by) + '</b>' : ''}`);
+  if (!k) { const ks = cutsOfCard(x); if (ks.length !== 1) return openEditPlan(id); k = ks[0]; }
+  if (action === 'reset' && EF.cutEdit(x, k).status === 'active' && !confirm(`The ${EF.cutLabel(x, k)} is being edited. Clear its edit?`)) return;
+  const r = EF.setCut(x, k, action, opts || {}, Date.now(), meName());
+  if (!r.ok) { if (/Pick who/.test(r.error)) return openEditPlan(id, k); return toast(r.error); }
+  mutate(id, l => { Object.assign(l, r.patch); foldInsta(l); }, `${EF.cutLabel(x, k)}: ${ED_HIST[action]}${r.edit.by ? ' — <b>' + esc(r.edit.by) + '</b>' : ''}`);
   if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
-  toast(ED_HIST[action]);
+  toast(`${EF.cutLabel(x, k)}: ${ED_HIST[action]}`);
 }
 window.edStep = edStep;
 
-// ── Plan the edit: who, which day, delivered by when ──
+// ── Plan edits: which outlets, who, which day, delivered by when ──
 let edPlanFor = null;
 const dateIn = ts => { if (!ts) return ''; const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
-function openEditPlan(id) {
+function openEditPlan(id, k) {
   const x = listings.find(l => l.id === id); if (!x) return;
   edPlanFor = id;
-  const e = EF.editOf(x), c = edCtx(x);
+  // Every outlet can be planned here; ticked: the one asked for, else those still to plan.
+  const have = cutsOfCard(x);
+  const all = [...(have.includes('all') ? ['all'] : []), ...EF.CUTS.map(c => c[0]).filter(c => c !== 'fbReel' || EF.fbOwnCut(x))];
+  const pick = k ? [k] : have.filter(c => !EF.cutEdit(x, c).status);
+  const first = pick[0] || have[0] || 'igReel';
+  const e = EF.cutEdit(x, first), c = edCtx(x, first);
   const people = editorPeople();
   const cur = e.by || (isSeriesCard(x) ? '' : x.shootAssignee) || myAgent || '';
   if (cur && !people.some(n => sameName(n, cur))) people.unshift(cur);
   document.getElementById('edTitle').textContent = 'Plan the edit — ' + cardName(x);
+  document.getElementById('edCuts').innerHTML = all.map(c2 => {
+    const s = EF.cutEdit(x, c2).status;
+    return `<label class="ed-cutpick${pick.includes(c2) ? ' on' : ''}"><input type="checkbox" value="${c2}" ${pick.includes(c2) ? 'checked' : ''} onchange="this.parentElement.classList.toggle('on', this.checked)">${cutIcon(c2)} ${esc(EF.cutLabel(x, c2))}${s ? ` <span class="tk-sub2">· ${esc(EF.EDIT_LABEL[s])}</span>` : ''}</label>`;
+  }).join('');
   document.getElementById('edWho').innerHTML = '<option value="">Pick the editor…</option>' + people.map(n => `<option value="${esc(n)}"${sameName(n, cur) ? ' selected' : ''}>${esc(n)}</option>`).join('');
   document.getElementById('edDay').value = dateIn(e.planAt);
-  // Deliver by: as set, else from the post day in Posting (Settings → Configurations says how).
+  // Deliver by: as set, else from that outlet's post day in Posting (Settings → Configurations says how).
   document.getElementById('edDue').value = dateIn(e.dueAt || CFG.defaultDelivery(config, c.postAt));
   document.getElementById('edNote').value = e.note || '';
-  document.getElementById('edPost').innerHTML = c.postAt ? `Post <b>${esc(postWhen(c))}</b> in Posting — deliver before it.` : 'No post date in Posting yet.';
+  document.getElementById('edPost').innerHTML = c.postAt ? `${esc(EF.cutLabel(x, first))} post <b>${esc(postWhen(c))}</b> in Posting — deliver before it.` : 'No post date in Posting yet for it.';
   document.getElementById('edErr').textContent = '';
   document.getElementById('edModal').classList.add('open');
 }
@@ -2890,32 +2955,38 @@ function saveEditPlan() {
   const x = listings.find(l => l.id === edPlanFor); if (!x) return closeEditPlan();
   const v = id => document.getElementById(id).value.trim();
   const day = s => { if (!s) return 0; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+  const ks = [...document.querySelectorAll('#edCuts input:checked')].map(i => i.value);
   const by = v('edWho'), planAt = day(v('edDay')), dueAt = day(v('edDue')), note = v('edNote');
-  if (!by) { document.getElementById('edErr').textContent = 'Pick who edits it.'; return; }
-  if (planAt && dueAt && dueAt < planAt) { document.getElementById('edErr').textContent = 'The delivery date is before the edit day.'; return; }
-  const e = EF.editOf(x);
-  // Planned or being edited: change the plan and keep where it stands. Otherwise plan it.
-  const r = e.status === 'planned' || e.status === 'active'
-    ? { ok: true, edit: { ...e, by, planAt, dueAt, note }, editLog: EF.editLogOf(x) }
-    : EF.setEdit(x, 'plan', { by, planAt, dueAt, note }, Date.now(), meName());
-  if (!r.ok) { document.getElementById('edErr').textContent = r.error; return; }
-  const id = x.id;
+  const err = m => { document.getElementById('edErr').textContent = m; };
+  if (!ks.length) return err('Tick the outlets this plan is for.');
+  if (!by) return err('Pick who edits it.');
+  if (planAt && dueAt && dueAt < planAt) return err('The delivery date is before the edit day.');
+  // Each outlet: planned or being edited — the plan changes, where it stands is kept; else it is planned.
+  let y = { ...x, cuts: EF.cutsView(x) };
+  for (const k of ks) {
+    const r = EF.setCut(y, k, 'details', { by, planAt, dueAt, note }, Date.now(), meName());
+    if (!r.ok) return err(r.error);
+    y = { ...y, ...r.patch };
+  }
+  const id = x.id, patch = { cuts: y.cuts, forDone: y.forDone, forPlan: y.forPlan };
   closeEditPlan();
-  mutate(id, l => { l.edit = r.edit; l.editLog = r.editLog; }, `Edit planned — <b>${esc(by)}</b>${planAt ? ', ' + esc(fmtDay(planAt)) : ''}${dueAt ? ', deliver by ' + esc(fmtDay(dueAt)) : ''}`);
+ mutate(id, l => { Object.assign(l, patch); foldInsta(l); }, `Edit planned — ${esc(ks.map(k => EF.cutLabel(x, k)).join(', '))} — <b>${esc(by)}</b>${planAt ? ', ' + esc(fmtDay(planAt)) : ''}${dueAt ? ', deliver by ' + esc(fmtDay(dueAt)) : ''}`);
   if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
-  toast('Edit planned');
+  toast(`Edit planned: ${ks.map(k => EF.cutLabel(x, k)).join(', ')}`);
 }
 Object.assign(window, { openEditPlan, closeEditPlan, saveEditPlan });
 
 // ═══════ EDITOR VIEW ═══════
-// The same cards in the editor's columns — what to shoot, what to edit, what is done and booked to
-// post — each with its next deadline (shoot day, delivery date or post day), nearest first, so the
-// person doing the work can put first things first. A track of every editor sits on top: who is
-// editing what right now and for how long, what each has assigned, and what each has delivered.
+// The cuts in the editor's columns — what to shoot, what to edit, what is done and booked to post —
+// each with its next deadline (shoot day, delivery date or that outlet's post day), nearest first. A
+// property not shot yet, or shot with outlets still to plan, is one card in the shoot columns; from
+// "Planned to edit" on, each outlet is its own card (Reel, YouTube…), moving along on its own. A track
+// of every editor sits on top: what each is editing now and for how long, assigned, delivered.
 let edPerson = '';
 try { edPerson = localStorage.getItem('track.edPerson') || ''; } catch (e) {}
 let edPastAll = false;
 let edCheck = '';   // the checklist filter: '' · 'post' (no post planned yet) · 'edit' (no edit planned)
+let edDragCut = null;   // the cut a dragged Editor card is
 window.setEdCheck = v => { edCheck = ['post', 'edit'].includes(v) ? v : ''; renderEditor(); };
 function setEdPerson(v) {
   edPerson = edPerson && sameName(edPerson, v) ? '' : String(v || '');
@@ -2924,32 +2995,37 @@ function setEdPerson(v) {
 }
 window.setEdPerson = setEdPerson;
 window.edPastToggle = () => { edPastAll = !edPastAll; renderEditor(); };
-// What the Editor view needs to know about a card: its stage, whether it is shot (a series: all its
-// properties), its shoot date, and its posts in Posting.
-function edCtx(x) {
+// What the Editor view needs to know about a card — or one cut of it (k): its stage, whether it is shot
+// (a series: all its properties), its shoot date, and its posts in Posting (a cut: its outlet's only).
+function edCtx(x, k) {
   const stageKey = P.stageKeyOf(stageById(x.stageId));
-  const posts = (window.pgPostsFor && window.pgPostsFor(x)) || { total: 0, scheduled: 0, live: 0, planned: 0 };
+  const posts = (window.pgPostsFor && window.pgPostsFor(x, k ? EF.channelsOfCut(x, k) : null)) || { total: 0, scheduled: 0, live: 0, planned: 0, channels: [] };
   const postAt = posts.nextAt || posts.planDay || 0;
+  const left = k ? (EF.cutPlanned(x, k) && EF.cutEdit(x, k).status !== 'done' ? 1 : 0) : cutsLeft(x);
+  const base = { stageKey, posts, postAt, postTimed: !!posts.nextAt, cutsLeft: left, now: Date.now() };
   if (isSeriesCard(x)) {
-    const ms = memberCards(x), left = ms.filter(m => !m.shot);
-    const next = left.map(m => m.shootAt).filter(Boolean).sort((a, b) => a - b)[0] || 0;
-    return { stageKey, shot: ms.length >= 2 && !left.length, shootPlanned: true, shootAt: next, posts, postAt, postTimed: !!posts.nextAt, cutsLeft: cutsLeft(x) };
+    const ms = memberCards(x), notShot = ms.filter(m => !m.shot);
+    const next = notShot.map(m => m.shootAt).filter(Boolean).sort((a, b) => a - b)[0] || 0;
+    return { ...base, shot: ms.length >= 2 && !notShot.length, shootPlanned: true, shootAt: next };
   }
-  return { stageKey, shot: isShot(x), shootPlanned: !!x.shootAt || stageKey === 'shoot_scheduled', shootAt: x.shootAt || 0, posts, postAt, postTimed: !!posts.nextAt, cutsLeft: cutsLeft(x) };
+  return { ...base, shot: isShot(x), shootPlanned: !!x.shootAt || stageKey === 'shoot_scheduled', shootAt: x.shootAt || 0 };
 }
 // Who can edit: the editors set in Settings first, then the shoot team (and anyone already editing).
 function editorPeople(withPast) {
   const out = [];
-  for (const n of [...config.editors, ...shootPeople().map(p => p.name), ...(withPast ? listings.map(x => EF.editOf(x).by) : [])]) {
+  const past = withPast ? listings.flatMap(x => cutsOfCard(x).map(k => EF.cutEdit(x, k).by)) : [];
+  for (const n of [...config.editors, ...shootPeople().map(p => p.name), ...past]) {
     if (n && !out.some(o => sameName(o, n))) out.push(n);
   }
   return out;
 }
 const cutsLeft = x => FOR_KEYS.filter(([k]) => forPlanned(x, k) && !forMade(x, k)).length;
-// Whose a card is, in the editor's eyes: the editor once there is one, before that whoever shoots it.
-function edWho(x) {
-  const e = EF.editOf(x);
-  if (e.by) return [e.by];
+// A cut as the edit rules read it (the card's own source for "edited before" kept).
+const cutPseudo = (x, k) => ({ id: x.id, edit: EF.cutEdit(x, k), editLog: EF.cutLog(x, k), source: x.source });
+// Whose an item is: a cut's editor; before that, whoever shoots the property.
+function edWho(it) {
+  if (it.k) { const e = EF.cutEdit(it.x, it.k); if (e.by) return [e.by]; }
+  const x = it.x;
   if (isSeriesCard(x)) return memberCards(x).filter(m => !m.shot).map(m => m.shooter).filter(Boolean);
   return x.shootAssignee ? [x.shootAssignee] : [];
 }
@@ -2958,60 +3034,92 @@ const WHAT = { shoot: 'Shoot', delivery: 'Deliver by', post: 'Post' };
 // A post with a time shows its time; one only planned for a day shows the day.
 const postWhen = c => c.postTimed ? fmtDateTime(c.postAt) : fmtDay(c.postAt) + ' (planned)';
 function edCardHtml(it) {
-  const { x, col, c, pr } = it, e = EF.editOf(x), ser = isSeriesCard(x), now = Date.now();
+  const { x, k, col, c, pr } = it, ser = isSeriesCard(x), now = Date.now();
+  const e = k ? EF.cutEdit(x, k) : EF.normalizeEdit(null);
   const code = ser ? `<span class="tk-code ser">Series · ${seriesInfo(x).members.length}</span>` : (codeChip(x) || '');
-  const due = pr.at ? `<span class="ed-due${pr.late ? ' bad' : pr.today ? ' hot' : pr.soon ? ' warn' : ''}" title="The next deadline for this card">${esc(WHAT[pr.what])} ${esc(pr.what === 'delivery' ? fmtDay(pr.at) : pr.what === 'post' ? postWhen(c) : fmtDateTime(pr.at))}${pr.late ? ' · late' : pr.today ? ' · today' : ''}</span>` : '';
+  const due = pr.at ? `<span class="ed-due${pr.late ? ' bad' : pr.today ? ' hot' : pr.soon ? ' warn' : ''}" title="The next deadline">${esc(WHAT[pr.what])} ${esc(pr.what === 'delivery' ? fmtDay(pr.at) : pr.what === 'post' ? postWhen(c) : fmtDateTime(pr.at))}${pr.late ? ' · late' : pr.today ? ' · today' : ''}</span>` : '';
   const lines = [];
   if (col === 'shoot_planned') {
     if (ser) { const left = memberCards(x).filter(m => !m.shot); lines.push(`📸 ${left.length ? 'To shoot: ' + left.map(m => esc(memLabel(m)) + (m.shootAt ? ' (' + esc(fmtDay(m.shootAt)) + ')' : '')).join(', ') : 'Add the properties in Posting'}`); }
     else lines.push(x.shootAt ? `📸 ${esc(fmtDateTime(x.shootAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}` : '📸 Shoot not booked');
+  } else if (col === 'shoot_done') {
+    if (x.shootDoneAt) lines.push(`📸 Shot ${esc(fmtDay(x.shootDoneAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}`);
+    lines.push(it.cuts && it.cuts.length ? `To plan: ${it.cuts.map(c2 => cutIcon(c2) + ' ' + esc(EF.cutLabel(x, c2))).join(' · ')}` : '<span class="ed-warn">Tick what it is cut for (Shoot for)</span>');
   } else if (e.status === 'active') lines.push(`✂ <b>${esc(e.by || '—')}</b> · editing for ${esc(EF.span(now - e.startedAt))}`);
   else if (e.status === 'planned') lines.push(`✂ <b>${esc(e.by)}</b>${e.planAt ? ' · edit ' + esc(fmtDay(e.planAt)) : ''}`);
-  else if (e.status === 'done') lines.push(`✂ Done${e.by ? ' by ' + esc(e.by) : ''} · ${esc(fmtDay(e.doneAt))}`);
-  else if (col === 'planned') lines.push('<span class="ed-warn">✂ Post day fixed — edit not planned</span>');
-  else if (col === 'shoot_done' && x.shootDoneAt) lines.push(`📸 Shot ${esc(fmtDay(x.shootDoneAt))}${x.shootAssignee ? ' · ' + esc(x.shootAssignee) : ''}`);
-  // The two dates the editor plans by, whichever are known.
-  // (the one already in the deadline chip is not repeated)
-  const dates = [e.dueAt && col !== 'done' && col !== 'scheduled' && pr.what !== 'delivery' ? `Deliver by ${esc(fmtDay(e.dueAt))}` : '', c.postAt && pr.what !== 'post' ? `Post ${esc(postWhen(c))}` : ''].filter(Boolean);
+  else if (e.status === 'done') lines.push(`✂ Done${e.by ? ' by ' + esc(e.by) : ''}${e.doneAt ? ' · ' + esc(fmtDay(e.doneAt)) : ''}`);
+  if (col === 'posted' && c.posts.lastLiveAt) lines.push(`<span class="ed-live">● Live ${esc(fmtDateTime(c.posts.lastLiveAt))}${c.posts.live > 1 ? ` · ${c.posts.live} posts` : ''}</span>`);
+  else if (col === 'planned' && !e.status) lines.push('<span class="ed-warn">✂ Post day fixed — edit not planned</span>');
+  // The two dates the editor plans by, whichever are known (the one in the deadline chip not repeated).
+  const dates = k ? [e.dueAt && col !== 'done' && col !== 'scheduled' && col !== 'posted' && pr.what !== 'delivery' ? `Deliver by ${esc(fmtDay(e.dueAt))}` : '', c.postAt && pr.what !== 'post' ? `Post ${esc(postWhen(c))}` : ''].filter(Boolean) : [];
   const b = (label, js, cls) => `<button type="button" class="tk-btn sm${cls ? ' ' + cls : ''}" onclick="event.stopPropagation();${js}">${label}</button>`;
+  const kq = k ? `'${k}'` : 'null';
   const act = {
     shoot_planned: !ser && x.shootAt && !x.shootDoneAt ? b('Shoot done →', `openWrapModal('${x.id}')`) : '',
-    shoot_done: b('Plan edit', `openEditPlan('${x.id}')`, 'primary'),
-    planned: e.status === 'planned' ? b('Start editing', `edStep('${x.id}','start')`, 'primary') + b('Plan…', `openEditPlan('${x.id}')`, 'ghost') : b('Plan edit', `openEditPlan('${x.id}')`, 'primary'),
-    active: b('Edit done', `edStep('${x.id}','done')`, 'primary') + b('Plan…', `openEditPlan('${x.id}')`, 'ghost'),
+    shoot_done: b('Plan edits', `openEditPlan('${x.id}')`, 'primary'),
+    planned: e.status === 'planned' ? b('Start editing', `edStep('${x.id}','start',null,${kq})`, 'primary') + b('Plan…', `openEditPlan('${x.id}',${kq})`, 'ghost') : b('Plan edit', `openEditPlan('${x.id}',${kq})`, 'primary'),
+    active: b('Edit done', `edStep('${x.id}','done',null,${kq})`, 'primary') + b('Plan…', `openEditPlan('${x.id}',${kq})`, 'ghost'),
     done: b('Schedule in Posting', `edPosting('${x.id}')`, 'primary'),
-    scheduled: b('Open in Posting', `edPosting('${x.id}')`)
+    scheduled: b('Open in Posting', `edPosting('${x.id}')`),
+    posted: (c.posts.lastUrl ? `<a class="tk-btn sm primary" href="${esc(c.posts.lastUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">View post ↗</a>` : '') + b('Open in Posting', `edPosting('${x.id}')`)
   }[col] || '';
-  // The two checks: edit planned, post planned. Either can come first; a planned post without a
-  // planned edit is the one to fix.
-  const ck = EF.checks(x, c);
-  const checklist = col === 'shoot_planned' ? '' : `<div class="ed-checks">
+  // The two checks for a cut: its edit planned, its post planned (either can come first).
+  const ck = k ? EF.checks(cutPseudo(x, k), c) : null;
+  const checklist = !ck || col === 'posted' ? '' : `<div class="ed-checks">
     <span class="ed-ck${ck.edit ? ' ok' : ck.gap === 'edit' ? ' bad' : ''}">${ck.edit ? '✓' : '○'} Edit planned</span>
     <span class="ed-ck${ck.post ? ' ok' : ''}">${ck.post ? '✓' : '○'} Post planned</span></div>`;
-  return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"
-      aria-label="Open ${esc(cardName(x))}" ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+  const vo = k && forVoice(x, k) === 'vo' && !forVoMade(x, k) ? '<span class="ed-cut vo">V/O to make</span>' : '';
+  return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"${k ? ` data-cut="${k}"` : ''}
+      aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="ed-top">${code}${due}</div>
     <div class="ed-name">${esc(cardName(x))}</div>
+    ${k ? `<div class="ed-cutname">${cutIcon(k)} ${esc(EF.cutLabel(x, k))}${vo}</div>` : ''}
     ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
     ${dates.length ? `<div class="ed-dates">${dates.join(' · ')}</div>` : ''}
     ${checklist}
-    ${cutsHtml(x)}
     ${act ? `<div class="ed-acts">${act}</div>` : ''}
   </div>`;
 }
-// Every card in the editor's world, with its column and deadline.
+window.edSetDragCut = k => { edDragCut = k; };
+// Everything in the editor's world: one item per property in the shoot columns, one per cut after.
 function edItems(list) {
   const now = Date.now(), out = [];
+  const push = (x, k, col, c, extra) => out.push({ x, k, col, c, pr: EF.priority(k ? cutPseudo(x, k) : x, { ...c, column: col }, now, config.dueSoonDays), ...(extra || {}) });
   for (const x of list) {
-    const c = edCtx(x), col = EF.editColumn(x, c);
-    if (!col) continue;
-    out.push({ x, col, c, pr: EF.priority(x, { ...c, column: col }, now, config.dueSoonDays) });
+    const ks = cutsOfCard(x), whole = edCtx(x);
+    if (!ks.length) { const col = EF.editColumn({}, whole); if (col === 'shoot_planned' || col === 'shoot_done') push(x, null, col, whole, { cuts: [] }); continue; }
+    const shootCol = { shoot_planned: [], shoot_done: [] };
+    for (const k of ks) {
+      const c = edCtx(x, k), e = EF.cutEdit(x, k);
+      // A cut with no outlet to post to (Collab) is finished once its edit is done.
+      if (k === 'collab' && e.status === 'done') continue;
+      const col = EF.editColumn(cutPseudo(x, k), c);
+      if (!col) continue;
+      if (col === 'shoot_planned' || col === 'shoot_done') shootCol[col].push(k);
+      else push(x, k, col, c);
+    }
+    for (const col of ['shoot_planned', 'shoot_done']) if (shootCol[col].length) push(x, null, col, whole, { cuts: shootCol[col] });
   }
   return out;
 }
 function edTrackHtml() {
   const now = Date.now();
-  const tr = EF.editorTrack(listings.filter(x => EF.editOf(x).status || EF.editLogOf(x).length).map(x => ({ x, title: cardName(x) })), now).filter(r => r.name);
+  const items = [];
+  // Every cut the card holds a record for — one no longer planned keeps its history here too.
+  for (const x of listings) {
+    const ks = Object.keys(EF.cutsView(x)).filter(k => k === 'all' || EF.CUTS.some(c => c[0] === k));
+    const own = ks.filter(k => !EF.cutShared(x, k)).map(k => EF.cutEdit(x, k));
+    for (const k of ks) {
+      const p = cutPseudo(x, k), e = p.edit;
+      // A copy of an old edit counts once: a done copy never (its edit is counted where it came from); a
+      // planned or active one only once nothing it was copied with still stands for it.
+      if (EF.cutShared(x, k) && (e.status === 'done' || own.some(o => o.status === e.status && o.by === e.by && o.startedAt === e.startedAt))) continue;
+      // The FB Reel back on the Insta Reel's video: its own plan has no card any more — only its history counts.
+      if (k === 'fbReel' && !EF.fbOwnCut(x) && e.status !== 'done') p.edit = EF.normalizeEdit(null);
+      if (p.edit.status || p.editLog.length) items.push({ x: p, title: `${cardName(x)} · ${EF.cutLabel(x, k)}` });
+    }
+  }
+  const tr = EF.editorTrack(items, now).filter(r => r.name);
   if (!tr.length) return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">Nobody has an edit yet — plan one from a card in Shoot done.</span></div></section>`;
   const tile = r => {
     const on = edPerson && sameName(edPerson, r.name), a = r.active[0];
@@ -3033,9 +3141,9 @@ function renderEditor() {
   if (!host || currentView !== 'board') return;
   if (!stages.length) { host.innerHTML = '<div class="tk-empty"><div class="tk-empty-t">Setting up the board…</div></div>'; return; }
   const all = edItems(filtered);
-  const byPerson = edPerson ? all.filter(it => edWho(it.x).some(n => sameName(n, edPerson))) : all;
+  const byPerson = edPerson ? all.filter(it => edWho(it).some(n => sameName(n, edPerson))) : all;
   // The checklist filter: edited (or edit planned) with no post planned yet, or a post planned with no edit.
-  const gapOf = it => it.col === 'shoot_planned' ? '' : EF.checks(it.x, it.c).gap;
+  const gapOf = it => it.k ? EF.checks(cutPseudo(it.x, it.k), it.c).gap : '';
   const mine = edCheck ? byPerson.filter(it => gapOf(it) === edCheck) : byPerson;
   const nGap = k => byPerson.filter(it => gapOf(it) === k).length;
   const people = editorPeople(true);
@@ -3058,7 +3166,7 @@ function renderEditor() {
       <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''} · nearest deadline first</span>
     </div>
     <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
-      const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || ((b.x.updatedAt || 0) - (a.x.updatedAt || 0)));
+      const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || EF.CUTS.findIndex(c => c[0] === a.k) - EF.CUTS.findIndex(c => c[0] === b.k));
       const nLate = cards.filter(it => it.pr.late).length;
       return `<div class="tk-col ed-col ed-${col.key}">
         <div class="tk-col-hdr"><div class="tk-col-head"><span class="tk-col-title">${esc(col.label)}</span></div><div class="tk-col-rule">${esc(col.hint)}</div>
@@ -3070,21 +3178,22 @@ function renderEditor() {
   </div>`;
   const b = host.querySelector('.ed-board'); if (b && sx) b.scrollLeft = sx;
 }
-// Dropping a card on one of the editor's own columns moves its edit; the others follow the shoot and Posting.
+// Dropping a cut on one of the editor's own columns moves its edit; the others follow the shoot and Posting.
 function edColDrop(e, colKey) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over');
-  const id = draggedId;
-  draggedId = null;
+  const id = draggedId, k = edDragCut;
+  draggedId = null; edDragCut = null;
   const x = listings.find(l => l.id === id); if (!x) return;
   const action = EF.ED_DROP[colKey];
-  if (!action) return toast(colKey === 'scheduled' ? 'Schedule it in Posting — it moves here by itself' : 'This column follows the shoot');
-  const e0 = EF.editOf(x);
-  if (action === 'plan' && (e0.status === 'planned' || !e0.by)) return e0.status === 'planned' ? null : openEditPlan(id);
+  if (!action) return toast(colKey === 'scheduled' || colKey === 'posted' ? 'Schedule or post it in Posting — it moves here by itself' : 'This column follows the shoot');
+  if (!k) return action === 'plan' ? openEditPlan(id) : toast('Plan its edits first — each outlet then moves on its own');
+  const e0 = EF.cutEdit(x, k);
+  if (action === 'plan' && (e0.status === 'planned' || !e0.by)) return e0.status === 'planned' ? null : openEditPlan(id, k);
   if (action === 'reset' && !e0.status) return;
-  if (action === 'reset' && !confirm('Clear the edit plan for this card?')) return;
+  if (action === 'reset' && !confirm(`Clear the edit plan for the ${EF.cutLabel(x, k)}?`)) return;
   if (action === 'done' && e0.status === 'done') return;
-  edStep(id, action, action === 'plan' ? { by: e0.by, planAt: e0.planAt, dueAt: e0.dueAt } : {});
+  edStep(id, action, action === 'plan' ? { by: e0.by, planAt: e0.planAt, dueAt: e0.dueAt } : {}, k);
 }
 window.edColDrop = edColDrop;
 // To the card's posts in Posting: a series to its block, a property to its row.

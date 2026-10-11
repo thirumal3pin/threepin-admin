@@ -19,6 +19,20 @@ import * as B from './brochure-flow.js';
 import { postGate } from './edit-flow.js';
 
 let trackers = [];
+// The board asks for a card's posts many times a render (each outlet, each card): rows indexed once per
+// change to them — by code, by family, by series — and each answer kept until the rows change.
+let postsIdx = null;
+function postsIndex() {
+  if (postsIdx) return postsIdx;
+  const byCode = new Map(), fam = new Map();
+  for (const t of trackers) {
+    if (!t.repostOf && !G.isSeries(t)) { const k = G.codeKey(t.propertyCode); if (k && !byCode.has(k)) byCode.set(k, t); }
+    const root = t.repostOf || t.id;
+    if (!fam.has(root)) fam.set(root, []);
+    fam.get(root).push(t);
+  }
+  return (postsIdx = { byCode, fam, memo: new Map() });
+}
 const MODES = ['today', 'week', 'sheet', 'cards', 'series'];
 // Older saved choices map onto the new tabs, so nobody lands somewhere unexpected after the update.
 const OLD_MODE = { tasks: 'today', upcoming: 'week', props: 'cards', matrix: 'sheet' };
@@ -111,7 +125,7 @@ window.pgLoaded = () => loaded;
 window.applyPostingSnapshot = list => {
   const next = (Array.isArray(list) ? list : []).map(G.normalizeTracker);
   const same = loaded && sameRows(trackers, next);
-  trackers = next;
+  trackers = next; postsIdx = null;
   loaded = true;
   snapIds = new Set(next.map(t => t.id));
   // Our own write coming back (Firestore echoes every local write): the page already shows it.
@@ -181,6 +195,7 @@ function stage(t) {
   t = { ...t, updatedAt: now(), updatedBy: who() };
   const i = trackers.findIndex(x => x.id === t.id);
   if (i >= 0) trackers[i] = t; else trackers.push(t);
+  postsIdx = null;
   return { t, paths, prev };
 }
 // An update to a row someone else deleted comes back as permission-denied (the rule reads a
@@ -191,7 +206,7 @@ function saveFailed(e, writes) {
   const code = e && e.code;
   const gone = (code === 'permission-denied' || code === 'not-found') && (writes || []).filter(w => w.paths && !snapIds.has(w.t.id));
   if (gone && gone.length) {
-    trackers = trackers.filter(t => !gone.some(w => w.t.id === t.id));
+    trackers = trackers.filter(t => !gone.some(w => w.t.id === t.id)); postsIdx = null;
     badge(); refresh();
     return toast((writes.length > 1 ? 'A row here' : 'This row') + ' was deleted by someone else' + (writes.length > 1 ? ' — nothing was saved' : ''));
   }
@@ -219,7 +234,7 @@ function undoOne(w) {
 function undoAll(writes) {
   return () => {
     for (const w of writes) {
-      if (!w.prev) { trackers = trackers.filter(t => t.id !== w.t.id); window.trackFirebase.deletePosting(w.t.id).catch(deleteFailed); }
+      if (!w.prev) { trackers = trackers.filter(t => t.id !== w.t.id); postsIdx = null; window.trackFirebase.deletePosting(w.t.id).catch(deleteFailed); }
     }
     persistAll(writes.filter(w => w.prev).map(w => { const cur = byId(w.t.id); return cur ? stage(G.copyPaths(cur, w.prev, w.paths)) : null; }));
     badge(); renderPosting(); offerUndo('Undone', null);
@@ -227,7 +242,7 @@ function undoAll(writes) {
 }
 const deleteFailed = e => { console.error(e); toast(e && e.code === 'permission-denied' ? 'You do not have permission to delete this' : 'Could not delete'); };
 function removeRow(id, what) {
-  trackers = trackers.filter(x => x.id !== id);
+  trackers = trackers.filter(x => x.id !== id); postsIdx = null;
   badge(); renderPosting();
   if (what) offerUndo(what, null);
   return window.trackFirebase.deletePosting(id).catch(deleteFailed);
@@ -301,38 +316,63 @@ const serName = s => G.nameOf(s);
 // The small "Series · 3" mark beside a series' name, wherever its name is shown.
 const serBadge = t => (isSer(t) ? `<span class="pg-ser" title="A series: ${membersOf(t).length} properties in one video">Series · ${membersOf(t).length}</span>` : '');
 
-// ── The edit, from the Shoot & Media board ──
-// Where the video for a post stands: planned, being edited (and by whom, for how long), or done.
-function editTag(t) {
+// ── The edit, from the Shoot & Media board — one per outlet (a cut) ──
+// For a post (key = its channel): where that outlet's video stands — planned, being edited (by whom,
+// for how long), or done. Without a key: the property's cuts in short.
+function editTag(t, key) {
   const l = listingOf(t), api = window.trackApi;
-  if (!l || !api || !api.editOf) return '';
-  const e = api.editOf(l);
-  if (e.status === 'active') return `<span class="pg-ed act" title="Being edited now (from the board's Editor view)">✂ Editing${e.by ? ' · ' + esc(e.by) : ''}${e.startedAt ? ' · ' + esc(api.span(now() - e.startedAt)) : ''}</span>`;
-  if (e.status === 'planned') return `<span class="pg-ed plan" title="Edit planned (from the board's Editor view)">✂ Edit planned${e.by ? ' · ' + esc(e.by) : ''}${e.planAt ? ' · ' + esc(G.dayLabel(e.planAt)) : ''}</span>`;
-  if (e.status === 'done') return `<span class="pg-ed ok" title="Edit done${e.by ? ' by ' + esc(e.by) : ''}">✂ Edit done</span>`;
-  return '';
+  if (!l || !api || !api.cutEdit) return '';
+  const one = k => {
+    const e = api.cutEdit(l, k), lab = api.cutLabel(l, k);
+    if (e.status === 'active') return `<span class="pg-ed act" title="${esc(lab)}: being edited now (from the board's Editor view)">✂ ${key ? '' : esc(lab) + ' '}Editing${e.by ? ' · ' + esc(e.by) : ''}${e.startedAt ? ' · ' + esc(api.span(now() - e.startedAt)) : ''}</span>`;
+    if (e.status === 'planned') return `<span class="pg-ed plan" title="${esc(lab)}: edit planned">✂ ${key ? 'Edit planned' : esc(lab) + ' planned'}${e.by ? ' · ' + esc(e.by) : ''}${e.planAt ? ' · ' + esc(G.dayLabel(e.planAt)) : ''}</span>`;
+    if (e.status === 'done') return `<span class="pg-ed ok" title="${esc(lab)}: edit done${e.by ? ' by ' + esc(e.by) : ''}">✂ ${key ? 'Edit done' : esc(lab) + ' done'}</span>`;
+    return key ? `<span class="pg-ed" title="${esc(lab)}: no edit planned yet">✂ Edit not planned</span>` : '';
+  };
+  if (key) {
+    // Nothing to say on a post already live, or one whose card counts as edited before this view.
+    const c = t.channels && t.channels[key];
+    if (c && c.status === 'live') return '';
+    const k = api.cutOfChannel(l, key);
+    if (!api.cutEdit(l, k).status && gateFor(t, 'live', key).ok) return '';
+    return one(k);
+  }
+  return (api.cutsOf ? api.cutsOf(l) : []).map(one).join('');
 }
 
 // Every post of a board card's property (all its rounds) — or of a series card's series — for the
 // board's Editor view: how many, how many with a time, how many live, and the next one.
-window.pgPostsFor = l => {
+window.pgPostsFor = (l, channels) => {
   if (!l) return null;
+  const idx = postsIndex();
+  const code = G.codeKey(l.propertyCode) || G.codeKey(l.brochure && l.brochure.code);
+  const mk = [l.id, l.kind || '', l.postingId || '', code, channels ? channels.join(',') : '*'].join('|');
+  if (idx.memo.has(mk)) return idx.memo.get(mk);
+  const only = channels ? new Set(channels) : null;
   let rows;
   if (l.kind === 'series') {
     const sid = l.postingId || (trackers.find(t => G.isSeries(t) && t.listingId === l.id) || {}).id;
-    rows = sid ? trackers.filter(t => t.id === sid || t.repostOf === sid) : [];
+    rows = sid ? idx.fam.get(sid) || [] : [];
   } else {
-    const k = G.codeKey(l.propertyCode) || G.codeKey(l.brochure && l.brochure.code);
-    const root = k ? trackers.find(t => !t.repostOf && !G.isSeries(t) && G.codeKey(t.propertyCode) === k) : null;
-    rows = root ? trackers.filter(t => t.id === root.id || t.repostOf === root.id) : [];
+    const root = code ? idx.byCode.get(code) : null;
+    rows = root ? idx.fam.get(root.id) || [] : [];
   }
-  const out = { total: 0, scheduled: 0, live: 0, planned: 0, nextAt: 0, nextKey: '', planDay: 0, lastLiveAt: 0, rowId: rows[0] ? rows[0].id : '' };
+  const out = { total: 0, scheduled: 0, live: 0, planned: 0, nextAt: 0, nextKey: '', planDay: 0, lastLiveAt: 0, lastUrl: '', lastKey: '', rowId: rows[0] ? rows[0].id : '', channels: [] };
+  const has = new Set();
   for (const t of rows) for (const k of G.CHANNEL_KEYS) {
+    if (only && !only.has(k)) continue;
     const c = t.channels[k];
-    if (c.status === 'live') { out.total++; out.live++; out.lastLiveAt = Math.max(out.lastLiveAt, c.liveAt || c.at || 0); }
+    if (c.status === 'live' || c.status === 'scheduled' || (c.status === 'yet' && c.day)) has.add(k);
+    if (c.status === 'live') {
+      out.total++; out.live++;
+      const at = c.liveAt || c.at || 0;
+      if (at >= out.lastLiveAt) { out.lastLiveAt = at; out.lastKey = k; out.lastUrl = G.isUrl(c.url) ? c.url : ''; }
+    }
     else if (c.status === 'scheduled') { out.total++; out.scheduled++; if (!out.nextAt || c.at < out.nextAt) { out.nextAt = c.at; out.nextKey = k; } }
     else if (c.status === 'yet' && c.day) { out.total++; out.planned++; if (!out.planDay || c.day < out.planDay) out.planDay = c.day; }
   }
+  out.channels = [...has];
+  idx.memo.set(mk, out);
   return out;
 };
 // A series, for its board card: its name and its properties.
@@ -503,7 +543,7 @@ function voiceTag(t, key) {
 function needsHtml(t, key) {
   if (!t) return '';
   const root = (t.repostOf && origOf(t)) || t;
-  const ed = editTag(t);
+  const ed = editTag(t, key);
   if (G.isSeries(root)) {
     // A series: which of its properties still lack photos or a brochure.
     const ms = membersOf(t), miss = [];
@@ -1549,7 +1589,7 @@ function openDlg(kind, id, key) {
     title = `Schedule ${chan.label}`;
     body = `<p class="tk-hint" style="margin-top:0">${nm}${dayBase ? ' · planned ' + esc(G.dayLabel(dayBase)) : ''}</p>
       <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" value="${localInput(start)}">
-      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${gateHtml(t, 'schedule')}${c && c.status === 'scheduled' ? `
+      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${gateHtml(t, 'schedule', key)}${c && c.status === 'scheduled' ? `
       <div class="pg-unsched">
         <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
         <div class="pg-unsched-b"><button type="button" class="tk-btn sm" onclick="pgUnschedule('yet')">Cancel this schedule</button><button type="button" class="tk-btn sm ghost" onclick="pgUnschedule('na')">Won't post (N/A)</button></div>
@@ -1568,7 +1608,7 @@ function openDlg(kind, id, key) {
       <p class="tk-hint" style="margin-top:4px">Now, unless it went out earlier — then pick when.</p>
       <label for="pgUrl">Link to the live post</label><input id="pgUrl" type="url" value="${esc((c && c.url) || '')}" placeholder="Open the post, copy its link and paste it here" oninput="pgCheckUrl()">
       <div class="pg-pasterow"><button type="button" class="tk-btn sm" onclick="pgPasteLink()"><i class="fa-regular fa-clipboard" aria-hidden="true"></i> Paste copied link</button><span id="pgUrlHint" class="pg-urlhint" role="status"></span></div>
-      <p class="tk-hint warn">You can confirm without the link, but it stays flagged <b>Live — link not shared</b> until you add it.</p>${already ? '' : gateHtml(t, 'live')}`;
+      <p class="tk-hint warn">You can confirm without the link, but it stays flagged <b>Live — link not shared</b> until you add it.</p>${already ? '' : gateHtml(t, 'live', key)}`;
     save.textContent = already ? 'Save' : 'Confirm posted';
   } else if (kind === 'link') {
     const c = t.channels && t.channels[key];
@@ -1832,12 +1872,16 @@ function pgCodeVerdict() {
 // ═══════ THE EDIT BEFORE THE POST ═══════
 // A post with a time needs its edit planned; a post goes live once its edit is done. Read from the
 // property's board card (a series: its card); a property with no card is not held back.
-function gateFor(t, action) {
+// Per outlet: the cut of the channel being posted (the FB Reel follows the Insta Reel's cut).
+function gateFor(t, action, key) {
   const l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
-  return l ? postGate(l, action, api && api.edCtx ? api.edCtx(l) : null) : { ok: true };
+  if (!l || !api || !api.cutEdit || !key) return { ok: true };
+  const k = api.cutOfChannel(l, key);
+  const g = postGate({ id: l.id, edit: api.cutEdit(l, k), source: l.source }, action, api.edCtx ? api.edCtx(l, k) : null);
+  return g.ok ? g : { ...g, text: `${api.cutLabel(l, k)}: ${g.text}` };
 }
-function gateHtml(t, action) {
-  const g = gateFor(t, action);
+function gateHtml(t, action, key) {
+  const g = gateFor(t, action, key);
   if (g.ok) return '';
   return `<div class="pg-gate" id="pgGate">${esc(g.text)}<div>${g.need === 'done'
     ? '<button type="button" class="tk-btn sm primary" onclick="pgEditDone()">The edit is done — mark it</button>'
@@ -1846,15 +1890,16 @@ function gateHtml(t, action) {
 window.pgEditDone = () => {
   const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
   if (!l || !api || !api.editStep) return;
-  api.editStep(l.id, 'done');
+  api.editStep(l.id, 'done', api.cutOfChannel(l, dlg.key));
   const el = $('pgGate');
-  if (el && gateFor(t, 'live').ok) { el.className = 'pg-gate ok'; el.textContent = '✓ Edit marked done — confirm the post below.'; $('pgErr').textContent = ''; }
+  if (el && gateFor(t, 'live', dlg.key).ok) { el.className = 'pg-gate ok'; el.textContent = '✓ Edit marked done — confirm the post below.'; $('pgErr').textContent = ''; }
 };
 window.pgPlanEdit = () => {
   const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null;
   if (!l || !window.openEditPlan) return;
+  const k = window.trackApi && window.trackApi.cutOfChannel ? window.trackApi.cutOfChannel(l, dlg.key) : null;
   closeQuiet();
-  window.openEditPlan(l.id);
+  window.openEditPlan(l.id, k);
   toast('Plan the edit, then schedule the post');
 };
 
@@ -2310,7 +2355,7 @@ window.pgSave = () => {
   let r;
   switch (dlg.kind) {
     case 'schedule': {
-      const gs = gateFor(t, 'schedule'); if (!gs.ok) return err(gs.text);
+      const gs = gateFor(t, 'schedule', k); if (!gs.ok) return err(gs.text);
       const at = $('pgAt').value ? new Date($('pgAt').value).getTime() : 0;
       r = G.setChannel(t, k, 'scheduled', { at }, now());
       if (!r.ok) return err(r.error);
@@ -2318,7 +2363,7 @@ window.pgSave = () => {
     }
     case 'live': {
       // A post goes live once its edit is done (an already-live post is only being corrected).
-      if (!(t.channels[k] && t.channels[k].status === 'live')) { const gl = gateFor(t, 'live'); if (!gl.ok) return err(gl.text); }
+      if (!(t.channels[k] && t.channels[k].status === 'live')) { const gl = gateFor(t, 'live', k); if (!gl.ok) return err(gl.text); }
       const liveAt = $('pgLiveAt') && $('pgLiveAt').value ? new Date($('pgLiveAt').value).getTime() : now();
       if (!liveAt || isNaN(liveAt)) return err('Pick when it went live.');
       if (liveAt > now() + 5 * 60000) return err('That time has not come yet — a post goes live when it is out.');
@@ -2439,7 +2484,8 @@ window.pgSave = () => {
       // A post with a time needs its edit planned (where the property has a board card).
       const held = entries.filter(e => e.at && e.keys.length).map(e => {
         const t0 = e.trackerId ? byId(e.trackerId) : e.inv ? trackedByCode(e.inv.propertyCode) || { id: '', propertyCode: e.inv.propertyCode } : null;
-        return t0 && !gateFor(t0, 'schedule').ok ? (t0.id ? dn(t0) : e.inv.propertyCode) : '';
+        const held = t0 ? e.keys.filter(k => !gateFor(t0, 'schedule', k).ok) : [];
+        return held.length ? `${t0.id ? dn(t0) : e.inv.propertyCode} (${held.map(k => G.SHORT_CH[k]).join(', ')})` : '';
       }).filter(Boolean);
       if (held.length) return err(`Plan the edit first for ${held.join(', ')} — or leave the time empty to plan the day.`);
       const r = G.bulkSchedule(trackers, entries, {}, now(), who());

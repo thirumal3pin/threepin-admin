@@ -7,7 +7,7 @@
 // The board's columns follow a PROPERTY through getting listed. The Editor view follows the same
 // cards through the editor's day instead — same data, other columns:
 //
-//   Shoot planned → Shoot done → Planned to edit → Editing → Edit done → Post scheduled
+//   Shoot planned → Shoot done → Planned to edit → Editing → Edit done → Post scheduled → Posted
 //
 // The first two are read from the shoot, the last from the Posting tab; the middle three are the
 // editor's own, kept on the card:
@@ -29,8 +29,10 @@ export const ED_COLS = [
   { key: 'planned', label: 'Planned to edit / post', hint: 'Edit planned, or a post day fixed in Posting — deliver by the earlier' },
   { key: 'active', label: 'Editing', hint: 'Being edited right now' },
   { key: 'done', label: 'Edit done', hint: 'Ready — schedule it in Posting' },
-  { key: 'scheduled', label: 'Post scheduled', hint: 'In Posting with a date and time' }
+  { key: 'scheduled', label: 'Post scheduled', hint: 'In Posting with a date and time' },
+  { key: 'posted', label: 'Posted', hint: 'Live — shown for a week, then it leaves the view' }
 ];
+export const POSTED_FOR = 7 * 86400000;   // how long a posted card stays in view
 export const ED_KEYS = ED_COLS.map(c => c.key);
 // The columns a card can be dragged into: the editor's own. The others are read, never set.
 export const ED_DROP = { planned: 'plan', active: 'start', done: 'done', shoot_done: 'reset' };
@@ -56,7 +58,8 @@ export function editLogOf(x) {
 }
 
 // ── Moving an edit along ──
-// action: 'plan' ({ by, planAt }) · 'start' ({ by }) · 'done' · 'reset' (back to not planned) · 'assign' ({ by }).
+// action: 'plan' ({ by, planAt }) · 'start' ({ by }) · 'done' · 'reset' (back to not planned) · 'assign' ({ by })
+//   · 'details' ({ by, planAt, dueAt, note } — the status kept) · 'reopen' (done taken back a step).
 // A finished edit that is planned or started again is a new edit: the finished one goes to the log
 // first, so nothing done is ever lost. Returns { ok, edit, editLog } or { ok:false, error }.
 export function setEdit(x, action, opts, now, who) {
@@ -89,6 +92,20 @@ export function setEdit(x, action, opts, now, who) {
       if (!e.status) return setEdit(x, 'plan', { by: o.by, planAt: 0 }, now, who);
       next = { ...e, by: str(o.by) };
       break;
+    case 'details':
+      // Planned or being edited: who, which day, delivered by when, the note — where it stands is kept.
+      if (e.status !== EDIT_STATUS.PLANNED && e.status !== EDIT_STATUS.ACTIVE) return setEdit(x, 'plan', o, now, who);
+      if (!by) return { ok: false, error: 'Pick who edits it.' };
+      if (num(o.dueAt) && num(o.planAt) && num(o.dueAt) < num(o.planAt)) return { ok: false, error: 'The delivery date is before the edit day.' };
+      next = { ...e, by, planAt: num(o.planAt), dueAt: num(o.dueAt), note: str(o.note !== undefined ? o.note : e.note) };
+      break;
+    case 'reopen':
+      // Done taken back: being edited again if it was, else planned — its editor and days kept. A bare
+      // "made" tick (no editor, no time) goes back to not planned.
+      if (e.status !== EDIT_STATUS.DONE) return { ok: false, error: 'Not done.' };
+      next = !e.by && !e.startedAt ? normalizeEdit(null)
+        : { ...e, status: e.startedAt ? EDIT_STATUS.ACTIVE : EDIT_STATUS.PLANNED, doneAt: 0 };
+      break;
     case 'reset':
       next = { status: EDIT_STATUS.NONE, by: '', planAt: 0, dueAt: 0, startedAt: 0, doneAt: 0, note: '' };
       archive();
@@ -112,12 +129,21 @@ export function editColumn(x, ctx) {
   if (parked) return null;
   if (e.status === EDIT_STATUS.PLANNED) return 'planned';
   if (e.status === EDIT_STATUS.DONE) {
+    // It follows Posting: a post with a time → Post scheduled; one only planned for a day → waiting
+    // to be scheduled; posted since this edit → Posted (for a week after, then off the view).
     if (p.scheduled) return 'scheduled';
-    // A post planned for a day (another round, say) and the video is ready: schedule it.
+    // Only a "made" tick from before (no editor, no time) on a card already live or media-ready: edited
+    // before this view existed — not new work waiting to be scheduled.
+    if (!e.doneAt && !e.by && (c.stageKey === 'live' || c.stageKey === 'media_ready')) return null;
     if (p.planned) return c.stageKey === 'closed' ? null : 'done';
-    // Posted since this edit (a post live after it started): a past edit now. A post that went live
-    // before it — an earlier round — does not count: this cut is still waiting to go out.
-    if (p.lastLiveAt && p.lastLiveAt >= (e.startedAt || e.doneAt)) return null;
+    // A post that went live after this edit began counts (a few days' grace, for a post confirmed before
+    // the edit was recorded; an old "made" tick has no time — any post). A re-edit whose earlier round was
+    // posted (the last post came after it): only a post after that earlier edit — that one was not this
+    // cut's. An earlier edit with no post after it (recorded late, or a quick redo) is not a round of its own.
+    const prev = editLogOf(x)[0], start = e.startedAt || e.doneAt;
+    const since = prev && p.lastLiveAt > prev.doneAt ? Math.max(prev.doneAt, start - 86400000) : start ? start - 3 * 86400000 : 0;
+    const after = p.lastLiveAt && p.lastLiveAt > since;
+    if (after) return (c.now || Date.now()) - p.lastLiveAt < POSTED_FOR ? 'posted' : null;
     return c.stageKey === 'closed' ? null : 'done';
   }
   if (c.stageKey === 'closed') return null;
@@ -145,6 +171,7 @@ export function priority(x, ctx, now, soonDays) {
   const soonN = soonDays == null ? 2 : Math.max(0, Number(soonDays) || 0);
   const day0 = startOfDay(now);
   let at = 0, what = '';
+  if (col === 'posted') return { at: 0, what: '', late: false, today: false, soon: false, rank: Infinity };
   if (col === 'shoot_planned') { at = num(c.shootAt); what = 'shoot'; }
   else if (col === 'done' || col === 'scheduled') { at = num(c.postAt); what = 'post'; }
   else if (col) {
@@ -161,6 +188,122 @@ export function priority(x, ctx, now, soonDays) {
   return { at, what, late, today, soon: !late && !today && startOfDay(at) <= day0 + soonN * 86400000, rank: at };
 }
 function startOfDay(ts) { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); }
+
+// ── Cuts: one edit per outlet ──
+// A property is edited per outlet — the Reel on Monday, YouTube on Thursday — and posted per outlet. A
+// CUT is one property × one outlet, with its own edit (the same record as above) kept on the card:
+//   cuts: { igStory|igReel|fbReel|yt|collab: { status, by, planAt, dueAt, startedAt, doneAt, note, log } }
+// The FB Reel is the Insta Reel's video unless the card says otherwise (fbOwnCut): then it is a cut of
+// its own. "Made" on the card's Shoot for is that cut's edit done; the two are kept the same.
+// A card from before cuts: its one edit stands for each outlet planned on it, and a "made" tick is done.
+export const CUTS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
+export const CUT_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+// 'all': a card edited before outlets were split, with no outlet ticked — its one edit stands for every
+// outlet (it shows as "Video") until outlets are planned.
+const ALL_CHANNELS = ['igStory', 'igReel', 'fbReel', 'yt'];
+export const fbOwnCut = x => !!(x && x.fbOwnCut);
+export const cutOfChannel = (x, ch) => (ch === 'fbReel' && !fbOwnCut(x) ? 'igReel' : ch);
+export function channelsOfCut(x, k) {
+  if (k === 'collab') return [];
+  if (k === 'all') return ALL_CHANNELS;
+  if (k === 'igReel') return fbOwnCut(x) ? ['igReel'] : ['igReel', 'fbReel'];
+  return [k];
+}
+export const cutLabel = (x, k) => (k === 'igReel' && !fbOwnCut(x) ? 'Reel + FB' : CUT_SHORT[k] || k);
+const outletPlanned = (x, k) => !!(x && x.forPlan && (x.forPlan[k] || (k === 'igReel' && x.forPlan.insta)));
+const outletMade = (x, k) => !!(x && x.forDone && (x.forDone[k] || (k === 'igReel' && x.forDone.insta)));
+// Is this cut wanted at all: planned on Shoot for (a folded FB Reel counts for the Reel's cut).
+export const cutPlanned = (x, k) => outletPlanned(x, k) || (k === 'igReel' && !fbOwnCut(x) && outletPlanned(x, 'fbReel'));
+// The outlets a cut stands for that are planned (its own key always).
+const cutOutlets = (x, k) => (k === 'collab' ? ['collab'] : k === 'all' ? [] : channelsOfCut(x, k).filter(ch => ch === k || outletPlanned(x, ch)));
+
+// ── A card from before cuts, read ONCE into cuts ──
+// What its old single edit, its log and its Shoot for "made" ticks mean per outlet, as the card stands
+// right now. The board writes this onto the card the first time the card is changed (materializeCuts),
+// so a later tick never changes what an old edit meant. Until then it is read the same way, every time.
+//   · an old edit (planned, being edited or done): it is each planned outlet's (it wins over a tick)
+//   · else every planned outlet of the cut "made": done (a tick — no editor, no time)
+//   · nothing ticked: the old edit stands for the whole video ('all', shown as "Video")
+// The old edit and its log count once (the first outlet); its copies are marked shared.
+export function legacyCuts(x) {
+  const old = editOf(x), log = editLogOf(x), out = {};
+  const keys = CUTS.map(c => c[0]).filter(k => !(k === 'fbReel' && !fbOwnCut(x)) && cutPlanned(x, k));
+  let used = false;
+  for (const k of keys) {
+    const outs = cutOutlets(x, k);
+    const made = outs.length > 0 && outs.every(ch => outletMade(x, ch));
+    let rec = null;
+    if (old.status) {
+      rec = { ...old, log: used ? [] : log };
+      if (used) rec.shared = true;
+      used = true;
+    } else if (made) rec = { ...normalizeEdit({ status: EDIT_STATUS.DONE }), log: [] };
+    if (rec) out[k] = rec;
+  }
+  if (!keys.length && (old.status || log.length)) out.all = { ...old, log };
+  else if (log.length && !used && keys.length) out[keys[0]] = { ...(out[keys[0]] || normalizeEdit(null)), log };
+  return out;
+}
+// The cuts as they are: the card's own once written, else read from its old fields.
+export const cutsView = x => (x && x.cuts && typeof x.cuts === 'object' ? x.cuts : legacyCuts(x || {}));
+// For the board, before its first change to a card from before cuts: the cuts to write (null: none needed).
+export function materializeCuts(x) {
+  if (!x || (x.cuts && typeof x.cuts === 'object')) return null;
+  const c = legacyCuts(x);
+  return Object.keys(c).length ? c : null;
+}
+const cutRecord = (x, k) => { const v = cutsView(x)[k]; return v && typeof v === 'object' ? v : null; };
+// An outlet without an edit of its own, on a card whose old edit stood for the whole video: that edit.
+const recordFor = (x, k) => cutRecord(x, k) || (k !== 'all' ? cutRecord(x, 'all') : null);
+export function cutEdit(x, k) { return normalizeEdit(recordFor(x, k)); }
+export const cutLog = (x, k) => editLogOf({ editLog: (recordFor(x, k) || {}).log });
+export const cutShared = (x, k) => !!(cutRecord(x, k) || {}).shared;
+// The cuts a card has: planned on Shoot for, with an edit under way or done, or with a post in Posting
+// (postChannels: the channels with a planned, scheduled or live post), in the outlets' order. A cut
+// cleared and no longer planned goes. "Video" only while no outlet is.
+export function cutKeys(x, postChannels) {
+  const posts = new Set(postChannels || []), keys = new Set();
+  for (const [k] of CUTS) {
+    if (k === 'fbReel' && !fbOwnCut(x)) continue;
+    const rec = cutRecord(x, k);
+    if (cutPlanned(x, k) || (rec && rec.status && !rec.shared) || channelsOfCut(x, k).some(ch => posts.has(ch))) keys.add(k);
+  }
+  const out = CUTS.map(c => c[0]).filter(k => keys.has(k));
+  if (!out.length && (cutRecord(x, 'all') || {}).status) return ['all'];
+  return out;
+}
+// One cut moved along (setEdit's steps). Returns { ok, patch } for the card — every cut (an old card's
+// read into cuts in the same write), and Shoot for kept the same: the cut's outlets planned, "made"
+// while its edit is done; an old "Instagram" tick folded into the Reel.
+// The cuts, with outlet k holding a record of its own. On a card whose old edit stood for the whole video
+// ('all'), the first outlet worked on splits it: k takes the old edit and its history, every other outlet
+// a copy marked shared (counted once), and 'all' is emptied — each outlet then moves on its own.
+export function ownCuts(x, k) {
+  const base = { ...cutsView(x) }, all = base.all;
+  if (k === 'all' || cutRecord(x, k) || !all || !(all.status || (all.log || []).length)) return base;
+  for (const [c] of CUTS) {
+    if (c === 'fbReel' && !fbOwnCut(x)) continue;
+    if (!base[c]) base[c] = c === k ? { ...all, shared: false } : { ...all, log: [], shared: true };
+  }
+  base.all = { ...normalizeEdit(null), log: [], shared: true };
+  return base;
+}
+export function setCut(x, k, action, opts, now, who) {
+  if (k !== 'all' && !CUTS.some(c => c[0] === k)) return { ok: false, error: 'Unknown outlet' };
+  const base = ownCuts(x, k), rec = base[k] || {};
+  const r = setEdit({ edit: rec, editLog: rec.log }, action, opts, now, who);
+  if (!r.ok) return r;
+  // A copy of an edit counted on another outlet: what it held is not this outlet's history.
+  if (rec.shared) r.editLog = [];
+  const fold = m => { const o = { ...((x && x[m]) || {}) }; if (o.insta) { o.igReel = true; o.insta = false; } return o; };
+  const forDone = fold('forDone'), forPlan = fold('forPlan');
+  for (const ch of (k === 'collab' ? ['collab'] : k === 'all' ? [] : channelsOfCut(x, k))) {
+    if (action !== 'reset' && (ch === k || forPlan[ch])) forPlan[ch] = true;
+    if (ch === k || forPlan[ch]) forDone[ch] = r.edit.status === EDIT_STATUS.DONE;
+  }
+  // shared written every time: the save merges into the stored card, and an old true would stay.
+  return { ok: true, edit: r.edit, patch: { cuts: { ...base, [k]: { ...r.edit, log: r.editLog, shared: false } }, forDone, forPlan } };
+}
 
 // ── The two checks: is the edit planned, is the post planned ──
 // An editor can edit in free time and the post be scheduled later, or the post day be fixed first:
