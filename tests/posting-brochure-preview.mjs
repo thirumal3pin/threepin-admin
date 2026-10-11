@@ -23,6 +23,7 @@ const LISTINGS = [
 ];
 const INV = [
   { id: 'TNAG0003', propertyCode: 'TNAG0003', name: '3BHK T Nagar', location: 'T Nagar' },
+  { id: 'ADB0001', propertyCode: 'ADB0001', name: 'Corporate Lease', location: 'Adambakkam', photosLink: 'https://drive.google.com/drive/folders/c', detailsText: '8 apartments', brochureLink: 'https://drive.google.com/file/d/c/view' },
   { id: 'TNAG0007', propertyCode: 'TNAG0007', name: 'Villa T Nagar', location: 'T Nagar', photosLink: 'https://drive.google.com/drive/folders/v', detailsText: 'villa', brochureLink: 'https://drive.google.com/file/d/villa/view' }
 ];
 const mk = o => ({ tenantId: T, channels: {}, brochure: { done: false }, acres99: { status: 'pending' }, website: { status: 'pending' }, createdAt: NOW - 5 * DAY, ...o });
@@ -36,7 +37,11 @@ const TRACKERS = [
   // A plan line whose property turns out to be TNAG0007 — already in the dashboard with its brochure.
   mk({ id: 'pW', reference: 'Villa in T Nagar', channels: { yt: { status: 'scheduled', at: NOW + DAY } } }),
   mk({ id: 'pX', reference: 'Duplex Anna Nagar', channels: { igReel: { status: 'scheduled', at: NOW + DAY } } }),
-  mk({ id: 'pT', reference: 'Typo row', channels: { igReel: { status: 'scheduled', at: NOW + DAY } } })
+  mk({ id: 'pT', reference: 'Typo row', channels: { igReel: { status: 'scheduled', at: NOW + DAY } } }),
+  // Linked to ADB0001 but its code was left half-typed ("AD"): the code must be the property's.
+  mk({ id: 'pAD', propertyCode: 'AD', propertyId: 'ADB0001', title: 'Corporate Lease', channels: {} }),
+  // Not linked yet; linked from the picker below.
+  mk({ id: 'pL', propertyCode: 'XX', title: 'Something', channels: {} })
 ];
 const STUB = `
 window.__saved = []; window.__listings = []; window.__inv = ${JSON.stringify(INV)}; window.__forms = 0;
@@ -183,6 +188,19 @@ await p.evaluate(() => pgUnlink('pN')); await p.waitForTimeout(100);
 await p.evaluate(() => pgMode('today')); await p.waitForTimeout(100);
 ok('Unlinked by hand: not linked back by itself', !((await row(p, 'pN')) || {}).propertyId);
 await p.close();
+
+console.log('code, details and brochure from the same property');
+{
+  const q = await open({ width: 1440, height: 950 });
+  await q.waitForTimeout(300);
+  const ad = await q.evaluate(() => window.__saved.filter(x => x.id === 'pAD').pop());
+  ok('A row linked to ADB0001 with a wrong code ("AD") takes ADB0001 by itself', ad && ad.propertyCode === 'ADB0001' && ad.propertyId === 'ADB0001', JSON.stringify(ad && ad.propertyCode));
+  await q.evaluate(() => { pgOpenLink('pL'); }); await q.waitForTimeout(200);
+  await q.evaluate(() => pgPick('TNAG0007')); await q.waitForTimeout(150);
+  const l = await q.evaluate(() => window.__saved.filter(x => x.id === 'pL').pop());
+  ok('Linking a row to a property sets its code to that property\'s', l && l.propertyCode === 'TNAG0007' && l.propertyId === 'TNAG0007');
+  await q.close();
+}
 
 console.log('a wrong code on a row whose posts are right → change the code, the posts stay');
 {

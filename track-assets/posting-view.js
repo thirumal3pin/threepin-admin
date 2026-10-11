@@ -1481,9 +1481,17 @@ window.pgListing = (id, key, status) => {
 };
 // Unlinked by hand: it stays unlinked — the automatic link (after a brochure) leaves it alone.
 window.pgUnlink = id => { const t = byId(id); if (t) persist({ ...t, propertyId: '', noAutoLink: true }); };
+// Linking a row to a dashboard property makes it that property: its code too, not only its details —
+// code, details and brochure always come from the same property.
+function linkTo(t, p) {
+  const c = G.setCode(trackers, t.id, p.propertyCode);
+  if (!c.ok) { toast(c.error); return false; }
+  persist(fillFrom({ ...t, propertyCode: p.propertyCode, propertyId: p.id, noAutoLink: false }, p), 'Linked to ' + p.propertyCode);
+  return true;
+}
 window.pgLinkTo = (id, propId) => {
-  const t = byId(id); const p = inv && inv.find(x => x.id === propId); if (!t || !p) return;
-  persist(fillFrom({ ...t, propertyId: p.id, noAutoLink: false }, p), 'Linked to the Property dashboard');
+  const t = byId(id); const p = invList().find(x => x.id === propId); if (!t || !p) return;
+  linkTo(t, p);
 };
 // In-place edits from the sheet.
 window.pgSetName = (id, v) => {
@@ -1981,12 +1989,21 @@ function linkRow(id, p) {
 }
 // Once a brochure is delivered its property is in the dashboard: rows with that code are linked to
 // it by themselves — once per row per visit, so a link someone removed is not put straight back.
-const autoTried = new Set();
+const autoTried = new Set(), codeFixed = new Set();
 function autoLink() {
   const invL = invList();
   if (!invL.length) return;
-  let byCode = null;
+  let byCode = null, byId = null;
   for (const t of trackers) {
+    // Linked to a property, but its code is not that property's: the code is put right.
+    if (!t.repostOf && !G.isSeries(t) && t.propertyId && !codeFixed.has(t.id)) {
+      if (!byId) byId = new Map(invL.map(q => [q.id, q]));
+      const p = byId.get(t.propertyId);
+      if (p && B.isRealCode(p.propertyCode) && B.codeKey(p.propertyCode) !== B.codeKey(t.propertyCode)) {
+        codeFixed.add(t.id);
+        if (G.setCode(trackers, t.id, p.propertyCode).ok) persist({ ...t, propertyCode: p.propertyCode }, '', true);
+      }
+    }
     if (t.repostOf || G.isSeries(t) || t.propertyId || t.noAutoLink || !t.propertyCode || autoTried.has(t.id)) continue;
     if (!byCode) { byCode = new Map(); for (const q of invL) { const k = B.codeKey(q.propertyCode); if (k && !byCode.has(k)) byCode.set(k, q); } }
     const p = byCode.get(B.codeKey(t.propertyCode));
@@ -2127,7 +2144,7 @@ window.pgPick = propId => {
   const p = inv && inv.find(x => x.id === propId); if (!p) return;
   if (dlg.kind === 'linkpick') {
     const t = byId(dlg.id); if (!t) return;
-    persist(fillFrom({ ...t, propertyId: p.id }, p), 'Linked to the Property dashboard');
+    if (!linkTo(t, p)) return;
     return closeQuiet();
   }
   if (!G.trackerId(p.propertyCode)) return;
