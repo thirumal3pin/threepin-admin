@@ -15,6 +15,8 @@
 
 import * as G from './posting.js';
 import * as TG from './tags.js';
+import * as B from './brochure-flow.js';
+import { postGate } from './edit-flow.js';
 
 let trackers = [];
 const MODES = ['today', 'week', 'sheet', 'cards', 'series'];
@@ -268,7 +270,7 @@ function matchesSearch(t, q) {
   const o = origOf(t);
   // A series is found by any of its properties too ("tnag0003" finds the T Nagar series).
   const mem = isSer(t) ? rootOf(t).members.flatMap(m => [m.propertyCode, m.title]) : [];
-  return [t.propertyCode, t.title, t.reference, t.location, t.details, t.note, o && o.title, o && o.propertyCode, ...mem, ...tagsOf(t)].join(' ').toLowerCase().includes(q);
+  return [t.propertyCode, t.title, t.reference, t.location, inputsFor(t).details, t.note, o && o.title, o && o.propertyCode, ...mem, ...tagsOf(t)].join(' ').toLowerCase().includes(q);
 }
 
 // ── Series: its properties, as they stand ──
@@ -435,6 +437,40 @@ function broState(t) {
   return r;
 }
 G.setBrochureSource(broState);
+// Photos and details: a property with a board card keeps them on the card (the brochure is made from
+// them, and they are edited there or here — one place). Without a card, the row's own.
+function inputsFor(t) {
+  const root = rootOf(t);
+  if (!root || G.isSeries(root)) return { photosLink: (root && root.photosLink) || '', details: (root && root.details) || '', card: null };
+  const l = listingOf(root);
+  // With a card, the card is the one source (the row's own, from before, was moved onto it — adoptInputs).
+  if (l) {
+    // A card whose brochure is made cannot take the row's old values (adoptInputs skips it): show them.
+    const lock = cardLocked(l);
+    const lp = String(l.photosLink || '').trim(), ld = String(l.description || '').trim();
+    return { photosLink: lp || (lock ? root.photosLink || '' : ''), details: ld || (lock ? root.details || '' : ''), card: l };
+  }
+  return { photosLink: root.photosLink || '', details: root.details || '', card: null };
+}
+// Rows that had their own photos / details before their property had a card: those move onto the card
+// once, where it has none, so nothing typed earlier is lost — never onto a card whose brochure is made.
+const adopted = new Set();
+function adoptInputs() {
+  const api = window.trackApi;
+  if (!api || !api.mutate || !(api.listingsLoaded && api.listingsLoaded())) return;
+  for (const t of trackers) {
+    if (t.repostOf || G.isSeries(t) || adopted.has(t.id) || (!t.photosLink && !t.details)) continue;
+    const l = listingOf(t);
+    if (!l) continue;
+    adopted.add(t.id);
+    if (cardLocked(l)) continue;
+    const patch = {};
+    if (t.photosLink && G.isUrl(t.photosLink) && !String(l.photosLink || '').trim()) patch.photosLink = t.photosLink;
+    if (t.details && !String(l.description || '').trim()) patch.description = t.details;
+    if (Object.keys(patch).length) api.mutate(l.id, x => Object.assign(x, patch), 'Photos / details brought over from Posting');
+  }
+}
+G.setInputsSource(inputsFor);
 // The one place a brochure is made: the property's listing on the board, else the Create brochure page.
 const broWhere = b => b.src === 'board' ? 'from the board' : b.src === 'dashboard' ? 'from the Property dashboard' : b.src === 'marked' ? 'marked here earlier' : '';
 // A series' brochures are its properties': "2 of 3 created", and which are missing.
@@ -448,9 +484,7 @@ function broCell(t, small) {
   if (isSer(t)) return serBroCell(t);
   const b = broState(t);
   const open = b.link ? ` <a href="${href(b.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">open ↗</a>` : '';
-  const go = !b.done && b.state === 'none'
-    ? (b.listingId ? `<button type="button" class="tk-link" onclick="pgBrochureGo(${jsq(b.listingId)})">Create on the board</button>` : '<a class="tk-link" href="dashboard.html?nav=brochure">Create brochure ↗</a>')
-    : '';
+  const go = !b.done && b.state === 'none' ? `<button type="button" class="tk-link" onclick="pgBrochure(${jsq(rootOf(t).id)})">Create brochure</button>` : '';
   return `<span class="ps-ro pg-bro ${b.done ? 'ok' : b.state === 'none' ? '' : 'warn'}">${b.done ? '✓ ' : ''}${esc(BRO_LABEL[b.state])}${open}</span>${small !== false ? `<div class="ps-sub">${esc(broWhere(b))}${go ? (broWhere(b) ? ' · ' : '') + go : ''}</div>` : ''}`;
 }
 // Voice-over for a post, from the listing's Shoot for on the board: a V/O to be made separately
@@ -481,9 +515,9 @@ function needsHtml(t, key) {
     if (!miss.length && !ed) return '';
     return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${ed}</div>`;
   }
-  const miss = [];
-  if (!String(root.photosLink || '').trim()) miss.push('Photos');
-  if (!String(root.details || '').trim()) miss.push('Details');
+  const miss = [], inp = inputsFor(root);
+  if (!String(inp.photosLink || '').trim()) miss.push('Photos');
+  if (!String(inp.details || '').trim()) miss.push('Details');
   const b = broState(t);
   if (b.state === 'none') miss.push('Brochure');
   const c = key && t.channels && t.channels[key];
@@ -537,6 +571,7 @@ function renderPosting() {
   const el = $('postingView');
   if (!el) return;
   renderWaiting = false; stale = false; shownQ = searchText();
+  try { autoLink(); adoptInputs(); } catch (e) { console.error('auto-link:', e); }   // before the rows are read for drawing
   famIdx = G.familyIndex(trackers);
   tagMemo = null;   // listings and tags are looked up once per render (see listingOf)
   broMemo = null;   // …and each property's brochure state
@@ -622,7 +657,7 @@ function taskActions(g, it) {
     case 'due': return it.keys.map(k => b('Mark ' + labelOf(k) + ' posted', `pgChannel(${jsq(id)},${jsq(k)},'live')`, 'primary') + b('Reschedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`)).join('');
     case 'link': return it.keys.map(k => b('Add ' + labelOf(k) + ' link', G.CHANNEL_KEYS.includes(k) ? `pgLink(${jsq(id)},${jsq(k)})` : `pgListing(${jsq(id)},${jsq(k)},'posted')`, 'primary')).join('');
     case 'plan': return G.CHANNELS.map(c => `<button type="button" class="tk-btn sm" onclick="pgChannel(${jsq(id)},${jsq(c.key)},'scheduled')">${chLabel(c.key, c.label)}</button>`).join('');
-    case 'brochure': { const bs = broState(byId(id)); return bs.listingId ? b('Create on the board', `pgBrochureGo(${jsq(bs.listingId)})`, 'primary') : '<a class="tk-btn sm primary" href="dashboard.html?nav=brochure">Create brochure ↗</a>'; }
+    case 'brochure': return b('Create brochure', `pgBrochure(${jsq(id)})`, 'primary');
     case 'photos': case 'details': return b('Add it', `pgOpenEdit(${jsq(id)})`, 'primary');
     case 'code': return b('Add code', `pgOpenEdit(${jsq(id)})`, 'primary') + b('Tag a property…', `pgOpenTag(${jsq(id)})`);
     case 'yet': return it.keys.map(k => `<span class="pg-pair"><span class="pg-pair-n">${chLabel(k, labelOf(k))}</span>${b('Schedule', `pgChannel(${jsq(id)},${jsq(k)},'scheduled')`, 'primary')}${b('N/A', `pgChannel(${jsq(id)},${jsq(k)},'na')`)}</span>`).join('');
@@ -940,7 +975,8 @@ function sheetIdentity(t) {
         : `<button type="button" class="ps-mini warn" onclick="pgOpenLink(${jsq(id)})">Not in dashboard</button>`);
   }
   const dot = (ok, label) => `<button type="button" class="ps-dot pg-chip ${ok ? 'ok' : 'no'}" onclick="pgOpenEdit(${jsq(id)})" title="${label} ${ok ? 'received — click to edit' : 'not received — click to add'}">${label}</button>`;
-  return `<div class="ps-ident">${code}</div><div class="ps-ident">${dot(!!t.photosLink, 'Photos')}${dot(!!t.details, 'Details')}${inSeries(t)}</div>${editTag(t) ? `<div class="ps-ident">${editTag(t)}</div>` : ''}`;
+  const inp = inputsFor(t);
+  return `<div class="ps-ident">${code}</div><div class="ps-ident">${dot(!!inp.photosLink, 'Photos')}${dot(!!inp.details, 'Details')}${inSeries(t)}</div>${editTag(t) ? `<div class="ps-ident">${editTag(t)}</div>` : ''}`;
 }
 
 function sheetRow(t, cols, t0, wk) {
@@ -1329,8 +1365,8 @@ function cardHtml(t) {
       : `<span class="pg-pend">Not in Property dashboard yet</span> ${match ? `<button type="button" class="tk-btn sm" onclick="pgLinkTo(${jsq(t.id)},${jsq(match.id)})">Link to ${esc(match.propertyCode)}</button>` : ''}<button type="button" class="tk-link" onclick="pgOpenLink(${jsq(t.id)})">${match ? 'pick another' : 'Link…'}</button>`;
   return `<article class="pg-card ${G.overall(t, t0)}" id="pg-${esc(t.id)}">${head}
     <div class="pg-inputs">
-      <span>${G.isUrl(t.photosLink) ? `<a href="${href(t.photosLink)}" target="_blank" rel="noopener">📷 Photos ↗</a>` : t.photosLink ? '<span class="pg-pend">📷 Photos link is not a web link</span>' : '<span class="pg-pend">📷 Photos not received</span>'}</span>
-      <span>${t.details ? '<span class="pg-ok">✓ Details received</span>' : '<span class="pg-pend">Details not received</span>'}</span>
+      <span>${G.isUrl(inputsFor(t).photosLink) ? `<a href="${href(inputsFor(t).photosLink)}" target="_blank" rel="noopener">📷 Photos ↗</a>` : inputsFor(t).photosLink ? '<span class="pg-pend">📷 Photos link is not a web link</span>' : '<span class="pg-pend">📷 Photos not received</span>'}</span>
+      <span>${inputsFor(t).details ? '<span class="pg-ok">✓ Details received</span>' : '<span class="pg-pend">Details not received</span>'}</span>
       <button type="button" class="tk-link" onclick="pgOpenEdit(${jsq(t.id)})">Edit</button>
     </div>
     <div class="pg-sec">Posts</div>
@@ -1443,10 +1479,11 @@ window.pgListing = (id, key, status) => {
   if (!r.ok) { toast(r.error); return renderPosting(); }
   persist(r.tracker);
 };
-window.pgUnlink = id => { const t = byId(id); if (t) persist({ ...t, propertyId: '' }); };
+// Unlinked by hand: it stays unlinked — the automatic link (after a brochure) leaves it alone.
+window.pgUnlink = id => { const t = byId(id); if (t) persist({ ...t, propertyId: '', noAutoLink: true }); };
 window.pgLinkTo = (id, propId) => {
   const t = byId(id); const p = inv && inv.find(x => x.id === propId); if (!t || !p) return;
-  persist(fillFrom({ ...t, propertyId: p.id }, p), 'Linked to the Property dashboard');
+  persist(fillFrom({ ...t, propertyId: p.id, noAutoLink: false }, p), 'Linked to the Property dashboard');
 };
 // In-place edits from the sheet.
 window.pgSetName = (id, v) => {
@@ -1501,7 +1538,7 @@ function openDlg(kind, id, key) {
     title = `Schedule ${chan.label}`;
     body = `<p class="tk-hint" style="margin-top:0">${nm}${dayBase ? ' · planned ' + esc(G.dayLabel(dayBase)) : ''}</p>
       <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" value="${localInput(start)}">
-      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${c && c.status === 'scheduled' ? `
+      <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${gateHtml(t, 'schedule')}${c && c.status === 'scheduled' ? `
       <div class="pg-unsched">
         <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
         <div class="pg-unsched-b"><button type="button" class="tk-btn sm" onclick="pgUnschedule('yet')">Cancel this schedule</button><button type="button" class="tk-btn sm ghost" onclick="pgUnschedule('na')">Won't post (N/A)</button></div>
@@ -1520,7 +1557,7 @@ function openDlg(kind, id, key) {
       <p class="tk-hint" style="margin-top:4px">Now, unless it went out earlier — then pick when.</p>
       <label for="pgUrl">Link to the live post</label><input id="pgUrl" type="url" value="${esc((c && c.url) || '')}" placeholder="Open the post, copy its link and paste it here" oninput="pgCheckUrl()">
       <div class="pg-pasterow"><button type="button" class="tk-btn sm" onclick="pgPasteLink()"><i class="fa-regular fa-clipboard" aria-hidden="true"></i> Paste copied link</button><span id="pgUrlHint" class="pg-urlhint" role="status"></span></div>
-      <p class="tk-hint warn">You can confirm without the link, but it stays flagged <b>Live — link not shared</b> until you add it.</p>`;
+      <p class="tk-hint warn">You can confirm without the link, but it stays flagged <b>Live — link not shared</b> until you add it.</p>${already ? '' : gateHtml(t, 'live')}`;
     save.textContent = already ? 'Save' : 'Confirm posted';
   } else if (kind === 'link') {
     const c = t.channels && t.channels[key];
@@ -1533,6 +1570,8 @@ function openDlg(kind, id, key) {
     save.textContent = 'Confirm posted';
   } else if (kind === 'edit') {
     const o = origOf(t);
+    // A property with a board card: its photos link and details are the card's (one place, either side).
+    const inp = inputsFor(t), shared = !!inp.card, frozen = shared && cardLocked(inp.card);
     title = t.repostOf ? 'Repost' : 'Property details';
     const common = `<label for="pgRefIn">Reference <span class="tk-opt">as it was in the plan</span></label><input id="pgRefIn" type="text" value="${esc(t.reference)}" placeholder="Lux49 4Bhk">
       <label for="pgDayIn">Planned date</label><input id="pgDayIn" type="date" value="${dateInput(t.plannedDate)}">
@@ -1546,17 +1585,18 @@ function openDlg(kind, id, key) {
     } else {
       body = `${common}
         <label for="pgCodeIn">Property code</label>${t.propertyCode
-          ? `<input id="pgCodeIn" type="text" value="${esc(t.propertyCode)}" disabled><p class="tk-hint">The code is set. To change it, delete this row and add it again.</p>`
+          ? `<input id="pgCodeIn" type="text" value="${esc(t.propertyCode)}" autocomplete="off" spellcheck="false"><p class="tk-hint">Wrong property? Change the code — this row moves to that property: what came from ${esc(t.propertyCode)} (its title, location, photos, details, brochure) goes, the new one's comes in if it is in the dashboard. Clear it to remove the code and what came with it. Its posts stay.</p>`
           : `<input id="pgCodeIn" type="text" placeholder="Add it once created, e.g. TNAG0002"><p class="tk-hint">Already tracked or in the dashboard? <button type="button" class="tk-link" onclick="pgOpenTag(${jsq(t.id)})">Tag that property instead</button> · Several properties in one video? <button type="button" class="tk-link" onclick="pgOpenSeriesDlg(${jsq(t.id)})">Make it a series</button></p>`}
         <label for="pgTitleIn">Title</label><input id="pgTitleIn" type="text" value="${esc(t.title)}" placeholder="3BHK in T Nagar">
         <label for="pgLocIn">Location</label><input id="pgLocIn" type="text" value="${esc(t.location)}">
-        <label for="pgPhotos">Photos link <span class="tk-opt">from the media team</span></label><input id="pgPhotos" type="url" value="${esc(t.photosLink)}" placeholder="Drive folder link">
-        <label for="pgDetails">Property details</label><textarea id="pgDetails" class="tk-area" rows="6" placeholder="Price, size, facing, highlights…">${esc(t.details)}</textarea>
+        <label for="pgPhotos">Photos link <span class="tk-opt">${shared ? 'the same link as its board card' : 'from the media team'}</span></label><input id="pgPhotos" type="url" value="${esc(inp.photosLink)}" placeholder="Drive folder link"${frozen ? ' readonly title="Its brochure is made from these — redo it on the board to change them"' : ''}>
+        <label for="pgDetails">Property details <span class="tk-opt">${shared ? 'the same details as its board card — the brochure is made from them' : ''}</span></label><textarea id="pgDetails" class="tk-area" rows="6" placeholder="Price, size, facing, highlights…"${frozen ? ' readonly' : ''}>${esc(inp.details)}</textarea>${frozen ? '<p class="tk-hint">Its brochure is made from these. To change them, redo the brochure on its board card.</p>' : ''}
         <p style="margin:12px 0 0"><button type="button" class="tk-btn danger sm" onclick="pgDelete(${jsq(t.id)})">Delete this property's tracker</button></p>`;
     }
     // What the form showed when it opened: Save writes only the fields you changed from these,
     // so a field someone else changed meanwhile is not put back to what this form still shows.
-    dlg.orig = { pgRefIn: t.reference, pgDayIn: dateInput(t.plannedDate), pgNote: t.note, pgTitleIn: t.title, pgLocIn: t.location, pgPhotos: t.photosLink, pgDetails: t.details };
+    dlg.orig = { pgRefIn: t.reference, pgDayIn: dateInput(t.plannedDate), pgNote: t.note, pgTitleIn: t.title, pgLocIn: t.location, pgPhotos: inp.photosLink, pgDetails: inp.details };
+    dlg.cardId = inp.card ? inp.card.id : null;
   } else if (kind === 'add') {
     title = 'Add a row';
     body = `<p class="tk-hint" style="margin-top:0"><b>Only have the plan line?</b> Type the reference and the day — the code, photos and brochure can come later.</p>
@@ -1721,6 +1761,241 @@ window.pgBulkCount = () => {
   const days = new Set(dlg.entries.filter(e => e.sel || e.text.trim()).map(e => e.day)).size;
   $('pgSave').textContent = ready ? `Add ${posts} post${posts === 1 ? '' : 's'}${days > 1 ? ` on ${days} days` : ''}` : 'Add to schedule';
 };
+// ═══════ THE EDIT BEFORE THE POST ═══════
+// A post with a time needs its edit planned; a post goes live once its edit is done. Read from the
+// property's board card (a series: its card); a property with no card is not held back.
+function gateFor(t, action) {
+  const l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
+  return l ? postGate(l, action, api && api.edCtx ? api.edCtx(l) : null) : { ok: true };
+}
+function gateHtml(t, action) {
+  const g = gateFor(t, action);
+  if (g.ok) return '';
+  return `<div class="pg-gate" id="pgGate">${esc(g.text)}<div>${g.need === 'done'
+    ? '<button type="button" class="tk-btn sm primary" onclick="pgEditDone()">The edit is done — mark it</button>'
+    : '<button type="button" class="tk-btn sm" onclick="pgPlanEdit()">Plan the edit</button>'}</div></div>`;
+}
+window.pgEditDone = () => {
+  const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
+  if (!l || !api || !api.editStep) return;
+  api.editStep(l.id, 'done');
+  const el = $('pgGate');
+  if (el && gateFor(t, 'live').ok) { el.className = 'pg-gate ok'; el.textContent = '✓ Edit marked done — confirm the post below.'; $('pgErr').textContent = ''; }
+};
+window.pgPlanEdit = () => {
+  const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null;
+  if (!l || !window.openEditPlan) return;
+  closeQuiet();
+  window.openEditPlan(l.id);
+  toast('Plan the edit, then schedule the post');
+};
+
+// ═══════ CREATE BROCHURE, FROM POSTING ═══════
+// The same request as the board's brochure panel (window.bpGenerate), made on the property's board
+// card — one card per property — so that card is mapped to the property the brochure creates, and the
+// property lands in the Property dashboard with this brochure, photos and details, linked here and on
+// the board. A property with no card gets one, in the column its posts say: Live — marketing when a
+// post is live, else Media ready. Photos and details are the card's (one place): what is typed here is
+// saved there. Nothing is saved until the questions are answered and the request can go.
+const anyLive = t => G.familyOf(trackers, t.id, fams()).some(r => G.CHANNEL_KEYS.some(k => r.channels[k].status === 'live'));
+const stageName = key => { const s = window.trackApi && window.trackApi.stageFor ? window.trackApi.stageFor(key) : null; return (s && s.name) || ({ live: 'Live — marketing', media_ready: 'Media ready' }[key] || key); };
+const cardTitle = l => { const v = String((l && l.title) || '').trim(); return v && v !== 'New listing' ? v : ''; };
+const cardLocked = l => !!(l && window.trackApi && window.trackApi.brochureOf && window.trackApi.brochureOf(l) === 'created');
+function cardWhere(card) {
+  return card
+    ? `Made from its board card <b>${esc(cardTitle(card) || 'this property')}</b> — the card is mapped to the property it creates.`
+    : `It has no board card yet: one is made in <b>${esc(stageName(dlg.stageKey))}</b>${dlg.stageKey === 'live' ? ' (a post is already live)' : ' (its posts are scheduled)'}.`;
+}
+window.pgBrochure = id => {
+  const t0 = byId(id); if (!t0) return;
+  const t = rootOf(t0);
+  // A repost whose original was deleted: there is no property row to make a brochure for.
+  if (t.repostOf) return toast('Its original row was deleted — make the brochure from the property\'s own row');
+  if (G.isSeries(t)) return toast('A series has no brochure of its own — each property has its own');
+  const b = broState(t);
+  if (b.done) return toast('Its brochure is already made');
+  // The board's cards must be in, or an existing card would be missed and a second one made.
+  if (window.trackApi && window.trackApi.listingsLoaded && !window.trackApi.listingsLoaded()) return toast('The board is still loading — try again in a moment');
+  const inp = inputsFor(t), card = inp.card;
+  const linked = card && B.isRealCode(card.propertyCode) ? card.propertyCode : '';
+  const code = linked || t.propertyCode || (card && card.brochure && card.brochure.code) || '';
+  const stageKey = anyLive(t) ? 'live' : 'media_ready';
+  dlg = { kind: 'brochure', id: t.id, cardId: card ? card.id : null, code, codeLocked: !!(linked || t.propertyCode), stageKey };
+  const save = $('pgSave'); save.style.display = ''; save.disabled = false; save.textContent = 'Create brochure';
+  $('pgErr').textContent = '';
+  $('pgModal').querySelector('.tk-box').classList.add('wide');
+  $('pgTitle').textContent = 'Create brochure — ' + dn(t);
+  const again = b.state === 'requested' || b.state === 'building'
+    ? `<p class="tk-hint warn">A brochure was already ${b.state === 'building' ? 'built and is being delivered' : 'requested'}. Sending again builds and emails a fresh one.</p>` : '';
+  $('pgBody').innerHTML = `<p class="tk-hint" style="margin-top:0"><span id="pgBroWhere">${cardWhere(card)}</span> When it is delivered (about 30 minutes), the property is in the <b>Property dashboard</b> with the brochure, photos and details — linked here and on the board.</p>${again}
+    <label for="pgBroCode">Property code</label>
+    ${dlg.codeLocked ? `<div class="pb-code"><span class="ps-code">${esc(code)}</span><span class="tk-hint" style="margin:0">${linked ? 'its board card is linked to it' : 'this row\'s code'}</span></div>`
+      : `<div class="sd-pick"><input id="pgBroCode" type="text" value="${esc(code)}" placeholder="e.g. TNAG0008 — type the letters to see the next free code" autocomplete="off" spellcheck="false" oninput="pgBroCodeIn(this.value)" onfocus="pgBroCodeIn(this.value)" onblur="setTimeout(() => { const s = document.getElementById('pgBroSug'); if (s) s.classList.remove('open'); }, 150)"><div id="pgBroSug" class="bk-sug" role="listbox"></div></div>`}
+    <label for="pgBroTitle">Title <span class="tk-opt">on the brochure</span></label><input id="pgBroTitle" type="text" value="${esc(cardTitle(card) || t.title || t.reference)}" placeholder="3BHK Apartment, T Nagar" oninput="pgBroCheck()">
+    <label for="pgBroPhotos">Photos — Google Drive folder <span class="tk-opt">the brochure is put in this folder</span></label><input id="pgBroPhotos" type="url" value="${esc(inp.photosLink)}" placeholder="https://drive.google.com/drive/folders/…" oninput="pgBroCheck()">
+    <label for="pgBroDesc">Details <span class="tk-opt">price, size, facing, highlights — the brochure is written from these</span></label><textarea id="pgBroDesc" class="tk-area" rows="7" oninput="pgBroCheck()">${esc(inp.details)}</textarea>
+    <label for="pgBroInt">Internal notes <span class="tk-opt">optional — never on the brochure</span></label><input id="pgBroInt" type="text" value="${esc((card && card.internalNotes) || '')}" placeholder="Owner's terms, keys with…">
+    <div id="pgBroCheck" class="pb-check" role="status"></div>`;
+  $('pgModal').classList.add('open');
+  // The code checks need the dashboard as it is now.
+  const api = window.trackApi, D = dlg;
+  if (api && api.loadInventory) api.loadInventory(true).then(() => { memMemo = null; if (dlg === D) window.pgBroCheck(); }).catch(() => {});
+  window.pgBroCheck();
+  setTimeout(() => { const f = $(dlg && dlg.codeLocked ? 'pgBroTitle' : 'pgBroCode'); if (f) f.focus(); }, 0);
+};
+function broDraft() {
+  const v = id => ($(id) ? $(id).value.trim() : '');
+  return { code: dlg.codeLocked ? dlg.code : B.normCode(v('pgBroCode')), title: v('pgBroTitle'), photosLink: G.cleanUrl(v('pgBroPhotos')), description: v('pgBroDesc'), internalNotes: v('pgBroInt') };
+}
+// What sending would do, and what stops it: the board's own brochure rules, as if the card were
+// already linked to a property of that code (sending links it first), plus codes on other Posting rows.
+function broVerdict(d) {
+  const api = window.trackApi, invL = invList(), lst = (api && api.listings()) || [];
+  const card = dlg.cardId ? lst.find(l => l.id === dlg.cardId) : null;
+  const existing = d.code ? invL.find(p => B.isRealCode(p.propertyCode) && B.codeKey(p.propertyCode) === B.codeKey(d.code)) : null;
+  // A card already holding that code: it is this property's card (one card per property).
+  const other = !card && d.code ? B.findCode(d.code, [], lst, null).listing : null;
+  const use = card || other;
+  const x = { id: (use || {}).id || '__new', propertyCode: existing ? existing.propertyCode : '', brochure: { code: d.code }, title: d.title, photosLink: d.photosLink, description: d.description };
+  const c = B.brochureCheck(x, invL, lst);
+  // Only linking (the property has its brochure): photos and details are not used — not asked for.
+  const linkOnly = !!(existing && B.isUrl(existing.brochureLink));
+  const missing = linkOnly ? c.missing.filter(m => !/photos|Description/i.test(m)) : c.missing.slice();
+  if (d.code && !dlg.codeLocked) { const r = G.setCode(trackers, dlg.id, d.code); if (!r.ok) missing.push(r.error); }
+  if (use && cardLocked(use) && !(existing && B.isUrl(existing.brochureLink))) missing.push(`Its board card “${cardTitle(use) || use.id}” already has its brochure — redo it on the board`);
+  return { ok: !missing.length, missing, warnings: linkOnly ? [] : c.warnings, existing, card: use, adopted: other, linkOnly };
+}
+window.pgBroCheck = () => {
+  const el = $('pgBroCheck'); if (!el || !dlg || dlg.kind !== 'brochure') return;
+  let d = broDraft(), v = broVerdict(d);
+  // The code typed belongs to a card already on the board: that card is this property's — show and
+  // use what it has (an empty box keeps what was typed), and say so.
+  const boxes = ['pgBroTitle', 'pgBroPhotos', 'pgBroDesc', 'pgBroInt'];
+  if (v.adopted && dlg.adoptedId !== v.adopted.id) {
+    // What was typed before, kept: it comes back if the code stops matching that card.
+    if (!dlg.typed) dlg.typed = Object.fromEntries(boxes.map(id => [id, $(id) ? $(id).value : '']));
+    dlg.adoptedId = v.adopted.id;
+    const a = v.adopted, put = (id, val) => { const i = $(id); if (i) i.value = String(val || '').trim() ? val : (dlg.typed[id] || ''); };
+    put('pgBroTitle', cardTitle(a)); put('pgBroPhotos', a.photosLink); put('pgBroDesc', a.description); put('pgBroInt', a.internalNotes);
+    const w = $('pgBroWhere'); if (w) w.innerHTML = `${esc(d.code)} is on the board already — made from that card, <b>${esc(cardTitle(a) || 'this property')}</b>; it is mapped to the property it creates.`;
+    d = broDraft(); v = broVerdict(d);
+  } else if (!v.adopted && dlg.adoptedId) {
+    dlg.adoptedId = null;
+    if (dlg.typed) { for (const id of boxes) { const i = $(id); if (i) i.value = dlg.typed[id] || ''; } dlg.typed = null; }
+    const w = $('pgBroWhere'); if (w) w.innerHTML = cardWhere(null);
+    d = broDraft(); v = broVerdict(d);
+  }
+  const done = v.existing && B.isUrl(v.existing.brochureLink);
+  el.innerHTML = (v.existing ? `<div class="pb-v ${done ? 'ok' : 'info'}">${esc(v.existing.propertyCode)} is already in the Property dashboard${v.existing.name ? ' — ' + esc(v.existing.name) : ''}. ${done ? 'It has its brochure: sending links this property to it, nothing is rebuilt.' : 'Sending links this property to it and makes its brochure.'}</div>` : d.code && B.looksLikeCode(d.code) ? `<div class="pb-v info">${esc(d.code)} is a new code — the brochure creates it in the Property dashboard.</div>` : '')
+    + (v.missing.length ? `<div class="pb-v bad"><b>Still needed:</b> ${v.missing.map(esc).join(' · ')}</div>` : '')
+    + (v.warnings.length ? `<div class="pb-v warn">${v.warnings.map(esc).join('<br>')}</div>` : '');
+  const save = $('pgSave'); if (save && !dlg.sending) save.textContent = done ? 'Link it' : 'Create brochure';
+};
+// Typing a code: the next free code in its series first, then codes already in the dashboard.
+window.pgBroCodeIn = v => {
+  const box = $('pgBroSug'); if (!box || !dlg) return;
+  window.pgBroCheck();
+  const q = String(v || '').trim(), invL = invList();
+  if (!q) { box.innerHTML = ''; box.classList.remove('open'); return; }
+  const next = B.seriesFor(q, invL).slice(0, 4).map(g => `<button type="button" class="bk-opt" role="option" onmousedown="event.preventDefault()" onclick="pgBroCodePick(${jsq(g.next)})"><b>${esc(g.next)}</b><span>next free in ${esc(g.letters)} · ${g.count} so far, last ${esc(g.last)}</span></button>`).join('');
+  const have = B.codeSuggestions(q, invL, 5).map(p => `<button type="button" class="bk-opt" role="option" onmousedown="event.preventDefault()" onclick="pgBroCodePick(${jsq(p.propertyCode)})"><b>${esc(p.propertyCode)}</b><span>already exists — ${esc([p.name, p.location].filter(Boolean).join(' · '))}</span></button>`).join('');
+  box.innerHTML = (next ? '<div class="bk-sh">Next free code</div>' + next : '') + (have ? '<div class="bk-sh">In the dashboard</div>' + have : '');
+  box.classList.toggle('open', !!(next || have));
+};
+window.pgBroCodePick = c => { const i = $('pgBroCode'); if (i) { i.value = c; } const box = $('pgBroSug'); if (box) box.classList.remove('open'); window.pgBroCheck(); };
+async function sendBrochure() {
+  const D = dlg;
+  const err = m => { if (dlg === D) $('pgErr').textContent = m; };
+  const api = window.trackApi;
+  if (!api || !api.mutate || !window.bpGenerate) return err('The board is still loading — try again in a moment.');
+  if (D.sending) return;
+  const save = $('pgSave');
+  D.sending = true; save.disabled = true; save.textContent = 'Checking…';
+  // While a send is under way the dialog stays (Esc and the backdrop wait); every step after a wait
+  // checks it is still this dialog.
+  const stop = m => { D.sending = false; if (dlg === D) { save.disabled = false; window.pgBroCheck(); if (m) err(m); } };
+  try {
+    try { await api.loadInventory(true); } catch (e) { /* checked against what is loaded */ }
+    memMemo = null; tagMemo = null; broMemo = null;
+    if (dlg !== D) return;
+    window.pgBroCheck();   // the dashboard may have changed: the boxes and the verdict follow
+    const d = broDraft(), v = broVerdict(d);
+    if (!v.ok) return stop('Still needed: ' + v.missing.join(' · '));
+    const linkOnly = v.linkOnly;
+    // The questions first — nothing is saved until they are answered.
+    if (!linkOnly) {
+      if (v.warnings.length && !confirm(v.warnings.join('\n') + '\n\nCreate the brochure anyway?')) return stop();
+      const st = broState(byId(D.id)).state;
+      const req = (v.card && v.card.brochure && v.card.brochure.requestedAt) || st === 'requested' || st === 'building' || (v.existing && String(v.existing.brochureLink || '').trim());
+      if (req && !confirm('A brochure was already requested for this property.\n\nSend it again? The pipeline builds a fresh one and emails it again.')) return stop();
+    }
+    let t = byId(D.id);
+    if (!t) return stop('This row was deleted by someone else.');
+    save.textContent = linkOnly ? 'Linking…' : 'Sending…';
+    // 1. The row takes the code (it is how this row, its card and the dashboard property find each other).
+    if (!t.propertyCode) { const r = G.setCode(trackers, t.id, d.code); if (!r.ok) return stop(r.error); persist({ ...t, propertyCode: r.code }, '', true); t = byId(t.id); }
+    // 2. Its board card: the one it has, else a new one in the column its posts say.
+    let cardId = v.card ? v.card.id : null;
+    if (!cardId) cardId = api.createListing({ title: d.title, location: t.location, stageKey: D.stageKey });
+    if (!cardId) return stop('Could not add it to the board — try again once the board has loaded.');
+    // 3. What the brochure is made from, on the card — the one place for them. Not when only linking
+    // (the property's own brochure stands), and an empty box never clears notes the card has.
+    if (!linkOnly) {
+      const ok = api.mutate(cardId, l => {
+        l.title = d.title; l.photosLink = d.photosLink; l.description = d.description;
+        if (d.internalNotes || !l.internalNotes) l.internalNotes = d.internalNotes;
+        if (!B.isRealCode(l.propertyCode)) l.brochure = { ...(l.brochure || {}), code: d.code };
+      }, 'Brochure details set from Posting');
+      if (!ok) return stop('Its board card was deleted — try again.');
+    } else if (!B.isRealCode((api.listings().find(l => l.id === cardId) || {}).propertyCode)) {
+      api.mutate(cardId, l => { if (!B.isRealCode(l.propertyCode)) l.brochure = { ...(l.brochure || {}), code: d.code }; });
+    }
+    tagMemo = null; broMemo = null;
+    // 4. Already in the dashboard: the card is linked to it first (and this row with it).
+    if (v.existing) {
+      const card = api.listings().find(l => l.id === cardId);
+      if (!card || B.codeKey(card.propertyCode) !== B.codeKey(v.existing.propertyCode)) {
+        const linked = await window.bpLink(cardId, v.existing.propertyCode);
+        if (!linked) return stop(`Could not link it to ${v.existing.propertyCode} — see the board card.`);
+      }
+      linkRow(t.id, v.existing);
+      if (linkOnly) { D.sending = false; if (dlg === D) closeQuiet(); toast(`Linked to ${v.existing.propertyCode} — its brochure is already made`); tagMemo = null; broMemo = null; return renderPosting(); }
+    }
+    // 5. The request — the board's own path (its checks and demo guard); the questions were asked above.
+    const out = await window.bpGenerate(cardId, { confirmed: true });
+    tagMemo = null; broMemo = null; memMemo = null;
+    if (out !== 'sent') return stop(out === 'busy' ? 'A request for this property is already being sent.' : out === 'failed' ? 'Could not send — check your connection. Nothing was lost.' : 'Not sent — check what is listed on its board card.');
+    D.sending = false;
+    if (dlg === D) closeQuiet();
+    renderPosting();
+  } catch (e) {
+    console.error('brochure from Posting failed:', e);
+    stop('Something went wrong — nothing more was sent. Check the board card.');
+  }
+}
+// A row whose property has reached the dashboard is linked to it (and takes what it does not have yet).
+function linkRow(id, p) {
+  const t = byId(id);
+  if (!t || t.repostOf || G.isSeries(t) || !p || t.propertyId === p.id) return;
+  persist(fillFrom({ ...t, propertyId: p.id }, p), '', true);
+}
+// Once a brochure is delivered its property is in the dashboard: rows with that code are linked to
+// it by themselves — once per row per visit, so a link someone removed is not put straight back.
+const autoTried = new Set();
+function autoLink() {
+  const invL = invList();
+  if (!invL.length) return;
+  let byCode = null;
+  for (const t of trackers) {
+    if (t.repostOf || G.isSeries(t) || t.propertyId || t.noAutoLink || !t.propertyCode || autoTried.has(t.id)) continue;
+    if (!byCode) { byCode = new Map(); for (const q of invL) { const k = B.codeKey(q.propertyCode); if (k && !byCode.has(k)) byCode.set(k, q); } }
+    const p = byCode.get(B.codeKey(t.propertyCode));
+    if (!p) continue;
+    autoTried.add(t.id);
+    linkRow(t.id, p);
+  }
+}
+
 // A series is edited in its own dialog; a round of one, like any repost.
 window.pgOpenEdit = id => { const t = byId(id); if (t && G.isSeries(t) && !t.repostOf) return window.pgOpenSeriesDlg(id); openDlg('edit', id, ''); };
 
@@ -1832,8 +2107,10 @@ window.pgOpenLink = id => openDlg('linkpick', id, '');
 window.pgOpenTag = id => openDlg('tag', id, '');
 window.pgOpenPlan = () => openDlg('plan', '', '');
 
-window.pgClose = () => { dlg = null; $('pgModal').classList.remove('open'); renderPosting(); };
-function closeQuiet() { dlg = null; $('pgModal').classList.remove('open'); }
+// The dialog's Save button is shared by every dialog: a send that disabled it gives it back on close.
+const freeSave = () => { const s = $('pgSave'); if (s) s.disabled = false; };
+window.pgClose = () => { if (dlg && dlg.sending) return; dlg = null; freeSave(); $('pgModal').classList.remove('open'); renderPosting(); };
+function closeQuiet() { dlg = null; freeSave(); $('pgModal').classList.remove('open'); }
 
 window.pgSearchInv = q => {
   const host = $('pgPickList'); if (!host) return;
@@ -1951,16 +2228,20 @@ window.pgSave = () => {
   const t = byId(dlg.id), k = dlg.key, val = id => ($(id) ? $(id).value.trim() : '');
   // A dialog about one row, and that row was deleted while it was open: nothing to save onto.
   if (dlg.kind === 'series') return saveSeries();
+  if (dlg.kind === 'brochure') return sendBrochure();
   if (!t && !['add', 'bulk', 'plan'].includes(dlg.kind)) { toast('This row was deleted by someone else'); window.pgClose(); return; }
   let r;
   switch (dlg.kind) {
     case 'schedule': {
+      const gs = gateFor(t, 'schedule'); if (!gs.ok) return err(gs.text);
       const at = $('pgAt').value ? new Date($('pgAt').value).getTime() : 0;
       r = G.setChannel(t, k, 'scheduled', { at }, now());
       if (!r.ok) return err(r.error);
       persist(r.tracker, at < now() ? 'Scheduled — that time has passed, so it shows as due' : 'Scheduled'); break;
     }
     case 'live': {
+      // A post goes live once its edit is done (an already-live post is only being corrected).
+      if (!(t.channels[k] && t.channels[k].status === 'live')) { const gl = gateFor(t, 'live'); if (!gl.ok) return err(gl.text); }
       const liveAt = $('pgLiveAt') && $('pgLiveAt').value ? new Date($('pgLiveAt').value).getTime() : now();
       if (!liveAt || isNaN(liveAt)) return err('Pick when it went live.');
       if (liveAt > now() + 5 * 60000) return err('That time has not come yet — a post goes live when it is out.');
@@ -1988,21 +2269,70 @@ window.pgSave = () => {
       if (changed('pgNote')) nt.note = val('pgNote');
       if (changed('pgTitleIn')) nt.title = val('pgTitleIn');
       if (changed('pgLocIn')) nt.location = val('pgLocIn');
-      if (changed('pgDetails')) nt.details = val('pgDetails');
+      const card = {};
+      if (changed('pgDetails')) card.description = val('pgDetails');
       if (changed('pgPhotos')) {
         const photos = G.cleanUrl(val('pgPhotos'));
         if (!G.validUrl(photos)) return err('The photos link does not look like a web link.');
-        nt.photosLink = photos;
+        card.photosLink = photos;
       }
       if (t.repostOf) { persist(nt, 'Saved'); break; }
-      if (!t.propertyCode && val('pgCodeIn')) {
-        const c = G.setCode(trackers, t.id, val('pgCodeIn'));
+      const newCode = val('pgCodeIn');
+      if (t.propertyCode && G.codeKey(newCode) !== G.codeKey(t.propertyCode)) {
+        // A code set on the wrong property: the row moves. Unlinked from the old property; linked to the
+        // new one when it is in the dashboard, and — if asked — takes its title, location, photos and
+        // details, which were filled in from the old one. The row's posts and links stay as they are.
+        // What came from the old property goes with it: a value equal to the old property's own (its
+        // name, location, photos link, details) — anything typed here by hand stays. The brochure follows
+        // the code by itself; an old "brochure created" tick on the row goes too.
+        const old = invList().find(q => G.codeKey(q.propertyCode) === G.codeKey(t.propertyCode));
+        const same = (a, b) => !!String(a || '').trim() && String(a).trim() === String(b || '').trim();
+        if (old) {
+          if (same(nt.photosLink, G.webLink(old.photosLink)) || same(nt.photosLink, old.photosLink)) nt.photosLink = '';
+          if (same(nt.details, old.detailsText)) nt.details = '';
+          if (same(nt.location, old.location)) nt.location = '';
+          if (same(nt.title, old.name) && String(nt.reference || '').trim()) nt.title = '';   // the plan's name stays the row's name
+        }
+        nt.brochure = { done: false, at: 0, by: '' };
+        if (!newCode) {
+          if (!confirm(`Remove the code ${t.propertyCode} from this row?\n\nWhat came from that property (photos, details, brochure) goes with it. Its posts stay.`)) return;
+          nt.propertyCode = ''; nt.propertyId = ''; nt.noAutoLink = false;
+          if (!nt.title && !nt.reference) nt.reference = t.title || t.propertyCode;
+        } else {
+          const c = G.setCode(trackers, t.id, newCode);
+          if (!c.ok) return err(c.error);
+          const m = invList().find(q => G.codeKey(q.propertyCode) === G.codeKey(c.code));
+          nt.propertyCode = m ? m.propertyCode : c.code;
+          nt.propertyId = m ? m.id : '';
+          nt.noAutoLink = false;
+          // The right property's own fill what is now empty — and its name replaces the old one's.
+          if (m && old && same(nt.title, old.name) && String(m.name || '').trim()) nt.title = m.name;
+          if (m) nt = fillFrom(nt, m);
+        }
+      } else if (!t.propertyCode && newCode) {
+        const c = G.setCode(trackers, t.id, newCode);
         if (!c.ok) return err(c.error);
         nt.propertyCode = c.code;
         const m = invFor(nt);
         if (m) nt = fillFrom({ ...nt, propertyCode: m.propertyCode, propertyId: m.id }, m);
       }
       if (!nt.propertyCode && !nt.title && !nt.reference) return err('Keep a reference, a title or a code so the row can be found.');
+      // Photos and details go on the property's board card (found by the code — a code set just now
+      // included): the board, the brochure and this row read them there. No card (or it was deleted
+      // meanwhile): on the row. A card whose brochure is made keeps them as they were (redo it there).
+      if (Object.keys(card).length) {
+        // (the code was changed in this save: the new property's card, not the old one's)
+        const moved = G.codeKey(nt.propertyCode) !== G.codeKey(t.propertyCode);
+        const api = window.trackApi, target = dlg.cardId && !moved ? (api && api.listings().find(l => l.id === dlg.cardId)) : listingOf(nt);
+        if (target && cardLocked(target)) return err('Its brochure is made from these — to change them, redo the brochure on its board card.');
+        const done = target && api && api.mutate ? api.mutate(target.id, l => Object.assign(l, card), 'Photos / details edited from Posting') : null;
+        if (done) { tagMemo = null; broMemo = null; memMemo = null; }
+        else {
+          if ('description' in card) nt.details = card.description;
+          if ('photosLink' in card) nt.photosLink = card.photosLink;
+        }
+        if (done && !G.changedPaths(t, nt).length) { toast('Saved on its board card'); break; }
+      }
       persist(nt, 'Saved'); break;
     }
     case 'add': {
@@ -2029,6 +2359,12 @@ window.pgSave = () => {
         if (e.sel && e.sel.kind === 'i') { const p = (inv || []).find(x => x.id === e.sel.id); return p ? { inv: { propertyCode: p.propertyCode, title: p.name, propertyId: p.id, location: p.location, photosLink: G.webLink(p.photosLink), details: p.detailsText }, keys, day, at, ref: (e.ref || '').trim() } : null; }
         return { ref: e.text.trim(), keys, day, at };
       }).filter(Boolean);
+      // A post with a time needs its edit planned (where the property has a board card).
+      const held = entries.filter(e => e.at && e.keys.length).map(e => {
+        const t0 = e.trackerId ? byId(e.trackerId) : e.inv ? trackedByCode(e.inv.propertyCode) || { id: '', propertyCode: e.inv.propertyCode } : null;
+        return t0 && !gateFor(t0, 'schedule').ok ? (t0.id ? dn(t0) : e.inv.propertyCode) : '';
+      }).filter(Boolean);
+      if (held.length) return err(`Plan the edit first for ${held.join(', ')} — or leave the time empty to plan the day.`);
       const r = G.bulkSchedule(trackers, entries, {}, now(), who());
       const daysUsed = [...new Set(entries.map(e => e.day))].sort((a, b) => a - b);
       if (r.errors.length) return err(r.errors.join(' '));

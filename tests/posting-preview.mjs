@@ -178,9 +178,8 @@ for (const [name, vp] of [['desk', { width: 1440, height: 950 }], ['phone', { wi
   s = await saved(p);
   ok('99 Acres N/A', s.acres99.status === 'na');
 
-  await p.click(`${card2} .pg-dash .tk-btn`);
-  s = await saved(p);
-  ok('Linked to dashboard from the code match', s.propertyId === 'VLCA002');
+  // Its code is in the dashboard: the row is linked by itself (no button to press).
+  ok('Linked to dashboard from the code match, by itself', await p.evaluate(() => window.__saved.some(t => t.id === 'VLCA002' && t.propertyId === 'VLCA002')) && /In Property dashboard/.test(await p.$eval(card2, c => c.textContent)));
 
   await mode(2);
   const rows = await p.$$eval('.tk-row', r => r.length);

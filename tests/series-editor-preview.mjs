@@ -319,6 +319,64 @@ console.log('fixes from review');
   await p.close();
 }
 
+{
+  console.log('Shoots: open, reschedule, cancel');
+  p = await open({ width: 1440, height: 950 }, 'light', 'shoots');
+  ok('"Waiting to be booked" is gone from Shoots', !/Waiting to be booked/.test(await p.textContent('#shootsView')));
+  const more = await p.$$eval('.tk-row.shoot .tk-shoot-more', m => m.map(x => x.textContent.replace(/\s+/g, ' ').trim()));
+  // A shoot already done can only be opened; one still to happen can be moved or called off.
+  ok('Every shoot row: Open; one still to happen also Reschedule · Cancel shoot', more.length && more.every(t => /Open/.test(t)) && more.some(t => /Reschedule/.test(t) && /Cancel shoot/.test(t)), JSON.stringify(more));
+  ok('The next-up card has them too, and still only Call / Directions / Done as big buttons', !!(await p.$('.tk-next .tk-shoot-more')) && (await p.$$('.tk-next-acts a, .tk-next-acts button')).length <= 3);
+  await p.click('.tk-row.shoot:has-text("Studio T Nagar") .tk-shoot-more .tk-link:has-text("Reschedule")'); await p.waitForTimeout(100);
+  ok('Reschedule opens the booking, with "Cancel this shoot"', await p.evaluate(() => document.getElementById('shModal').classList.contains('open')) && await p.isVisible('#shCancelShoot'));
+  await p.evaluate(() => closeShootModal());
+  await p.click('.tk-row.shoot:has-text("Studio T Nagar") .tk-shoot-more .tk-link:has-text("Cancel shoot")'); await p.waitForTimeout(150);
+  const lb = await savedListing(p, "l.id === 'lB'");
+  ok('Cancel shoot: date cleared, logged, back to Details & docs', lb && !lb.shootAt && lb.shootCancelled === 1 && lb.stageId === sid('details'), JSON.stringify(lb && { at: lb.shootAt, st: lb.stageId }));
+  ok('…and gone from the Shoots list', !/Studio T Nagar/.test(await p.textContent('#shootsView')));
+  await p.click('.tk-row.shoot .tk-shoot-more .tk-link:has-text("Open") >> nth=0'); await p.waitForTimeout(150);
+  ok('Open shows the property', await p.evaluate(() => document.getElementById('dp').classList.contains('open')));
+  await p.screenshot({ path: join(OUT, 'desk-shoots.png') });
+  await p.close();
+}
+
+{
+  console.log('Editor checklist: edit planned · post planned; the edit before the post');
+  p = await open({ width: 1440, height: 950 }, 'light', '');
+  await p.evaluate(() => { toggleView('board'); setBoardMode('editor'); }); await p.waitForTimeout(200);
+  const ckOf = async id => p.$eval(`.tk-card[data-id="${id}"] .ed-checks`, e => e.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
+  ok('Card checklist: ECR — post planned, edit not (flagged)', /○ Edit planned ✓ Post planned/.test(await ckOf('lF')) && !!(await p.$('.tk-card[data-id="lF"] .ed-ck.bad')), await ckOf('lF'));
+  ok('…Velachery being edited, no post planned yet', /✓ Edit planned ○ Post planned/.test(await ckOf('lC')), await ckOf('lC'));
+  await p.selectOption('.ed-bar select[aria-label="Checklist"]', 'edit'); await p.waitForTimeout(120);
+  ok('Filter "Post planned, edit not planned": only ECR duplex', JSON.stringify(await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))) === JSON.stringify(['ECR duplex']));
+  await p.selectOption('.ed-bar select[aria-label="Checklist"]', 'post'); await p.waitForTimeout(120);
+  ok('Filter "Edit planned, post not planned": Velachery (edited in free time, post later)', (await p.$$eval('.ed-board .ed-name', n => n.map(x => x.textContent))).includes('Velachery 3BHK'));
+  await p.selectOption('.ed-bar select[aria-label="Checklist"]', ''); await p.waitForTimeout(80);
+  // Posting: scheduling ECR's Story with a time needs its edit planned.
+  await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(150);
+  await p.evaluate(() => pgChannel('pF', 'igStory', 'scheduled')); await p.waitForTimeout(120);
+  ok('Schedule: says the edit is not planned, offers to plan it', /edit is not planned/.test(await p.textContent('#pgBody')) && !!(await p.$('#pgGate .tk-btn')));
+  await p.click('#pgSave'); await p.waitForTimeout(100);
+  ok('…and refuses to schedule until it is', /edit is not planned/.test(await p.textContent('#pgErr')) && !(await p.evaluate(() => window.__saved.some(t => t.id === 'pF' && t.channels && t.channels.igStory && t.channels.igStory.status === 'scheduled'))));
+  await p.click('#pgGate .tk-btn'); await p.waitForTimeout(150);
+  ok('"Plan the edit" opens the edit plan for its card', await p.evaluate(() => document.getElementById('edModal').classList.contains('open')) && /ECR duplex/.test(await p.textContent('#edTitle')));
+  await p.click('#edModal .tk-btn.primary'); await p.waitForTimeout(150);
+  await p.evaluate(() => pgChannel('pF', 'igStory', 'scheduled')); await p.waitForTimeout(120);
+  ok('Edit planned: scheduling is allowed', !(await p.$('#pgGate')));
+  await p.click('#pgSave'); await p.waitForTimeout(120);
+  ok('…and the Story is scheduled', await p.evaluate(() => window.__saved.some(t => t.id === 'pF' && t.channels.igStory.status === 'scheduled')));
+  // Mark live: Adyar's edit is done → fine; ECR's edit only planned → held until marked done.
+  await p.evaluate(() => pgChannel('pF', 'igStory', 'live')); await p.waitForTimeout(120);
+  ok('Mark live with the edit not done: says so, offers "The edit is done — mark it"', /edit is not done/.test(await p.textContent('#pgBody')));
+  await p.click('#pgSave'); await p.waitForTimeout(100);
+  ok('…refuses until it is', /edit is not done/.test(await p.textContent('#pgErr')));
+  await p.click('#pgGate .tk-btn'); await p.waitForTimeout(150);
+  await p.click('#pgSave'); await p.waitForTimeout(150);
+  const lf = await savedListing(p, "l.id === 'lF'");
+  ok('"The edit is done": the edit is marked done, and the post goes live', lf && lf.edit.status === 'done' && await p.evaluate(() => window.__saved.some(t => t.id === 'pF' && t.channels.igStory.status === 'live')), JSON.stringify(lf && lf.edit));
+  await p.close();
+}
+
 // ─────────────────────────── phone + dark ───────────────────────────
 for (const [name, vp, theme] of [['phone-light', { width: 390, height: 844 }, 'light'], ['phone-dark', { width: 390, height: 844 }, 'dark'], ['desk-dark', { width: 1440, height: 950 }, 'dark']]) {
   console.log(name);

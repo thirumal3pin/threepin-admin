@@ -332,6 +332,17 @@ export function seriesOf(trackers, tracker, index) {
   return out;
 }
 
+// ── Photos and details: one place for them ──
+// A property with a card on the Shoot & Media board keeps its photos link and details THERE — the
+// brochure is made from them. The page says where to read them (setInputsSource); without one, or
+// for a property with no card, they are the row's own.
+let inputsSource = null;
+export function setInputsSource(fn) { inputsSource = typeof fn === 'function' ? fn : null; }
+export function inputsOf(t) {
+  if (inputsSource) { try { const r = inputsSource(t); if (r) return { photosLink: str(r.photosLink), details: str(r.details) }; } catch (e) { /* fall back below */ } }
+  return { photosLink: str(t && t.photosLink), details: str(t && t.details) };
+}
+
 export function setBrochure(tracker, done, who, now) {
   const t = normalizeTracker(tracker);
   t.brochure = done ? { done: true, at: now || Date.now(), by: str(who) } : { done: false, at: 0, by: '' };
@@ -392,8 +403,9 @@ export function gaps(tracker, now) {
     else if (t[key].status === LISTING_STATUS.POSTED && !t[key].url) out.push({ kind: 'link', key, sev: 2, text: `${label} is posted but the link is not shared` });
   }
   if (!t.propertyId) out.push({ kind: 'dashboard', sev: 1, text: 'Not added to the Property dashboard yet' });
-  if (!t.photosLink) out.push({ kind: 'photos', sev: 2, text: 'Photos link not received' });
-  if (!t.details) out.push({ kind: 'details', sev: 2, text: 'Property details not received' });
+  const inp = inputsOf(tracker);
+  if (!inp.photosLink) out.push({ kind: 'photos', sev: 2, text: 'Photos link not received' });
+  if (!inp.details) out.push({ kind: 'details', sev: 2, text: 'Property details not received' });
   return out.sort((a, b) => b.sev - a.sev);
 }
 
@@ -924,7 +936,7 @@ export function matchesFilter(tracker, f, now) {
     case 'nodash': return !series && !t.repostOf && !t.propertyId;
     case 'nocode': return !series && !t.repostOf && !t.propertyCode;
     case 'thisweek': return inWeek(t, mondayOf(now));
-    case 'noinputs': return series ? (!t.repostOf && g.some(x => x.kind === 'photos')) : (!t.photosLink || !t.details);
+    case 'noinputs': { if (series) return !t.repostOf && g.some(x => x.kind === 'photos'); const inp = inputsOf(tracker); return !inp.photosLink || !inp.details; }
     default: return true;
   }
 }
@@ -946,7 +958,8 @@ export function toCsv(trackers) {
   head.push('Progress');
   const rows = (trackers || []).map(raw => [raw, normalizeTracker(raw)]).map(([raw, t]) => {
     const series = isSeries(t);
-    const r = [dateOnly(t.plannedDate), t.reference, t.repostOf, t.propertyCode, t.title, t.location, t.propertyId ? 'Yes' : 'No', t.photosLink, t.details, t.note,
+    const inp = inputsOf(raw);   // a property with a board card: its photos and details are the card's
+    const r = [dateOnly(t.plannedDate), t.reference, t.repostOf, t.propertyCode, t.title, t.location, t.propertyId ? 'Yes' : 'No', inp.photosLink, inp.details, t.note,
       series ? t.members.map(m => m.propertyCode || m.title).join('; ') : ''];
     for (const c of CHANNELS) { const x = t.channels[c.key]; r.push(STATUS_LABEL[x.status], when(x.at), x.url); }
     // A series' brochures are its properties': "2 of 3" rather than a yes or no.

@@ -1763,3 +1763,29 @@ button.ps-mem:hover { border-color: var(--ink3); }
   .cf-wrap { padding: 4px 12px 60px; }
   .cf-sec { grid-template-columns: 1fr; gap: 10px; padding: 14px; }
 }
+
+/* ═══════ Create brochure, from Posting ═══════ */
+.pb-code { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.pb-check { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.pb-v { font-size: 12.5px; line-height: 1.45; padding: 8px 11px; border-radius: 8px; background: var(--bg2); color: var(--ink2); }
+.pb-v.ok { background: var(--green-bg); color: var(--green); }
+.pb-v.info { background: var(--blue-bg); color: var(--blue); }
+.pb-v.warn { background: var(--amber-bg); color: var(--amber); }
+.pb-v.bad { background: var(--red-bg); color: var(--red); }
+
+/* Under each shoot: Open · Reschedule · Cancel shoot */
+.tk-shoot-more { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12.5px; }
+.tk-shoot-more .tk-link { min-height: 32px; display: inline-flex; align-items: center; }
+.tk-shoot-more .tk-link.bad { color: var(--red); }
+.tk-next .tk-shoot-more { margin-top: 12px; }
+@media (max-width: 760px) { .tk-shoot-more .tk-link { min-height: 44px; } }
+
+/* The Editor view's two checks on a card */
+.ed-checks { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px; }
+.ed-ck { color: var(--ink4); font-weight: 500; }
+.ed-ck.ok { color: var(--green); }
+.ed-ck.bad { color: var(--red); font-weight: 600; }
+/* Posting: what the edit still needs before a post can be scheduled / go live */
+.pg-gate { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber); font-size: 12.5px; line-height: 1.45; }
+.pg-gate.ok { background: var(--green-bg); color: var(--green); }
+.pg-gate .tk-btn { margin-top: 8px; }

@@ -342,22 +342,33 @@ function closePreview() { const el = $('bpPrev'); if (el) el.classList.remove('o
 window.bpClosePreview = closePreview;
 
 // ── Generate: the same Google Form as the Create brochure page ──
-window.bpGenerate = async id => {
+// Returns what happened: 'sent' · 'refused' (something missing) · 'cancelled' (a confirm said no) ·
+// 'busy' (a send for this listing is under way) · 'failed' (the form could not be reached) · 'gone'.
+// opts.confirmed: the caller (the Posting tab) has already asked both questions below.
+window.bpGenerate = async (id, opts) => {
   // One send per listing: a second click, or a fresh button from a redraw, waits for the first.
-  if (sending.has(id)) return;
-  const saved = byId(id); if (!saved) return;
+  if (sending.has(id)) return 'busy';
+  const saved = byId(id); if (!saved) return 'gone';
   // Work on a copy with anything typed but not yet blurred: nothing on the listing changes
-  // unless the request actually goes.
-  const x = { ...withDraft(saved) };
-  for (const [elId, f] of [['bpTitle', 'title'], ['bpPhotos', 'photosLink'], ['bpDesc', 'description'], ['bpInternal', 'internalNotes']]) {
-    const el = $(elId); if (el) x[f] = el.value.trim();
+  // unless the request actually goes. Only from this listing's own panel, open right now — a panel
+  // closed earlier stays in the page and must never be read for another listing.
+  // From the Posting tab (opts.confirmed) the card as it was just saved is what goes — no panel boxes,
+  // no half-typed draft from the board.
+  const fromPosting = !!(opts && opts.confirmed);
+  const x = fromPosting ? { ...saved } : { ...withDraft(saved) };
+  const panelOpen = !fromPosting && api().currentDetailId && api().currentDetailId() === id && !!$('dp') && $('dp').classList.contains('open') && !!$('bpSec');
+  if (panelOpen) {
+    for (const [elId, f] of [['bpTitle', 'title'], ['bpPhotos', 'photosLink'], ['bpDesc', 'description'], ['bpInternal', 'internalNotes']]) {
+      const el = $(elId); if (el) x[f] = el.value.trim();
+    }
+    const codeEl = $('bpCode'); if (codeEl && !B.isRealCode(x.propertyCode)) x.brochure = { ...(x.brochure || {}), code: B.normCode(codeEl.value) };
   }
-  const codeEl = $('bpCode'); if (codeEl && !B.isRealCode(x.propertyCode)) x.brochure = { ...(x.brochure || {}), code: B.normCode(codeEl.value) };
   const c = B.brochureCheck(x, inv(), listingsNow());
-  if (!c.ok) { paintCheck(id, x); api().toast('Fill in what is listed first'); return; }
-  if (c.warnings.length && !confirm(c.warnings.join('\n') + '\n\nGenerate anyway?')) return;
-  if (x.brochure && x.brochure.requestedAt && !confirm(`A brochure was already requested ${fmt(x.brochure.requestedAt)}.\n\nSend it again? The pipeline builds a fresh one and emails it again.`)) return;
-  if (sending.has(id)) return;   // a second click got through while a confirm was open
+  if (!c.ok) { paintCheck(id, x); api().toast('Fill in what is listed first'); return 'refused'; }
+  const asked = !!(opts && opts.confirmed);
+  if (!asked && c.warnings.length && !confirm(c.warnings.join('\n') + '\n\nGenerate anyway?')) return 'cancelled';
+  if (!asked && x.brochure && x.brochure.requestedAt && !confirm(`A brochure was already requested ${fmt(x.brochure.requestedAt)}.\n\nSend it again? The pipeline builds a fresh one and emails it again.`)) return 'cancelled';
+  if (sending.has(id)) return 'busy';   // a second click got through while a confirm was open
   const title = B.brochureTitle(x);
   const code = B.normCode(B.listingCode(x));
   sending.add(id); paintCheck(id, x);
@@ -372,7 +383,7 @@ window.bpGenerate = async id => {
     } catch (e) {
       console.error('brochure form submit failed:', e);
       api().toast('Could not send — check your connection. Nothing was lost.');
-      return;
+      return 'failed';
     }
     // Recorded the moment the form has it, before the log call below: from here a redraw shows
     // "Send again", which asks first.
@@ -394,8 +405,9 @@ window.bpGenerate = async id => {
     sending.delete(id);
     // Not sent: only the button comes back, so whatever was typed stays in the boxes.
     if (!sent) paintCheck(id, x);
-    else if (api().currentDetailId() === id) api().openDetail(id);
+    else if (panelOpen) api().openDetail(id);   // its panel, redrawn — never opened over another page
   }
+  return sent ? 'sent' : 'failed';
 };
 
 // ── Keep listings in step with the dashboard: link on arrival, tick on delivery ──

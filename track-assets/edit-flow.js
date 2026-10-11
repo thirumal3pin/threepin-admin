@@ -162,6 +162,35 @@ export function priority(x, ctx, now, soonDays) {
 }
 function startOfDay(ts) { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); }
 
+// ── The two checks: is the edit planned, is the post planned ──
+// An editor can edit in free time and the post be scheduled later, or the post day be fixed first:
+// either can come first. But a post with a time needs its edit planned, and goes live only once the
+// edit is done (postGate). posts = { scheduled, planned } from the Posting tab (not yet live).
+export const editPlanned = x => !!editOf(x).status;
+// No edit recorded, but edited before this view existed — the same reading editColumn makes: a card in
+// Live, or in Media ready with nothing left to cut, or one made from the Posting tab for its brochure.
+// ctx = { stageKey, cutsLeft } (the board's edCtx).
+export function editedBefore(x, ctx) {
+  if (editOf(x).status) return false;
+  const c = ctx || {};
+  return c.stageKey === 'live' || (c.stageKey === 'media_ready' && !c.cutsLeft) || (!!x && x.source === 'posting');
+}
+export function checks(x, ctx) {
+  const p = (ctx && ctx.posts) || {}, e = editOf(x), before = editedBefore(x, ctx);
+  const edit = !!e.status || before;
+  const post = (p.scheduled || 0) + (p.planned || 0) > 0;
+  return { edit, editDone: e.status === EDIT_STATUS.DONE || before, post, gap: post && !edit ? 'edit' : edit && !post ? 'post' : '' };
+}
+// May this post be scheduled with a time ('schedule') / marked live ('live')? A property with no board
+// card (no edit record) is not held back.
+export function postGate(x, action, ctx) {
+  if (!x || editedBefore(x, ctx)) return { ok: true };
+  const e = editOf(x);
+  if (action === 'live' && e.status !== EDIT_STATUS.DONE) return { ok: false, need: 'done', text: e.status ? 'The edit is not done yet — a post goes live once its edit is done.' : 'The edit is not marked done — a post goes live once its edit is done.' };
+  if (action === 'schedule' && !e.status) return { ok: false, need: 'plan', text: 'The edit is not planned — a post with a time needs its edit planned.' };
+  return { ok: true };
+}
+
 // ── The editor's track: what each editor is on, has coming, and has done ──
 // items = [{ x, title, column }] (column from editColumn). Done includes every logged edit.
 // Editors are keyed by name as written (case-insensitive); '' = not assigned.

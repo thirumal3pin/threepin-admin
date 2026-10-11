@@ -18,7 +18,7 @@
     "preview:brochure-code": "node tests/brochure-code-preview.mjs",
     "preview:shoot": "node tests/shoot-extras.mjs",
     "preview:tags": "node tests/tags-preview.mjs",
-    "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs && node tests/series-editor-preview.mjs",
+    "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs && node tests/series-editor-preview.mjs && node tests/posting-brochure-preview.mjs",
     "preview:brief": "node tests/brief-preview.mjs",
     "audit:ui": "node tests/ui-audit.mjs",
     "check:realmap": "node tests/real-map.mjs"

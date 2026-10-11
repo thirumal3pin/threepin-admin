@@ -1,5 +1,5 @@
 // The editor's flow.   node tests/edit-flow.test.mjs
-import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority } from '../track-assets/edit-flow.js';
+import { setEdit, editOf, editLogOf, editColumn, editorTrack, normalizeEdit, span, ED_DROP, priority, checks, postGate } from '../track-assets/edit-flow.js';
 
 let failed = 0;
 const check = (label, cond, detail) => { if (!cond) { failed++; console.log('  FAIL  ' + label + (detail !== undefined ? ' — ' + detail : '')); } };
@@ -94,5 +94,18 @@ check('Unassigned last', tr[tr.length - 1].name === '');
 check('Busiest editor first', tr[0].name.toLowerCase() === 'ravi');
 eq('Spans read plainly', [span(35 * 60000), span(130 * 60000), span(2 * H), span(76 * H)], ['35m', '2h 10m', '2h', '3d 4h']);
 
+// the two checks and the posting rules
+check('Edit planned, no post planned: edited in free time, post later', JSON.stringify(checks({ edit: { status: 'planned', by: 'R' } }, { posts: {} })) === JSON.stringify({ edit: true, editDone: false, post: false, gap: 'post' }));
+check('Post planned, no edit: the gap to fix', checks({}, { posts: { planned: 1 } }).gap === 'edit');
+check('Both planned: no gap', checks({ edit: { status: 'done', by: 'R', doneAt: 1 } }, { posts: { scheduled: 1 } }).gap === '');
+check('A post with a time needs its edit planned', !postGate({}, 'schedule').ok && postGate({ edit: { status: 'planned', by: 'R' } }, 'schedule').ok);
+check('A post goes live only once its edit is done', !postGate({ edit: { status: 'active', by: 'R', startedAt: 1 } }, 'live').ok && postGate({ edit: { status: 'done', by: 'R', doneAt: 1 } }, 'live').ok);
+check('No board card: not held back', postGate(null, 'live').ok);
+// Cards from before the Editor view existed are taken as edited — not held back, not flagged.
+check('A Live card with no edit record can post (edited before)', postGate({}, 'live', { stageKey: 'live' }).ok && postGate({}, 'schedule', { stageKey: 'live' }).ok);
+check('…a Media ready card with nothing left to cut, too', postGate({}, 'live', { stageKey: 'media_ready', cutsLeft: 0 }).ok);
+check('…and a card made from Posting for its brochure', postGate({ source: 'posting' }, 'live', { stageKey: 'shoot_done' }).ok);
+check('…but Media ready with a cut still to make is held', !postGate({}, 'live', { stageKey: 'media_ready', cutsLeft: 1 }).ok);
+check('Checklist agrees: an edited-before card is not flagged', checks({}, { stageKey: 'live', posts: { scheduled: 1 } }).gap === '');
 console.log(failed ? `\n${failed} failure(s)` : '\nAll good.');
 process.exit(failed ? 1 : 0);

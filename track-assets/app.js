@@ -1177,8 +1177,8 @@ function renderShoots() {
     ['Today', withShoot.filter(x => x.shootAt >= now && x.shootAt < endOfToday())],
     ['Coming up', withShoot.filter(x => x.shootAt >= endOfToday())]
   ];
-  const noShoot = open.filter(x => !x.shootAt
-    && ['new_listing', 'details', 'shoot_scheduled'].includes(P.stageKeyOf(stageById(x.stageId))));
+  // Only booked shoots: listings still to be booked are on the board (New listing, Details & docs),
+  // and listing them here too buried the day's run sheet under every unbooked card.
   const agents = shootAgents();
   // What would waste a trip if nobody noticed before setting off.
   const notReady = withShoot.filter(x => x.shootAt > now && (!x.address || !(x.siteContact || x.sellerPhone) || !x.ownerInformed));
@@ -1205,13 +1205,50 @@ function renderShoots() {
         <div class="tk-group-hdr${label === 'Missed' ? ' bad' : label === 'Today' ? ' warn' : ''}">${label} <span class="tk-count">${arr.length}</span></div>
         <div class="tk-rows">${arr.map(shootRow).join('')}</div>
       </div>` : '').join('')}
-    ${noShoot.length ? `
-      <div class="tk-group">
-        <div class="tk-group-hdr">Waiting to be booked <span class="tk-count">${noShoot.length}</span></div>
-        <div class="tk-rows">${noShoot.map(shootRow).join('')}</div>
-      </div>` : ''}
-    ${!withShoot.length && !noShoot.length ? `<div class="tk-empty"><div class="tk-empty-i">📸</div><div class="tk-empty-t">${agentFilter ? 'Nothing for ' + esc(agentFilter) : 'No shoots to plan'}</div><div class="tk-empty-s">Book one from any listing on the board.</div></div>` : ''}`;
+    ${!groups.some(g => g[1].length) ? `<div class="tk-empty"><div class="tk-empty-i">📸</div><div class="tk-empty-t">${agentFilter ? 'Nothing for ' + esc(agentFilter) : 'No shoots to plan'}</div><div class="tk-empty-s">Book one from any listing on the board.</div></div>` : ''}`;
 }
+// Under each shoot: open the property, move the shoot, or call it off — without going to the board.
+function shootMore(x) {
+  if (!x) return '';
+  return `<div class="tk-shoot-more" onclick="event.stopPropagation()">
+    <button type="button" class="tk-link" onclick="openDetail('${x.id}')">Open</button>
+    ${x.shootAt && !x.shootDoneAt ? `<button type="button" class="tk-link" onclick="openShootModal('${x.id}')">Reschedule</button>
+    <button type="button" class="tk-link bad" onclick="cancelShoot('${x.id}')">Cancel shoot</button>` : ''}
+  </div>`;
+}
+// Calling a shoot off: the date goes, the reason is kept, and a card that was only "Shoot scheduled"
+// goes back to Details & docs (a card further on keeps its column).
+function cancelShoot(id, reason) {
+  const x = listings.find(l => l.id === id);
+  if (!x || !x.shootAt || x.shootDoneAt) return;   // a shoot already done is not called off
+  const when = fmtDateTime(x.shootAt);
+  if (reason === undefined) {
+    const r = prompt(`Cancel the shoot on ${when} for “${x.title || x.propertyCode || 'this listing'}”?
+
+Why? (optional)`);
+    if (r === null) return;
+    reason = r.trim();
+  }
+  mutate(id, l => {
+    l.shootAt = null;
+    l.shootCancelled = (l.shootCancelled || 0) + 1;
+    l.cancelReason = reason || null;
+  }, `Shoot on <b>${esc(when)}</b> cancelled${reason ? ' — ' + esc(reason) : ''}`);
+  const det = P.stageForKey(stages, 'details');
+  if (det && P.stageKeyOf(stageById(x.stageId)) === 'shoot_scheduled') changeStage(id, det.id);
+  if (currentView === 'shoots') renderShoots();
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast('Shoot cancelled');
+}
+function cancelShootFromModal() {
+  const id = shootFor; if (!id) return;
+  const reason = document.getElementById('shWhy').value.trim();
+  const x = listings.find(l => l.id === id);
+  if (!x || !confirm(`Cancel the shoot on ${fmtDateTime(x.shootAt)}?`)) return;
+  closeShootModal();
+  cancelShoot(id, reason);
+}
+Object.assign(window, { cancelShoot, cancelShootFromModal });
 function endOfToday() { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); }
 
 // The top of the run sheet answers the only question an agent has on the
@@ -1252,6 +1289,7 @@ function dayHeaderHtml(today, missed, upcoming) {
         ${map ? `<a class="tk-btn big" href="${esc(map)}" target="_blank" rel="noopener">🧭 Directions</a>` : ''}
         <button type="button" class="tk-btn big" onclick="openWrapModal('${next.id}')">✓ Done</button>
       </div>
+      ${shootMore(next)}
     </div>` : (today.length ? '<div class="tk-day-done">Everything booked for today is done.</div>' : '')}
   </div>`;
 }
@@ -1286,6 +1324,7 @@ function shootRow(x) {
         `<span class="tk-bchip${m[k] ? ' got' : ''}">${icon} ${esc(label)}${m[k] ? ' ✓' : ''}</span>`).join('')
         || '<span class="tk-sub2">No brief set</span>'}</div>
       ${x.accessNotes ? `<div class="tk-row-note">🔑 ${esc(x.accessNotes)}</div>` : ''}
+      ${shootMore(x)}
     </div>
     <div class="tk-row-side col">
       ${x.shootAt ? `<div class="tk-when${late ? ' bad' : ''}">${esc(fmtDateTime(x.shootAt))}</div><div class="tk-rel">${esc(relDays(x.shootAt))}</div>`
@@ -2036,7 +2075,29 @@ window.trackApi = {
   editOf: x => EF.editOf(x),
   span: ms => EF.span(ms),
   createSeriesCard: seed => createSeriesCard(seed),
+  editStep: (id, action) => edStep(id, action),
+  edCtx: x => edCtx(x),
   listingsLoaded: () => seenListings,
+  stageFor: key => P.stageForKey(stages, key),
+  // A property's card made from the Posting tab (to make its brochure): placed in the column its posts
+  // say — Live when one is live, else Media ready. No owner, no lead: the board fills those in later.
+  createListing: seed => {
+    const key = seed && seed.stageKey;
+    const st = P.stageForKey(stages, key) || P.stageForKey(stages, 'media_ready') || P.stageForKey(stages, 'shoot_done') || stages[0];
+    if (!st || !window.trackFirebase) return null;
+    const now = Date.now(), k = P.stageKeyOf(st) || 'new_listing';
+    const x = {
+      id: newId('lst_'), stageId: st.id, title: String((seed && seed.title) || '').trim() || 'New listing', location: String((seed && seed.location) || '').trim(),
+      media: {}, ownerInformed: false, ownerApproved: false, source: 'posting',
+      stageChangedAt: now, stageChangedBy: currentUserEmail || 'team', reached: { [k]: now },
+      createdAt: now, createdBy: currentUserEmail || 'team', updatedAt: now, updatedBy: currentUserEmail || null
+    };
+    listings.push(x);
+    persist(x);   // the card first: its timeline's rule reads the card
+    addHistory(x, 'created', `Created from Posting to make its brochure — placed in <b>${esc(st.name)}</b>`);
+    applyFilters();
+    return x.id;
+  },
   // Undo of making a series: its card, made in the same action, goes too (no confirm — it is new).
   removeSeriesCard: id => {
     const x = listings.find(l => l.id === id);
@@ -2245,6 +2306,7 @@ function openShootModal(id) {
   // Moving an existing booking asks why: a shoot rescheduled three times is a
   // problem with the owner, and only the reasons show that.
   document.getElementById('shWhyRow').style.display = x.shootAt ? '' : 'none';
+  document.getElementById('shCancelShoot').style.display = x.shootAt && !x.shootDoneAt ? '' : 'none';
   document.getElementById('shWhy').value = '';
   document.getElementById('shClash').textContent = '';
   document.getElementById('shModal').classList.add('open');
@@ -2853,6 +2915,8 @@ Object.assign(window, { openEditPlan, closeEditPlan, saveEditPlan });
 let edPerson = '';
 try { edPerson = localStorage.getItem('track.edPerson') || ''; } catch (e) {}
 let edPastAll = false;
+let edCheck = '';   // the checklist filter: '' · 'post' (no post planned yet) · 'edit' (no edit planned)
+window.setEdCheck = v => { edCheck = ['post', 'edit'].includes(v) ? v : ''; renderEditor(); };
 function setEdPerson(v) {
   edPerson = edPerson && sameName(edPerson, v) ? '' : String(v || '');
   try { localStorage.setItem('track.edPerson', edPerson); } catch (e) {}
@@ -2918,12 +2982,19 @@ function edCardHtml(it) {
     done: b('Schedule in Posting', `edPosting('${x.id}')`, 'primary'),
     scheduled: b('Open in Posting', `edPosting('${x.id}')`)
   }[col] || '';
+  // The two checks: edit planned, post planned. Either can come first; a planned post without a
+  // planned edit is the one to fix.
+  const ck = EF.checks(x, c);
+  const checklist = col === 'shoot_planned' ? '' : `<div class="ed-checks">
+    <span class="ed-ck${ck.edit ? ' ok' : ck.gap === 'edit' ? ' bad' : ''}">${ck.edit ? '✓' : '○'} Edit planned</span>
+    <span class="ed-ck${ck.post ? ' ok' : ''}">${ck.post ? '✓' : '○'} Post planned</span></div>`;
   return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"
       aria-label="Open ${esc(cardName(x))}" ondragstart="onCardDragStart(event,'${x.id}')" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="ed-top">${code}${due}</div>
     <div class="ed-name">${esc(cardName(x))}</div>
     ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
     ${dates.length ? `<div class="ed-dates">${dates.join(' · ')}</div>` : ''}
+    ${checklist}
     ${cutsHtml(x)}
     ${act ? `<div class="ed-acts">${act}</div>` : ''}
   </div>`;
@@ -2962,7 +3033,11 @@ function renderEditor() {
   if (!host || currentView !== 'board') return;
   if (!stages.length) { host.innerHTML = '<div class="tk-empty"><div class="tk-empty-t">Setting up the board…</div></div>'; return; }
   const all = edItems(filtered);
-  const mine = edPerson ? all.filter(it => edWho(it.x).some(n => sameName(n, edPerson))) : all;
+  const byPerson = edPerson ? all.filter(it => edWho(it.x).some(n => sameName(n, edPerson))) : all;
+  // The checklist filter: edited (or edit planned) with no post planned yet, or a post planned with no edit.
+  const gapOf = it => it.col === 'shoot_planned' ? '' : EF.checks(it.x, it.c).gap;
+  const mine = edCheck ? byPerson.filter(it => gapOf(it) === edCheck) : byPerson;
+  const nGap = k => byPerson.filter(it => gapOf(it) === k).length;
   const people = editorPeople(true);
   const late = mine.filter(it => it.pr.late).length, today = mine.filter(it => it.pr.today).length;
   const sx = host.querySelector('.ed-board') ? host.querySelector('.ed-board').scrollLeft : 0;
@@ -2974,6 +3049,12 @@ function renderEditor() {
     <div class="ed-bar">
       <label class="tk-dd tk-dd-pick${edPerson ? ' on' : ''}"><span class="tk-dd-k">Person</span>
         <select onchange="setEdPerson(this.value || '')" aria-label="Show the work of">${['', ...people].map(n => `<option value="${esc(n)}"${(n === '' ? !edPerson : sameName(n, edPerson)) ? ' selected' : ''}>${n ? esc(n) : 'Everyone'}</option>`).join('')}</select></label>
+      <label class="tk-dd tk-dd-pick${edCheck ? ' on' : ''}"><span class="tk-dd-k">Checklist</span>
+        <select onchange="setEdCheck(this.value)" aria-label="Checklist">
+          <option value=""${!edCheck ? ' selected' : ''}>All</option>
+          <option value="post"${edCheck === 'post' ? ' selected' : ''}>Edit planned, post not planned (${nGap('post')})</option>
+          <option value="edit"${edCheck === 'edit' ? ' selected' : ''}>Post planned, edit not planned (${nGap('edit')})</option>
+        </select></label>
       <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''} · nearest deadline first</span>
     </div>
     <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
