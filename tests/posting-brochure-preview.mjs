@@ -242,6 +242,26 @@ console.log('a wrong code on a row whose posts are right → change the code, th
   await q.close();
 }
 
+console.log('Sheet sort: planned date, both ways');
+{
+  const q = await open({ width: 1440, height: 950 });
+  // Rows spread over weeks: two weeks ago, last week, next week, and one with no date.
+  await q.evaluate(([T0, D]) => {
+    const r = (id, ref, day) => ({ id, tenantId: 't', reference: ref, plannedDate: day || 0, channels: day ? { igStory: { status: 'yet', day } } : {}, brochure: {}, acres99: { status: 'pending' }, website: { status: 'pending' } });
+    window.applyPostingSnapshot([r('w1', 'Two weeks ago', T0 - 14 * D), r('w2', 'Last week', T0 - 7 * D), r('w3', 'Next week', T0 + 7 * D), r('w4', 'No date', 0)]);
+  }, [(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })(), DAY]);
+  await q.evaluate(() => pgMode('sheet')); await q.waitForTimeout(150);
+  const opts = await q.$$eval('.pg-sort select option', o => o.map(x => x.textContent));
+  ok('Sort options say which way they run', opts.includes('Planned date: oldest first') && opts.includes('Planned date: newest first'), JSON.stringify(opts));
+  const names = () => q.$$eval('.ps-row .pg-name', n => n.map(x => x.value));
+  await q.selectOption('.pg-sort select', 'planned'); await q.waitForTimeout(150);
+  ok('Oldest first: two weeks ago → last week → next week, no date last', JSON.stringify(await names()) === JSON.stringify(['Two weeks ago', 'Last week', 'Next week', 'No date']), JSON.stringify(await names()));
+  await q.selectOption('.pg-sort select', 'plannedDesc'); await q.waitForTimeout(150);
+  ok('Newest first: next week → last week → two weeks ago, no date still last', JSON.stringify(await names()) === JSON.stringify(['Next week', 'Last week', 'Two weeks ago', 'No date']), JSON.stringify(await names()));
+  ok('…grouped by week either way', (await q.$$eval('.ps-week-t', w => w.map(x => x.textContent))).length === 4);
+  await q.close();
+}
+
 const ph = await open({ width: 390, height: 844 });
 await ph.evaluate(() => pgBrochure('pN')); await ph.waitForTimeout(150);
 ok('Phone: the dialog fits, no sideways scroll', await ph.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

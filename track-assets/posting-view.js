@@ -23,7 +23,9 @@ const MODES = ['today', 'week', 'sheet', 'cards', 'series'];
 // Older saved choices map onto the new tabs, so nobody lands somewhere unexpected after the update.
 const OLD_MODE = { tasks: 'today', upcoming: 'week', props: 'cards', matrix: 'sheet' };
 const K_MODE = 'posting.mode', K_SORT = 'posting.sort';
-const SORTS = [['attention', 'Needs attention'], ['planned', 'Planned date'], ['progress', 'Least done first'], ['newest', 'Newest first'], ['code', 'Property code']];
+// Every option says which way it runs. Both planned-date orders keep the week groups; rows with no
+// date go last either way.
+const SORTS = [['attention', 'Needs attention first'], ['planned', 'Planned date: oldest first'], ['plannedDesc', 'Planned date: newest first'], ['progress', 'Least done first'], ['newest', 'Newest added first'], ['code', 'Property code A–Z']];
 let mode = 'today';             // home: what needs you now, today's posts, the week; the rest is one click away
 let sortKey = 'attention';
 try {
@@ -1117,7 +1119,7 @@ function sheetHtml(base) {
   const head = `<div class="ps-head ps-grid" role="row"><div role="columnheader">Planned</div><div role="columnheader">Property</div>${cols.map(c => `<div role="columnheader">${CH_ICON[c[0]] ? chLabel(c[0], c[1]) : esc(c[1])}</div>`).join('')}</div>`;
   const thisWeek = G.mondayOf(t0);
   let rows = '';
-  if (sortKey === 'planned') {
+  if (sortKey === 'planned' || sortKey === 'plannedDesc') {
     const groups = new Map();
     for (const t of list) { const wk = G.weekKey(t); if (!groups.has(wk)) groups.set(wk, []); groups.get(wk).push(t); }
     for (const [wk, arr] of groups) {
@@ -1134,7 +1136,8 @@ function sheetHtml(base) {
 // box must not make the row you are working on jump to another place on the page.
 function sortList(list) {
   const plannedOf = t => G.weekKey(t) ? (t.plannedDate || t.weekOf || G.weekKey(t)) : Infinity;
-  const rank = t => ({ attention: -worst(t), progress: G.progress(t).pct, newest: -(t.createdAt || 0), planned: plannedOf(t), code: 0 }[sortKey]);
+  const plannedDesc = t => { const v = plannedOf(t); return isFinite(v) ? -v : Infinity; };   // no date: still last
+  const rank = t => ({ attention: -worst(t), progress: G.progress(t).pct, newest: -(t.createdAt || 0), planned: plannedOf(t), plannedDesc: plannedDesc(t), code: 0 }[sortKey]);
   const byCode = (a, b) => String(codeOf(a) || dn(a)).localeCompare(String(codeOf(b) || dn(b)), undefined, { numeric: true });
   const cmp = (a, b) => sortKey === 'code' ? byCode(a, b) : (rank(a) - rank(b)) || byCode(a, b);
   if (!order) order = list.slice().sort(cmp).map(t => t.id);
