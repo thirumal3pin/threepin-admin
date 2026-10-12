@@ -237,6 +237,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...and somebody going there is the default', form.modeDefault === 'in_person', form.modeDefault);
 
   // The question that decides the time, answered without leaving the lead.
+  ok('the visit time is picked in 30-minute steps', await page.evaluate(() => document.getElementById('svTime').step) === '1800');
   const avail = await page.evaluate(async () => {
     const d = new Date(Date.now() + 3 * 86400000);
     const pad = n => String(n).padStart(2, '0');

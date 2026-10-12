@@ -506,3 +506,27 @@
     map: MAP,
   };
 })();
+
+/* Times are picked in 30-minute steps everywhere — a post, a shoot, a site visit, a follow-up, a meeting:
+   the picker offers :00 and :30, not every minute. Every time field on every admin page, including the
+   ones drawn later (dialogs), unless a field sets its own step. A time already saved off the half hour
+   (12:55) is shown as it is and is not changed until someone picks a new one. */
+(function () {
+  'use strict';
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return;
+  var SEL = 'input[type="time"], input[type="datetime-local"]';
+  function step(root) {
+    var list = root && root.matches && root.matches(SEL) ? [root] : (root && root.querySelectorAll ? root.querySelectorAll(SEL) : []);
+    for (var i = 0; i < list.length; i++) if (!list[i].hasAttribute('step')) list[i].step = 1800;
+  }
+  function start() {
+    step(document);
+    new MutationObserver(function (muts) {
+      for (var m = 0; m < muts.length; m++) {
+        var added = muts[m].addedNodes;
+        for (var n = 0; n < added.length; n++) if (added[n].nodeType === 1) step(added[n]);
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+})();

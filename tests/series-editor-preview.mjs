@@ -281,6 +281,7 @@ ok('Edit done straight from planned: refused (start editing first)', (await save
 await p.evaluate(() => openDetail('lF')); await p.waitForTimeout(150);
 ok('The card\'s Edit section offers "Plan post" for an outlet', !!(await p.$('#dpEdit .tk-btn:has-text("Plan post")')));
 await p.click('#dpEdit .tk-btn:has-text("Plan post") >> nth=0'); await p.waitForTimeout(150);
+ok('Times are picked in 30-minute steps (the picker offers :00 and :30)', await p.$eval('#pgAt', i => i.step) === '1800' && await p.evaluate(() => document.getElementById('shTime').step) === '1800');
 ok('…it opens Posting\'s schedule for that outlet, over the board', await p.evaluate(() => document.getElementById('pgModal').classList.contains('open')) && /Schedule YouTube/.test(await p.textContent('#pgTitle')));
 const when = new Date(day0 + 3 * DAY + 18 * H), pad = n => String(n).padStart(2, '0');
 await p.fill('#pgAt', `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T18:00`);
