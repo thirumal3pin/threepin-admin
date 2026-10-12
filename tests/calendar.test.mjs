@@ -38,7 +38,7 @@ function fakeGoogle(events = {}) {
       const idMatch = url.match(/\/events\/([^?]+)/);
       if (method === 'GET' && idMatch) {
         const e = (store[subject] || {})[decodeURIComponent(idMatch[1])];
-        if (!e) { const err = new Error('Not Found'); err.response = { data: { error: { message: 'Not Found' } } }; throw err; }
+        if (!e) { const err = new Error('Not Found'); err.response = { status: 404, data: { error: { message: 'Not Found' } } }; throw err; }
         return { data: e };
       }
       if (method === 'GET') {
@@ -372,6 +372,10 @@ const invited = (extra = {}) => stamped('ev1', 'L1', { attendees: [
   ok('...and an answer meant for another lead is refused', !r2.ok && r2.notOurs, JSON.stringify(r2));
   const r3 = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'vanished', response: 'accepted', leadId: 'L1', key: KEY, makeClient: g.make });
   ok('...and an invitation that is gone is said plainly, not thrown', !r3.ok && r3.gone, JSON.stringify(r3));
+  ok('...with Google 404, so the CRM knows it is really missing (and may send it again)', r3.status === 404, JSON.stringify(r3));
+  const busy = { make: () => ({ request: async () => { const err = new Error('Rate Limit Exceeded'); err.response = { status: 429, data: { error: { message: 'Rate Limit Exceeded' } } }; throw err; } }) };
+  const r4 = await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'accepted', leadId: 'L1', key: KEY, makeClient: busy.make });
+  ok('...a rate limit is not "missing" (the invitation is not re-sent to everyone)', !r4.ok && r4.status === 429, JSON.stringify(r4));
   let bad = null;
   await respondToVisit({ agent: 'swami@threepin.in', eventId: 'ev1', response: 'maybe-ish', key: KEY, makeClient: g.make }).catch(e => { bad = e; });
   ok('...and "maybe-ish" is not an answer', !!bad);

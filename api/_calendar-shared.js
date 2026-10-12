@@ -532,8 +532,10 @@ export async function respondToEvent({ agent, eventId, response, reason = '', le
   } catch (e) {
     const known = explain(e);
     if (known instanceof CalendarNotReady) throw known;
-    // The invitation is gone from their calendar \u2014 deleted, or never arrived.
-    return { ok: false, gone: true };
+    // The invitation is gone from their calendar \u2014 deleted, or never arrived. The status says whether
+    // Google really has no such event (404/410) or only failed to answer (a rate limit, an outage).
+    const status = Number((e && e.response && e.response.status) || (e && e.code)) || 0;
+    return { ok: false, gone: true, status };
   }
 
   // Only ever the CRM's own bookings, the same rule everything else here

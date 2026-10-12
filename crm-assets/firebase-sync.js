@@ -165,7 +165,9 @@ window.crmFirebase = {
   // `ai` is the lead automation's verdict (api/_lead-automation.js) — server-owned the same way;
   // the page changes only its suggestion/undo bookkeeping, through updateLeadAi().
   saveLead: (lead) => {
-    const { notes, history, tt, ttState, ai, ...rest } = lead;
+    // calendarEventId / calendarEventOwner are the server's (api/tailortalk.js books the visit): a page
+    // re-sending its older copy would point the lead at an event that was replaced.
+    const { notes, history, tt, ttState, ai, calendarEventId, calendarEventOwner, ...rest } = lead;
     if (tt) {
       TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
     }

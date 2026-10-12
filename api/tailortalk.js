@@ -369,6 +369,55 @@ async function teamEmails(db, tenantId) {
   return team;
 }
 
+// The visit fields a page may send with its invitation request: exactly what it just saved.
+const VISIT_FIELDS = { siteVisitAt: 'number', siteVisitStatus: 'string', siteVisitProperty: 'string', siteVisitNotes: 'string',
+  siteVisitMinutes: 'number', siteVisitMode: 'string' };
+function visitFromBody(v, user) {
+  const out = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [k, t] of Object.entries(VISIT_FIELDS)) if (k in v && (v[k] === null || typeof v[k] === t)) out[k] = v[k];
+  if (Array.isArray(v.siteVisitAgents)) out.siteVisitAgents = v.siteVisitAgents.filter(e => typeof e === 'string').slice(0, 10);
+  // Whoever saved it books it — the person asking, never a name the page claims.
+  const me = String(user.email || '').toLowerCase();
+  if (me) out.siteVisitBy = me;
+  return out;
+}
+// Book (or move, or hand over) a lead's site visit on Google Calendar, from the lead as given. The
+// organiser is whoever set the visit; the agents are its guests. Writes back the event and who is on it.
+// heal: putting an invitation right (an agent missing from it) — the answers already given are kept,
+// and the visit stays with its organiser unless the person who set it is on the team.
+async function bookVisit({ db, user, ref, lead, property, heal = false }) {
+  const team = await teamEmails(db, user.tenantId);
+  const known = new Set(team.map(e => String(e).toLowerCase()));
+  const visit = { ...visitOf(lead), minutes: lead.siteVisitMinutes || 60, notes: lead.siteVisitNotes || '',
+    mode: lead.siteVisitMode === 'remote' ? 'remote' : 'in_person' };
+  // Only people on the team can be sent on a visit. Anything else in the field is a stale address or
+  // a typo, and inviting it emails a stranger the client's phone number and the seller's.
+  const agents = (Array.isArray(lead.siteVisitAgents) ? lead.siteVisitAgents : [])
+    .map(e => String(e).toLowerCase()).filter(e => known.has(e));
+  let subject = visitOwnerFor(lead, visit, team);
+  const by = String(lead.siteVisitBy || '').toLowerCase(), owner = String(lead.calendarEventOwner || '').toLowerCase();
+  if (heal && !known.has(by) && known.has(owner)) subject = owner;   // no reshuffle to whoever edited last
+  if (!subject) return { ok: true, skipped: 'nobody on the team to book it with' };
+  // The seller's name, number and the location come off the property when one is linked. Sent by the
+  // page when it has it already, looked up only when it does not — this tenant runs close to its read quota.
+  let prop = property && typeof property === 'object' ? property : null;
+  if (!prop && visit.property) {
+    const q = await db.collection('properties').where('tenantId', '==', user.tenantId)
+      .where('propertyCode', '==', String(visit.property)).limit(1).get().catch(() => null);
+    if (q && !q.empty) prop = q.docs[0].data();
+  }
+  const r = await syncVisitEvent({ lead, visit, subject, agents, property: prop,
+    previous: { eventId: lead.calendarEventId || null, owner: lead.calendarEventOwner || null } });
+  // Stored so the next reschedule moves this entry rather than making a second one, and so a
+  // hand-over can clear the first person's diary. Who is on it is written with it: the lead and
+  // Google never disagree about who was invited.
+  const write = { calendarEventId: r.eventId, calendarEventOwner: r.owner, siteVisitAgents: agents };
+  if (!heal) write.siteVisitReplies = r.eventId ? agents.map(email => ({ email, status: 'needsAction' })) : [];
+  await ref.update(write);
+  return { ok: true, ...r, subject };
+}
+
 async function calendarPost(request) {
   const user = await crmUser(request);
   if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
@@ -384,40 +433,11 @@ async function calendarPost(request) {
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = { id: snap.id, ...snap.data() };
       if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
-
-      const team = await teamEmails(db, user.tenantId);
-      const known = new Set(team.map(e => String(e).toLowerCase()));
-      const visit = { ...visitOf(lead), minutes: lead.siteVisitMinutes || 60, notes: lead.siteVisitNotes || '',
-        mode: lead.siteVisitMode === 'remote' ? 'remote' : 'in_person' };
-      // Only people on the team can be sent on a visit. Anything else in the
-      // field is a stale address or a typo, and inviting it emails a stranger
-      // the client's phone number and the seller's.
-      const agents = (Array.isArray(lead.siteVisitAgents) ? lead.siteVisitAgents : [])
-        .map(e => String(e).toLowerCase()).filter(e => known.has(e));
-      // Whoever booked it organises. The agents are guests, so the replies land
-      // on one event the office can read.
-      const subject = visitOwnerFor(lead, visit, team);
-      if (!subject) return json({ ok: true, skipped: 'nobody on the team to book it with' });
-
-      // The seller's name, number and the location come off the property when
-      // one is linked. Sent by the page when it has it already, looked up only
-      // when it does not — this tenant runs close to its Firestore read quota.
-      let property = body.property && typeof body.property === 'object' ? body.property : null;
-      if (!property && visit.property) {
-        const q = await db.collection('properties').where('tenantId', '==', user.tenantId)
-          .where('propertyCode', '==', String(visit.property)).limit(1).get().catch(() => null);
-        if (q && !q.empty) property = q.docs[0].data();
-      }
-
-      const r = await syncVisitEvent({ lead, visit, subject, agents, property,
-        previous: { eventId: lead.calendarEventId || null, owner: lead.calendarEventOwner || null } });
-      // Stored so the next reschedule moves this entry rather than making a
-      // second one, and so a hand-over can clear the first person's diary.
-      const write = { calendarEventId: r.eventId, calendarEventOwner: r.owner };
-      if (r.eventId) write.siteVisitReplies = agents.map(email => ({ email, status: 'needsAction' }));
-      else write.siteVisitReplies = [];
-      await ref.update(write);
-      return json({ ok: true, ...r, subject });
+      // The page saves the visit and asks for the invitation at the same moment: the visit it just
+      // saved comes with the request, so the invitation is never built from a copy the save has not
+      // reached yet (that sent it from sales@ with nobody on it).
+      Object.assign(lead, visitFromBody(body.visit, user));
+      return json(await bookVisit({ db, user, ref, lead, property: body.property }));
     }
 
     // Who has answered an invitation the CRM sent. Read on demand rather than
@@ -456,9 +476,21 @@ async function calendarPost(request) {
       const agents = (Array.isArray(lead.siteVisitAgents) ? lead.siteVisitAgents : []).map(e => String(e).toLowerCase());
       if (!agents.includes(me)) return json({ ok: false, error: 'You are not on this visit' }, 403);
 
-      const r = await respondToVisit({ agent: me, eventId: lead.calendarEventId,
+      let r = await respondToVisit({ agent: me, eventId: lead.calendarEventId,
         response: body.response, reason: typeof body.reason === 'string' ? body.reason : '',
         leadId: body.leadId });
+      // On the visit, but not on its invitation (it went out before they were added, or the event
+      // was replaced): the invitation is sent again from the lead as it stands, then answered.
+      // Only when it is really missing — never on a rate limit or an outage, which would re-send it to
+      // everyone on every click.
+      if (!r.ok && (r.notInvited || (r.gone && [404, 410].includes(r.status)))) {
+        const booked = await bookVisit({ db, user, ref, lead: { id: snap.id, ...lead }, property: null, heal: true });
+        if (booked.ok && booked.eventId) {
+          r = await respondToVisit({ agent: me, eventId: booked.eventId,
+            response: body.response, reason: typeof body.reason === 'string' ? body.reason : '',
+            leadId: body.leadId });
+        }
+      }
       if (!r.ok) {
         return json({ ok: false, error: r.gone ? 'That invitation is no longer in your calendar'
           : r.notInvited ? 'You are not on this invitation' : 'That invitation does not belong to this lead' }, 409);

@@ -296,6 +296,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...against a property from the inventory', !!booked.property, booked.property);
   ok('...and nobody has answered yet', (booked.replies || []).every(r => r.status === 'needsAction'), JSON.stringify(booked.replies));
   ok('the invitation is actually sent', calendarCalls.some(c => c.op === 'visit'), JSON.stringify(calendarCalls));
+  // The visit just saved goes with the request — the server books from it, not from a copy the save
+  // may not have reached (that sent invitations from sales@ with nobody on them).
+  { const v = calendarCalls.filter(c => c.op === 'visit').pop();
+    ok('…carrying the visit just saved: who is going and when', v && v.visit && Array.isArray(v.visit.siteVisitAgents) && v.visit.siteVisitAgents.length > 0 && typeof v.visit.siteVisitAt === 'number', JSON.stringify(v && v.visit)); }
   ok('...carrying the seller\u2019s number and the address for the gate',
     !!(calendarCalls[0] && calendarCalls[0].property && calendarCalls[0].property.contactNumber), JSON.stringify(calendarCalls[0] && calendarCalls[0].property));
   ok('...and the form closes', booked.closed);

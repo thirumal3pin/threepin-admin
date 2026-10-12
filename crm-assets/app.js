@@ -3873,7 +3873,12 @@ function pushVisitToCalendar(leadId){
     return fetch('/api/tailortalk?action=calendar', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
-      body: JSON.stringify({ op:'visit', leadId: leadId, property: property })
+      // The visit just saved goes with the request — the server books from it, not from a copy the
+      // save may not have reached yet.
+      body: JSON.stringify({ op:'visit', leadId: leadId, property: property, visit: l ? {
+        siteVisitAt: l.siteVisitAt || null, siteVisitStatus: l.siteVisitStatus || null, siteVisitProperty: l.siteVisitProperty || null,
+        siteVisitAgents: visitAgentsOf(l), siteVisitNotes: l.siteVisitNotes || null,
+        siteVisitMinutes: l.siteVisitMinutes || null, siteVisitMode: l.siteVisitMode || null } : null })
     });
   }).then(function(r){ return r.json(); }).then(function(d){
     const names = (l ? visitAgentsOf(l) : []).map(e => window.crmMentions.displayName(e) || e).join(', ');
