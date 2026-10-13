@@ -118,7 +118,9 @@ for (const { vp, data, label } of CASES) {
       vh: window.innerHeight,
       heroH: h(q('.dp-hero')),
       tabsTop: top(tabs),
-      tabsSticky: tabs ? getComputedStyle(tabs).position : null,
+      // Pinned by the bar that holds them (since the header was made to scroll away) — what
+      // matters is that the tabs ride along, whichever element carries the stickiness.
+      tabsSticky: tabs ? getComputedStyle(tabs.closest('.dp-tabbar') || tabs).position : null,
       firstFactTop: top(firstFact),
       factTileH: h(firstFact),
       callH: h(q('.dp-call')),

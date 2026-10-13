@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { LEAD_SUMMARY_MODEL, LEAD_SUMMARY_MAX_TOKENS, buildLeadSummarySystemPrompt, buildLeadSummaryUserPrompt } from './_lead-summary-shared.js';
+import { writeLead } from './_lead-views.js';
 
 // Lazy so a missing ANTHROPIC_API_KEY doesn't crash module load — only an
 // actual generation attempt should fail.
@@ -75,11 +76,11 @@ export async function generatePost(request) {
       messages: [{ role: 'user', content: buildLeadSummaryUserPrompt(lead, stageName) }]
     });
     const summary = response.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    await leadRef.update({ aiSummary: summary, aiSummaryAt: Date.now(), aiSummaryError: null });
+    await writeLead(db, lead.tenantId, leadRef, { aiSummary: summary, aiSummaryAt: Date.now(), aiSummaryError: null }, 'update');
     return new Response(JSON.stringify({ ok: true, summary }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
     console.error('generate-lead-summary error:', e);
-    await leadRef.update({ aiSummaryError: String((e && e.message) || e), aiSummaryErrorAt: Date.now() }).catch(() => {});
+    await writeLead(db, lead.tenantId, leadRef, { aiSummaryError: String((e && e.message) || e), aiSummaryErrorAt: Date.now() }, 'update').catch(() => {});
     return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: { 'Content-Type': 'application/json' } });
   }
 }

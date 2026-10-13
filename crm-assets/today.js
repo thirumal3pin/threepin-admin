@@ -191,7 +191,11 @@
     var want = String(lead.propertyInterest || '').trim().toLowerCase();
     var found = (leads || []).find(function (o) {
       if (o.id === lead.id) return false;
-      if (String(o.enquiryType || '').trim().toLowerCase() !== 'seller listing') return false;
+      // The same seller rule as the rest of the CRM and the board (isSellerLead): an owner the AI
+      // recognised counts too, not only one whose enquiry type was set by hand.
+      var seller = typeof isSellerLead === 'function' ? isSellerLead(o)
+        : String(o.enquiryType || '').trim().toLowerCase() === 'seller listing';
+      if (!seller) return false;
       var oCodes = (o.propertyCodes || []).map(function (c) { return String(c).toUpperCase(); });
       if (codes.length && oCodes.some(function (c) { return codes.indexOf(c) !== -1; })) return true;
       return !!want && String(o.propertyInterest || '').trim().toLowerCase() === want;

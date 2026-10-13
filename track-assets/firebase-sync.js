@@ -23,8 +23,10 @@
 
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, deleteField, writeBatch, onSnapshot, getDoc, getDocs, query, where
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, deleteField, writeBatch, onSnapshot, getDoc, getDocs, query, where,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { leadViews } from '../shared-assets/lead-views-client.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -40,7 +42,28 @@ const firebaseConfig = {
 };
 
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// A local copy (IndexedDB) of what this page has read, shared by its tabs: the page draws at once
+// from it, and a reload (or another tab) pays only for what changed. Where the browser cannot keep
+// one (a private window, blocked storage) Firestore keeps it in memory, as before.
+let db, persistent = true;
+try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch (e) { db = getFirestore(app); persistent = false; }
+// Every lead from a few view documents instead of one read per lead (shared-assets/lead-views.js).
+const views = leadViews(db);
+// Signing out removes the local copy — nothing stays on a shared computer.
+async function signOutAndForget(auth) {
+  // A save still on its way goes first (up to 5 s): clearing the local copy would drop it. Not
+  // through by then (offline): ask — signing out now would lose those changes.
+  const flushed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), new Promise(r => setTimeout(() => r(false), 5000))]);
+  if (!flushed && !confirm('Some changes have not reached the server yet (no connection?). Sign out anyway and lose them? Cancel stays signed in until they are saved.')) return;
+  await signOut(auth);
+  try { await terminate(db); await clearIndexedDbPersistence(db); }
+  catch (e) {
+    // Another tab of the admin still open keeps the copy in use: say so, rather than leave it silently.
+    if (persistent) alert('Signed out. Close the other admin tabs too, so this computer keeps no copy of the data.');
+  }
+  location.reload();
+}
 const auth = getAuth(app);
 
 let currentTenantId = null;
@@ -69,8 +92,16 @@ function subscribeToData(tenantId){
   if(subscribed) return;
   subscribed = true;
   seedPipelineIfEmpty(tenantId).catch(e => console.error('Track pipeline seed failed:', e)).finally(() => {
-    onSnapshot(query(collection(db, 'listings'), where('tenantId', '==', tenantId)),
-      snap => { if(window.applyListingsSnapshot) window.applyListingsSnapshot(snap.docs.map(d => d.data())); },
+    // includeMetadataChanges: told also when the local copy is confirmed by the server (nothing else
+    // changed) — the board's automatic writers wait for that. A save's own echo is skipped.
+    let listingsLive = null;
+    onSnapshot(query(collection(db, 'listings'), where('tenantId', '==', tenantId)), { includeMetadataChanges: true },
+      snap => {
+        const live = !snap.metadata.fromCache;
+        if (live === listingsLive && !snap.docChanges().length) return;
+        listingsLive = live;
+        if(window.applyListingsSnapshot) window.applyListingsSnapshot(snap.docs.map(d => d.data()), live);
+      },
       err => console.error('Firestore listings sync error:', err));
 
     onSnapshot(pipelineRef(tenantId),
@@ -91,13 +122,9 @@ function subscribeToData(tenantId){
       },
       err => console.error('Firestore team sync error:', err));
 
-    // Seller leads, so a listing can name the owner who actually called in.
-    // The whole lead set is watched rather than only sellers: which leads
-    // count as sellers is a client-side rule (enquiryType OR the AI's intent
-    // — see isSellerLead in crm-assets/app.js), and Firestore cannot express
-    // that OR in one query.
-    onSnapshot(query(collection(db, 'leads'), where('tenantId', '==', tenantId)),
-      snap => { if(window.applyTrackLeadsSnapshot) window.applyTrackLeadsSnapshot(snap.docs.map(d => d.data())); },
+    // The leads, so a listing can name the owner who actually called in — every lead (which ones are
+    // sellers is a client-side rule, see isSellerLead), from the lead views: a read per ~20 leads.
+    views.watch(tenantId, (list, fromServer) => { if(window.applyTrackLeadsSnapshot) window.applyTrackLeadsSnapshot(list, fromServer); },
       err => console.error('Firestore leads sync error:', err));
   });
 }
@@ -163,11 +190,13 @@ window.trackFirebase = {
   // by field name so a future bug here cannot reach the rest of the document.
   async patchLead(leadId, patch){
     if(!currentTenantId) throw new Error('No tenant');
-    const allowed = ['listingId', 'propertyCodes', 'listingSkipped'];
+    const allowed = ['listingId', 'propertyCodes', 'listingSkipped', 'listingCode'];
     const safe = {};
     for(const k of allowed) if(k in patch) safe[k] = patch[k];
     if(!Object.keys(safe).length) return;
-    await setDoc(doc(db, 'leads', leadId), safe, { merge: true });
+    // An update, not a merge: a lead deleted in the CRM meanwhile is never brought back as a
+    // fragment holding only these three fields.
+    await views.save(currentTenantId, doc(db, 'leads', leadId), safe, 'update');
   },
 
   // A seller lead made from the board, when the property's owner is not in the CRM yet: the shape the
@@ -178,7 +207,7 @@ window.trackFirebase = {
     const stages = (p && p.exists() && p.data().stages) || [];
     const st = stages.find(s => s.key === 'new') || stages[0] || null;
     const out = { ...lead, tenantId: currentTenantId, stageId: st ? st.id : null };
-    await setDoc(doc(db, 'leads', lead.id), out);
+    await views.save(currentTenantId, doc(db, 'leads', lead.id), out, 'replace');
     if(historyEvent) await setDoc(doc(db, 'leads', lead.id, 'history', historyEvent.id), historyEvent).catch(() => {});
     return out;
   },
@@ -193,14 +222,23 @@ window.trackFirebase = {
   async getInventory(){
     if(!currentTenantId) return [];
     const snap = await getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)));
-    return snap.docs.map(d => {
-      const p = d.data();
-      return {
-        id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || '',
-        config: p.config || '', startingPrice: p.startingPrice || '', type: p.type || '',
-        photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut
-      };
-    });
+    return snap.docs.map(invRow);
+  },
+  // The inventory, live: read once, then only the properties that change (a brochure delivered,
+  // a code added) — so every check that needs it is free, and a delivery shows within seconds.
+  watchInventory(onList, onError){
+    // Not signed in yet: said as a failure (after this returns), so the caller tries again later.
+    if(!currentTenantId) { setTimeout(() => { if(onError) onError(new Error('not signed in yet')); }, 0); return () => {}; }
+    // includeMetadataChanges: told when the saved copy is confirmed by the server (fromServer); a
+    // confirmation with nothing new is passed on only once.
+    let wasLive = null;
+    return onSnapshot(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)), { includeMetadataChanges: true },
+      snap => {
+        const live = !snap.metadata.fromCache;
+        if (live === wasLive && !snap.docChanges().length) return;
+        wasLive = live;
+        onList(snap.docs.map(invRow), live);
+      }, onError);
   },
 
   // A dashboard property's internal notes (properties/{id}/internalNotes), joined oldest first —
@@ -230,9 +268,19 @@ window.trackFirebase = {
   }
 };
 
+// A dashboard property as this page uses it.
+function invRow(d) {
+  const p = d.data();
+  return {
+    id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || '',
+    config: p.config || '', startingPrice: p.startingPrice || '', type: p.type || '',
+    photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut
+  };
+}
+
 window.trackAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
-  logout: () => signOut(auth),
+  logout: () => signOutAndForget(auth),
   getTenantId: () => currentTenantId,
   getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
 };

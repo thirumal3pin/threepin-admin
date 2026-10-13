@@ -19,6 +19,7 @@ import { decideLeadChanges } from './_lead-policy.js';
 import { isBusinessLead } from '../crm-assets/leadAttention.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
 import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
+import { viewMeta, rowWrites, applyRowWrites, writeLead, withRowFallback } from './_lead-views.js';
 
 // A chat is read once it has been quiet for QUIET_MS — WhatsApp comes in bursts, and one read after
 // the burst sees everything — but never later than MAX_WAIT_MS after its first unread message, so a
@@ -26,10 +27,17 @@ import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
 export const QUIET_MS = 2 * 60000;
 export const MAX_WAIT_MS = 10 * 60000;
 
+// Read once a minute per server instance — it is asked on every webhook and every refresh, and
+// changes about never (a switch in Settings takes up to a minute to reach every instance).
+const settingsCache = new Map();   // tenantId → { at, value }
 export async function automationSettings(db, tenantId) {
+  const c = settingsCache.get(tenantId);
+  if (c && Date.now() - c.at < 60000) return c.value;
   const snap = await db.collection('settings').doc(tenantId).get();
   const s = (snap.exists && snap.data().leadAutomation) || {};
-  return { enabled: s.enabled === true, model: s.model || LEAD_AI_MODEL };
+  const value = { enabled: s.enabled === true, model: s.model || LEAD_AI_MODEL };
+  settingsCache.set(tenantId, { at: Date.now(), value });
+  return value;
 }
 
 let runSeq = 0;
@@ -153,7 +161,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   }
   if (!answer.ok) {
     if (apply) {
-      await ref.update({ 'ai.error': answer.error, 'ai.errorAt': now });
+      await writeLead(db, tenantId, ref, { 'ai.error': answer.error, 'ai.errorAt': now }, 'update');
       await ref.collection('aiRuns').doc(rid).set({ ...runRecord, ok: false, error: answer.error });
     }
     return { leadId, ok: false, error: answer.error, usage: runRecord.usage };
@@ -171,7 +179,8 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
 
   // Decide again against the lead as it is at write time: a person may have moved it while the
   // AI was reading, and the policy must respect that choice.
-  const summary = await db.runTransaction(async t => {
+  const views = await viewMeta(db, tenantId);   // fails closed: no lead written without its row
+  const summary = await withRowFallback(useRows => db.runTransaction(async t => {
     const fresh = await t.get(ref);
     if (!fresh.exists) return { leadId, ok: false, skipped: 'deleted while reading' };
     const current = fresh.data();
@@ -180,6 +189,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     const links = linksToAdd(current, candidates, known);
     if (links.length) patch.propertyCodes = [...(current.propertyCodes || []), ...links];
     t.update(ref, patch);
+    if (useRows) applyRowWrites(t, rowWrites(db, tenantId, views, leadId, patch, 'update'));
     d.history.forEach((h, i) => {
       const id = historyId(now + i);
       t.set(ref.collection('history').doc(id), { id, type: h.type, text: h.text, at: now + i, by: 'AI' });
@@ -190,7 +200,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
       moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped
     });
     return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped, links, usage: runRecord.usage };
-  });
+  }), 'AI verdict for ' + leadId);
   return summary;
 }
 

@@ -1,7 +1,9 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where
+  getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { leadViews } from '../shared-assets/lead-views-client.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -19,7 +21,27 @@ const firebaseConfig = {
 // email/password. See crm-assets/firebase-sync.js for the CRM's mirror of
 // this pattern.
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// A local copy (IndexedDB) of what this page has read, shared by its tabs: a reload pays only for
+// what changed. In memory where the browser cannot keep one.
+let db, persistent = true;
+// property.html (one property, opened cold from a link, often on a phone) keeps no local copy:
+// opening one would only slow its first paint.
+try { db = window.__pinPageMode === 'single' ? getFirestore(app) : initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); if (window.__pinPageMode === 'single') persistent = false; }
+catch (e) { db = getFirestore(app); persistent = false; }
+const views = leadViews(db);
+async function signOutAndForget(auth) {
+  // A save still on its way goes first (up to 5 s): clearing the local copy would drop it. Not
+  // through by then (offline): ask — signing out now would lose those changes.
+  const flushed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), new Promise(r => setTimeout(() => r(false), 5000))]);
+  if (!flushed && !confirm('Some changes have not reached the server yet (no connection?). Sign out anyway and lose them? Cancel stays signed in until they are saved.')) return;
+  await signOut(auth);
+  try { await terminate(db); await clearIndexedDbPersistence(db); }
+  catch (e) {
+    // Another tab of the admin still open keeps the copy in use: say so, rather than leave it silently.
+    if (persistent) alert('Signed out. Close the other admin tabs too, so this computer keeps no copy of the data.');
+  }
+  location.reload();
+}
 const auth = getAuth(app);
 const propertiesCol = collection(db, 'properties');
 
@@ -29,6 +51,8 @@ const propertiesCol = collection(db, 'properties');
 // with no claim yet gets no data access at all.
 let currentTenantId = null;
 let subscribed = false;
+let propsSeenLive = false, propsShown = false;   // the server's list of properties has arrived / anything drawn yet
+const singleMode = window.__pinPageMode === 'single';   // property.html: no saved copy, nothing to wait for
 
 function propertiesSeededRef(tenantId){ return doc(db, 'propertiesSeededFlags', tenantId); }
 
@@ -49,7 +73,14 @@ function subscribeToProperties(tenantId){
     .catch(e => console.error('Firestore seed error:', e))
     .finally(() => {
       const propertiesQuery = query(propertiesCol, where('tenantId', '==', tenantId));
-      onSnapshot(propertiesQuery, (snapshot) => {
+      // includeMetadataChanges: told also when this device's saved copy is confirmed by the server, so
+      // saves can wait for that (see saveProperty).
+      onSnapshot(propertiesQuery, { includeMetadataChanges: true }, (snapshot) => {
+        const live = !snapshot.metadata.fromCache;
+        // Nothing new to draw (a save confirmed, a connection blip): only the server's first word counts.
+        if (!snapshot.docChanges().length && propsShown && (!live || propsSeenLive)) return;
+        if (live) propsSeenLive = true;
+        propsShown = true;
         // d.id (the actual Firestore doc path) is the real identity — trust
         // it over whatever's in the data blob. Writers that never baked an
         // `id` field into the document itself (any server-side upsert that
@@ -78,8 +109,18 @@ window.dashboardFirebase = {
   // sheet columns...). A plain setDoc would delete every one of those the
   // first time anyone pressed Save from a tab whose data predated them.
   // Clearing a field in the form still works — that writes an explicit ''.
-  saveProperty: (data) => setDoc(doc(db, 'properties', data.id), { ...data, tenantId: currentTenantId }, { merge: true })
-    .catch(e => { console.error('Firestore save error:', e); throw e; }),
+  // A save writes the whole property. Made from this device's saved copy before the server's list is
+  // in, it would put that (possibly hours-old) copy back over a Sync from Sheet or a colleague's edit —
+  // so until then only a partial save (opts.partial: just the fields given) goes through.
+  isLive: () => propsSeenLive || singleMode,
+  saveProperty: (data, opts) => {
+    if (!propsSeenLive && !(opts && opts.partial) && !singleMode) {
+      const e = new Error('Still connecting — try again in a moment'); e.code = 'not-live';
+      return Promise.reject(e);
+    }
+    return setDoc(doc(db, 'properties', data.id), { ...data, tenantId: currentTenantId }, { merge: true })
+      .catch(e => { console.error('Firestore save error:', e); throw e; });
+  },
   deleteProperty: (id) => deleteDoc(doc(db, 'properties', id))
     .catch(e => { console.error('Firestore delete error:', e); throw e; }),
   // Live single-property subscription, used by property.html. Costs the same
@@ -117,8 +158,8 @@ window.dashboardFirebase = {
   // A property's agent (and a secondary). Only these keys, merged, so the sheet-owned fields and
   // the change log are untouched — an agent is the team's to set, not the sheet's.
   setPropertyAgents: (id, patch) => setDoc(doc(db, 'properties', id), { ...patch, tenantId: currentTenantId }, { merge: true }),
-  getLeads: () => getDocs(query(collection(db, 'leads'), where('tenantId', '==', currentTenantId)))
-    .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+  // Every lead, once — from the lead views (a read per ~20 leads), or the leads until they are built.
+  getLeads: () => views.readAll(currentTenantId)
     .catch(e => { console.error('Firestore leads read error:', e); return []; }),
 
   // ── Notes / events subcollection ──
@@ -169,6 +210,41 @@ window.dashboardFirebase = {
   getChanges: () => getDocs(query(collection(db, 'propertyChanges'), where('tenantId', '==', currentTenantId)))
     .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
     .catch(e => { console.error('Firestore get changes error:', e); throw e; }),
+  // The property's marketing, read only when someone opens that block (a handful of reads, never on
+  // a page load): its Shoot & Media card(s) and where each stands, and its posts with their links.
+  propertyMarketing: async (id, code) => {
+    const keys = [...new Set([id, code, String(code || '').toUpperCase()].filter(Boolean).map(String))].slice(0, 10);
+    const T = currentTenantId;
+    const [cards, rowsByCode, rowsById, pipe] = await Promise.all([
+      getDocs(query(collection(db, 'listings'), where('tenantId', '==', T), where('propertyCode', 'in', keys))),
+      getDocs(query(collection(db, 'postTracker'), where('tenantId', '==', T), where('propertyCode', 'in', keys))),
+      getDocs(query(collection(db, 'postTracker'), where('tenantId', '==', T), where('propertyId', '==', String(id)))),
+      getDoc(doc(db, 'trackPipelines', T)).catch(() => null)
+    ]);
+    const stages = (pipe && pipe.exists() && pipe.data().stages) || [];
+    const rows = new Map();
+    [...rowsByCode.docs, ...rowsById.docs].forEach(d => rows.set(d.id, { id: d.id, ...d.data() }));
+    return {
+      cards: cards.docs.map(d => {
+        const x = d.data(), st = stages.find(s => s.id === x.stageId);
+        return { id: d.id, title: x.title || '', stage: (st && st.name) || '', shootAt: x.shootAt || null, shootDoneAt: x.shootDoneAt || null,
+          leadId: x.leadId || null, listingType: x.listingType || '' };
+      }),
+      posts: [...rows.values()]
+    };
+  },
+  // Who still points at a property, asked only when someone is about to delete it (a few reads,
+  // never on a page load): board cards mapped to it, and leads linked to it by id or by code.
+  propertyUsage: async (id, code) => {
+    const keys = [...new Set([id, code, String(code || '').toUpperCase()].filter(Boolean).map(String))].slice(0, 10);
+    const [cards, leads] = await Promise.all([
+      getDocs(query(collection(db, 'listings'), where('tenantId', '==', currentTenantId), where('propertyCode', 'in', keys))),
+      Promise.all(keys.map(k => getDocs(query(collection(db, 'leads'), where('tenantId', '==', currentTenantId), where('propertyCodes', 'array-contains', k)))))
+    ]);
+    const leadIds = new Set();
+    leads.forEach(s => s.docs.forEach(d => leadIds.add(d.id)));
+    return { cards: cards.docs.map(d => d.data().title || d.id), leads: leadIds.size };
+  },
   setChangeApplied: (changeId, applied) =>
     setDoc(doc(db, 'propertyChanges', changeId), { appliedToSheet: !!applied }, { merge: true })
       .catch(e => { console.error('Firestore change-applied error:', e); throw e; })
@@ -176,7 +252,7 @@ window.dashboardFirebase = {
 
 window.dashboardAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
-  logout: () => signOut(auth),
+  logout: () => signOutAndForget(auth),
   getTenantId: () => currentTenantId,
   getUserEmail: () => (auth.currentUser && auth.currentUser.email) || '',
   // Bearer token for calls to api/*, which verify it server-side rather than

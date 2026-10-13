@@ -184,8 +184,8 @@ a { color: var(--brand-600); text-decoration-thickness: 1px; text-underline-offs
 .cur-tog { display: inline-flex; border: 1px solid var(--line-2); border-radius: 999px; overflow: hidden; background: var(--card); flex: none; }
 .cur-tog button {
   border: 0; background: none; cursor: pointer; font: inherit;
-  font-size: 10.5px; font-weight: 600; letter-spacing: .08em;
-  padding: 5px 9px; min-height: 28px; color: var(--ink-3); transition: background .15s, color .15s;
+  font-size: 11px; font-weight: 600; letter-spacing: .08em;
+  padding: 5px 9px; min-height: 28px; color: var(--ink-3); transition: background .15s;
 }
 .cur-tog button + button { border-left: 1px solid var(--line); }
 .cur-tog button:hover { color: var(--ink); }
@@ -215,7 +215,7 @@ main > * { animation: rise .18s ease-out both; }
 .bottom button {
   flex: 1; border: 0; background: none; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  font: inherit; font-size: 10.5px; letter-spacing: .02em; color: var(--ink-3);
+  font: inherit; font-size: 11px; letter-spacing: .02em; color: var(--ink-3);
   min-height: 44px; padding: 0; position: relative;
 }
 .bottom button .ic { font-size: 16px; line-height: 1; height: 18px; display: grid; place-items: center; }
@@ -257,7 +257,7 @@ main > * { animation: rise .18s ease-out both; }
   font: inherit; font-size: 14px; font-weight: 500; letter-spacing: -.005em;
   padding: 10px 16px; border-radius: var(--r); cursor: pointer;
   min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  transition: background .15s, border-color .15s, color .15s, transform .08s;
+  transition: background .15s, border-color .15s, transform .08s;
 }
 .btn:hover:not(:disabled) { border-color: var(--ink-3); }
 .btn:active:not(:disabled) { transform: translateY(1px); }
@@ -363,7 +363,7 @@ select { -webkit-appearance: none; appearance: none; background-image: linear-gr
 .preview .when { background: var(--card-2); border-radius: var(--r-md); padding: 12px 14px; font-size: 13.5px; margin-bottom: var(--s4); color: var(--ink-2); line-height: 1.5; }
 .effects { list-style: none; margin: 0 0 var(--s3); padding: 0; }
 .effects li { position: relative; padding: 0 0 0 20px; margin-bottom: 8px; font-size: 14px; line-height: 1.45; }
-.effects li::before { content: '→'; position: absolute; left: 0; color: var(--brand); font-weight: 600; }
+.effects li::before { content: '→'; position: absolute; left: 0; color: var(--brand-ink, var(--brand)); font-weight: 600; }
 .balanced { font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
 .balanced.ok { color: var(--good); }
 .balanced.no { color: var(--bad); }
@@ -411,7 +411,7 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--line-2); border-bottom:
 .card.pad0 table thead th:last-child, .card.pad0 table td:last-child { padding-right: 18px; }
 
 .tag {
-  display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em;
+  display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em;
   padding: 3px 7px; border-radius: 5px; background: var(--card-2); color: var(--ink-2); border: 1px solid var(--line);
   vertical-align: middle; margin-left: 6px;
 }
@@ -510,7 +510,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 .stage { list-style: none; margin: var(--s3) 0 0; padding: 0; }
 .stage li { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
 .stage li:last-child { border-bottom: 0; }
-.stage .pv { width: 46px; height: 46px; border-radius: 8px; flex: none; overflow: hidden; background: var(--card-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--ink-3); }
+.stage .pv { width: 46px; height: 46px; border-radius: 8px; flex: none; overflow: hidden; background: var(--card-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--ink-3); }
 .stage .pv img { width: 100%; height: 100%; object-fit: cover; }
 .stage .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage .st { font-size: 12px; white-space: nowrap; }
@@ -681,7 +681,7 @@ tr.undone td.lead .tag { text-decoration: none; }
 
 /* ═══════ PETTY-CASH SCOPE ═══════ */
 .scope-tog { margin-right: 6px; }
-.scope-tog .lbl { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px; align-self: center; }
+.scope-tog .lbl { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px; align-self: center; }
 .scope-tog.active { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .scope-banner {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
@@ -789,7 +789,7 @@ tr.click[role="button"]:focus-visible { outline: 2px solid var(--brand); outline
   flex: none; scroll-snap-align: start; display: inline-flex; align-items: center; gap: 8px;
   min-height: 40px; padding: 0 14px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--card);
   font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-2); cursor: pointer;
-  transition: background var(--d1), color var(--d1), border-color var(--d1);
+  transition: background var(--d1), border-color var(--d1);
 }
 .rec-groups .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dir, var(--ink-3)); flex: none; }
 .rec-groups .chip .cnt { font-weight: 500; color: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -816,7 +816,7 @@ tr.click[role="button"]:focus-visible { outline: 2px solid var(--brand); outline
 .act b { font-weight: 500; font-size: 15px; letter-spacing: -.005em; line-height: 1.3; }
 .act[data-tier="daily"] b { font-weight: 600; }
 .act .sub { font-size: 13px; color: var(--ink-3); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-.act .grp { position: absolute; right: 12px; top: 12px; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.act .grp { position: absolute; right: 12px; top: 12px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 .act mark { background: var(--brand-soft); color: inherit; border-radius: 2px; padding: 0 1px; }
 .act:hover { border-color: var(--line-2); background: var(--card-2); }
 .act:active { transform: scale(.985); }
@@ -879,7 +879,7 @@ details.more > .body { padding: var(--s3) 0 var(--s1); animation: rise var(--d2)
 .save-bar .sum { flex: 1; min-width: 0; font-size: 13px; line-height: 1.3; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .save-bar .sum b { display: block; font-size: 17px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.02em; font-weight: 600; }
 .save-bar .sum .todo { color: var(--ink-2); }
-.save-bar .sum .chip { display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+.save-bar .sum .chip { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
   padding: 2px 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); vertical-align: middle; }
 .save-bar .btn.primary { min-width: 92px; }
 .btn[aria-busy="true"] { color: transparent !important; position: relative; }

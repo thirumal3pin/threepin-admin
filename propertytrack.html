@@ -6,10 +6,9 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Shoot &amp; Media Track — 3 PIN Realty</title>
 
+<link rel="preload" href="shared-assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="shared-assets/fonts/inter.css">
 <link rel="icon" type="image/jpeg" href="logo.jpg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="crm-assets/style.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
@@ -34,6 +33,8 @@
     try { localStorage.setItem('crmTheme', next); } catch (e) {}
   }
 </script>
+<!-- The admin's look, last so it has the final say: Inter, neutral greys, the brand orange (shared-assets/theme.css). -->
+<link rel="stylesheet" href="shared-assets/theme.css">
 </head>
 <body>
 
@@ -79,6 +80,8 @@
       <input type="search" id="searchInput" placeholder="Search a listing, owner, Property ID…" oninput="onSearch(this.value)" aria-label="Search listings">
     </div>
     <div class="tk-filterbar">
+      <!-- Phones: the filters fold behind this one button (with a count), as in the CRM. -->
+      <button type="button" class="tk-filtoggle tk-ftog" id="tkFiltersBtn" aria-expanded="false" aria-controls="tkFilterBar" onclick="toggleTrackFilters()">Filters</button>
       <div id="tkFilterBar"></div>
       <div class="tk-sortbar" id="tkModeTog" role="group" aria-label="Board or list"></div>
     </div>
@@ -130,6 +133,7 @@
       <label for="mm_sellerName">Owner name</label><input id="mm_sellerName" type="text">
       <label for="mm_sellerPhone">Owner phone</label><input id="mm_sellerPhone" type="tel">
       <label for="mm_shootAssignee">Shoot assigned to</label><select id="mm_shootAssignee" onchange="shooterPicked(this)"></select>
+      <label for="mm_listingType">Listing type <span class="tk-opt">optional</span></label><select id="mm_listingType"><option value="">Not set</option><option value="normal">Normal</option><option value="exclusive">Exclusive</option><option value="collab">Collab</option></select>
     </div>
     <div class="tk-box-err" id="mmErr"></div>
     <div class="tk-box-ftr"><button type="button" class="tk-btn ghost" onclick="closeModal()">Cancel</button><button type="button" class="tk-btn primary" onclick="saveModal()">Save</button></div>

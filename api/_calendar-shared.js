@@ -627,7 +627,10 @@ export async function eventDetail({ viewer, eventId, key = serviceKey(), makeCli
       iCreated: sameEmail((e.organizer && e.organizer.email) || '', viewer),
       minutes: (e.start && e.end && e.start.dateTime && e.end.dateTime)
         ? Math.round((Date.parse(e.end.dateTime) - Date.parse(e.start.dateTime)) / 60000) : null,
-      repeats: Array.isArray(e.recurrence) && e.recurrence.length > 0,
+      // The grid lists single occurrences (singleEvents=true), and Google leaves `recurrence` off an
+      // occurrence — it carries recurringEventId instead. Either means it repeats.
+      repeats: !!e.recurringEventId || (Array.isArray(e.recurrence) && e.recurrence.length > 0),
+      occurrence: !!e.recurringEventId,   // one date of a repeating meeting: moving it moves that date only
       leadId: priv[STAMP] || null,
       attendees: (e.attendees || []).map(a => ({ email: a.email, status: a.responseStatus || 'needsAction', reason: a.comment || null })),
       mine: (e.attendees || []).filter(a => sameEmail(a.email, viewer))

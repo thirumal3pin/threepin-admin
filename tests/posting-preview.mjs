@@ -576,7 +576,8 @@ console.log('300 rows');
   }, many);
   const ms = m => p.evaluate(m => { const t = performance.now(); window.pgMode(m); return performance.now() - t; }, m);
   const times = {};
-  for (const m of ['today', 'sheet', 'cards']) { await ms(m); times[m] = Math.min(await ms(m), await ms(m)); }
+  // The best of five draws (after a warm-up): the code's speed, not a busy machine's worst moment.
+  for (const m of ['today', 'sheet', 'cards']) { await ms(m); let best = Infinity; for (let k = 0; k < 5; k++) best = Math.min(best, await ms(m)); times[m] = best; }
   console.log('  render ms', JSON.stringify(Object.fromEntries(Object.entries(times).map(([k, v]) => [k, Math.round(v)]))));
   // 800 ms: still well under a second, with headroom for a slower machine. (600 failed now and
   // then on the office PC even before tags — Sheet measured 376–513 there; with tags 470–610.)

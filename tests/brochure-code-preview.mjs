@@ -173,6 +173,9 @@ ok('…and only the list — the page stays open', await pg.evaluate(() => docum
 await pg.keyboard.press('Escape');
 ok('a second Escape closes the page as before', await pg.evaluate(() => !document.getElementById('brochurePanel').classList.contains('open')));
 await pg.evaluate(() => openBrochurePage());
+// The page puts the caret in the first field 50 ms after it opens; typing before that (no person
+// can) would land in whichever field the caret then moves to.
+await pg.waitForTimeout(150);
 
 // picking keeps the title typed after the code
 await pg.fill('#bfTitle', 'tnag 3BHK, Usman Road');

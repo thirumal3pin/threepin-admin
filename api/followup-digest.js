@@ -2,6 +2,10 @@ import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared
 import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
 import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
+import { rebuildLeadViews } from './_lead-views.js';
+
+// The digest, then the day's lead-views rebuild (one transaction per view document): room for both.
+export const maxDuration = 60;
 
 // What needs a person right now — the same rule book the board and action queue use, so the
 // morning digest never lists something the CRM does not show, or misses something it does.
@@ -249,12 +253,22 @@ async function digestForTenant(db, tenantId) {
   const settings = settingsSnap.exists ? settingsSnap.data() : {};
   const waRecipients = settings.followupDigestEnabled ? (settings.followupDigestRecipients || []) : [];
   const emailRecipients = settings.followupDigestEmailEnabled ? (settings.followupDigestEmails || []) : [];
-  if (!waRecipients.length && !emailRecipients.length) return { tenantId, skipped: true, results: [] };
 
+  const readAt = Date.now();
   const [leadsSnap, pipelineSnap] = await Promise.all([
     db.collection('leads').where('tenantId', '==', tenantId).get(),
     db.collection('pipelines').doc(tenantId).get()
   ]);
+  // The daily rebuild of the lead views (api/_lead-views.js), from this same read of the leads: any
+  // row a write ever missed is put right here, at no extra read. AFTER the digest goes out, so a
+  // slow rebuild can never delay or cost the day's digest.
+  const rebuild = async () => {
+    try { await rebuildLeadViews(db, tenantId, leadsSnap.docs.map(d => ({ ...d.data(), id: d.id })), readAt); }
+    catch (e) { console.error('lead views rebuild failed:', e); }
+  };
+  // The rebuild is handed back, not run here: the caller marks the day as sent FIRST, so a rebuild
+  // that runs out of time can never leave a sent digest unmarked (and sent again).
+  if (!waRecipients.length && !emailRecipients.length) return { tenantId, skipped: true, results: [], rebuild };
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
   const { overdue, days, startOfToday } = bucketLeads(leadsSnap, stages);
   const actions = actionItems(leadsSnap, stages);
@@ -284,7 +298,7 @@ async function digestForTenant(db, tenantId) {
       results.push({ channel: 'email', to, ...r });
     }
   }
-  return { tenantId, skipped: false, results };
+  return { tenantId, skipped: false, results, rebuild };
 }
 
 // Triggered by Vercel Cron (see vercel.json) once a day, or manually from
@@ -328,7 +342,7 @@ export async function GET(request) {
       if (s.lastDigestSentDate === today) { summary.push({ tenantId, skipped: 'already-sent-today' }); continue; }
 
       const r = await digestForTenant(db, tenantId);
-      if (r.skipped) { summary.push({ tenantId, skipped: 'no-recipients' }); continue; }
+      if (r.skipped) { summary.push({ tenantId, skipped: 'no-recipients' }); await r.rebuild(); continue; }
       // A send that failed for everyone is not a sent day: throwing leaves the date unmarked, so
       // the later trigger retries (sendEmail returns ok:false rather than throwing).
       if (r.results.length && !r.results.some(x => x.ok)) throw new Error('every send failed: ' + r.results.map(x => x.error).filter(Boolean).join('; '));
@@ -340,6 +354,7 @@ export async function GET(request) {
         lastDigestRun: { at: Date.now(), source: 'cron', date: today, results: r.results }
       }, { merge: true });
       summary.push({ tenantId, sent: r.results });
+      await r.rebuild();
     } catch (e) {
       console.error('followup-digest: tenant', tenantId, 'failed:', e);
       await settingsRef.set({
@@ -371,5 +386,7 @@ export async function POST(request) {
   await db.collection('settings').doc(user.tenantId).set({
     lastDigestRun: { at: Date.now(), source: 'manual', results: r.results }
   }, { merge: true }).catch(() => {});
-  return new Response(JSON.stringify(r), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  await r.rebuild();
+  const { rebuild, ...out } = r;
+  return new Response(JSON.stringify(out), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

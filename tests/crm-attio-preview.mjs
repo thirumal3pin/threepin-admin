@@ -105,6 +105,18 @@ async function openPage(viewport, { theme = null, search = '', user = 'agent.a@e
 const text = (page, sel) => page.evaluate(s => [...document.querySelectorAll(s)].map(e => e.textContent.replace(/\s+/g, ' ').trim()), sel);
 const cardText = (page, name) => page.evaluate(n => { const c = [...document.querySelectorAll('.lcard')].find(x => x.querySelector('.lcard-name').textContent === n); return c ? c.textContent.replace(/\s+/g, ' ') : null; }, name);
 
+// ── A lead opened from the board's link: Back closes it, and a reload does not open it again ──
+{
+  const page = await openPage({ width: 1280, height: 860 }, { search: '?lead=A1&from=track&listing=lst_9' });
+  const opened = await page.evaluate(() => ({ lead: document.getElementById('dp').classList.contains('open'), back: !!document.querySelector('.dp-track-link') }));
+  ok('Arriving from the board: the lead opens, with the way back to its card', opened.lead && opened.back, JSON.stringify(opened));
+  await page.evaluate(() => history.back());
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => ({ lead: document.getElementById('dp').classList.contains('open'), url: location.search, path: location.pathname }));
+  ok('…Back closes it, and the address no longer names it (a reload stays on the CRM)', !after.lead && !/lead=/.test(after.url) && /crm/.test(after.path), JSON.stringify(after));
+  await page.context().close();
+}
+
 // ── 3. Milestones ──
 {
   const page = await openPage({ width: 1440, height: 900 });
@@ -258,8 +270,11 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
 }
 {
   const page = await openPage({ width: 1440, height: 900 }, { user: 'agent.b@example.com' });
-  const chip = (await text(page, '#leadFilterBar .lf-chip')).find(c => /Mentioned me/.test(c)) || '';
+  // The focus filters live behind the bar's Filters button (the bar never scrolls sideways).
+  await page.evaluate(() => toggleFilterPanel(true));
+  const chip = (await text(page, '#leadFilterPanel .lf-chip')).find(c => /Mentioned me/.test(c)) || '';
   ok('The person mentioned gets a "Mentioned me" filter with the count', /@ Mentioned me\s*1/.test(chip), chip);
+  await page.evaluate(() => toggleFilterPanel(false));
   ok('…the card says "@ you"', /@ you/.test(await cardText(page, 'Meena R') || ''));
   await page.evaluate(() => setLeadFocus('mentions'));
   ok('…the filter shows just that lead', JSON.stringify(await text(page, '.lcard .lcard-name')) === '["Meena R"]');
@@ -417,17 +432,20 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
   ok('…as something you can actually dial', /^tel:/.test(card.tel || ''), card.tel);
 
   // The filter, which never existed.
-  const filters = await page.evaluate(() => [...document.querySelectorAll('.lf-chip')].map(c => c.textContent.replace(/\s*\d+\s*$/, '').trim()));
+  // It lives in the Filters panel (the bar itself never scrolls sideways).
+  await page.evaluate(() => toggleFilterPanel(true));
+  await page.waitForTimeout(100);
+  const filters = await page.evaluate(() => [...document.querySelectorAll('#leadFilterPanel .lf-chip')].map(c => c.textContent.replace(/\s*\d+\s*$/, '').trim()));
   ok('There is an Escalated filter', filters.some(f => /^Escalated$/.test(f)), JSON.stringify(filters));
-  // The filter strip scrolls sideways; at the end of it this was off screen at
-  // every width, which for the filter the owner follows up from is the same as
-  // not having it.
-  ok('…and it is on screen without scrolling the strip', await page.evaluate(() => {
-    const c = [...document.querySelectorAll('.lf-chip')].find(x => /^Escalated/.test(x.textContent.trim()));
+  // Off screen at the end of a sideways strip was the same as not having it: it must be in view
+  // once the panel is open, without scrolling anything.
+  ok('…and it is on screen without scrolling', await page.evaluate(() => {
+    const c = [...document.querySelectorAll('#leadFilterPanel .lf-chip')].find(x => /^Escalated/.test(x.textContent.trim()));
     if(!c) return false;
-    const r = c.getBoundingClientRect(), bar = c.closest('.lf-bar').getBoundingClientRect();
-    return r.width > 0 && r.left >= bar.left - 1 && r.right <= bar.right + 1;
+    const r = c.getBoundingClientRect();
+    return r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
   }));
+  await page.evaluate(() => toggleFilterPanel(false));
   await page.evaluate(() => setLeadFocus('escalated'));
   await page.waitForTimeout(300);
   const filtered = await page.evaluate(() => [...document.querySelectorAll('.lcard-name')].map(n => n.textContent.trim()));
@@ -491,6 +509,86 @@ const cardText = (page, name) => page.evaluate(n => { const c = [...document.que
     });
     ok('…and picking one opens that lead', jumped.opened && jumped.closed, JSON.stringify(jumped));
     await page.evaluate(() => closeDetail());
+  }
+
+  // ══════ BACK WITH A DIALOG OVER THE LEAD ══════
+  // Back closes the dialog on top, and the lead stays; Back again closes the lead — never the page.
+  {
+    const r = await page.evaluate(async () => {
+      const wait = ms => new Promise(res => setTimeout(res, ms));
+      const page0 = location.pathname;
+      openDetail('A3'); await wait(150);
+      openEditLeadModal('A3'); await wait(100);
+      history.back(); await wait(300);
+      const first = { modal: document.getElementById('lModal').classList.contains('open'), lead: document.getElementById('dp').classList.contains('open') };
+      history.back(); await wait(300);
+      const second = { lead: document.getElementById('dp').classList.contains('open'), samePage: location.pathname === page0 };
+      return { first, second };
+    });
+    ok('Back with the Edit dialog over a lead closes the dialog, not the lead', !r.first.modal && r.first.lead, JSON.stringify(r));
+    ok('…and Back again closes the lead, staying on the CRM', !r.second.lead && r.second.samePage, JSON.stringify(r));
+  }
+
+  // ══════ FILTERS ON VIEWS THAT IGNORE THEM ══════
+  // Daily task and Analytics are not filtered lists: the Filters panel and its "Showing N of M"
+  // line used to stay up over them, describing a list that was not there.
+  {
+    await page.evaluate(() => { toggleView('kanban'); if (leadFilter.focus !== 'escalated') setLeadFocus('escalated'); toggleFilterPanel(true); });
+    await page.waitForTimeout(150);
+    const shownOn = () => page.evaluate(() => {
+      const vis = id => { const el = document.getElementById(id); return !!el && !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0; };
+      return { panel: vis('leadFilterPanel'), active: vis('leadFilterActive'), open: filterPanelOpen };
+    });
+    const onBoard = await shownOn();
+    ok('Board: the Filters panel and the "Showing" line are up', onBoard.panel && onBoard.active, JSON.stringify(onBoard));
+    for (const v of ['dashboard', 'today']) {
+      await page.evaluate(v => toggleView(v), v);
+      await page.waitForTimeout(150);
+      const s = await shownOn();
+      ok(`${v}: neither the Filters panel nor the "Showing" line is left over it`, !s.panel && !s.active, JSON.stringify(s));
+    }
+    await page.evaluate(() => toggleView('kanban'));
+    await page.waitForTimeout(150);
+    const back = await shownOn();
+    ok('Back on the Board: the "Showing" line returns, the panel stays closed', back.active && !back.panel && !back.open, JSON.stringify(back));
+    await page.evaluate(() => setLeadFocus(null));
+  }
+
+  // ══════ "LEADS FOR THIS PROPERTY" BY ID OR BY CODE ══════
+  // The board's sync links a seller by the CODE on its card; the property page asks by id. Either
+  // is the same property.
+  {
+    const r = await page.evaluate(async () => {
+      await loadInventory();
+      const a2 = leads.find(l => l.id === 'A2');
+      const before = a2.propertyCodes;
+      a2.propertyCodes = ['anr-003'];
+      const res = { code: leadHasProperty(a2, 'ANR003'), other: leadHasProperty(a2, 'VLCA002'),
+        none: leadHasProperty(leads.find(l => l.id === 'A3'), 'ANR003') };
+      a2.propertyCodes = before;
+      return res;
+    });
+    ok('A lead linked by the property’s code counts as that property’s lead', r.code, JSON.stringify(r));
+    ok('…and not as another property’s', !r.other && !r.none, JSON.stringify(r));
+  }
+
+  // ══════ THE SELLER'S LISTING ROW OPENS ITS OWN CARD ══════
+  {
+    const r = await page.evaluate(async () => {
+      const a3 = leads.find(l => l.id === 'A3');
+      const keep = { ...a3 };
+      Object.assign(a3, { enquiryType: 'Seller Listing', listingId: 'lst_42', listingCode: 'ANR003' });
+      openDetail('A3');
+      await new Promise(res => setTimeout(res, 150));
+      const row = [...document.querySelectorAll('#dpInfo .pl-row')].find(x => /Listing/.test(x.textContent));
+      const href = row && row.querySelector('a') ? row.querySelector('a').getAttribute('href') : null;
+      const label = row ? row.textContent.replace(/\s+/g, ' ').trim() : '';
+      closeDetail();
+      Object.keys(a3).forEach(k => delete a3[k]); Object.assign(a3, keep);
+      return { href, label };
+    });
+    ok('A seller already on the board: "Listing" opens that exact card', r.href === 'propertytrack.html?listing=lst_42', JSON.stringify(r));
+    ok('…and shows the code the board recorded', /ANR003/.test(r.label), r.label);
   }
 
   await page.context().close();

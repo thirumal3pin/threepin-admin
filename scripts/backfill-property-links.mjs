@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { viewMeta, rowWrites, applyRowWrites } from '../api/_lead-views.js';
 import { codesIn, linksToAdd } from '../crm-assets/propertyLinks.js';
 
 const args = process.argv.slice(2);
@@ -33,8 +34,10 @@ for (const l of leads) {
   linkedLeads++; links += add.length;
   add.forEach(c => { byProperty[c] = (byProperty[c] || 0) + 1; });
   if (APPLY) {
-    batch.update(db.collection('leads').doc(l.id), { propertyCodes: [...(l.propertyCodes || []), ...add] });
-    if (++pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    const fix = { propertyCodes: [...(l.propertyCodes || []), ...add] };
+    batch.update(db.collection('leads').doc(l.id), fix);
+    applyRowWrites(batch, rowWrites(db, TENANT, await viewMeta(db, TENANT), l.id, fix, 'update'));   // its row in the lead views
+    if (++pending >= 150) { await batch.commit(); batch = db.batch(); pending = 0; }
   }
 }
 if (APPLY && pending) await batch.commit();

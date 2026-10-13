@@ -1,7 +1,13 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where, deleteField
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where, deleteField,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { leadViews } from '../shared-assets/lead-views-client.js';
+import { diffPaths, applyPaths } from '../shared-assets/lead-views.js';
+import { isUntouchedCard } from '../track-assets/seller-sync.js';
+// The board's own rule for "a card nobody worked on" (crm-assets/app.js markNotSeller).
+window.isUntouchedCard = isUntouchedCard;
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -16,7 +22,28 @@ const firebaseConfig = {
 };
 
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// A local copy (IndexedDB) of what this page has read, shared by its tabs: the page draws at once
+// from it, and a reload (or another tab) pays only for what changed. Where the browser cannot keep
+// one (a private window, blocked storage) Firestore keeps it in memory, as before.
+let db, persistent = true;
+try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch (e) { db = getFirestore(app); persistent = false; }
+// Every lead from a few view documents instead of one read per lead (shared-assets/lead-views.js).
+const views = leadViews(db);
+// Signing out removes the local copy — nothing of the CRM stays on a shared computer.
+async function signOutAndForget(auth) {
+  // A save still on its way goes first (up to 5 s): clearing the local copy would drop it. Not
+  // through by then (offline): ask — signing out now would lose those changes.
+  const flushed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), new Promise(r => setTimeout(() => r(false), 5000))]);
+  if (!flushed && !confirm('Some changes have not reached the server yet (no connection?). Sign out anyway and lose them? Cancel stays signed in until they are saved.')) return;
+  await signOut(auth);
+  try { await terminate(db); await clearIndexedDbPersistence(db); }
+  catch (e) {
+    // Another tab of the admin still open keeps the copy in use: say so, rather than leave it silently.
+    if (persistent) alert('Signed out. Close the other admin tabs too, so this computer keeps no copy of the data.');
+  }
+  location.reload();
+}
 const auth = getAuth(app);
 const leadsCol = collection(db, 'leads');
 
@@ -75,11 +102,16 @@ function subscribeToData(tenantId){
     seedSettingsIfEmpty(tenantId).catch(e => console.error('Settings seed error:', e))
   ])
     .finally(() => {
-      const leadsQuery = query(leadsCol, where('tenantId', '==', tenantId));
-      onSnapshot(leadsQuery, (snapshot) => {
-        const list = snapshot.docs.map(d => d.data());
-        if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list);
-      }, (err) => console.error('Firestore leads sync error:', err));
+      // Every lead, live — from the lead views (a read per ~20 leads), or the leads themselves
+      // until the views are built. fromServer: false while it is still this browser's local copy.
+      views.watch(tenantId, (list, fromServer) => {
+        // Each lead as it arrived, before the page touches it: a save sends only what differs —
+        // against the very object being saved when it came from a snapshot (a screen that held it
+        // across a wait compares with what IT was given, not with a newer copy).
+        savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
+        if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer);
+      },
+        err => console.error('Firestore leads sync error:', err));
 
       onSnapshot(pipelineRef(tenantId), (snap) => {
         if (snap.exists() && window.applyPipelineSnapshot) {
@@ -141,6 +173,20 @@ function watchTrackTasks(){
 // The lead fields TailorTalk keeps current until someone edits them here (see
 // api/_tailortalk-shared.js FOLLOW_FIELDS — the two lists must match).
 const TT_FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
+// Every lead as the last snapshot delivered it (JSON), the baseline a save is compared against —
+// per lead id, and per lead object (WeakMap: the copy each object was handed). Updated as soon as a
+// save is sent, so the next save compares with what was just saved.
+let savedAs = new Map();
+const savedFor = new WeakMap();
+// Every lead id this page has ever been given. A save of one of these is an update, never a create:
+// a lead deleted elsewhere meanwhile is refused, not brought back.
+const delivered = new Set();
+// What saveLead may write of a lead: never the server-owned parts (see saveLead).
+function writable(lead) {
+  const { notes, history, tt, ttState, ai, calendarEventId, calendarEventOwner, ...rest } = lead;
+  if (tt) TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
+  return rest;
+}
 
 // A write that does not go through must not look as if it did: the page has already updated and
 // often said "saved". On a quota-exhausted day every write fails. One warning per few seconds.
@@ -167,30 +213,51 @@ window.crmFirebase = {
   saveLead: (lead) => {
     // calendarEventId / calendarEventOwner are the server's (api/tailortalk.js books the visit): a page
     // re-sending its older copy would point the lead at an event that was replaced.
-    const { notes, history, tt, ttState, ai, calendarEventId, calendarEventOwner, ...rest } = lead;
-    if (tt) {
-      TT_FOLLOW_FIELDS.forEach(f => { if (!(lead.ttHold && lead.ttHold[f])) delete rest[f]; });
-    }
+    const rest = writable(lead);
     if ('phone' in rest && typeof window.phoneKey === 'function') rest.phoneKey = window.phoneKey(rest.phone);
-    return setDoc(doc(db, 'leads', lead.id), { ...rest, tenantId: currentTenantId }, { merge: true }).catch(e => saveFailed('save lead', e));
+    const data = { ...rest, tenantId: currentTenantId };
+    const ref = doc(db, 'leads', lead.id);
+    // A lead the page received: only the fields this save changed, as an update — never the rest
+    // of the page's copy (which may be older than what is saved), and never re-creating a lead
+    // someone deleted meanwhile. A new lead: written whole. With its row in the lead views,
+    // together (shared-assets/lead-views-client.js).
+    const was = savedFor.get(lead) || savedAs.get(lead.id);
+    let save;
+    if (was || delivered.has(lead.id)) {
+      const base = was ? JSON.parse(was) : {};
+      const pairs = diffPaths(writable(base), data);
+      const now = JSON.stringify(applyPaths(base, pairs));
+      savedFor.set(lead, now); savedAs.set(lead.id, now);
+      save = views.save(currentTenantId, ref, pairs, 'paths');
+    } else {
+      const now = JSON.stringify({ ...lead, ...data });
+      savedFor.set(lead, now); savedAs.set(lead.id, now); delivered.add(lead.id);
+      save = views.save(currentTenantId, ref, data, 'merge');
+    }
+    return save.catch(e => saveFailed('save lead', e));
   },
   // "Use TailorTalk's value": writes the value AND hands the field back to TailorTalk in one
   // update — saveLead() would drop the field again because it is no longer held.
   // Lead agent (and a secondary). Only these keys, so nothing else on the lead is rewritten.
-  setLeadAgents: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
+  setLeadAgents: (leadId, patch) => views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
   // "Not a seller": the lead's own fields, and its Property & Media card when that card is still
   // the empty one made automatically. A card someone has worked on is never deleted from here.
-  setLeadFields: (leadId, patch) => updateDoc(doc(db, 'leads', leadId), patch),
+  setLeadFields: (leadId, patch) => views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
   getListing: (id) => getDoc(doc(db, 'listings', id)).then(s => (s.exists() ? { id: s.id, ...s.data() } : null)),
   watchTrackTasks: () => watchTrackTasks(),
   deleteListing: (id) => deleteDoc(doc(db, 'listings', id)),
-  releaseLeadField: (leadId, field, value) => updateDoc(doc(db, 'leads', leadId), { [field]: value, ['ttHold.' + field]: false })
-    .catch(e => { console.error('Firestore release field error:', e); throw e; }),
+  releaseLeadField: (leadId, field, value) => {
+    const patch = { [field]: value, ['ttHold.' + field]: false };
+    return views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update')
+      .catch(e => { console.error('Firestore release field error:', e); throw e; });
+  },
   // Dotted paths only ('ai.suggestion', 'ai.dismissed.visit_pending', 'ai.lastMove') — the rest of
   // the AI's verdict is left exactly as the server wrote it.
   updateLeadAi: (leadId, fields) => {
     const safe = Object.fromEntries(Object.entries(fields).filter(([k]) => /^ai\.[A-Za-z_.]+$/.test(k)));
-    return updateDoc(doc(db, 'leads', leadId), safe).catch(e => console.error('Firestore AI field update error:', e));
+    if (!Object.keys(safe).length) return Promise.resolve();
+    return views.save(currentTenantId, doc(db, 'leads', leadId), safe, 'update')
+      .catch(e => console.error('Firestore AI field update error:', e));
   },
   saveAutomationSettings: ({ enabled }) => setDoc(settingsRef(currentTenantId), { leadAutomation: { enabled: !!enabled } }, { merge: true })
     .catch(e => console.error('Firestore save automation settings error:', e)),
@@ -224,15 +291,21 @@ window.crmFirebase = {
     s => cb(s.exists() ? s.data() : null, null),
     e => { console.error('Firestore watch tailortalk error:', e); cb(null, e); }
   ),
-  deleteLead: (id) => deleteDoc(doc(db, 'leads', id)).catch(e => saveFailed('delete lead', e)),
+  deleteLead: (id) => views.save(currentTenantId, doc(db, 'leads', id), null, 'delete').catch(e => saveFailed('delete lead', e)),
+  // Opening a lead re-checks its row in the views against the lead itself, in a transaction (1 read),
+  // and puts the row right if anything ever made them differ — without waiting for the daily rebuild.
+  // shown: the lead as this page has it. → 'same' · 'healed' · 'removed' · 'skipped' · 'failed'
+  healLead: (id, shown) => views.heal(currentTenantId, id, shown),
 
   // ── Notes / history subcollections ──
-  getLeadNotes: (leadId) => getDocs(collection(db, 'leads', leadId, 'notes'))
+  // since: only what was added after then (a lead opened again) — else all of it.
+  getLeadNotes: (leadId, since) => getDocs(since ? query(collection(db, 'leads', leadId, 'notes'), where('createdAt', '>', since)) : collection(db, 'leads', leadId, 'notes'))
+    // A failed read is passed on, never turned into "no notes": the page would show (and count) none.
     .then(s => s.docs.map(d => d.data()))
-    .catch(e => { console.error('Firestore get notes error:', e); return []; }),
-  getLeadHistory: (leadId) => getDocs(collection(db, 'leads', leadId, 'history'))
+    .catch(e => { console.error('Firestore get notes error:', e); throw e; }),
+  getLeadHistory: (leadId, since) => getDocs(since ? query(collection(db, 'leads', leadId, 'history'), where('at', '>', since)) : collection(db, 'leads', leadId, 'history'))
     .then(s => s.docs.map(d => d.data()))
-    .catch(e => { console.error('Firestore get history error:', e); return []; }),
+    .catch(e => { console.error('Firestore get history error:', e); throw e; }),
   saveNote: (leadId, note) => setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
   deleteNoteDoc: (leadId, noteId) => deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
   saveHistory: (leadId, event) => setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
@@ -263,7 +336,7 @@ window.crmFirebase = {
 
 window.crmAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
-  logout: () => signOut(auth),
+  logout: () => signOutAndForget(auth),
   getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null),
   getTenantId: () => currentTenantId
 };

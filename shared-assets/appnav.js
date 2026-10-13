@@ -343,6 +343,7 @@
 
   // ── Narrow / drawer ──
   function setMin(on) {
+    document.body.classList.add('rail-anim');   // a person's toggle eases; the page load does not
     document.body.classList.toggle('rail-min', !!on);
     write(K_MIN, on ? '1' : '0');
     syncToggle();
@@ -460,7 +461,47 @@
 
   // ═══════ PUBLIC ═══════
 
+  // ═══════ BACK CLOSES THE PANEL ═══════
+  // A full-screen panel (a lead, a card) owns one history entry while it is open, so the phone's
+  // Back button — or the browser's — closes it instead of leaving the console with it (and anything
+  // unsaved in it). Opening another lead in the same panel reuses the entry; closing it from the page
+  // takes the entry back out, so history never piles up.
+  var layers = [];      // [{ id, close }]
+  var skipPops = 0;     // our own history.back() calls, not the person's
+  var deferred = 0;     // entries to add once those land (a panel opened while one was still closing)
+  function pushEntry() {
+    try { history.pushState({ pinLayer: layers.length ? layers[layers.length - 1].id : '', pinDepth: layers.length }, '', location.href); } catch (e) {}
+  }
+  function openLayer(id, close) {
+    if (layers.length && layers[layers.length - 1].id === id) return;
+    layers.push({ id: id, close: close });
+    // Closing one panel and opening the next in the same moment: history.back() lands later, so the
+    // new entry waits for it — pushed now, the back would take the NEW entry away instead.
+    if (skipPops) deferred++; else pushEntry();
+  }
+  function closeLayer(id) {
+    var i = -1;
+    for (var k = layers.length - 1; k >= 0; k--) if (layers[k].id === id) { i = k; break; }
+    if (i < 0) return;
+    layers.splice(i, 1);
+    // Its entry not pushed yet (still waiting on an earlier back): nothing to take out.
+    if (deferred) { deferred--; return; }
+    skipPops++;
+    try { history.back(); } catch (e) { skipPops--; }
+  }
+  window.addEventListener('popstate', function () {
+    if (skipPops) {
+      skipPops--;
+      if (!skipPops) while (deferred) { deferred--; pushEntry(); }
+      return;
+    }
+    var top = layers.pop();
+    if (top && typeof top.close === 'function') top.close();
+  });
+
   window.AppNav = {
+    openLayer: openLayer,
+    closeLayer: closeLayer,
     /* cfg: { console, select(nav, item), signOut(), user } */
     boot: function (options) {
       cfg = options || {};
@@ -529,4 +570,22 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+})();
+
+// ═══════ THEME FLIPS CLEANLY ═══════
+// When the colour scheme changes (the system's, or the theme button's data-theme), every colour
+// changes at once: transitions are held for that one frame. Without this, an element mid-transition
+// could be left showing the old scheme's colour (dark text on a dark panel) — Chrome does not
+// re-resolve light-dark() for a transition that was running when the scheme flipped.
+(function () {
+  var root = document.documentElement;
+  var hold = function () {
+    root.classList.add('scheme-flip');
+    requestAnimationFrame(function () { requestAnimationFrame(function () { root.classList.remove('scheme-flip'); }); });
+  };
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', hold); else if (mq.addListener) mq.addListener(hold);
+  } catch (e) { /* no matchMedia: nothing to hold */ }
+  try { new MutationObserver(hold).observe(root, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) {}
 })();

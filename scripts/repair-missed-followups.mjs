@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { viewMeta, rowWrites, applyRowWrites } from '../api/_lead-views.js';
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -60,7 +61,9 @@ for (const l of stuck) {
   const ref = db.collection('leads').doc(l.id);
   const hid = 'h' + now.toString(36) + Math.random().toString(36).slice(2, 7);
   const batch = db.batch();
-  batch.update(ref, { followUpAt: l.holdUntil, followUpBy: 'ai', followUpSetAt: now, followUpNote: NOTE });
+  const fix = { followUpAt: l.holdUntil, followUpBy: 'ai', followUpSetAt: now, followUpNote: NOTE };
+  batch.update(ref, fix);
+  applyRowWrites(batch, rowWrites(db, TENANT, await viewMeta(db, TENANT), l.id, fix, 'update'));   // its row in the lead views
   batch.set(ref.collection('history').doc(hid), {
     id: hid, type: 'followup', at: now, by: 'AI',
     text: `🤖 Follow-up set for <b>${esc(fmt(l.holdUntil))}</b> (was ${esc(fmt(l.followUpAt))}, missed) — ${esc(NOTE)}`

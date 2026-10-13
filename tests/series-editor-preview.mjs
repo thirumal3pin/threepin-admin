@@ -172,6 +172,13 @@ const tiles = await p.$$eval('.ed-tile', t => t.map(x => x.textContent.replace(/
 ok('Editors, live: Ravi editing Velachery now', tiles.some(t => /^Ravi/.test(t) && /Editing Velachery 3BHK · Video · 2h 10m/.test(t)), JSON.stringify(tiles));
 ok('…Anu: not editing, 1 done this week', tiles.some(t => /^Anu/.test(t) && /Not editing now/.test(t) && /1 done this week/.test(t)), JSON.stringify(tiles));
 await p.screenshot({ path: join(OUT, 'desk-editor.png'), fullPage: true });
+// Move ▾ on an editor card: the steps the editor moves by hand, the column it is in marked.
+await p.click('.ed-active .tk-move-btn');
+await p.waitForTimeout(150);
+const mv = await p.evaluate(() => { const m = document.getElementById('tkMoveMenu'); return m ? [...m.querySelectorAll('.tk-move-i')].map(b => b.querySelector('.tk-move-l').textContent.trim()) : null; });
+ok('Move ▾ on an editor card lists the steps it can go to, its own marked', !!mv && mv.length === 4 && mv.some(l => /^Editing.*here now/.test(l)), JSON.stringify(mv));
+await p.keyboard.press('Escape');
+
 await noSideways(p, 'Editor view');
 
 console.log('desktop — per outlet: the Reel on its own, YouTube on another day');

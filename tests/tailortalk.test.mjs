@@ -11,7 +11,7 @@ import {
   planUpdate, shortValue, clean, contactParts, enquiryTypeFor, channelFor, isTestEnvelope,
   mergeChat, normaliseChat, ttLeadDocId, CHAT_BYTES_CAP, normaliseSignal
 } from '../api/_tailortalk-shared.js';
-import { applyTailorTalkEvent, pullTailorTalkPage, _clearConfigCache } from '../api/_tailortalk-sync.js';
+import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull, _clearConfigCache } from '../api/_tailortalk-sync.js';
 import { createFakeDb } from './_fake-firestore.mjs';
 
 let passed = 0, failed = 0;
@@ -591,6 +591,44 @@ section('Firestore: payloads that cannot be used');
   check('No id or contact is dead-lettered, not thrown', r.deadLettered);
   eq('Dead letter stored', db._list('ttDeadLetters').length, 1);
   eq('No lead created', db._list('leads').length, 0);
+}
+
+{
+  section('The 2-minute safety-net pull walks back to the last complete pull, and goes on where it stopped');
+  // A fake TailorTalk list, newest first: 130 conversations, one a minute.
+  const T0 = 1800000000000;
+  const convs = Array.from({ length: 130 }, (_, i) => ({ id: 'c' + i, at: T0 - i * 60000 }));
+  const calls = [];
+  const fakePage = ({ stopBefore, startAfter, pageSize }) => {
+    calls.push({ stopBefore, startAfter });
+    let from = startAfter ? convs.findIndex(c => c.at < startAfter) : 0;
+    if (from < 0) from = convs.length;
+    const slice = convs.slice(from, from + pageSize);
+    let processed = 0, reachedOld = false;
+    for (const c of slice) { if (stopBefore && c.at < stopBefore) { reachedOld = true; break; } processed++; }
+    const last = slice[slice.length - 1];
+    const done = reachedOld || slice.length < pageSize;
+    return { processed, created: 0, updated: processed, failed: slice.some(c => c.id === 'c3') ? 1 : 0, errors: [], changedLeadIds: slice.slice(0, processed).map(c => c.id), done, next: done ? null : last.at };
+  };
+  // First run ever: from the nightly sync's last complete run (100 minutes back).
+  let r = await walkRefreshPull({ from: T0 - 100 * 60000, cursor: null }, { started: T0, pullPage: fakePage, overlapMs: 10 * 60000, maxPages: 4 });
+  eq('First run: walks the window back to the nightly sync (minus the overlap)', calls[0].stopBefore, T0 - 110 * 60000);
+  check('…4 pages in this request, not finished: a cursor is kept, success not recorded', !r.done && r.state.refreshPullCursor && r.state.refreshPullCursor.until === T0 && !('lastRefreshPullOkAt' in r.state), JSON.stringify(r.state));
+  check('…a lead that failed is counted, not a reason to start over', r.stats.failed === 1 && r.stats.pulled === 100, JSON.stringify(r.stats));
+  // Next request: goes on from the cursor — not the same pages again.
+  calls.length = 0;
+  r = await walkRefreshPull({ from: T0 - 100 * 60000, cursor: r.state.refreshPullCursor }, { started: T0 + 120000, pullPage: fakePage, overlapMs: 10 * 60000, maxPages: 4 });
+  check('Next request: goes on from where the last one stopped', calls[0].startAfter === convs[99].at, JSON.stringify(calls[0]));
+  check('…reaches the end: "last complete pull" moves to when the walk began, the cursor goes', r.done && r.state.lastRefreshPullOkAt === T0 && r.state.refreshPullCursor === null, JSON.stringify(r.state));
+  // A quiet two minutes later: one page, nothing new — nothing re-read.
+  calls.length = 0;
+  const quiet = ({ stopBefore }) => { calls.push({ stopBefore }); return { processed: 0, created: 0, updated: 0, failed: 0, errors: [], changedLeadIds: [], done: true, next: null }; };
+  r = await walkRefreshPull({ from: T0, cursor: null }, { started: T0 + 240000, pullPage: quiet, overlapMs: 10 * 60000 });
+  check('Nothing new: one page, done, the window moves on', calls.length === 1 && r.done && r.state.lastRefreshPullOkAt === T0 + 240000);
+  // TailorTalk down: the walk throws, nothing is saved — the next request tries the same window.
+  let threw = false;
+  try { await walkRefreshPull({ from: T0, cursor: null }, { started: T0, pullPage: () => { throw new Error('TailorTalk 503'); } }); } catch (e) { threw = true; }
+  check('TailorTalk down: the pull fails without moving anything', threw);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

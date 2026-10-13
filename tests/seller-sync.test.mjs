@@ -8,7 +8,7 @@
 //   node tests/seller-sync.test.mjs
 
 import {
-  isSellerLead, isBusinessLead, wantsListing, newListingFor, listingPatchFor, leadPatchFor, planSync
+  isSellerLead, isBusinessLead, wantsListing, newListingFor, listingPatchFor, leadPatchFor, planSync, isUntouchedCard
 } from '../track-assets/seller-sync.js';
 import { defaultStages } from '../track-assets/track-pipeline.js';
 
@@ -91,14 +91,25 @@ section('What flows back to the lead');
 {
   const x = { ...newListingFor(lead(), FIRST, NOW, 'sync'), id: 'lst_9', propertyCode: 'TNAG0002', stageId: 'live', shootAt: NOW, media: { photos: true } };
   const p = leadPatchFor(lead(), x);
-  eq('The link and the mapped property, and nothing else',
-    Object.keys(p).sort(), ['listingId', 'propertyCodes']);
+  eq('The link and the mapped property (and which code the board put there), nothing else',
+    Object.keys(p).sort(), ['listingCode', 'listingId', 'propertyCodes']);
   eq('…with the code appended', p.propertyCodes, ['TNAG0002']);
   check('The listing\'s stage and shoot never reach the lead',
     !('stageId' in p) && !('shootAt' in p) && !('media' in p));
   eq('A property the team unlinked in the CRM is not re-added',
-    leadPatchFor(lead({ listingId: 'lst_9', unlinkedPropertyIds: ['TNAG0002'] }), x), null);
-  eq('Nothing to do once it is linked', leadPatchFor(lead({ listingId: 'lst_9', propertyCodes: ['TNAG0002'] }), x), null);
+    (leadPatchFor(lead({ listingId: 'lst_9', unlinkedPropertyIds: ['TNAG0002'], listingCode: 'TNAG0002' }), x)), null);
+  eq('Nothing to do once it is linked', leadPatchFor(lead({ listingId: 'lst_9', propertyCodes: ['TNAG0002'], listingCode: 'TNAG0002' }), x), null);
+  eq('A lead linked before the board recorded its code: the code is recorded once, nothing else moves',
+    leadPatchFor(lead({ listingId: 'lst_9', propertyCodes: ['TNAG0002'] }), x), { listingCode: 'TNAG0002' });
+  // The card mapped to another property: the old code (the board’s) comes off, the new one goes on;
+  // a code the team linked themselves stays.
+  const moved = { ...x, propertyCode: 'ANR0003' };
+  eq('Remapped: the board’s old code is swapped for the new one, the team’s own link stays',
+    leadPatchFor(lead({ listingId: 'lst_9', propertyCodes: ['VLC0001', 'TNAG0002'], listingCode: 'TNAG0002' }), moved),
+    { propertyCodes: ['VLC0001', 'ANR0003'], listingCode: 'ANR0003' });
+  eq('Unmapped: the board’s code comes off the lead',
+    leadPatchFor(lead({ listingId: 'lst_9', propertyCodes: ['TNAG0002'], listingCode: 'TNAG0002' }), { ...x, propertyCode: '' }),
+    { propertyCodes: [], listingCode: null });
 }
 
 section('The whole reconcile');
@@ -134,6 +145,23 @@ section('The whole reconcile');
   const second = planSync(afterLeads, after, FIRST, NOW, 'sync');
   eq('A second run changes nothing',
     [second.create.length, second.updateListings.length, second.updateLeads.length], [0, 0, 0]);
+}
+
+{
+  // "Not a seller" in the CRM deletes a board card only when nobody worked on it.
+  const stages = defaultStages();
+  const fresh = newListingFor({ id: 'L1', name: 'Ravi', phone: '98400 11111', propertyInterest: 'Anna Nagar 3BHK', budget: '2 Cr' }, stages[0], 1, 'sync');
+  const ok = (label, cond) => { if (cond) { passed++; console.log('  ok  ' + label); } else { failed++; console.log('  FAIL ' + label); } };
+  ok('A card exactly as the sync made it counts as untouched', isUntouchedCard({ ...fresh, tenantId: 't' }));
+  ok('…still untouched after an empty field was saved', isUntouchedCard({ ...fresh, description: '', tags: [], cuts: {} }));
+  for (const [what, patch] of [
+    ['planned cuts', { cuts: { reel: { status: 'planned' } } }], ['a tag', { tags: ['Collab'] }], ['a description', { description: 'East facing' }],
+    ['an address', { address: '12 Main Rd' }], ['a requested brochure', { brochure: { code: 'TNAG0003', requestedAt: 5 } }],
+    ['a shoot date', { shootAt: 9 }], ['a media tick', { media: { photos: true } }], ['a property code', { propertyCode: 'TNAG0003' }],
+    ['a note', { noteCount: 1 }], ['a move to another column', { reached: { new_listing: 1, details_docs: 2 } }],
+    ['the owner approved', { ownerApproved: true }], ['a board edit of the name', { own: { sellerName: true } }]
+  ]) ok(`…but a card with ${what} has work on it`, !isUntouchedCard({ ...fresh, ...patch }));
+  ok('No card: not untouched (nothing to delete)', !isUntouchedCard(null));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

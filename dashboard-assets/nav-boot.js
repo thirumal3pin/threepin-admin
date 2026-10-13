@@ -53,16 +53,21 @@
     };
   });
 
+  // Sync from sheet calls the API with the sign-in: a link that opens it waits until the session is
+  // restored (opened at once, it said "You appear to be signed out"). Other panels open at once.
+  var pending = window.AppNav.takeNav();
+  var needsAuth = { sync: true };
   var authChange = window.onDashboardAuthChange;
   window.onDashboardAuthChange = function (user) {
     window.AppNav.setUser(user && user.email ? user.email : '');
-    return authChange.apply(this, arguments);
+    var out = authChange.apply(this, arguments);
+    if (user && pending && needsAuth[pending]) { var go = pending; pending = null; setTimeout(function () { select(go); }, 0); }
+    return out;
   };
 
   // A link from another console lands with ?nav=, which is how Create
   // brochure works from Finance or the CRM. Opening straight away is safe:
   // applyPropertiesSnapshot re-renders the Missing panel when the real
   // inventory lands, so an early open fills in rather than going stale.
-  var pending = window.AppNav.takeNav();
-  if (pending) setTimeout(function () { select(pending); }, 0);
+  if (pending && !needsAuth[pending]) { var now = pending; pending = null; setTimeout(function () { select(now); }, 0); }
 })();

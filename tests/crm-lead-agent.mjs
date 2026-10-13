@@ -26,6 +26,9 @@ const LEADS = [
 const saved = [];
 const STUB = `
 window.__agentWrites = [];
+// As the real firebase-sync.js does: the board's own rule for a card nobody worked on.
+import { isUntouchedCard } from '/track-assets/seller-sync.js';
+window.isUntouchedCard = isUntouchedCard;
 window.crmFirebase = {
   saveLead: async () => {}, deleteLead: async () => {}, getLeadNotes: async () => [], getLeadHistory: async () => [],
   saveNote: async () => {}, deleteNoteDoc: async () => {}, saveHistory: async () => {}, savePipeline: async () => {},

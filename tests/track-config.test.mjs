@@ -1,5 +1,5 @@
 // Shoot & Media configuration.   node tests/track-config.test.mjs
-import { normalizeConfig, isEditor, defaultDelivery, DEFAULTS } from '../track-assets/track-config.js';
+import { normalizeConfig, isEditor, defaultDelivery, DEFAULTS, DEFAULT_DOCS, docKey, docStatus, docProgress, listingTypeOf } from '../track-assets/track-config.js';
 import { stageAge, setTargetDays, defaultStages } from '../track-assets/track-pipeline.js';
 import { parsePlan, planRows, mondayOf, isSeries } from '../track-assets/posting.js';
 
@@ -9,7 +9,18 @@ const NOW = 1789000000000, DAY = 86400000;
 console.log('3 PIN Realty — Shoot & Media configuration');
 
 const d = normalizeConfig(undefined);
-check('Nothing saved: the defaults', JSON.stringify(d) === JSON.stringify({ ...DEFAULTS, editors: [], targetDays: {}, tags: [] }));
+check('Nothing saved: the defaults', JSON.stringify(d) === JSON.stringify({ ...DEFAULTS, editors: [], targetDays: {}, tags: [], docItems: [...DEFAULT_DOCS] }));
+
+// The documents checklist: the starting list until one is saved; a saved list (even empty) is kept.
+check('Documents: the starting list when none is saved', d.docItems.length === DEFAULT_DOCS.length && d.docItems[0] === 'Sale deed / title');
+check('…a saved list as it is, cleaned', JSON.stringify(normalizeConfig({ docItems: [' Patta ', 'patta', '', 'NOC'] }).docItems) === '["Patta","NOC"]');
+check('…an emptied list stays empty', normalizeConfig({ docItems: [] }).docItems.length === 0);
+check('Document key: plain', docKey('Encumbrance certificate (EC)') === 'encumbrance_certificate_ec' && docKey('Owner ID & PAN') === 'owner_id_pan');
+const docCard = { docs: { patta: 'have', approved_plan: 'missing', encumbrance_certificate_ec: 'applied', owner_id_pan: 'na', sale_deed_title: 'bogus' } };
+check('Document status: only real ones', docStatus(docCard, 'Patta') === 'have' && docStatus(docCard, 'Sale deed / title') === '' && docStatus({}, 'Patta') === '');
+const prog = docProgress(docCard, {});
+check('Progress: in hand or not needed, out of all', prog.total === 7 && prog.done === 2 && prog.missing === 1 && prog.applied === 1, JSON.stringify(prog));
+check('Listing type: only known ones', listingTypeOf({ listingType: 'collab' }) === 'collab' && listingTypeOf({ listingType: 'x' }) === '' && listingTypeOf(null) === '');
 const c = normalizeConfig({ editors: [' Rajesh ', 'rajesh', '', 'Anu'], deliverDefault: 'zzz', dueSoonDays: 99, seriesAutoDetect: false, targetDays: { shoot_done: '4', live: 0, bogus: 3 }, tags: ['Premium', 'premium'] });
 check('Editors cleaned and de-duplicated', JSON.stringify(c.editors) === '["Rajesh","Anu"]');
 check('A bad value falls back to its default', c.deliverDefault === 'before' && c.dueSoonDays === 2);

@@ -2,6 +2,7 @@ import { getDb, verifyCrmUser, sendEmail } from './_bot-shared.js';
 import { computeDashboardMetrics, formatINR } from '../crm-assets/dashboardMetrics.js';
 import { summarizeDeadReasons } from './_dashboard-ai-shared.js';
 import { pullTailorTalkPage } from './_tailortalk-sync.js';
+import { readLeads } from './_lead-views.js';
 
 export const maxDuration = 60;
 
@@ -531,11 +532,11 @@ async function dashboardSummaryForTenant(db, tenantId, opts) {
   if (!recipients.length) return { tenantId, skipped: true, results: [] };
 
   await freshenTailorTalk(db, tenantId);
-  const [leadsSnap, pipelineSnap] = await Promise.all([
-    db.collection('leads').where('tenantId', '==', tenantId).get(),
+  // From the lead views — a read per ~20 leads instead of one per lead (api/_lead-views.js).
+  const [leadsArr, pipelineSnap] = await Promise.all([
+    readLeads(db, tenantId),
     db.collection('pipelines').doc(tenantId).get()
   ]);
-  const leadsArr = leadsSnap.docs.map(d => d.data());
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
 
   const metrics = computeDashboardMetrics(leadsArr, stages, Date.now());

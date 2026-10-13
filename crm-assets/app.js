@@ -63,25 +63,29 @@ function findLeadByPhone(phone, excludeId){
 }
 
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
-window.applyLeadsSnapshot = function(list){
-  // Notes + history now live in per-lead subcollections, so they don't arrive
-  // in this snapshot. Preserve the threads we already loaded for the open lead
-  // across the array swap so an incoming snapshot (e.g. right after saving a
-  // note) doesn't blank out the notes/history panels.
-  const openId = currentDetailId;
-  const prev = openId ? leads.find(x => x.id === openId) : null;
-  const keepNotes = prev ? prev.notes : undefined;
-  const keepHistory = prev ? prev.history : undefined;
+let docThreads = new Map();   // leadId → threads its document itself carries (kept by a full read)
+let leadsFromServer = false;   // the server's own list has arrived (not only this browser's copy)
+window.applyLeadsSnapshot = function(list, fromServer){
+  if(fromServer !== false) leadsFromServer = true;
+  // Notes + history live in per-lead subcollections, so they don't arrive in this snapshot. The
+  // threads already loaded — for every lead opened this visit, not only the open one — move across
+  // to the new lead objects, so a snapshot never blanks a panel and a lead opened again fetches
+  // only what is new (loadLeadThreads).
+  const kept = new Map();
+  for(const x of leads) if(x && (x.notes !== undefined || x.history !== undefined)) kept.set(x.id, x);
   leads = list;
-  if(openId){
-    const cur = leads.find(x => x.id === openId);
-    if(cur){
-      if(keepNotes !== undefined) cur.notes = keepNotes;
-      if(keepHistory !== undefined) cur.history = keepHistory;
-    }
+  // Threads a lead's own document still carries (from before they moved to subcollections).
+  docThreads = new Map(leads.filter(l => l && (Array.isArray(l.notes) || Array.isArray(l.history))).map(l => [l.id, { notes: l.notes, history: l.history }]));
+  for(const cur of leads){
+    const was = kept.get(cur.id);
+    if(!was) continue;
+    // The loaded threads (the document's own old ones merged with the subcollection's) always win
+    // over the document's old arrays (docThreads keeps those for the next load).
+    if(was.notes !== undefined) cur.notes = was.notes;
+    if(was.history !== undefined) cur.history = was.history;
   }
   refreshAll();
-  try{ notifyNewMentions(); }catch(e){}
+  try{ notifyNewMentions(fromServer); }catch(e){}
   // The AI summary regenerates server-side (see api/_lead-summary-generate.js)
   // and TailorTalk updates arrive from api/tailortalk.js — both come back
   // through this same snapshot. Refresh just the blocks they touch if the
@@ -94,13 +98,22 @@ window.applyLeadsSnapshot = function(list){
       renderStandSection(l);
       renderDetailStageRow(l);
       renderDetailAgents(l);
+      // Every lead, not only TailorTalk's: a follow-up, name or detail changed elsewhere (the AI, a
+      // teammate) shows at once — and the note's follow-up fields follow it unless the agent is
+      // editing them.
+      document.getElementById('dpName').textContent = l.name;
+      renderDetailInfo(l);
+      renderFollowUpSpotlight(l);
+      const fuD = document.getElementById('noteFollowUpDate'), fuT = document.getElementById('noteFollowUpTime');
+      if(fuD && fuT && String(l.followUpAt || '') !== (fuD.dataset.shownFor || '')
+         && String(parseFollowUpRaw(fuD.value, fuT.value) || '') === (fuD.dataset.shown || '')) renderNoteFollowUpFields(l);
       if(isTtLead(l)){
-        renderDetailInfo(l);
-        renderFollowUpSpotlight(l);
         renderTtSection(l);
         // A new TailorTalk event also wrote history/notes and a new profile.
         const cached = ttStateCache.get(l.id);
-        if(!cached || cached.at !== l.tt.lastEventAt){ loadTtState(l); loadLeadThreads(l); }
+        // All of it again (not only since the last fetch): TailorTalk dates a message by when it
+        // was sent, which can be before the last fetch.
+        if(!cached || cached.at !== l.tt.lastEventAt){ loadTtState(l); loadLeadThreads(l, true); }
       }
     }
   }
@@ -487,7 +500,7 @@ function stageAgeHtml(l){
   if(!age || !age.over) return '';
   const st = stageById(l.stageId);
   const title = `${age.days} days in ${st ? st.name : 'this column'} — usually ${age.target} or fewer`;
-  return `<span class="lcard-age${age.farOver ? ' far' : ' over'}" title="${escapeHtml(title)}">${age.days}d in stage</span>`;
+  return `<span class="lcard-age${age.farOver ? ' farover' : ' over'}" title="${escapeHtml(title)}">${age.days}d in stage</span>`;
 }
 function stageRuleOf(stage){
   const key = window.crmPipeline ? window.crmPipeline.stageKeyOf(stage) : null;
@@ -600,7 +613,7 @@ function inScope(l, scope, status){
   return true;
 }
 function passesLeadFilter(l){
-  if(propertyFilter) return (l.propertyCodes || []).includes(propertyFilter);
+  if(propertyFilter) return leadHasProperty(l, propertyFilter);
   if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
   if(leadFilter.agents.length && !leadFilter.agents.some(f => matchesAgentFilter(l, f))) return false;
   const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
@@ -743,8 +756,8 @@ function renderLeadFilterBar(){
     `<button type="button" class="lf-chip${cls}${pressed?' at':''}" aria-pressed="${pressed}" onclick="${onclick}"${title ? ` title="${title}"` : ''}>${pressed && cls.includes('sub') ? '<span class="lf-tick" aria-hidden="true">✓</span>' : ''}${label}<span class="lf-n">${n}</span>${pressed && cls.includes('sub') ? '<span class="lf-x" aria-hidden="true">×</span>' : ''}</button>`;
   if(propertyFilter){
     // Came from a property page: that property's leads, whatever their scope.
-    if(!inventory) loadInventory().then(() => renderLeadFilterBar());
-    const n = leads.filter(l => (l.propertyCodes || []).includes(propertyFilter)).length;
+    if(!inventory) loadInventory().then(() => { if(!inventory) return; renderLeadFilterBar(); applyFilters(); });
+    const n = leads.filter(l => leadHasProperty(l, propertyFilter)).length;
     el.innerHTML = `<button type="button" class="lf-chip prop at" onclick="clearPropertyFilter()" title="Show all leads again">🏠 Leads for ${escapeHtml(propertyShortLabel(propertyFilter))}<span class="lf-n">${n}</span><span aria-hidden="true">×</span></button>`;
     if(!document.getElementById('viewsCtlBtn')) renderViewsCtl();
     updateViewsChip();
@@ -1439,6 +1452,16 @@ function toggleConversationPane(){
   const l = currentDetailId ? leads.find(x => x.id === currentDetailId) : null;
   if(l) renderTtSection(l);
 }
+// Phones: Edit, Delete and TailorTalk sit behind the header's "⋯".
+function toggleDpMore(force){
+  const acts = document.querySelector('#dp .dp-actions');
+  const btn = document.getElementById('dpMoreBtn');
+  if(!acts) return;
+  const open = typeof force === 'boolean' ? force : !acts.classList.contains('more-open');
+  acts.classList.toggle('more-open', open);
+  if(btn) btn.setAttribute('aria-expanded', String(open));
+}
+window.toggleDpMore = toggleDpMore;
 function syncConversationPane(){
   const split = document.getElementById('dpSplit');
   const btn = document.getElementById('dpConvBtn');
@@ -1969,9 +1992,18 @@ function updateNavState(){
   // Search and the filter chips act on a list of leads. Daily task is a list
   // of today and the calendar is a list of hours, so they have nothing to act
   // on there and only get in the way.
-  const isLeadList = currentView !== 'today' && currentView !== 'calendar';
+  // Analytics counts every lead, so the search and filters (which it ignores) go too — they said
+  // "Showing 0 of 60 · TailorTalk only" over a chart of all 60.
+  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard';
   document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
   document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
+  // The Filters panel and its "Showing N of M" line sit outside the chip row: they follow it.
+  const panel = document.getElementById('leadFilterPanel'), active = document.getElementById('leadFilterActive');
+  if(!isLeadList){
+    if(typeof filterPanelOpen !== 'undefined' && filterPanelOpen){ filterPanelOpen = false; try{ renderLeadFilterBar(); }catch(e){} }
+    if(panel) panel.hidden = true;
+    if(active) active.style.display = 'none';
+  } else if(active) active.style.display = '';
 }
 // A trigger that claims aria-expanded="false" while its menu is open is worse
 // than one that says nothing, so every path that opens or closes a menu ends
@@ -2762,14 +2794,22 @@ let listVisibleIds = [];
 let bulkFuOpen = false;
 function toggleBulkLead(id, on){ if(on) bulkSelected.add(id); else bulkSelected.delete(id); renderList(); }
 function toggleBulkAll(on){ bulkSelected = on ? new Set(listVisibleIds) : new Set(); renderList(); }
-function clearBulkSelection(){ bulkSelected = new Set(); bulkFuOpen = false; renderList(); }
+function clearBulkSelection(){ bulkSelected = new Set(); bulkFuOpen = false; bulkFuPick = null; renderList(); }
+// The date and time picked in the bulk bar: kept here, because the list redraws (a tick, a minute,
+// a snapshot) rebuild the bar — drawn from these, a pick survives instead of resetting.
+let bulkFuPick = null;
+function bulkFuRemember(){
+  const d = document.getElementById('bulkFuDate'), t = document.getElementById('bulkFuTime');
+  if(d && t) bulkFuPick = { date: d.value, time: t.value };
+}
 function bulkBarHtml(){
   const n = bulkSelected.size;
   if(!n) return '';
   const opts = stages.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+  const pick = bulkFuPick || { date: toDateInputValue(new Date(Date.now() + 86400000)), time: '10:00' };
   const fu = bulkFuOpen ? `<span class="bulk-fu">
-      <input type="date" id="bulkFuDate" value="${toDateInputValue(new Date(Date.now() + 86400000))}">
-      <input type="time" id="bulkFuTime" value="10:00">
+      <input type="date" id="bulkFuDate" value="${escapeHtml(pick.date)}" oninput="bulkFuRemember()">
+      <input type="time" id="bulkFuTime" step="1800" value="${escapeHtml(pick.time)}" oninput="bulkFuRemember()">
       <button class="primary" onclick="bulkSetFollowUp()">Set</button>
     </span>` : '';
   return `<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
@@ -2964,7 +3004,7 @@ function renderList(){
         <td>${l.channel?channelLabel(l.channel):'—'}</td>
         <td>${escapeHtml(l.enquiryType||'—')}</td>
         <td>${escapeHtml(l.propertyInterest||'—')}</td>
-        <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:'—'}</td>
+        <td>${stage?`<span class="stage-pill" style="background:${stage.color}22;color:color-mix(in oklab, ${stage.color} 58%, var(--ink))">${escapeHtml(stage.name)}</span>`:'—'}</td>
         <td>${(() => { const s = nextStepOf(l); const t = topAttentionUi(l); return s || t ? `<span class="lv-next ${t ? t.severity : ''}">${escapeHtml(s ? s.text : t.label)}${s && s.due ? ` · ${escapeHtml(fmtDue(s.due))}` : ''}</span>` : '—'; })()}</td>
         <td>${sourceLabel(l.source)}</td>
         <td>${isTtLead(l)?`<span class="tt-chip ${escapeHtml(l.tt.status||'')}">${TT_STATUS[l.tt.status]?TT_STATUS[l.tt.status].icon+' ':''}${escapeHtml(ttStatusLabel(l.tt.status)||'Linked')}</span>${ttNeedsAttention(l)?' <span class="tt-chip alert" title="Escalated or flagged in TailorTalk">🚨</span>':''}`:'—'}</td>
@@ -2979,6 +3019,24 @@ function renderList(){
   wireListScroll();
   updateViewsChip();
 }
+
+// Board and List keep their place: they are rebuilt on every snapshot, every minute and after most
+// actions, and each rebuild threw the view back to the first column / first row. The scroll of the
+// board, each column and the list is kept across the rebuild.
+function keepScrollAcross(render, rootId, selectors){
+  return function(){
+    const root = document.getElementById(rootId);
+    const saved = root ? selectors.map(sel => [...root.querySelectorAll(sel)].map(e => [e.scrollLeft, e.scrollTop])) : null;
+    const out = render.apply(this, arguments);
+    if(root && saved) selectors.forEach((sel, i) => [...root.querySelectorAll(sel)].forEach((e, j) => {
+      const p = saved[i][j];
+      if(p && (p[0] || p[1])){ e.scrollLeft = p[0]; e.scrollTop = p[1]; }
+    }));
+    return out;
+  };
+}
+renderBoard = keepScrollAcross(renderBoard, 'kanbanView', ['.kanban', '.kcol', '.kcol-body']);
+renderList = keepScrollAcross(renderList, 'listView', ['.lv-scroll', '.list-view']);
 
 // ═══════ LIST VIEW SCROLL AFFORDANCE ═══════
 // The table is wider than any screen. Without a visible edge on the side that
@@ -3143,7 +3201,7 @@ function queueRowHtml(l, a){
     <div class="fu-row-main">
       <div class="fu-name-row">
         <span class="fu-name">${escapeHtml(l.name)}</span>
-        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
+        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:color-mix(in oklab, ${stage.color} 58%, var(--ink))">${escapeHtml(stage.name)}</span>`:''}
       </div>
       <div class="q-what">${escapeHtml(a.label)}</div>
       ${a.detail ? `<div class="fu-note">${escapeHtml(a.detail)}</div>` : ''}
@@ -3185,7 +3243,7 @@ function followupRowHtml(l, bucketKey){
     <div class="fu-row-main">
       <div class="fu-name-row">
         <span class="fu-name">${escapeHtml(l.name)}</span>
-        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:${stage.color}">${escapeHtml(stage.name)}</span>`:''}
+        ${stage?`<span class="stage-pill sm" style="background:${stage.color}22;color:color-mix(in oklab, ${stage.color} 58%, var(--ink))">${escapeHtml(stage.name)}</span>`:''}
         ${isSellerLead(l)?`<span class="stage-pill sm fu-seller-pill">Seller</span>`:''}
       </div>
       <div class="fu-meta">
@@ -3966,7 +4024,7 @@ function renderStandSection(l){
   if(kind === 'hold') why = [l.holdReason && P.HOLD_REASONS[l.holdReason], l.holdUntil && `revisit ${fmtDue(l.holdUntil)}`].filter(Boolean).join(' · ');
   const age = P.stageAge(l, stages);
   const ageText = age ? (age.days === 0 ? 'since today' : `for ${age.days} day${age.days === 1 ? '' : 's'}`) : '';
-  const ageCls = age && age.over ? (age.farOver ? ' far' : ' over') : '';
+  const ageCls = age && age.over ? (age.farOver ? ' farover' : ' over') : '';
   parts.push(`<div class="st-head">
     <div class="st-stage"><span class="kcol-dot" style="background:${stage ? stage.color : '#999'}"></span><b>${escapeHtml(stage ? stage.name : 'No column')}</b>${ageText ? `<span class="st-age${ageCls}" title="${age && age.target != null ? escapeHtml('Usually ' + age.target + ' days or fewer') : ''}">${ageText}</span>` : ''}${rule ? `<span class="st-rule">${escapeHtml(rule)}</span>` : ''}</div>
     ${why ? `<div class="st-why">${escapeHtml(why)}</div>` : ''}
@@ -4280,7 +4338,7 @@ function openAddLeadModal(){
   hideNewTypeRow();
   document.getElementById('lmInterest').value='';
   document.getElementById('lmBudget').value='';
-  document.getElementById('lmFollowUpDate').value='';
+  document.getElementById('lmFollowUpDate').value=''; delete document.getElementById('lmFollowUpDate').dataset.shown; delete document.getElementById('lmFollowUpDate').dataset.shownAt;
   document.getElementById('lmFollowUpTime').value='';
   document.getElementById('lmNotes').value='';
   setLeadModalDetailsSent(false);
@@ -4306,6 +4364,9 @@ function openEditLeadModal(id){
   const fu = l.followUpAt ? new Date(l.followUpAt) : null;
   document.getElementById('lmFollowUpDate').value = fu ? toDateInputValue(fu) : '';
   document.getElementById('lmFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
+  // What the fields showed: an overdue follow-up left as it is must not block saving the lead.
+  document.getElementById('lmFollowUpDate').dataset.shown = String(parseFollowUpRaw(document.getElementById('lmFollowUpDate').value, document.getElementById('lmFollowUpTime').value) || '');
+  document.getElementById('lmFollowUpDate').dataset.shownAt = String(l.followUpAt || '');
   document.getElementById('lmNotes').value='';
   setLeadModalDetailsSent(l.detailsSent === true);
   lmModalContactAt = l.contactAt || l.createdAt || Date.now();
@@ -4374,7 +4435,18 @@ function readLeadForm(){
 
   const followUpDate = document.getElementById('lmFollowUpDate').value;
   const followUpTime = document.getElementById('lmFollowUpTime').value;
+  const fuEl = document.getElementById('lmFollowUpDate');
   if(followUpDate){
+    // Editing a lead whose follow-up is overdue: unchanged, it is kept as it is (fixing a name must
+    // not need a new date) — only a date or time the agent changed has to be in the future.
+    const unchanged = fuEl.dataset.shown && String(parseFollowUpRaw(followUpDate, followUpTime) || '') === fuEl.dataset.shown;
+    // Untouched: the lead's follow-up as it is NOW — the AI or a teammate may have set a new one while
+    // this form was open, and saving a name must not put the old one back.
+    if(unchanged && fuEl.dataset.shownAt){
+      const cur = lModalEditId ? leads.find(x => x.id === lModalEditId) : null;
+      form.followUpAt = cur ? (cur.followUpAt || null) : Number(fuEl.dataset.shownAt);
+      return form;
+    }
     const r = computeFollowUpAt(followUpDate, followUpTime);
     if(r.error){ showErr(r.error); return null; }
     form.followUpAt = r.value;
@@ -4717,7 +4789,7 @@ async function runExport(){
   showToast('Preparing export…');
   const notesByLead = new Map();
   await Promise.all(rows.map(async l => {
-    const n = (l.notes && l.notes.length) ? l.notes : await window.crmFirebase.getLeadNotes(l.id);
+    const n = (l.notes && l.notes.length) ? l.notes : await window.crmFirebase.getLeadNotes(l.id).catch(() => []);
     notesByLead.set(l.id, (n || []).slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)));
   }));
 
@@ -4771,12 +4843,39 @@ async function runExport(){
 }
 
 // ═══════ DETAIL PANEL ═══════
+// Self-healing lead views: opening a lead reads the lead itself (1 read) and, if its row in the lead
+// views ever differs (a write that did not reach it), writes the row again — in one transaction
+// with the read, so it can never put back an older copy. The list catches up at once, without
+// waiting for the daily rebuild. Once per lead per visit.
+const healed = new Set();
+function healLeadRow(l){
+  if(!l || healed.has(l.id) || !window.crmFirebase || !window.crmFirebase.healLead) return;
+  healed.add(l.id);
+  // What this page shows, without what only the page adds (threads, its own _ bookkeeping).
+  const shown = Object.fromEntries(Object.entries(l).filter(([k]) => k !== 'notes' && k !== 'history' && !k.startsWith('_')));
+  window.crmFirebase.healLead(l.id, shown).catch(() => {});
+}
+// An unsent note belongs to the lead it was typed on: switching leads keeps it with that lead
+// (and brings it back on return) — never carried over to, and saved on, the next lead.
+const noteDrafts = new Map();
+function stashNoteDraft(){
+  const inp = document.getElementById('noteInput');
+  if(!inp || !currentDetailId) return;
+  if(inp.value.trim()) noteDrafts.set(currentDetailId, inp.value); else noteDrafts.delete(currentDetailId);
+}
 function openDetail(id){
   const l = leads.find(x=>x.id===id);
   if(!l) return;
+  if(currentDetailId !== id){
+    stashNoteDraft();
+    const inp = document.getElementById('noteInput');
+    if(inp) inp.value = noteDrafts.get(id) || '';
+    if(typeof hideMentionMenu === 'function') hideMentionMenu();
+  }
   currentDetailId = id;
   // Collect any accept/decline that came in since this lead was last looked at.
   refreshVisitReplies(id);
+  healLeadRow(l);
   document.getElementById('dpName').textContent = l.name;
   const sub =
     l.source==='meta' ? 'Lead via Meta (Facebook/Instagram) Ads'
@@ -4788,6 +4887,7 @@ function openDetail(id){
   document.getElementById('dpSub').innerHTML = escapeHtml(sub) + trackBackHtml(l);
   renderAiSummary(l);
 
+  toggleDpMore(false);   // a lead opens with its rarer actions folded again
   const callBtn = document.getElementById('dpCallBtn');
   if(callBtn){
     const tel = String(l.phone || '').replace(/[^\d+]/g, '');
@@ -4839,6 +4939,7 @@ function openDetail(id){
   renderNoteFollowUpFields(l);
   renderDetailsSentToggle(l);
   renderHistory(l);
+  if(window.AppNav && window.AppNav.openLayer) window.AppNav.openLayer('dp', leadBack);   // Back closes the lead
   document.getElementById('dp').classList.add('open');
   // The lead pane scrolls, not #dp — and resetting the page scroll here used to
   // throw away the caller's place in a long list, which closeDetail() then
@@ -4870,8 +4971,11 @@ function renderDetailInfo(l){
     ${l.formId?`<div class="info-b"><div class="info-b-l">Meta Form ID</div><div class="info-b-v">${escapeHtml(l.formId)}</div></div>`:''}
     ${l.adId?`<div class="info-b"><div class="info-b-l">Meta Ad ID</div><div class="info-b-v">${escapeHtml(l.adId)}</div></div>`:''}
     <div class="info-b pl-row" id="dpPropLinks">${propertyLinksInner(l)}</div>
-    ${isSellerLead(l) ? `<div class="info-b pl-row"><div class="info-b-l">Listing</div><div class="info-b-v pl-chips">
-      <span class="pl-chip"><a href="propertytrack.html?nav=sellers" title="Track this property's details, shoot and brochure on the Shoot &amp; Media board">🏷️ Track this listing →</a></span>
+    ${isSellerLead(l) || l.listingId ? `<div class="info-b pl-row"><div class="info-b-l">Listing</div><div class="info-b-v pl-chips">
+      ${l.listingId
+        // Already on the board: straight to its card (with its code, when the board recorded one).
+        ? `<span class="pl-chip"><a href="propertytrack.html?listing=${encodeURIComponent(l.listingId)}" title="Open this property's card on the Shoot &amp; Media board">${l.listingCode ? `<b>${escapeHtml(l.listingCode)}</b>` : ''}🏷️ Open its card →</a></span>`
+        : `<span class="pl-chip"><a href="propertytrack.html?nav=sellers" title="Track this property's details, shoot and brochure on the Shoot &amp; Media board">🏷️ Track this listing →</a></span>`}
     </div></div>` : ''}
   `;
   // A snapshot redraw must not throw away a property search being typed.
@@ -4915,6 +5019,17 @@ function loadInventory(){
   return inventoryLoading;
 }
 const inventoryById = id => (inventory || []).find(p => p.id === id) || null;
+// "Leads for this property": a lead holds the property's id (linked here) or its code (linked by the
+// board's sync, which goes by the code on the card) — either is the same property. Codes compare
+// without case or punctuation ("tnag-0002" is TNAG0002), as the board does.
+const propKey = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+function leadHasProperty(l, pid){
+  const have = l.propertyCodes || [];
+  if(have.includes(pid)) return true;
+  const p = inventoryById(pid);
+  const keys = new Set([propKey(pid), propKey(propertyCodeOf(p))].filter(Boolean));
+  return have.some(c => keys.has(propKey(c)));
+}
 // A site visit stores a CODE, because that is what an agent quotes. "TNAG0002"
 // is no help deciding which of today's two visits to leave for first, so
 // anywhere a person reads it, it gets the name as well.
@@ -4943,7 +5058,7 @@ function propertyLinksInner(l){
     <div class="info-b-v">
       <div class="pl-chips">${chips || '<span class="pl-none">None linked</span>'}${open ? '' : `<button type="button" class="pl-add" onclick="openPropertyLink('${l.id}')">＋ Link</button>`}</div>
       ${open ? `<div class="pl-pick">
-        <div class="pl-pick-row"><input id="plInput" autocomplete="off" placeholder="Search code, name or area…" value="${escapeHtml(propLinkQuery)}" oninput="propLinkQuery=this.value; renderPropertyResults('${l.id}')" onkeydown="if(event.key==='Escape')closePropertyLink()"><button type="button" class="pl-cancel" onclick="closePropertyLink()">Done</button></div>
+        <div class="pl-pick-row"><input id="plInput" autocomplete="off" placeholder="Search code, name or area…" value="${escapeHtml(propLinkQuery)}" oninput="propLinkQuery=this.value; renderPropertyResults('${l.id}')" onkeydown="if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closePropertyLink()}"><button type="button" class="pl-cancel" onclick="closePropertyLink()">Done</button></div>
         <div class="pl-results" id="plResults">${propertyResultsHtml(l)}</div>
       </div>` : ''}
     </div>`;
@@ -5023,33 +5138,38 @@ function clearPropertyFilter(){
 // strands you somewhere is worse than no link. The lead may not have arrived
 // from Firestore yet, so this retries until the snapshot lands.
 let pendingLeadOpen = null, pendingLeadTries = 0;
-let cameFromTrack = null;   // { listingId } when we arrived from the board
+let cameFromTrack = null;   // { leadId, listingId } when we arrived from the board — for that lead only
 try{
   const q = new URLSearchParams(location.search);
   pendingLeadOpen = q.get('lead') || null;
-  if(q.get('from') === 'track') cameFromTrack = { listingId: q.get('listing') || null };
+  if(q.get('from') === 'track') cameFromTrack = { leadId: q.get('lead') || null, listingId: q.get('listing') || null };
 }catch(e){}
 function openPendingLead(){
   if(!pendingLeadOpen) return;
   if(leads.some(l => l.id === pendingLeadOpen)){
     const id = pendingLeadOpen; pendingLeadOpen = null;
-    openDetail(id);
     // Keep ?lead= out of the URL once used, so a refresh does not fight the
-    // user's own navigation — same rule AppNav.takeNav() follows.
-    try{ const u = new URL(location.href); u.searchParams.delete('lead'); history.replaceState(null, '', u.pathname + u.search + u.hash); }catch(e){}
-  } else if(++pendingLeadTries > 40){
+    // user's own navigation — same rule AppNav.takeNav() follows. Taken out BEFORE the lead opens:
+    // the lead's own history entry is pushed on top of this one, and Back (then a refresh) must land
+    // on the plain CRM, not reopen the lead.
+    try{ const u = new URL(location.href); ['lead', 'from', 'listing'].forEach(k => u.searchParams.delete(k)); history.replaceState(history.state, '', u.pathname + u.search + u.hash); }catch(e){}
+    openDetail(id);
+  } else if(leadsFromServer || ++pendingLeadTries > 40){
+    // The server's own list has it or not: say so now, not after forty redraws (forty minutes).
     pendingLeadOpen = null;
-    showToast('That lead could not be found');
+    showToast('That lead could not be found — it may have been deleted');
   }
 }
 // The way back to the board, rendered into the lead panel's header.
 function trackBackHtml(l){
-  const listingId = (cameFromTrack && cameFromTrack.listingId) || l.listingId || null;
+  // "Back to the property card" only on the lead the board sent us to — not on every lead after.
+  const from = cameFromTrack && cameFromTrack.leadId === l.id ? cameFromTrack : null;
+  const listingId = (from && from.listingId) || l.listingId || null;
   if(!listingId && !isSellerLead(l)) return '';
   const href = listingId
     ? 'propertytrack.html?listing=' + encodeURIComponent(listingId)
     : 'propertytrack.html?nav=sellers';
-  const label = cameFromTrack ? '← Back to the property card'
+  const label = from ? '← Back to the property card'
     : (listingId ? '🏷️ Open its property card' : '🏷️ Track this listing');
   return `<a class="dp-track-link" href="${href}" title="Shoot &amp; Media Track">${label}</a>`
     + `<button type="button" class="dp-track-link not" onclick="markNotSeller('${escapeHtml(l.id)}')" title="This person is a buyer or tenant, not the owner">Not a seller? Move back to leads</button>`;
@@ -5069,7 +5189,9 @@ async function markNotSeller(leadId){
   if(listingId && window.crmFirebase.getListing){
     try{
       const card = await window.crmFirebase.getListing(listingId);
-      const untouched = card && !Object.values(card.media || {}).some(Boolean) && !card.shootAt && !card.remarks && !card.noteCount &&!card.brochureLink && !card.propertyCode;
+      // Only a card nobody worked on is removed — the board's own rule (track-assets/seller-sync.js):
+      // planned cuts, tags, a description, an address, a requested brochure all count as work.
+      const untouched = !!card && typeof window.isUntouchedCard === 'function' && window.isUntouchedCard(card);
       if(card && untouched){ await window.crmFirebase.deleteListing(listingId); cardNote = ' Its empty board card was removed.'; }
       else if(card){ cardNote = ' Its board card has work on it, so it was kept — delete it on the Shoot & Media board if it should go.'; }
     }catch(e){ cardNote = ' Its board card could not be checked — delete it on the Shoot & Media board if it is still there.'; }
@@ -5092,15 +5214,31 @@ async function markNotSeller(leadId){
 // re-render the panels. Merges with anything already on the object (e.g. a
 // parent still carrying pre-migration arrays) and de-dupes by id, so nothing
 // is ever dropped during the cutover window.
-async function loadLeadThreads(l){
+// A lead's notes and history: all of it the first time it is opened in this visit; after that only
+// what was added since (with a 5-minute margin) — merged into what is already here.
+// All of it (replacing what is here, so a note deleted elsewhere goes too) the first time, on a
+// TailorTalk event (full), when the TailorTalk activity changed since, and when the last full read
+// is over 10 minutes old. Otherwise only what was added since the last read — with an hour's margin
+// for a device whose clock is off — merged in.
+const threadsAt = new Map();   // leadId → { at, fullAt, tt }
+const THREADS_FULL_EVERY = 10 * 60000;
+async function loadLeadThreads(l, full){
   try{
+    const have = Array.isArray(l.notes) && Array.isArray(l.history);
+    const was = threadsAt.get(l.id);
+    const tt = (l.tt && l.tt.lastEventAt) || 0;
+    const whole = full || !have || !was || was.tt !== tt || Date.now() - was.fullAt > THREADS_FULL_EVERY;
+    const since = whole ? 0 : was.at - 60 * 60000;
+    const startedAt = Date.now();
     const [notes, history] = await Promise.all([
-      window.crmFirebase.getLeadNotes(l.id),
-      window.crmFirebase.getLeadHistory(l.id)
+      window.crmFirebase.getLeadNotes(l.id, since),
+      window.crmFirebase.getLeadHistory(l.id, since)
     ]);
+    threadsAt.set(l.id, { at: startedAt, fullAt: whole ? startedAt : was.fullAt, tt });
     const byId = (arr) => { const m = new Map(); (arr||[]).forEach(x => { if(x && x.id) m.set(x.id, x); }); return m; };
-    const notesMap = byId(l.notes); byId(notes).forEach((v,k)=>notesMap.set(k,v));
-    const histMap = byId(l.history); byId(history).forEach((v,k)=>histMap.set(k,v));
+    const own = docThreads.get(l.id) || {};
+    const notesMap = byId(whole ? own.notes : l.notes); byId(notes).forEach((v,k)=>notesMap.set(k,v));
+    const histMap = byId(whole ? own.history : l.history); byId(history).forEach((v,k)=>histMap.set(k,v));
     l.notes = Array.from(notesMap.values()).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
     l.history = Array.from(histMap.values()).sort((a,b)=>(a.at||0)-(b.at||0));
     recomputeNoteMeta(l);
@@ -5300,8 +5438,12 @@ function onDetailStageChange(){
   const sel = document.getElementById('dpStageSel');
   changeStage(currentDetailId, sel.value);
 }
-function closeDetail(){
+// fromHistory: Back closed it (its history entry is already gone).
+function closeDetail(fromHistory){
+  stashNoteDraft();
+  const wasOpen = document.getElementById('dp').classList.contains('open');
   document.getElementById('dp').classList.remove('open');
+  if(wasOpen && fromHistory !== true && window.AppNav && window.AppNav.closeLayer) window.AppNav.closeLayer('dp');
   if(typeof closeAlerts === 'function') closeAlerts();   // the lead's bell menu lives on <body>
   currentDetailId = null;
   convSheetOpen = false;
@@ -5319,8 +5461,13 @@ function toggleRaw(){
 function renderNotes(l){ renderTimeline(l); }
 function renderNoteFollowUpFields(l){
   const fu = l.followUpAt ? new Date(l.followUpAt) : null;
-  document.getElementById('noteFollowUpDate').value = fu ? toDateInputValue(fu) : '';
-  document.getElementById('noteFollowUpTime').value = fu ? toTimeInputValue(fu) : '';
+  const d = document.getElementById('noteFollowUpDate'), t = document.getElementById('noteFollowUpTime');
+  d.value = fu ? toDateInputValue(fu) : '';
+  t.value = fu ? toTimeInputValue(fu) : '';
+  // What the fields were drawn from: a note changes the follow-up only when the agent changed
+  // these fields — not because the lead's follow-up moved meanwhile (the AI, a teammate).
+  d.dataset.shown = String(parseFollowUpRaw(d.value, t.value) || '');
+  d.dataset.shownFor = String(l.followUpAt || '');
   const actions = document.getElementById('noteFuActions');
   if(actions) actions.style.display = l.followUpAt ? 'flex' : 'none';
 }
@@ -5369,8 +5516,9 @@ function setFuIn(dateId, timeId, spec){
   const d = new Date();
   if(spec.hours){
     d.setTime(d.getTime() + spec.hours*3600000);
-    // To the next five minutes, so the chip reads "4:35" and not "4:37".
-    d.setMinutes(Math.ceil(d.getMinutes()/5)*5, 0, 0);
+    // To the next half hour — the time fields step in 30 minutes, so "4:37" would be a time the
+    // picker cannot show (and saves off the half hour): it reads "5:00".
+    d.setMinutes(Math.ceil(d.getMinutes()/30)*30, 0, 0);
     dateInp.value = toDateInputValue(d);
     timeInp.value = toTimeInputValue(d);
     return;
@@ -5454,11 +5602,15 @@ function addNote(){
   const fuTimeStr = document.getElementById('noteFollowUpTime').value;
   const currentAt = l.followUpAt || null;
   const candidateAt = parseFollowUpRaw(fuDateStr, fuTimeStr);
+  // Did the agent change the fields? Compared with what they showed when drawn — not with the
+  // lead's follow-up now, which the AI or a teammate may have moved since (that must stay).
+  const shown = document.getElementById('noteFollowUpDate').dataset.shown;
+  const shownAt = shown ? Number(shown) : null;
   let nextFollowUpAt = currentAt;
   // Only re-validate "must be future" when the agent actually changed the
   // date/time — leaving it as-is must never block saving a note, even if
   // that existing follow-up has since gone overdue.
-  if(candidateAt !== currentAt){
+  if(candidateAt !== shownAt && candidateAt !== currentAt){
     if(candidateAt === null){
       nextFollowUpAt = null;
     } else {
@@ -5494,7 +5646,7 @@ function addNote(){
   l.updatedAt = now;
   l.updatedBy = currentUserEmail || l.updatedBy || null;
   l.lastActionType = 'note';
-  inp.value='';
+  inp.value=''; noteDrafts.delete(l.id);
   renderNotes(l);
   renderNoteFollowUpFields(l);
   renderFollowUpSpotlight(l);
@@ -5598,8 +5750,11 @@ function mentionifyHtml(escapedText){
 // New mentions of me while the CRM is open → one toast.
 const mentionsSeen = new Set();
 let mentionsPrimed = false;
-function notifyNewMentions(){
+// fromServer false: still this browser's local copy, perhaps hours old — not a baseline to compare
+// the server's list against (every mention made since would pop up as new on each open).
+function notifyNewMentions(fromServer){
   if(!currentUserEmail || !window.crmMentions) return;
+  if(!mentionsPrimed && fromServer === false) return;
   const mine = leads.map(l => ({ l, m: myOpenMention(l) })).filter(x => x.m);
   const fresh = mine.filter(x => !mentionsSeen.has(`${x.l.id}:${x.m.at}`));
   fresh.forEach(x => mentionsSeen.add(`${x.l.id}:${x.m.at}`));
@@ -5653,7 +5808,7 @@ function mentionKeydown(e){
   if(e.key === 'ArrowDown'){ e.preventDefault(); mentionState.index = (mentionState.index + 1) % n; renderMentionMenu(); }
   else if(e.key === 'ArrowUp'){ e.preventDefault(); mentionState.index = (mentionState.index - 1 + n) % n; renderMentionMenu(); }
   else if(e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); pickMention(mentionState.index); }
-  else if(e.key === 'Escape'){ e.preventDefault(); hideMentionMenu(); }
+  else if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); hideMentionMenu(); }
 }
 function pickMention(i){
   const inp = document.getElementById('noteInput');
@@ -6495,6 +6650,20 @@ function openLayers(){
     .sort((a,b) => (parseInt(getComputedStyle(a).zIndex) || 0) - (parseInt(getComputedStyle(b).zIndex) || 0));
 }
 function topLayer(){ const l = openLayers(); return l[l.length - 1] || null; }
+// Back (a phone's, or the browser's) with a dialog or a calendar sheet open over the lead: that
+// closes and the lead stays, with Back armed for it again. Back used to close the lead underneath and
+// leave the dialog sitting over the board.
+function leadBack(){
+  const again = () => { if(window.AppNav && window.AppNav.openLayer) window.AppNav.openLayer('dp', leadBack); };
+  if(document.querySelector('.cal-sheet') && window.PinCalendar && window.PinCalendar.closeTopSheet){ window.PinCalendar.closeTopSheet(); again(); return; }
+  const top = topLayer();
+  if(top && top.id !== 'dp' && document.getElementById('dp').classList.contains('open')){
+    const fn = LAYER_CLOSERS[top.id];
+    fn ? fn() : top.classList.remove('open');
+    again(); return;
+  }
+  closeDetail(true);
+}
 
 function focusablesIn(el){
   return [...el.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')]
@@ -6549,6 +6718,9 @@ document.addEventListener('keydown', e => {
   // focus (calendar.js). Left to this handler, Escape also closed the lead behind it, and Tab
   // sent focus to the lead's controls underneath.
   if((e.key === 'Escape' || e.key === 'Tab') && document.querySelector('.cal-sheet')) return;
+  // Escape already used by something smaller (the @mention list, a search box's popup) or by the
+  // phone menu drawer: that is all it does — the lead behind stays open.
+  if(e.key === 'Escape' && (e.defaultPrevented || document.body.classList.contains('rail-open'))) return;
   if(e.key === 'Escape'){
     // Close only the topmost layer. Closing all of them meant that pressing
     // Escape in the Edit modal also closed the lead behind it, dumping you back

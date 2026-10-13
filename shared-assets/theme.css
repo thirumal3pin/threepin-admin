@@ -1,0 +1,253 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   THE ADMIN'S LOOK — one place, loaded LAST on every page (after the page's own
+   stylesheet and any inline <style>), so every console speaks the same visual
+   language: the reference the owner chose (the Listing page).
+
+     Type      Inter (self-hosted, shared-assets/fonts/inter.css) for everything —
+               text, headings, dates, counts, labels — with figures that line up
+               (tabular) where the pages ask for "mono". No serif display face.
+               A true monospace only for code.
+     Colour    Neutral greys (no warm tint), white cards on a near-white ground,
+               hairline borders, near-black ink. One accent: the brand orange,
+               solid on the selected thing (an active tab, a chosen status, the
+               current menu item's icon tile).
+     Shape     Radii 6 · 10 · 12 · 16. Cards lie flat (hairline, no shadow);
+               shadow only for what floats.
+
+   Each console names its tokens in its own way — CRM / Shoot & Media / Dashboard
+   (--border, --ink2, --bg2) and Finance / Home (--line, --ink-2, --card-2) — so
+   both sets are given here. light-dark(): the light value is the reference; the
+   dark value is what each dark theme already was (a light-only page simply
+   never asks for it).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Type ── */
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --serif: var(--sans);
+  --mono: var(--sans);         /* figures: every rule using it also sets tabular-nums */
+  --code: 'SF Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /* ── Accent ── */
+  --brand: #FF8A00;
+  --brand-600: light-dark(#F07F00, #FF9B1A);
+  --brand-mark: light-dark(#E07700, #FF9E24);
+  --brand-ink: light-dark(#A35A00, #FFA22E);          /* orange TEXT on white: 5.1:1 */
+  --brand-soft: light-dark(#FFF4E6, rgba(255,138,0,.12));
+  --brand-line: light-dark(#FFD9AD, rgba(255,138,0,.34));
+  --brand-200: #FFD3A1;
+  --on-brand: #1A1206;          /* text on a solid orange fill: 8:1 (white would be 2.4:1) */
+  --ring: 0 0 0 3px light-dark(rgba(255,138,0,.26), rgba(255,138,0,.36));
+
+  /* ── Grounds and lines (CRM · Shoot & Media · Dashboard names) ── */
+  --bg: light-dark(#F8F8F8, #0F1216);
+  --bg2: light-dark(#F2F2F2, #1F252E);
+  --white: light-dark(#FFFFFF, #151920);
+  --card: light-dark(#FFFFFF, #161A21);
+  --raised: light-dark(#FFFFFF, #1C222A);
+  --border: light-dark(#E6E6E6, #252B34);
+  --border2: light-dark(#D4D4D4, #333B46);
+
+  /* ── Ink: near-black, then three greys, each AA on white, --bg and --bg2 ── */
+  --ink: light-dark(#171717, #ECEAE5);
+  --ink2: light-dark(#3D3D3D, #B9B5AE);
+  --ink3: light-dark(#5C5C5C, #8A867F);
+  --ink4: light-dark(#686868, #908B84);
+
+  /* ── The same, by Finance's and Home's names ── */
+  --card-2: light-dark(#F2F2F2, #232120);
+  --band: #FAFAFA;
+  --line: light-dark(#E6E6E6, #2C2825);
+  --line-2: light-dark(#D4D4D4, #3D3733);
+  --ink-2: light-dark(#4D4D4D, #B3ABA0);
+  --ink-3: light-dark(#686868, #877F74);
+
+  /* ── Shape ── */
+  --r1: 6px;     /* chips, pills, tiny controls */
+  --r2: 10px;    /* buttons, inputs, rows */
+  --r3: 12px;    /* cards, columns, panels */
+  --r4: 16px;    /* dialogs, sheets */
+  --r: var(--r3);
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+  --shadow-c: light-dark(rgba(0,0,0,.06), rgba(0,0,0,.44));
+  --shadow-c2: light-dark(rgba(0,0,0,.12), rgba(0,0,0,.60));
+}
+
+/* Inter, set the way it reads best on screen: hinted shapes at small sizes, tighter
+   tracking as it grows, figures that line up in columns. */
+html { -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--sans);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.006em;
+}
+h1, h2, h3, h4 { font-family: var(--sans); letter-spacing: -0.017em; }
+h1 { font-weight: 650; }
+h2, h3, h4 { font-weight: 600; }
+input, select, textarea, button { font-family: inherit; }
+table, .num, [data-num] { font-variant-numeric: tabular-nums; }
+code, kbd, samp, pre { font-family: var(--code); }
+
+/* ── The side menu, as in the reference: the current entry on a soft grey pill, its icon
+   in a solid orange tile — not a tinted wash. ── */
+#appRail {
+  --rl-on-bg: var(--bg2, #F2F2F2);
+  --rl-hover: light-dark(rgba(0,0,0,.04), rgba(255,255,255,.05));
+  --rl-accent: var(--brand-ink, #A35A00);
+}
+#appRail[data-console="finance"] { --rl-on-bg: var(--card-2, #F2F2F2); }
+#appRail .rl-item.on, #appRail .rl-h.on { font-weight: 600; }
+/* Every icon in the same 26px box, so the tile never shifts a label out of line. */
+#appRail .rl-ico { width: 26px; flex: none; text-align: center; }
+#appRail .rl-h.on .rl-ico,
+#appRail .rl-item.on .rl-ico {
+  width: 26px; height: 26px; margin: -3px 0; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--brand); color: #fff;
+}
+#appRail .rl-item.on::before { display: none; }
+#appRail .rail-brand-nm { font-weight: 650; }
+
+/* ── Dark-theme legibility: the quiet greys one step lighter (AA on every dark surface), and
+   white on a light red is never legible — a count on red reads dark there, as the CRM's do. ── */
+:root {
+  --ink3: light-dark(#5C5C5C, #9C978F);
+  --ink4: light-dark(#686868, #96918A);
+}
+#appRail .rl-badge.alert, .tk-n.hot, #postingView .pg-bar .tk-n.hot { color: light-dark(#fff, #2A0A0A); }
+
+/* ═══════ MOTION ═══════
+   One vocabulary for everything that moves, so nothing moves on its own terms:
+     --ease-out     for things arriving (fast start, gentle stop)
+     --ease-spring  a touch of settle for things that are picked, opened or pressed (linear())
+     --dur-1/2/3    120 · 200 · 320ms — feedback · small surfaces · panels
+   Progressive: a browser without a feature simply shows the change at once. "Reduce motion"
+   turns all of it off. */
+:root {
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: linear(0, .008 1.1%, .031 2.2%, .129 4.8%, .257 7.2%, .671 14.2%, .789 16.8%, .881 19.6%, .947 22.6%, .99 26.2%, 1.008 29.1%, 1.019 34%, 1.012 41.3%, 1.002 51.3%, 1);
+  --dur-1: 120ms; --dur-2: 200ms; --dur-3: 320ms;
+  --ease: var(--ease-out);
+  /* height: auto and friends can be animated (an accordion opening, a panel growing). */
+  interpolate-size: allow-keywords;
+}
+
+/* Moving between consoles (CRM → Shoot & Media → Finance): the browser cross-fades the page and
+   keeps the side menu where it is, instead of a white flash and a redraw. */
+@view-transition { navigation: auto; }
+#appRail { view-transition-name: app-rail; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: var(--dur-2); animation-timing-function: var(--ease-out); }
+
+/* Feedback on every control: colours ease, a press settles. `scale` (not transform), so a
+   control already moved by a transform is never knocked out of place. */
+:where(button, [role="button"], a.btn, .tk-btn, .lf-chip, .rl-item, .rl-h) {
+  /* Not `color`: a text colour mid-transition when the system theme flips can be left at the old
+     scheme's value (seen in Chrome) — text changes colour at once, surfaces ease. */
+  transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out), scale var(--dur-1) var(--ease-spring);
+}
+:where(button, [role="button"], .tk-btn):not(:disabled):active { scale: .97; }
+
+/* One focus ring for the keyboard, the brand's own — never on a mouse click. */
+:where(button, a, [role="button"], [tabindex], summary):focus-visible {
+  outline: 2px solid var(--brand-600); outline-offset: 2px; border-radius: inherit;
+}
+
+/* Scrollbars that are there when needed and quiet otherwise. */
+:root { scrollbar-color: var(--border2) transparent; }
+::selection { background: var(--brand-soft); color: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+  :where(button, [role="button"], .tk-btn):active { scale: none; }
+  @view-transition { navigation: none; }
+}
+
+/* ═══════ COMPONENTS — the reference's details, console by console ═══════
+   Same specificity as each console's own rule; this file loads last, so it decides. Only shape,
+   line and accent change here — sizes and layouts stay each page's own. */
+
+/* Buttons — secondary: white, a 1px hairline, radius 10. Primary: solid orange, dark text. */
+.tt-btn, .dp-act, .dp-back, .modal-cancel, .stages-btn, .td-act, .dash-card-btn, .note-fu-btn, .kb-upload-btn, .kb-paste-toggle, .kb-drive-btn,
+.dp-hact, .cta-view, .pmodal-cancel, .int-btn-cancel, .export-btn, .tk-btn, #postingView .tk-btn, #pgModal .tk-btn, .pt-acts .tk-btn, .btn {
+  border-width: 1px; border-radius: var(--r2);
+}
+.addl-btn, .modal-save, .note-btn, .login-submit, .kb-add-btn, .stage-add-row button, .bulk-bar button.primary { border-radius: var(--r2); }
+.addp-btn { background: var(--brand); border-color: var(--brand); color: var(--on-brand); border-radius: var(--r2); }
+.addp-btn:hover { background: var(--brand-600); border-color: var(--brand-600); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.btn.primary:hover { background: var(--brand-600); border-color: var(--brand-600); }
+.tk-btn.primary:hover, .addl-btn:hover, .modal-save:hover { background: var(--brand-600); border-color: var(--brand-600); }
+
+/* Tabs — text, with a 2px orange line under the one you are on. */
+.dp-tab, .bp-tab { border-bottom-width: 2px; }
+.dp-tab.active, .bp-tab.on, .tt-tab.at, #postingView .pg-bar .tk-sbtn.on { color: var(--ink); border-bottom-color: var(--brand); }
+
+/* Cards lie flat: a hairline, no shadow at rest (a lift on hover where the page asks for one). */
+.card, .stat-b, .summary-card, .conn-wrap, .spec-t, .cmp-t, .bp-card, .bp-form, .int-item { border-width: 1px; box-shadow: none; }
+.card:hover { box-shadow: var(--shadow-md); }
+
+/* Shoot & Media's filter row: every control the same height and caret, a breath below the search. */
+.tk-filterbar { padding-top: 10px; }
+.tk-dd { border-radius: var(--r2); }
+.tk-dd-sort, .tk-dd-pick { padding-left: 11px; }
+.tk-dd-sort select, .tk-dd-pick select {
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); border: 0; padding-top: 7px; padding-bottom: 7px; padding-left: 0; cursor: pointer;
+  appearance: none; -webkit-appearance: none; padding-right: 22px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235C5C5C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 4px center;
+}
+.tk-dd-bro.on { border-color: var(--ink2); }   /* one "on" look for every filter in the row */
+
+/* ═══════ EYE STRAIN: 11px is the floor for anything a person reads ═══════
+   The consoles had grown 9–10.5px labels, counts and timestamps (found by tests/ui-audit-all.mjs on
+   every screen). Each is lifted to 11px here; carets and other glyphs are decoration, not text. */
+.lf-n, .rl-badge, .tk-n, .stat-b-l, .wk-ch, .tk-code, .tk-count, .sec-title, .dup-sec-title, .info-b-l, .dp-meta-l,
+.dp-agent-l, .field label, .login-field label, .kcol-rule, .tk-sub2, .sr-k, .rl-gnm, .pm-pts, .tk-rel, .ed-due, .tl-meta,
+.dp-builder-tag, .tk-late, .tk-miss, .kcol-urgent, .td-sec-mine, .tt-chip, .pg-fgl, .tk-next-lab, .tl-t, .pm-code, .pm-conf,
+.tk-tag, .pg-ser, .lcard-next, .tt-tab-n, .tl-del, .q-title, .rail-brand-sb, .bell-count, .lv-th-label, .tt-stat-l, .tk-pill,
+.dp-ai-summary-meta, .dp-ai-regen, .dp-flag-label, .lcard-src, .tl-kind, .sv-agent-free, .tk-bchip, .pm-sc-b, .dash-stat-label,
+.dash-kpi-label, .dash-mini-title, .fu-spotlight-label, .tk-req, .lcard-time, .lcard-step-due, .lcard-age, .sync-kind, .lbl,
+.stage-pill.sm, .tt-sub, .tk-mbar-n, .tk-av, .wf-pill, .wf-title, .list-view th, .dash-chart-table th, .chg-count, .ms-count,
+.stage-pill, .tk-blk, .st-label, #lvScrollHint, .lcard-flag, .lcard-followup, .tt-signal, .kcol-count {
+  font-size: 11px !important;   /* a floor, whatever more specific rule a console has */
+}
+/* Quiet metadata in sentence case, like the reference's "Available" pill — not shouted capitals. */
+.lcard-src { text-transform: none; letter-spacing: 0; font-weight: 600; }
+/* A select as wide as what it shows, not its longest option (newer browsers; others keep their width). */
+.tk-dd-sort select, .tk-dd-pick select { field-sizing: content; }
+/* Shoot & Media: the filter row starts and ends exactly where the search box does (as in the CRM). */
+.tk-filterbar { padding-left: 0; padding-right: 0; }
+
+/* One accent family: the old gold/amber "selected" colour (#B45309) becomes the brand's own deeper
+   orange everywhere — the Dashboard's active tab, its labels, its favourites. */
+:root {
+  --gold: var(--brand-ink); --gold-bg: var(--brand-soft); --gold-lt: light-dark(#FFF9F1, rgba(255,138,0,.07));
+}
+/* The property header's actions are one quiet row: neutral outlines, no blue or purple frames. */
+.dp-hact.share, .crm-btn { border: 1px solid var(--border); color: var(--ink2); background: var(--white); background-image: none; }
+.dp-hact.share:hover, .crm-btn:hover { border-color: var(--ink); color: var(--ink); background: var(--white); background-image: none; }
+/* An opened row on the Daily task: a slightly stronger hairline and the soft lift — not a dark frame. */
+.td-row[open] { border-color: var(--border2); }
+/* The frame the colour scheme flips (shared-assets/appnav.js): nothing transitions, so every
+   colour lands on the new scheme at once. */
+.scheme-flip *, .scheme-flip *::before, .scheme-flip *::after { transition: none !important; }
+
+/* ═══════ PHONE TAP TARGETS: 24×24 at the least (WCAG 2.5.8) ═══════
+   Small controls found on phone screens by tests/ui-audit-all.mjs (and tests/ui-audit.mjs, the Dashboard's own, which asks 30px). Buttons grow to the minimum; links
+   that stand alone get padding, which widens what a thumb can hit without moving the text. */
+@media (max-width: 760px) {
+  .srch-clear, .lv-filter-btn, .adv-group-clr, .adv-x, .adv-reset, .lfa-pill, .lfa-clear, .tl-del, .lcard-wa,
+  .wk-arrow, .chip-sel button, .lv-th-label, .kcol-sort-btn, .tk-link.ed-vo-n {
+    min-width: 24px; min-height: 24px;
+  }
+  .srch-clear, .adv-x, .lcard-wa, .wk-arrow, .chip-sel button { min-width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+  .srch-clear { min-width: 32px; min-height: 32px; }   /* the search box's ×: the one control every visit uses */
+  .tk-link, .dp-maplink, .pm-link, #dp a[href^="tel:"], #dp a[href*="wa.me"], #dp a[href*="whatsapp"] { padding-block: 4px; }
+  /* The list's row checkbox: a thumb-sized box. */
+  .list-view td input[type="checkbox"], .list-view th input[type="checkbox"] { width: 24px; height: 24px; margin: 0; }
+}

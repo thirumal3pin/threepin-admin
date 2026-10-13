@@ -22,7 +22,9 @@ import { planPipelineMigration } from '../crm-assets/pipeline.js';
 const OUT = process.argv[2] || 'tests/out/crm-lead-panel';
 mkdirSync(OUT, { recursive: true });
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const NOW = Date.now(), D = 86400000;
+// The page's clock is pinned to today 11:00 (per browser context, below): "+3 hours lands today" and the
+// half-hour rounding are only true before ~8:30 pm, so run at night the checks failed for that alone.
+const NOW = new Date(new Date().setHours(11, 0, 0, 0)).getTime(), D = 86400000;
 const T = 't_3pinrealty';
 const STAGES = planPipelineMigration([
   { id: 'new', name: 'New' }, { id: 'site_visit', name: 'Site Visit' }, { id: 'negotiation', name: 'in Negotiation' }
@@ -80,6 +82,7 @@ const calendarCalls = [];
 const browser = await chromium.launch();
 async function open(viewport) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  await ctx.clock.setFixedTime(NOW);
   await ctx.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
   const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(`${viewport.width}px pageerror: ${e.message}`));
@@ -176,7 +179,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('a "+3 hours" follow-up lands today', fu.isToday, JSON.stringify(fu));
   ok('...and carries a time, which is what makes today legal', fu.hasTime);
   ok('...and is accepted rather than refused as "must be a future date"', fu.accepted, fu.error);
-  ok('...roughly three hours out', fu.hoursAhead >= 2.8 && fu.hoursAhead <= 3.2, fu.hoursAhead + 'h');
+  // Rounded UP to the next half hour (the time picker's step), so 3 to 3.5 hours out.
+  ok('...three hours out, on the half hour', fu.hoursAhead >= 2.95 && fu.hoursAhead <= 3.55, fu.hoursAhead + 'h');
 
   const saved = await page.evaluate(async () => {
     document.getElementById('noteInput').value = 'Called - ringing back after lunch';

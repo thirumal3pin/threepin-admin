@@ -11,7 +11,15 @@
 
   window.AppNav.boot({
     console: 'crm',
-    select: function (view) { toggleView(view); },
+    // A lead (or the bot editor) open over the page: picking a section from the menu closes it
+    // first — else the section opened behind the panel and only showed after "All Leads".
+    select: function (view) {
+      var dp = document.getElementById('dp');
+      if (dp && dp.classList.contains('open') && typeof closeDetail === 'function') closeDetail();
+      var bot = document.getElementById('botEditorPanel');
+      if (bot && bot.classList.contains('open') && typeof closeBotEditor === 'function') closeBotEditor();
+      toggleView(view);
+    },
     signOut: function () { crmLogout(); },
   });
   window.AppNav.setActive(typeof currentView === 'string' ? currentView : 'kanban');

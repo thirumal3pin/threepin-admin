@@ -115,7 +115,7 @@ window.trackAuth = { login: async () => {}, logout: async () => {}, getTenantId:
 setTimeout(() => {
   window.onTrackAuthChange({ email: 'agent.a@example.com' }, '${T}');
   window.applyTrackPipelineSnapshot(${JSON.stringify(STAGES)});
-  window.applyListingsSnapshot(${JSON.stringify(LISTINGS)});
+  window.applyListingsSnapshot(${JSON.stringify(LISTINGS)}, window.__fromCache ? false : undefined);
   window.applyTrackLeadsSnapshot(${JSON.stringify(LEADS)});
   window.__ready = true;
 }, 0);
@@ -350,9 +350,82 @@ ok('Ticking a media item saves it', await page.evaluate(() => window.__saved.som
 // ── The owner conversation was taken off the listing (it lives in the CRM); the brochure panel took its place ──
 await page.evaluate(() => { closeDetail(); openDetail('l1'); });
 await page.waitForTimeout(400);
+// The owner's report: a card open, then "Editor" picked in the menu — the editor opened behind the
+// card and only showed after Back. Picking a section closes the card.
+// (Within the open Shoot & Media section: the rail lists every console, and "Board" is also the CRM's.)
+await page.evaluate(() => { const i = [...document.querySelectorAll('#appRail .rl-sec.open .rl-item')].find(x => (x.querySelector('.rl-nm') || {}).textContent === 'Editor'); if (i) i.click(); });
+await page.waitForTimeout(300);
+ok('Picking a section in the menu with a card open closes the card and shows the section', await page.evaluate(() =>
+  !document.getElementById('dp').classList.contains('open') && !!document.querySelector('#boardView .ed-board')));
+await page.evaluate(() => { const i = [...document.querySelectorAll('#appRail .rl-sec.open .rl-item')].find(x => (x.querySelector('.rl-nm') || {}).textContent === 'Board'); if (i) i.click(); });
+await page.waitForTimeout(200);
+await page.evaluate(() => openDetail('l1'));
+await page.waitForTimeout(400);
 ok('The listing no longer shows the owner chat', !(await page.$('#dpConvo')) && !/weekend works/.test(await page.textContent('#dpBody')));
 ok('…the brochure panel is there instead, under Notes', !!(await page.$('.tk-dp-side #bpSec')));
 await shot('detail-convo');
+
+// ── Move to… — a card's column in two clicks, no dragging (and the drop target is the whole column) ──
+await page.evaluate(() => closeDetail());
+await page.waitForTimeout(150);
+{
+  const before = await page.evaluate(() => window.trackApi.listings().find(l => l.id === 'l4').stageId);
+  const savedCard = await page.evaluate(() => JSON.stringify(window.trackApi.listings().find(l => l.id === 'l4')));
+  await page.click('.tk-card[data-id="l4"] .tk-move-btn');
+  await page.waitForTimeout(150);
+  const menu = await page.evaluate(() => { const m = document.getElementById('tkMoveMenu'); return m ? { n: m.querySelectorAll('.tk-move-i').length, here: (m.querySelector('.tk-move-i.here .tk-move-l') || {}).textContent || '', focus: document.activeElement && document.activeElement.classList.contains('tk-move-i') } : null; });
+  ok('A card’s Move button opens the list of columns, the current one marked', menu && menu.n === (await page.evaluate(() => window.trackApi.stages().length)) && /here now/.test(menu.here) && menu.focus, JSON.stringify(menu));
+  const target = await page.evaluate(b => window.trackApi.stages().find(s => s.id !== b && !/hold|drop/i.test(s.key || s.name)).id, before);
+  const picked = await page.evaluate(t => { const m = document.getElementById('tkMoveMenu'); if (!m) return 'menu closed before picking'; const i = window.trackApi.stages().findIndex(s => s.id === t); m.querySelectorAll('.tk-move-i')[i].click(); return 'ok'; }, target);
+  if (picked !== 'ok') console.log('  · ' + picked);
+  await page.waitForTimeout(250);
+  ok('…picking a column moves the card there', await page.evaluate(t => window.trackApi.listings().find(l => l.id === 'l4').stageId === t && !document.getElementById('tkMoveMenu'), target));
+  await page.click('.tk-card[data-id="l4"] .tk-move-btn');
+  await page.keyboard.press('Escape');
+  ok('…Escape closes the menu (and nothing else)', await page.evaluate(() => !document.getElementById('tkMoveMenu')));
+  // Put the card back exactly as it was (a column change records dates the later steps would see).
+  await page.evaluate(j => { const was = JSON.parse(j); window.trackApi.mutate('l4', o => { Object.keys(o).forEach(k => delete o[k]); Object.assign(o, was); }, 'restored'); if (window.applyFilters) window.applyFilters(); }, savedCard);
+  await page.waitForTimeout(250);
+  // The drop target is the whole column — its header too, not only the strip under the cards.
+  const hdrDrop = await page.evaluate(() => {
+    const col = document.querySelector('.tk-col'); const hdr = col.querySelector('.tk-col-hdr');
+    const ev = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() });
+    hdr.dispatchEvent(ev);
+    const marked = col.classList.contains('drag-over');
+    col.classList.remove('drag-over');
+    return marked && ev.defaultPrevented;
+  });
+  ok('A drag over a column’s header is accepted (the whole column is the drop target)', hdrDrop);
+}
+// (back to where the next step expects: the card open)
+await page.evaluate(() => openDetail('l1'));
+await page.waitForTimeout(300);
+
+// ── Back closes the card (the phone's Back button), not the console ──
+{
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(150);
+  await page.evaluate(() => openDetail('l2'));
+  await page.waitForTimeout(250);
+  const urlBefore = page.url();
+  await page.goBack();
+  await page.waitForTimeout(250);
+  ok('Back with a card open closes the card and stays on the board', await page.evaluate(() => !document.getElementById('dp').classList.contains('open')) && /propertytrack/.test(page.url()), urlBefore + ' → ' + page.url());
+  await page.evaluate(() => openDetail('l2'));
+  await page.waitForTimeout(200);
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(250);
+  ok('…and closing it from the page leaves no extra Back step behind', await page.evaluate(() => !(history.state && history.state.pinLayer)));
+  // Switching cards in a hurry (close + open in the same moment, five times): one Back still closes
+  // the card and stays on the page — the history never drifts.
+  await page.evaluate(() => { for (let i = 0; i < 5; i++) { closeDetail(); openDetail(i % 2 ? 'l1' : 'l2'); } });
+  await page.waitForTimeout(400);
+  await page.goBack();
+  await page.waitForTimeout(300);
+  ok('…after switching cards quickly, one Back closes the card and stays on the page', /propertytrack/.test(page.url()) && await page.evaluate(() => !document.getElementById('dp').classList.contains('open')));
+  await page.evaluate(() => openDetail('l1'));
+  await page.waitForTimeout(300);
+}
 
 // ── Seller preview, without leaving the board ──
 await page.evaluate(() => openSellerPreview('l1'));
@@ -561,6 +634,219 @@ ok('The stage chips and board switch are out of the way in agent mode',
   await page.evaluate(() => document.body.classList.contains('agent-mode')));
 await shot('agent-day');
 
+// ── Listing type and documents: shown on the card, never holding it back ──
+{
+  const was = await page.evaluate(() => JSON.stringify(window.trackApi.listings().find(l => l.id === 'l1')));
+  // On the Board itself (earlier steps leave it in the Editor view).
+  const modeWas = await page.evaluate(() => ((document.querySelector('#tkModeTog .on') || {}).textContent || 'Board').toLowerCase());
+  const agentWas = await page.evaluate(() => { try { return localStorage.getItem('track.me') || ''; } catch (e) { return ''; } });
+  if (agentWas) await page.evaluate(() => setMyAgent(''));
+  await page.evaluate(() => { if (document.getElementById('dp').classList.contains('open')) closeDetail(); toggleView('board', true); setBoardMode('board'); openDetail('l1'); });
+  await page.waitForTimeout(250);
+  const sec = await page.evaluate(() => {
+    const s = document.getElementById('dpTerms');
+    return s ? { types: [...s.querySelectorAll('.tk-seg-b')].map(b => b.textContent.trim()), docs: s.querySelectorAll('.tk-doc-r').length,
+      count: (s.querySelector('.tk-count') || {}).textContent || '' } : null;
+  });
+  ok('The card has a Listing & documents section', !!sec && sec.types.join() === 'Normal,Exclusive,Collab' && sec.docs === 7, JSON.stringify(sec));
+  ok('…counting what is in hand', sec && sec.count === '0 of 7', JSON.stringify(sec));
+  await page.click('#dpTerms .tk-seg-b:has-text("Exclusive")');
+  await page.waitForTimeout(150);
+  await page.selectOption('#dpTerms .tk-doc-r:has-text("Patta") select', 'have');
+  await page.waitForTimeout(150);
+  await page.selectOption('#dpTerms .tk-doc-r:has-text("Approved plan") select', 'missing');
+  await page.waitForTimeout(150);
+  const after = await page.evaluate(() => {
+    const l = window.trackApi.listings().find(x => x.id === 'l1');
+    const saved = window.__saved.filter(s => s.id === 'l1').pop() || {};
+    return { type: l.listingType, docs: l.docs, savedType: saved.listingType, savedDocs: saved.docs,
+      count: (document.querySelector('#dpTerms .tk-count') || {}).textContent || '',
+      on: (document.querySelector('#dpTerms .tk-seg-b.on') || {}).textContent || '', stage: l.stageId };
+  });
+  ok('Picking a type and a document status saves them', after.type === 'exclusive' && after.savedType === 'exclusive'
+    && after.savedDocs && after.savedDocs.patta === 'have' && after.savedDocs.approved_plan === 'missing', JSON.stringify(after));
+  ok('…the section shows them', /Exclusive/.test(after.on) && after.count === '1 of 7', JSON.stringify(after));
+  await page.locator('#dpTerms').screenshot({ path: `${OUT}/card-terms.png` });
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(200);
+  const chipOn = await page.evaluate(() => { const all = [...document.querySelectorAll('.tk-card[data-id="l1"]')]; const c = document.querySelector('.tk-card.cmp[data-id="l1"]'); return { card: !!c, n: all.map(x => x.className + '@' + (x.closest('[id]') || {}).id), top: c ? (c.querySelector('.tk-ctop') || {}).outerHTML || 'no top' : '', type: window.trackApi.listings().find(x => x.id === 'l1').listingType }; });
+  ok('…and the board card shows the type', /tk-ltype exclusive/.test(chipOn.top), JSON.stringify(chipOn));
+  // A missing document is a note, not a stop: the card is never held back or flagged for it.
+  ok('…a missing document holds nothing back', await page.evaluate(() => !/Approved plan|document/i.test((document.querySelector('.tk-card[data-id="l1"] .tk-stuck') || {}).textContent || '')));
+  // Picking the chosen type again clears it.
+  await page.evaluate(() => { openDetail('l1'); });
+  await page.waitForTimeout(150);
+  await page.click('#dpTerms .tk-seg-b.on');
+  await page.waitForTimeout(150);
+  ok('Picking the chosen type again clears it', await page.evaluate(() => window.trackApi.listings().find(x => x.id === 'l1').listingType === ''));
+  await page.evaluate(() => closeDetail());
+  // Settings → Configurations sets the list.
+  await page.evaluate(() => toggleView('settings', true));
+  await page.waitForTimeout(200);
+  await page.fill('#cfDoc', 'Society NOC');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  const cfg = await page.evaluate(() => [...document.querySelectorAll('#settingsView .cf-chip')].map(c => c.textContent.replace('✕', '').trim()));
+  ok('Settings: a document can be added to the checklist', cfg.includes('Society NOC'), JSON.stringify(cfg));
+  await page.evaluate(() => cfRemoveDoc('Society NOC'));
+  await page.waitForTimeout(150);
+  ok('…and removed', await page.evaluate(() => ![...document.querySelectorAll('#settingsView .cf-chip')].some(c => /Society NOC/.test(c.textContent))));
+  // The new-listing form offers the type too.
+  await page.evaluate(() => { toggleView('board', true); openAddModal(); });
+  await page.waitForTimeout(150);
+  ok('New listing: the type can be set there', await page.evaluate(() => [...document.querySelectorAll('#mm_listingType option')].map(o => o.value).join() === ',normal,exclusive,collab'));
+  await page.evaluate(() => closeModal());
+  await page.evaluate(m => setBoardMode(m), modeWas);
+  if (agentWas) await page.evaluate(a => setMyAgent(a), agentWas);
+
+  // ── The finished video's link: optional, on a done edit, read by Posting ──
+  const fin = await page.evaluate(async () => {
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const now = Date.now();
+    window.trackApi.mutate('l1', o => { o.cuts = { ...(o.cuts || {}), igReel: { status: 'done', by: 'Ravi', startedAt: now - 7200e3, doneAt: now - 3600e3 } }; }, null);
+    openDetail('l1'); await wait(150);
+    const offered = !!document.querySelector('#dpEdit .tk-final button');
+    const realPrompt = window.prompt;
+    window.prompt = () => 'not a link';
+    edFinalLink('l1', 'igReel'); await wait(80);
+    const refused = !(window.trackApi.listings().find(x => x.id === 'l1').finalLinks || {}).igReel;
+    window.prompt = () => 'https://drive.google.com/file/d/final123/view';
+    edFinalLink('l1', 'igReel'); await wait(150);
+    const l = window.trackApi.listings().find(x => x.id === 'l1');
+    const shown = (document.querySelector('#dpEdit .tk-final a') || {}).href || '';
+    const viaPosting = window.trackApi.finalLinkOf(l, 'igReel'), viaFb = window.trackApi.finalLinkOf(l, 'fbReel');
+    const saved = l.finalLinks && l.finalLinks.igReel && l.finalLinks.igReel.url;
+    window.prompt = () => '';
+    edFinalLink('l1', 'igReel'); await wait(80);
+    const removed = !(window.trackApi.listings().find(x => x.id === 'l1').finalLinks || {}).igReel;
+    window.prompt = realPrompt;
+    closeDetail();
+    return { offered, refused, saved, shown,
+      viaPosting: viaPosting && viaPosting.url, viaFb: viaFb && viaFb.url, removed };
+  });
+  ok('A done edit offers an optional final video link', fin.offered, JSON.stringify(fin));
+  ok('…a non-link is refused', fin.refused, JSON.stringify(fin));
+  ok('…a link is saved and shown on the card', /final123/.test(fin.saved || '') && /final123/.test(fin.shown), JSON.stringify(fin));
+  ok('…Posting reads it (the FB Reel sharing the Insta Reel’s cut too)', /final123/.test(fin.viaPosting || '') && /final123/.test(fin.viaFb || ''), JSON.stringify(fin));
+  ok('…and emptying it removes it', fin.removed, JSON.stringify(fin));
+
+  // ── Re-shot after the brochure was made: a "Brochure v2?" reminder, never a block ──
+  const v2 = await page.evaluate(async ([modeWas, agentWas]) => {
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    if (agentWas) setMyAgent('');
+    setBoardMode('board');
+    const now = Date.now();
+    const sd = window.trackApi.stages().find(st => st.key === 'shoot_done' || st.name === 'Shoot done');
+    window.trackApi.mutate('l1', o => { o.stageId = sd.id; }, null);
+    const stageBefore = window.trackApi.listings().find(x => x.id === 'l1').stageId;
+    window.trackApi.mutate('l1', o => { o.brochure = { ...(o.brochure || {}), doneAt: now - 5 * 864e5 }; o.shootDoneAt = now; o.broV2Seen = null; }, null);
+    await wait(150);
+    const chip = !!document.querySelector('.tk-card[data-id="l1"] .tk-bro.v2');
+    openDetail('l1'); await wait(150);
+    const note = !!document.querySelector('#dpBody .tk-v2');
+    const blocked = (window.blockersFor ? window.blockersFor(window.trackApi.listings().find(x => x.id === 'l1')) : []).some(b => /brochure v2|re-?shot/i.test(b));
+    broV2Seen('l1'); await wait(150);
+    const gone = !document.querySelector('#dpBody .tk-v2');
+    closeDetail(); await wait(150);
+    const chipGone = !document.querySelector('.tk-card[data-id="l1"] .tk-bro.v2');
+    // A shoot done BEFORE the brochure: no reminder.
+    window.trackApi.mutate('l1', o => { o.shootDoneAt = now - 9 * 864e5; o.broV2Seen = null; }, null);
+    await wait(150);
+    const none = !document.querySelector('.tk-card[data-id="l1"] .tk-bro.v2');
+    const sameStage = window.trackApi.listings().find(x => x.id === 'l1').stageId === stageBefore;
+    setBoardMode(modeWas);
+    if (agentWas) setMyAgent(agentWas);
+    return { chip, note, blocked, gone, chipGone, none, sameStage };
+  }, [modeWas, agentWas]);
+  ok('Re-shot after the brochure: the card says "Brochure v2?"', v2.chip && v2.note, JSON.stringify(v2));
+  ok('…as a reminder only: nothing is held back, the card does not move', !v2.blocked && v2.sameStage, JSON.stringify(v2));
+  ok('…"Not needed" puts it away', v2.gone && v2.chipGone, JSON.stringify(v2));
+  ok('…and a shoot from before the brochure never asks', v2.none, JSON.stringify(v2));
+
+  // ── Shoots on the team calendar: off until switched on in Settings; then booked, moved, called off ──
+  const calRun = await page.evaluate(async () => {
+    const calls = [];
+    const realFetch = window.fetch;
+    window.fetch = (u, o) => {
+      if (String(u).includes('/api/tailortalk?action=calendar')) {
+        const b = JSON.parse(o.body); calls.push(b);
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, eventId: b.cancel ? null : (b.eventId || 'ev1') }), { status: 200 }));
+      }
+      return realFetch(u, o);
+    };
+    window.trackAuth.getIdToken = async () => 'tok';
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const book = async (date, time) => {
+      openShootModal('l1'); await wait(80);
+      document.getElementById('shDate').value = date; document.getElementById('shTime').value = time;
+      saveShoot(); await wait(150);
+    };
+    const l1 = () => window.trackApi.listings().find(x => x.id === 'l1');
+    // A card not shot yet (earlier steps finished l1's shoot; it is put back after).
+    window.trackApi.mutate('l1', o => { o.shootDoneAt = null; }, null);
+    const d = new Date(Date.now() + 3 * 86400000), day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    await book(day, '10:00');
+    const whenOff = calls.length;
+    window.applyTrackConfigSnapshot({ shootCalendar: true });
+    await book(day, '11:00');
+    const first = calls[calls.length - 1], idAfter = l1().shootEventId;
+    await book(day, '15:30');
+    const moved = calls[calls.length - 1], ownerAfter = l1().shootEventBy;
+    const want11 = new Date(day + 'T11:00').getTime(), want1530 = new Date(day + 'T15:30').getTime();
+    // Somebody else's entry: not touched from here (the server would refuse; a second entry is never made).
+    window.trackApi.mutate('l1', o => { o.shootEventBy = 'someone.else@example.com'; }, null);
+    const before = calls.length;
+    await book(day, '16:00');
+    const othersSent = calls.length - before;
+    window.trackApi.mutate('l1', o => { o.shootEventBy = ownerAfter; }, null);
+    cancelShoot('l1', 'rain'); await wait(150);
+    const off = calls[calls.length - 1];
+    window.applyTrackConfigSnapshot({});
+    window.fetch = realFetch;
+    return { whenOff, n: calls.length, first, idAfter, moved, off, idEnd: l1().shootEventId || null, ownerAfter, othersSent,
+      firstAtOk: first && first.at === want11, movedAtOk: moved && moved.at === want1530 };
+  });
+  ok('Shoots on the calendar: nothing is sent while the setting is off', calRun.whenOff === 0, JSON.stringify(calRun));
+  ok('…switched on, a booked shoot goes on the calendar', calRun.first && calRun.first.op === 'meeting' && !calRun.first.eventId && /Shoot/.test(calRun.first.title)
+    && /propertytrack\.html\?listing=l1/.test(calRun.first.about || '') && calRun.idAfter === 'ev1', JSON.stringify(calRun.first));
+  ok('…with the shoot\u2019s own time', calRun.firstAtOk, JSON.stringify(calRun.first));
+  ok('…kept as the booker\u2019s entry', calRun.ownerAfter === 'agent.a@example.com', JSON.stringify(calRun));
+  ok('…moving it moves the same entry, to the new time', calRun.moved && calRun.moved.eventId === 'ev1' && !calRun.moved.cancel && calRun.movedAtOk, JSON.stringify(calRun.moved));
+  ok('…someone else\u2019s entry is left to them (no second entry)', calRun.othersSent === 0, JSON.stringify(calRun));
+  ok('…cancelling it calls that entry off', calRun.off && calRun.off.eventId === 'ev1' && calRun.off.cancel === true && calRun.idEnd === null, JSON.stringify(calRun));
+  // A slow calendar, and every save coming back as a fresh snapshot (new objects): book, then call it
+  // off before the booking has answered — the entry that was made is called off, none is left behind.
+  const race = await page.evaluate(async () => {
+    const calls = [], wait = ms => new Promise(r => setTimeout(r, ms));
+    const realFetch = window.fetch;
+    window.fetch = (u, o) => {
+      if (String(u).includes('/api/tailortalk?action=calendar')) {
+        const b = JSON.parse(o.body); calls.push(b);
+        return new Promise(res => setTimeout(() => res(new Response(JSON.stringify({ ok: true, eventId: b.cancel ? null : (b.eventId || 'ev9') }), { status: 200 })), b.cancel ? 10 : 200));
+      }
+      return realFetch(u, o);
+    };
+    const echo = () => window.applyListingsSnapshot(JSON.parse(JSON.stringify(window.trackApi.listings())), true);
+    window.trackApi.mutate('l1', o => { o.shootDoneAt = null; o.shootEventId = null; o.shootEventBy = ''; }, null);
+    window.applyTrackConfigSnapshot({ shootCalendar: true });
+    const d = new Date(Date.now() + 4 * 86400000), day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    openShootModal('l1'); await wait(60);
+    document.getElementById('shDate').value = day; document.getElementById('shTime').value = '10:00';
+    saveShoot(); echo(); await wait(20);
+    cancelShoot('l1', 'owner busy'); echo();
+    await wait(700);
+    window.applyTrackConfigSnapshot({});
+    window.fetch = realFetch;
+    const l = window.trackApi.listings().find(x => x.id === 'l1');
+    return { calls: calls.map(c => (c.cancel ? 'cancel:' : 'make:') + (c.eventId || '-')), left: l.shootEventId || null };
+  });
+  ok('Booked and called off before the calendar answered: the entry made is called off again', race.calls[0] === 'make:-' && race.calls.includes('cancel:ev9') && race.left === null, JSON.stringify(race));
+  ok('…and only one entry was ever made', race.calls.filter(c => c.startsWith('make:')).length === 1, JSON.stringify(race));
+  ok('…and the Settings page has the switch', await page.evaluate(() => { toggleView('settings', true); const t = [...document.querySelectorAll('#settingsView .cf-tog')].some(l => /team calendar/i.test(l.textContent)); toggleView('board', true); return t; }));
+  await page.evaluate(j => { const w = JSON.parse(j); window.trackApi.mutate('l1', o => { Object.keys(o).forEach(k => delete o[k]); Object.assign(o, w); }, null); if (window.applyFilters) window.applyFilters(); }, was);
+  await page.waitForTimeout(150);
+}
+
 // A shoot phone reopens on the day, not the board.
 const agentPage = await open({ width: 390, height: 844 }, () => {
   try { localStorage.setItem('track.me', 'Ravi'); localStorage.setItem('track.agent', 'Ravi'); } catch (e) {}
@@ -577,10 +863,38 @@ ok('…with thumb-sized actions', tap.length && tap.every(h => h >= 44), JSON.st
 ok('…and no sideways scroll', !(await agentPage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
 await agentPage.screenshot({ path: `${OUT}/phone-agent-day.png`, fullPage: true });
 
+// ── Opened from this device's saved copy: no card is saved until the server's list is in ──
+// (a save writes the whole card — from an hours-old copy it would undo everyone's changes since).
+{
+  const cached = await open({ width: 1280, height: 860 }, () => { window.__fromCache = true; });
+  const r = await cached.evaluate(async () => {
+    const wait = ms => new Promise(res => setTimeout(res, ms));
+    const was = window.trackApi.listings().find(x => x.id === 'l1').ownerInformed;
+    setFlag('l1', 'ownerInformed', !was); await wait(100);
+    const blocked = { saved: window.__saved.length, same: window.trackApi.listings().find(x => x.id === 'l1').ownerInformed === was,
+      toast: document.getElementById('toast').textContent };
+    // The server's list arrives: changes go through again.
+    window.applyListingsSnapshot(JSON.parse(JSON.stringify(window.trackApi.listings())), true); await wait(100);
+    setFlag('l1', 'ownerInformed', !was); await wait(100);
+    return { blocked, after: window.__saved.filter(x => x.id === 'l1').length };
+  });
+  ok('From the saved copy: a change is not saved (it would put the old copy back)', r.blocked.saved === 0 && r.blocked.same, JSON.stringify(r));
+  ok('…and the person is told why', /Still connecting/.test(r.blocked.toast), r.blocked.toast);
+  ok('…once the server\u2019s list is in, it saves', r.after === 1, JSON.stringify(r));
+  await cached.context().close();
+}
+
 // ── Phone ──
 const phone = await open({ width: 390, height: 844 });
 await phone.waitForTimeout(250);
 await phone.screenshot({ path: `${OUT}/phone-board.png`, fullPage: true });
+// On a phone the filters are folded behind one button: the board starts under the search.
+ok('On a phone the filters fold behind one Filters button', await phone.evaluate(() => {
+  const btn = document.getElementById('tkFiltersBtn'), stage = document.getElementById('ddStage');
+  return !!btn && btn.getBoundingClientRect().width > 0 && stage.getBoundingClientRect().width === 0;
+}));
+await phone.click('#tkFiltersBtn'); await phone.waitForTimeout(150);
+ok('…and open with it', await phone.evaluate(() => document.getElementById('ddStage').getBoundingClientRect().width > 0 && document.getElementById('tkFiltersBtn').getAttribute('aria-expanded') === 'true'));
 await phone.click('#ddStage summary'); await phone.waitForTimeout(150); await phone.screenshot({ path: `${OUT}/phone-filter-open.png` });
 ok('On a phone the stage list fits on screen', await phone.evaluate(() => { const b = document.querySelector('#ddStage .tk-dd-pop').getBoundingClientRect(); return b.left >= 0 && b.right <= innerWidth; }));
 await phone.click('#ddStage summary');
@@ -589,6 +903,7 @@ ok('The phone board does not scroll the page sideways', !wide);
 await phone.evaluate(() => openDetail('l1'));
 await phone.waitForTimeout(250);
 await phone.screenshot({ path: `${OUT}/phone-detail.png`, fullPage: true });
+await phone.locator('#dpTerms').screenshot({ path: `${OUT}/phone-card-terms.png` });
 ok('The phone detail panel does not scroll sideways',
   !(await phone.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
 

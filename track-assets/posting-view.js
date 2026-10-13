@@ -532,6 +532,12 @@ function broCell(t, small) {
 }
 // Voice-over for a post, from the listing's Shoot for on the board: a V/O to be made separately
 // shows here until it is made.
+// The finished video, from the board card's edit (optional there): one click from the post.
+function finalTag(t, key) {
+  const l = listingOf(t), api = window.trackApi;
+  const f = l && api && api.finalLinkOf ? api.finalLinkOf(l, key) : null;
+  return f && href(f.url) ? `<a class="pg-final" href="${href(f.url)}" target="_blank" rel="noopener noreferrer" title="The finished video (from the board)">🎬 Final video ↗</a>` : '';
+}
 function voiceTag(t, key) {
   const l = listingOf(t), api = window.trackApi;
   if (!l || !api || !api.voiceOf) return '';
@@ -569,7 +575,9 @@ function needsHtml(t, key) {
   if (!miss.length && !bro && !ed) return '';
   return `<div class="pg-needs">${miss.length ? `<span class="pg-needs-l">Missing:</span>${miss.map(m => `<span class="pg-need">${esc(m)}</span>`).join('')}` : ''}${bro ? `<span class="pg-need bro">${esc(bro)}</span>` : ''}${ed}</div>`;
 }
-window.pgBrochureGo = listingId => { if (window.toggleView) window.toggleView('board'); if (window.openDetail) window.openDetail(listingId); };
+// The card opens OVER Posting (it is a panel over any view): Back / closing it lands on Posting
+// again — it used to switch to the Board first, so you came back to the wrong place.
+window.pgBrochureGo = listingId => { if (window.openDetail) window.openDetail(listingId); };
 
 // The tag picker changed a listing's tags: show them here at once.
 window.pgRedraw = () => { tagMemo = null; if (isOpen() && !dlg) renderPosting(); else stale = true; };
@@ -1361,7 +1369,7 @@ function channelRow(t, c) {
   return `<div class="pg-ch${v.due || v.linkMissing || lateDay ? ' hot' : ''}">
     <span class="pg-ch-n">${chLabel(c.key, c.label)}</span>
     <select class="pg-sel s-${v.status}" aria-label="${esc(c.label)} status" onchange="pgChannel(${jsq(t.id)},${jsq(c.key)},this.value)">${opts}</select>
-    <span class="pg-ch-i">${info}${voiceTag(t, c.key) ? ' ' + voiceTag(t, c.key) : ''}${v.status === 'live' && v.at ? `<span class="pg-sub"> planned ${esc(fmt(v.at))}</span>` : ''}</span>
+    <span class="pg-ch-i">${info}${voiceTag(t, c.key) ? ' ' + voiceTag(t, c.key) : ''}${finalTag(t, c.key) ? ' ' + finalTag(t, c.key) : ''}${v.status === 'live' && v.at ? `<span class="pg-sub"> planned ${esc(fmt(v.at))}</span>` : ''}</span>
   </div>`;
 }
 function listingRow(t, l) {
@@ -2033,7 +2041,13 @@ async function sendBrochure() {
   D.sending = true; save.disabled = true; save.textContent = 'Checking…';
   // While a send is under way the dialog stays (Esc and the backdrop wait); every step after a wait
   // checks it is still this dialog.
-  const stop = m => { D.sending = false; if (dlg === D) { save.disabled = false; window.pgBroCheck(); if (m) err(m); } };
+  // The result is always seen: in the dialog while it is showing, else as a toast.
+  const stop = m => {
+    D.sending = false;
+    const shown = dlg === D && document.getElementById('pgModal') && document.getElementById('pgModal').classList.contains('open');
+    if (dlg === D) { save.disabled = false; window.pgBroCheck(); if (m) err(m); }
+    if (m && !shown) toast(m);
+  };
   try {
     try { await api.loadInventory(true); } catch (e) { /* checked against what is loaded */ }
     memMemo = null; tagMemo = null; broMemo = null;

@@ -8,6 +8,7 @@ backups/
 # Local, per-machine record of which scheduler failures have been emailed —
 # state, not source. Deleting it only re-sends alerts for still-open failures.
 .deliver-brochures-alerts.json
+.deliver-brochures-notes.json
 
 # Screenshot output from tests/*-preview.mjs — regenerated on demand.
 tests/out/

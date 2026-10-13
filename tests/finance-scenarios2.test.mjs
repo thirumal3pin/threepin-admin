@@ -749,7 +749,9 @@ section('I. Edge cases — zero amounts, dates, opening balances, references, un
   for (const [ev, v] of Object.entries(zeroCases)) refuses(`Zero amount refused: ${ev}`, () => save(ev, v));
   check('…and none of them posted anything', g.txns.length === before);
   refuses('A bill dated before the books start is refused', () => save('bill', { date: '2026-08-15', vendor: zv, desc: 'Old', acc: '5100', amt: 500, rcm: 'no' }), 'before the books start');
-  refuses('A bill dated more than a year ahead is refused', () => save('bill', { date: '2027-10-01', vendor: zv, desc: 'Far', acc: '5100', amt: 500, rcm: 'no' }), 'check the year');
+  // Relative to today (the rule is "more than 366 days from today"): a fixed date stops being "ahead".
+  const farAhead = new Date(Date.now() + 400 * 86400000).toISOString().slice(0, 10);
+  refuses('A bill dated more than a year ahead is refused', () => save('bill', { date: farAhead, vendor: zv, desc: 'Far', acc: '5100', amt: 500, rcm: 'no' }), 'check the year');
 
   // An opening-style payable: owed on the ledger with no bill document behind it.
   g.txns.push({

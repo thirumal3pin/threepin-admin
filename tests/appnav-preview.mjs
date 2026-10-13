@@ -113,6 +113,7 @@ export const getFirestore = obj, collection = obj, doc = obj, setDoc = async()=>
 export const getDoc = obj, getDocs = obj, getDocFromServer = obj, getDocsFromServer = obj;
 export const writeBatch = obj, runTransaction = async()=>{}, query = obj, where = obj, limit = obj;
 export const orderBy = obj, serverTimestamp = obj, Timestamp = { fromMillis: obj }, getCountFromServer = obj;
+export const updateDoc = async()=>{}, deleteDoc = async()=>{}, deleteField = obj, initializeFirestore = obj, persistentLocalCache = obj, persistentMultipleTabManager = obj, terminate = async()=>{}, clearIndexedDbPersistence = async()=>{}, waitForPendingWrites = async()=>{}, FieldPath = class { constructor(...s) { this.segments = s; } };
 export const getAuth = obj, signInWithEmailAndPassword = async()=>{}, signOut = async()=>{};
 // Real Firebase never calls back synchronously, and finance-sync.js relies on
 // that: its callback touches module state declared further down the file.
@@ -234,6 +235,14 @@ console.log('\nCRM — desktop');
     return { shown: getComputedStyle(el).display !== 'none', left: Math.round(el.getBoundingClientRect().left) };
   });
   ok('A lead page opens beside the rail, not over it', dp.shown && dp.left >= 240, JSON.stringify(dp));
+  // With the lead open, picking another section from the rail shows that section — the lead
+  // closes; it does not stay in front with the section opening behind it.
+  await clickItem(page, 'List');
+  await page.waitForTimeout(250);
+  ok('Picking a section with a lead open closes the lead and shows the section', await page.evaluate(() =>
+    !document.getElementById('dp').classList.contains('open') && document.getElementById('listView').style.display !== 'none'));
+  await clickItem(page, 'Board');
+  await page.waitForTimeout(200);
   await page.evaluate(() => closeDetail());
   await page.waitForTimeout(200);
 

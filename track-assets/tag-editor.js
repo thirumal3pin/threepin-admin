@@ -110,8 +110,11 @@ window.tagInput = el => {
 };
 window.tagClose = el => { const box = el && el.parentElement && el.parentElement.querySelector('.tg-sug'); if (box) box.classList.remove('open'); };
 window.tagKeydown = (e, el) => {
+  // Escape in an empty tag box with nothing suggested is the card's Escape (it closes the card).
+  const box = el.parentElement && el.parentElement.querySelector('.tg-sug');
+  if (e.key === 'Escape' && !el.value && !(box && box.classList.contains('open'))) return;
   e.stopPropagation();   // the card behind it must not open on Enter
-  if (e.key === 'Escape') { el.value = ''; window.tagClose(el); return; }
+  if (e.key === 'Escape') { e.preventDefault(); el.value = ''; window.tagClose(el); return; }
   if (e.key !== 'Enter') return;
   e.preventDefault();
   const o = options(el);

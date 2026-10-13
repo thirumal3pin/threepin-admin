@@ -15,6 +15,7 @@
 import {
   planUpdate, isTestEnvelope, contactParts, phoneKey, ttLeadDocId, isBusinessCategory, BUSINESS_ENQUIRY_TYPE
 } from './_tailortalk-shared.js';
+import { viewMeta, rowWrites, applyRowWrites, withRowFallback } from './_lead-views.js';
 
 // Stages and enquiry types change rarely; a warm function re-reading them on every chat
 // message would double its reads for nothing.
@@ -67,6 +68,7 @@ async function findLeadRefByPhone(db, tenantId, key, now) {
   if (st.exists && st.data().phoneKeysBackfilledAt) return null;
 
   const all = await leads.where('tenantId', '==', tenantId).get();
+  const views0 = await viewMeta(db, tenantId);
   const matches = [];
   let batch = db.batch();
   let pending = 0;
@@ -75,7 +77,8 @@ async function findLeadRefByPhone(db, tenantId, key, now) {
     const k = phoneKey(l.phone);
     if (k && !l.phoneKey) {
       batch.update(doc.ref, { phoneKey: k });
-      if (++pending === 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+      applyRowWrites(batch, rowWrites(db, tenantId, views0, doc.id, { phoneKey: k }, 'update'));
+      if (++pending >= 150) { await batch.commit(); batch = db.batch(); pending = 0; }   // each with its row writes
     }
     if (k && k === key) matches.push(doc);
   }
@@ -170,7 +173,9 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
   const ref = await resolveLeadRef(db, tenantId, hadId ? String(d.id) : null, key, d.lead_contact, now);
   const stateRef = ref.collection('tailortalk').doc('state');
 
-  const result = await db.runTransaction(async t => {
+  // The lead views (api/_lead-views.js): the lead's row is written in this same transaction.
+  const views = await viewMeta(db, tenantId);   // fails closed: no lead written without its row
+  const result = await withRowFallback(useRows => db.runTransaction(async t => {
     const [leadSnap, stateSnap] = [await t.get(ref), await t.get(stateRef)];
     const lead = leadSnap.exists ? leadSnap.data() : null;
     if (lead && lead.tenantId !== tenantId) throw new Error(`Lead ${ref.id} is not in tenant ${tenantId}`);
@@ -196,6 +201,7 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
       t.set(ref, plan.leadWrite);
     }
     else t.set(ref, plan.leadWrite, { merge: true });
+    if (useRows) applyRowWrites(t, rowWrites(db, tenantId, views, ref.id, plan.leadWrite, plan.isNew ? 'replace' : 'merge'));
     t.set(stateRef, plan.stateWrite);
 
     plan.history.forEach((h, i) => {
@@ -214,7 +220,7 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
     }
 
     return { leadId: ref.id, created: plan.isNew, stale: plan.stale, history: plan.history.length };
-  });
+  }), 'TailorTalk event for ' + ref.id);
 
   if (envelope.webhook_trigger !== 'sync') {
     await db.collection('ttState').doc(tenantId).set({
@@ -249,6 +255,34 @@ const GET_LEADS = 'https://api.tailortalk.ai/api/v1/get_leads';
  * @param {Function} o.fetchImpl      for tests
  * @returns {{ processed, created, updated, failed, errors, next, done }}
  */
+// The 2-minute safety-net pull's walk over TailorTalk's list (newest first): page after page, back
+// to what the last COMPLETE pull already saw (stopBefore), or as far as this request's time allows.
+//   claim  { from, cursor }   from: when the last complete pull began; cursor: where an unfinished
+//                             one stopped ({ startAfter, stopBefore, until })
+//   pullPage(opts)            one page (pullTailorTalkPage, bound to db/tenant/token)
+// → { done, state, stats, changed }: state is what to save — { lastRefreshPullOkAt: until } once the
+//   window is walked to the end (cursor cleared), else { refreshPullCursor } to go on from next time.
+//   A lead that fails is counted, not retried here (it would block the window for good): its
+//   webhook, its next activity, or the nightly sync brings it.
+export async function walkRefreshPull(claim, { started, pullPage, overlapMs = 10 * 60000, maxPages = 4, budgetMs = 15000, clock = Date.now }) {
+  const c = claim.cursor;
+  const stopBefore = c ? c.stopBefore : claim.from - overlapMs;
+  const until = c ? c.until : started;
+  let startAfter = c ? c.startAfter : null, done = false, page = null;
+  const stats = { pulled: 0, created: 0, updated: 0, failed: 0, pages: 0, errors: [] };
+  const changed = new Set();
+  for (let n = 0; n < maxPages && !done && (n === 0 || clock() - started < budgetMs); n++) {
+    page = await pullPage({ pageSize: 25, now: started, stopBefore, startAfter });
+    stats.pages++; stats.pulled += page.processed; stats.created += page.created; stats.updated += page.updated; stats.failed += page.failed || 0;
+    (page.errors || []).forEach(e => stats.errors.push(e));
+    page.changedLeadIds.forEach(id => changed.add(id));
+    done = !!page.done; startAfter = page.next;
+    if (!startAfter) { done = true; break; }
+  }
+  const state = done ? { lastRefreshPullOkAt: until, refreshPullCursor: null } : { refreshPullCursor: { startAfter, stopBefore, until } };
+  return { done, state, stats, changed: [...changed] };
+}
+
 export async function pullTailorTalkPage(db, tenantId, token, { startAfter = null, pageSize = 25, stopBefore = null, now = Date.now(), fetchImpl = fetch } = {}) {
   const body = { limit: Math.min(Math.max(pageSize, 1), 200) };
   if (startAfter) body.start_after = startAfter;

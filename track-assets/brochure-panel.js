@@ -429,7 +429,9 @@ window.bpReconcile = force => {
     if (b.unlockedAt && b.requestedAt < b.unlockedAt) return false;
     return !!String(x.propertyCode || '').trim() || B.codeKey(b.code) === B.codeKey(b.requestedCode);
   });
-  const cached = api().inventory();
+  // This device's saved copy of the inventory (the second before the server's arrives) never fills
+  // cards: only the server's copy does.
+  const cached = api().inventoryLive && !api().inventoryLive() ? null : api().inventory();
   if (!waiting && !late && !cached) return;
   reconciling = true; lastRun = now;
   if (late) lastLate = now;

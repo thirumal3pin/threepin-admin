@@ -67,9 +67,41 @@ service cloud.firestore {
     // tenant — otherwise a tenant could reassign their own lead's tenantId
     // to hand (or accidentally move) it to a different tenant.
     match /leads/{leadId} {
-      allow read, delete: if ownsTenantField();
+      // A team member may read or delete a lead that does not exist (it reveals nothing to them),
+      // so a page can tell "deleted" from "not yours" — the lead views clear a deleted lead's row
+      // that way. Signed out, nothing: a lead's id carries a phone number.
+      // A TailorTalk lead's id names its tenant (tt_<tenant>_<id>) and can carry a phone number: the
+      // "does not exist" answer is given only for the caller's own tenant's ids, so nobody can test
+      // whether a number is another tenant's lead.
+      allow get, delete: if isSignedInWithTenant() && (
+        (resource == null && (!leadId.matches('tt_.*') || leadId.matches('tt_' + tenantId() + '_.*')))
+        || (resource != null && ownsTenantField()));
+      allow list: if ownsTenantField();
       allow update: if ownsTenantField() && writingOwnTenantField();
       allow create: if writingOwnTenantField();
+    }
+
+    // Lead views (shared-assets/lead-views.js): {tenant}__meta and {tenant}__v{n}_{i}, each lead as a
+    // row. Read by the tenant's team. A page writes only rows — one lead's row per document per write
+    // (with the lead, in the same batch) — so no page can rewrite or empty a whole document. The
+    // meta and the rebuilds are the server's (the Admin SDK, not bound by these rules).
+    match /leadViews/{viewId} {
+      allow read: if isSignedInWithTenant()
+        && viewId.split('__').size() == 2 && viewId.split('__')[0] == tenantId();
+      allow create: if isSignedInWithTenant()
+        && viewId.split('__').size() == 2 && viewId.split('__')[0] == tenantId()
+        && viewId.split('__')[1].matches('v[0-9]+_[0-9]+')
+        && request.resource.data.tenantId == tenantId()
+        && request.resource.data.keys().hasOnly(['tenantId', 'rows'])
+        && request.resource.data.rows is map && request.resource.data.rows.size() <= 1;
+      allow update: if isSignedInWithTenant()
+        && viewId.split('__').size() == 2 && viewId.split('__')[0] == tenantId()
+        && viewId.split('__')[1].matches('v[0-9]+_[0-9]+')
+        && resource.data.tenantId == tenantId()
+        && request.resource.data.tenantId == tenantId()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rows'])
+        && request.resource.data.rows is map
+        && (!('rows' in resource.data) || request.resource.data.rows.diff(resource.data.rows).affectedKeys().size() <= 1);
     }
 
     // Notes + history live in subcollections under each lead (so adding a note

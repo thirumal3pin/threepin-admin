@@ -264,7 +264,19 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
   console.log(`  phone header buttons (viewport 390) — TailorTalk lead: ${ttEdges} | ordinary lead: ${plainEdges}`);
   const past = s => s.split(', ').some(x => Number(x.split('→')[1]) > 391);
   if (past(ttEdges) && !past(plainEdges)) errors.push('Phone lead page: a header button runs off the screen on a TailorTalk lead only');
+  // No header action off the edge, on either kind of lead (only the board scrolls sideways):
+  // the rarer ones fold behind "⋯" and come out with it.
+  const offScreen = () => page.evaluate(() => [...document.querySelectorAll('#dp .dp-act')].filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && (r.right > innerWidth + 1 || r.left < -1); }).map(b => b.textContent.trim()));
+  let off = await offScreen();
+  if (off.length) errors.push('Phone lead page: header actions off screen — ' + off.join(', '));
   await page.evaluate(() => openDetail('tt1'));
+  off = await offScreen();
+  if (off.length) errors.push('Phone lead page (TailorTalk lead): header actions off screen — ' + off.join(', '));
+  await page.click('#dpMoreBtn');
+  const more = await page.evaluate(() => [...document.querySelectorAll('#dp .dp-act-more')].filter(b => b.getBoundingClientRect().width > 0).map(b => b.textContent.trim()));
+  if (!more.some(t => /Edit/.test(t)) || !more.some(t => /Delete/.test(t))) errors.push('Phone lead page: "⋯" does not show Edit and Delete — ' + JSON.stringify(more));
+  off = await offScreen();
+  if (off.length) errors.push('Phone lead page: with "⋯" open, actions off screen — ' + off.join(', '));
   await page.close();
 }
 
@@ -291,7 +303,13 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
       export const setDoc=async(ref,data,opts)=>{w().push({op:'set',path:ref.path,data:JSON.parse(JSON.stringify(data)),opts:opts||null});};
       export const updateDoc=async(ref,data)=>{w().push({op:'update',path:ref.path,data});};
       export const deleteDoc=async()=>{}; export const onSnapshot=()=>()=>{}; export const getDoc=async()=>({exists:()=>false,data:()=>null});
-      export const getDocs=async()=>({docs:[]}); export const writeBatch=()=>({set(){},commit:async()=>{}}); export const query=()=>({}); export const where=()=>({});
+      export const getDocs=async()=>({docs:[]}); export const query=()=>({}); export const where=()=>({});
+      export const writeBatch=()=>{const ops=[];return{set(ref,data,opts){ops.push({op:'set',path:ref.path,data:JSON.parse(JSON.stringify(data)),opts:opts||null});},update(ref,data){ops.push({op:'update',path:ref.path,data});},delete(ref){ops.push({op:'delete',path:ref.path});},commit:async()=>{w().push(...ops);}};};
+      export const runTransaction=async()=>null; export const FieldPath=class{constructor(...s){this.segments=s;}};
+      export const initializeFirestore=()=>({}); export const persistentLocalCache=()=>({}); export const persistentMultipleTabManager=()=>({});
+      export const terminate=async()=>{}; export const clearIndexedDbPersistence=async()=>{}; export const waitForPendingWrites=async()=>{};
+      export const serverTimestamp=()=>({__serverTimestamp:true}); export const getDocFromServer=async()=>({exists:()=>false,data:()=>null}); export const getDocsFromServer=async()=>({docs:[]});
+      export const limit=()=>({}); export const orderBy=()=>({}); export const Timestamp={fromMillis:ms=>({toMillis:()=>ms})}; export const getCountFromServer=async()=>({data:()=>({count:0})});
       export const deleteField=()=>({__deleteField:true});`,
     'firebase-auth.js': 'export const getAuth=()=>({}); export const signInWithEmailAndPassword=async()=>{}; export const signOut=async()=>{}; export const onAuthStateChanged=()=>{};'
   };
@@ -306,8 +324,11 @@ const shot = async (page, name, opts = {}) => { const path = join(OUT, name + '.
     }
     return route.fulfill({ contentType: 'text/javascript', body: readFileSync(join(ROOT, url.pathname)) });
   });
+  page.on('console', m => { if (m.type() === 'error') errors.push('firebase-sync console: ' + m.text()); });
   await page.goto('http://crm.local/sync.html');
-  await page.waitForFunction(() => !!window.crmFirebase, null, { timeout: 10000 });
+  // A module that fails to load (an import its stand-in lacks) never defines crmFirebase: say why.
+  await page.waitForFunction(() => !!window.crmFirebase, null, { timeout: 10000 })
+    .catch(e => { console.log('firebase-sync did not load:', errors.join(' | ') || '(no error reported)'); throw e; });
   const writes = await page.evaluate(async ([ttLeadObj, plainLead]) => {
     window.__writes = [];
     await window.crmFirebase.saveLead({ ...ttLeadObj, notes: [{ id: 'n' }], history: [] });

@@ -48,13 +48,15 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { waitUntil } from '@vercel/functions';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
-import { applyTailorTalkEvent, pullTailorTalkPage } from './_tailortalk-sync.js';
+import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
 } from './_lead-automation.js';
 import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, respondToEvent, eventDetail, visitOwnerFor, CalendarNotReady } from './_calendar-shared.js';
 import { visitOf } from '../crm-assets/pipeline.js';
+import { writeLead } from './_lead-views.js';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export const maxDuration = 60;
 const SYNC_BUDGET_MS = 40000;
@@ -224,16 +226,24 @@ async function syncPost(request) {
   }
 }
 
+// One pull every couple of minutes, tenant-wide. Returns null when another tab's pull is still
+// fresh; else { from, cursor }: from — when the last COMPLETE pull started (a pull that failed or
+// did not reach the end does not move it; before the first one, the nightly sync's last complete
+// run, else a day back); cursor — where an unfinished pull stopped, to go on from there.
 async function claimRefreshPull(db, tenantId, now) {
   const ref = db.collection('ttState').doc(tenantId);
   return db.runTransaction(async t => {
     const snap = await t.get(ref);
-    const last = (snap.exists && snap.data().lastRefreshPullAt) || 0;
-    if (now - last < REFRESH_PULL_EVERY_MS) return false;
+    const d = (snap.exists && snap.data()) || {};
+    if (now - (d.lastRefreshPullAt || 0) < REFRESH_PULL_EVERY_MS) return null;
     t.set(ref, { lastRefreshPullAt: now }, { merge: true });
-    return true;
+    return { from: d.lastRefreshPullOkAt || d.lastSyncCompletedAt || now - 24 * 3600000, cursor: d.refreshPullCursor || null };
   });
 }
+// The safety net reaches back to the last pull, with a margin for clocks and a lead TailorTalk
+// was still writing — only conversations with activity since then (TailorTalk lists the most
+// recent first, so the pull stops at the first older one). Nothing new: no lead is read at all.
+const PULL_OVERLAP_MS = 10 * 60000;
 
 // The CRM calls this when it opens and every few minutes: fresh TailorTalk data, then due AI runs.
 async function refreshPost(request) {
@@ -249,10 +259,18 @@ async function refreshPost(request) {
     out.automation = auto.enabled;
     // Webhooks already deliver changes as they happen; the pull only catches a missed one, so
     // several open tabs share one pull every couple of minutes.
-    if (token && await claimRefreshPull(db, tenantId, started)) {
-      const page = await pullTailorTalkPage(db, tenantId, token, { pageSize: 25, now: started });
-      out.pulled = page.processed; out.created = page.created; out.updated = page.updated;
-      if (auto.enabled) for (const leadId of page.changedLeadIds) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 });
+    const claim = token ? await claimRefreshPull(db, tenantId, started) : null;
+    if (claim) {
+      // Back to what the last complete pull saw, going on from where an unfinished one stopped —
+      // never the same pages twice (api/_tailortalk-sync.js walkRefreshPull).
+      const walk = await walkRefreshPull(claim, { started, overlapMs: PULL_OVERLAP_MS, pullPage: o => pullTailorTalkPage(db, tenantId, token, o) });
+      out.pulled = walk.stats.pulled; out.created = walk.stats.created; out.updated = walk.stats.updated; out.failed = walk.stats.failed;
+      if (walk.stats.failed) console.error('tailortalk refresh: ' + walk.stats.failed + ' lead(s) failed', walk.stats.errors.slice(0, 5));
+      await db.collection('ttState').doc(tenantId).set(walk.done
+        ? { lastRefreshPullOkAt: walk.state.lastRefreshPullOkAt, refreshPullCursor: FieldValue.delete() }
+        : walk.state, { merge: true });
+      const changed = walk.changed;
+      if (auto.enabled) for (const leadId of changed) await queueLeadAutomation(db, tenantId, leadId, { now: Date.now(), quietMs: 0 });
     }
     if (auto.enabled) {
       const drained = await drainQueue(db, tenantId, { client: leadClaude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
@@ -359,7 +377,7 @@ async function adminAiPost(request) {
 // set-team.mjs, which is roughly never, and every calendar call was spending a
 // Firestore read on it — on a project whose daily read quota keeps running out.
 const teamCache = new Map();
-const TEAM_TTL_MS = 60000;
+const TEAM_TTL_MS = 15 * 60 * 1000;   // the team changes about never; the calendar asks every minute or two
 async function teamEmails(db, tenantId) {
   const hit = teamCache.get(tenantId);
   if (hit && Date.now() - hit.at < TEAM_TTL_MS) return hit.team;
@@ -414,7 +432,7 @@ async function bookVisit({ db, user, ref, lead, property, heal = false }) {
   // Google never disagree about who was invited.
   const write = { calendarEventId: r.eventId, calendarEventOwner: r.owner, siteVisitAgents: agents };
   if (!heal) write.siteVisitReplies = r.eventId ? agents.map(email => ({ email, status: 'needsAction' })) : [];
-  await ref.update(write);
+  await writeLead(db, user.tenantId, ref, write, 'update', { mustSave: true });   // the event exists now: never lose its id
   return { ok: true, ...r, subject };
 }
 
@@ -454,7 +472,7 @@ async function calendarPost(request) {
       const replies = await visitReplies({ organiser: lead.calendarEventOwner, eventId: lead.calendarEventId });
       // Kept on the lead so the board, the attention list and the daily digest
       // can all see a refusal without any of them calling Google.
-      await ref.update({ siteVisitReplies: replies });
+      await writeLead(db, user.tenantId, ref, { siteVisitReplies: replies }, 'update');
       return json({ ok: true, replies });
     }
 
@@ -497,7 +515,7 @@ async function calendarPost(request) {
       }
       // Kept on the lead so the board, the attention list and the daily digest
       // all see the answer without any of them calling Google.
-      await ref.update({ siteVisitReplies: r.replies });
+      await writeLead(db, user.tenantId, ref, { siteVisitReplies: r.replies }, 'update');
       return json({ ok: true, replies: r.replies });
     }
 
@@ -543,7 +561,9 @@ async function calendarPost(request) {
       const cur = await eventDetail({ viewer: me, eventId: body.eventId });
       if (!cur || !cur.ok) return json({ ok: false, error: 'That meeting is no longer in your calendar' }, 404);
       if (!cur.iCreated) return json({ ok: false, error: 'Only whoever booked this meeting can move it' }, 403);
-      if (cur.repeats) return json({ ok: false, error: 'This one repeats — change it in the form rather than by dragging' }, 409);
+      // A whole series is changed in the form; one date of it (what the grid shows) may be dragged — it
+      // moves that date only, as before.
+      if (cur.repeats && !cur.occurrence) return json({ ok: false, error: 'This one repeats — change it in the form rather than by dragging' }, 409);
       const r = await syncTeamMeeting({
         organiser: me, attendees: (cur.attendees || []).map(a => a.email).filter(e => e && e.toLowerCase() !== me),
         title: cur.title, at, minutes: Math.min(600, Math.max(5, Number(body.minutes) || cur.minutes || 30)),

@@ -115,6 +115,27 @@ export function newListingFor(lead, firstStage, now, by) {
   };
 }
 
+// What newListingFor writes, plus bookkeeping any write adds: a card holding nothing beyond these
+// (and nothing meaningful in them) is still the empty card the sync made.
+const AUTO_FIELDS = new Set(['id', 'tenantId', 'leadId', 'stageId', 'sellerName', 'sellerPhone', 'title', 'location', 'askingPrice',
+  'propertyCode', 'media', 'own', 'ownerInformed', 'ownerApproved', 'stageChangedAt', 'stageChangedBy', 'reached',
+  'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'source', 'listingSkipped', 'noteCount', 'lastNote']);
+const empty = v => v == null || v === '' || v === false || v === 0 || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(empty));
+
+/**
+ * True only for a card nobody has worked on: everything on it is what the seller sync put there,
+ * it never left its first column, and nothing was added — no cuts, plans, tags, description,
+ * address, brochure, shoot, media, notes, code. "Not a seller" may delete such a card; any other
+ * card is kept (deleting it would throw away someone's work).
+ */
+export function isUntouchedCard(card) {
+  if (!card) return false;
+  if (Object.keys(card.reached || {}).length > 1) return false;          // it has moved on
+  if (!empty(card.media) || !empty(card.own) || card.ownerInformed || card.ownerApproved) return false;
+  if (clean(card.propertyCode) || Number(card.noteCount) > 0) return false;
+  return Object.entries(card).every(([k, v]) => AUTO_FIELDS.has(k) || empty(v));
+}
+
 /**
  * The patch to apply to an EXISTING listing so it agrees with its lead, or
  * null when it already does. Only ever touches fields the CRM owns.
@@ -148,13 +169,21 @@ export function leadPatchFor(lead, listing) {
   const patch = {};
   if (lead.listingId !== listing.id) patch.listingId = listing.id;
   const code = clean(listing.propertyCode);
+  // The code this sync put on the lead last time (listingCode): when the card is mapped to another
+  // property — or unmapped — that one comes off, so the seller is not still shown as the owner of
+  // the old property (Daily task, "Leads for X"). Codes the team linked themselves are never
+  // touched; a lead from before listingCode existed keeps what it has.
+  const before = clean(lead.listingCode);
+  let have = (lead.propertyCodes || []).slice();
+  if (before && before !== code) have = have.filter(c => c !== before);
   if (code) {
-    const have = lead.propertyCodes || [];
     const unlinked = lead.unlinkedPropertyIds || [];
     // Never re-add a property a person deliberately unlinked in the CRM —
     // same rule propertyLinks.js follows for the automation.
-    if (!have.includes(code) && !unlinked.includes(code)) patch.propertyCodes = [...have, code];
+    if (!have.includes(code) && !unlinked.includes(code)) have.push(code);
   }
+  if (JSON.stringify(have) !== JSON.stringify(lead.propertyCodes || [])) patch.propertyCodes = have;
+  if ((lead.listingCode || '') !== code) patch.listingCode = code || null;
   return Object.keys(patch).length ? patch : null;
 }
 

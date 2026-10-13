@@ -13,7 +13,7 @@
 // fake Google that records every request, so "it never touched that event" is
 // something the test can actually see rather than assume.
 
-import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, findVisitEvent, recurrenceRule, respondToEvent, freeSlots, visitOwnerFor, CalendarNotReady } from '../api/_calendar-shared.js';
+import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToVisit, findVisitEvent, recurrenceRule, respondToEvent, freeSlots, visitOwnerFor, CalendarNotReady, eventDetail } from '../api/_calendar-shared.js';
 
 let pass = 0;
 const fails = [];
@@ -623,6 +623,22 @@ section('A YES TO TUESDAY IS NOT A YES TO SATURDAY');
 
 console.log('');
 console.log('─'.repeat(64));
+// ── A repeating meeting opened from the grid is one OCCURRENCE (singleEvents=true): Google gives it a
+// recurringEventId and no recurrence. It still has to read as repeating (the edit form and the drag
+// guard both rely on it).
+{
+  const base = { id: 'abc_20261019T053000Z', summary: 'Weekly review', start: { dateTime: '2026-10-19T11:00:00+05:30' }, end: { dateTime: '2026-10-19T11:30:00+05:30' },
+    organizer: { email: 'swami@threepin.in' }, extendedProperties: { private: { '3pin.meeting': '1' } } };
+  const mk = data => (viewer, key) => ({ request: async () => ({ data }) });
+  const occ = await eventDetail({ viewer: 'swami@threepin.in', eventId: base.id, key: 'k', makeClient: mk({ ...base, recurringEventId: 'abc' }) });
+  ok('An occurrence of a repeating meeting reads as repeating', occ && occ.ok && occ.repeats === true, JSON.stringify(occ));
+  ok('…as one date of it (which may be dragged on its own)', occ && occ.occurrence === true, JSON.stringify(occ));
+  const series = await eventDetail({ viewer: 'swami@threepin.in', eventId: 'abc', key: 'k', makeClient: mk({ ...base, id: 'abc', recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] }) });
+  ok('…as does the series itself (not an occurrence)', series && series.repeats === true && series.occurrence === false, JSON.stringify(series));
+  const once = await eventDetail({ viewer: 'swami@threepin.in', eventId: 'x1', key: 'k', makeClient: mk({ ...base, id: 'x1' }) });
+  ok('…and a one-off does not', once && once.repeats === false, JSON.stringify(once));
+}
+
 if (fails.length) {
   console.log(fails.length + ' failing of ' + (pass + fails.length) + ':');
   fails.forEach(f => console.log('  · ' + f));

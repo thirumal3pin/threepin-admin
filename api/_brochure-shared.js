@@ -89,7 +89,7 @@ export async function getDriveAccessToken(impersonate = true) {
 // folder already is.
 export async function makeDriveFilePublic(accessToken, fileId) {
   try {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ role: 'reader', type: 'anyone' })

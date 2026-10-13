@@ -229,8 +229,10 @@ function agentMatches(p, f){
 }
 // Several at once (any of them); empty = everyone.
 function agentFilterPasses(p){ return !agentFilters.length || agentFilters.some(f => agentMatches(p, f)); }
+let propTeamTried = false;   // asked once per visit: an empty team (or a failed read) is not re-read in a loop
 async function loadPropTeam(){
-  if(propTeam.length || !window.dashboardFirebase || !window.dashboardFirebase.getTeam) return;
+  if(propTeam.length || propTeamTried || !window.dashboardFirebase || !window.dashboardFirebase.getTeam) return;
+  propTeamTried = true;
   try { propTeam = (await window.dashboardFirebase.getTeam()).sort(); } catch(e) { propTeam = []; }
   renderAgentFilter();
   if(currentDetailId) renderPropAgents(properties.find(x => x.id === currentDetailId));
@@ -419,7 +421,7 @@ function bootMapView(){
       if(!p) return;
       Object.assign(p, patch);
       if(window.dashboardFirebase && window.dashboardFirebase.saveProperty){
-        window.dashboardFirebase.saveProperty(Object.assign({ id }, patch))
+        window.dashboardFirebase.saveProperty(Object.assign({ id }, patch), { partial: true })
           .catch(e => { console.error('pin save failed:', e); showToast && showToast('Could not save the pin — it is on screen but not stored.'); });
       }
     }
@@ -719,6 +721,43 @@ function toggleFavFromDetail(){
   document.getElementById('dpFav').textContent = favorites.includes(id)?'★ Saved':'★ Save';
 }
 
+// ═══════ MARKETING — read only, from the Shoot & Media board and Posting ═══════
+// Where the property stands in marketing, without leaving it: its card on the board (the column it
+// is in, the shoot), the seller's lead, and every post with its link. Read when the block is opened
+// (a few reads), never on a page load; changed only on the board and in Posting.
+const MK_CHANNELS = [['igStory','Insta Story'],['igReel','Insta Reel'],['fbReel','FB Reel'],['yt','YouTube']];
+const MK_STATUS = { posted:'Posted', live:'Live', scheduled:'Scheduled', due:'Due', pending:'Pending', yet:'Yet to schedule', na:'N/A' };
+const mkUrl = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+async function loadMarketing(id){
+  const el = document.getElementById('dpMarketingBody');
+  const p = properties.find(x => x.id === id);
+  if(!el || !p) return;
+  if(!window.dashboardFirebase || !window.dashboardFirebase.propertyMarketing){ el.innerHTML = '<div class="mk-none">Not available here.</div>'; return; }
+  el.innerHTML = '<div class="mk-none">Loading…</div>';
+  let m;
+  try{ m = await window.dashboardFirebase.propertyMarketing(p.id, p.propertyCode); }
+  catch(e){
+    console.warn('marketing read failed', e);
+    if(currentDetailId === id) el.innerHTML = `<div class="mk-none">Could not read it just now. <button type="button" class="mk-retry" onclick="loadMarketing('${escapeHtml(id)}')">Try again</button></div>`;
+    return;
+  }
+  if(currentDetailId !== id) return;   // moved on to another property meanwhile
+  const when = t => t ? new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '';
+  const cards = m.cards.map(c => `<div class="mk-row">
+      <div class="mk-main"><b>${escapeHtml(c.title || 'Card')}</b>${c.listingType && c.listingType !== 'normal' ? ` <span class="mk-tag">${escapeHtml(c.listingType === 'collab' ? 'Collab' : 'Exclusive')}</span>` : ''}
+        <div class="mk-sub">${[c.stage ? 'In ' + escapeHtml(c.stage) : '', c.shootDoneAt ? 'Shot ' + when(c.shootDoneAt) : c.shootAt ? 'Shoot ' + when(c.shootAt) : 'No shoot booked'].filter(Boolean).join(' · ')}</div></div>
+      <div class="mk-acts"><a href="propertytrack.html?listing=${encodeURIComponent(c.id)}" target="_blank" rel="noopener">Open card →</a>${c.leadId ? `<a href="crm.html?lead=${encodeURIComponent(c.leadId)}" target="_blank" rel="noopener">Seller lead →</a>` : ''}</div>
+    </div>`).join('');
+  const posts = m.posts.flatMap(r => [
+    ...MK_CHANNELS.map(([k, label]) => { const c = (r.channels || {})[k]; return c && c.status && c.status !== 'na' ? { label, status: c.status === 'scheduled' && c.at && c.at <= Date.now() ? 'due' : c.status, url: mkUrl(c.url), at: c.liveAt || c.at } : null; }),
+    ...[['acres99','99 Acres'],['website','Website']].map(([k, label]) => { const c = r[k]; return c && c.status && c.status !== 'na' ? { label, status: c.status, url: mkUrl(c.url), at: c.at } : null; })
+  ].filter(Boolean).map(x => ({ ...x, round: r.repostOf ? 'repost' : '' })));
+  const postRows = posts.map(x => `<div class="mk-post"><span>${escapeHtml(x.label)}${x.round ? ' <em>repost</em>' : ''}</span><span class="mk-st ${escapeHtml(x.status)}">${escapeHtml(MK_STATUS[x.status] || x.status)}${x.at ? ' · ' + when(x.at) : ''}</span>${x.url ? `<a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">Link →</a>` : '<span class="mk-nolink">no link</span>'}</div>`).join('');
+  el.innerHTML = (cards || '<div class="mk-none">No card on the Shoot &amp; Media board for this property.</div>')
+    + `<div class="mk-h">Posts</div>` + (postRows || '<div class="mk-none">Nothing in Posting for it yet.</div>');
+}
+window.loadMarketing = loadMarketing;
+
 // ═══════ LEAD CRM ═══════
 function openLeadCrm(id){
   const p = properties.find(x=>x.id===id);
@@ -731,7 +770,10 @@ async function toggleSoldOut(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   const prev = p.soldOut;
-  p.soldOut = !p.soldOut;
+  // The opposite of what the button SHOWS — not of the record, which a sync or a colleague may have
+  // changed since it was drawn (flipping that silently un-marked a property just marked sold).
+  const btn = document.getElementById('dpSoldOut');
+  p.soldOut = btn ? !btn.classList.contains('sold-out') : !p.soldOut;
   if(p.soldOut){
     document.getElementById('dpSoldOut').classList.add('sold-out');
     document.getElementById('dpSoldOut').textContent = '✓ Marked Sold Out';
@@ -790,6 +832,9 @@ function compareSelected(){
   document.querySelector('.dp-tabs').style.display='none';
   document.querySelector('.dp-hdr-actions').style.display='none';
   document.getElementById('dpBody').innerHTML=html;
+  // Nothing of the last property opened stays: its agents, its tabs, its Call bar.
+  document.getElementById('dp').classList.add('comparing');
+  const ag = document.getElementById('dpAgents'); if(ag) ag.innerHTML = '';
   document.getElementById('dp').classList.add('open');
 }
 
@@ -807,6 +852,7 @@ function renderDetail(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return false;
   currentDetailId = id;
+  document.getElementById('dp').classList.remove('comparing');
   PinPropertyView.cacheProperty(p);
   document.querySelector('.dp-tabs').style.display='flex';
   document.querySelector('.dp-hdr-actions').style.display='flex';
@@ -837,6 +883,10 @@ function renderDetail(id){
           <button class="interest-btn cold ${lvl==='cold'?'active':''}" data-lvl="cold" onclick="setInterest('${id}','cold')">❄️ Cold</button>
         </div>
       </div>
+      <details class="sec mk-sec" id="dpMarketing" ontoggle="if(this.open) loadMarketing('${id}')">
+        <summary class="sec-title">📣 Shoot &amp; Media and posts <span class="mk-hint">Show</span></summary>
+        <div id="dpMarketingBody" class="mk-body"></div>
+      </details>
       <div class="sec">
         <div class="sec-title">📝 Notes & Events</div>
         <div id="notesPanel">${renderNotes(id)}</div>
@@ -1124,7 +1174,9 @@ function hideDetailPanel(){
 // Close routes through the history stack so the Back button and the
 // "All Properties" button land in exactly the same state.
 function closeDetail(){
-  if(detailUrlPushed){ history.back(); return; }
+  // Closed once: a second close before Back lands (a live update finding the property gone, a
+  // double click) must not go back a second time — that would leave the dashboard.
+  if(detailUrlPushed){ detailUrlPushed = false; hideDetailPanel(); history.back(); return; }
   hideDetailPanel();
 }
 window.addEventListener('popstate', e => {
@@ -1450,7 +1502,10 @@ async function setInterest(id,lvl){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   const prev = p.interestLevel || '';
-  const next = prev===lvl ? '' : lvl;
+  // Toggled against what is shown, as above.
+  const shownBtn = document.querySelector('.interest-btn.active');
+  const shown = shownBtn ? shownBtn.dataset.lvl || '' : prev;
+  const next = shown===lvl ? '' : lvl;
   p.interestLevel = next;
   document.querySelectorAll('.interest-btn').forEach(b=>b.classList.toggle('active', b.dataset.lvl===next));
   try{
@@ -1697,6 +1752,13 @@ function closePModal(){
 
 async function savePModal(){
   const errBox = document.getElementById('pmErr');
+  // Not saved from this device's old copy (see saveProperty): said here, with the form still open and
+  // everything typed kept.
+  if(window.dashboardFirebase && window.dashboardFirebase.isLive && !window.dashboardFirebase.isLive()){
+    errBox.textContent = 'Still connecting — your changes are kept here. Press Save again in a moment.';
+    errBox.classList.add('show');
+    return;
+  }
 
   // Add mode: if the form's still empty but JSON was pasted (and never
   // explicitly "Load"ed), apply it now — otherwise Save silently fails
@@ -1764,22 +1826,50 @@ async function savePModal(){
 async function deleteProperty(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return;
-  if(!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+  // A property still in use leaves the board's cards and the CRM's leads pointing at nothing: say
+  // who before asking. Best-effort — if the question cannot be asked, the plain warning stands.
+  let inUse = '';
+  try{
+    const u = window.dashboardFirebase && window.dashboardFirebase.propertyUsage
+      ? await window.dashboardFirebase.propertyUsage(p.id, p.propertyCode) : null;
+    if(u && (u.cards.length || u.leads)){
+      const parts = [];
+      if(u.cards.length) parts.push(`${u.cards.length} Shoot & Media card${u.cards.length>1?'s':''} (${u.cards.slice(0,3).join(', ')}${u.cards.length>3?', …':''})`);
+      if(u.leads) parts.push(`${u.leads} CRM lead${u.leads>1?'s':''}`);
+      inUse = `\n\nStill linked to it: ${parts.join(' and ')}. They will keep its code but no longer find the property.`;
+    }
+  }catch(e){ console.warn('property usage check failed', e); }
+  if(!confirm(`Delete "${p.name}"? This cannot be undone.${inUse}`)) return;
+  // The full document goes into the change log (append-only) FIRST — it is the only copy left once
+  // the property is gone. No safety copy, no delete.
+  let logged = null;
+  try{
+    logged = await recordChanges(p, 'delete', [{
+      field:'(property)', label:'Property deleted',
+      from:`${p.name} — ${p.location}`, to:''
+    }], { snapshot: JSON.stringify(p) }, true);
+  }catch(e){
+    showToast('✗ Not deleted — its safety copy could not be saved. Check your connection and try again.');
+    return;
+  }
   properties = properties.filter(x=>x.id!==id);
   closeDetail();
   refreshAfterDataChange();
   try{
     await window.dashboardFirebase.deleteProperty(id);
     showToast('Property deleted');
-    // The full document goes into the change log, which is append-only —
-    // so a delete stays recoverable instead of being gone for good.
-    recordChanges(p, 'delete', [{
-      field:'(property)', label:'Property deleted',
-      from:`${p.name} — ${p.location}`, to:''
-    }], { snapshot: JSON.stringify(p) });
   }catch(e){
     properties.unshift(p);
     refreshAfterDataChange();
+    // The log already says "Property deleted": it must not stay as a step to take in the sheet.
+    // That entry is set aside (marked done) and a line says the delete did not go through.
+    (logged || []).forEach(c => {
+      c.appliedToSheet = true;
+      window.dashboardFirebase.setChangeApplied(c.id, true).catch(err => console.error(err));
+    });
+    recordChanges(p, 'update', [{ field:'(property)', label:'Delete did not go through — property kept (ignore the delete above)',
+      from:'', to:`${p.name} — ${p.location}` }]).catch(err => console.error(err));
+    renderChangesIfOpen();
     showToast('✗ Delete failed — check your connection and try again');
   }
 }
@@ -1825,7 +1915,9 @@ function changeStamp(p){
 // Fire-and-forget on purpose: a failure to write the audit trail must never
 // roll back or block the property edit the user actually asked for. It warns
 // instead, so a silent gap in the log can't go unnoticed.
-async function recordChanges(property, kind, diffs, extra){
+// mustSave: the entry has to land before the change it records goes ahead (a delete — the log is
+// the only copy left afterwards); a failure is passed on instead of only noted.
+async function recordChanges(property, kind, diffs, extra, mustSave){
   if(!diffs.length) return;
   const at = Date.now();
   const by = (window.dashboardAuth && window.dashboardAuth.getUserEmail()) || '';
@@ -1844,8 +1936,11 @@ async function recordChanges(property, kind, diffs, extra){
   }catch(e){
     changeLog = changeLog.filter(c => !entries.some(x => x.id === c.id));
     renderChangesIfOpen();
+    if(mustSave) throw e;
     showToast('⚠ Saved, but the change log entry failed to record');
+    return null;
   }
+  return entries;
 }
 
 function refreshAfterDataChange(){
@@ -1885,7 +1980,26 @@ window.applyPropertiesSnapshot = function(list){
   refreshAfterDataChange();
   migrateLegacyInterests();
   openLinkedProperty();
+  refreshOpenDetail();
 };
+// An open property follows the live data: its header, Sold Out and favourite state, agents and Call
+// — the tab being read is left alone. Deleted elsewhere: the panel closes and says so.
+function refreshOpenDetail(){
+  const dp = document.getElementById('dp');
+  if(!currentDetailId || !dp || !dp.classList.contains('open')) return;
+  const p = properties.find(x=>x.id===currentDetailId);
+  if(!p){ closeDetail(); showToast('That property was removed'); return; }
+  const isSoldOut = !!p.soldOut, fav = favorites.includes(p.id);
+  document.getElementById('dpFav').classList.toggle('active', fav);
+  document.getElementById('dpFav').textContent = fav ? '★ Saved' : '★ Save';
+  document.getElementById('dpSoldOut').classList.toggle('sold-out', isSoldOut);
+  document.getElementById('dpSoldOut').textContent = isSoldOut ? '✓ Marked Sold Out' : '🏷️ Mark Sold Out';
+  document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
+  document.getElementById('dpMabCall').href = 'tel:' + (p.contactNumber || '');
+  document.querySelectorAll('.interest-btn').forEach(b => b.classList.toggle('active', b.dataset.lvl === (p.interestLevel || '')));
+  if(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('dp-agent-sel')) return;
+  renderPropAgents(p);
+}
 window.getDuplicateRecords = () => duplicateRecords;
 
 // dashboard.html?property=ID opens that property's full record — every tab, Internal Notes and
@@ -1900,8 +2014,10 @@ function openLinkedProperty(){
   // A first snapshot from the local cache may not have it yet; the next one is tried too.
   if(p){
     linkedProperty = null;
-    openDetail(p.id);
+    // Out of the address FIRST: openDetail adds its own history entry, which the clean-up would
+    // otherwise rewrite — leaving ?property= in place for a refresh to reopen.
     try { const u = new URL(location.href); u.searchParams.delete('property'); history.replaceState(null, '', u.pathname + u.search + u.hash); } catch (e) {}
+    openDetail(p.id);
   }
 }
 

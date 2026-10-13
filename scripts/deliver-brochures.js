@@ -279,27 +279,48 @@ async function upsertInternalNoteFromQueue(propertyId, text) {
 // Runs over EVERY Queue row each cycle, not just the ones being delivered: a
 // row is delivered once, but its internal instructions get edited long
 // afterwards, and those edits still need to reach the tab.
+//
+// Only rows whose text CHANGED since this Mac last synced them are read and
+// written (each costs two Firestore reads); the text last synced is kept
+// locally. Once a day every row is checked again regardless — so a note
+// deleted or broken in the dashboard is still put back within a day.
+const NOTES_STATE_PATH = path.join(import.meta.dirname, '..', '.deliver-brochures-notes.json');
+const NOTES_FULL_EVERY = 24 * 3600 * 1000;
+const textKey = t => crypto.createHash('sha1').update(String(t || '').trim()).digest('hex');
+function loadNotesState() { try { return JSON.parse(fs.readFileSync(NOTES_STATE_PATH, 'utf8')); } catch { return { fullAt: 0, rows: {} }; } }
+function saveNotesState(st) { try { fs.writeFileSync(NOTES_STATE_PATH, JSON.stringify(st)); } catch (e) { console.warn('[WARN] notes state not saved:', e.message); } }
 async function syncInternalNotesFromQueue(rows, cols) {
   if (cols.internalNotes === null) {
     console.warn('[WARN] Queue sheet has no "Internal TEAM Instructions" column - skipping internal notes sync');
     return;
   }
-  let created = 0, updated = 0, skipped = 0, failed = 0;
+  const st = loadNotesState();
+  st.rows = st.rows || {};
+  const full = Date.now() - (st.fullAt || 0) > NOTES_FULL_EVERY;
+  let created = 0, updated = 0, skipped = 0, failed = 0, same = 0;
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] || [];
     const propertyId = parseQueuePropertyId(row[cols.idTitle]);
     const text = row[cols.internalNotes];
     if (!propertyId || !String(text || '').trim()) continue;
+    const key = textKey(text);
+    if (!full && st.rows[propertyId] === key) { same++; continue; }   // unchanged since synced: no read
     try {
       const r = await upsertInternalNoteFromQueue(propertyId, text);
       if (r.changed) { r.reason === 'created' ? created++ : updated++; }
       else skipped++;
+      // Synced (or deliberately left alone): not read again until the text changes or the daily pass.
+      if (r.reason !== 'no property document') st.rows[propertyId] = key;
     } catch (e) {
       failed++;
       console.error(`[ERROR] internal notes ${propertyId}: ${e.message || e}`);
     }
   }
-  console.log(`Internal notes: ${created} created, ${updated} updated, ${skipped} unchanged/protected, ${failed} failed.`);
+  // A row that failed was not marked synced, so it is tried again on every run anyway: the daily
+  // pass is done either way (else one broken row would make every run a full, costly pass).
+  if (full) st.fullAt = Date.now();
+  saveNotesState(st);
+  console.log(`Internal notes${full ? ' (daily full pass)' : ''}: ${created} created, ${updated} updated, ${skipped} unchanged/protected, ${same} not read (unchanged since synced), ${failed} failed.`);
 }
 
 // -- Cowork's generation notes: brochure JSON -> the property's Internal Notes tab --

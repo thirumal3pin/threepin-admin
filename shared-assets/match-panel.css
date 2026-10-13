@@ -79,7 +79,7 @@
   font-size: 23px; font-weight: 600; line-height: 1.05;
   font-variant-numeric: tabular-nums;
 }
-.pm-sc-b { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--pm-ink-3); margin-top: 2px; }
+.pm-sc-b { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--pm-ink-3); margin-top: 2px; }
 
 .pm-row.strong  .pm-sc-n { color: var(--pm-good); }
 .pm-row.good    .pm-sc-n { color: var(--pm-blue); }
@@ -93,8 +93,8 @@
   overflow-wrap: anywhere;
 }
 .pm-code {
-  font-family: var(--mono, 'IBM Plex Mono', ui-monospace, monospace);
-  font-size: 10.5px; font-weight: 600;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px; font-weight: 600;
   background: var(--pm-sunk); border-radius: 4px;
   padding: 1px 5px; margin-right: 5px;
   color: var(--pm-ink-2);
@@ -117,7 +117,7 @@
 .pm-seg.low i { background: var(--pm-bad); }
 .pm-bars-k {
   display: flex; flex-wrap: wrap; gap: 3px 9px;
-  margin-top: 6px; font-size: 10px; color: var(--pm-ink-3);
+  margin-top: 6px; font-size: 11px; color: var(--pm-ink-3);
 }
 .pm-bars-k b { font-weight: 600; color: var(--pm-ink-2); }
 
@@ -134,7 +134,7 @@
 .pm-why li.veto::before { content: '✕'; color: var(--pm-bad); }
 .pm-pts {
   flex: 0 0 auto; font-variant-numeric: tabular-nums;
-  font-size: 10.5px; color: var(--pm-ink-3);
+  font-size: 11px; color: var(--pm-ink-3);
   font-family: var(--mono, ui-monospace, monospace);
 }
 .pm-why q { font-style: italic; color: var(--pm-ink-3); }
@@ -162,7 +162,7 @@
    and a buyer we know little about is still a buyer worth calling. */
 .pm-conf {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10.5px; color: var(--pm-ink-3); margin-top: 7px;
+  font-size: 11px; color: var(--pm-ink-3); margin-top: 7px;
 }
 .pm-conf-t { display: flex; gap: 1.5px; }
 .pm-conf-t i { width: 11px; height: 3px; border-radius: 2px; background: var(--pm-line); }
@@ -206,7 +206,7 @@
 .pm-note ul { margin: 6px 0 0; padding-left: 17px; }
 .pm-note li { margin: 2px 0; }
 .pm-note code {
-  font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px;
+  font-family: var(--mono, ui-monospace, monospace); font-size: 11px;
   background: var(--pm-card); border-radius: 3px; padding: 1px 4px;
 }
 
@@ -216,7 +216,7 @@
   .pm-r1 { gap: 9px; }
   .pm-sc { min-width: 44px; }
   .pm-sc-n { font-size: 19px; }
-  .pm-bars-k { font-size: 9.5px; }
+  .pm-bars-k { font-size: 11px; }
   .pm-acts .pm-btn { flex: 1 1 auto; justify-content: center; }
 }
 

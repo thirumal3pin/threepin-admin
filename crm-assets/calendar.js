@@ -1010,6 +1010,16 @@
       return !document.querySelector('.cm-who input[value="' + e + '"]');
     });
     set('cmAlso', extra.join(', '));
+    // A repeating meeting keeps its pattern: the form used to say "Just once" over a weekly review
+    // (the save leaves the series as it is, so what it said was simply wrong). Shown, not offered.
+    var rep = document.getElementById('cmRepeat');
+    if (rep && d.repeats) {
+      rep.insertAdjacentHTML('afterbegin', '<option value="none" selected>Repeats — this change is for this one only</option>');
+      rep.value = 'none';
+      rep.disabled = true;
+      rep.title = 'The others keep their time. To change how often it repeats, call it off and book it again';
+    }
+    editingAt = at - (at % MIN);   // the form holds the minute, not the seconds
   }
 
   function callOff() {
@@ -1052,9 +1062,11 @@
   // the same either way; what differs is whether Google is told to make an
   // event or to move the one that is already there.
   var editingId = null;
+  var editingAt = null;   // the time the meeting being changed had when the form opened
   function newMeeting(eventId) {
     if (state.error) { if (typeof showToast === 'function') showToast(state.error); return; }
     editingId = eventId || null;
+    editingAt = null;
     closeMeeting();
     document.body.insertAdjacentHTML('beforeend', meetingHtml());
     var t = document.getElementById('cmTitle');
@@ -1135,7 +1147,9 @@
     if (!date || !time) return fail('Pick a day and a time.');
     var at = new Date(date + 'T' + time + ':00').getTime();
     if (!at) return fail('That is not a time.');
-    if (at < Date.now() - 5 * MIN) return fail('That is in the past.');
+    // Correcting the title or the guests of a meeting that has already started is fine; only a NEW
+    // time in the past is refused.
+    if (at < Date.now() - 5 * MIN && !(editingId && at === editingAt)) return fail('That is in the past.');
     if (bad.length) return fail('That does not look like an email address: ' + bad[0]);
     if (!attendees.length) return fail('Pick at least one other person — a meeting with yourself is a reminder.');
 
@@ -1182,7 +1196,7 @@
     },
     today: function () { state.at = startOfDay(Date.now()); load(false); },
     newMeeting: function () { newMeeting(null); },
-    editEvent: editEvent, callOff: callOff,
+    editEvent: editEvent, callOff: callOff, closeTopSheet: function () { return closeTopSheet(); },
     setSpan: function (span) {
       state.span = span;
       if (span !== 'day' && !state.person) state.person = defaultPerson();
@@ -1226,8 +1240,33 @@
     else top.remove();
     return true;
   }
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && closeTopSheet()) e.stopPropagation(); });
-  document.addEventListener('click', function (e) { if (e.target && e.target.classList && e.target.classList.contains('cal-sheet')) closeTopSheet(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && closeTopSheet()) { e.stopPropagation(); return; }
+    // Tab stays inside the sheet on top: it never wanders to the lead or page behind it.
+    if (e.key === 'Tab') {
+      var sheets = document.querySelectorAll('.cal-sheet');
+      var top = sheets[sheets.length - 1];
+      if (!top) return;
+      var f = [].slice.call(top.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter(function (el) { return el.offsetParent !== null || el === document.activeElement; });
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      e.stopPropagation();
+    }
+  }, true);
+  // A click on the dimmed backdrop closes the sheet — only when the press also began there. A
+  // drag-select that ends outside the box (a click lands on the backdrop) must not throw away
+  // what was typed.
+  var pressedOn = null;
+  document.addEventListener('pointerdown', function (e) { pressedOn = e.target; }, true);
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (t && t.classList && t.classList.contains('cal-sheet') && pressedOn === t) closeTopSheet();
+    pressedOn = null;
+  });
 
   window.renderCalendarView = function () { window.PinCalendar.open(); };
 })();

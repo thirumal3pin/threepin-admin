@@ -26,7 +26,10 @@ const STAGES = planPipelineMigration([{ id: 'new', name: 'New' }, { id: 'site_vi
 // Anchored to the clock, not to 11am. Fixed at 11:00 it only straddled "now"
 // if the suite happened to run late morning, so "somebody in a meeting reads
 // as busy" passed before lunch and failed after it.
-const now = Date.now();
+// …and the page's clock is pinned to today 11:00 (below, per browser context): run late in the evening,
+// a meeting "two hours from now" lands near midnight and cannot be dragged later — the drag checks
+// failed after 8 pm for that reason alone.
+const now = new Date(new Date().setHours(11, 0, 0, 0)).getTime();
 const at = now - 30 * 60000;   // started half an hour ago, still running
 const H = 3600000;
 const iso = t => new Date(t).toISOString();
@@ -89,11 +92,13 @@ const ok = (label, cond, detail) => {
 
 const browser = await chromium.launch();
 let booked = null;
+let evOver = {};   // what the next opened meeting looks like, over the default
 let answered = null;
 let moved = null;
 
 async function open(viewport, calendarReply) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  await ctx.clock.setFixedTime(now);
   await ctx.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
   const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(`${viewport.width}px pageerror: ${e.message}`));
@@ -115,7 +120,7 @@ async function open(viewport, calendarReply) {
           id: 'mtg1', title: 'Monday review', start: iso(at + 2 * H), end: iso(at + 2.5 * H),
           where: 'Office', about: 'Pipeline and the week ahead.', meet: 'https://meet.google.com/abc',
           organiser: 'swami@threepin.in', iCreated: true, minutes: 30, repeats: false,
-          leadId: null, mine: 'needsAction',
+          leadId: null, mine: 'needsAction', ...evOver,
           attendees: [{ email: 'swami@threepin.in', status: 'needsAction', reason: null },
                       { email: 'pradeep@threepin.in', status: 'declined', reason: 'Bank appointment.' },
                       { email: 'sales@threepin.in', status: 'accepted', reason: null } ] } }) });
@@ -354,6 +359,31 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   // point: without the id, changing a meeting leaves two in the diary.
   ok('saving writes back to the same meeting', !!booked && booked.eventId === 'mtg1', JSON.stringify(booked));
   ok('...and closes', saved.closed);
+
+  // A weekly review that started an hour ago: correcting its title is allowed (only a NEW time in the
+  // past is refused), and the form says it keeps repeating instead of claiming "Just once".
+  evOver = { repeats: true, start: iso(Date.now() - H), end: iso(Date.now() - 0.5 * H) };
+  booked = null;
+  const rep = await page.evaluate(async () => {
+    PinCalendar.closeEvent();
+    await PinCalendar.openEvent('mtg1');
+    await new Promise(r => setTimeout(r, 400));
+    PinCalendar.editEvent();
+    await new Promise(r => setTimeout(r, 300));
+    const sel = document.getElementById('cmRepeat');
+    const shown = sel ? { label: sel.options[sel.selectedIndex].textContent, disabled: sel.disabled } : null;
+    document.getElementById('cmTitle').value = 'Weekly review (renamed)';
+    PinCalendar.book();
+    await new Promise(r => setTimeout(r, 400));
+    const err = document.getElementById('cmErr');
+    const out = { shown, err: err ? err.textContent : '', closed: !document.getElementById('calSheet') };
+    PinCalendar.closeMeeting();
+    return out;
+  });
+  evOver = {};
+  ok('changing a repeating meeting says it repeats (and that only this one changes)', rep.shown && /Repeats/.test(rep.shown.label) && rep.shown.disabled, JSON.stringify(rep));
+  ok('...renaming one that already started is not refused as "in the past"', rep.closed && !/past/i.test(rep.err) && !!booked, JSON.stringify(rep));
+  ok('...and the series is left as it is', booked && booked.repeat === 'none' && booked.eventId === 'mtg1', JSON.stringify(booked));
 
   // ── DRAGGING IT TO A NEW TIME ──
   moved = null;

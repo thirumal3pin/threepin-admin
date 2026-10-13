@@ -122,6 +122,7 @@ export const getFirestore = obj, collection = obj, doc = obj, setDoc = async()=>
 export const getDoc = obj, getDocs = obj, getDocFromServer = obj, getDocsFromServer = obj;
 export const writeBatch = obj, runTransaction = async()=>{}, query = obj, where = obj, limit = obj;
 export const orderBy = obj, serverTimestamp = obj, Timestamp = { fromMillis: obj }, getCountFromServer = obj;
+export const initializeFirestore = obj, persistentLocalCache = obj, persistentMultipleTabManager = obj, terminate = async()=>{}, clearIndexedDbPersistence = async()=>{}, waitForPendingWrites = async()=>{}, FieldPath = class { constructor(...s) { this.segments = s; } };
 export const getAuth = obj, signInWithEmailAndPassword = async()=>{}, signOut = async()=>{};
 // Real Firebase never calls back synchronously, and finance-sync.js relies on
 // that: its callback touches module state declared further down the file.

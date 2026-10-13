@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { viewMeta, rowWrites, applyRowWrites } from '../api/_lead-views.js';
 import { LADDER, stageKeyOf, legacyKeyOf } from '../crm-assets/pipeline.js';
 
 const args = process.argv.slice(2);
@@ -53,8 +54,10 @@ for (const l of leads) {
   changed++; fields += keys.length;
   keys.forEach(k => { tally[k] = (tally[k] || 0) + 1; });
   if (APPLY) {
-    batch.update(db.collection('leads').doc(l.id), Object.fromEntries(keys.map(k => [`reached.${k}`, found[k]])));
-    if (++pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    const fix = Object.fromEntries(keys.map(k => [`reached.${k}`, found[k]]));
+    batch.update(db.collection('leads').doc(l.id), fix);
+    applyRowWrites(batch, rowWrites(db, TENANT, await viewMeta(db, TENANT), l.id, fix, 'update'));   // its row in the lead views
+    if (++pending >= 150) { await batch.commit(); batch = db.batch(); pending = 0; }
   }
 }
 if (APPLY && pending) await batch.commit();

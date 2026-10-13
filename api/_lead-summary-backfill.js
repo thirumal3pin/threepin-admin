@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { FieldPath } from 'firebase-admin/firestore';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { LEAD_SUMMARY_MODEL, LEAD_SUMMARY_MAX_TOKENS, buildLeadSummarySystemPrompt, buildLeadSummaryUserPrompt } from './_lead-summary-shared.js';
+import { writeLead } from './_lead-views.js';
 
 let _anthropic;
 function getAnthropic() {
@@ -66,12 +67,12 @@ export async function backfillPost(request) {
         messages: [{ role: 'user', content: buildLeadSummaryUserPrompt(lead, stageName(lead.stageId)) }]
       });
       const summary = response.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      await doc.ref.update({ aiSummary: summary, aiSummaryAt: Date.now(), aiSummaryError: null });
+      await writeLead(db, user.tenantId, doc.ref, { aiSummary: summary, aiSummaryAt: Date.now(), aiSummaryError: null }, 'update');
       generated++;
     } catch (e) {
       failed++;
       errors.push({ leadId: doc.id, name: lead.name || '', error: String((e && e.message) || e) });
-      await doc.ref.update({ aiSummaryError: String((e && e.message) || e), aiSummaryErrorAt: Date.now() }).catch(() => {});
+      await writeLead(db, user.tenantId, doc.ref, { aiSummaryError: String((e && e.message) || e), aiSummaryErrorAt: Date.now() }, 'update').catch(() => {});
     }
   }
 

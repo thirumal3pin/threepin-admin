@@ -24,7 +24,11 @@ let favorites = JSON.parse(localStorage.getItem('pinFavorites')) || [];
 PinPropertyView.setResolver(id => (currentProperty && currentProperty.id === id) ? currentProperty : null);
 
 // ═══════ RENDER ═══════
+// The tab being read: kept when the same property updates live — a change elsewhere must not throw
+// the reader back to Overview mid-read. A different property starts at Overview.
+let currentTab = 'overview';
 function renderProperty(p){
+  if(!currentProperty || currentProperty.id !== p.id) currentTab = 'overview';
   currentProperty = p;
   renderedOnce = true;
   document.title = `${p.name} — 3 PIN Realty`;
@@ -32,7 +36,9 @@ function renderProperty(p){
   document.getElementById('dpBody').innerHTML =
     PinPropertyView.overviewTab(p) + PinPropertyView.specsTab(p) + PinPropertyView.pitchTab(p);
   document.querySelector('.dp-tabs').style.display = 'flex';
-  document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
+  const tabIdx = Math.max(0, ['overview','specs','pitch'].indexOf(currentTab));
+  document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===tabIdx));
+  document.querySelectorAll('.tab-panel').forEach((t,i)=>t.classList.toggle('active',i===tabIdx));
   document.getElementById('dpHdrActions').style.display = 'flex';
   const bar = document.getElementById('mobileActionBar');
   document.getElementById('mabCall').href = 'tel:' + (p.contactNumber || '');
@@ -106,6 +112,7 @@ function openInDashboard(){
 }
 
 function showTab(name, btn){
+  currentTab = name;
   document.querySelectorAll('.dp-tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');

@@ -19,6 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { viewMeta, rowWrites, applyRowWrites } from '../api/_lead-views.js';
 import { planPipelineMigration, stageKindOf, stageKeyOf, stageForKey } from '../crm-assets/pipeline.js';
 
 const args = process.argv.slice(2);
@@ -75,7 +76,10 @@ await pipeRef.set({ stages: plan.stages, reworkedAt: now }, { merge: true });
 
 let batch = db.batch(), pending = 0, written = 0;
 const flush = async () => { if (pending) { await batch.commit(); written += pending; batch = db.batch(); pending = 0; } };
-const queue = async (fn) => { fn(batch); pending++; if (pending >= 350) await flush(); };
+const queue = async (fn) => { fn(batch); pending++; if (pending >= 150) await flush(); };
+// A lead update with its row in the lead views, in the same batch (api/_lead-views.js).
+const views = await viewMeta(db, TENANT);
+const leadUpdate = (b, ref, patch) => { b.update(ref, patch); applyRowWrites(b, rowWrites(db, TENANT, views, ref.id, patch, 'update')); };
 let hSeq = 0;
 const hid = () => `h${now}rw${(hSeq++).toString(36)}`;
 
@@ -87,7 +91,7 @@ for (const m of plan.moves) {
   if (m.toStageId !== m.fromStageId) Object.assign(patch, { stageId: m.toStageId, prevStageId: m.fromStageId, stageChangedBy: 'migration' });
   if (m.lostReason) patch.lostReason = m.lostReason;
   if (m.toKey === 'options') patch.detailsSent = true;
-  await queue(b => b.update(ref, patch));
+  await queue(b => leadUpdate(b, ref, patch));
   if (m.toStageId !== m.fromStageId) {
     const id = hid();
     await queue(b => b.set(ref.collection('history').doc(id), { id, type: 'stage', text: `Stage changed from <b>${m.fromName}</b> to <b>${stageName(m.toStageId)}</b> in the pipeline rework — ${m.reason}`, at: now, by: 'CRM rework' }));
@@ -99,9 +103,9 @@ for (const s of stale) {
   const since = new Date(s.lead.updatedAt || s.lead.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
   const base = { prevStageId: s.lead.stageId || null, stageChangedBy: 'migration', followUpAt: null };
   if (s.to === 'lost') {
-    await queue(b => b.update(ref, { ...base, stageId: lostId, lostReason: 'unreachable' }));
+    await queue(b => leadUpdate(b, ref, { ...base, stageId: lostId, lostReason: 'unreachable' }));
   } else {
-    await queue(b => b.update(ref, { ...base, stageId: holdId, holdReason: 'other', holdUntil: null }));
+    await queue(b => leadUpdate(b, ref, { ...base, stageId: holdId, holdReason: 'other', holdUntil: null }));
   }
   const id = hid();
   const text = s.to === 'lost'

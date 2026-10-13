@@ -85,9 +85,13 @@ function renderModeToggle() {
 // ═══════ SNAPSHOT CALLBACKS ═══════
 // The sync module calls these; each ends in a re-render. Same contract as the
 // CRM's applyLeadsSnapshot / applyPipelineSnapshot.
-window.applyListingsSnapshot = function (list) {
+// fromServer: false while the list is still this browser's local copy (it can be hours old) — drawn at
+// once, but the automatic writers below (seller cards, column moves, brochure links) wait for the
+// server's, or they would act on what is no longer true (a duplicate card for a seller whose card
+// the copy does not have yet).
+window.applyListingsSnapshot = function (list, fromServer) {
   listings = Array.isArray(list) ? list : [];
-  seenListings = true;
+  if (fromServer !== false) seenListings = true;
   // The Posting tab shows each property's tags from its listing: tell it to redraw (it still waits
   // while someone is typing there).
   if (window.pgListingsChanged) window.pgListingsChanged();
@@ -136,9 +140,9 @@ function retireColumnsNow() {
       applyFilters();
     });
 }
-window.applyTrackLeadsSnapshot = function (list) {
+window.applyTrackLeadsSnapshot = function (list, fromServer) {
   leads = Array.isArray(list) ? list : [];
-  seenLeads = true;
+  if (fromServer !== false) seenLeads = true;
   refreshAll();
 };
 
@@ -152,7 +156,11 @@ function refreshAll() {
   // snapshot is reads nobody sees (the visible tab, or this one when it comes back, does it).
   try { if (seenListings && window.bpReconcile && document.visibilityState === 'visible') window.bpReconcile(); } catch (e) { console.error('brochure reconcile:', e); }
   try { mediaSweepNow(); } catch (e) { console.error('media ready:', e); }
-  try { applyFilters(); } catch (e) { console.error(e); }
+  // Someone typing or choosing in the view (a card name, a reference, Settings, the Editor's
+  // pickers): this update waits, and lands the moment they leave the field — a redraw would take
+  // the field away mid-word (and its blur would save the half-typed text). Their own actions
+  // (a filter picked, a save) redraw as before: they call applyFilters directly.
+  try { if (viewBusy()) viewStale = true; else applyFilters(); } catch (e) { console.error(e); }
   try { renderFilterBar(); } catch (e) { console.error(e); }
   try { renderModeToggle(); } catch (e) { console.error(e); }
   try { updateSellerBadge(); } catch (e) { console.error(e); }
@@ -267,7 +275,23 @@ function skippedSellers() {
 function leadById(id) { return leads.find(l => l.id === id) || null; }
 
 // ═══════ FILTER + ROUTING ═══════
+// The view being typed or chosen in right now (Posting has its own guard).
+// Sellers: "Set aside" stays open (or shut) across redraws.
+let sellersAsideOpen = false;
+window.__setSellersAside = v => { sellersAsideOpen = !!v; };
+const VIEW_IDS = { board: 'boardView', shoots: 'shootsView', settings: 'settingsView', sellers: 'sellersView' };
+let viewStale = false;
+function viewBusy() {
+  const id = VIEW_IDS[currentView];
+  const a = document.activeElement, el = id && document.getElementById(id);
+  return !!(a && el && el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+}
+document.addEventListener('focusout', () => {
+  if (!viewStale) return;
+  setTimeout(() => { if (viewStale && !viewBusy()) { viewStale = false; try { applyFilters(); } catch (e) { console.error(e); } } }, 0);
+});
 function applyFilters() {
+  viewStale = false;
   forgetBrochures();
   const q = currentSearch;
   filtered = listings.filter(x => {
@@ -415,9 +439,25 @@ const allTags = () => TG.catalog(config.tags, ...listings.map(l => l.tags), ...(
 // A listing's tags as chips (on the tile, the list row, the Posting tab).
 const tagChips = list => { const l = TG.cleanTags(list); return l.length ? `<div class="tk-tags">${l.map(t => `<span class="tk-tag ${TG.tagClass(t)}">${esc(t)}</span>`).join('')}</div>` : ''; };
 
+// Phones: the filter row folds behind one Filters button (it says how many are on).
+function toggleTrackFilters(force) {
+  const bar = document.querySelector('.tk-filterbar');
+  if (!bar) return;
+  const open = typeof force === 'boolean' ? force : !bar.classList.contains('fopen');
+  bar.classList.toggle('fopen', open);
+  const btn = document.getElementById('tkFiltersBtn');
+  if (btn) btn.setAttribute('aria-expanded', String(open));
+}
+window.toggleTrackFilters = toggleTrackFilters;
 function renderFilterBar() {
   const el = document.getElementById('tkFilterBar');
   if (!el) return;
+  const btn = document.getElementById('tkFiltersBtn');
+  if (btn) {
+    const nOn = (stageFilter.size ? 1 : 0) + (ownerAgentFilter.size ? 1 : 0) + (tagFilter.size ? 1 : 0) + (brochureFilter ? 1 : 0);
+    btn.classList.toggle('on', !!nOn);
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Filters${nOn ? `<span class="lf-badge">${nOn}</span>` : ''}`;
+  }
   const openId = (el.querySelector('details[open]') || {}).id;
   const row = (on, onclick, dot, label, n) => `<label class="tk-dd-row"><input type="checkbox" ${on ? 'checked' : ''} onchange="${onclick}">${dot}<span class="tk-dd-l">${esc(label)}</span><span class="tk-dd-n">${n}</span></label>`;
   const stageRows = stages.map(s => row(stageFilter.has(s.id), `toggleStageFilter('${s.id}')`,
@@ -477,7 +517,7 @@ function renderBoard() {
     const late = cards.filter(isLate).length;
     const kind = P.stageKindOf(stage);
     const rule = (P.stageDef(P.stageKeyOf(stage)) || {}).rule || '';
-    return `<div class="tk-col${kind && kind !== 'open' ? ' tk-col-' + kind : ''}">
+    return `<div class="tk-col${kind && kind !== 'open' ? ' tk-col-' + kind : ''}" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
       <div class="tk-col-hdr">
         <div class="tk-col-head">
           <span class="tk-dot" style="background:${stage.color}"></span>
@@ -489,7 +529,7 @@ function renderBoard() {
           <span class="tk-count">${cards.length}</span>
         </div>
       </div>
-      <div class="tk-col-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="onColDrop(event,'${stage.id}')">
+      <div class="tk-col-body">
         ${cards.map(cardHtml).join('') || '<div class="tk-col-none">Nothing here</div>'}
       </div>
     </div>`;
@@ -637,7 +677,7 @@ function cardHtml(x) {
   const ageTitle = [age.target ? `About ${age.target} days in this column` : 'Days in this column',
     `Updated ${timeAgo(x.updatedAt) || '—'}${by ? ' by ' + by : ''}`, it.intake ? `Came in ${fmtDate(it.intake)} · ${it.channel}` : ''].filter(Boolean).join('\n');
   // The code and the days here share the top row; with no code, the days sit beside the name.
-  const code = codeChip(x);
+  const code = codeChip(x) + ltypeChip(x);
   const pill = `<span class="tk-age-pill${age.farOver ? ' bad' : age.over ? ' warn' : ''}" title="${esc(ageTitle)}">${age.days === 0 ? 'today' : age.days + 'd here'}</span>`;
   return `<div class="tk-card cmp${late ? ' late' : ''}" draggable="true" tabindex="0" role="link"
       aria-label="Open ${esc(propName(x, it) || it.locality || it.name)}${owner ? ', owner ' + esc(owner) : ''}"
@@ -686,7 +726,8 @@ function editCardRef(id) {
   inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') finish(false); });
   inp.addEventListener('click', e => e.stopPropagation());
   inp.addEventListener('mousedown', e => e.stopPropagation());
-  inp.addEventListener('blur', () => finish(true));
+  // Taken away by a redraw (not left by the person): nothing is saved.
+  inp.addEventListener('blur', () => { if (inp.isConnected) finish(true); });
   slot.replaceWith(inp);
   inp.focus(); inp.select();
 }
@@ -716,6 +757,7 @@ function cardFoot(x, o) {
     + (n ? `<span class="tk-noteic" title="${esc(n)} — ${esc(personName(x.lastNote.by))}, ${esc(timeAgo(x.lastNote.at))}${x.noteCount > 1 ? ` (${x.noteCount} notes)` : ''}"><i class="fa-regular fa-note-sticky" aria-hidden="true"></i>${x.noteCount > 1 ? ' ' + x.noteCount : ''}</span>` : '');
   const quick = (o.tel ? `<a class="tk-qa" href="tel:${esc(o.tel)}" onclick="event.stopPropagation()" title="Call ${esc(o.owner || 'the owner')}" aria-label="Call"><i class="fa-solid fa-phone" aria-hidden="true"></i></a>` : '')
     + (o.wa ? `<a class="tk-qa" href="https://wa.me/${esc(o.wa)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="WhatsApp ${esc(o.owner || 'the owner')}" aria-label="WhatsApp"><i class="fa-brands fa-whatsapp" aria-hidden="true"></i></a>` : '')
+    + `<button type="button" class="tk-qa tk-move-btn" onclick="openMoveMenu(event,'${x.id}')" title="Move to another column" aria-label="Move to another column" aria-haspopup="menu"><i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i></button>`
     + (o.preview ? `<button type="button" class="tk-qa" onclick="event.stopPropagation();openSellerPreview('${x.id}')" title="The property at a glance" aria-label="Preview"><i class="fa-regular fa-eye" aria-hidden="true"></i></button>` : '');
   const av = (o.agents || []).map(e => `<span class="tk-av" title="Agent: ${esc(personName(e))}">${esc(avInitials(e))}</span>`).join('');
   if (!left && !quick && !av) return '';
@@ -783,7 +825,8 @@ function editCardTitle(id) {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
-  inp.addEventListener('blur', () => finish(true));
+  // Taken away by a redraw (not left by the person): nothing is saved.
+  inp.addEventListener('blur', () => { if (inp.isConnected) finish(true); });
   slot.replaceWith(inp);
   const ed = card.querySelector('.tk-pname-ed'); if (ed) ed.hidden = true;
   inp.focus(); inp.select();
@@ -927,8 +970,29 @@ const BROCHURE_SIG = {
 };
 function brochureSignal(x) {
   const b = BROCHURE_SIG[brochureOf(x)];
-  return b ? `<span class="tk-bro ${b[1]}" title="${esc(b[2])}">${b[0]}</span>` : '';
+  return (b ? `<span class="tk-bro ${b[1]}" title="${esc(b[2])}">${b[0]}</span>` : '')
+    + (brochureV2Due(x) ? '<span class="tk-bro v2" title="Shot after the brochure was made — it does not have these photos. A reminder only.">Brochure v2?</span>' : '');
 }
+// Re-shot after its brochure was made: the brochure still shows the old shoot. A reminder only — it
+// holds nothing back, and "Not needed" puts it away for that shoot (a later re-shoot asks again).
+// Only for shoots from when this reminder exists: older cards' dates were not kept with it in mind.
+const BRO_V2_FROM = new Date(2026, 9, 13).getTime();
+function brochureV2Due(x) {
+  const b = (x && x.brochure) || {};
+  return !!(b.doneAt && x.shootDoneAt && x.shootDoneAt >= BRO_V2_FROM && x.shootDoneAt > b.doneAt && x.broV2Seen !== x.shootDoneAt);
+}
+function broV2Html(x) {
+  if (!brochureV2Due(x)) return '';
+  return `<div class="tk-hint warn tk-v2">Shot on <b>${esc(fmtDay(x.shootDoneAt))}</b>, after the brochure was made (${esc(fmtDay(x.brochure.doneAt))}) — it does not have these photos. Make a new version when the new ones are in.
+    <button type="button" class="tk-link" onclick="broV2Seen('${x.id}')">Not needed</button></div>`;
+}
+function broV2Seen(id) {
+  const x = listings.find(l => l.id === id);
+  if (!x || !x.shootDoneAt) return;
+  mutate(id, l => { l.broV2Seen = l.shootDoneAt; }, 'Brochure v2: not needed for this shoot');
+  if (currentDetailId === id) openDetail(id);
+}
+window.broV2Seen = broV2Seen;
 window.blockersFor = blockersFor;   // read by tests/track-preview.mjs
 
 // The media checklist. TWO states, not one: what this shoot is supposed to
@@ -1038,8 +1102,9 @@ function setShooter(id, sel) {
   const who = pickedShooter(sel);
   if (who === null) return;
   sel.dataset.was = who;
-  mutate(id, x => { x.shootAssigneeEmail = shooterEmail(x, who); x.shootAssignee = who; },
+  const x = mutate(id, x => { x.shootAssigneeEmail = shooterEmail(x, who); x.shootAssignee = who; },
     who ? `Shoot assigned to <b>${esc(who)}</b>` : 'Shoot unassigned');
+  if (x && x.shootAt && !x.shootDoneAt) shootCalendar(x);
   if (currentDetailId === id) openDetail(id);
 }
 window.setShooter = setShooter;
@@ -1067,16 +1132,22 @@ function onCardDragStart(e, id) {
   e.dataTransfer.effectAllowed = 'move';
   try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
   e.currentTarget.classList.add('dragging');
+  // While a card is carried, every column is a full-size target — the folded empty ones open up.
+  // A frame later: changing the layout inside dragstart itself can cancel the drag.
+  requestAnimationFrame(() => document.body.classList.add('tk-dragging'));
 }
 function onCardDragEnd(e) {
   e.currentTarget.classList.remove('dragging');
+  document.body.classList.remove('tk-dragging');
   // A drag dropped nowhere (or cancelled) must not leave the page thinking one is under way —
   // the Editor view waits while one is. After the drop handler, which still reads it.
   setTimeout(() => { draggedId = null; }, 0);
-  document.querySelectorAll('.tk-col-body.drag-over').forEach(el => el.classList.remove('drag-over'));
+  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
 }
+// The whole column takes the drop — its header too, not only the strip under the cards.
 function onColDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('drag-over'); }
-function onColDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+// Moving over a card inside the column is still the column: only leaving it clears the mark.
+function onColDragLeave(e) { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drag-over'); }
 function onColDrop(e, stageId) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over');
@@ -1096,6 +1167,7 @@ window.onColDrop = onColDrop; window.onCardKeydown = onCardKeydown;
 // ═══════ MOVING A LISTING ═══════
 function changeStage(id, stageId, opts) {
   opts = opts || {};
+  if (notLiveYet()) return;
   const x = listings.find(l => l.id === id);
   const to = stageById(stageId);
   if (!x || !to || x.stageId === stageId) return;
@@ -1124,10 +1196,12 @@ function changeStage(id, stageId, opts) {
     x.prevShootDoneAt = x.shootDoneAt; x.shootDoneAt = null;
     addHistory(x, 'field', 'Shoot marked not done (moved back) — to be shot again');
   }
-  // Moved back before Shoot scheduled with a shoot booked: that shoot is off.
+  // Moved back before Shoot scheduled with a shoot booked: that shoot is off (and off the calendar).
+  let calOff = false;
   if (toStep >= 0 && toStep < P.ladderIndex('shoot_scheduled') && x.shootAt && !x.shootDoneAt) {
     if (!wasShot) { addHistory(x, 'field', `Shoot on <b>${esc(fmtDateTime(x.shootAt))}</b> cancelled (moved back)`); x.shootCancelled = (x.shootCancelled || 0) + 1; }
     x.shootAt = null; x.ownerInformed = false;
+    calOff = true;
   }
   x.heldBack = key === 'shoot_done' && fromStep > toStep;
   x.heldGap = x.heldBack && mediaGaps(x).length > 0;
@@ -1138,6 +1212,7 @@ function changeStage(id, stageId, opts) {
   x.updatedAt = now;
   x.updatedBy = currentUserEmail || null;
   persist(x);
+  if (calOff) shootCalendar(x, true);
   applyFilters();
   if (currentDetailId === id) openDetail(id);
   // Moved into Media ready by hand with things still open: say so, rather than let the column lie.
@@ -1164,9 +1239,15 @@ function openReasonModal(id, stageId) {
   document.getElementById('rsUntil').value = '';
   document.getElementById('rsModal').classList.add('open');
 }
-function closeReasonModal() { document.getElementById('rsModal').classList.remove('open'); reasonFor = null; }
+function closeReasonModal() {
+  document.getElementById('rsModal').classList.remove('open');
+  // Cancelled: the card's Stage picker goes back to the column the card is really in.
+  const was = reasonFor; reasonFor = null;
+  if (was && currentDetailId === was.id) openDetail(was.id);
+}
 function saveReason() {
   if (!reasonFor) return;
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const key = document.getElementById('rsReason').value;
   const kind = stageKindOfId(reasonFor.stageId);
   const map = kind === 'lost' ? P.DROP_REASONS : P.HOLD_REASONS;
@@ -1241,7 +1322,11 @@ function renderShoots() {
   // A media person's shoots: by name, and by their email when the name was ever spelled differently.
   const fEmail = agentFilter ? emailOfShooter(agentFilter) : '';
   const mine = x => !agentFilter || sameName(x.shootAssignee, agentFilter) || (!!fEmail && x.shootAssigneeEmail === fEmail);
-  const open = listings.filter(x => stageKindOfId(x.stageId) === 'open' && mine(x));
+  // The search box above filters this view too (it is shown here): title, code, address, who shoots.
+  const q = currentSearch;
+  const found = x => !q || [x.title, x.propertyCode, x.address, x.location, x.shootAssignee, x.sellerName, typeof x.siteContact === 'string' ? x.siteContact : x.siteContact && x.siteContact.name]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
+  const open = listings.filter(x => stageKindOfId(x.stageId) === 'open' && mine(x) && found(x));
   const withShoot = open.filter(x => x.shootAt).sort((a, b) => a.shootAt - b.shootAt);
   const now = Date.now();
   // "Missed" is judged on the brief, not on one field: a shoot whose required
@@ -1292,7 +1377,89 @@ function shootMore(x) {
 }
 // Calling a shoot off: the date goes, the reason is kept, and a card that was only "Shoot scheduled"
 // goes back to Details & docs (a card further on keeps its column).
+// ── Shoots on the team calendar (Settings → Configurations; off until switched on) ──
+// A booked shoot goes on the calendar of whoever books it, the shooter invited — the CRM's own
+// meeting path (the same as "New meeting" there), so it shows on the team calendar and in Google.
+// Moved, re-assigned or called off here: the same entry follows. Best-effort: nothing on the board
+// waits on it, and when the calendar cannot take it, it is said once (the card is booked anyway).
+let calSaid = false;
+const calChain = new Map();   // listing id → the request in flight: one at a time, in order
+function shootCalendar(x, cancel) {
+  if (!config.shootCalendar || !x || !window.trackAuth || !window.trackAuth.getIdToken) return;
+  const prev = calChain.get(x.id) || Promise.resolve();
+  const next = prev.then(() => shootCalendarNow(x.id, x, cancel)).catch(() => {});
+  calChain.set(x.id, next);
+  next.then(() => { if (calChain.get(x.id) === next) calChain.delete(x.id); });
+}
+// The entry is on the calendar of whoever booked it, and only they can move it or call it off (the
+// server refuses anyone else). Someone else changing the shoot is told who to ask — a second entry
+// is never made beside the first.
+// Every step reads the card afresh by its id: each save comes back as a new snapshot (new objects),
+// so the one handed in when this was queued can be out of date by the time it runs. `gone` is the
+// card as it was, for a card deleted meanwhile (its entry is still called off).
+async function shootCalendarNow(id, gone, cancel) {
+  const now = () => listings.find(l => l.id === id) || gone;
+  let x = now();
+  const me = String(currentUserEmail || '').toLowerCase();
+  const evId = x.shootEventId || null, owner = String(x.shootEventBy || '').toLowerCase();
+  if (evId && owner && owner !== me) {
+    return say({ error: `the calendar entry is ${personName(owner) || owner}'s — they can move it in the CRM calendar` });
+  }
+  const live = !cancel && x.shootAt && !x.shootDoneAt;
+  if (cancel ? !evId : !live) return;
+  const brief = MEDIA_KEYS.filter(([k]) => needOf(x)[k]).map(([, l]) => l).join(', ');
+  const body = cancel ? { op: 'meeting', eventId: evId, cancel: true } : {
+    op: 'meeting', eventId: evId, meet: false, repeat: 'none', minutes: 60, at: Number(x.shootAt),
+    title: `Shoot — ${x.title || x.propertyCode || 'a listing'}`.slice(0, 200),
+    where: String(x.address || x.location || '').slice(0, 300),
+    about: [x.propertyCode ? 'Property: ' + x.propertyCode : '', x.siteContact ? 'Who opens it: ' + x.siteContact : '',
+      brief ? 'To capture: ' + brief : '', x.accessNotes ? 'Access: ' + x.accessNotes : '',
+      'The card: ' + location.origin + '/propertytrack.html?listing=' + encodeURIComponent(x.id)].filter(Boolean).join('\n'),
+    attendees: x.shootAssigneeEmail ? [x.shootAssigneeEmail] : []
+  };
+  const token = await window.trackAuth.getIdToken();
+  if (!token) return;
+  let res;
+  try {
+    const r = await fetch('/api/tailortalk?action=calendar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body)
+    });
+    res = { status: r.status, d: await r.json().catch(() => ({})) };
+  } catch (e) { return say(null); }
+  x = now();
+  if (!res.d || !res.d.ok) {
+    // Gone from the calendar (removed in Google): forget it — the next booking makes a fresh one.
+    if (res.status === 404 && evId) keep(null, '');
+    return say(res.d);
+  }
+  if (cancel) return keep(null, '');
+  const newId = res.d.eventId || evId;
+  keep(newId, newId === evId ? (x.shootEventBy || me) : me);
+  // Called off, done or deleted while this was on its way: take the new entry off again.
+  x = now();
+  const stillOn = listings.some(l => l.id === id) && x.shootAt && !x.shootDoneAt;
+  if (!evId && newId && !stillOn) {
+    try {
+      await fetch('/api/tailortalk?action=calendar', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ op: 'meeting', eventId: newId, cancel: true }) });
+      keep(null, '');
+    } catch (e) {}
+  }
+  function keep(nextId, by) {
+    // Only the entry's id and owner are stored (no timeline line): the timeline already says what happened.
+    const cur = listings.find(l => l.id === id);
+    if (!cur) return;
+    if ((cur.shootEventId || null) === nextId && (cur.shootEventBy || '') === (by || '')) return;
+    mutate(id, l => { l.shootEventId = nextId; l.shootEventBy = nextId ? by : ''; });
+  }
+  function say(d) {
+    if (calSaid) return;
+    calSaid = true;
+    toast('Not on the team calendar — ' + ((d && (d.error || d.hint)) || 'it could not be reached') + '. The shoot is booked.', true);
+  }
+}
 function cancelShoot(id, reason) {
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const x = listings.find(l => l.id === id);
   if (!x || !x.shootAt || x.shootDoneAt) return;   // a shoot already done is not called off
   const when = fmtDateTime(x.shootAt);
@@ -1308,6 +1475,7 @@ Why? (optional)`);
     l.shootCancelled = (l.shootCancelled || 0) + 1;
     l.cancelReason = reason || null;
   }, `Shoot on <b>${esc(when)}</b> cancelled${reason ? ' — ' + esc(reason) : ''}`);
+  shootCalendar(x, true);
   const det = P.stageForKey(stages, 'details');
   if (det && P.stageKeyOf(stageById(x.stageId)) === 'shoot_scheduled') changeStage(id, det.id);
   if (currentView === 'shoots') renderShoots();
@@ -1578,7 +1746,7 @@ function renderSellers() {
         <div class="tk-rows">${missing.map(l => sellerRow(l, 'pending')).join('')}</div>
       </div>` : ''}
     ${aside.length ? `
-      <details class="tk-group">
+      <details class="tk-group" id="slAside"${sellersAsideOpen ? ' open' : ''} ontoggle="__setSellersAside(this.open)">
         <summary class="tk-group-hdr">Set aside <span class="tk-count">${aside.length}</span></summary>
         <div class="tk-hint" style="margin:4px 0 9px">Deliberately not tracked — a deleted card or a skip. They are never re-added on their own.</div>
         <div class="tk-rows">${aside.map(l => sellerRow(l, 'aside')).join('')}</div>
@@ -1613,6 +1781,7 @@ function sellerRow(l, mode) {
 // Creating a listing from a seller lead — the manual half of the mapping. The
 // lead's own words become the starting point so nothing is retyped.
 function createFromLead(leadId) {
+  if (notLiveYet()) return;
   const l = leadById(leadId);
   if (!l) return;
   const first = stages[0];
@@ -1717,6 +1886,8 @@ function openDetail(id) {
       ${x.propertyCode ? `<a class="tk-btn ghost" href="dashboard.html?property=${encodeURIComponent(x.propertyCode)}" target="_blank" rel="noopener" title="The full record: notes, internal notes, matching buyers">Open property →</a>` : ''}
     </div>
 
+    ${termsSectionHtml(x)}
+
     <div class="tk-sec">
       <div class="tk-sec-hdr">Getting there</div>
       <div class="tk-kv col"><span>Address</span><div>${x.address ? esc(x.address) : '<i class="tk-miss">No address — a shoot cannot be sent without one</i>'}</div></div>
@@ -1772,6 +1943,7 @@ function openDetail(id) {
       <div class="tk-sec-hdr">Deliverables</div>
       ${linkRow('Drive photos', x.photosLink, x.id, 'photosLink')}
       ${linkRow('Brochure PDF', x.brochureLink, x.id, 'brochureLink')}
+      ${broV2Html(x)}
       <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
     </div>
 
@@ -1805,6 +1977,7 @@ function openDetail(id) {
       </div>
     </aside>`;
 
+  openDpLayer();   // Back closes the card
   document.getElementById('dp').classList.add('open');
   if (keep) {
     if (keep.note) document.getElementById('dpNoteText').value = keep.note;
@@ -1822,6 +1995,18 @@ function openDetail(id) {
   } catch (e) {}
 }
 window.openDetail = openDetail;
+// The entry under an open card is the page WITHOUT ?listing= (a card opened from a link included):
+// closing the card, or Back, lands there — and a reload then does not open the card again.
+function openDpLayer() {
+  if (!window.AppNav || !window.AppNav.openLayer) return;
+  if (!document.getElementById('dp').classList.contains('open')) {
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has('listing')) { u.searchParams.delete('listing'); history.replaceState(history.state, '', u.pathname + u.search + u.hash); }
+    } catch (e) {}
+  }
+  window.AppNav.openLayer('dp', () => closeDetail(true));
+}
 
 // Shoot for's "Edit" column: where the outlet's edit stands — read only. It moves by its own steps
 // (Plan → Start editing → Edit done) in the Edit section and the Editor view, never by a tick here.
@@ -2017,8 +2202,11 @@ function editLink(id, field) {
   if (currentDetailId === id) openDetail(id);
 }
 window.editLink = editLink;
-function closeDetail() {
+// fromHistory: Back closed it (its history entry is already gone).
+function closeDetail(fromHistory) {
+  const wasOpen = document.getElementById('dp').classList.contains('open');
   document.getElementById('dp').classList.remove('open');
+  if (wasOpen && fromHistory !== true && window.AppNav && window.AppNav.closeLayer) window.AppNav.closeLayer('dp');
   closeSellerPreview();
   currentDetailId = null;
   try {
@@ -2037,10 +2225,13 @@ try { pendingListing = new URLSearchParams(location.search).get('listing'); } ca
 let pendingTries = 0;
 function openPendingListing() {
   if (!pendingListing) return;
+  // The person has moved on (opened another card) — a late arrival must not pop up over that.
+  if (currentDetailId && currentDetailId !== pendingListing) { pendingListing = null; return; }
   if (listings.some(l => l.id === pendingListing)) {
     const id = pendingListing; pendingListing = null;
     openDetail(id);
-  } else if (++pendingTries > 40) {
+  } else if (seenListings || ++pendingTries > 40) {
+    // The server's own list is in and it is not there: say so now (not forty redraws later).
     pendingListing = null;
     toast('That listing no longer exists');
   }
@@ -2117,9 +2308,20 @@ async function deleteNote(id, noteId) {
 window.addNote = addNote; window.deleteNote = deleteNote;
 
 // ── Small field writes from the detail panel ──
+// The board drawn from this device's saved copy (it can be hours old) before the server's list is in:
+// a card saved now would put that old copy back over everyone's changes since (a save writes the
+// whole card). Changes wait for the server's list — a second or two; it is said, not silently lost.
+let holdToastsUntil = 0;
+function notLiveYet() {
+  if (seenListings || !window.trackFirebase) return false;
+  toast('Still connecting — this is the copy saved on this device. Try again in a moment.', true);
+  holdToastsUntil = Date.now() + 2500;   // the caller's own "Saved" must not cover this up
+  return true;
+}
 function mutate(id, fn, historyText) {
   const x = listings.find(l => l.id === id);
   if (!x) return null;
+  if (notLiveYet()) return null;
   const hadGaps = mediaGaps(x).length > 0;
   // A card from before edits were per outlet: what its old edit and "made" ticks meant is written as
   // cuts now, before this change — so a tick made later never changes what the old edit meant.
@@ -2156,6 +2358,7 @@ function markReached(x, key, at) {
 // Move a listing forward to a milestone without asking — used when its media is all ready.
 // Never moves it back, never touches a listing on hold, dropped or closed.
 function advanceTo(id, key, why) {
+  if (!seenListings && window.trackFirebase) return null;
   const x = listings.find(l => l.id === id);
   const to = P.stageForKey(stages, key);
   if (!x || !to || x.stageId === to.id) return;
@@ -2174,13 +2377,17 @@ function advanceTo(id, key, why) {
 // What the brochure panel (brochure-panel.js) needs from the board.
 window.trackApi = {
   listings: () => listings,
+  stages: () => stages,
   editSheetHtml: () => edSheetHtml(listings),
   inventory: () => inventory,
+  inventoryLive: () => !invWatch || invLive,   // the inventory shown is the server's copy (not this device's saved one)
   loadInventory: force => loadInventory(force),
   mutate: (id, fn, text) => mutate(id, fn, text),
   brochureOf: x => brochureOf(x),
   // Voice-over per outlet, as set on the listing's Shoot for: 'live' (with V/O), 'vo' (V/O made separately) or '' — and whether that V/O is made.
   voiceOf: (x, k) => ({ voice: forVoice(x, k), made: forVoMade(x, k), planned: forPlanned(x, k) }),
+  // The finished video for a Posting channel (the FB Reel shares the Insta Reel's cut unless it has its own).
+  finalLinkOf: (x, ch) => finalLinkOf(x, EF.cutOfChannel(x, ch)) || finalLinkOf(x, 'all'),   // an older card's one cut for every outlet
   // The edit, for the Posting tab: where the video for a post stands.
   editOf: x => EF.editOf(x),
   span: ms => EF.span(ms),
@@ -2231,6 +2438,41 @@ window.trackApi = {
   user: () => currentUserEmail,
   toast: m => toast(m)
 };
+// ── Listing type and documents: shown on the card, they hold nothing back and raise no alert ──
+const LTYPE_LABEL = Object.fromEntries(CFG.LISTING_TYPES);
+function ltypeChip(x) {
+  const t = CFG.listingTypeOf(x);
+  return t && t !== 'normal' ? `<span class="tk-ltype ${t}" title="${esc(LTYPE_LABEL[t])} listing">${esc(LTYPE_LABEL[t])}</span>` : '';
+}
+function termsSectionHtml(x) {
+  const t = CFG.listingTypeOf(x), items = config.docItems, pr = CFG.docProgress(x, config);
+  const seg = CFG.LISTING_TYPES.filter(([k]) => k).map(([k, l]) =>
+    `<button type="button" class="tk-seg-b${t === k ? ' on' : ''}" aria-pressed="${t === k}" onclick="setListingType('${x.id}','${t === k ? '' : k}')">${esc(l)}</button>`).join('');
+  const docs = items.map(n => {
+    const s = CFG.docStatus(x, n);
+    return `<label class="tk-doc-r"><span>${esc(n)}</span><select class="tk-sel sm tk-doc-s${s ? ' ' + s : ''}" aria-label="${esc(n)}" onchange="setDocStatus('${x.id}', ${jsq(n)}, this.value)">${
+      CFG.DOC_STATUSES.map(([k, l]) => `<option value="${k}"${s === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+  }).join('');
+  return `<div class="tk-sec" id="dpTerms">
+      <div class="tk-sec-hdr">Listing &amp; documents${items.length ? ` <span class="tk-count" title="In hand or not needed">${pr.done} of ${pr.total}</span>` : ''}</div>
+      <div class="tk-kv tk-pickrow"><span>Listing type</span><div class="tk-seg" role="group" aria-label="Listing type">${seg}</div></div>
+      ${items.length ? `<div class="tk-docs">${docs}</div>
+      <div class="tk-hint">A checklist only — nothing waits on it. The list is set in Settings → Configurations.</div>` : ''}
+    </div>`;
+}
+function setListingType(id, t) {
+  const v = CFG.LISTING_TYPES.some(([k]) => k === t) ? t : '';
+  mutate(id, x => { x.listingType = v; }, `Listing type: ${v ? LTYPE_LABEL[v] : 'not set'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+function setDocStatus(id, name, v) {
+  const k = CFG.docKey(name);
+  if (!k) return;
+  const st = CFG.DOC_STATUSES.find(([s]) => s === v) || CFG.DOC_STATUSES[0];
+  mutate(id, x => { x.docs = { ...(x.docs || {}), [k]: st[0] }; }, `${esc(name)}: ${st[0] ? st[1].toLowerCase() : 'not checked'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+window.setListingType = setListingType; window.setDocStatus = setDocStatus;
 function setFlag(id, key, on) {
   mutate(id, x => { x[key] = !!on; },
     (key === 'ownerInformed' ? 'Owner informed about the shoot' : 'Owner approval') + ': ' + (on ? 'yes' : 'no'));
@@ -2400,6 +2642,7 @@ function openAccessModal(id) {
 function closeAccessModal() { document.getElementById('acModal').classList.remove('open'); accessFor = null; }
 function saveAccess() {
   if (!accessFor) return;
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const id = accessFor;
   const get = i => document.getElementById(i).value.trim();
   mutate(id, x => {
@@ -2433,6 +2676,7 @@ function openWrapModal(id) {
 function closeWrapModal() { document.getElementById('wrapModal').classList.remove('open'); wrapFor = null; }
 function saveWrap() {
   if (!wrapFor) return;
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const id = wrapFor;
   const media = {};
   for (const [k] of MEDIA_KEYS) media[k] = !!document.getElementById('wrap_' + k)?.checked;
@@ -2441,6 +2685,8 @@ function saveWrap() {
   if (photos && !/^https?:\/\//i.test(photos)) { toast('That photo link does not look like a link'); return; }
   mutate(id, x => {
     x.media = media; x.shootNotes = notes; x.shootDoneAt = Date.now();
+    // Done: its calendar entry stays as the record of that day; a reshoot gets an entry of its own.
+    x.shootEventId = null;
     if (photos) x.photosLink = photos;
   }, 'Shoot wrapped up' + (photos ? ' · photos uploaded' : ''));
   const x = listings.find(l => l.id === id);
@@ -2454,10 +2700,12 @@ function saveWrap() {
 window.openWrapModal = openWrapModal; window.closeWrapModal = closeWrapModal; window.saveWrap = saveWrap;
 
 function deleteListing(id) {
+  if (notLiveYet()) return;
   const x = listings.find(l => l.id === id);
   if (!x) return;
   if (!confirm(`Delete "${x.title || x.propertyCode || 'this listing'}"? The CRM lead is not touched, and the seller will not be re-added automatically.`)) return;
   listings = listings.filter(l => l.id !== id);
+  if (x.shootAt && !x.shootDoneAt) shootCalendar(x, true);
   if (window.trackFirebase) {
     window.trackFirebase.deleteListing(id).catch(e => console.error(e));
     // Without this tombstone the live sync would create the card again on the
@@ -2535,6 +2783,7 @@ window.shooterPicked = sel => { const n = pickedShooter(sel); if (n !== null) se
 function closeShootModal() { document.getElementById('shModal').classList.remove('open'); shootFor = null; }
 function saveShoot() {
   if (!shootFor) return;
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const date = document.getElementById('shDate').value;
   const time = document.getElementById('shTime').value || '10:00';
   const who = document.getElementById('shWho').value.trim();
@@ -2564,6 +2813,7 @@ function saveShoot() {
     changeStage(id, sched.id);
   } else if (at && x && stageKindOfId(x.stageId) !== 'open') toast(`Booked — the card stays in ${(stageById(x.stageId) || {}).name || 'its column'}`);
   closeShootModal();
+  if (at && x) shootCalendar(x);
   if (currentDetailId === id) openDetail(id);
 }
 window.openShootModal = openShootModal; window.closeShootModal = closeShootModal; window.saveShoot = saveShoot;
@@ -2577,14 +2827,39 @@ window.openShootModal = openShootModal; window.closeShootModal = closeShootModal
 // dialog is reopened immediately.
 const INVENTORY_TTL = 60000;
 let inventoryAt = 0;
+// The inventory is watched live from the first time anything needs it (trackFirebase.watchInventory):
+// read once, then only what changes — every later call is free and never stale. Where the watch is
+// not available (the demo, a test), it is read on demand as before.
+let invWatch = null, invFirst = null, invLive = false;
+function startInventoryWatch() {
+  if (invWatch || !window.trackFirebase || !window.trackFirebase.watchInventory) return invFirst;
+  invFirst = new Promise(resolve => {
+    let first = true;
+    invWatch = window.trackFirebase.watchInventory((list, fromServer) => {
+      inventory = list; inventoryAt = Date.now();
+      // Drawn from this device's saved copy at once; questions that decide something (is this code
+      // in the dashboard? link this card?) wait for the server's copy.
+      if (fromServer !== false) invLive = true;
+      if (window.pgListingsChanged) window.pgListingsChanged();
+      if (seenListings) { if (viewBusy()) viewStale = true; else applyFilters(); }
+      if (first && invLive) { first = false; resolve(list); }
+      // A property changed (a brochure delivered): the listings waiting on it are linked at once —
+      // by a tab someone is looking at (a hidden one catches up when it is shown again).
+      else if (invLive && !first && window.bpReconcile && seenListings && document.visibilityState === 'visible') window.bpReconcile(true);
+    }, e => { console.error('inventory watch failed — reading on demand:', e); invWatch = null; invFirst = null; resolve(inventory || []); });
+  });
+  return invFirst;
+}
 function loadInventory(force) {
+  const live = startInventoryWatch();
+  if (live) return inventory && invLive ? Promise.resolve(inventory) : live;
   const fresh = inventory && (Date.now() - inventoryAt < INVENTORY_TTL);
   if (fresh && !force) return Promise.resolve(inventory);
   if (!window.trackFirebase) return Promise.resolve(inventory || []);
   return window.trackFirebase.getInventory()
     // Tiles read their brochure state from the inventory, so they are redrawn when it arrives.
     // Posting reads each property's brochure from the inventory too: tell it.
-    .then(list => { inventory = list; inventoryAt = Date.now(); if (window.pgListingsChanged) window.pgListingsChanged(); if (seenListings) applyFilters(); return list; })
+    .then(list => { inventory = list; inventoryAt = Date.now(); if (window.pgListingsChanged) window.pgListingsChanged(); if (seenListings) { if (viewBusy()) viewStale = true; else applyFilters(); } return list; })
     // A failed refresh must not empty a picker that already had something in
     // it — better slightly stale than suddenly blank.
     .catch(e => { console.error('inventory read failed:', e); return inventory || []; });
@@ -2720,6 +2995,7 @@ function renderLinkNew(q, open) {
 }
 window.renderLinkNewOpen = () => renderLinkNew(document.getElementById('linkSearch').value, true);
 async function createLinkedLead() {
+  if (notLiveYet()) return;   // (a dialog stays open, with what was typed)
   const x = listings.find(l => l.id === linkFor); if (!x) return;
   const name = document.getElementById('lnName').value.trim(), phone = document.getElementById('lnPhone').value.trim();
   const err = m => { document.getElementById('lnErr').textContent = m; };
@@ -2749,8 +3025,24 @@ async function createLinkedLead() {
 }
 window.createLinkedLead = createLinkedLead;
 function pickLead(leadId) {
+  if (notLiveYet()) return;
   const l = leadById(leadId);
   if (!linkFor || !l) return;
+  // One card per lead: a lead that already has a card here is moved only on purpose — two cards on
+  // one lead split its updates (the sync keeps only one of them in step) and its CRM link.
+  const other = listings.find(o => o.leadId === l.id && o.id !== linkFor);
+  if (other && !confirm(`${l.name || 'This lead'} is already linked to the card "${cardName(other)}". Link it to this card instead? That card will be left without a lead.`)) return;
+  const card = listings.find(o => o.id === linkFor);
+  const prevLead = card && card.leadId && card.leadId !== l.id ? card.leadId : null;
+  if (other) mutate(other.id, o => { o.leadId = null; }, `Its CRM lead <b>${esc(l.name || l.id)}</b> was linked to another card`);
+  // The lead this card was linked to before no longer points at it.
+  if (prevLead && window.trackFirebase && window.trackFirebase.patchLead) {
+    // …and the property code the board put on it goes too (codes the team linked themselves stay).
+    const pl = leadById(prevLead), boardCode = pl && pl.listingCode;
+    const patch = { listingId: null, listingCode: null };
+    if (boardCode && (pl.propertyCodes || []).includes(boardCode)) patch.propertyCodes = pl.propertyCodes.filter(c => c !== boardCode);
+    window.trackFirebase.patchLead(prevLead, patch).catch(e => console.error(e));
+  }
   mutate(linkFor, x => {
     x.leadId = l.id;
     if (!x.sellerName) x.sellerName = l.name || '';
@@ -2772,7 +3064,8 @@ const FORM_FIELDS = [
   ['askingPrice', 'Asking price', 'text', '₹2.1 Cr'],
   ['sellerName', 'Owner name', 'text', ''],
   ['sellerPhone', 'Owner phone', 'tel', ''],
-  ['shootAssignee', 'Shoot assigned to', 'text', '']
+  ['shootAssignee', 'Shoot assigned to', 'text', ''],
+  ['listingType', 'Listing type', 'select', '']
 ];
 // The form's "Shoot assigned to" is the same picker as the shoot's own.
 function fillShooterPick(current) {
@@ -2810,9 +3103,10 @@ function openEditModal(id) {
 function closeModal() { document.getElementById('mModal').classList.remove('open'); }
 let modalWaiting = false;
 function saveModal(retried) {
+  if (notLiveYet()) return;
   // What a typed Property ID means depends on the inventory — never decide it without one. One
   // wait at a time (a second click does nothing), and only if the same form is still open after it.
-  if (!inventory && window.trackFirebase && retried !== true) {
+  if ((!inventory || (invWatch && !invLive)) && window.trackFirebase && retried !== true) {
     if (modalWaiting) return;
     modalWaiting = true;
     const same = { mode: mModalMode, id: mModalEditId };
@@ -2843,6 +3137,7 @@ function saveModal(retried) {
   let sameLink = false;
   const now = Date.now();
   if (mModalMode === 'edit') {
+    const shooterWas = ((listings.find(l => l.id === mModalEditId) || {}).shootAssigneeEmail) || '';
     mutate(mModalEditId, x => {
       // Editing the owner's name or phone HERE claims that field: the live
       // sync stops pushing the CRM's value over it from now on (see the
@@ -2865,6 +3160,9 @@ function saveModal(retried) {
       if (!document.getElementById('mm_propertyCode').value.trim() && x.brochure && !x.brochure.requestedAt) x.brochure = { ...x.brochure, code: '' };
     }, 'Details edited');
     const editedId = mModalEditId;
+    // A new shooter set here: the calendar invitation follows, as from the card's own picker.
+    const ed = listings.find(l => l.id === editedId);
+    if (ed && ed.shootAt && !ed.shootDoneAt && shooterWas !== (ed.shootAssigneeEmail || '')) shootCalendar(ed);
     closeModal();
     if (linkAfter && !sameLink && window.bpLink) linkOrSay(editedId, linkAfter, 'Saved');
     else { if (currentDetailId === editedId) openDetail(editedId); toast('Saved'); }
@@ -3046,6 +3344,7 @@ function openSeriesDetail(x) {
       </div>
       <div class="tk-sec"><div class="tk-sec-hdr">Timeline</div><div id="dpHistory" class="tk-hist"><div class="tk-hint">Loading…</div></div></div>
     </aside>`;
+  openDpLayer();   // Back closes the card
   document.getElementById('dp').classList.add('open');
   if (keepNote) document.getElementById('dpNoteText').value = keepNote;
   loadHistory(x.id);
@@ -3054,6 +3353,7 @@ function openSeriesDetail(x) {
 // Made from the Posting tab when a series is created there; starts in Shoot done (its properties are
 // shot on their own cards — this card is the edit).
 function createSeriesCard(seed) {
+  if (!seenListings && window.trackFirebase) return null;
   const st = P.stageForKey(stages, 'shoot_done') || stages[0];
   if (!st || !window.trackFirebase) return null;
   const now = Date.now();
@@ -3111,6 +3411,7 @@ function editSectionHtml(x) {
       <div class="tk-cut-n">${cutIcon(k)} <b>${esc(EF.cutLabel(x, k))}</b></div>
       <div class="tk-cut-s"><b class="tk-ed-s ${e.status || 'none'}">${esc(st)}</b>${e.by ? ` · ${esc(e.by)}` : ''}${e.planAt ? ` · edit ${esc(fmtDay(e.planAt))}` : ''}${e.dueAt ? ` · deliver ${esc(fmtDay(e.dueAt))}` : ''}${e.doneAt ? ` · done ${esc(fmtDay(e.doneAt))}${took(e.startedAt, e.doneAt) ? ' (' + esc(took(e.startedAt, e.doneAt)) + ')' : ''}` : ''}
         <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : k === 'collab' ? '' : 'No post in Posting yet'}</span>
+        ${finalLinkLine(x, k, e)}
         ${log.length ? `<details class="tk-cutlog"><summary>${log.length} earlier edit${log.length === 1 ? '' : 's'}</summary>${log.map(l => `<div class="tk-cutlog-r"><span>${esc(l.by || '—')} · done ${esc(fmtDay(l.doneAt))}${took(l.startedAt, l.doneAt) ? ' (' + esc(took(l.startedAt, l.doneAt)) + ')' : ''}</span><button type="button" class="tk-link" title="Not a real edit — take it out of the history" onclick="edForget('${x.id}','${k}',${jsq(l.by)},${Number(l.doneAt)})">Remove</button></div>`).join('')}</details>` : ''}</div>
       <div class="tk-cut-a">
         ${btn(e.status && e.status !== 'done' ? 'Plan…' : 'Plan', `openEditPlan('${x.id}','${k}')`, e.status ? '' : 'primary')}
@@ -3168,6 +3469,34 @@ function edStep(id, action, opts, k) {
   toast(`${EF.cutLabel(x, k)}: ${ED_HIST[action]}`);
 }
 window.edStep = edStep;
+
+// ── The finished video, where it is (optional): pasted once the edit is done, shown in Posting ──
+// x.finalLinks = { <cut>: { url, at, by } }. Never asked for and never required — a cut with no link
+// is just a cut with no link. A re-edit keeps the old link until a new one is pasted.
+const isWebLink = u => /^https?:\/\/\S+$/i.test(String(u || '').trim());
+const finalLinkOf = (x, k) => { const f = x && x.finalLinks && x.finalLinks[k]; return f && isWebLink(f.url) ? f : null; };
+function finalLinkLine(x, k, e) {
+  const f = finalLinkOf(x, k);
+  if (f) return `<span class="tk-final">🎬 <a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Final video ↗</a> <button type="button" class="tk-link" onclick="edFinalLink('${x.id}','${k}')">change</button></span>`;
+  return e.status === 'done' ? `<span class="tk-final"><button type="button" class="tk-link" onclick="edFinalLink('${x.id}','${k}')" title="Where the finished video is (Drive, YouTube…) — optional">+ Final video link</button> <span class="tk-sub2">optional</span></span>` : '';
+}
+function edFinalLink(id, k) {
+  const x = listings.find(l => l.id === id); if (!x) return;
+  const was = finalLinkOf(x, k);
+  const v = prompt(`Where is the finished ${EF.cutLabel(x, k)}? Paste its link (Drive, YouTube…). Leave empty to remove it.`, was ? was.url : '');
+  if (v === null) return;
+  const url = v.trim();
+  if (url && !isWebLink(url)) return toast('That does not look like a web link — paste the full address');
+  if (!url && !was) return;
+  mutate(id, l => {
+    const all = { ...(l.finalLinks || {}) };
+    if (url) all[k] = { url, at: Date.now(), by: currentUserEmail || '' }; else delete all[k];
+    l.finalLinks = all;
+  }, url ? `${EF.cutLabel(x, k)}: final video link ${was ? 'changed' : 'added'}` : `${EF.cutLabel(x, k)}: final video link removed`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  toast(url ? 'Final video link saved' : 'Final video link removed');
+}
+window.edFinalLink = edFinalLink;
 
 // ── Plan edits: which outlets, who, which day, delivered by when ──
 let edPlanFor = null;
@@ -3393,7 +3722,7 @@ function edCardHtml(it) {
     ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
     ${dates.length ? `<div class="ed-dates">${dates.join(' · ')}</div>` : ''}
     ${checklist}
-    ${act ? `<div class="ed-acts">${act}</div>` : ''}
+    <div class="ed-acts">${act}${EF.ED_COLS.some(c2 => EF.ED_DROP[c2.key] && c2.key !== col) && !ser ? `<button type="button" class="tk-btn sm ghost tk-move-btn" onclick="openMoveMenu(event,'${x.id}',${kq},'${col}')" aria-haspopup="menu" title="Move this edit to another column">Move ▾</button>` : ''}</div>
   </div>`;
 }
 window.edSetDragCut = k => { edDragCut = k; };
@@ -3489,10 +3818,10 @@ function renderEditor() {
     <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
       const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || EF.CUTS.findIndex(c => c[0] === a.k) - EF.CUTS.findIndex(c => c[0] === b.k));
       const nLate = cards.filter(it => it.pr.late).length;
-      return `<div class="tk-col ed-col ed-${col.key}${cards.length ? '' : ' ed-empty'}" title="${cards.length ? '' : esc(col.label + ' — ' + col.hint)}">
+      return `<div class="tk-col ed-col ed-${col.key}${cards.length ? '' : ' ed-empty'}" title="${cards.length ? '' : esc(col.label + ' — ' + col.hint)}" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="edColDrop(event,'${col.key}')">
         <div class="tk-col-hdr"><div class="tk-col-head"><span class="tk-col-title">${esc(col.label)}</span></div><div class="tk-col-rule">${esc(col.hint)}</div>
           <div class="tk-col-counts">${nLate ? `<span class="tk-late">${nLate} late</span>` : ''}<span class="tk-count">${cards.length}</span></div></div>
-        <div class="tk-col-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="edColDrop(event,'${col.key}')">
+        <div class="tk-col-body">
           ${cards.map(edCardHtml).join('') || '<div class="tk-col-none">Nothing here</div>'}
         </div></div>`;
     }).join('')}</div>
@@ -3506,6 +3835,11 @@ function edColDrop(e, colKey) {
   e.currentTarget.classList.remove('drag-over');
   const id = draggedId, k = edDragCut;
   draggedId = null; edDragCut = null;
+  edMoveTo(id, k, colKey);
+}
+window.edColDrop = edColDrop;
+// A cut moved to an editor column — by a drop or from its card's Move menu: the same rules either way.
+function edMoveTo(id, k, colKey) {
   const x = listings.find(l => l.id === id); if (!x) return;
   const action = EF.ED_DROP[colKey];
   if (!action) return toast(colKey === 'scheduled' || colKey === 'posted' ? 'Schedule or post it in Posting — it moves here by itself' : 'This column follows the shoot');
@@ -3517,7 +3851,82 @@ function edColDrop(e, colKey) {
   if (action === 'done' && e0.status === 'done') return;
   edStep(id, action, action === 'plan' ? { by: e0.by, planAt: e0.planAt, dueAt: e0.dueAt } : {}, k);
 }
-window.edColDrop = edColDrop;
+window.edMoveTo = edMoveTo;
+
+// ═══════ MOVE TO… — a card's next column in two clicks, no dragging ═══════
+// Dragging needs a mouse and a steady hand (and does not work on a phone at all). Every card has a
+// Move button: a small menu of the columns it can go to, the one it is in marked. On the Board it
+// goes through changeStage (so On hold / Dropped still ask why); in the Editor, through the same
+// rules as a drop (edMoveTo — a cut is planned before it is started, and so on).
+function closeMoveMenu() {
+  const m = document.getElementById('tkMoveMenu');
+  if (m) m.remove();
+  document.removeEventListener('pointerdown', moveMenuOutside, true);
+  window.removeEventListener('scroll', moveMenuScroll, true);
+  window.removeEventListener('resize', closeMoveMenu);
+}
+function moveMenuOutside(e) { const m = document.getElementById('tkMoveMenu'); if (m && !m.contains(e.target) && !e.target.closest('.tk-move-btn')) closeMoveMenu(); }
+function openMoveMenu(e, id, k, edCol) {
+  e.stopPropagation(); e.preventDefault();
+  const btn = e.currentTarget;
+  const already = document.getElementById('tkMoveMenu');
+  if (already && already.dataset.for === id + '|' + (k || '')) return closeMoveMenu();   // the button toggles
+  closeMoveMenu();
+  const x = listings.find(l => l.id === id); if (!x) return;
+  let items;
+  if (edCol) {
+    items = EF.ED_COLS.filter(c => EF.ED_DROP[c.key]).map(c => ({ label: c.label, hint: c.hint, here: c.key === edCol,
+      run: () => edMoveTo(id, k, c.key) }));
+  } else {
+    items = stages.map(s => ({ label: s.name, hint: (P.stageDef(P.stageKeyOf(s)) || {}).rule || '', here: s.id === x.stageId,
+      dot: s.color, run: () => changeStage(id, s.id) }));
+  }
+  const m = document.createElement('div');
+  m.id = 'tkMoveMenu'; m.className = 'tk-move'; m.setAttribute('role', 'menu'); m.dataset.for = id + '|' + (k || '');
+  m.innerHTML = `<div class="tk-move-h">Move <b>${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}</b> to</div>`
+    + items.map((it, i) => `<button type="button" role="menuitem" class="tk-move-i${it.here ? ' here' : ''}" data-i="${i}"${it.here ? ' aria-current="true" disabled' : ''}>
+        ${it.dot ? `<i class="tk-cdot" style="background:${esc(it.dot)}"></i>` : ''}<span class="tk-move-l">${esc(it.label)}${it.here ? ' <small>· here now</small>' : ''}</span>
+        ${it.hint ? `<small class="tk-move-s">${esc(it.hint)}</small>` : ''}</button>`).join('');
+  m.addEventListener('click', ev => {
+    const b = ev.target.closest('.tk-move-i'); if (!b || b.disabled) return;
+    ev.stopPropagation();
+    const it = items[Number(b.dataset.i)];
+    closeMoveMenu();
+    it.run();
+  });
+  m.addEventListener('keydown', ev => {
+    const list = [...m.querySelectorAll('.tk-move-i:not([disabled])')];
+    const at = list.indexOf(document.activeElement);
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeMoveMenu(); btn.focus(); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); (list[at + 1] || list[0]).focus(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); (list[at - 1] || list[list.length - 1]).focus(); }
+  });
+  document.body.appendChild(m);
+  // Under the button, kept on screen.
+  moveMenuBtn = btn;
+  placeMoveMenu(m, btn);
+  const first = m.querySelector('.tk-move-i:not([disabled])'); if (first) first.focus({ preventScroll: true });
+  document.addEventListener('pointerdown', moveMenuOutside, true);
+  window.addEventListener('scroll', moveMenuScroll, true);
+  window.addEventListener('resize', closeMoveMenu);
+}
+// The page scrolling: the menu follows its button, and closes once the button is off screen. (Not on
+// any scroll: a click that brings a half-hidden button into view scrolls just after the menu opens.)
+// Scrolling the menu's own list is ignored.
+let moveMenuBtn = null;
+function placeMoveMenu(m, btn) {
+  const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+  m.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+}
+function moveMenuScroll(e) {
+  const m = document.getElementById('tkMoveMenu');
+  if (!m || (e.target instanceof Node && m.contains(e.target))) return;
+  const r = moveMenuBtn && moveMenuBtn.isConnected ? moveMenuBtn.getBoundingClientRect() : null;
+  if (!r || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return closeMoveMenu();
+  placeMoveMenu(m, moveMenuBtn);
+}
+window.openMoveMenu = openMoveMenu;
 // To the card's posts in Posting: a series to its block, a property to its row.
 function edPosting(id) {
   const x = listings.find(l => l.id === id); if (!x) return;
@@ -3623,6 +4032,15 @@ window.cfAddTag = () => {
   if ([...TG.DEFAULT_TAGS, ...config.tags].some(t => TG.tagKey(t) === TG.tagKey(v))) return toast('That tag is already offered');
   saveConfig({ tags: [...config.tags, v] }, 'Tag added');
 };
+window.cfAddDoc = () => {
+  const el = document.getElementById('cfDoc');
+  const v = String(el ? el.value : '').replace(/\s+/g, ' ').trim();
+  if (!v) return;
+  if (config.docItems.some(n => CFG.docKey(n) === CFG.docKey(v))) return toast('That document is already on the list');
+  saveConfig({ docItems: [...config.docItems, v] }, 'Document added');
+};
+window.cfRemoveDoc = n => saveConfig({ docItems: config.docItems.filter(x => CFG.docKey(x) !== CFG.docKey(n)) }, 'Document removed');
+window.cfResetDocs = () => saveConfig({ docItems: [...CFG.DEFAULT_DOCS] }, 'Starting list back');
 window.cfRemoveTag = t => saveConfig({ tags: config.tags.filter(x => TG.tagKey(x) !== TG.tagKey(t)) }, 'Tag removed');
 // A field's change can fire again as the redraw takes it away (it loses focus): one redraw at a time.
 let cfDrawing = false, cfStale = false;
@@ -3662,11 +4080,17 @@ function drawSettings(host) {
     ${sec('Series', 'Several properties, shot separately, edited into one video.', `
       ${tog('seriesAutoDetect', 'Plan lines that say "series" become a series', 'Pasting "Youtube - T nagar series" makes a series; its properties are picked after.')}
       ${tog('seriesBoardCard', 'A new series gets a card on the board', 'Its edit is then tracked on the board and in the Editor view.')}`)}
+    ${sec('Team calendar', 'Shoots booked on the board, on the calendar too.', `
+      ${tog('shootCalendar', 'Put booked shoots on the team calendar', 'On the calendar of whoever books it, with the shooter invited by Google. Moving, re-assigning or cancelling the shoot here moves it there too.')}`)}
     ${sec('Board — stage targets', 'Days a card can sit in a stage before it shows as late (red at double).', `
       <div class="cf-targets">${CFG.TARGET_STAGES.map(([k, l, d]) => `<label class="cf-row"><span>${esc((P.stageForKey(stages, k) || {}).name || l)}</span><span class="cf-num"><input type="number" min="1" max="365" value="${config.targetDays[k] || ''}" placeholder="${d}" onchange="cfTarget('${k}', this.value)" aria-label="${esc(l)} target days"> days${config.targetDays[k] ? '' : ' <em>default</em>'}</span></label>`).join('')}</div>`)}
     ${sec('Tags', 'Offered on every card and Posting row, besides the four starting tags and any in use.', `
       <div class="cf-chips">${TG.DEFAULT_TAGS.map(t => chip(t, '', 'fixed')).join('')}${config.tags.map(t => chip(t, `cfRemoveTag(${jsq(t)})`)).join('')}</div>
       <div class="cf-add"><input id="cfTag" type="text" placeholder="New tag" maxlength="32" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddTag()}"><button type="button" class="tk-btn" onclick="cfAddTag()">Add tag</button></div>`)}
+    ${sec('Documents checklist', 'The documents each card is checked for (have it, applied for, missing, not needed). A checklist only: it never holds a card back. Remove every item to hide it.', `
+      <div class="cf-chips">${config.docItems.length ? config.docItems.map(n => chip(n, `cfRemoveDoc(${jsq(n)})`)).join('') : '<span class="cf-none">No documents — the checklist is hidden</span>'}</div>
+      <div class="cf-add"><input id="cfDoc" type="text" placeholder="New document, e.g. Society NOC" maxlength="60" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddDoc()}"><button type="button" class="tk-btn" onclick="cfAddDoc()">Add document</button>
+      ${JSON.stringify(config.docItems) === JSON.stringify([...CFG.DEFAULT_DOCS]) ? '' : '<button type="button" class="tk-btn ghost" onclick="cfResetDocs()">Starting list</button>'}</div>`)}
     ${sec('Team', 'Who can be picked for a shoot or an edit. The team is kept in the CRM by the owner.', `
       <div class="cf-chips">${team.length ? team.map(t => `<span class="cf-chip" title="${esc(t.email)}">${esc(t.name)}</span>`).join('') : '<span class="cf-none">No team set yet</span>'}</div>`)}
   </div>`;
@@ -3675,9 +4099,10 @@ window.renderSettings = renderSettings;
 
 // ═══════ TOAST ═══════
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, force) {
   const el = document.getElementById('toast');
   if (!el) return;
+  if (!force && Date.now() < holdToastsUntil) return;
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
@@ -3741,6 +4166,15 @@ function closeTrackLayer(id) {
 }
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  // Already used by something smaller (a menu, a tag box): that is all Escape does.
+  if (e.defaultPrevented) return;
+  // An open filter dropdown closes first.
+  const dd = document.querySelector('#tkFilterBar details[open]');
+  if (dd) { dd.open = false; return; }
+  // Typing on the card (a note, a field) with something in it: Escape leaves the field — it does
+  // not close the card and throw the text away.
+  const a = document.activeElement;
+  if (a && /^(TEXTAREA|INPUT)$/.test(a.tagName) && a.value && a.closest('#dp') && !document.querySelector('.tk-ov.open')) { a.blur(); return; }
   // Innermost layer first, so Escape peels one thing at a time.
   const open = TRACK_LAYERS.map(([id]) => id).find(id => {
     const el = document.getElementById(id);
@@ -3751,7 +4185,9 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('mousedown', e => {
   const t = e.target;
-  if (t.classList && (t.classList.contains('tk-ov') || t.classList.contains('tk-prev')) && t.id) closeTrackLayer(t.id);
+  // This page's own layers only: Posting's dialogs (pgModal) handle their backdrop themselves — a
+  // "Create brochure" still sending must not be hidden mid-request.
+  if (t.classList && (t.classList.contains('tk-ov') || t.classList.contains('tk-prev')) && t.id && TRACK_LAYERS.some(([x]) => x === t.id)) closeTrackLayer(t.id);
 });
 
 // ═══════ THE RAIL ═══════
@@ -3761,7 +4197,13 @@ document.addEventListener('mousedown', e => {
 // them is a display swap rather than a navigation.
 window.AppNav.boot({
   console: 'track',
-  select: view => toggleView(view, true),
+  // A card open over the board: picking a section from the menu closes it first — else the new
+  // section opened behind the card and only showed after Back.
+  select: view => {
+    if (document.getElementById('dp')?.classList.contains('open')) closeDetail();
+    closeSellerPreview();
+    toggleView(view, true);
+  },
   signOut: () => trackLogout()
 });
 window.AppNav.setActive(currentView);

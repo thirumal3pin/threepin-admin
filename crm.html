@@ -4,9 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>3 PIN Realty — CRM</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="shared-assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="shared-assets/fonts/inter.css">
 <link rel="icon" type="image/jpeg" href="logo.jpg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="crm-assets/style.css">
@@ -69,6 +68,8 @@ function toggleDensity(){
   if(typeof showToast==='function') showToast(next==='compact'?'Compact rows':'Comfortable rows');
 }
 </script>
+<!-- The admin's look, last so it has the final say: Inter, neutral greys, the brand orange (shared-assets/theme.css). -->
+<link rel="stylesheet" href="shared-assets/theme.css">
 </head>
 <body>
 
@@ -381,10 +382,12 @@ function toggleDensity(){
         <!-- The business number's thread, in TailorTalk. The WhatsApp button
              beside this one opens the agent's OWN WhatsApp, which the client
              sees arriving from a different number. -->
-        <a class="dp-act tt" id="dpTtBtn" href="#" target="tailortalkChat" rel="noopener" hidden
+        <a class="dp-act tt dp-act-more" id="dpTtBtn" href="#" target="tailortalkChat" rel="noopener" hidden
            title="Open this conversation in TailorTalk, on the business number">↪ TailorTalk</a>
-        <button class="dp-act" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
-        <button class="dp-act danger" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
+        <button class="dp-act dp-act-more" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
+        <button class="dp-act danger dp-act-more" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
+        <!-- Phones: the rarer actions fold behind this, so the row never scrolls sideways. -->
+        <button type="button" class="dp-act dp-more-btn" id="dpMoreBtn" aria-expanded="false" aria-label="More actions" onclick="toggleDpMore()">⋯</button>
       </div>
     </div>
     <!-- Two independently scrolling panes with a draggable divider between

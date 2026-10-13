@@ -147,6 +147,9 @@ async function run(engine, name, viewport) {
   // checking a photo or a brochure meant opening TailorTalk. This is the
   // reason the chat is in the CRM at all.
   {
+    // The photo's URL is deliberately dead: give the browser time to give up on it (the fallback
+    // shows on its error event), rather than reading the page before it has.
+    await page.waitForSelector('#dpTtChatScroll .tt-m-imgwrap.gone', { timeout: 10000 }).catch(() => {});
     const media = await page.evaluate(() => {
       const box = document.querySelector('#dpTtChatScroll');
       if (!box) return { none: true };

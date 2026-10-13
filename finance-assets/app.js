@@ -266,6 +266,10 @@ document.addEventListener('keydown', e => {
 window.addEventListener('hashchange', routeFromHash);
 
 function routeFromHash() {
+  // Back (or a link) to another screen: a dialog or the record preview from the screen being left
+  // closes with it — it stayed open over the new screen, its Save still live.
+  closeModal();
+  window.fin?.closePreview?.();
   const h = location.hash.replace(/^#/, '');
   view = NAV.some(([k]) => k === h) ? h : (ALIASES[h] || 'overview');
   repaint();

@@ -89,6 +89,31 @@ async function resolveRootFolder(tenantId) {
   return process.env.FINANCE_DRIVE_FOLDER_ID || null;
 }
 
+// A file id from the browser is only acted on (made public, deleted) when the file really lies in
+// this tenant's finance attachments folder: root → year → transaction → file. Without this, any
+// signed-in user could publish or delete ANY file the Workspace account can reach (the inventory
+// sheet included) by passing its id.
+// Only a FILE, never a folder: deleting a year or transaction folder would take every attachment in
+// it (Drive deletes skip the trash), and publishing one would publish them all. And only as deep as
+// the layout goes (the file, its transaction folder, its year folder: root within three hops).
+async function insideRoot(token, fileId, rootId) {
+  let id = String(fileId || '');
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(id) || !rootId || id === rootId) return false;
+  for (let hop = 0; hop < 3; hop++) {
+    // An error (not found / no access with this credential) is passed on: withDrive retries with its
+    // other credential, and if neither can see the file nothing is done.
+    const meta = await driveFetch(token, `${DRIVE_FILES}/${encodeURIComponent(id)}?fields=parents,mimeType&supportsAllDrives=true`);
+    if (hop === 0 && (!meta || meta.mimeType === FOLDER_MIME)) return false;
+    const parents = (meta && meta.parents) || [];
+    if (parents.includes(rootId)) return true;
+    if (!parents.length) return false;
+    id = parents[0];
+  }
+  return false;
+}
+
+export const _insideRootForTests = insideRoot;
+
 // Metadata and bytes in one request. Node's fetch takes a Uint8Array body as-is.
 async function multipartUpload(token, { name, mimeType, bytes, folderId }) {
   const boundary = 'fin-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -234,6 +259,7 @@ export async function uploadPost(request) {
       const { fileId } = body;
       if (!fileId) return fail('validation', 'fileId is required', 400);
       return withDrive(async token => {
+        if (!(await insideRoot(token, fileId, rootId))) return fail('auth', 'That file is not a finance attachment', 403);
         await makeDriveFilePublic(token, fileId);
         const meta = await driveFetch(token, `${DRIVE_FILES}/${encodeURIComponent(fileId)}?fields=${FIELDS}`);
         return json(describe(meta));
@@ -243,9 +269,13 @@ export async function uploadPost(request) {
     if (body.action === 'delete') {
       const { fileId } = body;
       if (!fileId) return fail('validation', 'fileId is required', 400);
-      await withDrive(token => driveFetch(token,
-        `${DRIVE_FILES}/${encodeURIComponent(fileId)}`, { method: 'DELETE' })
-        .catch(e => { if (e.status !== 404) throw e; }));
+      const refused = await withDrive(async token => {
+        if (!(await insideRoot(token, fileId, rootId))) return true;
+        await driveFetch(token, `${DRIVE_FILES}/${encodeURIComponent(fileId)}`, { method: 'DELETE' })
+          .catch(e => { if (e.status !== 404) throw e; });
+        return false;
+      });
+      if (refused) return fail('auth', 'That file is not a finance attachment', 403);
       return json({ success: true });
     }
 

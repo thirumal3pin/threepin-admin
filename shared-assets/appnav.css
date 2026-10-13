@@ -83,7 +83,7 @@ body.rail-on #appRail { display: flex; }
 .rail-brand-nm { display: block; font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 .rail-brand-sb {
   display: block; margin-top: 1px;
-  font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
   color: var(--rl-ink-3); white-space: nowrap;
 }
 
@@ -112,7 +112,7 @@ body.rail-on #appRail { display: flex; }
 .rl-h.on { background: var(--rl-on-bg); }
 .rl-h .rl-ico {
   width: 19px; flex: none; text-align: center; font-size: 14.5px;
-  color: var(--rl-ink-3); transition: color .12s;
+  color: var(--rl-ink-3); transition: none;
 }
 .rl-sec.here .rl-h .rl-ico, .rl-sec.open .rl-h .rl-ico { color: var(--rl-accent); }
 .rl-h .rl-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -133,7 +133,7 @@ body.rail-on #appRail { display: flex; }
   border: 0; background: none; cursor: pointer; font: inherit; text-align: left;
   color: var(--rl-ink-2); font-size: 13.5px;
   padding: 6px 9px 6px 20px; border-radius: 8px; min-height: 32px;
-  position: relative; transition: background .12s, color .12s;
+  position: relative; transition: background .12s;
 }
 .rl-item:hover { background: var(--rl-hover); color: var(--rl-ink); }
 .rl-item .rl-ico { width: 17px; flex: none; text-align: center; font-size: 12px; color: var(--rl-ink-3); }
@@ -159,7 +159,7 @@ body.rail-on #appRail { display: flex; }
 .rl-badge {
   flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--rl-accent); color: var(--rl-bg);
-  font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .rl-badge.alert { background: var(--red, #b91c1c); color: #fff; }
@@ -172,9 +172,9 @@ body.rail-on #appRail { display: flex; }
   display: flex; align-items: center; gap: 7px; width: 100%;
   border: 0; background: none; cursor: pointer; font: inherit; text-align: left;
   padding: 5px 9px 5px 20px; border-radius: 8px; min-height: 28px;
-  color: var(--rl-ink-3); font-size: 10.5px; font-weight: 700;
+  color: var(--rl-ink-3); font-size: 11px; font-weight: 700;
   letter-spacing: .09em; text-transform: uppercase;
-  transition: background .12s, color .12s;
+  transition: background .12s;
 }
 .rl-grp-h:hover { background: var(--rl-hover); color: var(--rl-ink-2); }
 .rl-grp-h .rl-gnm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -198,7 +198,7 @@ body.rail-on #appRail { display: flex; }
   display: flex; align-items: center; gap: 9px; width: 100%;
   border: 0; background: none; cursor: pointer; font: inherit;
   color: var(--rl-ink-3); font-size: 13px; padding: 7px 9px 7px 10px;
-  border-radius: 8px; min-height: 34px; transition: background .12s, color .12s;
+  border-radius: 8px; min-height: 34px; transition: background .12s;
 }
 .rail-out:hover { background: var(--rl-hover); color: var(--red, #b91c1c); }
 .rail-out .rl-ico { width: 19px; flex: none; text-align: center; font-size: 13px; }
@@ -226,7 +226,7 @@ body.rail-on #appRail { display: flex; }
      the control that opens the menu is not one to go hunting for. */
   background: var(--bg2, var(--card-2, transparent));
   color: var(--ink2, var(--ink-2, #44403c)); cursor: pointer;
-  transition: background .12s, border-color .12s, color .12s;
+  transition: background .12s, border-color .12s;
 }
 .rail-toggle:hover { border-color: var(--ink3, var(--ink-3, #655E59)); color: var(--ink, #1c1917); }
 .rail-toggle svg { width: 17px; height: 17px; display: block; }
@@ -234,7 +234,10 @@ body.rail-on #appRail { display: flex; }
 /* ═══════ DESKTOP ═══════ */
 
 @media (min-width: 900px) {
-  body.rail-on { padding-left: var(--rail-w); transition: padding-left .18s cubic-bezier(.22,.61,.36,1); }
+  /* The room for the rail is there from the first paint — eased only when someone collapses or
+     expands it (.rail-anim, set by the toggle), never on load, where it slid the page sideways. */
+  body.rail-on { padding-left: var(--rail-w); }
+  body.rail-on.rail-anim { transition: padding-left .18s cubic-bezier(.22,.61,.36,1); }
   body.rail-on.rail-min { padding-left: var(--rail-w-min); }
   #appRail { transform: none !important; }
 

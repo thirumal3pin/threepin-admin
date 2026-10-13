@@ -192,6 +192,94 @@ const noRepeat = await page.evaluate(() => {
 ok('Select all skips what is already written', noRepeat.ticked === 1, JSON.stringify(noRepeat));
 
 await page.screenshot({ path: join(OUT, 'sync-per-property.png') });
+
+// ── 3. Deleting a property that cards and leads still point at says so first ──
+console.log('\n── delete warning ──');
+const asked = [];
+const onDialog = d => { asked.push(d.message()); d.dismiss(); };   // dismissed: nothing is deleted
+page.on('dialog', onDialog);
+const del = await page.evaluate(async () => {
+  window.dashboardFirebase.propertyUsage = async (id, code) => ({ cards: ['Anna Nagar 3BHK'], leads: 2, _asked: [id, code] });
+  await deleteProperty('ANR003');
+  window.dashboardFirebase.propertyUsage = async () => { throw new Error('offline'); };
+  await deleteProperty('ANR003');
+  delete window.dashboardFirebase.propertyUsage;
+  await deleteProperty('ANR003');
+  return { stillThere: properties.some(p => p.id === 'ANR003') };
+});
+page.off('dialog', onDialog);
+console.log('   ', JSON.stringify(asked));
+ok('the warning names the cards and the leads still linked',
+  asked[0] && /1 Shoot & Media card \(Anna Nagar 3BHK\)/.test(asked[0]) && /2 CRM leads/.test(asked[0]), asked[0]);
+ok('a failed check still asks the plain question', asked[1] && /^Delete "/.test(asked[1]) && !/Still linked/.test(asked[1]), asked[1]);
+ok('no usage check available: the plain question too', asked[2] && !/Still linked/.test(asked[2]), asked[2]);
+ok('cancelled: nothing deleted', del.stillThere, JSON.stringify(del));
+
+// ── 3b. A delete that does not go through leaves no "Property deleted" step pending in the log ──
+{
+  const acceptAll = d => d.accept();
+  page.on('dialog', acceptAll);
+  const r = await page.evaluate(async () => {
+    const saved = [], applied = [];
+    const keep = { ...window.dashboardFirebase };
+    window.dashboardFirebase.saveChanges = async entries => { saved.push(...entries); };
+    window.dashboardFirebase.setChangeApplied = async (id, v) => { applied.push([id, v]); };
+    window.dashboardFirebase.deleteProperty = async () => { throw new Error('offline'); };
+    if (!window.dashboardAuth.getUserEmail) window.dashboardAuth.getUserEmail = () => 'agent.a@example.com';
+    openDetail('VLC001');
+    await new Promise(res => setTimeout(res, 150));
+    await deleteProperty('VLC001');
+    await new Promise(res => setTimeout(res, 400));
+    Object.assign(window.dashboardFirebase, keep);
+    const del = saved.find(c => c.kind === 'delete');
+    return { stillThere: properties.some(p => p.id === 'VLC001'), delLogged: !!del,
+      delSetAside: !!del && applied.some(([id, v]) => id === del.id && v === true),
+      note: saved.some(c => /did not go through/.test(c.label || '')), onPage: location.pathname };
+  });
+  page.off('dialog', acceptAll);
+  ok('a failed delete: the property is kept', r.stillThere, JSON.stringify(r));
+  ok('…its "Property deleted" log entry is set aside, not left as a sheet step', r.delLogged && r.delSetAside, JSON.stringify(r));
+  ok('…and the log says the delete did not go through', r.note, JSON.stringify(r));
+  ok('…and the page is still the dashboard', /dashboard/.test(r.onPage), r.onPage);
+}
+
+// ── 4. Marketing, read only: the board card and the posts, read only when opened ──
+console.log('\n── marketing ──');
+const mk = await page.evaluate(async () => {
+  closeSyncModal();
+  let reads = 0;
+  window.dashboardFirebase.propertyMarketing = async (id, code) => {
+    reads++;
+    return {
+      cards: [{ id: 'lst_1', title: 'Anna Nagar 3BHK', stage: 'Live — marketing', shootAt: Date.now() - 864e5 * 5, shootDoneAt: Date.now() - 864e5 * 4, leadId: 'L9', listingType: 'exclusive' }],
+      posts: [{ id: 'r1', channels: { igReel: { status: 'live', url: 'https://instagram.com/reel/x', liveAt: Date.now() - 864e5 }, yt: { status: 'scheduled', at: Date.now() - 3600e3 }, igStory: { status: 'na' },
+        fbReel: { status: 'live', url: 'javascript:alert(1)' } }, acres99: { status: 'posted', url: 'https://99acres.com/x' } }]
+    };
+  };
+  openDetail('ANR003');
+  await new Promise(r => setTimeout(r, 200));
+  const readsOnOpen = reads;
+  const d = document.getElementById('dpMarketing');
+  d.open = true;
+  await new Promise(r => setTimeout(r, 200));
+  const body = document.getElementById('dpMarketingBody');
+  const links = [...body.querySelectorAll('a')].map(a => a.getAttribute('href'));
+  const out = { readsOnOpen, reads, text: body.textContent.replace(/\s+/g, ' ').trim(), links };
+  return out;
+});
+await page.evaluate(() => showTab('notes', document.querySelectorAll('.dp-tab')[DETAIL_TABS.indexOf('notes')]));
+ok('the block is on the property’s Notes tab, visible there', await page.evaluate(() => document.getElementById('dpMarketing').getBoundingClientRect().height > 40));
+await page.locator('#dpMarketing').scrollIntoViewIfNeeded().catch(() => {});
+await page.locator('#dpMarketing').screenshot({ path: join(OUT, 'marketing.png'), timeout: 5000 }).catch(e => console.log('   (no shot: ' + e.message.split('\n')[0] + ')'));
+await page.evaluate(() => { closeDetail(); delete window.dashboardFirebase.propertyMarketing; });
+console.log('   ', JSON.stringify(mk));
+ok('nothing is read until the block is opened', mk.readsOnOpen === 0 && mk.reads === 1, JSON.stringify(mk));
+ok('it shows the card, its column and its shoot', /Anna Nagar 3BHK/.test(mk.text) && /In Live — marketing/.test(mk.text) && /Shot /.test(mk.text) && /Exclusive/.test(mk.text), mk.text);
+ok('…with links to the card and to the seller', mk.links.includes('propertytrack.html?listing=lst_1') && mk.links.includes('crm.html?lead=L9'), JSON.stringify(mk.links));
+ok('it lists the posts with their links (N/A ones left out)', /Insta Reel/.test(mk.text) && /99 Acres/.test(mk.text) && !/Insta Story/.test(mk.text)
+  && mk.links.includes('https://instagram.com/reel/x') && mk.links.includes('https://99acres.com/x'), mk.text);
+ok('a scheduled post whose time has passed reads as due', /YouTube\s*Due/.test(mk.text), mk.text);
+ok('a link that is not a web address is never made clickable', !mk.links.some(h => /^javascript:/i.test(h || '')), JSON.stringify(mk.links));
 await page.close();
 await browser.close();
 console.log(errors.length ? `\n${errors.length} FAILURE(S)\n` + errors.map(e => ' - ' + e).join('\n') : '\nAll checks passed.');

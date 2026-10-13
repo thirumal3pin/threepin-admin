@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { viewMeta, rowWrites, applyRowWrites } from '../api/_lead-views.js';
 import { planSync, wantsListing, isSellerLead } from '../track-assets/seller-sync.js';
 import { defaultStages } from '../track-assets/track-pipeline.js';
 
@@ -94,8 +95,10 @@ for (const { lead, listing } of plan.create) {
 for (const { id, patch } of plan.updateListings) {
   await add(b => b.set(db.collection('listings').doc(id), { ...patch, updatedAt: now }, { merge: true }));
 }
+// Each lead with its row in the lead views, in the same batch (api/_lead-views.js).
+const views = await viewMeta(db, TENANT);
 for (const { id, patch } of plan.updateLeads) {
-  await add(b => b.set(db.collection('leads').doc(id), patch, { merge: true }));
+  await add(b => { b.set(db.collection('leads').doc(id), patch, { merge: true }); applyRowWrites(b, rowWrites(db, TENANT, views, id, patch, 'merge')); ops += 2; });
 }
 await flush();
 
