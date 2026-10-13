@@ -53,6 +53,11 @@
 .tk-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .tk-card.dragging { opacity: .4; transform: rotate(1.2deg) scale(.98); }
 .tk-card.late { border-left: 3px solid var(--red, #B91C1C); }
+/* A card out of sight is not laid out or painted until it scrolls into view (on a phone, laying out
+   every card on each redraw was seconds). Under the pointer, focused or being dragged it draws in
+   full, so its shadow, focus ring and menus are never clipped. */
+.tk-card { content-visibility: auto; contain-intrinsic-size: auto 150px; }
+.tk-card:hover, .tk-card:focus-within, .tk-card.dragging { content-visibility: visible; }
 .tk-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .tk-card-title { font-weight: 700; font-size: 13px; line-height: 1.3; letter-spacing: -.01em; }
 .tk-card-sub { font-size: 11.5px; color: var(--ink3); }

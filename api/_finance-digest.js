@@ -257,7 +257,8 @@ function closeStatus(state, month) {
   const me = state.monthEnds[month] || null;
   // The reconciled flag is written onto monthEnds/{month} by the bank import
   // (Phase 5) — no doc at all means neither has happened.
-  return { month, label: mlabel(month), ran: !!me, reconciled: !!(me && me.reconciled) };
+  // A record holding only the reconciliation mark (written before month-end) is not a closed month.
+  return { month, label: mlabel(month), ran: !!(me && me.ranAt), reconciled: !!(me && me.reconciled) };
 }
 
 // ── HTML / text building blocks (inline CSS, single column, ≤640px) ─────

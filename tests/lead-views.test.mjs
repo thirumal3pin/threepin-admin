@@ -328,6 +328,24 @@ async function browserSide() {
   store.fromCache = false; store.notify(); await tick(200);
   check('…and its row is put right once the server confirms the layout', strip(await rowIn(store, db, 'P9')).name === 'before the layout');
   stop4();
+  // The server confirming the local copy, view document by view document: ONE call at the end,
+  // marked same (a page need not redraw) — a phone used to redraw every lead once per document.
+  {
+    store.fromCache = true;
+    const vs = leadViews({});
+    const seen = [];
+    const stopS = vs.watch(T, (list, fromServer, info) => seen.push({ n: list.length, fromServer, same: !!(info && info.same) }), () => {});
+    await tick(120);
+    check('Confirming the local copy: the local copy comes first, as a change', seen.length === 1 && seen[0].fromServer === false && seen[0].same === false, JSON.stringify(seen));
+    store.fromCache = false; store.notify(); await tick(200);
+    const after = seen.slice(1);
+    check('…the server confirming every document is ONE call, marked same and from the server', after.length === 1 && after[0].fromServer === true && after[0].same === true, JSON.stringify(after));
+    await vs.save(T, web.doc(null, 'leads', 'P9'), [[['name'], 'changed after confirm']], 'paths');
+    await tick(200);
+    const last = seen[seen.length - 1];
+    check('…and a real change afterwards is a change again (redraw)', last && last.same === false && seen.length >= 3, JSON.stringify(seen.slice(-2)));
+    stopS();
+  }
   // The layout cannot be read at all (an error, not slowness): saves do not stall 3 s waiting.
   store.failListen = p => p.endsWith('__meta');
   const v5 = leadViews({});

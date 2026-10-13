@@ -91,42 +91,44 @@ async function seedPipelineIfEmpty(tenantId){
 function subscribeToData(tenantId){
   if(subscribed) return;
   subscribed = true;
-  seedPipelineIfEmpty(tenantId).catch(e => console.error('Track pipeline seed failed:', e)).finally(() => {
-    // includeMetadataChanges: told also when the local copy is confirmed by the server (nothing else
-    // changed) — the board's automatic writers wait for that. A save's own echo is skipped.
-    let listingsLive = null;
-    onSnapshot(query(collection(db, 'listings'), where('tenantId', '==', tenantId)), { includeMetadataChanges: true },
-      snap => {
-        const live = !snap.metadata.fromCache;
-        if (live === listingsLive && !snap.docChanges().length) return;
-        listingsLive = live;
-        if(window.applyListingsSnapshot) window.applyListingsSnapshot(snap.docs.map(d => d.data()), live);
-      },
-      err => console.error('Firestore listings sync error:', err));
+  seedPipelineIfEmpty(tenantId).catch(e => console.error('Track pipeline seed failed:', e));
+  // The listeners start at once (this browser's local copy first, then the server) — they used to
+  // wait for the seed read above, a server round trip before the board showed anything. The seed
+  // only writes for a brand-new account, and the column listener picks that up.
+  // includeMetadataChanges: told also when the local copy is confirmed by the server (nothing else
+  // changed) — the board's automatic writers wait for that. A save's own echo is skipped.
+  let listingsLive = null;
+  onSnapshot(query(collection(db, 'listings'), where('tenantId', '==', tenantId)), { includeMetadataChanges: true },
+    snap => {
+      const live = !snap.metadata.fromCache;
+      if (live === listingsLive && !snap.docChanges().length) return;
+      listingsLive = live;
+      if(window.applyListingsSnapshot) window.applyListingsSnapshot(snap.docs.map(d => d.data()), live);
+    },
+    err => console.error('Firestore listings sync error:', err));
 
-    onSnapshot(pipelineRef(tenantId),
-      snap => { if(window.applyTrackPipelineSnapshot) window.applyTrackPipelineSnapshot((snap.data() && snap.data().stages) || []); },
-      err => console.error('Firestore track pipeline sync error:', err));
+  onSnapshot(pipelineRef(tenantId),
+    snap => { if(window.applyTrackPipelineSnapshot) window.applyTrackPipelineSnapshot((snap.data() && snap.data().stages) || []); },
+    err => console.error('Firestore track pipeline sync error:', err));
 
-    // Posting tracker: one doc per property, what has been posted where.
-    onSnapshot(query(collection(db, 'postTracker'), where('tenantId', '==', tenantId)),
-      snap => { if(window.applyPostingSnapshot) window.applyPostingSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id }))); },
-      err => console.error('Firestore postTracker sync error:', err));
+  // Posting tracker: one doc per property, what has been posted where.
+  onSnapshot(query(collection(db, 'postTracker'), where('tenantId', '==', tenantId)),
+    snap => { if(window.applyPostingSnapshot) window.applyPostingSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id }))); },
+    err => console.error('Firestore postTracker sync error:', err));
 
-    // The team (settings/{tenant}.team, set by the owner in the CRM), for "Shoot assigned to".
-    onSnapshot(doc(db, 'settings', tenantId),
-      snap => {
-        if(window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot((snap.data() && snap.data().team) || {});
-        // Settings → Configurations on this page (editors, deadlines, series, stage targets, tags).
-        if(window.applyTrackConfigSnapshot) window.applyTrackConfigSnapshot((snap.data() && snap.data().trackConfig) || {});
-      },
-      err => console.error('Firestore team sync error:', err));
+  // The team (settings/{tenant}.team, set by the owner in the CRM), for "Shoot assigned to".
+  onSnapshot(doc(db, 'settings', tenantId),
+    snap => {
+      if(window.applyTrackTeamSnapshot) window.applyTrackTeamSnapshot((snap.data() && snap.data().team) || {});
+      // Settings → Configurations on this page (editors, deadlines, series, stage targets, tags).
+      if(window.applyTrackConfigSnapshot) window.applyTrackConfigSnapshot((snap.data() && snap.data().trackConfig) || {});
+    },
+    err => console.error('Firestore team sync error:', err));
 
-    // The leads, so a listing can name the owner who actually called in — every lead (which ones are
-    // sellers is a client-side rule, see isSellerLead), from the lead views: a read per ~20 leads.
-    views.watch(tenantId, (list, fromServer) => { if(window.applyTrackLeadsSnapshot) window.applyTrackLeadsSnapshot(list, fromServer); },
-      err => console.error('Firestore leads sync error:', err));
-  });
+  // The leads, so a listing can name the owner who actually called in — every lead (which ones are
+  // sellers is a client-side rule, see isSellerLead), from the lead views: a read per ~20 leads.
+  views.watch(tenantId, (list, fromServer) => { if(window.applyTrackLeadsSnapshot) window.applyTrackLeadsSnapshot(list, fromServer); },
+    err => console.error('Firestore leads sync error:', err));
 }
 
 window.trackFirebase = {
@@ -287,12 +289,19 @@ window.trackAuth = {
 
 onAuthStateChanged(auth, async user => {
   if(user){
-    try {
-      const token = await user.getIdTokenResult(true);
-      currentTenantId = token.claims.tenantId || null;
-    } catch(e){
-      console.error('Could not refresh the sign-in; using the cached one:', e);
-      try { currentTenantId = (await user.getIdTokenResult(false)).claims.tenantId || null; } catch(e2) { currentTenantId = null; }
+    // The token this browser already holds first: it carries the tenant claim, so the board starts
+    // loading at once instead of after a round trip to Google on every open. Only a token WITHOUT
+    // the claim is refreshed before going on (a claim set after this browser's last sign-in).
+    try { currentTenantId = (await user.getIdTokenResult(false)).claims.tenantId || null; } catch(e) { currentTenantId = null; }
+    if(!currentTenantId){
+      try { currentTenantId = (await user.getIdTokenResult(true)).claims.tenantId || null; }
+      catch(e){ console.error('Could not refresh the sign-in:', e); }
+    } else {
+      // A claim changed since (a tenant moved): checked in the background; the page reloads onto it.
+      const held = currentTenantId;
+      user.getIdTokenResult(true).then(r => {
+        if(r && r.claims.tenantId !== held) location.reload();
+      }).catch(() => {});
     }
     if(currentTenantId) subscribeToData(currentTenantId);
   } else {

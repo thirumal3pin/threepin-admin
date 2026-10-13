@@ -12,7 +12,10 @@
 
 const NUM = '(\\d{1,3}(?:,\\d{2,3})+|\\d+(?:\\.\\d+)?)';
 const num = s => parseFloat(String(s).replace(/,/g, ''));
-const fmtNum = n => (Math.round(n * 100) / 100).toLocaleString('en-IN');
+// One formatter for every number (toLocaleString builds a new one per call — the Sellers page calls
+// this for every seller on every redraw).
+const NUM_FMT = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
+const fmtNum = n => NUM_FMT.format(Math.round(n * 100) / 100);
 
 // Buildings before land: "villa, land area 4500 sqft" is a villa, not a plot.
 const TYPES = [

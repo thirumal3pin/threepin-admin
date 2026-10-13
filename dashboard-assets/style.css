@@ -131,6 +131,10 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15p
 /* ── CARD ── */
 .card{background:var(--card);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .18s, box-shadow .18s, border-color .18s;position:relative;}
 .card:hover{transform:translateY(-4px);box-shadow:var(--shadow-md);border-color:var(--border2);}
+/* A property card out of sight is not laid out or painted until it scrolls into view; under the
+   pointer or focused it draws in full (shadow and focus ring unclipped). */
+#pgrid > .card{content-visibility:auto;contain-intrinsic-size:auto 420px;}
+#pgrid > .card:hover,#pgrid > .card:focus-within{content-visibility:visible;}
 .card-bar{height:3px;}
 .card-bar.rtm{background:var(--green);}
 .card-bar.uc{background:var(--amber);}

@@ -376,7 +376,12 @@ service cloud.firestore {
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciled']) &&
          request.resource.data.diff(resource.data).affectedKeys().hasAny(['reconciled'])) ||
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciledAt', 'reconciled']) &&
-         request.resource.data.diff(resource.data).affectedKeys().hasAll(['reconciledAt', 'reconciled']))
+         request.resource.data.diff(resource.data).affectedKeys().hasAll(['reconciledAt', 'reconciled'])) ||
+        // A month reconciled before its month-end has a record holding only that mark: month-end
+        // completes it once (never when it has already run).
+        (!('ranAt' in resource.data) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ranAt', 'ranBy', 'entriesPosted', 'overrodeReconciliation']) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAll(['ranAt', 'ranBy', 'entriesPosted']))
       );
       allow delete: if false;
     }

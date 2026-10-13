@@ -375,9 +375,11 @@ function applyToState(byColl, settings, { complete = true } = {}) {
     if (!byColl[name] && !complete) continue;
     const docs = (byColl[name] || []).map(rehydrate);
     if (name === 'monthEnds') {
-      const m = {};
-      for (const d of docs) m[d.id] = d;
+      // Closed months (month-end ran) only; a month only marked reconciled is not closed.
+      const m = {}, r = {};
+      for (const d of docs) { if (d.ranAt) m[d.id] = d; if (d.reconciled) r[d.id] = true; }
       s.monthEnds = m;
+      s.reconciledMonths = r;
     } else {
       s[key] = docs;
     }
@@ -597,10 +599,14 @@ function mergeIntoState(upserts, removals) {
     const drop = new Set(removals[name] || []);
     if (!add.length && !drop.size) continue;
     if (name === 'monthEnds') {
-      const m = { ...s.monthEnds };
-      for (const d of add) m[d.id] = d;
-      for (const id of drop) delete m[id];
+      const m = { ...s.monthEnds }, r = { ...(s.reconciledMonths || {}) };
+      for (const d of add) {
+        if (d.ranAt) m[d.id] = d; else delete m[d.id];
+        if (d.reconciled) r[d.id] = true; else delete r[d.id];
+      }
+      for (const id of drop) { delete m[id]; delete r[id]; }
       s.monthEnds = m;
+      s.reconciledMonths = r;
     } else {
       const by = new Map((s[key] || []).map(d => [d.id, d]));
       for (const d of add) by.set(d.id, d);
@@ -1131,6 +1137,11 @@ export async function runMonthEnd(month, opts = {}) {
   const entries = monthEndEntries(month);
 
   await runTransaction(db, async tx => {
+    // A month closes once. A record already there may be only the bank reconciliation's mark
+    // (written before month-end): month-end then completes that record instead of replacing it.
+    const meRef = ref('monthEnds', month);
+    const meSnap = await tx.get(meRef);
+    if (meSnap.exists() && meSnap.data().ranAt) throw new Error(`Month-end for ${month} has already run — that month is closed`);
     const { nos, patch } = await reserveNumbers(tx, entries.length);
 
     const bumped = { subscriptions: {}, assets: {} };
@@ -1155,12 +1166,13 @@ export async function runMonthEnd(month, opts = {}) {
       logChange(tx, 'assets', id);
     }
 
-    tx.set(ref('monthEnds', month), {
+    const closing = {
       ranAt: Date.now(),
       ranBy: currentUser?.email || 'unknown',
       entriesPosted: entries.length,
       ...(opts.overrodeReconciliation ? { overrodeReconciliation: true } : {}),
-    });
+    };
+    if (meSnap.exists()) tx.update(meRef, closing); else tx.set(meRef, closing);
     logChange(tx, 'monthEnds', month);
     if (Object.keys(patch).length) tx.set(root(), patch, { merge: true });
   });
@@ -1168,12 +1180,22 @@ export async function runMonthEnd(month, opts = {}) {
   return entries.length;
 }
 
-// Bank reconciliation status is the one field allowed to change on a month-end record.
+// Bank reconciliation status is the one field allowed to change on a month-end record. A month
+// reconciled before its month-end gets a record holding only the mark (month-end completes it
+// later). It used to be an update of a record that did not exist yet: refused, silently.
 export async function markReconciled(month, reconciled) {
-  await commitWith((b, log) => {
-    b.update(ref('monthEnds', month), { reconciled: !!reconciled });
-    log('monthEnds', month);
+  await whenReady();
+  await runTransaction(db, async tx => {
+    const meRef = ref('monthEnds', month);
+    const snap = await tx.get(meRef);
+    // Already marked this way: nothing to write (a re-save would change only reconciledAt, which
+    // the rules rightly refuse on its own).
+    if (snap.exists() && !!snap.data().reconciled === !!reconciled) return;
+    const mark = { reconciled: !!reconciled, reconciledAt: Date.now() };
+    if (snap.exists()) tx.update(meRef, mark); else tx.set(meRef, mark);
+    logChange(tx, 'monthEnds', month);
   });
+  await pullNow();
 }
 
 // ═══════ INVOICES ═══════

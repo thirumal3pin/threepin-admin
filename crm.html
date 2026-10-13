@@ -88,9 +88,10 @@ function toggleDensity(){
       xfbml: true,
       version: 'v21.0'
     });
+    window.__fbReady = true; // FB.login is safe only from here
   };
 </script>
-<script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
+<!-- The SDK itself loads when the AI Bot editor opens (window.loadLib('fb')), not on every CRM open. -->
 
 <!-- LOGIN SCREEN -->
 <div id="loginScreen" class="login-screen">
@@ -878,19 +879,41 @@ function toggleDensity(){
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<!-- SRI integrity hashes pin the exact bytes: if cdnjs is ever compromised
-     and serves altered JS, the hash mismatch makes the browser refuse to run
-     it (supply-chain protection). XLSX here is export-only (no XLSX.read), so
-     its parse-time CVEs are not reachable; pdf.js is hardened separately with
-     isEvalSupported:false in extractPdfText(). Hashes are cdnjs's own published
+<!-- The Excel export (xlsx, ~900 KB of script) and the PDF reader (pdf.js) load only when they are
+     needed — Export Leads, or a PDF added to the bot's knowledge — not on every CRM open, where
+     reading them cost a phone seconds before the first lead showed (window.loadLib below).
+     SRI integrity hashes still pin the exact bytes: if cdnjs is ever compromised and serves altered
+     JS, the hash mismatch makes the browser refuse to run it (supply-chain protection). XLSX here is
+     export-only (no XLSX.read), so its parse-time CVEs are not reachable; pdf.js is hardened
+     separately with isEvalSupported:false in extractPdfText(). Hashes are cdnjs's own published
      SRI — re-generate if the pinned versions ever change. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
-  if (window.pdfjsLib) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  }
+  (function () {
+    var LIBS = {
+      xlsx: { src: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', sri: 'sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==', ready: function () { return typeof window.XLSX !== 'undefined'; } },
+      pdf: { src: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', sri: 'sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==', ready: function () { return !!window.pdfjsLib; },
+        after: function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; } },
+      fb: { src: 'https://connect.facebook.net/en_US/sdk.js', ready: function () { return !!window.__fbReady; } }
+    };
+    var loading = {};
+    // loadLib('xlsx' | 'pdf' | 'fb') → a promise, resolved once the library is usable. A failed
+    // load can be tried again (the next call starts afresh).
+    window.loadLib = function (name) {
+      var lib = LIBS[name];
+      if (!lib) return Promise.reject(new Error('Unknown library ' + name));
+      if (lib.ready()) return Promise.resolve();
+      if (loading[name]) return loading[name];
+      loading[name] = new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = lib.src; s.async = true; s.crossOrigin = 'anonymous'; s.referrerPolicy = 'no-referrer';
+        if (lib.sri) s.integrity = lib.sri;
+        s.onload = function () { try { if (lib.after) lib.after(); } catch (e) {} resolve(); };
+        s.onerror = function () { delete loading[name]; s.remove(); reject(new Error('Could not load ' + name)); };
+        document.head.appendChild(s);
+      });
+      return loading[name];
+    };
+  })();
 </script>
 <script src="dashboard-assets/search-engine.js"></script>
 <script src="shared-assets/chennai-geo.js"></script>

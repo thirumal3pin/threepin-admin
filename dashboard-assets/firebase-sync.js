@@ -70,29 +70,30 @@ function subscribeToProperties(tenantId){
   if(subscribed) return;
   subscribed = true;
   seedPropertiesIfEmpty(tenantId)
-    .catch(e => console.error('Firestore seed error:', e))
-    .finally(() => {
-      const propertiesQuery = query(propertiesCol, where('tenantId', '==', tenantId));
-      // includeMetadataChanges: told also when this device's saved copy is confirmed by the server, so
-      // saves can wait for that (see saveProperty).
-      onSnapshot(propertiesQuery, { includeMetadataChanges: true }, (snapshot) => {
-        const live = !snapshot.metadata.fromCache;
-        // Nothing new to draw (a save confirmed, a connection blip): only the server's first word counts.
-        if (!snapshot.docChanges().length && propsShown && (!live || propsSeenLive)) return;
-        if (live) propsSeenLive = true;
-        propsShown = true;
-        // d.id (the actual Firestore doc path) is the real identity — trust
-        // it over whatever's in the data blob. Writers that never baked an
-        // `id` field into the document itself (any server-side upsert that
-        // doesn't go through savePModal's convention) left it undefined,
-        // which silently broke every click-to-open on those cards: the
-        // onclick handler stringifies undefined into the literal text
-        // "undefined", which never matches the real `undefined` id when
-        // openDetail does its lookup, so it fails with no visible error.
-        const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
-        if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(list);
-      }, (err) => console.error('Firestore sync error:', err));
-    });
+    .catch(e => console.error('Firestore seed error:', e));
+  // The listener starts at once (this device's saved copy first, then the server) — it used to wait
+  // for the seed read, a server round trip before a single property showed. The seed only writes
+  // for a brand-new account, and the listener picks that up.
+  const propertiesQuery = query(propertiesCol, where('tenantId', '==', tenantId));
+  // includeMetadataChanges: told also when this device's saved copy is confirmed by the server, so
+  // saves can wait for that (see saveProperty).
+  onSnapshot(propertiesQuery, { includeMetadataChanges: true }, (snapshot) => {
+    const live = !snapshot.metadata.fromCache;
+    // Nothing new to draw (a save confirmed, a connection blip): only the server's first word counts.
+    if (!snapshot.docChanges().length && propsShown && (!live || propsSeenLive)) return;
+    if (live) propsSeenLive = true;
+    propsShown = true;
+    // d.id (the actual Firestore doc path) is the real identity — trust
+    // it over whatever's in the data blob. Writers that never baked an
+    // `id` field into the document itself (any server-side upsert that
+    // doesn't go through savePModal's convention) left it undefined,
+    // which silently broke every click-to-open on those cards: the
+    // onclick handler stringifies undefined into the literal text
+    // "undefined", which never matches the real `undefined` id when
+    // openDetail does its lookup, so it fails with no visible error.
+    const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
+    if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(list);
+  }, (err) => console.error('Firestore sync error:', err));
 }
 
 // property.html sets window.__pinPageMode='single' (in a plain inline script,
@@ -262,15 +263,21 @@ window.dashboardAuth = {
 
 onAuthStateChanged(auth, async (user) => {
   if(user){
-    // Force-refresh so a tenantId claim set AFTER this browser's last
-    // sign-in is picked up immediately instead of reusing a stale token.
-    // A fresh token can fail on a poor connection; without a fallback the page stayed blank
-    // with no message. Use the cached one then — it carries the same tenant claim.
+    // The token this browser already holds first: it carries the tenant claim, so the data starts
+    // loading at once instead of after a round trip to Google on every open. Only a token WITHOUT
+    // the claim is refreshed before going on (a claim set after this browser's last sign-in).
     let tokenResult = null;
-    try { tokenResult = await user.getIdTokenResult(true); }
-    catch (e) {
-      console.error('Could not refresh the sign-in; using the cached one:', e);
-      try { tokenResult = await user.getIdTokenResult(false); } catch (e2) { tokenResult = null; }
+    try { tokenResult = await user.getIdTokenResult(false); } catch (e) { tokenResult = null; }
+    if (!(tokenResult && tokenResult.claims.tenantId)) {
+      try { tokenResult = await user.getIdTokenResult(true); }
+      catch (e) { console.error('Could not refresh the sign-in:', e); }
+    } else {
+      // A claim changed since (a tenant moved): the fresh token, checked in the background, reloads
+      // the page onto the right tenant. Nothing waits for it.
+      const held = tokenResult.claims.tenantId;
+      user.getIdTokenResult(true).then(r => {
+        if (r && r.claims.tenantId !== held) location.reload();
+      }).catch(() => {});
     }
     currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
     if (!currentTenantId) {

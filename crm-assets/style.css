@@ -292,6 +292,11 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .kcol-empty{text-align:center;color:var(--ink4);font-size:12px;padding:20px 8px;}
 
 .lcard{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:calc(13px * var(--dens) + 4px) 13px;cursor:grab;transition:transform .16s var(--ease), box-shadow .16s, border-color .16s, opacity .15s;}
+/* A card out of sight is not laid out or painted until it scrolls into view: with hundreds of leads
+   on the board, laying out every one on each redraw was seconds of a phone's time. A card under the
+   pointer or holding focus draws in full, so its shadow and focus ring are never clipped. */
+.lcard{content-visibility:auto;contain-intrinsic-size:auto 150px;}
+.lcard:hover,.lcard:focus-within{content-visibility:visible;}
 .lcard:active{cursor:grabbing;}
 /* A slight tilt while dragging reads as "picked up off the sheet". */
 .lcard.dragging{opacity:.4;transform:rotate(1.4deg) scale(.98);box-shadow:var(--shadow-lg);}

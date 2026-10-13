@@ -277,7 +277,7 @@ export function blank() {
   return {
     settings: defaultSettings(),
     parties: [], deals: [], txns: [], subs: [], loans: [], assets: [],
-    invoices: [], bills: [], bankStatements: [], monthEnds: {},
+    invoices: [], bills: [], bankStatements: [], monthEnds: {}, reconciledMonths: {},
   };
 }
 

@@ -67,6 +67,10 @@ const NAV = [
 ];
 // Invoices live inside Deals now; the old route still lands somewhere sensible.
 const ALIASES = { invoices: 'deals' };
+// Screens reached by a link, not listed in the menu: Opening balances is a one-time form, opened from
+// the first-run page, Overview and the Books check. It was missing here, so every one of those
+// links quietly landed on Overview.
+const LINKED_ONLY = ['opening'];
 
 const BOTTOM = ['overview', 'txns', 'record', 'owed', 'more'];
 
@@ -271,7 +275,7 @@ function routeFromHash() {
   closeModal();
   window.fin?.closePreview?.();
   const h = location.hash.replace(/^#/, '');
-  view = NAV.some(([k]) => k === h) ? h : (ALIASES[h] || 'overview');
+  view = NAV.some(([k]) => k === h) || LINKED_ONLY.includes(h) ? h : (ALIASES[h] || 'overview');
   repaint();
 }
 
@@ -1892,9 +1896,10 @@ window.fin = {
     if (!month) return toast('Pick a month');
     const s = getState();
 
+    // A month closes once.
+    if (s.monthEnds[month]) return toast(`${mlabel(month)} is already closed — its month-end has run`);
     // The bank statement is the only external check on the books, so month-end is gated on it.
-    const me = s.monthEnds[month];
-    if (!me?.reconciled) {
+    if (!(s.reconciledMonths || {})[month]) {
       const ok = await confirmDialog({
         title: `${mlabel(month)} is not reconciled`,
         message: 'This month has not been matched against a bank statement yet, so the books have not been checked against anything external. You can override, and the override is recorded against your name.',

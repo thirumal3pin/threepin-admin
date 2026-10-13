@@ -65,8 +65,11 @@ function findLeadByPhone(phone, excludeId){
 // ═══════ SNAPSHOT HANDLERS (called by firebase-sync.js) ═══════
 let docThreads = new Map();   // leadId → threads its document itself carries (kept by a full read)
 let leadsFromServer = false;   // the server's own list has arrived (not only this browser's copy)
-window.applyLeadsSnapshot = function(list, fromServer){
+window.applyLeadsSnapshot = function(list, fromServer, info){
   if(fromServer !== false) leadsFromServer = true;
+  // The server only confirmed the list already on screen (no lead changed): nothing to redraw.
+  // Redrawing every lead for it cost a phone a second or more each time.
+  const sameAsShown = !!(info && info.same) && leads.length > 0;
   // Notes + history live in per-lead subcollections, so they don't arrive in this snapshot. The
   // threads already loaded — for every lead opened this visit, not only the open one — move across
   // to the new lead objects, so a snapshot never blanks a panel and a lead opened again fetches
@@ -84,6 +87,13 @@ window.applyLeadsSnapshot = function(list, fromServer){
     if(was.notes !== undefined) cur.notes = was.notes;
     if(was.history !== undefined) cur.history = was.history;
   }
+  if(sameAsShown){
+    // Only what depends on the list being the server's: a ?lead= that is not in it is now known missing.
+    try{ openPendingLead(); }catch(e){}
+    try{ notifyNewMentions(fromServer); }catch(e){}
+    return;
+  }
+  cancelSoonRefresh();
   refreshAll();
   try{ notifyNewMentions(fromServer); }catch(e){}
   // The AI summary regenerates server-side (see api/_lead-summary-generate.js)
@@ -120,8 +130,23 @@ window.applyLeadsSnapshot = function(list, fromServer){
 };
 window.applyPipelineSnapshot = function(list){
   stages = list.slice().sort((a,b)=> (a.order||0) - (b.order||0));
-  refreshAll();
+  // With leads on screen a redraw is the costly part: the columns, settings and leads all arrive
+  // on open within a moment of each other — one redraw for all of them, not one each.
+  if(leads.length) refreshSoon(); else refreshAll();
 };
+// One redraw for changes that land together (the column list, the settings): the next frame,
+// unless a leads snapshot redraws first (it cancels this one).
+let soonRefresh = 0;
+function refreshSoon(){
+  if(soonRefresh) return;
+  const run = () => { soonRefresh = 0; refreshAll(); };
+  soonRefresh = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 16);
+}
+function cancelSoonRefresh(){
+  if(!soonRefresh) return;
+  if(typeof cancelAnimationFrame === 'function') cancelAnimationFrame(soonRefresh); else clearTimeout(soonRefresh);
+  soonRefresh = 0;
+}
 window.applyEnquiryTypesSnapshot = function(list){
   enquiryTypes = (list && list.length) ? list : enquiryTypes;
   if(document.getElementById('lModal').classList.contains('open')){
@@ -507,15 +532,18 @@ function stageRuleOf(stage){
   const def = key && window.crmPipeline.stageDef(key);
   return def ? def.rule : '';
 }
+// Formatters made once: toLocaleString() builds a new one on every call, and the board calls this
+// for every card on every redraw.
+const DUE_TIME_FMT = new Intl.DateTimeFormat([], { hour:'numeric', minute:'2-digit' });
+const DUE_FULL_FMT = new Intl.DateTimeFormat([], { weekday:'short', day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
 function fmtDue(ts){
   if(!ts) return '';
   const d = new Date(ts), now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
   const tomorrow = new Date(now.getTime() + 86400000).toDateString() === d.toDateString();
-  const time = d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
-  if(sameDay) return `today ${time}`;
-  if(tomorrow) return `tomorrow ${time}`;
-  return d.toLocaleString([], { weekday:'short', day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
+  if(sameDay) return `today ${DUE_TIME_FMT.format(d)}`;
+  if(tomorrow) return `tomorrow ${DUE_TIME_FMT.format(d)}`;
+  return DUE_FULL_FMT.format(d);
 }
 
 // The one line a card leads with: what happens next, and whose move it is.
@@ -2700,6 +2728,12 @@ function detailsSentChip(l){
   return `<div class="lcard-flag ${sent?'sent':'not-sent'}">${sent?'📨 Details sent':'📭 Details not sent'}</div>`;
 }
 
+// The card's "→ next" button. Won is a person's decision about money that changed hands, so one tap
+// asks first rather than closing the deal by a slip of the finger.
+function nextFromCard(leadId, stageId){
+  if(stageKindOfId(stageId) === 'won' && !confirm('Mark this lead Won — token paid, signed or rented?')) return;
+  changeStage(leadId, stageId);
+}
 // The next column along the milestone path (never into Won/On hold/Lost by a one-tap button
 // from somewhere unrelated). Falls back to plain column order on a pipeline without keys.
 function nextLadderStageId(stageId){
@@ -2757,7 +2791,7 @@ function leadCardHtml(l, sort){
     ${chips.length ? `<div class="lcard-tt">${chips.slice(0,3).join('')}${chips.length>3?`<span class="tt-chip more" title="${chips.length-3} more">+${chips.length-3}</span>`:''}</div>` : ''}
     <div class="lcard-foot">
       <div class="lcard-time">${stageAgeHtml(l)}${aiMoved ? `<span class="lcard-ai" title="${escapeHtml(l.ai.lastMove.evidence || '')}">🤖 moved ${timeAgo(l.ai.lastMove.at)}</span>` : `${timeAgo(l.updatedAt||l.createdAt)}${l.updatedBy?' · '+escapeHtml(l.updatedBy.split('@')[0]):''}`}</div>
-      ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();changeStage('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}
+      ${nextStage?`<button class="lcard-next" onclick="event.stopPropagation();nextFromCard('${l.id}','${next}')">→ ${escapeHtml(nextStage.name)}</button>`:''}
     </div>
   </div>`;
 }
@@ -4523,6 +4557,8 @@ function applyLeadForm(l, form, now){
     if(toKind === 'lost' && !l.lostReason) l.lostReason = 'other';
     if(toKind !== 'lost') l.lostReason = null;
     if(toKind !== 'hold'){ l.holdReason = null; l.holdUntil = null; }
+    // A closed lead has no next call — the same as a move by drag, dropdown or bulk.
+    if(toKind === 'won' || toKind === 'lost'){ l.followUpAt = null; l.followUpNote = null; }
   }
   l.lastActionType = stageChanged ? 'stage' : (form.noteText ? 'note' : 'field');
   diffs.forEach(d => addHistory(l, d.type, d.text));
@@ -4553,6 +4589,10 @@ function saveLeadModal(){
       if(isTtLead(l) && lmOpenValues){
         TT_FOLLOW_FIELDS.forEach(f => { if((form[f]||'') === (lmOpenValues[f]||'')) form[f] = l[f] || ''; });
       }
+      // Lost and On hold need a reason, here as everywhere else: the other edits are saved now and
+      // the move waits for the reason dialog (it used to file every such lead as "other").
+      const toKind = form.stageId !== l.stageId ? stageKindOfId(form.stageId) : null;
+      if(toKind === 'lost' || toKind === 'hold'){ reasonForStage = { leadId: l.id, stageId: form.stageId }; form.stageId = l.stageId; }
       applyLeadForm(l, form, now);
       if(form.noteText) logNote(l, { id:'n'+now, text: form.noteText, createdAt: now, by: currentUserEmail || null });
       showToast('✓ Enquiry updated');
@@ -4562,7 +4602,9 @@ function saveLeadModal(){
   closeLeadModal();
   refreshAll();
   if(lModalMode==='edit') openDetail(lModalEditId);
+  if(reasonForStage){ const r = reasonForStage; reasonForStage = null; openStageReasonModal(r.leadId, r.stageId); }
 }
+let reasonForStage = null;   // a Lost / On hold move from the Edit dialog, waiting for its reason
 
 function createLeadFromForm(form){
   const now = Date.now();
@@ -4736,6 +4778,8 @@ function openExportModal(){
   document.getElementById('exportDateTo').value = '';
   document.getElementById('exportDateRangeRow').style.display = 'none';
   document.getElementById('exportErr').classList.remove('show');
+  // The Excel library loads now, while the choices are made, so Export runs without a wait.
+  if(window.loadLib) window.loadLib('xlsx').catch(() => {});
   updateExportCount();
   document.getElementById('exportModal').classList.add('open');
 }
@@ -4769,6 +4813,7 @@ function updateExportCount(){
   countEl.textContent = result===null ? 'Pick both a from and to date.' : `${result.length} lead${result.length===1?'':'s'} will be exported.`;
 }
 async function runExport(){
+  if(typeof XLSX === 'undefined' && window.loadLib){ try{ await window.loadLib('xlsx'); }catch(e){} }
   if(typeof XLSX === 'undefined'){ showToast('Export library failed to load — check your connection and retry'); return; }
   const errBox = document.getElementById('exportErr');
   errBox.classList.remove('show');
@@ -5895,7 +5940,10 @@ function saveStageManager(){
       persistLead(l);
     }
   });
-  stages = stageManagerDraft;
+  // The order shown in the editor is the order saved: every column numbered afresh. The board sorts
+  // columns by `order`, so keyed columns kept their old numbers (a reorder reverted on the next
+  // load) and a new column with none jumped to second place.
+  stages = stageManagerDraft.map((s, i) => ({ ...s, order: i }));
   window.crmFirebase.savePipeline(stages);
   closeStageManager();
   refreshAll();
@@ -6097,6 +6145,8 @@ let botTestHistory = [];
 
 async function openBotEditor(){
   document.getElementById('botEditorPanel').classList.add('open');
+  // Meta's SDK (Connect via Meta) is needed only here: loaded now, not on every CRM open.
+  if(window.loadLib) window.loadLib('fb').catch(() => {});
   // A failed read used to leave a blank form, and Save then threw on the empty draft.
   let saved = null;
   try { saved = await window.crmFirebase.getBotConfig(); }
@@ -6257,9 +6307,11 @@ function connectWhatsApp(){
   // public config is pre-fetched into `publicConfig` at load time rather
   // than awaited here.
   const note = document.getElementById('waConnectNote');
-  if (typeof FB === 'undefined'){
-    note.textContent = 'Meta SDK failed to load — check your connection and try again.';
+  if (typeof FB === 'undefined' || !window.__fbReady){
+    // Not loaded (offline?) or not set up yet: ask for it again so the next click works.
+    note.textContent = typeof FB === 'undefined' ? 'Meta SDK failed to load — check your connection and try again.' : 'Meta is still getting ready — try again in a second.';
     note.style.color = 'var(--red)';
+    if (window.loadLib) window.loadLib('fb').catch(() => {});
     return;
   }
   if (!publicConfig || !publicConfig.metaEmbeddedSignupConfigId){
@@ -6577,6 +6629,7 @@ async function uploadKnowledgeFile(event){
 }
 
 async function extractPdfText(file){
+  if(!window.pdfjsLib && window.loadLib){ try{ await window.loadLib('pdf'); }catch(e){} }
   if(!window.pdfjsLib) throw new Error('PDF reader not loaded — try again');
   const buf = await file.arrayBuffer();
   // isEvalSupported:false disarms CVE-2024-4367 — a crafted PDF can otherwise
@@ -6788,13 +6841,21 @@ document.addEventListener('keydown', e => {
 // One tab stop per group: Tab enters at the active item and leaves the group,
 // instead of walking through fifteen filter chips to reach the board.
 function syncRovingTabstops(root){
+  // Every group read first, then every change written. Reading visibility (offsetParent) right
+  // after writing a tabIndex made the browser lay out the whole page again for each item — with
+  // the board's hundreds of cards that was seconds of a phone's time on every redraw.
+  const plan = [];
   (root || document).querySelectorAll(ROVING_SEL).forEach(group => {
     const items = rovingItems(group);
     if(items.length < 2) return;
     // The active ITEM — a container marked .at (the Agent filter's <details>) is not one.
     const active = items.find(el => el.matches('[aria-selected="true"],[aria-pressed="true"],.at')) || items[0];
-    items.forEach(el => { el.tabIndex = el === active ? 0 : -1; });
+    plan.push([items, active]);
   });
+  plan.forEach(([items, active]) => items.forEach(el => {
+    const want = el === active ? 0 : -1;
+    if(el.tabIndex !== want) el.tabIndex = want;
+  }));
 }
 // Re-applied after any render, since the chips are rebuilt wholesale each time.
 // Coalesced to one pass per frame: the board re-renders every card on any

@@ -96,64 +96,65 @@ async function seedSampleLeadsIfEmpty(tenantId){
 function subscribeToData(tenantId){
   if(subscribed) return;
   subscribed = true;
+  // The listeners start at once — from this browser's local copy, then the server. They used to
+  // wait for the three first-time seeds below: three server round trips before a single lead
+  // showed (and, on a weak phone signal, much longer). The seeds only ever write for a brand-new
+  // account, and the listeners pick up whatever they write.
   Promise.all([
     seedPipelineIfEmpty(tenantId).catch(e => console.error('Pipeline seed error:', e)),
     seedSampleLeadsIfEmpty(tenantId).catch(e => console.error('Sample leads seed error:', e)),
     seedSettingsIfEmpty(tenantId).catch(e => console.error('Settings seed error:', e))
-  ])
-    .finally(() => {
-      // Every lead, live — from the lead views (a read per ~20 leads), or the leads themselves
-      // until the views are built. fromServer: false while it is still this browser's local copy.
-      views.watch(tenantId, (list, fromServer) => {
-        // Each lead as it arrived, before the page touches it: a save sends only what differs —
-        // against the very object being saved when it came from a snapshot (a screen that held it
-        // across a wait compares with what IT was given, not with a newer copy).
-        savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
-        if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer);
-      },
-        err => console.error('Firestore leads sync error:', err));
+  ]);
+  // Every lead, live — from the lead views (a read per ~20 leads), or the leads themselves
+  // until the views are built. fromServer: false while it is still this browser's local copy.
+  views.watch(tenantId, (list, fromServer, info) => {
+    // Each lead as it arrived, before the page touches it: a save sends only what differs —
+    // against the very object being saved when it came from a snapshot (a screen that held it
+    // across a wait compares with what IT was given, not with a newer copy).
+    savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
+    if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer, info);
+  },
+    err => console.error('Firestore leads sync error:', err));
 
-      onSnapshot(pipelineRef(tenantId), (snap) => {
-        if (snap.exists() && window.applyPipelineSnapshot) {
-          window.applyPipelineSnapshot(snap.data().stages || []);
-        }
-      }, (err) => console.error('Firestore pipeline sync error:', err));
+  onSnapshot(pipelineRef(tenantId), (snap) => {
+    if (snap.exists() && window.applyPipelineSnapshot) {
+      window.applyPipelineSnapshot(snap.data().stages || []);
+    }
+  }, (err) => console.error('Firestore pipeline sync error:', err));
 
-      onSnapshot(settingsRef(tenantId), (snap) => {
-        if (!snap.exists()) return;
-        const data = snap.data();
-        if (window.applyEnquiryTypesSnapshot) window.applyEnquiryTypesSnapshot(data.enquiryTypes || DEFAULT_ENQUIRY_TYPES);
-        if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(data.properties || []);
-        if (window.applyDigestSettingsSnapshot) {
-          window.applyDigestSettingsSnapshot({
-            enabled: !!data.followupDigestEnabled,
-            recipients: data.followupDigestRecipients || [],
-            emailEnabled: !!data.followupDigestEmailEnabled,
-            emails: data.followupDigestEmails || []
-          });
-        }
-        if (window.applyDashboardEmailSettingsSnapshot) {
-          window.applyDashboardEmailSettingsSnapshot({
-            enabled: !!data.dashboardEmailEnabled,
-            // null (key never set) vs [] (saved once, deliberately emptied) are
-            // distinct — the client uses null to decide whether to default this
-            // list from the Follow-up Digest's recipients on first-ever open.
-            recipients: Array.isArray(data.dashboardEmailRecipients) ? data.dashboardEmailRecipients : null
-          });
-        }
-        if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
-        if (window.applyViewsSnapshot) window.applyViewsSnapshot(data.views || {});
-        if (window.applyTeamSnapshot) window.applyTeamSnapshot(data.team || {});
-        // Shoot & Media's configuration — Daily task reads who makes the voice-overs.
-        if (window.applyTrackTaskConfig) window.applyTrackTaskConfig(data.trackConfig || {});
-        if (window.applyDefaultLeadAgent) window.applyDefaultLeadAgent(data.defaultLeadAgent || null);
-        // The slug in TailorTalk's own dashboard URL
-        // (dashboard.tailortalk.ai/<workspace>/leads). TailorTalk does not send
-        // it with a lead, so it is configuration rather than data.
-        if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
-      }, (err) => console.error('Firestore settings sync error:', err));
-
-    });
+  onSnapshot(settingsRef(tenantId), (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data();
+    if (window.applyEnquiryTypesSnapshot) window.applyEnquiryTypesSnapshot(data.enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+    if (window.applyPropertiesSnapshot) window.applyPropertiesSnapshot(data.properties || []);
+    if (window.applyDigestSettingsSnapshot) {
+      window.applyDigestSettingsSnapshot({
+        enabled: !!data.followupDigestEnabled,
+        recipients: data.followupDigestRecipients || [],
+        emailEnabled: !!data.followupDigestEmailEnabled,
+        emails: data.followupDigestEmails || []
+      });
+    }
+    if (window.applyDashboardEmailSettingsSnapshot) {
+      window.applyDashboardEmailSettingsSnapshot({
+        enabled: !!data.dashboardEmailEnabled,
+        // null (key never set) vs [] (saved once, deliberately emptied) are
+        // distinct — the client uses null to decide whether to default this
+        // list from the Follow-up Digest's recipients on first-ever open.
+        recipients: Array.isArray(data.dashboardEmailRecipients) ? data.dashboardEmailRecipients : null
+      });
+    }
+    if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot(data.leadAutomation || {});
+    if (window.applyViewsSnapshot) window.applyViewsSnapshot(data.views || {});
+    if (window.applyTeamSnapshot) window.applyTeamSnapshot(data.team || {});
+    // Shoot & Media's configuration — Daily task reads who makes the voice-overs.
+    if (window.applyTrackTaskConfig) window.applyTrackTaskConfig(data.trackConfig || {});
+    if (window.applyDefaultLeadAgent) window.applyDefaultLeadAgent(data.defaultLeadAgent || null);
+    // The slug in TailorTalk's own dashboard URL
+    // (dashboard.tailortalk.ai/<workspace>/leads). TailorTalk does not send
+    // it with a lead, so it is configuration rather than data.
+    if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
+  }, (err) => console.error('Firestore settings sync error:', err));
 }
 
 // Shoot & Media's cards and stages, read only, for Daily task's voice-overs (track-assets/voiceover.js).
@@ -343,17 +344,23 @@ window.crmAuth = {
 
 onAuthStateChanged(auth, async (user) => {
   if(user){
-    // Force-refresh (the `true` argument) so a tenantId claim set AFTER this
-    // browser's last sign-in — e.g. right after scripts/create-tenant.js or
-    // scripts/migrate-existing-tenant.js ran — is picked up immediately,
-    // instead of silently reusing a cached token that predates the claim.
-    // A fresh token can fail on a poor connection; without a fallback the page stayed blank
-    // with no message. Use the cached one then — it carries the same tenant claim.
+    // The token this browser already holds first: it carries the tenant claim, so the data starts
+    // loading at once instead of after a round trip to Google on every page open (on a phone,
+    // a second or more before anything showed). Only a token WITHOUT the claim is refreshed before
+    // going on — a claim set after this browser's last sign-in (scripts/create-tenant.js,
+    // scripts/migrate-existing-tenant.js) is then picked up immediately, as before.
     let tokenResult = null;
-    try { tokenResult = await user.getIdTokenResult(true); }
-    catch (e) {
-      console.error('Could not refresh the sign-in; using the cached one:', e);
-      try { tokenResult = await user.getIdTokenResult(false); } catch (e2) { tokenResult = null; }
+    try { tokenResult = await user.getIdTokenResult(false); } catch (e) { tokenResult = null; }
+    if (!(tokenResult && tokenResult.claims.tenantId)) {
+      try { tokenResult = await user.getIdTokenResult(true); }
+      catch (e) { console.error('Could not refresh the sign-in:', e); }
+    } else {
+      // A claim changed since (a tenant moved): the fresh token, checked in the background, reloads
+      // the page onto the right tenant. Nothing waits for it.
+      const held = tokenResult.claims.tenantId;
+      user.getIdTokenResult(true).then(r => {
+        if (r && r.claims.tenantId !== held) location.reload();
+      }).catch(() => {});
     }
     currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
     if (!currentTenantId) {

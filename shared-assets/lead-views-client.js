@@ -7,7 +7,13 @@
 //                                              are switched off. fromServer: false while the list
 //                                              is still the browser's local copy (automatic writers
 //                                              wait for true). One call per change, however many
-//                                              documents it touched. Returns the unsubscribe.
+//                                              documents it touched; the server confirming the
+//                                              local copy is one call at the end, with a third
+//                                              argument { same: true } (no lead changed — a page
+//                                              need not redraw). Once true, fromServer is not
+//                                              taken back when the connection drops (from the
+//                                              views, going offline changes no lead, so nothing
+//                                              is said). Returns the unsubscribe.
 //   views.save(tenantId, leadRef, data, mode)  a lead write AND its row in one batch — all or
 //                                              nothing. A save never fails because of the views:
 //                                              if the row cannot be written (rules not yet live,
@@ -117,6 +123,10 @@ export function leadViews(db) {
       let shardUnsubs = [], collUnsub = null, metaUnsub = null, key = '', docs = [], live = [];
       let collList = null, collLive = false, source = null;   // 'views' | 'coll'
       let stopped = false, retry = 0, retryTimer = null, emitTimer = null;
+      // Whether any lead itself changed since the last call (false: the server only confirmed the
+      // local copy). A page then knows it need not redraw — on a phone, redrawing every lead once
+      // per confirmed document made the list take minutes to settle.
+      let dataChanged = true, emittedSource = null;
       // One call per change: the documents a change touches (and the local copy being confirmed
       // document by document on open) arrive as separate events within a few milliseconds.
       const emit = () => {
@@ -127,8 +137,17 @@ export function leadViews(db) {
           // Each emit hands out its own copies: a page that changes a lead in place (a nested map)
           // can never alter the documents this listener keeps, nor the next emit's leads.
           const own = list => (typeof structuredClone === 'function' ? structuredClone(list) : JSON.parse(JSON.stringify(list)));
-          if (source === 'views' && docs.length && docs.every(Boolean)) onLeads(own(LV.rowsToLeads(docs)), live.every(Boolean));
-          else if (source === 'coll' && collList) onLeads(own(collList), collLive);
+          // Switching between the views and the collection always counts as a change.
+          const same = !dataChanged && emittedSource === source;
+          // The flags reset only when leads actually go out, so a change is never lost to an emit
+          // that had nothing to send.
+          if (source === 'views' && docs.length && docs.every(Boolean)) {
+            dataChanged = false; emittedSource = source;
+            onLeads(own(LV.rowsToLeads(docs)), live.every(Boolean), { same });
+          } else if (source === 'coll' && collList) {
+            dataChanged = false; emittedSource = source;
+            onLeads(own(collList), collLive, { same });
+          }
         }, 30);
       };
       const stopShards = () => { shardUnsubs.forEach(u => u()); shardUnsubs = []; key = ''; docs = []; };
@@ -152,8 +171,10 @@ export function leadViews(db) {
         collUnsub = onSnapshot(query(collection(db, 'leads'), where('tenantId', '==', tenantId)), { includeMetadataChanges: true },
           s => {
             const isLive = !s.metadata.fromCache;
-            if (isLive === wasLive && !s.docChanges().length) return;
+            const changed = s.docChanges().length > 0;
+            if (isLive === wasLive && !changed) return;
             wasLive = isLive;
+            if (changed || !collList) dataChanged = true;
             collList = s.docs.map(d => ({ ...d.data(), id: d.id })); collLive = isLive;
             if (source === 'coll') emit();
           },
@@ -176,12 +197,20 @@ export function leadViews(db) {
             // server) changes nothing a page shows, so it does not redraw the page again.
             const json = JSON.stringify(data.rows || {}, (k, v) => (k === LV.WROTE ? undefined : v));
             if (was && was.live === isLive && was.json === json) return;
+            // The server confirming rows this page already has (only the "live" flag moved).
+            const confirmOnly = !!was && was.json === json;
+            if (!confirmOnly) dataChanged = true;
             was = { live: isLive, json };
             docs[i] = data; live[i] = isLive;
             // Every view document in: the views take over from the collection (if it was on).
             if (docs.every(Boolean)) {
+              const allLive = live.every(Boolean);
+              if (source !== 'views') dataChanged = true;
               source = 'views';
-              if (live.every(Boolean)) { retry = 0; stopColl(); }
+              if (allLive) { retry = 0; stopColl(); }
+              // A document only confirmed tells the page nothing until the last one is in — then
+              // once, so it knows the list is the server's.
+              if (confirmOnly && !allLive) return;
               emit();
             }
           }, e => {

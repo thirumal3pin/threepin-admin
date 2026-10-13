@@ -226,13 +226,17 @@ function stageById(id) { return stages.find(s => s.id === id) || null; }
 function stageKindOfId(id) { return P.stageKindOf(stageById(id)); }
 function newId(prefix) { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+// Formatters made once: toLocale…String() builds a new one on every call, and every card and seller
+// tile calls these on every redraw.
+const DATE_FMT = new Intl.DateTimeFormat([], { weekday: 'short', day: 'numeric', month: 'short' });
+const DATETIME_FMT = new Intl.DateTimeFormat([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 function fmtDate(ts) {
   if (!ts) return '';
-  return new Date(ts).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  return DATE_FMT.format(new Date(ts));
 }
 function fmtDateTime(ts) {
   if (!ts) return '';
-  return new Date(ts).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return DATETIME_FMT.format(new Date(ts));
 }
 function timeAgo(ts) {
   if (!ts) return '';
@@ -272,7 +276,13 @@ function skippedSellers() {
   const linked = new Set(listings.map(x => x.leadId).filter(Boolean));
   return sellerLeads().filter(l => !linked.has(l.id) && l.listingSkipped === true);
 }
-function leadById(id) { return leads.find(l => l.id === id) || null; }
+// By id through an index, made once per leads list: a scan of every lead for each card and seller
+// tile was seconds of a phone's time per redraw.
+let leadIndex = null, leadIndexOf = null;
+function leadById(id) {
+  if (leadIndexOf !== leads || !leadIndex || leadIndex.size !== leads.length) { leadIndex = new Map(leads.map(l => [l.id, l])); leadIndexOf = leads; }
+  return leadIndex.get(id) || null;
+}
 
 // ═══════ FILTER + ROUTING ═══════
 // The view being typed or chosen in right now (Posting has its own guard).
@@ -538,13 +548,23 @@ function renderBoard() {
 }
 // The board fills the screen below the header: columns scroll inside themselves, and the page
 // never scrolls on into blank space. Only the board view; list, shoots and sellers scroll as pages.
+// The board's top is measured in the next frame, when the browser lays the page out anyway: measured
+// straight after a redraw it forced a second full layout of every card, each time (on a phone, many
+// seconds while the leads were arriving).
+let fitQueued = false;
 function fitBoard() {
   const on = currentView === 'board' && boardMode === 'board' && !myAgent;
   document.documentElement.classList.toggle('tk-fit', on);
-  const b = on && document.querySelector('#boardView .tk-board');
-  if (!b) return;
-  window.scrollTo(0, 0);
-  document.documentElement.style.setProperty('--board-top', Math.round(b.getBoundingClientRect().top) + 'px');
+  if (!on || fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => {
+    fitQueued = false;
+    const b = currentView === 'board' && boardMode === 'board' && !myAgent && document.querySelector('#boardView .tk-board');
+    if (!b) return;
+    window.scrollTo(0, 0);
+    const top = Math.round(b.getBoundingClientRect().top) + 'px';
+    if (document.documentElement.style.getPropertyValue('--board-top') !== top) document.documentElement.style.setProperty('--board-top', top);
+  });
 }
 window.addEventListener('resize', () => fitBoard());
 
@@ -881,6 +901,17 @@ function blockersFor(x) {
   const key = P.stageKeyOf(stageById(x.stageId));
   if (isSeriesCard(x)) return ['closed', 'dropped'].includes(key) ? [] : seriesGaps(x);
   const out = [];
+  // The owner's process before the shoot: Swami's go-ahead, then (Exclusive / Collab) the signed
+  // agreement. Said on the card until done — the board still lets the work go on.
+  if (['new_listing', 'details', 'shoot_scheduled'].includes(key)) {
+    if (!approvalOf(x)) out.push('awaiting approval');
+    if (agreementNeeded(x) && agreementOf(x) !== 'checked') out.push(agreementOf(x) === 'signed' ? 'agreement not checked' : 'agreement not signed');
+  }
+  // Papers: said until every one is in hand (documents never block posting).
+  if (!['closed', 'dropped', 'on_hold'].includes(key)) {
+    const missing = papersMissing(x);
+    if (missing) out.push(`${missing} paper${missing === 1 ? '' : 's'} still to come`);
+  }
   // Before the shoot: the things that make an agent's trip wasted.
   if (['shoot_scheduled'].includes(key)) {
     if (!x.address) out.push('no address');
@@ -894,7 +925,7 @@ function blockersFor(x) {
     for (const g of mediaGaps(x)) if (g !== GAP_BROCHURE || brochureOf(x) === 'none') out.push(g);
   }
   if (key === 'live' && !x.propertyCode) out.push('not in inventory');
-  if (key === 'live' && !x.ownerApproved) out.push('owner has not approved');
+  if (key === 'live' && !x.ownerApproved) out.push('property owner has not approved the photos');
   if (key === 'live' && brochureOf(x) !== 'created') out.push('no brochure');
   return out;
 }
@@ -2453,13 +2484,61 @@ function termsSectionHtml(x) {
     return `<label class="tk-doc-r"><span>${esc(n)}</span><select class="tk-sel sm tk-doc-s${s ? ' ' + s : ''}" aria-label="${esc(n)}" onchange="setDocStatus('${x.id}', ${jsq(n)}, this.value)">${
       CFG.DOC_STATUSES.map(([k, l]) => `<option value="${k}"${s === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
   }).join('');
+  const ap = x.approval && x.approval.at ? x.approval : null;
+  const approvalRow = ap
+    ? `<div class="tk-kv"><span>Approved to list</span><div>✓ ${esc(personName(ap.by) || ap.by || 'Team')} · ${esc(fmtDate(ap.at))} <button type="button" class="tk-link" onclick="setApproval('${x.id}', false)">Undo</button></div></div>`
+    : `<div class="tk-kv"><span>Approved to list</span><div><button type="button" class="tk-btn ghost sm" onclick="setApproval('${x.id}', true)">Record Swami's approval</button></div></div>`;
+  const ag = agreementOf(x);
+  const agSeg = AGREEMENT_STEPS.map(([k, l]) =>
+    `<button type="button" class="tk-seg-b${ag === k ? ' on' : ''}" aria-pressed="${ag === k}" onclick="setAgreement('${x.id}','${ag === k ? '' : k}')">${esc(l)}</button>`).join('');
+  const agLink = x.agreement && isWebLink(x.agreement.link) ? x.agreement.link : null;
+  const agreementRow = agreementNeeded(x)
+    ? `<div class="tk-kv tk-pickrow"><span>Agreement</span><div class="tk-seg" role="group" aria-label="Agreement">${agSeg}</div></div>
+      <div class="tk-kv"><span></span><div>${agLink ? `<a href="${esc(agLink)}" target="_blank" rel="noopener">Open the agreement ↗</a> · ` : ''}<button type="button" class="tk-link" onclick="setAgreementLink('${x.id}')">${agLink ? 'Change link' : 'Add the agreement link'}</button></div></div>`
+    : '';
   return `<div class="tk-sec" id="dpTerms">
-      <div class="tk-sec-hdr">Listing &amp; documents${items.length ? ` <span class="tk-count" title="In hand or not needed">${pr.done} of ${pr.total}</span>` : ''}</div>
+      <div class="tk-sec-hdr">Approval, terms &amp; documents${items.length ? ` <span class="tk-count" title="In hand or not needed">${pr.done} of ${pr.total}</span>` : ''}</div>
+      ${approvalRow}
       <div class="tk-kv tk-pickrow"><span>Listing type</span><div class="tk-seg" role="group" aria-label="Listing type">${seg}</div></div>
-      ${items.length ? `<div class="tk-docs">${docs}</div>
-      <div class="tk-hint">A checklist only — nothing waits on it. The list is set in Settings → Configurations.</div>` : ''}
+      ${agreementRow}
+      ${items.length ? `<div class="tk-docs">${docs}</div>` : ''}
+      <div class="tk-hint">Nothing here holds the card back: what is still open shows on the card until it is done${agreementNeeded(x) ? ', and booking a shoot asks first while the agreement is not checked' : ''}. The document list is set in Settings → Configurations.</div>
     </div>`;
 }
+// ── The owner's go-ahead and the agreement (Exclusive / Collab), recorded on the card ──
+// Who recorded it and when is kept: the board does not decide who may approve — it shows who did.
+const AGREEMENT_STEPS = [['drafted', 'Drafted'], ['signed', 'Signed'], ['checked', 'Checked']];
+const approvalOf = x => !!(x && x.approval && x.approval.at);
+const agreementNeeded = x => ['exclusive', 'collab'].includes(CFG.listingTypeOf(x));
+const agreementOf = x => (x && x.agreement && x.agreement.status) || '';
+// Papers marked Missing or Applied for — still to come in.
+function papersMissing(x) {
+  if (!config.docItems || !config.docItems.length) return 0;
+  return config.docItems.filter(n => ['missing', 'applied'].includes(CFG.docStatus(x, n))).length;
+}
+function setApproval(id, on) {
+  mutate(id, x => { x.approval = on ? { by: currentUserEmail || '', at: Date.now() } : null; },
+    on ? 'Approved to list' : 'Approval taken back');
+  if (currentDetailId === id) openDetail(id);
+  toast(on ? 'Approval recorded' : 'Approval taken back');
+}
+function setAgreement(id, status) {
+  const v = AGREEMENT_STEPS.some(([k]) => k === status) ? status : '';
+  mutate(id, x => { x.agreement = { ...(x.agreement || {}), status: v, by: currentUserEmail || '', at: Date.now() }; },
+    `Agreement: ${v ? AGREEMENT_STEPS.find(([k]) => k === v)[1].toLowerCase() : 'not started'}`);
+  if (currentDetailId === id) openDetail(id);
+}
+function setAgreementLink(id) {
+  const x = listings.find(l => l.id === id); if (!x) return;
+  const was = (x.agreement && x.agreement.link) || '';
+  const v = prompt('Where is the agreement? Paste its link (Drive, e-sign…). Leave empty to remove it.', was);
+  if (v === null) return;
+  const url = v.trim();
+  if (url && !isWebLink(url)) return toast('That does not look like a web link — paste the full address');
+  mutate(id, l => { l.agreement = { ...(l.agreement || {}), link: url || null }; }, url ? 'Agreement link saved' : 'Agreement link removed');
+  if (currentDetailId === id) openDetail(id);
+}
+window.setApproval = setApproval; window.setAgreement = setAgreement; window.setAgreementLink = setAgreementLink;
 function setListingType(id, t) {
   const v = CFG.LISTING_TYPES.some(([k]) => k === t) ? t : '';
   mutate(id, x => { x.listingType = v; }, `Listing type: ${v ? LTYPE_LABEL[v] : 'not set'}`);
@@ -2710,7 +2789,13 @@ function deleteListing(id) {
     window.trackFirebase.deleteListing(id).catch(e => console.error(e));
     // Without this tombstone the live sync would create the card again on the
     // very next snapshot — the most infuriating bug this design could have.
-    if (x.leadId) window.trackFirebase.patchLead(x.leadId, { listingSkipped: true, listingId: null }).catch(e => console.error(e));
+    if (x.leadId) {
+      // The seller's property links stay (they still own it, and the board cannot tell a code it
+      // added from one the team linked by hand); only the board's claim on the code is released.
+      const lead = leadById(x.leadId);
+      const patch = { listingSkipped: true, listingId: null, ...(lead && lead.listingCode ? { listingCode: null } : {}) };
+      window.trackFirebase.patchLead(x.leadId, patch).catch(e => console.error(e));
+    }
   }
   closeDetail();
   refreshAll();
@@ -2797,6 +2882,14 @@ function saveShoot() {
     closeShootModal(); return cancelShoot(id, why);
   }
   const moving = !!(prev && prev.shootAt && at && prev.shootAt !== at);
+  // A first booking asks first when the owner's process is not done yet: Swami's go-ahead, and for an
+  // Exclusive / Collab listing a signed and checked agreement. Asked once, never a hard stop.
+  if (at && prev && !prev.shootAt) {
+    const open = [];
+    if (!approvalOf(prev)) open.push("Swami's approval is not recorded");
+    if (agreementNeeded(prev) && agreementOf(prev) !== 'checked') open.push(`the ${LTYPE_LABEL[CFG.listingTypeOf(prev)] || ''} agreement is not ${agreementOf(prev) === 'signed' ? 'checked' : 'signed and checked'}`.replace('  ', ' '));
+    if (open.length && !confirm(`Before booking: ${open.join(', and ')}. Book the shoot anyway?`)) return;
+  }
   mutate(id, x => {
     x.shootAt = at; x.shootAssigneeEmail = shooterEmail(x, who); x.shootAssignee = who; x.siteContact = contact;
     if (moving) { x.rescheduled = (x.rescheduled || 0) + 1; x.rescheduleReason = why || null; x.ownerInformed = false; }
@@ -3490,7 +3583,9 @@ function edFinalLink(id, k) {
   if (!url && !was) return;
   mutate(id, l => {
     const all = { ...(l.finalLinks || {}) };
-    if (url) all[k] = { url, at: Date.now(), by: currentUserEmail || '' }; else delete all[k];
+    // Removed = null, not a deleted key: the card is saved as a merge, which keeps a key that is
+    // simply missing — the link came back on the next snapshot. finalLinkOf reads null as "none".
+    if (url) all[k] = { url, at: Date.now(), by: currentUserEmail || '' }; else all[k] = null;
     l.finalLinks = all;
   }, url ? `${EF.cutLabel(x, k)}: final video link ${was ? 'changed' : 'added'}` : `${EF.cutLabel(x, k)}: final video link removed`);
   if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
