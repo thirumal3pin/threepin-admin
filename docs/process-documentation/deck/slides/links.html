@@ -1,0 +1,17 @@
+<section id="links" data-transition="push" style="background:#F8F8F8;color:#171717;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:24px;letter-spacing:4px;font-weight:700;color:#A35A00;text-transform:uppercase">Interconnections</p>
+<h2 style="font-size:72px;font-weight:800;letter-spacing:-2px;line-height:1.1;color:#171717">Seven links that carry the business</h2>
+</div>
+<table style="font-family:'Inter', Arial, sans-serif;font-size:26px;color:#3D3D3D">
+<tr><th style="width:26%">From → to</th><th style="width:26%">Carried by</th><th style="width:48%">Rule</th></tr>
+<tr><td>Chat → CRM lead</td><td>TailorTalk webhook</td><td>A person's edit always beats TailorTalk</td></tr>
+<tr><td>Seller lead → board card</td><td>listingId ↔ leadId</td><td>Every seller gets a card unless set aside</td></tr>
+<tr><td>Board card → property</td><td>propertyCode, by hand</td><td>One property, one card; never from a chat</td></tr>
+<tr><td>Brochure → property → card</td><td>brochureLink</td><td>The requesting card links itself within seconds</td></tr>
+<tr><td>Card ↔ Posting row</td><td>code, reference, edit gates</td><td>A confirmed live post moves the card to Live</td></tr>
+<tr><td>Site visit → Google Calendar</td><td>visit fields + seller contact</td><td>Private invitation to team agents only</td></tr>
+<tr style="background:#FFF4E6"><td>CRM Won → Finance</td><td>none</td><td>Deals and invoices are entered by hand today</td></tr>
+</table>
+<aside>The full matrix in the documentation lists 24 links. The last row is a deliberate gap today: TailorTalk's "converted" fires at site visits, so it must never raise an invoice, but a Won lead could draft a Finance deal for approval.</aside>
+</section>

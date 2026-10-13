@@ -37,3 +37,7 @@ storage.rules
 
 # Internal TailorTalk integration analysis — planning material, not a site page.
 Tailortalk/
+
+# Internal process documentation (HTML, PDF, deck and its build scripts) — it maps
+# every process, field and known issue, so it must not be served at its own URL.
+docs/process-documentation/

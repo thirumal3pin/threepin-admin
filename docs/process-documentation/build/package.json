@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Rebuilds the process documentation HTML and PDF editions from ../source.",
+  "scripts": {
+    "build": "node build.mjs",
+    "pdf": "node pdf.mjs ../html/3Pin-Process-Atlas.html ../pdf/3Pin-Process-Atlas.pdf \"3Pin Realty · Process Atlas\" && node pdf.mjs ../html/3Pin-AI-Autopilot.html ../pdf/3Pin-AI-Automation-Roadmap.pdf \"3Pin Realty · AI & Automation Roadmap\" && node pdf.mjs ../html/3Pin-AI-PropTech-Strategy.html ../pdf/3Pin-AI-PropTech-Strategy.pdf \"3Pin Realty · AI & PropTech Strategy 2027–2029\""
+  },
+  "devDependencies": { "marked": "14.1.4" }
+}
