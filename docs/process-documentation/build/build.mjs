@@ -131,10 +131,10 @@ writeFileSync(join(out, '3Pin-AI-Autopilot.html'), doc(roadmap));
   const sBody = strip(md('7-ai-proptech-strategy.md'));
   const sections = [...sBody.matchAll(/<h3 id="([^"]+)">([\s\S]*?)<\/h3>/g)];
   const sSide = `<a class="t1" href="#top">AI &amp; PropTech Strategy</a><ol>${sections.map(m => `<li><a href="#${m[1]}">${m[2].replace(/<[^>]+>/g, '')}</a></li>`).join('')}</ol>`;
-  const navNames = { '1': 'Thesis', '3': 'Scorecard', '5': 'The plan', '7': 'Waves', '8': 'Money', '12': 'Eåsy', '13': 'Bets', '14': 'Next chain', '15': 'World', '16': 'Gaps' };
+  const navNames = { '1': 'Thesis', '5': 'The plan', '7': 'Waves', '8': 'Money', '12': 'Eåsy', '14': 'Next chain', '16': 'Gaps', '19': 'Fees', '25': 'Risks', '26': '90 days' };
   const sNav = sections.map(m => [m[1], (m[2].replace(/<[^>]+>/g, '').match(/^(\d+)\./) || [])[1]]).filter(([, n]) => navNames[n]).map(([id, n]) => `<a href="#${id}">${navNames[n]}</a>`).join('');
-  const sMain = `<section class="doc" id="top"><header class="doc-head"><p class="eyebrow">STRATEGY · 2027–2029</p><h1>AI &amp; PropTech Strategy — the 10× plan</h1><p class="lead">Where 3 PIN stands against the best AI-native brokerages and proptech products, and what to build, in what order, with the money, the business effect and the agent time for every initiative.</p></header>${sBody}</section>`;
-  const sHtml = page({ title: '3Pin AI & PropTech Strategy', description: 'The 10× AI and proptech plan for 3 PIN Realty, 2027–2029: benchmarks, scorecard, twelve areas, financial model, waves and guardrails.',
+  const sMain = `<section class="doc" id="top"><header class="doc-head"><p class="eyebrow">STRATEGY · 2027–2029</p><h1>AI &amp; PropTech Strategy 2027–2029</h1><p class="lead">Where 3 PIN stands against the best AI-native brokerages and proptech products, and what to build, in what order, with the money, the business effect and the agent time for every initiative.</p></header>${sBody}</section>`;
+  const sHtml = page({ title: '3Pin AI & PropTech Strategy', description: 'The AI and proptech strategy for 3 PIN Realty, 2027–2029: benchmarks, scorecard, twelve areas, financial model with three cases, waves, Eåsy, the next chain of business, fees, unit economics, risks, the 90-day plan and funding.',
     brand: '3Pin AI &amp; PropTech Strategy', nav: sNav, side: sSide, body: sMain, foot: '3Pin Realty · AI & PropTech Strategy · 14 Oct 2026' });
   writeFileSync(join(out, '3Pin-AI-PropTech-Strategy.artifact.html'), sHtml);
   writeFileSync(join(out, '3Pin-AI-PropTech-Strategy.html'), doc(sHtml));
