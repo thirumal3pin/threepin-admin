@@ -83,6 +83,8 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
     evidence: verdict.evidence,
     line: verdict.line,
     urgency: verdict.urgency,
+    // What a buyer wants, as the AI read the chat — the matching engine reads it (null for owners).
+    want: verdict.want || null,
     // setAt stays put while the step is the same one, so a person who already acted on it
     // (updatedAt > setAt) is not asked again just because the AI re-read the same chat.
     next: verdict.next.owner === 'none' ? null : { ...verdict.next, setAt: sameStep ? (prevNext.setAt || now) : now },

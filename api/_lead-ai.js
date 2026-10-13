@@ -36,7 +36,7 @@ export const LEAD_AI_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['intent', 'stage', 'confidence', 'evidence', 'next_owner', 'next_action', 'next_kind', 'next_due',
-    'visit_status', 'visit_at', 'visit_property', 'hold_reason', 'hold_until', 'lost_reason', 'urgency', 'status_line'],
+    'visit_status', 'visit_at', 'visit_property', 'hold_reason', 'hold_until', 'lost_reason', 'urgency', 'status_line', 'want'],
   properties: {
     intent: { type: 'string', enum: ['buy', 'rent', 'sell', 'rent_out', 'invest', 'vendor', 'unclear'] },
     stage: { type: 'string', enum: STAGES },
@@ -53,7 +53,27 @@ export const LEAD_AI_SCHEMA = {
     hold_until: nullable({ type: 'string' }),
     lost_reason: nullable({ type: 'string', enum: Object.keys(LOST_REASONS) }),
     urgency: { type: 'string', enum: ['high', 'normal', 'low'] },
-    status_line: { type: 'string' }
+    status_line: { type: 'string' },
+    // What a buyer or tenant is looking for, read from the whole conversation — the matching
+    // engine's best source (shared-assets/match-engine.js cleanWant). null for owners and vendors.
+    want: nullable({
+      type: 'object',
+      additionalProperties: false,
+      required: ['deal', 'budget_min', 'budget_max', 'budget_unit', 'areas', 'bhk', 'types', 'ready_by', 'size_sqft_min', 'must_have', 'deal_breakers'],
+      properties: {
+        deal: { type: 'string', enum: ['buy', 'rent', 'lease', 'either', 'unknown'] },
+        budget_min: nullable({ type: 'number' }),
+        budget_max: nullable({ type: 'number' }),
+        budget_unit: { type: 'string', enum: ['total', 'per_month', 'lease_amount', 'unknown'] },
+        areas: { type: 'array', items: { type: 'string' } },
+        bhk: { type: 'array', items: { type: 'integer' } },
+        types: { type: 'array', items: { type: 'string', enum: ['apartment', 'villa', 'independent_house', 'plot', 'commercial'] } },
+        ready_by: nullable({ type: 'string' }),
+        size_sqft_min: nullable({ type: 'number' }),
+        must_have: { type: 'array', items: { type: 'string' } },
+        deal_breakers: { type: 'array', items: { type: 'string' } }
+      }
+    })
   }
 };
 
@@ -103,6 +123,13 @@ export const LEAD_AI_SYSTEM = [
   '- lost_reason only when lost, hold_reason only when on_hold; otherwise null.',
   '- urgency: high if eager, frustrated or kept waiting by 3 PIN; low for idle browsing.',
   '- evidence: a quote or paraphrase with its date, at most 160 characters. status_line: at most 80 characters for the board, e.g. "Agreed to see TNAG0001 Sat; team to confirm time".',
+  '',
+  'WANT — buyers and tenants only (intent buy, rent or invest); null for sell, rent_out, vendor and unclear. What THEY are looking for, from the lead\'s own words, the team notes and TailorTalk\'s requirement profile — never from a property 3 PIN sent or an ad they pasted. Latest statement wins.',
+  '- deal: buy, rent (monthly), lease (lump-sum lease deposit), either (only if they said they are open to both), unknown.',
+  '- budget_min / budget_max in rupees (1.5 Cr = 15000000, 45k = 45000); budget_unit total (purchase), per_month (rent) or lease_amount; null and "unknown" when not stated. One figure → budget_max only.',
+  '- areas: the localities, roads or corridors they want, as they wrote them (e.g. ["Velachery", "OMR"]). bhk: bedroom counts wanted. types: only those they named or clearly meant.',
+  '- ready_by: "immediate" if they need it now, else "YYYY-MM" for a stated deadline, else null. size_sqft_min: only a stated minimum.',
+  '- must_have: short phrases for each specific thing they asked for — rooms, parking, floor, facing, amenities, what should be nearby (e.g. "pooja room", "covered car parking", "near a school", "lift", "east facing"). deal_breakers: short phrases for what they ruled out (e.g. "ground floor", "main road", "under construction").',
   '',
   'Answer only with the JSON object.'
 ].join('\n');
@@ -262,7 +289,8 @@ export function normaliseVerdict(raw, now) {
     holdUntil: stage === 'on_hold' ? parseWhen(raw.hold_until, now) : null,
     lostReason: stage === 'lost' ? oneOf(raw.lost_reason, Object.keys(LOST_REASONS), 'other') : null,
     urgency: oneOf(raw.urgency, ['high', 'normal', 'low'], 'normal'),
-    line: clip(raw.status_line, 100)
+    line: clip(raw.status_line, 100),
+    want: normaliseWant(raw.want, raw.intent)
   };
   // The stage must agree with the visit the model itself described: a lead who asked for or
   // agreed to a visit has at least a visit planned, one who visited has at least visited.
@@ -275,6 +303,30 @@ export function normaliseVerdict(raw, now) {
     v.next = { owner: 'team', action: `Call for feedback on the visit${v.visit.property ? ' to ' + v.visit.property : ''}`, kind: 'collect_feedback', dueAt: null };
   }
   return v;
+}
+
+// What the lead wants, checked: plausible numbers only, short clipped phrases, nothing for an owner.
+export function normaliseWant(w, intent) {
+  if (!w || typeof w !== 'object' || !['buy', 'rent', 'invest'].includes(intent)) return null;
+  const num = v => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
+  const list = (v, n, len) => (Array.isArray(v) ? v : []).map(x => clip(x, len)).filter(Boolean).slice(0, n);
+  const out = {
+    deal: oneOf(w.deal, ['buy', 'rent', 'lease', 'either', 'unknown'], 'unknown'),
+    budget_min: num(w.budget_min),
+    budget_max: num(w.budget_max),
+    budget_unit: oneOf(w.budget_unit, ['total', 'per_month', 'lease_amount', 'unknown'], 'unknown'),
+    areas: list(w.areas, 8, 40),
+    bhk: (Array.isArray(w.bhk) ? w.bhk : []).filter(n => Number.isInteger(n) && n >= 1 && n <= 8).slice(0, 4),
+    types: (Array.isArray(w.types) ? w.types : []).filter(t => ['apartment', 'villa', 'independent_house', 'plot', 'commercial'].includes(t)).slice(0, 4),
+    ready_by: w.ready_by === 'immediate' || /^20\d\d-(0[1-9]|1[0-2])$/.test(String(w.ready_by || '')) ? w.ready_by : null,
+    size_sqft_min: num(w.size_sqft_min) && w.size_sqft_min >= 200 && w.size_sqft_min <= 100000 ? Math.round(w.size_sqft_min) : null,
+    must_have: list(w.must_have, 10, 50),
+    deal_breakers: list(w.deal_breakers, 6, 50)
+  };
+  if (out.budget_min && out.budget_max && out.budget_min > out.budget_max) [out.budget_min, out.budget_max] = [out.budget_max, out.budget_min];
+  const empty = out.deal === 'unknown' && !out.budget_max && !out.budget_min && !out.areas.length && !out.bhk.length && !out.types.length
+    && !out.ready_by && !out.size_sqft_min && !out.must_have.length && !out.deal_breakers.length;
+  return empty ? null : out;
 }
 
 // ── The call ───────────────────────────────────────────────────────────────

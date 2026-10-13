@@ -1906,8 +1906,14 @@ function openDetail(id) {
     x.location ? esc(x.location) : '', x.config ? esc(x.config) : '', x.askingPrice ? esc(x.askingPrice) : ''
   ].filter(Boolean).join(' · ');
 
+  const dups = likelyDuplicates(x);
   document.getElementById('dpBody').innerHTML = `
     <div class="tk-dp-main">
+    ${dups.length ? `<div class="tk-dupe" role="note">
+      <div><b>Same property as ${dups.map(d => `“${esc(cardName(d.card))}”`).join(' or ')}?</b>
+        <span>${esc(dups[0].why)} · ${esc((stageById(dups[0].card.stageId) || {}).name || '')}</span></div>
+      <button type="button" class="tk-btn primary sm" onclick="openMergeModal('${x.id}')">Merge…</button>
+    </div>` : ''}
     ${summaryHtml(x, lead, stage)}
 
     <div class="tk-sec">
@@ -1973,7 +1979,7 @@ function openDetail(id) {
     <div class="tk-sec">
       <div class="tk-sec-hdr">Deliverables</div>
       ${linkRow('Drive photos', x.photosLink, x.id, 'photosLink')}
-      ${linkRow('Brochure PDF', x.brochureLink, x.id, 'brochureLink')}
+      ${brochureRow(x)}
       ${broV2Html(x)}
       <div class="tk-hint">The brochure pipeline fills both in when it finishes this property. Paste the Drive folder yourself as soon as the photos are up — nothing downstream can start until it is there.</div>
     </div>
@@ -1987,6 +1993,7 @@ function openDetail(id) {
 
     <div class="tk-sec tk-danger">
       <button class="tk-btn" onclick="openEditModal('${x.id}')">Edit details</button>
+      <button class="tk-btn" onclick="openMergeModal('${x.id}')" title="Two cards for one property: keep one, with everything from both">Merge with another card…</button>
       <button class="tk-btn danger" onclick="deleteListing('${x.id}')">Delete listing</button>
     </div>
     </div>
@@ -2146,7 +2153,7 @@ function renderWaitingBuyers(x, lead) {
         sub: [m.lead.propertyInterest, m.lead.budget ? 'budget ' + m.lead.budget : ''].filter(Boolean).join(' · '),
         actions: [
           { id: 'crm', key: m.lead.id, label: 'Open in CRM →', href: crmLeadHref(m.lead.id, x.id), primary: true },
-          m.lead.phone ? { id: 'call', key: m.lead.id, label: 'Call', href: 'tel:' + telOf(m.lead.phone) } : null
+          m.lead.phone && !(window.PinContact && window.PinContact.contactBlock && window.PinContact.contactBlock(m.lead, 'calls')) ? { id: 'call', key: m.lead.id, label: 'Call', href: 'tel:' + telOf(m.lead.phone) } : null
         ].filter(Boolean)
       })
     });
@@ -2219,6 +2226,19 @@ function linkRow(label, url, id, field) {
     <span class="tk-linkcell">
       ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">open →</a>` : '<i>not yet</i>'}
       <button type="button" class="tk-link" onclick="editLink('${id}','${field}')">${url ? 'change' : 'add'}</button>
+    </span></div>`;
+}
+// The brochure is made and delivered by the pipeline (Brochure section below) and lands on the
+// property; a link pasted only on the card made the board say "created" while the property page
+// had none. So this row shows the delivered brochure and does not take a pasted one.
+function brochureRow(x) {
+  const isUrl = u => /^https?:\/\//i.test(String(u || '').trim());
+  const p = realCode(x.propertyCode) ? (inventory || []).find(q => String(q.propertyCode || '').toUpperCase() === String(x.propertyCode).toUpperCase()) : null;
+  const url = isUrl(x.brochureLink) ? x.brochureLink : (p && isUrl(p.brochureLink) ? p.brochureLink : '');
+  return `<div class="tk-kv"><span>Brochure PDF</span>
+    <span class="tk-linkcell">
+      ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">open →</a>` : '<i>not yet</i>'}
+      <button type="button" class="tk-link" onclick="document.getElementById('bpSec')?.scrollIntoView({ behavior: 'smooth', block: 'start' })">${url ? 'redo' : 'generate'} ↓</button>
     </span></div>`;
 }
 function editLink(id, field) {
@@ -3147,6 +3167,263 @@ function pickLead(leadId) {
 }
 window.openLinkLead = openLinkLead; window.pickLead = pickLead;
 window.closeLinkModal = () => { document.getElementById('linkModal').classList.remove('open'); linkFor = null; };
+
+// ── Two cards for one property: merge them ──
+// It happens the ordinary way: a card made by hand (the shoot already booked), then the owner writes
+// in on WhatsApp and the seller sync makes a second card for the same property. Merge keeps ONE card —
+// the one further along, so a booked shoot stays booked — and fills into it everything only the other
+// card knows: the CRM lead and its link, price, type, documents, links, tags, the notes and the
+// timeline. Where both cards hold a different value the kept card's stays, and the other's is written
+// into a note on it, so nothing either card held is lost. Then the other card is removed.
+let mergeFor = null;
+// Fields that describe the card itself, not the property: never copied across as-is.
+const MERGE_SKIP = new Set(['id', 'tenantId', 'stageId', 'stageChangedAt', 'stageChangedBy', 'reached', 'createdAt', 'createdBy',
+  'updatedAt', 'updatedBy', 'source', 'leadId', 'lastNote', 'noteCount', 'listingSkipped', 'own', 'history', 'notes', 'lead', 'property']);
+const MERGE_LABEL = { title: 'Title', location: 'Location', askingPrice: 'Asking price', config: 'Configuration', propertyType: 'Type',
+  address: 'Address', sellerName: 'Owner', sellerPhone: 'Owner phone', propertyCode: 'Property ID', remarks: 'Remarks', siteContact: 'Who opens it',
+  accessNotes: 'Access notes', bestTime: 'Best time', shootAt: 'Shoot', photosLink: 'Drive photos', brochureLink: 'Brochure PDF', docs: 'Documents', need: 'What to shoot' };
+const isBlank = v => v == null || v === '' || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length);
+// A shoot is one thing — its time, who shoots it, its calendar entry. The kept card's shoot stays
+// whole; only a card with no shoot takes the other card's, whole.
+const isShootKey = k => /^shoot/.test(k);
+const isPlainObj = v => v && typeof v === 'object' && !Array.isArray(v);
+const dup = v => (v == null ? v : JSON.parse(JSON.stringify(v)));
+// How far a card has got: the ladder position of its column (a closed or dropped card is not "further").
+const cardStep = x => { const k = P.stageKeyOf(stageById(x.stageId)); return ['dropped', 'on_hold'].includes(k) ? -1 : P.ladderIndex(k); };
+
+// Words that name the property rather than describe it: "Chamier's Road" and "Chamiers Road" share
+// "chamiers"; "Commercial", "Sale" and "Road" are said of half the board.
+const DUP_GENERIC = new Set(('road street salai nagar main cross avenue colony sale rent lease commercial building buildings apartment apartments flat flats ' +
+  'house houses villa villas land plot plots floor floors office chennai grounds ground cents independent individual premium luxury brand ' +
+  'bhk sqft near opposite phase block tower towers project property properties listing untitled new apartment for with and the').split(' '));
+function dupTokens(x) {
+  const txt = String([x.title, x.location, x.address].filter(Boolean).join(' ')).toLowerCase().replace(/['’`]/g, '');
+  const out = new Map();
+  for (const w of txt.split(/[^a-z0-9]+/)) {
+    if (w.length < 5 || DUP_GENERIC.has(w) || /^\d+$/.test(w)) continue;
+    // A locality name ("Mylapore") is half a clue — two different flats share it all the time.
+    const place = window.PinGeo && window.PinGeo.resolve && window.PinGeo.resolve(w) === w;
+    out.set(w, place ? 0.5 : 1);
+  }
+  return out;
+}
+// Cards that look like this same property. The commonest case is exactly one card from WhatsApp (a
+// CRM lead on it) and one made by hand (no lead), so only such a pair — or the same owner's number,
+// or the same Property ID — is ever suggested; two hand-made cards in Mylapore are not.
+function likelyDuplicates(x) {
+  if (!x || isSeriesCard(x)) return [];
+  const mine = dupTokens(x), phone = phoneKeyOf(x.sellerPhone);
+  const out = [];
+  for (const o of listings) {
+    if (o.id === x.id || isSeriesCard(o)) continue;
+    if (['closed', 'dropped'].includes(P.stageKeyOf(stageById(o.stageId)))) continue;
+    if (x.leadId && o.leadId && x.leadId !== o.leadId) continue;
+    if (realCode(x.propertyCode) && realCode(o.propertyCode) && x.propertyCode !== o.propertyCode) continue;
+    let why = null;
+    if (realCode(x.propertyCode) && x.propertyCode === o.propertyCode) why = `same Property ID ${x.propertyCode}`;
+    else if (phone && phone.length >= 10 && phone === phoneKeyOf(o.sellerPhone)) why = 'same owner’s number';
+    else if (!!x.leadId !== !!o.leadId) {
+      let score = 0; const shared = [];
+      for (const [w, v] of dupTokens(o)) if (mine.has(w)) { score += Math.min(v, mine.get(w)); shared.push(w); }
+      if (score >= 1) why = `both say “${shared.slice(0, 2).join(' ')}”`;
+    }
+    if (why) out.push({ card: o, why });
+  }
+  return out.slice(0, 3);
+}
+
+function openMergeModal(id) {
+  const x = listings.find(l => l.id === id);
+  if (!x) return;
+  if (isSeriesCard(x)) return toast('A series card cannot be merged — merge the property cards in it instead');
+  mergeFor = id;
+  document.getElementById('mergeSearch').value = '';
+  renderMergeList('');
+  document.getElementById('mergeModal').classList.add('open');
+}
+function renderMergeList(q) {
+  const el = document.getElementById('mergeList');
+  const x = listings.find(l => l.id === mergeFor);
+  if (!el || !x) return;
+  const needle = String(q || '').toLowerCase().trim();
+  const sugg = likelyDuplicates(x);
+  const suggIds = new Set(sugg.map(s => s.card.id));
+  const row = (o, why) => {
+    const st = stageById(o.stageId);
+    return `<button type="button" class="tk-pick" onclick="pickMerge('${o.id}')">
+      <span class="tk-pick-main"><b>${esc(cardName(o))}</b><span>${esc([st && st.name, o.sellerName, o.location !== cardName(o) ? o.location : '', o.leadId ? 'CRM lead linked' : ''].filter(Boolean).join(' · '))}</span></span>
+      ${why ? `<span class="tk-pill ai" title="${esc(why)}">same property?</span>` : ''}
+    </button>`;
+  };
+  const others = listings.filter(o => o.id !== x.id && !isSeriesCard(o) && !suggIds.has(o.id)
+    && (!needle || [cardName(o), o.title, o.location, o.sellerName, o.sellerPhone, o.propertyCode].join(' ').toLowerCase().includes(needle)))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 40);
+  const top = sugg.filter(s => !needle || [cardName(s.card), s.card.location, s.card.sellerName].join(' ').toLowerCase().includes(needle));
+  el.innerHTML = (top.length ? `<div class="tk-pick-h">Looks like the same property</div>${top.map(s => row(s.card, s.why)).join('')}` : '')
+    + (others.length ? `<div class="tk-pick-h">${top.length ? 'Other cards' : 'Cards on the board'}</div>${others.map(o => row(o)).join('')}` : '')
+    || '<div class="tk-hint">Nothing matches.</div>';
+  document.getElementById('mergeStep').innerHTML = '';
+}
+window.onMergeSearch = v => renderMergeList(v);
+
+// What a merge would do, worked out without touching anything — shown, then done on "Merge".
+function mergePlan(keep, drop) {
+  const fill = [], clash = [];
+  for (const [k, v] of Object.entries(drop)) {
+    if (MERGE_SKIP.has(k) || isBlank(v) || v === false) continue;
+    if (isShootKey(k) && keep.shootAt) continue;
+    const cur = keep[k];
+    if (isBlank(cur) || cur === false) { fill.push(k); continue; }
+    if (Array.isArray(cur) || isPlainObj(cur)) continue;                       // merged part by part below
+    if (typeof v !== 'object' && String(cur).trim() !== String(v).trim()) clash.push(k);
+  }
+  const leadMove = !!drop.leadId && !keep.leadId;
+  const leadClash = !!drop.leadId && !!keep.leadId && drop.leadId !== keep.leadId;
+  return { fill, clash, leadMove, leadClash };
+}
+function pickMerge(otherId) {
+  const a = listings.find(l => l.id === mergeFor), b = listings.find(l => l.id === otherId);
+  if (!a || !b) return;
+  // The card further along is the one kept — its column, its booked shoot. A tie keeps the one with
+  // the CRM lead (it is the one the sync keeps in step), then the one opened.
+  const keepA = cardStep(a) > cardStep(b) || (cardStep(a) === cardStep(b) && (!!a.leadId || !b.leadId));
+  renderMergeStep(keepA ? a : b, keepA ? b : a);
+}
+function renderMergeStep(keep, drop) {
+  const plan = mergePlan(keep, drop);
+  const label = k => MERGE_LABEL[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase());
+  const st = x => (stageById(x.stageId) || {}).name || '—';
+  const leadName = id => { const l = leadById(id); return l ? (l.name || 'the lead') : 'its CRM lead'; };
+  const lines = [];
+  if (plan.leadMove) lines.push(`the CRM lead <b>${esc(leadName(drop.leadId))}</b> — linked to the kept card, and its WhatsApp updates go there from now on`);
+  if (plan.fill.length) lines.push(`${plan.fill.map(k => esc(label(k))).join(', ')}`);
+  lines.push('its notes and timeline, tags, documents and links');
+  if (plan.clash.length) lines.push(`where both cards differ (${plan.clash.map(k => esc(label(k))).join(', ')}), the kept card's stays and the other's is saved as a note`);
+  document.getElementById('mergeStep').innerHTML = `<div class="tk-merge">
+      <div class="tk-merge-h">Keep <b>${esc(cardName(keep))}</b> <span class="tk-sub2">${esc(st(keep))}</span></div>
+      <div class="tk-merge-s">and bring in from <b>${esc(cardName(drop))}</b> <span class="tk-sub2">${esc(st(drop))}</span>:</div>
+      <ul>${lines.map(l => `<li>${l}</li>`).join('')}</ul>
+      ${plan.leadClash ? `<div class="tk-box-err">Both cards have a different CRM lead. <b>${esc(leadName(keep.leadId))}</b> stays on the kept card; <b>${esc(leadName(drop.leadId))}</b> is left without a card (and the board will not make one for them again). If they are the same person, merge the two leads in the CRM too.</div>` : ''}
+      <div class="tk-hint">Then “${esc(cardName(drop))}” is removed. This cannot be undone.</div>
+      <div class="tk-btnrow">
+        <button type="button" class="tk-btn primary" id="mergeGo" onclick="doMerge('${keep.id}','${drop.id}')">Merge</button>
+        <button type="button" class="tk-btn" onclick="swapMerge('${drop.id}','${keep.id}')">Keep the other card instead</button>
+      </div>
+    </div>`;
+  const s = document.getElementById('mergeStep');
+  if (s && s.scrollIntoView) s.scrollIntoView({ block: 'nearest' });
+}
+window.swapMerge = (keepId, dropId) => {
+  const k = listings.find(l => l.id === keepId), d = listings.find(l => l.id === dropId);
+  if (k && d) renderMergeStep(k, d);
+};
+
+async function doMerge(keepId, dropId) {
+  if (notLiveYet()) return;
+  const keep = listings.find(l => l.id === keepId), drop = listings.find(l => l.id === dropId);
+  if (!keep || !drop || !window.trackFirebase) return;
+  const btn = document.getElementById('mergeGo'); if (btn) btn.disabled = true;
+  const plan = mergePlan(keep, drop);
+  const label = k => MERGE_LABEL[k] || k;
+  // 1. The other card's notes and timeline, onto the kept card (same ids: copying twice is harmless).
+  let moved = [];
+  try {
+    const hist = await window.trackFirebase.getListingHistory(drop.id);
+    for (const h of hist) await window.trackFirebase.saveHistory(keep.id, h);
+    moved = hist;
+    histCache.delete(keep.id);
+  } catch (e) {
+    console.error('merge: history copy failed', e);
+    if (btn) btn.disabled = false;
+    return toast('Could not copy the notes across — check your connection. Nothing was changed.', true);
+  }
+  // 2. Where the two cards disagree, the other card's values go on record as a note.
+  if (plan.clash.length) {
+    const text = `From the merged card “${cardName(drop)}”: ` + plan.clash.map(k => `${label(k)}: ${drop[k]}`).join(' · ');
+    const entry = { id: newId('n'), type: 'note', text, at: Date.now(), by: currentUserEmail || 'team' };
+    try { await window.trackFirebase.saveHistory(keep.id, entry); moved.push(entry); } catch (e) { console.error(e); }
+  }
+  // Both cards must still be there after the copy (someone may have deleted one meanwhile): a merge
+  // into a card that is gone would delete the other and keep nothing.
+  if (!listings.some(l => l.id === keepId) || !listings.some(l => l.id === dropId)) {
+    if (btn) btn.disabled = false;
+    return toast('One of the two cards changed or was removed meanwhile — nothing was merged. Open it again and retry.', true);
+  }
+  // 3. Everything only the other card knows, into the kept card — one save.
+  const leadBefore = keep.leadId || null;
+  mutate(keep.id, x => {
+    for (const [k, v] of Object.entries(drop)) {
+      if (MERGE_SKIP.has(k) || isBlank(v)) continue;
+      if (isShootKey(k) && x.shootAt) continue;
+      const cur = x[k];
+      if (isBlank(cur) || (cur === false && v === true)) { x[k] = dup(v); continue; }
+      if (Array.isArray(cur) && Array.isArray(v)) {
+        const seen = new Set(cur.map(e => JSON.stringify(e)));
+        x[k] = cur.concat(v.filter(e => !seen.has(JSON.stringify(e))).map(dup));
+        continue;
+      }
+      if (isPlainObj(cur) && isPlainObj(v)) {
+        const o = dup(cur);
+        for (const [sk, sv] of Object.entries(v)) if (isBlank(o[sk]) && !isBlank(sv)) o[sk] = dup(sv);
+        x[k] = o;
+      }
+    }
+    // What the board edited by hand stays protected from the CRM sync, on either card.
+    x.own = Object.assign({}, drop.own || {}, x.own || {});
+    // The further column wins (it already does by choice of card; this covers "keep the other").
+    if (cardStep(drop) > cardStep(x)) { x.stageId = drop.stageId; x.stageChangedAt = drop.stageChangedAt; x.stageChangedBy = drop.stageChangedBy; }
+    const r = Object.assign({}, x.reached || {});
+    for (const [k, t] of Object.entries(drop.reached || {})) if (!r[k] || (t && t < r[k])) r[k] = t;
+    x.reached = r;
+    const born = [x.createdAt, drop.createdAt].filter(t => typeof t === 'number' && t > 0);
+    if (born.length) x.createdAt = Math.min(...born);
+    if (!x.leadId && drop.leadId) x.leadId = drop.leadId;
+    const notes = moved.filter(h => h.type === 'note');
+    if (notes.length) {
+      x.noteCount = (x.noteCount || 0) + notes.length;
+      const newest = [x.lastNote, latestNoteOf(notes)].filter(Boolean).sort((p, q) => (q.at || 0) - (p.at || 0))[0];
+      x.lastNote = newest || null;
+    }
+  }, `Merged with the card <b>${esc(cardName(drop))}</b>${plan.leadMove ? ' — its CRM lead is linked here now' : ''}`);
+  // The kept card must be saved before the other one goes: deleting first and failing the save
+  // would lose what only the other card held.
+  const kept = listings.find(l => l.id === keep.id);
+  if (!kept) {
+    if (btn) btn.disabled = false;
+    return toast('The merged card could not be saved — the other card was kept. Try again.', true);
+  }
+  try { await window.trackFirebase.saveListing(kept); }
+  catch (e) {
+    console.error('merge: save failed', e);
+    if (btn) btn.disabled = false;
+    return toast('Could not save the merged card — check your connection. The other card was kept.', true);
+  }
+  // 4. The CRM lead points at the kept card; a second, different lead is left without one for good
+  //    (said on this device at once, so the seller sync cannot make its card again meanwhile).
+  if (window.trackFirebase.patchLead) {
+    if (drop.leadId && leadBefore && leadBefore !== drop.leadId) {
+      const dl = leadById(drop.leadId);
+      if (dl) { dl.listingSkipped = true; dl.listingId = null; }
+      window.trackFirebase.patchLead(drop.leadId, { listingId: null, listingSkipped: true, ...(dl && dl.listingCode ? { listingCode: null } : {}) }).catch(e => console.error(e));
+    } else if (drop.leadId) {
+      const dl = leadById(drop.leadId);
+      if (dl) dl.listingId = keep.id;
+      window.trackFirebase.patchLead(drop.leadId, { listingId: keep.id }).catch(e => console.error(e));
+    }
+  }
+  // 5. The other card goes. A shoot booked on it alone moved across with its calendar entry; one booked
+  //    on both is called off on the removed card.
+  if (drop.shootAt && !drop.shootDoneAt && kept.shootAt && kept.shootEventId !== drop.shootEventId) shootCalendar(drop, true);
+  listings = listings.filter(l => l.id !== drop.id);
+  window.trackFirebase.deleteListing(drop.id).catch(e => console.error(e));
+  document.getElementById('mergeModal').classList.remove('open');
+  mergeFor = null;
+  refreshAll();
+  openDetail(keep.id);
+  toast(`Merged — “${cardName(keep)}” holds both now`);
+}
+window.openMergeModal = openMergeModal; window.pickMerge = pickMerge; window.doMerge = doMerge; window.likelyDuplicates = id => likelyDuplicates(listings.find(l => l.id === id));
+window.closeMergeModal = () => { document.getElementById('mergeModal').classList.remove('open'); mergeFor = null; };
 
 // ═══════ ADD / EDIT MODAL ═══════
 const FORM_FIELDS = [

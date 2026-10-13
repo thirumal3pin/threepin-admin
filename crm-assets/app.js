@@ -5360,7 +5360,7 @@ function renderMatchingProperties(l){
         name: m.p.name || m.p.id,
         sub: [
           m.p.location, m.p.config,
-          m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice,
+          m.property.priceLo != null ? PinMatch.priceLabel(m.property) : m.p.startingPrice,
           m.alreadyShared ? '· already shared with them' : ''
         ].filter(Boolean).join(' · '),
         actions: [

@@ -834,5 +834,16 @@ section('@mentions');
   eq('Open mentions for a person across leads, newest first', openMentionsFor([lead, { id: 'm2', mentions: { agent_b_example_com: { email: 'agent.b@example.com', at: NOW + 5, doneAt: null } } }], 'agent.b@example.com').map(x => x.lead.id), ['m2', 'm1']);
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+section('What a buyer wants (ai.want) — read with the verdict, checked before it is kept');
+{
+  const v = normaliseVerdict({ ...good, intent: 'buy', want: { deal: 'buy', budget_min: 12000000, budget_max: 9000000, budget_unit: 'total', areas: ['Velachery', 'OMR'], bhk: [3, 42], types: ['apartment', 'castle'], ready_by: '2027-03', size_sqft_min: 50, must_have: ['pooja room', 'covered car parking'], deal_breakers: ['main road'] } }, NOW);
+  eq('Kept, with min and max put the right way round, junk dropped', [v.want.budget_min, v.want.budget_max, v.want.bhk, v.want.types, v.want.ready_by, v.want.size_sqft_min],
+    [9000000, 12000000, [3], ['apartment'], '2027-03', null]);
+  eq('An owner has no want', normaliseVerdict({ ...good, intent: 'sell', want: { deal: 'buy', budget_max: 1, areas: ['x'], bhk: [], types: [], must_have: [], deal_breakers: [] } }, NOW).want, null);
+  eq('Nothing said is no want', normaliseVerdict({ ...good, intent: 'buy', want: { deal: 'unknown', budget_min: null, budget_max: null, budget_unit: 'unknown', areas: [], bhk: [], types: [], ready_by: null, size_sqft_min: null, must_have: [], deal_breakers: [] } }, NOW).want, null);
+  check('The schema asks for it', LEAD_AI_SCHEMA.required.includes('want') && !!LEAD_AI_SCHEMA.properties.want);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

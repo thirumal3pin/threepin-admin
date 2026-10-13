@@ -86,31 +86,47 @@
       : m.confidence >= 0.6 ? 'we know most of what they want'
         : m.confidence >= 0.35 ? 'we know some of what they want'
           : 'we know very little about them';
-    return `<div class="pm-conf" title="How much of the budget, area, configuration, type and size we actually hold for this buyer">
+    return `<div class="pm-conf" title="How much of rent-or-buy, budget, area, bedrooms, type and size we actually hold for this buyer">
       <span class="pm-conf-t">${[1, 2, 3, 4].map(i => `<i class="${i <= pips ? 'on' : ''}"></i>`).join('')}</span>
       ${esc(label)}</div>`;
   }
 
-  // Reasons for, then gaps against. Capped at five and three: past that an
-  // agent stops reading, and the sixth reason was never the one that mattered.
+  // Every match answers three questions, in this order: why it fits, why it might not, and what we
+  // do not know yet (with the question that would settle it). The first three reasons for, and the
+  // first two of each other kind, show at once; the rest are one tap away — nothing is dropped.
   function reasons(m) {
     const out = [];
-    for (const v of (m.vetoes || [])) {
-      out.push(`<li class="veto"><span>${esc(v.why)}</span></li>`);
-    }
-    for (const f of (m.for || [])) {
-      out.push(`<li><span class="pm-pts">${f.points}/${f.of}</span><span>${esc(f.why)}</span></li>`);
-    }
-    for (const a of (m.against || [])) {
+    for (const v of (m.vetoes || [])) out.push(`<li class="veto"><span>${esc(v.why)}</span></li>`);
+    const group = (title, cls, items, cap, li) => {
+      if (!items.length) return '';
+      const shown = items.slice(0, cap).map(li).join('');
+      const more = items.length > cap
+        ? `<details class="pm-more-r"><summary>${items.length - cap} more</summary><ul class="pm-why">${items.slice(cap).map(li).join('')}</ul></details>` : '';
+      return `<div class="pm-grp ${cls}"><div class="pm-grp-h">${esc(title)}</div><ul class="pm-why">${shown}</ul>${more}</div>`;
+    };
+    const forLi = f => `<li><span class="pm-lbl">${esc(f.label)}</span><span>${esc(f.why)}</span></li>`;
+    const negLi = a => {
       // A gap the buyer stated in their own words is shown as a quote — it is
       // far more persuasive than our paraphrase, and it is what the agent
       // will be answering on the call.
-      const body = a.quote
-        ? `${esc(a.why.replace(/ — “.*”$/, ''))} <q>${esc(a.quote)}</q>`
-        : esc(a.why);
-      out.push(`<li class="neg"><span class="pm-pts">−${a.lost}</span><span>${body}</span></li>`);
-    }
-    return out.length ? `<ul class="pm-why">${out.join('')}</ul>` : '';
+      const body = a.quote ? `${esc(a.why.replace(/ — “.*”$/, ''))} <q>${esc(a.quote)}</q>` : esc(a.why);
+      return `<li class="neg"><span class="pm-lbl">${esc(a.label)}</span><span>${body}</span></li>`;
+    };
+    const unkLi = u => `<li class="unk"><span class="pm-lbl">${esc(u.label)}</span><span>${esc(u.why)}${u.ask ? ` — <b>${esc(u.ask)}</b>` : ''}</span></li>`;
+    const vetoes = out.length ? `<ul class="pm-why">${out.join('')}</ul>` : '';
+    // Ruled out: the reason, and their own words behind it.
+    if (m.vetoed) return vetoes + group('Why it might not', 'against', (m.against || []).filter(a => a.quote), 3, negLi);
+    return vetoes
+      + group('Why it matches', 'for', m.for || [], 3, forLi)
+      + group('Why it might not', 'against', m.against || [], 2, negLi)
+      + group('Not known yet', 'unknown', m.unknown || [], 2, unkLi);
+  }
+
+  // How keen the buyer is right now — beside the score, never inside it.
+  function interest(m) {
+    const i = m.interest;
+    if (!i) return '';
+    return `<span class="pm-int ${i.level.toLowerCase()}" title="${esc(i.why.join(' · ') || 'Nothing recent on record')}">${esc(i.level)} interest</span>`;
   }
 
   function actions(list) {
@@ -131,7 +147,7 @@
           <div class="pm-sc-b">${esc(band.label)}</div>
         </div>
         <div class="pm-main">
-          <div class="pm-name">${t.code ? `<span class="pm-code">${esc(t.code)}</span>` : ''}${esc(t.name)}</div>
+          <div class="pm-name">${t.code ? `<span class="pm-code">${esc(t.code)}</span>` : ''}${esc(t.name)}${m.vetoed ? '' : interest(m)}</div>
           ${t.sub ? `<div class="pm-sub">${esc(t.sub)}</div>` : ''}
           ${m.vetoed ? '' : scoreBar(m)}
         </div>
@@ -153,13 +169,15 @@
     const top = attrs.slice(0, 8).map(a => `${esc(a.label)} ${a.weight}`).join(' · ');
     return `<div class="pm-note">
       <h4>How the score is worked out</h4>
-      Each thing the buyer told us is scored on its own and weighted by how much it matters
+      Each part of the requirement is scored on its own and weighted by how much it matters
       — <code>${top}</code>, and a dozen smaller ones.
       <ul>
-        <li>Only what they <b>actually told us</b> counts. A buyer who never mentioned facing is not marked down for it.</li>
-        <li>Nothing is pass or fail. Six percent over budget and sixty percent over are different answers.</li>
+        <li><b>Rent and sale are never mixed.</b> A tenant is not shown a flat for sale, nor a buyer a flat to let — unless they have said they are open to both.</li>
+        <li><b>What we do not know counts as a maybe, not a yes.</b> No budget, area, bedrooms or type on record scores about half for that part, so a lead we know little about cannot reach 100% — and the match says what to ask.</li>
+        <li>Nothing else is pass or fail: 6% over budget and 60% over are different answers, and a property nearing the budget beats one far below it.</li>
+        <li>What they asked for by name — a pooja room, a school nearby, covered parking — is checked: has it, does not, or not on record.</li>
         <li>Their own objections come off the score, with the quote attached — and a price they have already called too high rules a property out.</li>
-        <li><b>Confidence</b> is separate on purpose: 95% on two facts is not 95% on eleven.</li>
+        <li><b>Interest</b> (WhatsApp heat, visits, how recently they were in touch) orders the buyers; it never changes the percentage.</li>
       </ul>
     </div>`;
   }

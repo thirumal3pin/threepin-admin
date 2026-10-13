@@ -210,8 +210,11 @@
       // Rounded because 4.06 × 10^7 is 40599999.99999999 in binary floating
       // point, and a price that renders as "₹4.06 Cr" must compare equal to
       // one typed as 4.06cr.
-      const lo = Math.round(a.n * (kind === 'price' ? mult(unitA) : 1) * 100) / 100;
-      const hi = isRange ? Math.round(b.n * (kind === 'price' ? mult(b.unit || unitA) : 1) * 100) / 100 : lo;
+      // Money in rupees — a price, and a rent too ("45k per month" is ₹45,000, not ₹45). A rate per
+      // sqft is quoted as it is.
+      const scaled = kind === 'price' || kind === 'rent';
+      const lo = Math.round(a.n * (scaled ? mult(unitA) : 1) * 100) / 100;
+      const hi = isRange ? Math.round(b.n * (scaled ? mult(b.unit || unitA) : 1) * 100) / 100 : lo;
       if (!isFinite(lo)) continue;
       out[kind].push([Math.min(lo, hi), Math.max(lo, hi)]);
       if (isRange) i++;
@@ -505,7 +508,7 @@
         builder: p.builder || '',
         areas, corridor, facing, parkingKind, approvals, amenityTags,
         bhk, possession: possession.bucket,
-        hasBrochure: !!p.brochureLink, hasPhotos: !!p.photosLink, hasMap: !!p.mapLink,
+        hasBrochure: /^https?:\/\//i.test(String(p.brochureLink || '').trim()), hasPhotos: !!p.photosLink, hasMap: !!p.mapLink,
         soldOut: !!p.soldOut
       },
       possessionYear: possession.year

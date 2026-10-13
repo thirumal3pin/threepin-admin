@@ -238,6 +238,18 @@
   </div>
 </div>
 
+<div class="tk-ov" id="mergeModal">
+  <div class="tk-box">
+    <div class="tk-box-hdr"><b>Merge with another card</b><button type="button" class="tk-x" onclick="closeMergeModal()">✕</button></div>
+    <div class="tk-box-body">
+      <div class="tk-hint">Two cards for the same property? Pick the other one. The card further along is kept, with everything from both — the CRM lead, details, notes and documents.</div>
+      <input id="mergeSearch" type="search" placeholder="Title, owner, phone or Property ID…" oninput="onMergeSearch(this.value)" aria-label="Find the other card">
+      <div id="mergeList" class="tk-picklist"></div>
+      <div id="mergeStep"></div>
+    </div>
+  </div>
+</div>
+
 <div class="tk-ov" id="rsModal">
   <div class="tk-box">
     <div class="tk-box-hdr"><b id="rsTitle">Why?</b><button type="button" class="tk-x" onclick="closeReasonModal()">✕</button></div>

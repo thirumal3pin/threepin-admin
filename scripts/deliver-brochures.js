@@ -392,10 +392,23 @@ function extractFolderId(driveUrl) {
 // is returned with data:null and deliverRow() rebuilds the metadata from the
 // Inventory sheet row instead (see inventoryFallbackData). Only a missing
 // PDF is genuinely undeliverable.
+// The folder for exactly this property: "THVA001" or "THVA001 - Title", never "THVA0010 …" —
+// startsWith alone handed one property the other's brochure.
+const isFolderFor = (name, propertyId) => {
+  const n = String(name).toUpperCase(), id = String(propertyId).toUpperCase();
+  return n === id || (n.startsWith(id) && /[^A-Z0-9]/.test(n[id.length]));
+};
+// The newest PDF in a folder: a redo writes a new PDF beside the delivered one, and the JSON's
+// file name stops being one once delivery writes the Drive link into it.
+const newestPdf = (dir, files) => files.filter(f => f.toLowerCase().endsWith('.pdf'))
+  .map(f => ({ f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+  .sort((a, b) => b.mtime - a.mtime)
+  .map(x => x.f)[0] || null;
+
 function findLocalBrochure(propertyId) {
   for (const entry of fs.readdirSync(BROCHURE_FOLDER, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    if (!entry.name.startsWith(propertyId)) continue;
+    if (!isFolderFor(entry.name, propertyId)) continue;
     const dir = path.join(BROCHURE_FOLDER, entry.name);
     let files;
     try { files = fs.readdirSync(dir); } catch { continue; }
@@ -415,9 +428,7 @@ function findLocalBrochure(propertyId) {
       }
     }
 
-    const pdfName = data && data.brochureLink && !/^https?:\/\//i.test(data.brochureLink)
-      ? data.brochureLink
-      : files.find(f => f.toLowerCase().endsWith('.pdf'));
+    const pdfName = newestPdf(dir, files);
     if (!pdfName) continue;
     const pdfPath = path.join(dir, pdfName);
     if (!fs.existsSync(pdfPath)) continue;

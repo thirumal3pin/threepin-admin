@@ -138,6 +138,31 @@
   font-family: var(--mono, ui-monospace, monospace);
 }
 .pm-why q { font-style: italic; color: var(--pm-ink-3); }
+.pm-why li.unk::before { content: '?'; color: var(--pm-ink-3); }
+
+/* Why it matches · why it might not · not known yet — three short groups, each labelled. */
+.pm-grp { margin-top: 9px; }
+.pm-grp .pm-why { margin-top: 3px; }
+.pm-grp-h {
+  font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--pm-ink-3);
+}
+.pm-grp.for .pm-grp-h { color: var(--pm-good); }
+.pm-grp.against .pm-grp-h { color: var(--pm-bad); }
+.pm-lbl { flex: 0 0 auto; font-weight: 600; color: var(--pm-ink-2); }
+.pm-lbl::after { content: ':'; }
+.pm-why li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.pm-more-r summary { font-size: 11.5px; color: var(--pm-ink-3); cursor: pointer; margin: 2px 0 0 14px; }
+.pm-more-r .pm-why { margin-top: 2px; }
+
+/* Interest — how keen the buyer is now. Beside the name, quiet. */
+.pm-int {
+  display: inline-block; margin-left: 7px; vertical-align: 1px;
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--pm-line); color: var(--pm-ink-3); white-space: nowrap;
+}
+.pm-int.high { color: var(--pm-good); border-color: color-mix(in srgb, var(--pm-good) 40%, transparent); background: color-mix(in srgb, var(--pm-good) 8%, transparent); }
+.pm-int.low { color: var(--pm-ink-3); }
 
 /* ═══════ ACTIONS ═══════ */
 

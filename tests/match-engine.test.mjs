@@ -407,8 +407,8 @@ section('Unknown is not the same as mismatched');
 const noType = M.propertyProfile(prop({ id: 'P_NOTYPE', location: 'Anna Nagar', config: '3BHK', startingPrice: '₹3 Cr', type: '' }));
 eq('a blank type column reads as Other', noType.type, 'Other');
 const nt = M.score(profileOf(keen), noType, {});
-check('and is not scored at all', !nt.breakdown.some(b => b.key === 'type'), J(nt.breakdown.map(b => b.key)));
-check('so it is not held against the property', nt.pct >= 90, nt.pct);
+check('it is listed as not known, never as a mismatch', nt.unknown.some(u => u.key === 'type') && !nt.against.some(a => a.key === 'type'), J([nt.unknown.map(u => u.key), nt.against.map(a => a.key)]));
+check('so it costs little — the property still scores high', nt.pct >= 90, nt.pct);
 
 // ═══════ 7. PATHOLOGICAL INPUT ═══════
 
@@ -431,6 +431,161 @@ try {
   M.propertiesFor(keen, [], { now: NOW });
 } catch (e) { threw = e; }
 check('malformed leads and empty lists are survivable', !threw, threw && threw.message);
+
+section('Rent or buy — never mixed (the owner’s Adambakkam / OMR case, Oct 2026)');
+{
+  const RENT_ADB = prop({ id: 'ADB', propertyCode: 'ADB0001', name: 'Corporate Lease - 8 Brand-New Apartments',
+    location: 'Adambakkam, Near OMR & Velachery, Chennai', config: '2 BHK & 3 BHK',
+    startingPrice: '3 BHK - Rent Rs.45,000/month + Maintenance | 2 BHK - Rent Rs.30,000/month + Maintenance' });
+  const SALE_OMR = prop({ id: 'OMR1', propertyCode: 'OMR0001', name: 'Sea Breeze', location: 'Sholinganallur, OMR', config: '3 BHK', startingPrice: '₹1.1 Cr' });
+  const INV = [RENT_ADB, SALE_OMR];
+  const area = M.areaModelFor(INV);
+  const ap = M.propertyProfile(RENT_ADB);
+  eq('a "Rent …/month" price makes the property for rent', ap.deal, 'rent');
+  eq('…priced by the month', ap.priceMode, 'monthly');
+  check('…and it is IN Adambakkam — OMR and Velachery are only what it is near', J(ap.localities) === J(['adambakkam']) && ap.nearLocalities.includes('velachery'), J([ap.localities, ap.nearLocalities]));
+  eq('a ₹1.1 Cr flat is for sale', M.propertyProfile(SALE_OMR).deal, 'sale');
+
+  const buyer = lead({ id: 'B_OMR', propertyInterest: 'OMR', budget: '1.2 Cr', ai: { intent: 'buy' } });
+  const tenant = lead({ id: 'T_ADB', propertyInterest: 'Adambakkam, Velachery', budget: '40,000 - 50,000 per month', ai: { intent: 'rent' } });
+  const both = lead({ id: 'BOTH', propertyInterest: '3BHK in Velachery, rent or buy', budget: '1.2 Cr' });
+  const sb = M.score(profileOf(buyer, { inventory: INV }), ap, { area });
+  check('a buyer is never shown a flat to let', sb.vetoed && /for rent, and they want to buy/.test(sb.vetoes[0].why), J(sb.vetoes));
+  const st = M.score(profileOf(tenant, { inventory: INV }), M.propertyProfile(SALE_OMR), { area });
+  check('nor a tenant a flat for sale', st.vetoed && /for sale, and they want to rent/.test(st.vetoes[0].why), J(st.vetoes));
+  const tt = M.score(profileOf(tenant, { inventory: INV }), ap, { area });
+  check('the tenant and the rental match, on a monthly budget', !tt.vetoed && tt.for.some(f => f.key === 'budget' && /a month/.test(f.why)), J(tt.for));
+  check('someone open to both sees both', !M.score(profileOf(both, { inventory: INV }), ap, { area }).vetoes.some(v => v.key === 'deal')
+    && !M.score(profileOf(both, { inventory: INV }), M.propertyProfile(SALE_OMR), { area }).vetoes.some(v => v.key === 'deal'));
+  eq('"currently staying on rent, want to buy" is a buyer', M.readDeal(lead({}), [{ text: 'Currently staying on rent in Adyar, want to buy a 2BHK', src: 'Property / Locality', at: NOW, authority: 3 }], null).values.join(), 'sale');
+  eq('a monthly budget alone makes a tenant', profileOf(lead({ propertyInterest: 'Velachery 2BHK', budget: 'Rent: 25k per month' })).deal.values.join(), 'rent');
+  eq('a budget in crores alone makes a buyer', profileOf(lead({ propertyInterest: 'Velachery 2BHK', budget: '1.2 Cr' })).deal.values.join(), 'sale');
+  eq('a lump-sum lease is its own kind of money', profileOf(lead({ propertyInterest: 'Adyar', budget: '₹30–35 lakhs total lease amount', ai: { intent: 'rent' } })).budget.mode, 'lumpsum');
+}
+
+section('A sparse lead can never be a 100% match');
+{
+  const P3 = prop({ id: 'P3B', location: 'Medavakkam, Chennai', config: '3 BHK', startingPrice: '₹1.25 Cr' });
+  const thin = lead({ id: 'THIN', propertyInterest: '3 BHK' });
+  const r = M.score(profileOf(thin), M.propertyProfile(P3), {});
+  check('bedrooms alone score well under 80', r.pct < 80, r.pct);
+  check('…and the match says what is not known, with what to ask', ['deal', 'budget', 'locality'].every(k => r.unknown.some(u => u.key === k && u.ask)), J(r.unknown.map(u => u.key)));
+  check('…confidence says so too', r.confidence < 0.5, r.confidence);
+  const full = lead({ id: 'FULL', propertyInterest: '3 BHK flat in Medavakkam', budget: '1.3 Cr', ai: { intent: 'buy' } });
+  const f = M.score(profileOf(full), M.propertyProfile(P3), {});
+  check('the same flat for a buyer we know well scores in the nineties', f.pct >= 90, f.pct);
+  check('every match has why it fits AND what is open', f.for.length >= 4 && Array.isArray(f.against) && Array.isArray(f.unknown), J([f.for.length, f.unknown.map(u => u.key)]));
+}
+
+section('Budget — nearing it beats far under it');
+{
+  const at = price => M.score(profileOf(lead({ propertyInterest: '3BHK Anna Nagar', budget: '3 Cr', ai: { intent: 'buy' } })),
+    M.propertyProfile(prop({ id: 'B' + price, location: 'Anna Nagar', config: '3BHK', startingPrice: price })), {}).breakdown.find(b => b.key === 'budget').s;
+  check('₹2.8 Cr (nearing ₹3 Cr) scores full', at('₹2.8 Cr') === 1, at('₹2.8 Cr'));
+  check('₹1.2 Cr (far under) scores well below it', at('₹1.2 Cr') < 0.7, at('₹1.2 Cr'));
+  check('₹3.5 Cr (17% over) stays the owner’s 0.78', at('₹3.5 Cr') === 0.78, at('₹3.5 Cr'));
+  check('a range overlapping the budget counts as inside it', at('₹1.21 Cr - ₹3.56 Cr') === 1, at('₹1.21 Cr - ₹3.56 Cr'));
+}
+
+section('What they asked for by name — pooja room, school, covered parking');
+{
+  const asks = lead({ id: 'ASK', propertyInterest: '3BHK in Velachery with pooja room and covered car parking, near a good school', budget: '1.5 Cr', ai: { intent: 'buy' } });
+  const req = profileOf(asks);
+  check('the asks are read', ['pooja', 'parking', 'school'].every(k => req.specs.keys.includes(k)), J(req.specs));
+  check('"no need of a lift" is not an ask', !M.readSpecs([{ text: 'no need of a lift, ground floor is fine', src: 'Requirement', at: NOW }], null).keys.includes('lift'));
+  check('"security deposit" is not an ask for security', !M.readSpecs([{ text: 'can pay 3 months security deposit', src: 'Requirement', at: NOW }], null).keys.includes('security'));
+  const has = M.propertyProfile(prop({ id: 'HAS', location: 'Velachery', config: '3 BHK', startingPrice: '₹1.45 Cr', amenities: 'Pooja room, covered car parking', nearby: 'DAV School 1 km' }));
+  const lacks = M.propertyProfile(prop({ id: 'LACK', location: 'Velachery', config: '3 BHK', startingPrice: '₹1.45 Cr', parking: 'No', amenities: 'Gym' }));
+  const a = M.score(req, has, {}), b = M.score(req, lacks, {});
+  check('a property with all three scores them', a.for.some(f => f.key === 'specs' && /has Pooja room, Covered car parking and A school nearby/.test(f.why)), J(a.for.map(f => f.why)));
+  check('one without parking says so, and lists the rest as to ask', b.against.some(x => x.key === 'specs' && /no Covered car parking/.test(x.why)) && b.unknown.some(u => /Pooja room/.test(u.label)), J([b.against, b.unknown]));
+  check('and ranks below the one that has them', a.pct > b.pct, J([a.pct, b.pct]));
+}
+
+section('Possession — to the month');
+{
+  const want = M.readPossession([{ text: 'need possession by March 2027', src: 'Requirement', at: NOW }], NOW);
+  eq('"by March 2027" is a deadline', want.want, 'by');
+  const p = when => M.score(profileOf(lead({ propertyInterest: '3BHK Velachery possession by March 2027', budget: '1.5 Cr' })),
+    M.propertyProfile(prop({ id: 'PS' + when, location: 'Velachery', config: '3 BHK', startingPrice: '₹1.4 Cr', status: 'Under Construction', possession: when })), {})
+    .breakdown.find(b => b.key === 'possession');
+  check('Dec 2026 is inside it', p('Dec 2026').s === 1, J(p('Dec 2026')));
+  check('Dec 2028 is well past it', p('Dec 2028').s <= 0.2, J(p('Dec 2028')));
+}
+
+section('Interest — how keen they are orders the buyers, never the score');
+{
+  const P = prop({ id: 'INT', location: 'Velachery', config: '3 BHK', startingPrice: '₹1.4 Cr' });
+  const base = { propertyInterest: '3BHK Velachery', budget: '1.5 Cr' };
+  const hot = lead({ id: 'HOT', name: 'Hot', ...base, tt: { status: 'hot', lastMessageAt: NOW - DAY }, ai: { intent: 'buy', stage: 'visit_done' } });
+  const cold = lead({ id: 'COLD', name: 'Cold', ...base, tt: { status: 'cold', lastMessageAt: NOW - 150 * DAY }, ai: { intent: 'buy' } });
+  const list = M.buyersFor(P, [cold, hot], { now: NOW, minPct: 0 });
+  eq('the hot buyer who visited comes first', list[0].lead.id, 'HOT');
+  eq('…with the same percentage as the cold one', list[0].pct, list[1].pct);
+  check('…and the reason is said', list[0].interest.level === 'High' && list[0].interest.why.includes('has visited'), J(list[0].interest));
+}
+
+section('The AI’s read of the chat (ai.want) fills what the CRM fields do not say');
+{
+  const w = lead({ id: 'W', propertyInterest: '', budget: '', ai: { intent: 'buy', at: NOW, want: {
+    deal: 'buy', budget_min: null, budget_max: 15000000, budget_unit: 'total', areas: ['Velachery'], bhk: [3], types: ['apartment'],
+    ready_by: 'immediate', size_sqft_min: 1400, must_have: ['pooja room', 'east facing balcony'], deal_breakers: ['main road'] } } });
+  const r = profileOf(w);
+  check('budget, area, bedrooms, type, size and readiness come from it', r.budget && r.budget.max === 15000000 && r.localities && r.localities.keys.includes('velachery')
+    && r.bhk && r.bhk.values.includes(3) && r.types && r.types.values.includes('Apartment') && r.size && r.size.min === 1400 && r.possession.want === 'ready', J([r.budget, r.localities, r.bhk, r.types, r.size, r.possession]));
+  check('its must-haves become asks', r.specs.keys.includes('pooja') && r.specs.keys.includes('balcony'), J(r.specs));
+  const s = M.score(r, M.propertyProfile(prop({ id: 'WP', location: 'Velachery', config: '3 BHK', startingPrice: '₹1.45 Cr' })), {});
+  check('its deal-breakers are shown to be checked', s.unknown.some(u => /main road/.test(u.why)), J(s.unknown));
+  check('a junk want is ignored, never trusted blindly', M.cleanWant({ budget_max: 'lots', bhk: [99], areas: 'Velachery' }).bhk.length === 0 && M.cleanWant({ budget_max: 'lots' }).budget === null);
+}
+
+section('Gazetteer — every place in a line, and where a property is');
+{
+  const G = globalThis.PinGeo;
+  eq('commas and "&" separate places', J(G.resolveAll('Adambakkam, Near OMR & Velachery, Chennai')), J(['adambakkam', 'sholinganallur', 'velachery']));
+  eq('"Mount Road" is Mount Road, not St Thomas Mount', G.resolve('Mount Road, Chennai'), 'mount road');
+  eq('a property is where it is, not what it is near', J(G.placeOf('Mount Road, near Gopalapuram/Egmore/Poes Garden, Nungambakkam').at), J(['mount road', 'nungambakkam']));
+  eq('a corridor beside a locality is the stretch, not a place', J(G.placeOf('OMR Perungudi').at), J(['perungudi']));
+  eq('"Near X / Y" alone is still the answer', G.placeOf('Near Medavakkam / Mambakkam').at.length, 2);
+}
+
+section('A brochure is on file only when there is a link to open');
+{
+  const S = globalThis.PinSearch;
+  check('a bare file name (made, not delivered) is not a brochure', S.indexProperty({ id: 'BR1', brochureLink: 'TNAG0002_brochure.pdf' }).facet.hasBrochure === false);
+  check('a Drive link is', S.indexProperty({ id: 'BR2', brochureLink: 'https://drive.google.com/file/d/abc' }).facet.hasBrochure === true);
+}
+
+section('Review fixes — rent money, the bot’s own question, false deadlines, asks');
+{
+  const S = globalThis.PinSearch;
+  eq('"45k per month" is ₹45,000 a month', J(S.parseMoney('45k per month', 'price').rent), J([[45000, 45000]]));
+  eq('"1.2L/month" is ₹1.2 L a month', J(S.parseMoney('1.2L/month', 'price').rent), J([[120000, 120000]]));
+  const b1 = profileOf(lead({ propertyInterest: 'Porur 2BHK', budget: '35000 monthly rent', ai: { intent: 'rent' } })).budget;
+  check('a bare "35000 monthly rent" is read as the rent', b1 && b1.mode === 'monthly' && b1.max === 35000, J(b1));
+  const b2 = profileOf(lead({ propertyInterest: 'Velachery 2BHK', budget: 'Budget 80L, EMI 50k per month' })).budget;
+  check('"Budget 80L, EMI 50k per month" is a buyer with ₹80 L', b2 && b2.mode === 'sale' && b2.max === 8000000, J(b2));
+  eq('a sale property quoting its rental income stays for sale', M.propertyProfile(prop({ id: 'PL', location: 'Adyar', startingPrice: '₹2.5 Cr, pre-leased, rent 1.5L/month' })).deal, 'sale');
+  const dep = M.propertyProfile(prop({ id: 'DEP', name: '3BHK flat, Adyar', location: 'Adyar', startingPrice: 'Rent ₹60,000/month, deposit 6 lakhs' }));
+  check('a rental quoting its deposit stays a rental, priced by the month', dep.deal === 'rent' && dep.priceMode === 'monthly' && dep.priceLo === 60000, J([dep.deal, dep.priceMode, dep.priceLo]));
+  const asked = lead({ propertyInterest: 'Velachery', ai: { intent: 'unclear', evidence: 'AI asked buy/rent/sell; no reply yet' } });
+  check('the bot asking "buy/rent/sell?" is not the lead being open to both', !(profileOf(asked).deal || { values: [] }).values.includes('rent') || (profileOf(asked).deal || {}).values.length < 2, J(profileOf(asked).deal));
+  const p1 = M.readPossession([{ text: 'Will decide by May 15', src: 'Requirement', at: NOW }], NOW);
+  const p2 = M.readPossession([{ text: 'referred by friend, market 30 lakhs', src: 'Requirement', at: NOW }], NOW);
+  const p3 = M.readPossession([{ text: 'asked if handover earlier than December 2029 is possible', src: 'Conversation (AI summary)', at: NOW }], NOW);
+  check('"by May 15", "market 30 lakhs" and a question in the AI summary are not deadlines', !p1 && !p2 && !p3, J([p1, p2, p3]));
+  check('"possession by Dec ’27" is one', (M.readPossession([{ text: 'possession by Dec ’27', src: 'Requirement', at: NOW }], NOW) || {}).want === 'by');
+  check('the bot asking "independent house or plot?" is not an ask', !M.readSpecs([{ text: 'Which type interests you most - independent house, plots or apartment?', src: 'AI evidence', at: NOW }], null).keys.includes('independent'));
+  check('"facing a hospital" is a complaint, not an ask', !M.readSpecs([{ text: 'Not interested as it is facing a hospital', src: 'Note', at: NOW }], null).keys.includes('hospital'));
+  check('"east facing balcony" still asks for a balcony', M.readSpecs([{ text: 'east facing balcony needed', src: 'Requirement', at: NOW }], null).keys.includes('balcony'));
+  const L25 = M.propertyProfile(prop({ id: 'LS25', location: 'Adyar', startingPrice: 'Lease 25 lakhs' }));
+  check('"Lease 25 lakhs" is a lease, priced as a lump sum', L25.deal === 'rent' && L25.priceMode === 'lumpsum', J([L25.deal, L25.priceMode]));
+  const ADV = M.propertyProfile(prop({ id: 'ADV', location: 'Adyar', startingPrice: 'Rs 35,000 + 3L advance' }));
+  check('"Rs 35,000 + 3L advance" is a rental at ₹35,000 a month', ADV.deal === 'rent' && ADV.priceLo === 35000, J([ADV.deal, ADV.priceLo]));
+  const cur = profileOf(lead({ propertyInterest: 'Adyar 2BHK', budget: 'Budget 80L, rent currently 20k' }));
+  check('"Budget 80L, rent currently 20k" is a buyer at ₹80 L', cur.budget && cur.budget.mode === 'sale' && cur.budget.max === 8000000 && cur.deal.values.join() === 'sale', J([cur.budget, cur.deal]));
+  check('"need by Dec \u201926" is a deadline', (M.readPossession([{ text: 'need by Dec \u201926', src: 'Requirement', at: NOW }], NOW) || {}).want === 'by');
+}
 
 section('Speed — this runs on every panel open');
 const t0 = Date.now();

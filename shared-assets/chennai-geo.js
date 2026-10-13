@@ -290,6 +290,15 @@
   // longer one. Built once — the lists never change at runtime.
   const KEYS_BY_LENGTH = Object.keys(LOCALITIES).sort((a, b) => b.length - a.length);
   const ALIAS_BY_LENGTH = Object.keys(ALIASES).sort((a, b) => b.length - a.length);
+  // Every name the gazetteer knows — localities and aliases together — longest first. One list,
+  // because checking aliases before localities let a short alias win inside a longer locality:
+  // "mount" (St Thomas Mount) inside "Mount Road", which put Nungambakkam next to Adambakkam.
+  const NAMES_BY_LENGTH = KEYS_BY_LENGTH.map(k => [k, k])
+    .concat(ALIAS_BY_LENGTH.filter(a => !LOCALITIES[a]).map(a => [a, ALIASES[a]]))
+    .sort((a, b) => b[0].length - a[0].length);
+  const isWordChar = c => /[a-z0-9]/.test(c || ' ');
+  // Names of roads and corridors (each resolves to one representative locality in ALIASES).
+  const CORRIDOR_NAME = /^(?:omr|old mahabalipuram road|rajiv gandhi salai|it corridor|it highway|ecr|east coast road|gst|gst road|grand southern trunk road|radial road|mount poonamallee road|mount-poonamallee|velachery tambaram road|arcot road|nh ?45)$/;
 
   function resolve(text) {
     const s = norm(text);
@@ -305,9 +314,52 @@
       const after = i + needle.length >= hay.length ? ' ' : hay[i + needle.length];
       return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
     };
-    for (const a of ALIAS_BY_LENGTH) if (contains(s, a)) return ALIASES[a];
-    for (const k of KEYS_BY_LENGTH) if (contains(s, k)) return k;
+    for (const [name, key] of NAMES_BY_LENGTH) if (contains(s, name)) return key;
     return null;
+  }
+
+  // Every place named in a piece of text, in the order written, each with where it sits. Longest
+  // name first and no overlaps, so "Anna Nagar West Extension" is one place, not three.
+  //
+  // The scan runs on the text with its separators still in it. The old split ran AFTER norm(),
+  // which had already turned every comma and "&" into a space — so "Adambakkam, Near OMR &
+  // Velachery" was one part, and the longest alias inside it (OMR → Sholinganallur) was the only
+  // place it ever named. Every rent flat in Adambakkam was being matched as an OMR property.
+  function scan(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw.trim()) return [];
+    // Segments: what a "near …" reaches is the rest of its own segment, never the next one.
+    const segs = raw.split(/[,;|\n]+|\s+-\s+|\s*\(\s*|\s*\)\s*/);
+    const hits = [];
+    let order = 0;
+    for (const seg of segs) {
+      const s = ' ' + norm(seg) + ' ';
+      if (!s.trim()) continue;
+      const taken = new Uint8Array(s.length);
+      const found = [];
+      for (const [name, key] of NAMES_BY_LENGTH) {
+        let from = 0, i;
+        while ((i = s.indexOf(name, from)) !== -1) {
+          from = i + 1;
+          const end = i + name.length;
+          if (isWordChar(s[i - 1]) || isWordChar(s[end])) continue;
+          let free = true;
+          for (let j = i; j < end; j++) if (taken[j]) { free = false; break; }
+          if (!free) continue;
+          for (let j = i; j < end; j++) taken[j] = 1;
+          found.push({ at: i, key, corridor: CORRIDOR_NAME.test(name) });
+        }
+      }
+      found.sort((a, b) => a.at - b.at);
+      // "Near X", "opp. X", "off X Road", "close to X": X is a landmark the property is beside,
+      // not where it is.
+      const nearAt = (() => {
+        const m = s.match(/\b(?:near|nr|opp|opposite|behind|beside|off|close\s+to|next\s+to|adjacent\s+to|walkable\s+to|minutes?\s+(?:from|to)|mins?\s+(?:from|to)|km\s+from|from|via|towards)\b/);
+        return m ? m.index : -1;
+      })();
+      for (const f of found) hits.push({ key: f.key, near: nearAt !== -1 && nearAt < f.at, corridor: f.corridor, order: order++ });
+    }
+    return hits;
   }
 
   // Every locality named in one string. The Location column routinely holds
@@ -315,19 +367,29 @@
   // / Ottiyambakkam"), and a property in both is genuinely in both as far as
   // a buyer is concerned.
   function resolveAll(text) {
-    const s = norm(text);
-    if (!s) return [];
     const out = [];
-    const seen = new Set();
-    // Split on the separators the sheet uses between two place names, then
-    // resolve each part, so one part failing does not lose the others.
-    for (const part of s.split(/[\/,]|\band\b|\bor\b/)) {
-      const k = resolve(part);
-      if (k && !seen.has(k)) { seen.add(k); out.push(k); }
-    }
-    if (!out.length) { const k = resolve(s); if (k) out.push(k); }
+    for (const h of scan(text)) if (!out.includes(h.key)) out.push(h.key);
+    if (!out.length) { const k = resolve(text); if (k) out.push(k); }
     return out;
   }
+
+  // Where a property IS, as against what it is near. "Adambakkam, Near OMR & Velachery" is in
+  // Adambakkam; OMR and Velachery are what it is close to. When every place named is a "near"
+  // ("Near Medavakkam / Mambakkam"), those places are the best answer there is.
+  function placeOf(text) {
+    let hits = scan(text);
+    // A road or corridor named beside a real locality ("OMR Perungudi") says which stretch it is
+    // on, not a second place: the alias table would otherwise put it in Sholinganallur too.
+    if (hits.some(h => !h.corridor && !h.near)) hits = hits.map(h => (h.corridor ? Object.assign({}, h, { near: true }) : h));
+    const at = [], near = [];
+    for (const h of hits) {
+      const list = h.near ? near : at;
+      if (!list.includes(h.key) && !(h.near && at.includes(h.key))) list.push(h.key);
+    }
+    if (!at.length && !near.length) { const k = resolve(text); if (k) at.push(k); }
+    return at.length ? { at, near: near.filter(k => !at.includes(k)) } : { at: near, near: [] };
+  }
+
 
   // ═══════ DISTANCE ═══════
 
@@ -392,7 +454,7 @@
 
   const api = {
     LOCALITIES, ALIASES, CORRIDOR_MEMBERS, CORRIDOR_OF, ZONE_MEMBERS, ZONE_OF,
-    resolve, resolveAll, distanceKm, haversine, near, zoneOf, corridorsOf, label, norm
+    resolve, resolveAll, placeOf, distanceKm, haversine, near, zoneOf, corridorsOf, label, norm
   };
   root.PinGeo = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;

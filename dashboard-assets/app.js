@@ -592,7 +592,7 @@ function runBrief(){
       code: m.property.code || '',
       name: m.p.name || m.p.id,
       sub: [m.p.location, m.p.config,
-        m.property.priceLo != null ? PinMatch.fmtMoney(m.property.priceLo) : m.p.startingPrice
+        m.property.priceLo != null ? PinMatch.priceLabel(m.property) : m.p.startingPrice
       ].filter(Boolean).join(' · '),
       actions: [{ id:'open', key:m.p.id, label:'Open property →', primary:true }]
     }),
@@ -1100,6 +1100,9 @@ function matchStageKeyOf(lead){
   return null;
 }
 
+// Do not call someone who asked not to be called (shared-assets/contact-policy.js, when loaded).
+const callBlocked = l => !!(window.PinContact && window.PinContact.contactBlock && window.PinContact.contactBlock(l, 'calls'));
+
 function renderMatchingBuyers(id){
   const el = document.getElementById('dpMatches');
   if(!el || !window.PinMatch || !window.PinMatchPanel) return;
@@ -1135,7 +1138,7 @@ function renderMatchingBuyers(id){
         ].filter(Boolean).join(' · '),
         actions: [
           { id:'crm', key:m.lead.id, label:'Open in CRM →', primary:true },
-          m.lead.phone ? { id:'call', key:m.lead.id, label:'Call', href:'tel:'+m.lead.phone } : null
+          m.lead.phone && !callBlocked(m.lead) ? { id:'call', key:m.lead.id, label:'Call', href:'tel:'+m.lead.phone } : null
         ].filter(Boolean)
       }),
       onAction: (act, key) => {

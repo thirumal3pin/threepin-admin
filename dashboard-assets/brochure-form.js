@@ -338,6 +338,21 @@ function newBrochure(){
   bfEl('bfTitle').focus();
 }
 
+// A request for the same property code in the last six hours that has not been delivered or
+// failed — from this page or the board (both write the same log).
+function bfPendingFor(title){
+  const code = String(title || '').trim().split(/\s+/)[0].toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code || !/\d/.test(code)) return null;
+  const hit = (bfLog || []).find(r => {
+    const c = String(r.title || '').trim().split(/\s+/)[0].toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const st = (r.status && r.status.state) || 'queued';
+    return c === code && Date.now() - (r.at || 0) < 6 * 3600000 && !['delivered', 'error'].includes(st);
+  });
+  if (!hit) return null;
+  return { code, when: new Date(hit.at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }),
+    by: hit.by ? String(hit.by).split('@')[0] : '', label: (hit.status && hit.status.label) || 'in queue' };
+}
+
 async function submitBrochureForm(){
   let title = bfEl('bfTitle').value.trim();
   const drive = bfEl('bfDrive').value.trim();
@@ -358,6 +373,8 @@ async function submitBrochureForm(){
     bfEl('bfTitle').focus();
     return;
   }
+  const pending = bfPendingFor(title);
+  if (pending && !confirm(`A brochure for ${pending.code} is already on its way — requested ${pending.when}${pending.by ? ' by ' + pending.by : ''} (${pending.label}).\n\nSubmitting again makes a second brochure and a second email. Submit anyway?`)) return;
   err.classList.remove('show');
   // The pipeline takes the first word exactly as typed and files the property under it, so the
   // code goes out as checked above: tnag-0002 would otherwise become a second, lower-case record.

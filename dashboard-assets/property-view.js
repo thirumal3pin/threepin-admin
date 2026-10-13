@@ -67,7 +67,8 @@
   // chips row — green means one tap away, dimmed means not on file yet.
   function resourceChips(p, compact){
     const items = [
-      { ok: !!(p.brochureLink && String(p.brochureLink).trim()), icon:'📑', label:'Brochure' },
+      // A real link only: a bare file name means the brochure is made but not delivered yet.
+      { ok: /^https?:\/\//i.test(String(p.brochureLink || '').trim()), icon:'📑', label:'Brochure' },
       { ok: !!(p.photosLink && String(p.photosLink).trim()),     icon:'🖼️', label:'Photos' },
       { ok: !!mapsHref(p),                                       icon:'📍', label:'Map Pin' },
       { ok: !!(p.detailsText && String(p.detailsText).trim()),   icon:'💬', label:'Details' }
