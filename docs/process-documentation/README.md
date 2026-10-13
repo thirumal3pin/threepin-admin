@@ -7,7 +7,7 @@ Everything that documents how the 3 PIN Realty platform works — and the AI & a
 | Path | What it is |
 | --- | --- |
 | `pdf/3Pin-Process-Atlas.pdf` | The four documents as one A4 PDF (functional overview, business guide, process & field reference, architecture & flows, release status) |
-| `pdf/3Pin-AI-PropTech-Strategy.pdf` | **The AI & PropTech Strategy 2027–2029 — the 10× plan** (14 Oct 2026): benchmarks, scorecard, twelve areas with status / why / money / business / agent time, financial model, six waves, KPIs, guardrails, **Eåsy by 3 PIN** (the personal AI staff), the sector bets, the next chain of business (mandates → JV → co-development → redevelopment) and the international watchlist with the ideas untouched in Chennai. Supersedes the roadmap below |
+| `pdf/3Pin-AI-PropTech-Strategy.pdf` | **The AI & PropTech Strategy 2027–2029 — the 10× plan** (14 Oct 2026): benchmarks, scorecard, twelve areas with status / why / money / business / agent time, financial model, six waves, KPIs, guardrails, **Eåsy by 3 PIN** (the personal AI staff), the sector bets, the next chain of business (mandates → JV → co-development → redevelopment) the international watchlist with the ideas untouched in Chennai, and an audit of the current system (missings, gaps, known defects, data/ops/security gaps, the improvement list). Supersedes the roadmap below |
 | `pdf/3Pin-AI-Automation-Roadmap.pdf` | The earlier AI & automation roadmap (13 Oct 2026), kept for reference |
 | `html/3Pin-Process-Atlas.html` | The documentation with animated diagrams — open it in a browser |
 | `html/3Pin-AI-PropTech-Strategy.html` | The strategy as a page with a side index and light/dark theme |

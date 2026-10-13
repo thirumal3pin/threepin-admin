@@ -131,7 +131,7 @@ writeFileSync(join(out, '3Pin-AI-Autopilot.html'), doc(roadmap));
   const sBody = strip(md('7-ai-proptech-strategy.md'));
   const sections = [...sBody.matchAll(/<h3 id="([^"]+)">([\s\S]*?)<\/h3>/g)];
   const sSide = `<a class="t1" href="#top">AI &amp; PropTech Strategy</a><ol>${sections.map(m => `<li><a href="#${m[1]}">${m[2].replace(/<[^>]+>/g, '')}</a></li>`).join('')}</ol>`;
-  const navNames = { '1': 'Thesis', '3': 'Scorecard', '5': 'The plan', '7': 'Waves', '8': 'Money', '12': 'Eåsy', '13': 'Bets', '14': 'Next chain', '15': 'World' };
+  const navNames = { '1': 'Thesis', '3': 'Scorecard', '5': 'The plan', '7': 'Waves', '8': 'Money', '12': 'Eåsy', '13': 'Bets', '14': 'Next chain', '15': 'World', '16': 'Gaps' };
   const sNav = sections.map(m => [m[1], (m[2].replace(/<[^>]+>/g, '').match(/^(\d+)\./) || [])[1]]).filter(([, n]) => navNames[n]).map(([id, n]) => `<a href="#${id}">${navNames[n]}</a>`).join('');
   const sMain = `<section class="doc" id="top"><header class="doc-head"><p class="eyebrow">STRATEGY · 2027–2029</p><h1>AI &amp; PropTech Strategy — the 10× plan</h1><p class="lead">Where 3 PIN stands against the best AI-native brokerages and proptech products, and what to build, in what order, with the money, the business effect and the agent time for every initiative.</p></header>${sBody}</section>`;
   const sHtml = page({ title: '3Pin AI & PropTech Strategy', description: 'The 10× AI and proptech plan for 3 PIN Realty, 2027–2029: benchmarks, scorecard, twelve areas, financial model, waves and guardrails.',

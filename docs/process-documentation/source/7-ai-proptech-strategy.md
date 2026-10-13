@@ -1,6 +1,6 @@
 # AI & PropTech Strategy 2027–2029 — the 10× plan for 3 PIN Realty
 
-Written 14 Oct 2026 from a review of the best AI-native brokerages and proptech products in the world and in India, the Chennai market, and the platform 3 PIN already runs. It replaces the earlier roadmap, which listed ideas without saying what each one changes. Every initiative here states **where we are, what we introduce, why, what happens the day after, how to build it on what exists, the money, the business effect, the agent time, the risks, and the number that proves it worked**. Figures marked *assumption* are to be replaced with the Finance console's own numbers; the model in section 8 shows how. Sections 12–15 add **Eåsy by 3 PIN** (the personal AI staff for every user), the bets that rule the sector, the next chain of business — joint ventures, construction and redevelopment — with the one-year case, and the international watchlist with the ideas untouched in Chennai.
+Written 14 Oct 2026 from a review of the best AI-native brokerages and proptech products in the world and in India, the Chennai market, and the platform 3 PIN already runs. It replaces the earlier roadmap, which listed ideas without saying what each one changes. Every initiative here states **where we are, what we introduce, why, what happens the day after, how to build it on what exists, the money, the business effect, the agent time, the risks, and the number that proves it worked**. Figures marked *assumption* are to be replaced with the Finance console's own numbers; the model in section 8 shows how. Sections 12–15 add **Eåsy by 3 PIN** (the personal AI staff for every user), the bets that rule the sector, the next chain of business — joint ventures, construction and redevelopment — with the one-year case, the international watchlist with the ideas untouched in Chennai, and (section 16) an audit of the current system: what is missing, where the gaps are, and the improvement list to ship first.
 
 ## 1. The thesis in one page
 
@@ -627,6 +627,138 @@ What shipped in the last twelve months that a firm like 3 PIN must measure itsel
 | Recurring revenue | NoBroker management, embedded insurance | Management + loans + insurance + value reports (I) |
 | Development intelligence | PropEquity, Liases Foras (metro level) | Street-level demand map feeding mandates and JVs (14) |
 | Data openness | MCP servers from data providers | 3 PIN MCP for the owner, then for partners (K5, R8) |
+
+## 16. The current system — what is missing, where the gaps are, and what to improve
+
+An honest audit of the live platform (main `b48bfaa`, 14 Oct 2026), so the plan above starts from facts. Each gap says what it costs today and which part of the plan closes it. Items marked **fix now** are small, independent of the waves, and worth doing in the next release.
+
+### 16.1 Where the platform is already strong
+
+One sign-in and one database across five consoles; every enquiry captured from chat without a duplicate; a real pipeline with milestone dates and an AI that places leads forward-only with undo; one matching engine used in three places; a card for every seller automatically; per-outlet edits and voice-over tracked to a confirmed URL; double-entry books per deal; an append-only change log; a release gate with 41 test suites, page previews and a design audit; lead views that cut a CRM open from 760 reads to 39. Most of the plan is wiring on top of this, not replacement.
+
+### 16.2 Process gaps against the owner's lifecycle
+
+| Owner's step | Today | Gap and cost | Improvement | Closes in |
+| --- | --- | --- | --- | --- |
+| Find on 99acres / WhatsApp / by agent → shortlist | Cards come from seller leads or by hand | No "where found" field or shortlist stage; sourcing is invisible and unmeasured | A *Prospect* column and a `foundVia` field on the card; the sourcing inbox | A3, A5 (Wave 4); the field **fix now** |
+| **Gate: Swami approves** before any agreement | Not recorded | "Owner approved" means the property owner approved photos; no record that the agency approved the listing | One-tap approval on the card, logged; agreement drafting waits for it | B5 (Wave 2) |
+| Agreement for Exclusive / Collab before the shoot | Listing type gates nothing | A shoot can be booked without a signed exclusive; disputes later | E-signed agreement; shoot booking for Exclusive/Collab checks it (Normal skips) | B5 (Wave 2) |
+| Documents: non-blocking, **frequent alerts** | Checklist, silent | Missing papers surface only when someone opens the card | Weekly seller nudges and a Daily-task line per card | B6 (Wave 0) |
+| Brochure v1 / v2 | Redo + a reminder | Versions unlabelled; nobody knows which brochure a buyer holds | Version stamp on the brochure record and the PDF name | **fix now** |
+| **Gate: Swami plans the post** before editing | Anyone can plan; editing starts without a plan | Editors cut for outlets nobody decided | "Post plan approved" tick on the card; Start editing warns without it (never blocks a Normal reel) | **fix now** (soft gate) |
+| Final media to Drive | Optional link | Final cuts live on editors' machines | Final link required before "Edit done" for YouTube and Collab; optional for Stories | **fix now** |
+| URL saved against the property | On the Posting row and the dashboard block | Not on the lead; an agent in the CRM cannot see what was posted | Mirror live URLs onto the seller lead's card view | **fix now** |
+
+### 16.3 Missing capabilities, by console
+
+| Console | Missing today | Cost | Improvement (plan reference) |
+| --- | --- | --- | --- |
+| **CRM** | Phone calls are not captured (no cloud number, no recording, no notes from calls) | The main channel in Chennai leaves no record; follow-ups depend on memory | F1, F2 (Wave 1) |
+| CRM | No outbound: no WhatsApp broadcast, no matched-buyer push, no templates beyond confirmations | Every outreach is typed by hand | D3, D4 (Wave 1–3) |
+| CRM | No deal score, no next-best-action; the follow-up queue is date-ordered | Agents work the loudest lead, not the most valuable | F3 (Wave 1) |
+| CRM | No lead attribution to post, ad or portal | Marketing spend cannot be judged | K3 (Wave 0) |
+| CRM | No buyer-facing surface (shortlist, visit pack, documents, offers) | Buyers get WhatsApp messages typed by agents | G1–G3 (Waves 1–5) |
+| CRM | No "do not contact" flag; no consent record per channel | DPDP exposure from May 2027; outbound AI impossible safely | **fix now** (flag), Wave 0 (consent texts) |
+| CRM | Team list, default agent, TailorTalk workspace and the lead-views switch are set by script | Owner depends on an engineer for routine settings | Settings screens — **fix now** |
+| **Shoot & Media** | No sourcing stage, no likely-to-list, no co-broking intake | Listings depend on inbound chat | A1–A5 (Wave 4) |
+| Shoot & Media | No price opinion on the card; asking price is typed | Overpriced listings get shot and never sell | B3 price desk (Wave 2) |
+| Shoot & Media | No document reading or verification; no passport | Trust is asserted, not shown | B2, R2, U3 (Wave 4) |
+| Shoot & Media | Media kit is photos/video/drone/floor plan/tour as ticks; no 3D tour, staging, Tamil narration, microsite | Listings look like everyone else's | C1–C5 (Wave 3) |
+| Shoot & Media | The Collab outlet has no Posting channel; `postingId` links only series cards to rows | Collab posts tracked by hand; ordinary cards find their row only by code | **fix now** |
+| **Posting** | No portal syndication; 99acres and the website are ticks, not feeds; no WhatsApp channel | Reach limited to what is posted by hand | D1, D3 (Wave 3) |
+| Posting | No leads-per-post measurement | The weekly plan is made by instinct | E3 (Wave 3) |
+| **Property dashboard** | No price desk, no demand map, no days-on-market, no flood/resilience page | The inventory is a list, not intelligence | K2, U1 (Waves 2–3) |
+| Property dashboard | Full-page panels' Back button not wired like the CRM and board | Phone Back leaves the page from a panel | **fix now** |
+| Property dashboard | Deleting a property leaves its notes; code patterns differ from the board's | Orphaned notes; some codes never link | **fix now** (shared code module) |
+| **Finance** | No link from a CRM Won lead or a board card to a deal; deals are typed | Revenue per lead/source cannot be computed | Optional lead link on a deal — **fix now** |
+| Finance | No cash forecast; no recurring-revenue lines; no DSA/referral income tracking | The new lines in section 5 have nowhere to land | Accounts for loans, services, management (Wave 2) |
+| Finance | Opening-balances screen probably unreachable; reconciled flag fails silently; month-end re-run errors; bank accounts share one id | Month-end needs overrides; a second bank cannot be reconciled | **fix now** (bank ids, reconciled flag); verify opening balances before the new year |
+| **Platform** | No enforced roles (everyone can do everything, Finance included); the Finance passcode is in the page code | One mistaken tap can delete money records; no audit of who may do what | Role claims checked by the rules — Wave 0 |
+| Platform | No settings screen for several settings; no in-app help; documentation only in this pack | Onboarding a new agent takes a person | Eåsy carries the process (Wave 2); help links **fix now** |
+| Platform | No push notifications; reminders are email and in-app | A follow-up due at 4 pm is missed until the page is opened | WhatsApp reminders through Eåsy (Wave 1) |
+| Platform | No Tamil UI, no Tamil output anywhere | Half the team's and most sellers' first language is absent | C3 language layer (Wave 2) |
+
+### 16.4 Known defects and weaknesses in the live code
+
+From the release-status document and the three independent reviews of the last release.
+
+| Area | Defect | Effect | Fix |
+| --- | --- | --- | --- |
+| Shoot & Media | A removed final-video link comes back (the card is saved whole with a merge) | Deleted map keys survive | Delete the key explicitly (`deleteField`) — **fix now** |
+| Shoot & Media | Deleting a card leaves `listingCode` on the lead | The seller still looks linked | Clear it in the delete path — **fix now** |
+| CRM | AI-written visit dates are not sent to Google Calendar | The invitation keeps the old time | Route AI visit changes through the calendar sync — **fix now** |
+| CRM | A deleted TailorTalk lead returns on the next sync; Manage Stages reorder does not persist; Edit → Lost skips the reason; matching ignores TailorTalk's requirement text | Small, daily irritations | Tombstone on delete; persist order; reason dialog on every Lost path; copy a short requirement profile onto the lead (the single highest-return fix for matching) |
+| Lead views | A lead saved while the view layout cannot be confirmed is written without its row (hidden from lists until 09:00); the rules do not check the `_w` stamp; a tenant id that is a prefix of another's would pass the `tt_` guard | Rare; needs a deliberate actor for two of them | `viewsDirty` marker healed by the next page or the rebuild; stamp rule; tenant ids without `_` |
+| Property | Toggles re-save the whole property from the page; a stale tab can overwrite sheet fields without a log entry | Silent data drift | Partial saves for toggles (the map pin already does this) — **fix now** |
+| Finance | The finance settings record, including the Drive folder id the attachments guard trusts, is writable by every team member | A member could point attachments at another folder | Admin-only rule for `driveFolderId` once roles exist |
+| Platform | Brochure delivery and the sheet sync depend on one Mac being on | A switched-off Mac stalls brochures and sync | Run both on a scheduled cloud job with the same credentials |
+| Platform | AI spend is capped only for lead automation; no per-feature budget | A runaway feature can spend the month's budget | One daily budget per feature with a kill switch — Wave 0 |
+| Platform | Documents describe removed WhatsApp-bot routes; the privacy policy is a draft | Compliance and clarity | Retire dead routes; publish the policy with the DPDP consent texts — Wave 0 |
+
+### 16.5 Data quality and intelligence gaps
+
+| Gap | Numbers today | Cost | Improvement |
+| --- | --- | --- | --- |
+| Properties without map coordinates | 0 of 131 have pins | No distance, commute or flood-zone answers; the map view is empty | Geocode once from address + locality graph; pin confirmed on the card (Wave 0) |
+| Properties without details text | ~60 of 131 | Copy, matching and the price desk have nothing to read | Seller intake (B1) and the inventory data-quality agent |
+| Duplicate and mismatched codes | Two code patterns (board vs CRM); duplicates worklist exists | Links missed; two cards for one property possible on re-entry | One shared code module; a duplicate check on create |
+| Signals log written but never read or marked handled | `ttSignalEvents`, interest level, milestone dates, undo history | The richest data the agency owns powers nothing | The fact store (K1) and the self-audit (K4) |
+| No attribution | Leads carry a channel but not the post, ad or portal | Spend decided by instinct | K3 |
+| No history of prices and closings as comparables | Price edits are logged; closings are in Finance; neither feeds a price view | No price opinion, no index | K2 price desk |
+| No measured AI accuracy | AI verdicts and human undos are stored; no report | Nobody knows whether the AI helps | K4 weekly accuracy report |
+
+### 16.6 Operations, security, compliance and cost
+
+| Gap | Cost | Improvement |
+| --- | --- | --- |
+| Deploys are by hand: rules through a script, the site through a push, lead views through a script; the index exemption needs the Console | Every release depends on one person knowing the order | A release checklist in the repo (exists in the status doc) → a single release script that refuses to skip a step |
+| No continuous integration; tests run on a laptop | A push without tests is possible | Run `npm test` and the previews on every push (GitHub Actions); block merges on failure |
+| No monitoring or alerting for the API routes, cron jobs and quota | A failed 09:00 digest or a quota ceiling is found by a person noticing | The ops sentinel (K4): daily health line to the owner; alert on failures and at 70 % of quota |
+| No backup/restore drill beyond the change log and finance snapshots | Recovery is theoretical | Weekly export of every collection to Drive; a restore test once a quarter |
+| No roles; Finance passcode in the page | Any member can delete or publish anything | Role claims in auth, checked by rules and hidden in the UI — Wave 0 |
+| DPDP (duties from May 2027): consent texts, purpose limits, deletion schedules, processor agreements not in place | Outbound AI and recording unlawful without them | Wave 0 compliance pack; a consent field per channel on the lead |
+| WhatsApp templates and the 24-hour window managed by hand | Blocks and failed sends | Template registry in Settings; the assistant checks the window before sending |
+| Firestore free-plan ceiling | Lead views fixed the CRM; the dashboard, board and analytics still read whole collections on open | The fact store and views for properties and cards (K1); upgrade to Blaze with a budget alert before Wave 3 |
+| Single points of failure: the brochure Mac, one TailorTalk workspace, one engineer | A holiday stops the pipeline | Cloud jobs for the Mac's work; documented runbooks (this pack); a second person trained on releases |
+
+### 16.7 Experience improvements
+
+| Area | Today | Improvement |
+| --- | --- | --- |
+| Phone performance | The board and CRM redraw on every confirmed document; large lists settle slowly (a fix is in progress in the working copy) | Redraw only on data changes (in progress); virtualised lists; skeleton states |
+| Offline and flaky connections | "Still connecting" guard protects data; nothing works offline | Read-only offline mode with queued, visible drafts |
+| Notifications | Email digests and in-app badges | WhatsApp and push reminders from Eåsy, per person, tunable |
+| Finding things | Search per console; no global search or command bar | One command bar (Eåsy) across leads, cards, properties, deals, posts |
+| Help and onboarding | None in the app | "?" on every screen linking to this pack's section; Eåsy answers "how do I…" |
+| Language | English only | Tamil UI strings and Tamil output for every message a seller or buyer receives |
+| Accessibility and consistency | UI v2 audit passes; some older dialogs predate it | Fold the remaining dialogs into the theme; keyboard paths for every dialog |
+
+### 16.8 The improvement list — what to fix first
+
+Ordered by return for effort. **S** days · **M** weeks.
+
+| # | Improvement | Effort | Why first | Closes |
+| --- | --- | --- | --- | --- |
+| 1 | Copy a short TailorTalk requirement profile onto each lead (matching reads it) | S | Highest return per hour: every match improves | 16.4 |
+| 2 | Do-not-contact flag and consent fields; DPDP consent texts | S | Everything outbound depends on it | 16.3, 16.6 |
+| 3 | Roles in auth and rules; Finance passcode removed from the page | M | Safety; prerequisite for Eåsy's per-role views | 16.6 |
+| 4 | Geocode the 131 properties; pin on the card | S | Unlocks map, commute, flood page, demand map | 16.5 |
+| 5 | Final-link delete, `listingCode` on delete, AI visit dates to Calendar, Lost reason, stage order | S | Daily irritations, each an hour | 16.4 |
+| 6 | Shared property-code module; duplicate check on create | S | Ends the two-pattern problem | 16.4, 16.5 |
+| 7 | Optional lead link on a Finance deal; income accounts for loans, services, management | S | Revenue per source; the new lines have a home | 16.3 |
+| 8 | Settings screens for team, default agent, workspace, lead-views switch; help links | S | Owner independence | 16.3 |
+| 9 | Soft gates: post-plan approved, final link for YouTube/Collab, agency approval tick, brochure version stamp, "where found" | S | The owner's lifecycle, without blocking anyone | 16.2 |
+| 10 | Partial saves for property toggles; notes removed with a property | S | Silent drift stopped | 16.4 |
+| 11 | Document nudges in Daily task and WhatsApp | S | The owner's "frequent alerts" | 16.2 |
+| 12 | Fact store nightly + attribution fields + ops sentinel | M | The base of every wave; a daily health line | 16.5, 16.6 |
+| 13 | Dashboard panels' Back button; Collab outlet channel; `postingId` on ordinary cards | S | Navigation and tracking consistency | 16.3 |
+| 14 | CI on push; weekly collection export; restore drill | M | Release safety | 16.6 |
+| 15 | Cloud jobs for brochure delivery and sheet sync | M | Removes the Mac dependency | 16.4 |
+| 16 | Per-feature AI budgets and kill switches; retire dead bot routes | S | Cost control | 16.4 |
+| 17 | Tamil strings for every seller- and buyer-facing message | M | Language gap | 16.7 |
+| 18 | Finance: bank account ids, reconciled flag, month-end re-run, opening balances check | M | Month-end without overrides | 16.3 |
+
+Items 1–11 and 13 are a two-to-three-week release on their own and should ship before Wave 1; 12 and 14–16 are Wave 0; 17–18 fit Wave 2.
 
 ## Sources
 
