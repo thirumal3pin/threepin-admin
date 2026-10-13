@@ -1723,7 +1723,7 @@ button.ps-mem:hover { border-color: var(--ink3); }
 #tkFilterBar.ed-mode .tk-dd-sort { display: none; }
 /* A voice-over still to make: the one thing on a card that someone else has to do first — amber, with its button */
 .tk-vo-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tk-vo { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--amber, #B45309); background: var(--amber-bg, #FEF3C7); border: 1px solid color-mix(in srgb, var(--amber, #B45309) 35%, transparent); border-radius: 99px; padding: 3px 9px; line-height: 1.3; }
+.tk-vo { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--amber, #B45309); background: var(--amber-bg, #FEF3C7); border: 1px solid color-mix(in srgb, var(--amber, #B45309) 35%, transparent); border-radius: 99px; padding: 3px 9px; line-height: 1.3; }
 .tk-vo b { font-weight: 700; }
 .tk-vo-done { font: inherit; font-size: 11px; font-weight: 600; color: var(--ink2); background: var(--card); border: 1px solid var(--border); border-radius: 99px; padding: 3px 9px; cursor: pointer; min-height: 26px; }
 .tk-vo-done:hover { border-color: var(--amber, #B45309); color: var(--amber, #B45309); }
@@ -1928,3 +1928,39 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .tk-for-ed.act { background: color-mix(in srgb, var(--accent, #EA6A00) 14%, var(--card)); color: var(--accent, #EA6A00); }
 .tk-for-ed.plan { background: var(--bg2); color: var(--ink2); }
 .tk-for-ed.none { color: var(--ink4); }
+
+/* The reference (the plan's name for a property), under its name, and its box in the panel */
+.tk-ref { font-size: 11.5px; color: var(--ink3); margin-top: -2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-refrow { display: flex; flex-direction: column; gap: 5px; margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--ink3); }
+.tk-refrow em { font-style: normal; font-weight: 400; }
+.tk-refrow input { font: inherit; font-size: 13.5px; font-weight: 500; color: var(--ink); padding: 8px 11px; border: 1px solid var(--border); border-radius: var(--r1); background: var(--card); max-width: 360px; }
+
+/* Link a CRM lead → not there: create it */
+.tk-linknew { margin-top: 10px; }
+.tk-linknew-f { border-top: 1px solid var(--border); padding-top: 12px; }
+.tk-linknew-h { font-weight: 700; font-size: 13.5px; color: var(--ink); margin-bottom: 4px; display: flex; flex-direction: column; gap: 2px; }
+.tk-linknew-f .tk-btnrow { margin-top: 12px; display: flex; justify-content: flex-end; }
+
+/* ── Editor view: one scroll (the page), columns share the width, an empty column folds to a strip ──
+   No column scrolls on its own and the board scrolls sideways only when the screen is too narrow. */
+.ed-board { align-items: flex-start; }
+.ed-board .tk-col { flex: 1 1 250px; width: auto; min-width: 232px; max-height: none; }
+.ed-board .tk-col-body { overflow: visible; }
+.ed-board .tk-col.ed-empty { flex: 0 0 50px; min-width: 50px; width: 50px; padding: 12px 4px; align-self: stretch; min-height: 200px; }
+.ed-board .ed-empty .tk-col-hdr { padding: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.ed-board .ed-empty .tk-col-counts { order: -1; margin: 0; }
+.ed-board .ed-empty .tk-col-head { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; }
+.ed-board .ed-empty .tk-col-title { font-size: 12.5px; color: var(--ink3); }
+.ed-board .ed-empty .tk-col-rule, .ed-board .ed-empty .tk-col-none { display: none; }
+.ed-board .ed-empty .tk-col-body { min-height: 60px; flex: 1; }
+@media (max-width: 760px) { .ed-board .tk-col:not(.ed-empty) { flex: 0 0 84vw; } }
+
+/* The reference on the board card: shown, changed or added right there */
+button.tk-ref { font: inherit; font-size: 11.5px; text-align: left; border: 0; background: none; padding: 0; color: var(--ink3); cursor: pointer; max-width: 100%; }
+button.tk-ref:hover { color: var(--ink); text-decoration: underline; }
+.tk-ref-ed.same { display: none; }
+.tk-card:hover .tk-ref-ed.same, .tk-card:focus-within .tk-ref-ed.same { display: block; }
+.tk-ref-add { opacity: 0; color: var(--ink4) !important; transition: opacity .12s; height: 0; overflow: hidden; }
+.tk-card:hover .tk-ref-add, .tk-card:focus-within .tk-ref-add, .tk-ref-add:focus-visible { opacity: 1; height: auto; }
+@media (hover: none) { .tk-ref-add { opacity: .7; height: auto; } }
+.tk-ref-in { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--brand); border-radius: 7px; background: var(--card); color: var(--ink); outline: none; box-shadow: var(--ring); width: 100%; }

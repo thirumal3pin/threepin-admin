@@ -647,6 +647,7 @@ function cardHtml(x) {
     ${code ? `<div class="tk-ctop"><span class="tk-pcode">${code}</span>${pill}</div>` : ''}
     <div class="tk-pname">${propNameHtml(x, it)}
       <button type="button" class="tk-pname-ed" title="Rename this property" aria-label="Rename this property" onclick="event.stopPropagation();editCardTitle('${x.id}')">✎</button>${code ? '' : pill}</div>
+    ${refLine(x, propName(x, it), true)}
     ${meta ? `<div class="tk-meta1" title="${esc(meta)}">${esc(meta)}</div>` : loc ? '' : '<div class="tk-meta1 none">Area not given</div>'}
     ${nextLine(x, it, key)}
     ${voRow(x)}
@@ -654,6 +655,42 @@ function cardHtml(x) {
     ${cardFoot(x, { tel, wa, owner, agents, preview: !!x.leadId })}
   </div>`;
 }
+// The reference Posting knows the property by (its plan name), when it says something the name does not.
+// On the board card it is set or changed right there (editable): "+ Reference" on hover when there is none.
+function refLine(x, name, editable) {
+  const r = window.pgRefOf ? window.pgRefOf(x.id) : '';
+  const shown = r && r.toLowerCase() !== String(name || '').trim().toLowerCase();
+  if (!editable) return shown ? `<div class="tk-ref" title="The reference in Posting (the plan's name for it)">Ref: ${esc(r)}</div>` : '';
+  if (!window.pgSetRef) return '';
+  return r
+    ? `<button type="button" class="tk-ref tk-ref-ed${shown ? '' : ' same'}" title="The reference in Posting (the plan's name for it) — click to change" onclick="event.stopPropagation();editCardRef('${x.id}')">Ref: ${esc(r)}</button>`
+    : `<button type="button" class="tk-ref tk-ref-add" title="Give it the reference used when planning posts" onclick="event.stopPropagation();editCardRef('${x.id}')">+ Reference</button>`;
+}
+// The reference typed on the card itself: Enter saves (on its Posting row), Escape leaves it.
+function editCardRef(id) {
+  const card = document.querySelector(`.tk-card[data-id="${CSS.escape(id)}"]`);
+  const slot = card && card.querySelector('.tk-ref');
+  if (!slot) return;
+  card.draggable = false;
+  const inp = document.createElement('input');
+  inp.className = 'tk-ref-in'; inp.type = 'text'; inp.maxLength = 80;
+  inp.value = window.pgRefOf ? window.pgRefOf(id) : ''; inp.placeholder = 'e.g. Lux49 4Bhk';
+  inp.setAttribute('aria-label', 'Reference for posting');
+  let done = false;
+  const finish = save => {
+    if (done) return; done = true;
+    card.draggable = true;
+    if (save && window.pgSetRef) window.pgSetRef(id, inp.value);
+    applyFilters();
+  };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') finish(false); });
+  inp.addEventListener('click', e => e.stopPropagation());
+  inp.addEventListener('mousedown', e => e.stopPropagation());
+  inp.addEventListener('blur', () => finish(true));
+  slot.replaceWith(inp);
+  inp.focus(); inp.select();
+}
+window.editCardRef = editCardRef;
 // The one next thing, by stage: what is missing → the shoot → the media, cuts and brochure → the brochure.
 function nextLine(x, it, key) {
   if (['closed', 'on_hold', 'dropped'].includes(key)) return '';
@@ -1642,9 +1679,19 @@ function summaryHtml(x, lead, stage) {
   </div>`;
 }
 
+// Redrawn after a tick or a save, the panel stays where it was scrolled — every scrolling part of it.
+const DP_SCROLLERS = ['#dpBody', '#dp .tk-dp-main', '#dp .tk-dp-side', '#dp'];
+function keepDpScroll() {
+  const at = DP_SCROLLERS.map(sel => { const el = document.querySelector(sel); return el ? el.scrollTop : 0; });
+  const win = window.scrollY;
+  // Put back once this redraw is done (it is synchronous), and again after the layout settles.
+  const put = () => { DP_SCROLLERS.forEach((sel, i) => { const el = document.querySelector(sel); if (el && at[i]) el.scrollTop = at[i]; }); if (win) window.scrollTo(0, win); };
+  queueMicrotask(put); requestAnimationFrame(put);
+}
 function openDetail(id) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) keepDpScroll();
   if (isSeriesCard(x)) return openSeriesDetail(x);
   // Redrawing the same listing (a tick, a save) keeps what was open and what was half-typed.
   const same = currentDetailId === id && document.getElementById('dp').classList.contains('open');
@@ -1789,12 +1836,14 @@ function voAskLine(x, k) {
   const a = VO.voAsk(x, k), who = config.voiceBy;
   return `<div class="tk-for-ask">${a
     ? `<span class="tk-vo">🎙 V/O asked by <b>${esc(a.by || '—')}</b> · ${esc(timeAgo(a.at))}${who ? ` — ${esc(who)}` : ''}</span>${a.note ? `<span class="tk-for-note">“${esc(a.note)}”</span>` : ''}<button type="button" class="tk-link" onclick="voUnask('${x.id}','${k}')">Take back</button>`
-    : `<span class="tk-vo need">🎙 V/O not asked yet</span><button type="button" class="tk-vo-ask" onclick="voAskFor('${x.id}','${k}')">Ask for V/O</button><span class="tk-sub2">once the rough cut is ready</span>`}</div>`;
+    : `<span class="tk-vo need">🎙 V/O not asked yet</span>${voCutOn(x, k) ? `<button type="button" class="tk-vo-ask" onclick="voAskFor('${x.id}','${k}')">Ask for V/O</button>` : ''}<span class="tk-sub2">${voCutOn(x, k) ? 'once the rough cut is ready' : 'asked by the editor once the edit is under way'}</span>`}</div>`;
 }
 // Shoot for: each outlet this shoot (or a series' edit) is cut for — planned, made, and its voice.
 function forSectionHtml(x, intro) {
   return `<div class="tk-sec" id="dpFor">
       <div class="tk-sec-hdr">Shoot for</div>
+      <label class="tk-refrow"><span>Reference for posting <em class="tk-sub2">the plan's name for it — the same in Posting</em></span>
+        <input type="text" maxlength="80" value="${esc(window.pgRefOf ? window.pgRefOf(x.id) : '')}" placeholder="e.g. Lux49 4Bhk" onchange="pgSetRef('${x.id}', this.value)" aria-label="Reference for posting"></label>
       <div class="tk-hint" style="margin:-3px 0 9px">${intro || 'Where this shoot is going. For each: planned, made, and its voice over — with V/O, or V/O required separately.'}</div>
       ${legacyVoice(x) ? `<div class="tk-hint warn tk-for-legacy">Set before for the whole shoot: <b>voice-over separately</b>${x.voDone ? ' (made)' : ''}. Pick the voice for each one below.</div>` : ''}
       <div class="tk-brief tk-forgrid">
@@ -2236,8 +2285,10 @@ function voChip(x, keys) {
     + (need.length ? `<span class="tk-vo need" title="Needs a voice-over made separately — ask once the rough cut is ready"><i class="fa-solid fa-microphone" aria-hidden="true"></i> V/O needed: <b>${esc(voNames(need))}</b> · not asked yet</span>` : '');
 }
 // The buttons: ask for the ones not asked yet; "made" for the ones asked.
+// Asking needs the rough cut: an outlet's V/O can be asked once its edit is being edited (or done).
+const voCutOn = (x, k) => (k === 'all' ? cutsOfCard(x) : [EF.cutOfChannel(x, k)]).some(c => ['active', 'done'].includes(EF.cutEdit(x, c).status));
 function voBtns(x, keys) {
-  const left = voOf(x, keys), need = left.filter(o => !o.ask).map(o => o.k), asked = left.filter(o => o.ask).map(o => o.k);
+  const left = voOf(x, keys), need = left.filter(o => !o.ask && voCutOn(x, o.k)).map(o => o.k), asked = left.filter(o => o.ask).map(o => o.k);
   return (need.length ? `<button type="button" class="tk-vo-ask" onclick="event.stopPropagation();voAskFor('${x.id}',${jsq(need.join(','))})" title="The rough cut is ready — ask ${esc(config.voiceBy || 'for the voice-over')}">Ask for V/O</button>` : '')
     + (asked.length ? `<button type="button" class="tk-vo-done" onclick="event.stopPropagation();voMade('${x.id}',${jsq(asked.join(','))})" title="The voice-over is made">V/O made ✓</button>` : '');
 }
@@ -2649,8 +2700,54 @@ function renderLinkList(q) {
       <span class="tk-pick-main"><b>${esc(l.name || 'Unnamed')}</b><span>${esc([l.phone, l.propertyInterest].filter(Boolean).join(' · '))}</span></span>
       ${isSellerLead(l) ? '<span class="tk-pill ai">seller</span>' : ''}
     </button>`).join('') : '<div class="tk-hint">Nothing matches.</div>';
+  renderLinkNew(q, !list.length);
 }
 window.onLinkSearch = v => renderLinkList(v);
+// Not in the CRM: the owner becomes a seller lead there, linked to this card — name and number are all it needs.
+const phoneKeyOf = raw => { const d = String(raw || '').replace(/\D/g, ''); return !d ? '' : d.length === 10 ? '91' + d : d.length === 11 && d[0] === '0' ? '91' + d.slice(1) : d; };
+function renderLinkNew(q, open) {
+  const el = document.getElementById('linkNew'); if (!el) return;
+  const x = listings.find(l => l.id === linkFor) || {};
+  const typed = String(q || '').trim(), isPhone = /^[+\d\s-]{6,}$/.test(typed);
+  if (!open) { el.innerHTML = `<button type="button" class="tk-link" onclick="renderLinkNewOpen()">Not in the CRM? Create the lead</button>`; return; }
+  el.innerHTML = `<div class="tk-linknew-f">
+      <div class="tk-linknew-h">Create the owner as a lead <span class="tk-sub2">a seller lead in the CRM, linked to this card</span></div>
+      <label for="lnName">Owner name</label><input id="lnName" type="text" maxlength="80" value="${esc(isPhone ? x.sellerName || '' : typed || x.sellerName || '')}" placeholder="e.g. Meenakshi">
+      <label for="lnPhone">Phone</label><input id="lnPhone" type="tel" maxlength="20" value="${esc(isPhone ? typed : x.sellerPhone || '')}" placeholder="98400 11111">
+      <div class="tk-box-err" id="lnErr"></div>
+      <div class="tk-btnrow"><button type="button" class="tk-btn primary" id="lnSave" onclick="createLinkedLead()">Create lead &amp; link</button></div>
+    </div>`;
+}
+window.renderLinkNewOpen = () => renderLinkNew(document.getElementById('linkSearch').value, true);
+async function createLinkedLead() {
+  const x = listings.find(l => l.id === linkFor); if (!x) return;
+  const name = document.getElementById('lnName').value.trim(), phone = document.getElementById('lnPhone').value.trim();
+  const err = m => { document.getElementById('lnErr').textContent = m; };
+  if (!name) return err('Type the owner’s name.');
+  if (!phoneKeyOf(phone) || phoneKeyOf(phone).length < 10) return err('Type the owner’s phone number.');
+  // Already in the CRM under this number: that is the lead — link it rather than make a second one.
+  const same = leads.find(l => phoneKeyOf(l.phone) === phoneKeyOf(phone));
+  if (same) { if (confirm(`${same.name || 'A lead'} already has ${phone} in the CRM. Link that lead?`)) pickLead(same.id); return; }
+  const now = Date.now(), me = currentUserEmail || null;
+  const lead = { id: 'lead_' + now, channel: 'call', name, phone, phoneKey: phoneKeyOf(phone), email: '',
+    enquiryType: 'Seller Listing', propertyInterest: x.title || x.location || '', budget: '',
+    ...(realCode(x.propertyCode) ? { propertyCodes: [x.propertyCode] } : {}),
+    listingId: x.id, source: 'board', detailsSent: false, contactAt: now, followUpAt: null,
+    createdAt: now, updatedAt: now, createdBy: me, updatedBy: me, lastActionType: 'created' };
+  const event = { id: 'h' + now + Math.random().toString(36).slice(2, 7), type: 'created', text: `Lead added from the Shoot &amp; Media board (<b>${esc(x.title || 'a property')}</b>)`, at: now, by: me };
+  const btn = document.getElementById('lnSave'); if (btn) btn.disabled = true;
+  try {
+    const saved = await window.trackFirebase.createLead(lead, event);
+    if (!leads.some(l => l.id === saved.id)) leads.push(saved);
+    pickLead(saved.id);
+    toast(`${name} is in the CRM now — linked to this card`);
+  } catch (e) {
+    console.error('create lead failed:', e);
+    if (btn) btn.disabled = false;
+    err(e && e.code === 'permission-denied' ? 'You do not have permission to add leads.' : 'Could not create the lead — check your connection.');
+  }
+}
+window.createLinkedLead = createLinkedLead;
 function pickLead(leadId) {
   const l = leadById(leadId);
   if (!linkFor || !l) return;
@@ -3290,6 +3387,7 @@ function edCardHtml(it) {
       aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
     <div class="ed-top">${code}${due}</div>
     <div class="ed-name">${esc(cardName(x))}</div>
+    ${refLine(x, cardName(x))}
     ${k ? `<div class="ed-cutname">${cutIcon(k)} ${esc(EF.cutLabel(x, k))}</div>` : ''}
     ${vo ? `<div class="tk-vo-row">${vo}${voBtns(x, voKeys)}</div>` : ''}
     ${lines.map(l => `<div class="ed-line">${l}</div>`).join('')}
@@ -3391,7 +3489,7 @@ function renderEditor() {
     <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
       const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || EF.CUTS.findIndex(c => c[0] === a.k) - EF.CUTS.findIndex(c => c[0] === b.k));
       const nLate = cards.filter(it => it.pr.late).length;
-      return `<div class="tk-col ed-col ed-${col.key}">
+      return `<div class="tk-col ed-col ed-${col.key}${cards.length ? '' : ' ed-empty'}" title="${cards.length ? '' : esc(col.label + ' — ' + col.hint)}">
         <div class="tk-col-hdr"><div class="tk-col-head"><span class="tk-col-title">${esc(col.label)}</span></div><div class="tk-col-rule">${esc(col.hint)}</div>
           <div class="tk-col-counts">${nLate ? `<span class="tk-late">${nLate} late</span>` : ''}<span class="tk-count">${cards.length}</span></div></div>
         <div class="tk-col-body" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="edColDrop(event,'${col.key}')">

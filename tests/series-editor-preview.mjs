@@ -43,6 +43,7 @@ window.trackFirebase = {
   saveListing: async l => { window.__listings.push(JSON.parse(JSON.stringify(l))); },
   deleteListing: async () => {}, savePipeline: async () => {}, patchLead: async () => {},
   saveTrackConfig: async c => { window.__cfg = JSON.parse(JSON.stringify(c)); },
+  createLead: async (l, e) => { window.__newLead = JSON.parse(JSON.stringify(l)); window.__newLeadEvent = e; return { ...l, stageId: 'crm_new' }; },
   getInventory: async () => JSON.parse(JSON.stringify(window.__inv)), getListingHistory: async () => [], saveHistory: async () => {}, deleteHistory: async () => {},
   getPropertyInternalNotes: async () => '', getLeadConversation: async () => null
 };
@@ -227,7 +228,7 @@ await p.close();
 console.log('Voice-overs and the property sheet');
 p = await open({ width: 1440, height: 950 }, 'light', '', { voiceBy: 'Anu' });
 await p.click('#tkModeTog .tk-sbtn:has-text("Board")'); await p.waitForTimeout(120);
-ok('Board card: V/O needed, not asked yet — with "Ask for V/O" for the editor', /V\/O needed: Reel · not asked yet/.test(await p.$eval('.tk-card[data-id="lA"] .tk-vo', e => e.textContent.replace(/\s+/g, ' ').trim())) && !!(await p.$('.tk-card[data-id="lA"] .tk-vo-ask')), await p.$eval('.tk-card[data-id="lA"]', e => e.textContent.replace(/\s+/g, ' ')).catch(() => 'no chip'));
+ok('Board card: V/O needed, not asked yet — no "Ask" until the edit is under way (the rough cut comes first)', /V\/O needed: Reel · not asked yet/.test(await p.$eval('.tk-card[data-id="lA"] .tk-vo', e => e.textContent.replace(/\s+/g, ' ').trim())) && !(await p.$('.tk-card[data-id="lA"] .tk-vo-ask')), await p.$eval('.tk-card[data-id="lA"]', e => e.textContent.replace(/\s+/g, ' ')).catch(() => 'no chip'));
 ok('…its line not repeated in the blockers', !/voice-over not made/.test(await p.$eval('.tk-card[data-id="lA"]', e => e.textContent)));
 await p.click('#tkModeTog .tk-sbtn:has-text("Editor")'); await p.waitForTimeout(150);
 ok('Editor view: the shot card shows the V/O to make', !!(await p.$('.ed-shoot_done .tk-card[data-id="lA"] .tk-vo')));
@@ -237,11 +238,13 @@ ok('Checklist → V/O to make: only cards with one', JSON.stringify(await p.$$ev
 await p.evaluate(() => setEdCheck('')); await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(120);
 ok('Not asked yet: not Anu\'s work', !(await p.$('.ed-board .tk-card[data-id="lA"]')));
 await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(80);
-// The editor asks once the rough cut is ready (the note box is answered with nothing).
-await p.click('.ed-board .tk-card[data-id="lA"] .tk-vo-ask'); await p.waitForTimeout(150);
+// The editor starts the Reel; with the rough cut ready, asks (the note box is answered with nothing).
+await p.evaluate(() => { edStep('lA', 'plan', { by: 'Ravi' }, 'igReel'); edStep('lA', 'start', null, 'igReel'); }); await p.waitForTimeout(150);
+ok('…the edit under way: "Ask for V/O" is offered', !!(await p.$('.ed-board .tk-card[data-id="lA"][data-cut="igReel"] .tk-vo-ask')));
+await p.click('.ed-board .tk-card[data-id="lA"][data-cut="igReel"] .tk-vo-ask'); await p.waitForTimeout(150);
 let lAa = await savedListing(p, "l.id === 'lA'");
 ok('"Ask for V/O": asked, stamped with who and when', lAa && lAa.forVoAsk && lAa.forVoAsk.igReel && lAa.forVoAsk.igReel.at > NOW - 60000 && !!lAa.forVoAsk.igReel.by, JSON.stringify(lAa && lAa.forVoAsk));
-ok('…the card now says V/O asked · Anu, with "V/O made"', /V\/O asked: Reel · Anu/.test(await p.$eval('.ed-board .tk-card[data-id="lA"] .tk-vo', e => e.textContent.replace(/\s+/g, ' '))) && !!(await p.$('.ed-board .tk-card[data-id="lA"] .tk-vo-done')));
+ok('…the card now says V/O asked · Anu, with "V/O made"', /V\/O asked: Reel · Anu/.test(await p.$eval('.ed-board .tk-card[data-id="lA"][data-cut="igReel"] .tk-vo', e => e.textContent.replace(/\s+/g, ' '))) && !!(await p.$('.ed-board .tk-card[data-id="lA"][data-cut="igReel"] .tk-vo-done')));
 await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(120);
 ok('Person → Anu (the voice-over person): asked, so it is in her work', !!(await p.$('.ed-board .tk-card[data-id="lA"]')));
 await p.evaluate(() => setEdPerson('Anu')); await p.waitForTimeout(80);
@@ -295,6 +298,38 @@ await p.evaluate(() => pgPlanPost('lE', 'igStory')); await p.waitForTimeout(150)
 ok('A card with no Posting row: the row is made from the card (its code)', await p.evaluate(() => (window.__lastRows() || []).some(r => r.propertyCode === 'LIVE0001')) && await p.evaluate(() => document.getElementById('pgModal').classList.contains('open')));
 await p.evaluate(() => pgClose()); await p.waitForTimeout(150);
 ok('…cancelled: the row made for it goes again (nothing left empty in Posting)', await p.evaluate(() => !window.pgPostsFor(window.trackApi.listings().find(l => l.id === 'lE')).rowId));
+// The reference: set on the card, kept on the property's Posting row, shown on the card.
+await p.evaluate(() => toggleView('board', true)); await p.waitForTimeout(150);
+await p.evaluate(() => openDetail('lF')); await p.waitForTimeout(150);
+await p.fill('#dpFor input[aria-label="Reference for posting"]', 'ECR sea view 4Bhk');
+await p.dispatchEvent('#dpFor input[aria-label="Reference for posting"]', 'change'); await p.waitForTimeout(200);
+ok('Reference set on the card: saved on its Posting row', await p.evaluate(() => window.__lastRows().find(r => r.id === 'pF').reference) === 'ECR sea view 4Bhk');
+await p.evaluate(() => closeDetail()); await p.waitForTimeout(150);
+ok('…and shown under the card\'s name on the board', /Ref: ECR sea view 4Bhk/.test(await p.textContent('.tk-card[data-id="lF"]')));
+await p.click('.tk-card[data-id="lF"] .tk-ref'); await p.waitForTimeout(100);
+await p.fill('.tk-card[data-id="lF"] .tk-ref-in', 'ECR villa 4Bhk'); await p.keyboard.press('Enter'); await p.waitForTimeout(200);
+ok('…changed right on the board card (Enter saves, on its Posting row)', await p.evaluate(() => window.__lastRows().find(r => r.id === 'pF').reference) === 'ECR villa 4Bhk' && /Ref: ECR villa 4Bhk/.test(await p.textContent('.tk-card[data-id="lF"]')));
+await p.hover('.tk-card[data-id="lC"]'); await p.waitForTimeout(150);
+ok('…a card with none offers "+ Reference" on hover', await p.isVisible('.tk-card[data-id="lC"] .tk-ref-add'));
+await p.evaluate(() => pgSetRef('lE', 'Old flat, Besant Nagar')); await p.waitForTimeout(200);
+ok('…a card with no Posting row: the row is made with the reference', await p.evaluate(() => (window.__lastRows() || []).some(r => r.propertyCode === 'LIVE0001' && r.reference === 'Old flat, Besant Nagar')));
+// A tick in the panel redraws it — and it stays where it was scrolled.
+await p.evaluate(() => openDetail('lF')); await p.waitForTimeout(150);
+const scroller = await p.evaluate(() => { const c = ['#dpBody', '#dp .tk-dp-main', '#dp .tk-dp-side', '#dp'].find(sel => { const el = document.querySelector(sel); return el && el.scrollHeight > el.clientHeight + 50; }); return c || ''; });
+await p.evaluate(sel => { document.querySelector(sel).scrollTop = 400; }, scroller); await p.waitForTimeout(100);
+const before = await p.evaluate(sel => document.querySelector(sel).scrollTop, scroller);
+await p.evaluate(() => setForPlan('lF', 'collab', true)); await p.waitForTimeout(250);
+const after = await p.evaluate(sel => document.querySelector(sel).scrollTop, scroller);
+ok('A tick in the panel keeps it where it was scrolled (not back to the top)', !!scroller && before > 100 && Math.abs(after - before) < 5, JSON.stringify({ scroller, before, after }));
+await p.evaluate(() => closeDetail()); await p.waitForTimeout(100);
+// No lead in the CRM for this owner: create it from the card, linked.
+await p.evaluate(() => openLinkLead('lF')); await p.waitForTimeout(120);
+await p.fill('#linkSearch', '9876543210'); await p.dispatchEvent('#linkSearch', 'input'); await p.waitForTimeout(120);
+ok('Link a CRM lead → nothing matches: the form to create the lead, the number typed already in it', /Nothing matches/.test(await p.textContent('#linkList')) && await p.$eval('#lnPhone', i => i.value) === '9876543210');
+await p.fill('#lnName', 'Prakash'); await p.click('#lnSave'); await p.waitForTimeout(250);
+const nl = await p.evaluate(() => window.__newLead);
+ok('…created as a seller lead in the CRM, already linked to the card', nl && nl.name === 'Prakash' && nl.enquiryType === 'Seller Listing' && nl.listingId === 'lF' && nl.phoneKey === '919876543210' && (nl.propertyCodes || []).includes('ECR0009'), JSON.stringify(nl));
+ok('…and the card is linked to it', (await savedListing(p, "l.id === 'lF'")).leadId === nl.id && !(await p.evaluate(() => document.getElementById('linkModal').classList.contains('open'))));
 // A post live in Posting: the card moves to Live.
 await p.evaluate(() => toggleView('posting')); await p.waitForTimeout(150);
 await p.evaluate(() => pgChannel('pD', 'igReel', 'live')); await p.waitForTimeout(150);

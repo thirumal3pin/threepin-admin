@@ -2253,12 +2253,36 @@ function backToCard() {
   const id = fromCard; fromCard = null;
   if (id && window.openDetail && document.getElementById('dp') && document.getElementById('dp').classList.contains('open')) setTimeout(() => window.openDetail(id), 0);
 }
+// A board card's own Posting row (not a repost): by its postingId, a series by its card, else by code.
+const cardCode = l => l.propertyCode || (l.brochure && l.brochure.code) || '';
+function rowOfCard(l) {
+  const series = l.kind === 'series', ck = G.codeKey(cardCode(l));
+  return trackers.find(r => !r.repostOf && (r.id === l.postingId || (series ? r.listingId === l.id : (ck && G.codeKey(r.propertyCode) === ck)))) || null;
+}
+// The reference — the plan's short name for a property ("Lux49 4Bhk") — lives on its Posting row: the
+// board shows it and edits it there, so Posting and the board always say the same.
+window.pgRefOf = listingId => {
+  const api = window.trackApi, l = api && api.listings().find(x => x.id === listingId);
+  const t = l && rowOfCard(l);
+  return t ? String(t.reference || '').trim() : '';
+};
+window.pgSetRef = (listingId, value) => {
+  const api = window.trackApi, l = api && api.listings().find(x => x.id === listingId);
+  if (!l) return;
+  if (!loaded) return toast('Posting is still loading — try again in a moment');
+  const v = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const t = rowOfCard(l);
+  if (t) { if (String(t.reference || '').trim() !== v) persist({ ...t, reference: v }, v ? 'Reference saved — Posting shows it too' : 'Reference cleared'); return; }
+  if (!v) return;
+  if (l.kind === 'series' || !G.trackerId(cardCode(l))) return toast('Give the card its property code first — Posting keeps a property by its code');
+  persist(G.blankTracker({ propertyCode: cardCode(l), title: l.title, reference: v, location: l.location || '', photosLink: G.webLink(l.photosLink || '') }, now(), who()), 'Reference saved — the property is on Posting now');
+};
 window.pgPlanPost = (listingId, key) => {
   const api = window.trackApi, l = api && api.listings().find(x => x.id === listingId);
   if (!l || !G.CHANNELS.some(c => c.key === key)) return;
   if (!loaded) return toast('Posting is still loading — try again in a moment');
-  const series = l.kind === 'series', code = l.propertyCode || (l.brochure && l.brochure.code) || '', ck = G.codeKey(code);
-  let t = trackers.find(r => !r.repostOf && (r.id === l.postingId || (series ? r.listingId === l.id : (ck && G.codeKey(r.propertyCode) === ck))));
+  const series = l.kind === 'series', code = cardCode(l);
+  let t = rowOfCard(l);
   let made = null;
   if (!t) {
     if (series) return toast('This series has no Posting row yet — make it from Posting (New series)');

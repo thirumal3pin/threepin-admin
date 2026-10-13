@@ -170,6 +170,19 @@ window.trackFirebase = {
     await setDoc(doc(db, 'leads', leadId), safe, { merge: true });
   },
 
+  // A seller lead made from the board, when the property's owner is not in the CRM yet: the shape the
+  // CRM's own Add Lead writes, already linked to this card, in the CRM's first column (its "new").
+  async createLead(lead, historyEvent){
+    if(!currentTenantId) throw new Error('No tenant');
+    const p = await getDoc(doc(db, 'pipelines', currentTenantId)).catch(() => null);
+    const stages = (p && p.exists() && p.data().stages) || [];
+    const st = stages.find(s => s.key === 'new') || stages[0] || null;
+    const out = { ...lead, tenantId: currentTenantId, stageId: st ? st.id : null };
+    await setDoc(doc(db, 'leads', lead.id), out);
+    if(historyEvent) await setDoc(doc(db, 'leads', lead.id, 'history', historyEvent.id), historyEvent).catch(() => {});
+    return out;
+  },
+
   async savePipeline(stages){
     if(!currentTenantId) throw new Error('No tenant');
     await setDoc(pipelineRef(currentTenantId), { stages });

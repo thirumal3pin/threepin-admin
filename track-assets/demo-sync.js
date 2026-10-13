@@ -93,7 +93,7 @@ window.trackFirebase = {
   async saveTrackConfig(cfg) { setTimeout(() => window.applyTrackConfigSnapshot && window.applyTrackConfigSnapshot(clone(cfg)), 0); },
   async saveListing(l) { const i = listings.findIndex(x => x.id === l.id); const c = { ...clone(l), tenantId: T }; if (i >= 0) listings[i] = c; else listings.push(c); },
   async deleteListing(id) { listings = listings.filter(x => x.id !== id); window.applyListingsSnapshot(clone(listings)); },
-  async savePipeline() {}, async patchLead() {},
+  async savePipeline() {}, async patchLead() {}, async createLead(l) { return { ...l, stageId: null }; },
   async getPropertyInternalNotes(id) { return id === 'TNAG0002' ? 'Owner: Mr Raman, call after 6pm. Keys with the watchman.' : ''; },
   async getInventory() { return clone(INVENTORY); },
   async getListingHistory() { return history.slice(); },
