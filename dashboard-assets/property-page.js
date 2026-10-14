@@ -100,8 +100,8 @@ function openLeadCrm(){
   window.location.href = 'crm.html?propertyId=' + encodeURIComponent(currentProperty.id);
 }
 
-// This page is the light, shareable view (Overview, Specifications, Sales Pitch). The team's
-// notes, internal notes and matching buyers live in the full record on the Properties page.
+// A link with an id never stays on this page (property.html forwards it to the full record);
+// this is kept for anything that still renders the light view directly.
 function openFullRecord(){
   if(!currentProperty) return;
   window.location.href = 'dashboard.html?property=' + encodeURIComponent(currentProperty.id);

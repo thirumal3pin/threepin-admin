@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Property — 3 PIN Realty</title>
 <meta name="robots" content="noindex, nofollow">
+<script>
+  // A property link is for the team only, so it opens the FULL record on the Properties page —
+  // every tab: Matching Buyers, Notes & CRM and Internal Notes as well as Overview, Specifications
+  // and Sales Pitch. Every link already sent (property.html?id=…) lands there too. Without an id
+  // this page stays and says the link is incomplete.
+  (function () {
+    try {
+      var id = new URLSearchParams(location.search).get('id');
+      if (id) location.replace('dashboard.html?property=' + encodeURIComponent(id));
+    } catch (e) {}
+  })();
+</script>
 <!-- Warm up the two hosts the first paint waits on, in parallel with the
      HTML parse — this is most of the cold-open speed on a shared link. -->
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>

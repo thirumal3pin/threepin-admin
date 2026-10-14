@@ -48,7 +48,8 @@
   // ── URL for one property. Same shape from both pages, so whatever is in
   // the address bar is always the link worth pasting into chat.
   function propertyUrl(id){
-    return new URL('property.html?id=' + encodeURIComponent(id), location.href).href;
+    // The full record, every tab (property.html forwards older links here too).
+    return new URL('dashboard.html?property=' + encodeURIComponent(id), location.href).href;
   }
 
   // The sheet's Location_Pin column holds either a real Maps URL or just a

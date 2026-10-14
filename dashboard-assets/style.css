@@ -1455,6 +1455,12 @@ a.nm-row{ text-decoration:none; }
 #dp .dp-hdr{position:static;box-shadow:none;border-bottom:0;}
 #dp .dp-tabbar{position:sticky;top:0;z-index:10;background:var(--white);padding:0 28px;border-bottom:1.5px solid var(--border);box-shadow:0 2px 14px rgba(0,0,0,.05);}
 #dp .dp-tabbar .dp-tabs{margin-top:0;position:static;}
+/* On a phone the six tabs sit in a 3 × 2 grid, every one in sight — not a strip that scrolls sideways
+   with Notes & CRM and Internal Notes off the edge. */
+@media (max-width:760px){
+  #dp .dp-tabbar .dp-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;overflow:visible;}
+  #dp .dp-tabbar .dp-tab{padding:10px 4px;font-size:13px;white-space:normal;text-align:center;line-height:1.25;}
+}
 /* On a wide screen the header and the tabs start where the content below does (the body is a
    centred 1000px column with 28px inside), instead of at the window's edge. */
 @media (min-width:761px){

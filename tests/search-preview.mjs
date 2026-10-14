@@ -168,6 +168,51 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   await p.close();
 }
 
+// ── A shared property link opens the FULL record: every tab, Internal Notes included, and it scrolls ──
+// (property.html?id=… — every link already sent — forwards there too.)
+for (const [name, vp] of [['desk', { width: 1366, height: 768 }], ['phone', { width: 390, height: 844 }]]) {
+  const target = DATA.find(x => x.id && x.propertyCode) || DATA[0];
+  for (const start of [`/dashboard.html?property=${encodeURIComponent(target.id)}`, `/property.html?id=${encodeURIComponent(target.id)}`]) {
+    const p = await b.newPage({ viewport: vp, deviceScaleFactor: 1 });
+    p.on('pageerror', e => errs.push(`${name} link: ${String(e).slice(0, 300)}`));
+    await p.route('**/firebasejs/**', r => r.abort());
+    await p.route('**/dashboard-assets/firebase-sync.js', r => r.abort());
+    await p.route('**/identitytoolkit**', r => r.abort());
+    await p.route('**/firestore.googleapis.com/**', r => r.abort());
+    await p.goto((process.env.PIN_BASE || 'http://127.0.0.1:5199') + start, { waitUntil: 'domcontentloaded' });
+    await p.waitForURL(/dashboard\.html/, { timeout: 5000 }).catch(() => {});
+    await p.waitForFunction(() => typeof window.init === 'function' && !!window.PinSearch, null, { timeout: 8000 });
+    await p.evaluate(data => {
+      window.dashboardFirebase = { saveProperty: () => Promise.resolve(), getPropertyNotes: () => Promise.resolve([]), getInternalNotes: () => Promise.resolve([]),
+        getChanges: () => Promise.resolve([]), getLeads: () => Promise.resolve([]), propertyMarketing: () => Promise.resolve({ cards: [], posts: [] }) };
+      window.dashboardAuth = { getTenantId: () => 't_test', getUserEmail: () => 'test@example.com', getIdToken: () => Promise.resolve(null), logout: () => { } };
+      window.onDashboardAuthChange({ uid: 'test' });
+      window.applyPropertiesSnapshot(data);
+    }, DATA);
+    await p.waitForTimeout(700);
+    const st = await p.evaluate(() => ({
+      open: document.getElementById('dp').classList.contains('open'),
+      tabs: [...document.querySelectorAll('#dp .dp-tab')].map(t => t.textContent.trim()),
+      url: location.pathname
+    }));
+    const tabsOk = st.open && st.tabs.length === 6 && st.tabs.some(t => /Internal Notes/.test(t)) && st.tabs.some(t => /Notes & CRM/.test(t)) && st.tabs.some(t => /Matching Buyers/.test(t));
+    if (!tabsOk) errs.push(`${name} ${start}: the full record did not open with every tab: ${JSON.stringify(st)}`);
+    await p.mouse.move(vp.width / 2, vp.height - 160);
+    await p.mouse.wheel(0, 700);
+    await p.waitForTimeout(700);
+    const y = await p.evaluate(() => document.getElementById('dp').scrollTop + document.scrollingElement.scrollTop);
+    if (y < 100) errs.push(`${name} ${start}: the full record does not scroll (${y})`);
+    await p.evaluate(() => { const t = [...document.querySelectorAll('#dp .dp-tab')].find(x => /Internal/.test(x.textContent)); if (t) t.click(); });
+    await p.waitForTimeout(300);
+    const internalShown = await p.evaluate(() => !!document.querySelector('#dp .tab-panel.active #internalNotesPanel'));
+    if (!internalShown) errs.push(`${name} ${start}: the Internal Notes tab does not open`);
+    console.log(`   ${name} ${start}: opened ${st.url}, ${st.tabs.length} tabs, scroll ${y}, internal notes ${internalShown}`);
+    await p.screenshot({ path: `${OUT}${name}-full-record${start.startsWith('/property') ? '-from-old-link' : ''}.png` });
+    shots++;
+    await p.close();
+  }
+}
+
 await b.close();
 console.log(`\n${shots} screenshots → ${OUT}`);
 if (errs.length) { console.log('\nPAGE ERRORS:'); [...new Set(errs)].forEach(e => console.log('  ' + e)); process.exit(1); }

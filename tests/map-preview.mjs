@@ -550,7 +550,7 @@ console.log('The map view');
     e => decodeURIComponent((e.href.split('text=')[1] || '')));
   ok('the message carries the code, the price and the possession',
     /ANR0099/.test(waText) && /3\.5 Cr/.test(waText) && /Ready to move/.test(waText), waText.slice(0, 170));
-  ok('and a link back to the property', /property\.html\?id=/.test(waText));
+  ok('and a link back to the property (its full record)', /dashboard\.html\?property=/.test(waText));
 
   ok('Directions routes from the device, not property-to-itself',
     await page.$eval('#mapCard .mv-btn.ghost', e => !/origin=/.test(e.href) && /destination=/.test(e.href)),

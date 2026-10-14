@@ -964,7 +964,7 @@ function renderDetail(id){
   currentDetailId = id;
   document.getElementById('dp').classList.remove('comparing');
   PinPropertyView.cacheProperty(p);
-  document.querySelector('.dp-tabs').style.display='flex';
+  document.querySelector('.dp-tabs').style.display='';   // the stylesheet decides: a row, or a 3 × 2 grid on a phone
   document.querySelector('.dp-hdr-actions').style.display='flex';
   const fav = favorites.includes(id);
   const isSoldOut = !!p.soldOut;
@@ -1021,7 +1021,7 @@ function renderDetail(id){
     <div class="tab-panel">
       <div class="sec">
         <div class="sec-title">🔒 Internal Notes &amp; Instructions</div>
-        <div class="int-warn">Team-only. Never shown on the shared property link, never written to the Inventory sheet, and never touched by Sync from Sheet.</div>
+        <div class="int-warn">Team-only. Seen by the team on the property's page and its link — never in the client copy (WhatsApp details, brochure, print), never written to the Inventory sheet, and never touched by Sync from Sheet.</div>
         <div id="internalNotesPanel">${renderInternalNotes(id)}</div>
         <div class="note-add">
           <textarea class="int-input" id="intInput" rows="3" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();addInternalNote('${id}');}" placeholder="Add a pointer or a paragraph — owner's number, negotiation floor, access instructions, anything the team needs but the client must not see…"></textarea>
@@ -2116,9 +2116,9 @@ function refreshOpenDetail(){
 window.getDuplicateRecords = () => duplicateRecords;
 
 // dashboard.html?property=ID opens that property's full record — every tab, Internal Notes and
-// Notes & CRM included. The Property & Media board and the CRM link here; property.html is the
-// lighter page for sharing. Matched by document id or Property_ID, opened once.
-let linkedProperty = null;
+// Notes & CRM included. The Property & Media board, the CRM and every shared property link come
+// here (property.html forwards its links). Matched by document id or Property_ID, opened once.
+let linkedProperty = null, linkedMissTimer = null;
 try { linkedProperty = new URLSearchParams(location.search).get('property'); } catch (e) {}
 function openLinkedProperty(){
   if(!linkedProperty || !properties.length) return;
@@ -2131,6 +2131,13 @@ function openLinkedProperty(){
     // otherwise rewrite — leaving ?property= in place for a refresh to reopen.
     try { const u = new URL(location.href); u.searchParams.delete('property'); history.replaceState(null, '', u.pathname + u.search + u.hash); } catch (e) {}
     openDetail(p.id);
+  } else if(!linkedMissTimer){
+    // The first list may be this device's saved copy; the server's follows. Give it a moment, then
+    // say the link found nothing rather than leave the person on the grid wondering.
+    linkedMissTimer = setTimeout(() => {
+      if(linkedProperty && typeof showToast === 'function') showToast(`No property “${linkedProperty}” here — it may have been deleted or renamed.`);
+      linkedProperty = null;
+    }, 8000);
   }
 }
 

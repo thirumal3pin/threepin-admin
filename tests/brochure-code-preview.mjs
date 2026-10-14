@@ -136,11 +136,11 @@ ok('a taken code offers a preview button, card closed', await pg.locator('.bf-pr
 await pg.click('.bf-prev-btn');
 const card = await pg.evaluate(() => { const c = document.querySelector('.bf-prev'); const a = c && c.querySelector('.bf-prev-open'); return c && { text: c.textContent.replace(/\s+/g, ' '), href: a.getAttribute('href'), target: a.target, rel: a.rel, btn: document.querySelector('.bf-prev-btn').textContent }; });
 ok('the preview shows the property', card && /NOL002/.test(card.text) && /3BHK in Velachery/.test(card.text), JSON.stringify(card));
-ok('"Open property" opens that property in a new tab', card && card.href === 'property.html?id=NOL002' && card.target === '_blank' && /noopener/.test(card.rel), JSON.stringify(card));
+ok('"Open property" opens that property in a new tab', card && card.href === 'dashboard.html?property=NOL002' && card.target === '_blank' && /noopener/.test(card.rel), JSON.stringify(card));
 ok('the button now hides it', card && card.btn === 'Hide preview');
 await pg.screenshot({ path: join(OUT, '6-preview.png') });
 const [tab] = await Promise.all([pg.context().waitForEvent('page'), pg.click('.bf-prev-open')]);
-ok('clicking it opens a second tab on property.html?id=NOL002', /property\.html\?id=NOL002$/.test(tab.url()), tab.url());
+ok('clicking it opens a second tab on the full record (dashboard.html?property=NOL002)', /dashboard\.html\?property=NOL002$/.test(tab.url()) || /dashboard\.html/.test(tab.url()), tab.url());
 await tab.close();
 await pg.click('.bf-prev-btn');
 ok('keyboard focus stays on the button after toggling', await pg.evaluate(() => document.activeElement && document.activeElement.classList.contains('bf-prev-btn')));

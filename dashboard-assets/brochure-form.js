@@ -234,7 +234,7 @@ function bfPreviewCard(code){
     ${meta ? `<div class="bf-prev-meta">${meta}</div>` : ''}
     ${p.startingPrice ? `<div class="bf-prev-price">${e(p.startingPrice)}</div>` : ''}
     ${details ? `<div class="bf-prev-text">${e(details.length > 160 ? details.slice(0, 160) + '…' : details)}</div>` : ''}
-    <div class="bf-prev-acts"><a class="bf-prev-open" href="property.html?id=${encodeURIComponent(p.id)}" target="_blank" rel="noopener">Open property ↗</a>${extra}</div>
+    <div class="bf-prev-acts"><a class="bf-prev-open" href="dashboard.html?property=${encodeURIComponent(p.id)}" target="_blank" rel="noopener">Open property ↗</a>${extra}</div>
   </div>`;
 }
 

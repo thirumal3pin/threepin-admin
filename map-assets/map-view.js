@@ -516,7 +516,7 @@
 
   function pitch(it) {
     let url = null;
-    try { url = new URL('property.html?id=' + encodeURIComponent(it.p.id), location.href).href; } catch (e) {}
+    try { url = new URL('dashboard.html?property=' + encodeURIComponent(it.p.id), location.href).href; } catch (e) {}
     return root.PinMapCore.pitchFor(it.p, { priceLo: it.priceLo, priceHi: it.priceHi, url });
   }
 
