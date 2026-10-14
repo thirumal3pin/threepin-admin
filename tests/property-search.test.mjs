@@ -708,6 +708,21 @@ check('a nonsense word returns nothing rather than everything', find('zzzqqxwv')
 check('stopwords alone do not empty the grid', find('looking for a property in').length > 0);
 check('a query of only stopwords behaves like an empty one', find('please show me any options').length === P.length);
 
+section('One place, many spellings — "Tnagar" is T Nagar, not every "Nagar" a typo away');
+{
+  const tn = P.filter(p => /\bT\.? ?Nagar\b/i.test([p.name, p.location, p.zone].join(' '))).map(p => p.propertyCode);
+  check('the inventory has T Nagar listings to find', tn.length >= 3, tn.length);
+  const ref = find('t nagar').map(r => r.p.propertyCode);
+  for (const q of ['tnagar', 'Tnagar', 'T.Nagar', 'T. Nagar', 't-nagar', 'Thyagaraya Nagar', 'thyagaraja nagar']) {
+    const got = find(q).map(r => r.p.propertyCode);
+    check(`"${q}" finds every T Nagar listing`, tn.every(c => got.includes(c)), got.length);
+    check(`"${q}" does not drag in Anna Nagar and the other Nagars`, !got.some(c => /^(ANR|ANN|ANW|ADRM|ASN)/.test(c)), got.filter(c => /^(ANR|ANN|ANW|ADRM|ASN)/.test(c)).slice(0, 5).join(','));
+    check(`"${q}" ranks the T Nagar listings first`, got.slice(0, 2).every(c => tn.includes(c)), got.slice(0, 3).join(','));
+  }
+  eq('"tnagar" and "t nagar" are the same search', find('tnagar').map(r => r.p.propertyCode).join(), ref.join());
+  check('"annanagar" finds Anna Nagar', find('annanagar').length > 0 && find('annanagar').length === find('anna nagar').length);
+}
+
 section('Robustness — properties with broken data still index');
 for (const p of P) {
   try { S.indexProperty(p); }

@@ -7,7 +7,7 @@ import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-const DIRS = ['api', 'crm-assets', 'track-assets', 'dashboard-assets', 'finance-assets', 'shared-assets', 'scripts', 'tests'];
+const DIRS = ['api', 'crm-assets', 'track-assets', 'dashboard-assets', 'finance-assets', 'shared-assets', 'home-assets', 'scripts', 'tests'];
 const files = [];
 for (const d of DIRS) for (const f of readdirSync(d)) if (['.js', '.mjs'].includes(extname(f))) files.push(join(d, f));
 const tmp = mkdtempSync(join(tmpdir(), 'syntax-'));

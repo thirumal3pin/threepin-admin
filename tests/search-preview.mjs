@@ -77,11 +77,16 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
     ['budget', 'ready to move 3bhk under 2 cr'],
     ['code', 'ADRA0001'],
     ['typo', 'adayar villa'],
+    ['tnagar', 'Tnagar'],
+    ['tnagar-3bhk', '3bhk tnagar'],
     ['none', 'zzzqqxwv']
   ]) {
     await type(q);
     results[q] = await count();
     await shot('q-' + label);
+    // The groups under the exact hits (nearby areas, almost match, reads like), when there are any.
+    const nm = await p.$('#nearMisses:not([hidden])');
+    if (nm) { await nm.screenshot({ path: `${OUT}${name}-nm-${label}.png` }); shots++; }
   }
 
   // Type-ahead

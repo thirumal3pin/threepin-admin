@@ -600,6 +600,64 @@ const bulk = Date.now() - t1;
 console.log(`  ${bulk} ms to rank 200 leads for one property`);
 check('200 leads under 1.5 s', bulk < 1500, bulk + 'ms');
 
+// ═══════ NEARBY AREAS AND "READS LIKE" ═══════
+{
+  const S = globalThis.PinSearch, geo = globalThis.PinGeo;
+  const gaz = S.buildGazetteer(INVENTORY);
+  const exact = q => S.search(INVENTORY, { text: q, gazetteer: gaz }).map(h => h.p);
+  const km = (a, b) => geo.haversine(geo.LOCALITIES[a], geo.LOCALITIES[b]);
+
+  for (const q of ['t nagar', 'tnagar', 'adyar', '3bhk adyar']) {
+    const shown = exact(q);
+    const nb = M.nearbyAreas(INVENTORY, q, { gazetteer: gaz, exclude: shown });
+    check(`"${q}": there are nearby-area results`, nb.length > 0, nb.length);
+    check(`"${q}": none repeats an exact hit`, nb.every(n => !shown.some(p => p.id === n.p.id)));
+    check(`"${q}": every one is within 5 km`, nb.every(n => n.km <= 5), nb.map(n => n.km.toFixed(1)).join());
+    check(`"${q}": nearest first`, nb.every((n, i) => !i || nb[i - 1].km <= n.km));
+    check(`"${q}": each says where it is and from what`, nb.every(n => n.from && n.where));
+  }
+  // Only the AREA is relaxed: a 3BHK search never offers a non-3BHK next door.
+  {
+    const nb = M.nearbyAreas(INVENTORY, '3bhk t nagar', { gazetteer: gaz, exclude: exact('3bhk t nagar') });
+    const anyBhk = M.nearbyAreas(INVENTORY, 't nagar', { gazetteer: gaz, exclude: exact('t nagar') });
+    check('a 3BHK search offers fewer nearby than the bare area (the BHK still holds)', nb.length <= anyBhk.length, nb.length + ' vs ' + anyBhk.length);
+    check('every nearby result of "3bhk t nagar" is a 3BHK', nb.every(n => S.search([n.p], { text: '3bhk', gazetteer: gaz }).length === 1));
+  }
+  // The distance stated is the real one.
+  {
+    const n = M.nearbyAreas(INVENTORY, 'adyar', { gazetteer: gaz, exclude: exact('adyar') })[0];
+    check('the stated distance is the straight line from the area asked for', n && Math.abs(n.km - km('adyar', geo.resolve(n.where))) < 0.05);
+  }
+  // A query with no area has nothing to widen.
+  eq('"3bhk" alone has no nearby areas', M.nearbyAreas(INVENTORY, '3bhk', { gazetteer: gaz }).length, 0);
+  eq('an empty query has none', M.nearbyAreas(INVENTORY, '', { gazetteer: gaz }).length, 0);
+  // A pinned property is placed by its pin, not by its Location text.
+  {
+    const p = Object.assign({}, INVENTORY.find(x => /Adyar/i.test(x.location)), { id: 'PINNED', location: 'Somewhere unlisted', geo: { lat: 13.0418, lng: 80.2341 } });
+    const nb = M.nearbyAreas([p], 'adyar', { km: 6 });
+    check('a pinned property is measured from its pin', nb.length === 1 && nb[0].where === 'its pin', J(nb.map(n => n.where)));
+  }
+  // Rent and sale are never mixed here either.
+  {
+    const rent = INVENTORY.filter(p => /rent/i.test(String(p.saleType || p.listingType || '')));
+    if (rent.length) {
+      const nb = M.nearbyAreas(INVENTORY, 'for sale adyar', { gazetteer: gaz });
+      check('a sale search offers no rental next door', nb.every(n => !/rent/i.test(String(n.p.saleType || n.p.listingType || ''))));
+    }
+  }
+  // Right property, wrong part of town is not a near miss — the nearby group has those within 5 km.
+  {
+    const shown = exact('3bhk t nagar');
+    const withArea = M.nearMisses(INVENTORY, '3bhk t nagar', { gazetteer: gaz, exclude: shown });
+    const without = M.nearMisses(INVENTORY, '3bhk t nagar', { gazetteer: gaz, exclude: shown, skipAreaOnly: true });
+    check('skipAreaOnly drops the ones missing only the area', without.length < withArea.length, withArea.length + ' -> ' + without.length);
+    check('and keeps the ones missing something else', without.every(n => n.missing.some(m => !/nagar/i.test(m))));
+  }
+  const sim = M.similarTo(INVENTORY, 'school nearby', { gazetteer: gaz, exclude: exact('school nearby'), limit: 5 });
+  check('"school nearby" reads-like never repeats an exact hit', sim.every(s => !exact('school nearby').some(p => p.id === s.p.id)));
+  check('reads-like results carry a similarity', sim.every(s => s.sim > 0));
+}
+
 // ═══════ RESULT ═══════
 console.log('\n' + '─'.repeat(64));
 if (failed) {

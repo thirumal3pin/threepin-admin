@@ -2427,7 +2427,7 @@
       const rec = eng.indexProperty(p);
       let met = 0;
       const missing = [];
-      let blocked = false;
+      let blocked = false, onlyArea = true;
       for (const c of clauses) {
         let hit = null;
         for (const leaf of c.leaves) {
@@ -2440,9 +2440,13 @@
         }
         if (c.negate) { if (hit) { blocked = true; break; } continue; }
         if (hit) met++;
-        else missing.push(clauseLabel(c));
+        else { missing.push(clauseLabel(c)); if (!isAreaClause(c)) onlyArea = false; }
       }
       if (blocked) continue;
+      // Missing nothing but the AREA means "right property, wrong part of town": the nearby-areas
+      // group already offers those within a few km, so a 3BHK in Whitefield is not a near miss
+      // of a T Nagar search.
+      if (o.skipAreaOnly && missing.length && onlyArea) continue;
       const wanted = clauses.filter(c => !c.negate).length;
       const ratio = wanted ? met / wanted : 0;
       // "Missing at most two things", not a ratio alone. A two-thirds ratio
@@ -2457,6 +2461,113 @@
     }
     out.sort((a, b) => b.ratio - a.ratio || a.missing.length - b.missing.length);
     return o.limit ? out.slice(0, o.limit) : out;
+  }
+
+  // A clause that is only a place: every leaf resolves to a locality on the Chennai area map.
+  function isAreaClause(c) {
+    const geo = G(), L = geo.LOCALITIES || {};
+    if (c.negate || !c.leaves.length) return false;
+    return c.leaves.every(leaf => {
+      const t = leaf.kind === 'gaz' ? ((leaf.entry && leaf.entry.raw) || leaf.text)
+        : (leaf.kind === 'text' || leaf.kind === 'phrase' || (leaf.kind === 'scoped' && leaf.field === 'area')) ? leaf.text : null;
+      const k = t ? geo.resolve(t) : null;
+      return !!(k && L[k]);
+    });
+  }
+
+  // ═══════ NEARBY AREAS ═══════
+  //
+  // "T Nagar 3BHK" with five T Nagar listings should still show the 3BHK in Kodambakkam, two
+  // kilometres away — as its own group under the exact hits, never mixed into them, each
+  // saying how far and from where. Everything else the person typed must still hold (rent/sale,
+  // BHK, budget…): only the AREA is relaxed, and only to places the Chennai area map puts within
+  // a few kilometres. A property is placed by its dropped pin when it has one, else by the
+  // places its Location names.
+  function nearbyAreas(list, text, opts) {
+    const o = opts || {};
+    const eng = S(), geo = G();
+    const gaz = o.gazetteer || eng.buildGazetteer(list);
+    const clauses = eng.parseQuery(text, gaz);
+    if (!clauses.length) return [];
+    const maxKm = o.km == null ? 5 : o.km;
+    const L = geo.LOCALITIES || {};
+
+    const areaKey = leaf => {
+      const t = leaf.kind === 'gaz' ? ((leaf.entry && leaf.entry.raw) || leaf.text)
+        : (leaf.kind === 'text' || leaf.kind === 'phrase' || (leaf.kind === 'scoped' && leaf.field === 'area')) ? leaf.text : null;
+      const k = t ? geo.resolve(t) : null;
+      return k && L[k] ? k : null;
+    };
+    const targets = [], rest = [];
+    for (const c of clauses) {
+      const keys = c.negate ? [] : c.leaves.map(areaKey);
+      if (keys.length && keys.every(Boolean)) keys.forEach(k => { if (!targets.includes(k)) targets.push(k); });
+      else rest.push(c);
+    }
+    if (!targets.length) return [];
+
+    const exclude = new Set((o.exclude || []).map(p => p.id));
+    const out = [];
+    for (const p of list) {
+      if (exclude.has(p.id)) continue;
+      // Where it is: the pin, else the places its Location (then its name) names.
+      let points = [], names = [];
+      const g = p.geo;
+      if (g && isFinite(Number(g.lat)) && isFinite(Number(g.lng)) && Number(g.lat) && Number(g.lng)) {
+        points = [[Number(g.lat), Number(g.lng)]]; names = ['its pin'];
+      } else {
+        let at = geo.placeOf([p.location, p.zone].filter(Boolean).join(', ')).at;
+        if (!at.length) at = geo.placeOf(p.name || '').at;
+        at = at.filter(k => L[k]);
+        points = at.map(k => L[k]); names = at;
+      }
+      if (!points.length) continue;
+      // Already in the area asked for: the exact search had its say about it.
+      if (names.some(n => targets.includes(n))) continue;
+      let best = null;
+      for (const t of targets) points.forEach((pt, i) => {
+        const km = geo.haversine(L[t], pt);
+        if (!best || km < best.km) best = { km, from: t, where: names[i] };
+      });
+      if (!best || best.km > maxKm) continue;
+      // Everything that is not the area still has to hold.
+      const rec = eng.indexProperty(p);
+      let ok = true;
+      for (const c of rest) {
+        let hit = false;
+        for (const leaf of c.leaves) if (leafHolds(eng, rec, leaf, p, gaz)) { hit = true; break; }
+        if (c.negate ? hit : !hit) { ok = false; break; }
+      }
+      if (!ok) continue;
+      out.push({ p, km: best.km, from: geo.label(best.from), where: best.where === 'its pin' ? 'its pin' : geo.label(best.where) });
+    }
+    out.sort((a, b) => a.km - b.km);
+    return o.limit ? out.slice(0, o.limit) : out;
+  }
+
+  // Properties that READ like the search without containing its words — "school", "metro",
+  // "gated community", "investment" — found through the concept vectors, for the person whose
+  // words are not the sheet's. The facets they set (rent/sale, type, status) still have to hold.
+  function similarTo(list, text, opts) {
+    const o = opts || {};
+    const eng = S();
+    const gaz = o.gazetteer || eng.buildGazetteer(list);
+    const clauses = eng.parseQuery(text, gaz);
+    const exclude = new Set((o.exclude || []).map(p => p.id));
+    const pool = list.filter(p => !exclude.has(p.id));
+    const facetLeaves = [];
+    clauses.forEach(c => { if (!c.negate) c.leaves.forEach(l => { if (l.kind === 'facet' && c.leaves.length === 1) facetLeaves.push(l); }); });
+    const out = [];
+    const wanted = Object.keys(conceptsOf(text));
+    for (const x of semanticRank(pool, text, { floor: o.floor == null ? 0.12 : o.floor })) {
+      const rec = eng.indexProperty(x.p);
+      if (!facetLeaves.every(l => leafHolds(eng, rec, l, x.p, gaz))) continue;
+      const have = conceptsOf(propertyText(x.p));
+      const shared = wanted.filter(k => have[k]);
+      out.push({ p: x.p, sim: x.sim, why: shared.slice(0, 2).map(k => CONCEPT_LABEL[k] || k) });
+      if (o.limit && out.length >= o.limit) break;
+    }
+    return out;
   }
 
   // Whether one leaf holds for one property, using only PinSearch's public
@@ -2600,7 +2711,7 @@
     // profiles
     requirementProfile, briefProfile, propertyProfile, listingProfile, ownerPropertyProfile,
     // the hybrid search layer
-    fuse, semanticRank, nearMisses,
+    fuse, semanticRank, nearMisses, nearbyAreas, similarTo,
     // geography
     areaModelFor, legacyProximity,
     // vectors, exported for the tests and for reuse

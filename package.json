@@ -20,6 +20,7 @@
     "preview:tags": "node tests/tags-preview.mjs",
     "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs && node tests/series-editor-preview.mjs && node tests/posting-brochure-preview.mjs",
     "preview:brief": "node tests/brief-preview.mjs",
+    "preview:home": "node tests/home-preview.mjs",
     "audit:ui": "node tests/ui-audit.mjs",
     "audit:ui-all": "node tests/ui-audit-all.mjs",
     "check:realmap": "node tests/real-map.mjs"

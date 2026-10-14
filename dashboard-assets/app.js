@@ -445,26 +445,56 @@ function renderNearMisses(base, text, shown){
   const el = document.getElementById('nearMisses');
   if(!el) return;
   if(!text || !window.PinMatch || base.length < 2){ el.hidden = true; el.innerHTML = ''; return; }
-  let near = [];
-  try {
-    near = PinMatch.nearMisses(base, text, { gazetteer: searchGaz, exclude: shown, limit: 8 });
-  } catch(e) { near = []; }
-  if(!near.length){ el.hidden = true; el.innerHTML = ''; return; }
+  // Three groups, each under the exact hits and each saying why it is there:
+  //   nearby areas — the area is relaxed to places a few km away; everything else still holds
+  //   almost match — meets most of the clauses, the missing ones named
+  //   reads like   — same idea in other words (concept match), facets still holding
+  let nearby = [], near = [], similar = [];
+  const taken = shown.slice();
+  try { nearby = PinMatch.nearbyAreas(base, text, { gazetteer: searchGaz, exclude: taken, limit: 8 }); } catch(e) { nearby = []; }
+  nearby.forEach(n => taken.push(n.p));
+  try { near = PinMatch.nearMisses(base, text, { gazetteer: searchGaz, exclude: taken, limit: 8, skipAreaOnly: true }); } catch(e) { near = []; }
+  near.forEach(n => taken.push(n.p));
+  try { similar = PinMatch.similarTo(base, text, { gazetteer: searchGaz, exclude: taken, floor: 0.15, limit: 6 }); } catch(e) { similar = []; }
+  if(!nearby.length && !near.length && !similar.length){ el.hidden = true; el.innerHTML = ''; return; }
 
+  const name = p => { const e = esc(p); return (e.propertyCode ? e.propertyCode + ' — ' : '') + e.name; };
+  const km = k => k < 1 ? 'under 1 km' : (Math.round(k * 10) / 10) + ' km';
+  const row = (p, pill, mid, tail, tailCls) => `
+      <button type="button" class="nm-row" onclick="openDetail(${escapeHtml(JSON.stringify(String(p.id)))})">
+        <span class="nm-met">${pill}</span>
+        <span class="nm-nm">${name(p)}</span>
+        <span class="${tailCls || 'nm-why'}">${tail}</span>
+      </button>`;
+  const none = shown.length ? '' : 'Nothing matches exactly. ';
+  const parts = [];
+  if(nearby.length){
+    const from = [...new Set(nearby.map(n => n.from))].slice(0, 3).join(', ');
+    parts.push(`<div class="nm-grp">
+      <div class="nm-hd">${escapeHtml(none)}${nearby.length} in nearby areas</div>
+      <div class="nm-sub">Close to ${escapeHtml(from)} (straight-line distance). Everything else you typed still holds; only the area is wider.</div>
+      <div class="nm-list">${nearby.map(n => row(n.p, escapeHtml(km(n.km)), '',
+        `${escapeHtml(n.where)} · ${escapeHtml(km(n.km))} from ${escapeHtml(n.from)}`)).join('')}</div>
+    </div>`);
+  }
+  if(near.length){
+    parts.push(`<div class="nm-grp">
+      <div class="nm-hd">${escapeHtml(shown.length || nearby.length ? `${near.length} more almost match` : `Nothing has all of that — but ${near.length} come close`)}</div>
+      <div class="nm-sub">Each of these meets most of what you typed. What it is missing is named against it.</div>
+      <div class="nm-list">${near.map(n => row(n.p, `${n.met}/${n.of}`, '',
+        `missing <b>${escapeHtml(n.missing.join(' · '))}</b>`, 'nm-miss')).join('')}</div>
+    </div>`);
+  }
+  if(similar.length){
+    parts.push(`<div class="nm-grp">
+      <div class="nm-hd">${similar.length} that read like your search</div>
+      <div class="nm-sub">They do not contain your words, but their description points the same way. Rent/sale, type and status still hold; area and size are not checked.</div>
+      <div class="nm-list">${similar.map(n => row(n.p, 'related', '',
+        n.why.length ? escapeHtml(n.why.join(' · ')) : escapeHtml(esc(n.p).location || ''))).join('')}</div>
+    </div>`);
+  }
   el.hidden = false;
-  const heading = shown.length
-    ? `${near.length} more almost match`
-    : `Nothing has all of that — but ${near.length} come close`;
-  el.innerHTML = `<div class="nm">
-    <div class="nm-hd">${escapeHtml(heading)}</div>
-    <div class="nm-sub">Each of these meets most of what you typed. What it is missing is named against it.</div>
-    <div class="nm-list">${near.map(n => `
-      <button type="button" class="nm-row" onclick="openDetail('${esc(n.p).id}')">
-        <span class="nm-met">${n.met}/${n.of}</span>
-        <span class="nm-nm">${esc(n.p).propertyCode ? esc(n.p).propertyCode + ' — ' : ''}${esc(n.p).name}</span>
-        <span class="nm-miss">missing <b>${escapeHtml(n.missing.join(' · '))}</b></span>
-      </button>`).join('')}</div>
-  </div>`;
+  el.innerHTML = `<div class="nm">${parts.join('')}</div>`;
 }
 
 // ═══════ CLIENT BRIEF ═══════

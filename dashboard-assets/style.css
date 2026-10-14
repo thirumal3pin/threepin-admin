@@ -1029,6 +1029,8 @@ body.adv-open{overflow:hidden;}
   font-family:var(--mono,ui-monospace,monospace);
 }
 .nm-nm{ flex:1 1 180px; min-width:0; font-size:13px; font-weight:600; }
+.nm-grp + .nm-grp{ margin-top:6px; }
+.nm-why{ flex:0 1 auto; min-width:0; font-size:11.5px; color:var(--ink3); }
 .nm-miss{ flex:0 0 auto; font-size:11.5px; color:var(--red); }
 .nm-miss b{ font-weight:600; }
 @media(max-width:600px){

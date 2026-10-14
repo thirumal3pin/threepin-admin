@@ -12,7 +12,7 @@ const PREVIEWS = ['posting-preview', 'posting-roles', 'track-preview', 'brochure
   'today-invites-preview', 'crm-lead-panel-preview', 'crm-calendar-preview', 'crm-assign-agent', 'crm-lead-agent',
   'crm-pipeline-preview', 'crm-scroll-preview', 'crm-tailortalk-preview', 'crm-conversation-preview', 'crm-attio-preview',
   'dashboard-sync-preview', 'property-mobile-preview', 'map-preview', 'match-preview', 'search-preview', 'brief-preview',
-  'analytics-preview', 'app-preview'];
+  'analytics-preview', 'app-preview', 'home-preview'];
 const [outArg, ...only] = process.argv.slice(2);
 const OUT = outArg || join(tmpdir(), 'ui-audit.jsonl');
 writeFileSync(OUT, '');

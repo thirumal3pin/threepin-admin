@@ -66,13 +66,34 @@
   // dots are kept only between digits, so "Sq.Ft" → "sq ft" but "813.89"
   // stays "813.89".
   function normText(v) {
-    return dropDigitCommas(fold(v))
+    const s = dropDigitCommas(fold(v))
       .replace(/['’`]/g, '')        // "Navin's" → "navins", the same both sides
       .replace(/\.(?!\d)/g, ' ')
       .replace(/[^a-z0-9.]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    return SPELLING_RE.test(s) ? s.replace(SPELLING_RE_G, (m, pre, w) => pre + SPELLING[w]) : s;
   }
+
+  // One place, many spellings. "Tnagar", "T. Nagar" and "Thyagaraya Nagar" are the same locality,
+  // but "tnagar" is one word to the matcher — it matched every "Nagar" in the sheet a typo away
+  // and left the real T Nagar listings ninth. Variant spellings are folded to one form here, in
+  // normText, so a typed query and the stored text always meet in the same spelling. Only
+  // spellings of one place: a corridor or a road ("OMR") stays what it is.
+  const SPELLING = {
+    'tnagar': 't nagar', 'thyagaraya nagar': 't nagar', 'thyagaraja nagar': 't nagar',
+    'thiyagaraya nagar': 't nagar', 'thiagaraya nagar': 't nagar',
+    'annanagar': 'anna nagar', 'kknagar': 'k k nagar', 'kk nagar': 'k k nagar', 'besantnagar': 'besant nagar',
+    'adayar': 'adyar', 'velacherry': 'velachery', 'velachary': 'velachery', 'velacheri': 'velachery',
+    'medavakam': 'medavakkam', 'pallikarnai': 'pallikaranai', 'thiruvanmyur': 'thiruvanmiyur',
+    'tiruvanmiyur': 'thiruvanmiyur', 'chrompet': 'chromepet', 'nanganalloor': 'nanganallur',
+    'kelambakam': 'kelambakkam', 'sholinganallore': 'sholinganallur', 'thoraipakam': 'thoraipakkam'
+  };
+  const SPELLING_ALT = Object.keys(SPELLING).sort((a, b) => b.length - a.length).join('|');
+  const SPELLING_RE = new RegExp('(?:^| )(?:' + SPELLING_ALT + ')(?= |$)');
+  const SPELLING_RE_G = new RegExp('(^| )(' + SPELLING_ALT + ')(?= |$)', 'g');
+  // The same on the raw query, which still has its capitals, dots and runs of spaces.
+  const SPELLING_RAW_RE = new RegExp('(^|[^a-z0-9])(' + SPELLING_ALT.replace(/ /g, '\\s+') + ')(?![a-z0-9])', 'gi');
 
   const tokenize = s => normText(s).split(' ').filter(Boolean);
 
@@ -816,7 +837,9 @@
   // The result of reading the atom stream: a list of clauses, where a clause
   // is one leaf or an OR of leaves from the same field.
   function parseQuery(q, gaz) {
-    const atoms = lexQuery(q, gaz);
+    // The typed words, with variant spellings of a place folded to one (see SPELLING above): the
+    // stored text was folded the same way when it was indexed.
+    const atoms = lexQuery(String(q || '').replace(/(^|[^a-z0-9])t\s*\.\s*nagar(?![a-z0-9])/gi, '$1t nagar').replace(/(^|[^a-z0-9])k\s*\.?\s*k\s*\.?\s*nagar(?![a-z0-9])/gi, '$1k k nagar').replace(SPELLING_RAW_RE, (m, pre, w) => pre + SPELLING[w.toLowerCase().replace(/\s+/g, ' ')]), gaz);
     const leaves = [];          // in source order, with connector info
     let pendingHint = null;     // a field word waiting for its number
     let pendingCmp = null;

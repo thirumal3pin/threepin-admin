@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const sources = [];
-for (const d of ['crm-assets', 'track-assets', 'dashboard-assets', 'finance-assets', 'shared-assets', 'shared-assets/fonts']) {
+for (const d of ['crm-assets', 'track-assets', 'dashboard-assets', 'finance-assets', 'shared-assets', 'shared-assets/fonts', 'home-assets']) {
   if (!existsSync(d)) continue;
   for (const f of readdirSync(d)) if (f.endsWith('.css')) sources.push([join(d, f), readFileSync(join(d, f), 'utf8')]);
 }
