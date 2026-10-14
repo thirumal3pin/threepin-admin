@@ -5,6 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { stageKeyOf, stageKindOf, defaultStages } from '../track-assets/track-pipeline.js';
+import { wantsListing } from '../track-assets/seller-sync.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -222,12 +223,24 @@ window.dashboardFirebase = {
     // Both reads must succeed: without the board's columns a Sold or Dropped card cannot be told
     // from an open one, and offering those as upcoming would be wrong. A board that never saved
     // its columns uses the starting set (whose ids are their keys).
-    const [snap, pipe] = await Promise.all([
+    // The leads too (one read per ~20, from the lead views), for the sellers who have called in and
+    // have no card yet. Those are a bonus: if they cannot be read, the cards still come back.
+    const [snap, pipe, leads] = await Promise.all([
       getDocs(query(collection(db, 'listings'), where('tenantId', '==', T))),
-      getDoc(doc(db, 'trackPipelines', T))
+      getDoc(doc(db, 'trackPipelines', T)),
+      views.readAll(T).catch(e => { console.warn('Leads for the seller suggestions could not be read:', e); return []; })
     ]);
     const saved = (pipe.exists() && pipe.data().stages) || [];
     const stages = saved.length ? saved : defaultStages();
+    // Sellers with no card on the board yet — exactly the board's own "Sellers" list: a seller lead
+    // (the same rule the board uses), not a vendor, not set aside by someone, and no card made for it.
+    const carded = new Set(snap.docs.map(d => d.data().leadId).filter(Boolean));
+    const sellers = (leads || []).filter(l => l && l.id && !carded.has(l.id) && wantsListing(l)).map(l => ({
+      id: 'lead_' + l.id, kind: 'seller', leadId: l.id, title: l.propertyInterest || '', location: l.propertyInterest || '',
+      address: '', config: '', askingPrice: l.budget || '', propertyCode: '', brochureCode: '', propertyType: '',
+      detailsText: (l.ai && l.ai.line) || '', intent: (l.ai && l.ai.intent) || '', createdAt: l.createdAt || null,
+      stageId: '', stageName: 'New seller', stageKey: null, stageKind: 'open', shootAt: null
+    }));
     return snap.docs.map(d => {
       const x = d.data(), st = stages.find(s => s.id === x.stageId) || null;
       return {
@@ -238,7 +251,7 @@ window.dashboardFirebase = {
         // The column's meaning by its key or name; a hand-named column keeps the kind it was saved with.
         stageKind: st ? (stageKindOf(st) || st.kind || null) : null, shootAt: x.shootAt || null
       };
-    });
+    }).concat(sellers);
   },
   // The property's marketing, read only when someone opens that block (a handful of reads, never on
   // a page load): its Shoot & Media card(s) and where each stands, and its posts with their links.

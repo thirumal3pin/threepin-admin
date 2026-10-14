@@ -57,5 +57,26 @@ store.notify && store.notify();
 await tick(150);
 check('A snapshot with nothing new does not redraw the grid', draws === before, `${before} → ${draws}`);
 
+// ── The seller board, for search suggestions: cards with where each stands, and the sellers who have
+// called in and have no card yet (the board's own Sellers list).
+store.set('trackPipelines/' + T, { tenantId: T, stages: [
+  { id: 'c1', key: 'shoot_scheduled', name: 'Shoot scheduled' }, { id: 'c2', name: 'Rented out (custom)', kind: 'won' },
+  { id: 'c3', key: 'dropped', name: 'Dropped' }] });
+store.set('listings/L1', { id: 'L1', tenantId: T, title: '3BHK, T Nagar', location: 'T Nagar', stageId: 'c1', leadId: 'S1', brochure: { code: 'TNAG0099' } });
+store.set('listings/L2', { id: 'L2', tenantId: T, title: 'Rented flat', stageId: 'c2' });
+store.set('listings/L3', { id: 'L3', tenantId: 'someone_else', title: 'Another agency' });
+store.set('leads/S1', { tenantId: T, name: 'Has a card', enquiryType: 'Seller Listing', propertyInterest: '3BHK T Nagar' });
+store.set('leads/S2', { tenantId: T, name: 'New owner', enquiryType: 'Seller Listing', propertyInterest: '2BHK Kodambakkam', budget: '1.2 Cr', ai: { intent: 'rent_out', confidence: 'high' } });
+store.set('leads/S3', { tenantId: T, name: 'Set aside', enquiryType: 'Seller Listing', propertyInterest: 'Plot Adyar', listingSkipped: true });
+store.set('leads/B1', { tenantId: T, name: 'A buyer', enquiryType: 'Property Enquiry', propertyInterest: '3BHK Adyar' });
+const q = await F.sellerQueue();
+const byId = Object.fromEntries(q.map(x => [x.id, x]));
+check('The board’s cards come back, this tenant’s only', byId.L1 && byId.L2 && !byId.L3, JSON.stringify(Object.keys(byId)));
+check('…each with its column resolved', byId.L1 && byId.L1.stageKind === 'open' && byId.L1.stageName === 'Shoot scheduled', JSON.stringify(byId.L1));
+check('…a hand-named column keeps the kind it was saved with', byId.L2 && byId.L2.stageKind === 'won', JSON.stringify(byId.L2));
+check('…and the brochure code travels with the card', byId.L1 && byId.L1.brochureCode === 'TNAG0099');
+check('A seller with no card comes back as a new seller', byId.lead_S2 && byId.lead_S2.kind === 'seller' && byId.lead_S2.intent === 'rent_out' && byId.lead_S2.askingPrice === '1.2 Cr', JSON.stringify(byId.lead_S2));
+check('…but not one who has a card, one set aside, or a buyer', !byId.lead_S1 && !byId.lead_S3 && !byId.lead_B1, JSON.stringify(Object.keys(byId)));
+
 console.log(failed ? `\n${failed} failed, ${passed} passed.` : `\nAll good (${passed} checks).`);
 process.exit(failed ? 1 : 0);

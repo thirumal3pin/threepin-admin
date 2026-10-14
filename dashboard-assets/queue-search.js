@@ -5,7 +5,9 @@
 // brochure is made — but a client can be shown it before that. A card on the Shoot & Media board
 // that is still on its way (new listing … media ready, even live) and has no property in the
 // dashboard yet is offered under a search as "UPCOMING : NOT IN PROPERTY DASHBOARD", with a
-// link to its card on the seller board.
+// link to its card on the seller board. Sellers who have called in and have no card yet (the
+// board's own "Sellers" list, set-aside ones excluded) come along as kind 'seller', offered as
+// "New seller, not yet on the board".
 //
 // Pure: takes the cards and the dashboard's properties, returns what to suggest. The page
 // (dashboard-assets/app.js) owns fetching and drawing. Each card is read by the SAME engine as
@@ -74,12 +76,19 @@
       status: '',
       stageName: card.stageName || '',
       stageKey: card.stageKey || '',
-      shootAt: card.shootAt || null
+      shootAt: card.shootAt || null,
+      // A seller who has called in and has no card on the board yet: only what they told us so far.
+      newSeller: card.kind === 'seller',
+      leadId: card.leadId || '',
+      detailsText: card.detailsText || '',
+      intent: card.intent || '',
+      createdAt: card.createdAt || null
     };
   }
 
   // Two cards for one property (before someone merges them on the board) are one suggestion.
   function sameKey(p) {
+    if (p.newSeller) return 's:' + p.leadId;   // one per lead; never folded into a card
     if (p.propertyCode) return 'c:' + codeKey(p.propertyCode);
     const n = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     return 't:' + n(p.name) + '|' + n(p.location);
@@ -93,6 +102,8 @@
       // A series card is one edit of several properties, not a property.
       if (card.kind === 'series') continue;
       if (inDashboard(card, properties)) continue;
+      // A new seller is offered on what they said about the property; a seller with nothing said is not.
+      if (card.kind === 'seller' && !String(card.title || card.location || '').trim()) continue;
       // Something to read: a title, a place or a code. A card with none is not a suggestion.
       if (!(String(card.title || '').trim() || String(card.location || card.address || '').trim()
         || realCode(card.propertyCode) || realCode(card.brochureCode))) continue;

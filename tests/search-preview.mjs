@@ -54,7 +54,9 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
         { id: 'lst_a', title: '3BHK Apartment, T Nagar - Venkatesh', location: 'T Nagar, Chennai', config: '3 BHK', askingPrice: '₹2.8 Cr', propertyCode: '', stageName: 'Shoot scheduled', stageKey: 'shoot_scheduled', stageKind: 'open' },
         { id: 'lst_b', title: 'Independent Villa, Adyar', location: 'Adyar', config: '4 BHK', askingPrice: '₹6.5 Cr', propertyCode: '', stageName: 'Details & docs', stageKey: 'details', stageKind: 'open' },
         { id: 'lst_c', title: 'Already in the dashboard', location: 'T Nagar', config: '2 BHK', propertyCode: 'TNAG0002', stageName: 'Live — marketing', stageKey: 'live', stageKind: 'open' },
-        { id: 'lst_d', title: 'Dropped T Nagar flat', location: 'T Nagar', config: '2 BHK', propertyCode: '', stageName: 'Dropped', stageKey: 'dropped', stageKind: 'lost' }
+        { id: 'lst_d', title: 'Dropped T Nagar flat', location: 'T Nagar', config: '2 BHK', propertyCode: '', stageName: 'Dropped', stageKey: 'dropped', stageKind: 'lost' },
+        // A seller who has called in and has no card yet.
+        { id: 'lead_S9', kind: 'seller', leadId: 'S9', title: '2BHK flat in T Nagar near Pondy Bazaar', location: '2BHK flat in T Nagar near Pondy Bazaar', askingPrice: '1.4 Cr', intent: 'sell', createdAt: Date.now() - 86400000, stageName: 'New seller', stageKind: 'open' }
       ])
     };
     window.dashboardAuth = { getTenantId: () => 't_test', getUserEmail: () => 'test@example.com', getIdToken: () => Promise.resolve(null), logout: () => { } };
@@ -101,7 +103,7 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   // card; the one already in the dashboard and the dropped one never; none with Ready picked.
   await type('Tnagar');
   await p.waitForTimeout(400);
-  const q = await p.evaluate(() => [...document.querySelectorAll('#nearMisses a.nm-q')].map(a => ({ href: a.getAttribute('href'), text: a.textContent })));
+  const q = await p.evaluate(() => [...document.querySelectorAll('#nearMisses a.nm-q:not(.nm-s)')].map(a => ({ href: a.getAttribute('href'), text: a.textContent })));
   const qOk = q.some(r => /listing=lst_a/.test(r.href) && /Upcoming : not in Property Dashboard/i.test(r.text) && /Venkatesh/.test(r.text))
     && !q.some(r => /lst_c|lst_d/.test(r.href))
     // Adyar is offered only as a nearby area, saying so.
@@ -114,6 +116,16 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   await p.evaluate(() => setStatus('all', document.querySelector('#statusFilters .fbtn') || document.createElement('b')));
   await p.waitForTimeout(150);
   console.log(`   ${name}: seller board suggestions for "Tnagar": ${q.length} (ok: ${qOk}); with Ready: ${qReady}`);
+  // The new seller: its own group, labelled, linking to the board's Sellers list, never in the cards group.
+  await type('Tnagar');
+  await p.waitForTimeout(300);
+  const ns = await p.evaluate(() => [...document.querySelectorAll('#nearMisses a.nm-s')].map(a => ({ href: a.getAttribute('href'), text: a.textContent })));
+  const nsOk = ns.length === 1 && /nav=sellers/.test(ns[0].href) && /New seller · not yet on the board/i.test(ns[0].text) && /Selling/.test(ns[0].text)
+    && !q.some(r => /Pondy Bazaar/.test(r.text));
+  if (!nsOk) errs.push(`${name}: new-seller suggestion wrong for "Tnagar": ${JSON.stringify(ns)}`);
+  console.log(`   ${name}: new sellers for "Tnagar": ${ns.length} (ok: ${nsOk})`);
+  const nm = await p.$('#nearMisses:not([hidden])');
+  if (nm) { await nm.screenshot({ path: `${OUT}${name}-nm-queue-and-sellers.png` }); shots++; }
 
   // Type-ahead
   await type('ady');

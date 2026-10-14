@@ -1042,6 +1042,7 @@ a.nm-row{ text-decoration:none; }
   color:var(--brand-ink,#A35A00); background:var(--brand-soft,#FFF4E6); border:1px solid var(--brand-line,#FFD9AD);
   border-radius:6px; padding:3px 8px;
 }
+.nm-up-new{ color:var(--ink2); background:var(--bg2); border-color:var(--border2); }
 .nm-why{ flex:0 1 auto; min-width:0; font-size:11.5px; color:var(--ink3); }
 .nm-miss{ flex:0 0 auto; font-size:11.5px; color:var(--red); }
 .nm-miss b{ font-weight:600; }

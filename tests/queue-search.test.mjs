@@ -67,5 +67,20 @@ ok('the type is read from the card', Q.typeOf({ title: 'Residential plot' }) ===
   const k = near.find(h => /^twin/.test(h.p.listingId));
   ok('a card in a nearby area is offered, with how far', !!k && k.km > 0 && k.km <= 5 && /Nungambakkam/.test(k.from), JSON.stringify(k && { km: k.km, from: k.from }));
 }
+{
+  const SELLERS = [
+    { id: 'lead_N1', kind: 'seller', leadId: 'N1', title: '2BHK in T Nagar', location: '2BHK in T Nagar', askingPrice: '1.2 Cr', intent: 'sell', stageKind: 'open' },
+    { id: 'lead_N2', kind: 'seller', leadId: 'N2', title: '', location: '', stageKind: 'open' },
+    { id: 'lead_N3', kind: 'seller', leadId: 'N3', title: '3BHK, T Nagar', location: 'T Nagar', stageKind: 'open' }
+  ];
+  const all = CARDS.concat(SELLERS);
+  const cs = Q.candidates(all, PROPS);
+  ok('a new seller with something said is a candidate, marked as a new seller', cs.some(p => p.listingId === 'lead_N1' && p.newSeller && p.leadId === 'N1'));
+  ok('a new seller who said nothing about the property is not', !cs.some(p => p.listingId === 'lead_N2'));
+  ok('a new seller is never folded into a card with the same words', cs.some(p => p.listingId === 'lead_N3') && cs.some(p => p.listingId === 'waiting'));
+  const h = Q.search(all, PROPS, { text: 't nagar', gazetteer: gaz });
+  ok('"t nagar" finds the new seller too', h.some(x => x.p.listingId === 'lead_N1' && x.p.newSeller));
+  ok('…and keeps what they said they are doing', h.find(x => x.p.listingId === 'lead_N1').p.intent === 'sell');
+}
 console.log(failed ? `\n${failed} failed.` : '\nAll good.');
 process.exit(failed ? 1 : 0);

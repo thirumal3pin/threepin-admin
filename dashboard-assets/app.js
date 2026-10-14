@@ -470,7 +470,7 @@ function queuedFor(text){
   if(!window.PinQueue || !sellerQueue || !queueAllowed()) return [];
   try {
     return PinQueue.search(sellerQueue, properties, {
-      text, advanced: window.PinAdvanced ? PinAdvanced.query() : null, gazetteer: searchGaz, type: currentType, limit: 8
+      text, advanced: window.PinAdvanced ? PinAdvanced.query() : null, gazetteer: searchGaz, type: currentType
     }).filter(h => agentFilterPasses(h.p));
   } catch(e) { return []; }
 }
@@ -483,7 +483,9 @@ function renderNearMisses(base, text, shown){
   ensureSellerQueue();
   // Properties still on the seller board, not in this dashboard yet: offered as upcoming. Worked out
   // before anything else, so a small dashboard (or a narrow Type pick) still shows them.
-  const queued = queuedFor(text);
+  const queuedAll = queuedFor(text);
+  const queued = queuedAll.filter(h => !h.p.newSeller).slice(0, 8);
+  const sellersNew = queuedAll.filter(h => h.p.newSeller).slice(0, 8);
   // Three groups, each under the exact hits and each saying why it is there:
   //   nearby areas — the area is relaxed to places a few km away; everything else still holds
   //   almost match — meets most of the clauses, the missing ones named
@@ -498,7 +500,7 @@ function renderNearMisses(base, text, shown){
   near.forEach(n => taken.push(n.p));
   try { similar = PinMatch.similarTo(base, text, { gazetteer: searchGaz, exclude: taken, floor: 0.15, limit: 6 }); } catch(e) { similar = []; }
   }
-  if(!queued.length && !nearby.length && !near.length && !similar.length){ el.hidden = true; el.innerHTML = ''; return; }
+  if(!queued.length && !sellersNew.length && !nearby.length && !near.length && !similar.length){ el.hidden = true; el.innerHTML = ''; return; }
 
   const name = p => { const e = esc(p); return (e.propertyCode ? e.propertyCode + ' — ' : '') + e.name; };
   const km = k => k < 1 ? 'under 1 km' : (Math.round(k * 10) / 10) + ' km';
@@ -526,6 +528,23 @@ function renderNearMisses(base, text, shown){
           <span class="nm-up">Upcoming : not in Property Dashboard</span>
           <span class="nm-nm">${e.propertyCode ? e.propertyCode + ' — ' : ''}${e.name}</span>
           <span class="nm-why">${bits} · Open seller board →</span>
+        </a>`; }).join('')}</div>
+    </div>`);
+  }
+  if(sellersNew.length){
+    const intentOf = i => i === 'sell' ? 'Selling' : i === 'rent_out' ? 'Renting out' : '';
+    parts.push(`<div class="nm-grp">
+      <div class="nm-hd">${escapeHtml(none())}${sellersNew.length} new seller${sellersNew.length === 1 ? '' : 's'}, not yet on the board</div>
+      <div class="nm-sub">Owners who have called in about a property like this and have no card on the seller board yet. Only what they told us so far — confirm before offering it.</div>
+      <div class="nm-list">${sellersNew.map(h => {
+        const p = h.p;
+        const away = h.km != null ? `${h.where} · ${km(h.km)} from ${h.from}` : '';
+        const bits = [intentOf(p.intent), away, p.startingPrice, p.createdAt ? 'called ' + new Date(Number(p.createdAt)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '']
+          .filter(Boolean).map(escapeHtml).join(' · ');
+        return `<a class="nm-row nm-q nm-s" href="propertytrack.html?nav=sellers" target="_blank" rel="noopener">
+          <span class="nm-up nm-up-new">New seller · not yet on the board</span>
+          <span class="nm-nm">${escapeHtml(p.name)}</span>
+          <span class="nm-why">${bits ? bits + ' · ' : ''}Open the sellers list →</span>
         </a>`; }).join('')}</div>
     </div>`);
   }
