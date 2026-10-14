@@ -1895,6 +1895,8 @@ function openDetail(id) {
   if (isSeriesCard(x)) return openSeriesDetail(x);
   // Redrawing the same listing (a tick, a save) keeps what was open and what was half-typed.
   const same = currentDetailId === id && document.getElementById('dp').classList.contains('open');
+  // The documents checklist opens closed on every card; a redraw of the same card (a tick) keeps it as it was.
+  if (!same) dpDocsOpen = false;
   const keep = same ? { buyers: !!document.getElementById('dpBuyers')?.open, note: document.getElementById('dpNoteText')?.value || '' } : null;
   currentDetailId = id;
   const stage = stageById(x.stageId);
@@ -2495,6 +2497,9 @@ function ltypeChip(x) {
   const t = CFG.listingTypeOf(x);
   return t && t !== 'normal' ? `<span class="tk-ltype ${t}" title="${esc(LTYPE_LABEL[t])} listing">${esc(LTYPE_LABEL[t])}</span>` : '';
 }
+// Whether the documents checklist is expanded on the open card (closed whenever a card is opened).
+let dpDocsOpen = false;
+window.__setDpDocs = v => { dpDocsOpen = !!v; };
 function termsSectionHtml(x) {
   const t = CFG.listingTypeOf(x), items = config.docItems, pr = CFG.docProgress(x, config);
   const seg = CFG.LISTING_TYPES.filter(([k]) => k).map(([k, l]) =>
@@ -2521,7 +2526,16 @@ function termsSectionHtml(x) {
       ${approvalRow}
       <div class="tk-kv tk-pickrow"><span>Listing type</span><div class="tk-seg" role="group" aria-label="Listing type">${seg}</div></div>
       ${agreementRow}
-      ${items.length ? `<div class="tk-docs">${docs}</div>` : ''}
+      ${items.length ? (() => {
+        const open = papersMissing(x), applied = items.filter(n => CFG.docStatus(x, n) === 'applied').length;
+        const miss = open - applied, unset = items.filter(n => !CFG.docStatus(x, n)).length;
+        const bits = [`${pr.done} of ${pr.total} in hand`, miss ? `<b class="bad">${miss} missing</b>` : '', applied ? `<b class="warn">${applied} applied for</b>` : '', unset ? `${unset} not checked` : '']
+          .filter(Boolean).join(' · ');
+        return `<details class="tk-docs-x"${dpDocsOpen ? ' open' : ''} ontoggle="__setDpDocs(this.open)">
+          <summary><span class="tk-docs-t">Documents</span><span class="tk-docs-s">${bits}</span></summary>
+          <div class="tk-docs">${docs}</div>
+        </details>`;
+      })() : ''}
       <div class="tk-hint">Nothing here holds the card back: what is still open shows on the card until it is done${agreementNeeded(x) ? ', and booking a shoot asks first while the agreement is not checked' : ''}. The document list is set in Settings → Configurations.</div>
     </div>`;
 }

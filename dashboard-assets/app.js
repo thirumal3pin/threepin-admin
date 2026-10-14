@@ -441,22 +441,64 @@ function bootMapView(){
 // Deliberately BELOW the grid and never mixed into it. A near-miss is a
 // different claim from a hit, and a search that silently relaxes a filter
 // somebody set is a search people stop believing.
+// The seller board's cards, read once on the first search and again if the last read is old: they
+// are suggestions beside the results, never part of them.
+let sellerQueue = null, sellerQueueAt = 0, sellerQueueLoading = false, sellerQueueFailedAt = 0, lastNearArgs = null;
+// Whether the quick bar leaves room for a card at all: Ready only and Favourites never hold one.
+const queueAllowed = () => currentStatus !== 'ready' && !showFavOnly;
+function ensureSellerQueue(){
+  const fresh = sellerQueue && Date.now() - sellerQueueAt < 3 * 60 * 1000;
+  // A failed read (offline, not signed in yet) is tried again after 30 s, not kept as "nothing".
+  const cooling = Date.now() - sellerQueueFailedAt < 30 * 1000;
+  if(fresh || cooling || sellerQueueLoading || !queueAllowed() || !window.dashboardFirebase || !window.dashboardFirebase.sellerQueue) return;
+  sellerQueueLoading = true;
+  window.dashboardFirebase.sellerQueue()
+    .then(list => { sellerQueue = list || []; sellerQueueAt = Date.now(); sellerQueueFailedAt = 0; return true; })
+    .catch(e => {
+      sellerQueueFailedAt = Date.now();
+      if(!e || e.message !== 'not-ready') console.warn('Seller board suggestions could not be read:', e);
+      return false;
+    })
+    .then(got => {
+      sellerQueueLoading = false;
+      if(got && lastNearArgs && !briefOn) renderNearMisses(lastNearArgs[0], lastNearArgs[1], lastNearArgs[2]);
+    });
+}
+
+// The seller board's cards that answer this search, as upcoming suggestions.
+function queuedFor(text){
+  if(!window.PinQueue || !sellerQueue || !queueAllowed()) return [];
+  try {
+    return PinQueue.search(sellerQueue, properties, {
+      text, advanced: window.PinAdvanced ? PinAdvanced.query() : null, gazetteer: searchGaz, type: currentType, limit: 8
+    }).filter(h => agentFilterPasses(h.p));
+  } catch(e) { return []; }
+}
+
 function renderNearMisses(base, text, shown){
   const el = document.getElementById('nearMisses');
   if(!el) return;
-  if(!text || !window.PinMatch || base.length < 2){ el.hidden = true; el.innerHTML = ''; return; }
+  lastNearArgs = [base, text, shown];
+  if(!text || briefOn){ el.hidden = true; el.innerHTML = ''; return; }
+  ensureSellerQueue();
+  // Properties still on the seller board, not in this dashboard yet: offered as upcoming. Worked out
+  // before anything else, so a small dashboard (or a narrow Type pick) still shows them.
+  const queued = queuedFor(text);
   // Three groups, each under the exact hits and each saying why it is there:
   //   nearby areas — the area is relaxed to places a few km away; everything else still holds
   //   almost match — meets most of the clauses, the missing ones named
   //   reads like   — same idea in other words (concept match), facets still holding
   let nearby = [], near = [], similar = [];
   const taken = shown.slice();
+  const canMatch = !!window.PinMatch && base.length >= 2;
+  if(canMatch){
   try { nearby = PinMatch.nearbyAreas(base, text, { gazetteer: searchGaz, exclude: taken, limit: 8 }); } catch(e) { nearby = []; }
   nearby.forEach(n => taken.push(n.p));
   try { near = PinMatch.nearMisses(base, text, { gazetteer: searchGaz, exclude: taken, limit: 8, skipAreaOnly: true }); } catch(e) { near = []; }
   near.forEach(n => taken.push(n.p));
   try { similar = PinMatch.similarTo(base, text, { gazetteer: searchGaz, exclude: taken, floor: 0.15, limit: 6 }); } catch(e) { similar = []; }
-  if(!nearby.length && !near.length && !similar.length){ el.hidden = true; el.innerHTML = ''; return; }
+  }
+  if(!queued.length && !nearby.length && !near.length && !similar.length){ el.hidden = true; el.innerHTML = ''; return; }
 
   const name = p => { const e = esc(p); return (e.propertyCode ? e.propertyCode + ' — ' : '') + e.name; };
   const km = k => k < 1 ? 'under 1 km' : (Math.round(k * 10) / 10) + ' km';
@@ -466,12 +508,31 @@ function renderNearMisses(base, text, shown){
         <span class="nm-nm">${name(p)}</span>
         <span class="${tailCls || 'nm-why'}">${tail}</span>
       </button>`;
-  const none = shown.length ? '' : 'Nothing matches exactly. ';
+  // When the grid is empty, the first group says so — once.
+  let noneLeft = !shown.length;
+  const none = () => { if(!noneLeft) return ''; noneLeft = false; return 'Nothing matches exactly. '; };
   const parts = [];
+  if(queued.length){
+    parts.push(`<div class="nm-grp">
+      <div class="nm-hd">${escapeHtml(none())}${queued.length} still on the seller board</div>
+      <div class="nm-sub">Not in the Property Dashboard yet — the shoot, edit or brochure is still to finish — so they can be suggested as upcoming. Open the card to see where it stands.</div>
+      <div class="nm-list">${queued.map(h => {
+        const p = h.p, e = esc(p);
+        const shoot = p.shootAt && Number(p.shootAt) > Date.now() - 86400000
+          ? 'shoot ' + new Date(Number(p.shootAt)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '';
+        const away = h.km != null ? `${h.where} · ${km(h.km)} from ${h.from}` : '';
+        const bits = [p.stageName, shoot, away || p.location, p.config, p.startingPrice].filter(Boolean).map(escapeHtml).join(' · ');
+        return `<a class="nm-row nm-q" href="propertytrack.html?listing=${encodeURIComponent(p.listingId)}" target="_blank" rel="noopener">
+          <span class="nm-up">Upcoming : not in Property Dashboard</span>
+          <span class="nm-nm">${e.propertyCode ? e.propertyCode + ' — ' : ''}${e.name}</span>
+          <span class="nm-why">${bits} · Open seller board →</span>
+        </a>`; }).join('')}</div>
+    </div>`);
+  }
   if(nearby.length){
     const from = [...new Set(nearby.map(n => n.from))].slice(0, 3).join(', ');
     parts.push(`<div class="nm-grp">
-      <div class="nm-hd">${escapeHtml(none)}${nearby.length} in nearby areas</div>
+      <div class="nm-hd">${escapeHtml(none())}${nearby.length} in nearby areas</div>
       <div class="nm-sub">Close to ${escapeHtml(from)} (straight-line distance). Everything else you typed still holds; only the area is wider.</div>
       <div class="nm-list">${nearby.map(n => row(n.p, escapeHtml(km(n.km)), '',
         `${escapeHtml(n.where)} · ${escapeHtml(km(n.km))} from ${escapeHtml(n.from)}`)).join('')}</div>
@@ -479,7 +540,7 @@ function renderNearMisses(base, text, shown){
   }
   if(near.length){
     parts.push(`<div class="nm-grp">
-      <div class="nm-hd">${escapeHtml(shown.length || nearby.length ? `${near.length} more almost match` : `Nothing has all of that — but ${near.length} come close`)}</div>
+      <div class="nm-hd">${escapeHtml(noneLeft ? (noneLeft = false, `Nothing has all of that — but ${near.length} come close`) : `${near.length} more almost match`)}</div>
       <div class="nm-sub">Each of these meets most of what you typed. What it is missing is named against it.</div>
       <div class="nm-list">${near.map(n => row(n.p, `${n.met}/${n.of}`, '',
         `missing <b>${escapeHtml(n.missing.join(' · '))}</b>`, 'nm-miss')).join('')}</div>

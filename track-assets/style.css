@@ -2038,6 +2038,19 @@ button.tk-ref:hover { color: var(--ink); text-decoration: underline; }
 .tk-seg-b.on { background: var(--ink); border-color: var(--ink); color: var(--card); }
 .tk-seg-b:focus-visible { outline: none; box-shadow: var(--ring); }
 .tk-docs { display: grid; gap: 2px; margin: 6px 0 8px; }
+/* The checklist folds away: closed on every card, its tally on the summary line. */
+.tk-docs-x { margin: 6px 0 8px; border: 1px solid var(--border); border-radius: var(--r2, 10px); background: var(--white, #fff); }
+.tk-docs-x > summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; cursor: pointer; list-style: none; min-height: 40px; }
+.tk-docs-x > summary::-webkit-details-marker { display: none; }
+.tk-docs-x > summary::before { content: ''; width: 7px; height: 7px; border-right: 1.6px solid var(--ink3); border-bottom: 1.6px solid var(--ink3); rotate: -45deg; flex: none; transition: rotate var(--dur-2, .2s) var(--ease-out, ease); }
+.tk-docs-x[open] > summary::before { rotate: 45deg; }
+.tk-docs-x > summary:hover { background: var(--bg2); border-radius: var(--r2, 10px); }
+.tk-docs-t { font-size: 13px; font-weight: 600; color: var(--ink); }
+.tk-docs-s { font-size: 12px; color: var(--ink3); }
+.tk-docs-s b { font-weight: 600; }
+.tk-docs-s b.bad { color: var(--red, #B91C1C); }
+.tk-docs-s b.warn { color: var(--amber, #B45309); }
+.tk-docs-x > .tk-docs { margin: 0; padding: 2px 12px 8px; border-top: 1px solid var(--border); }
 .tk-doc-r { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 13px; color: var(--ink2); border-bottom: 1px dashed var(--border); }
 .tk-doc-r:last-child { border-bottom: none; }
 .tk-doc-r > span { min-width: 0; overflow-wrap: anywhere; }

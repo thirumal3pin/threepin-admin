@@ -4,6 +4,7 @@ import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
+import { stageKeyOf, stageKindOf, defaultStages } from '../track-assets/track-pipeline.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -211,6 +212,34 @@ window.dashboardFirebase = {
   getChanges: () => getDocs(query(collection(db, 'propertyChanges'), where('tenantId', '==', currentTenantId)))
     .then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
     .catch(e => { console.error('Firestore get changes error:', e); throw e; }),
+  // The Shoot & Media board's cards, with where each one stands — read once when someone first
+  // searches (not on a page load), to suggest properties that are still on their way and not in
+  // this dashboard yet (dashboard-assets/queue-search.js). Only what that needs leaves here.
+  sellerQueue: async () => {
+    const T = currentTenantId;
+    // Not signed in yet (the token is still being checked): say so, so nothing empty is kept.
+    if (!T) throw new Error('not-ready');
+    // Both reads must succeed: without the board's columns a Sold or Dropped card cannot be told
+    // from an open one, and offering those as upcoming would be wrong. A board that never saved
+    // its columns uses the starting set (whose ids are their keys).
+    const [snap, pipe] = await Promise.all([
+      getDocs(query(collection(db, 'listings'), where('tenantId', '==', T))),
+      getDoc(doc(db, 'trackPipelines', T))
+    ]);
+    const saved = (pipe.exists() && pipe.data().stages) || [];
+    const stages = saved.length ? saved : defaultStages();
+    return snap.docs.map(d => {
+      const x = d.data(), st = stages.find(s => s.id === x.stageId) || null;
+      return {
+        id: d.id, kind: x.kind || '', title: x.title || '', location: x.location || '', address: x.address || '', config: x.config || '',
+        askingPrice: x.askingPrice || '', propertyCode: x.propertyCode || '', brochureCode: (x.brochure && x.brochure.code) || '',
+        propertyType: x.propertyType || '',
+        stageId: x.stageId || '', stageName: (st && st.name) || '', stageKey: st ? stageKeyOf(st) : null,
+        // The column's meaning by its key or name; a hand-named column keeps the kind it was saved with.
+        stageKind: st ? (stageKindOf(st) || st.kind || null) : null, shootAt: x.shootAt || null
+      };
+    });
+  },
   // The property's marketing, read only when someone opens that block (a handful of reads, never on
   // a page load): its Shoot & Media card(s) and where each stands, and its posts with their links.
   propertyMarketing: async (id, code) => {

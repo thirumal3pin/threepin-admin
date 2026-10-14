@@ -650,6 +650,11 @@ await shot('agent-day');
   });
   ok('The card has a Listing & documents section', !!sec && sec.types.join() === 'Normal,Exclusive,Collab' && sec.docs === 7, JSON.stringify(sec));
   ok('…counting what is in hand', sec && sec.count === '0 of 7', JSON.stringify(sec));
+  // The checklist opens closed: seen only by expanding it.
+  ok('The documents checklist starts closed', await page.evaluate(() => { const d = document.querySelector('#dpTerms .tk-docs-x'); return !!d && !d.open; }));
+  ok('…its summary still says how far it is', /0 of 7 in hand/.test(await page.evaluate(() => (document.querySelector('#dpTerms .tk-docs-x summary') || {}).textContent || '')));
+  await page.click('#dpTerms .tk-docs-x summary');
+  await page.waitForTimeout(120);
   await page.click('#dpTerms .tk-seg-b:has-text("Exclusive")');
   await page.waitForTimeout(150);
   await page.selectOption('#dpTerms .tk-doc-r:has-text("Patta") select', 'have');
@@ -666,7 +671,14 @@ await shot('agent-day');
   ok('Picking a type and a document status saves them', after.type === 'exclusive' && after.savedType === 'exclusive'
     && after.savedDocs && after.savedDocs.patta === 'have' && after.savedDocs.approved_plan === 'missing', JSON.stringify(after));
   ok('…the section shows them', /Exclusive/.test(after.on) && after.count === '1 of 7', JSON.stringify(after));
+  ok('Ticking a document keeps the checklist open', await page.evaluate(() => !!(document.querySelector('#dpTerms .tk-docs-x') || {}).open));
+  ok('…and the summary names what is missing', /1 missing/.test(await page.evaluate(() => (document.querySelector('#dpTerms .tk-docs-x summary') || {}).textContent || '')));
   await page.locator('#dpTerms').screenshot({ path: `${OUT}/card-terms.png` });
+  await page.evaluate(() => closeDetail());
+  await page.waitForTimeout(200);
+  await page.evaluate(() => openDetail('l1'));
+  await page.waitForTimeout(200);
+  ok('Opening the card again shows the checklist closed', await page.evaluate(() => !(document.querySelector('#dpTerms .tk-docs-x') || {}).open));
   await page.evaluate(() => closeDetail());
   await page.waitForTimeout(200);
   const chipOn = await page.evaluate(() => { const all = [...document.querySelectorAll('.tk-card[data-id="l1"]')]; const c = document.querySelector('.tk-card.cmp[data-id="l1"]'); return { card: !!c, n: all.map(x => x.className + '@' + (x.closest('[id]') || {}).id), top: c ? (c.querySelector('.tk-ctop') || {}).outerHTML || 'no top' : '', type: window.trackApi.listings().find(x => x.id === 'l1').listingType }; });
