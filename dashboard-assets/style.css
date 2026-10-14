@@ -414,7 +414,11 @@ a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
 .dp-builder-tag{font-size:12px;font-weight:700;color:var(--gold);letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px;}
 .dp-title{font-family:var(--serif);font-size:32px;font-weight:700;line-height:1.15;margin-bottom:10px;overflow-wrap:anywhere;}
 .dp-loc{font-size:14px;color:var(--ink2);display:flex;align-items:center;gap:6px;margin-bottom:14px;}
-.dp-price-box{text-align:right;flex-shrink:0;}
+.dp-price-box{text-align:right;flex:0 1 auto;min-width:0;max-width:100%;}
+/* A price that is a sentence ("3 BHK - Rent Rs.45,000/month + … | 2 BHK - …") takes the full width
+   under the name, left-aligned and smaller, and wraps — it never runs off the page. */
+.dp-price-box.long{flex-basis:100%;text-align:left;}
+.dp-price-box.long .dp-price{font-size:22px;line-height:1.35;font-weight:600;}
 .dp-price{font-family:var(--serif);font-size:36px;font-weight:500;line-height:1;overflow-wrap:anywhere;}
 .dp-psf{font-size:13px;color:var(--ink3);margin-top:5px;}
 .dp-call{display:inline-flex;align-items:center;gap:8px;padding:11px 24px;border-radius:11px;background:var(--green);font-size:14.5px;font-weight:700;color:#fff;text-decoration:none;margin-top:14px;box-shadow:var(--shadow);transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s, opacity .15s;}
@@ -434,6 +438,7 @@ a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
    from its content, so this only needs to rescue a word that genuinely cannot
    fit — it should not split "Unfurnished" when it very nearly does. */
 .stat-b-v{font-family:var(--serif);font-size:19px;font-weight:700;line-height:1.2;overflow-wrap:break-word;}
+.stat-b.long .stat-b-v{font-family:var(--sans);font-size:14px;font-weight:600;line-height:1.35;}
 .stat-b-l{font-size:11px;color:var(--ink3);margin-top:5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;}
 .hi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;}
 .hi-item{background:var(--green-bg);border:1px solid #BBF7D0;border-radius:10px;padding:11px 14px;font-size:13px;color:#166534;font-weight:600;display:flex;align-items:center;gap:9px;}
@@ -597,6 +602,7 @@ a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
      call owner") is normal sheet data. Two lines of it, then it gives way —
      the full string is still in Specifications. */
   .dp-price{font-size:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .dp-price-box.long .dp-price{font-size:16px;display:block;-webkit-line-clamp:unset;overflow:visible;}
   .dp-psf{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;}
   .dp-psf,.dp-age{font-size:11.5px;}
   /* Nothing in the panel may widen it; long values wrap or are clipped, they
@@ -1442,6 +1448,11 @@ body.adv-open{overflow:hidden;}
 #dp .dp-hdr{position:static;box-shadow:none;border-bottom:0;}
 #dp .dp-tabbar{position:sticky;top:0;z-index:10;background:var(--white);padding:0 28px;border-bottom:1.5px solid var(--border);box-shadow:0 2px 14px rgba(0,0,0,.05);}
 #dp .dp-tabbar .dp-tabs{margin-top:0;position:static;}
+/* On a wide screen the header and the tabs start where the content below does (the body is a
+   centred 1000px column with 28px inside), instead of at the window's edge. */
+@media (min-width:761px){
+  #dp .dp-hdr, #dp .dp-tabbar{padding-left:max(28px, calc((100% - 1000px) / 2 + 28px));padding-right:max(28px, calc((100% - 1000px) / 2 + 28px));}
+}
 @media (max-width:760px){ #dp .dp-tabbar{padding:0 14px;} }
 @media print{ #dp .dp-tabbar{display:none;} }
 

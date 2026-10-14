@@ -191,6 +191,29 @@ for (const { vp, data, label } of CASES) {
   await page.close();
 }
 
+// ── A shared link must SCROLL, on a desktop as on a phone ──
+// The page once could not be scrolled at all: the panel was a scroll box exactly as tall as its
+// content, with overscroll contained, so the wheel and a finger stopped inside it. This turns the
+// wheel over the key facts and asserts the page moved — the test the phone-only sweep above lacked.
+// The price is a rental sentence (the property that showed it), so it must also wrap, not run off.
+const RENT = { ...PROP, name: 'Corporate Lease - 8 Brand-New Apartments',
+  startingPrice: '3 BHK - Rent Rs.45,000/month + Maintenance per apartment | 2 BHK - Rent Rs.30,000/month + Maintenance per apartment',
+  parking: '1 Covered Car Park per Apartment, Total 8 Covered Car Parks', facing: 'East (3 BHK) / North & South (2 BHK)' };
+for (const vp of [{ width: 1902, height: 880 }, { width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+  console.log(`\n── scroll · ${vp.width}×${vp.height} ──`);
+  const page = await open(vp, RENT);
+  await page.mouse.move(vp.width / 2, vp.height - 140);
+  await page.mouse.wheel(0, 700);
+  await page.waitForTimeout(700);
+  const y = await page.evaluate(() => document.scrollingElement.scrollTop);
+  ok(`the page scrolls with the wheel (${vp.width}px)`, y > 100, 'scrollTop ' + y);
+  const price = await page.evaluate(() => { const r = document.querySelector('.dp-price').getBoundingClientRect(); return { right: Math.round(r.right), w: innerWidth }; });
+  ok(`a long rental price stays on the page (${vp.width}px)`, price.right <= price.w, JSON.stringify(price));
+  ok(`nothing scrolls sideways (${vp.width}px)`, await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1));
+  await page.screenshot({ path: join(OUT, `scroll-${vp.width}.png`) });
+  await page.context().close();
+}
+
 await browser.close();
 console.log(errors.length ? `\n${errors.length} FAILURE(S)\n` + errors.map(e => ' - ' + e).join('\n') : '\nAll checks passed.');
 process.exit(errors.length ? 1 : 0);

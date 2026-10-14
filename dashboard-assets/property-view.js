@@ -90,7 +90,7 @@
       <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="dp-call">📞 Call ${e.contactName} — ${e.contactNumber}</a>
       <div class="res-chips">${resourceChips(p)}</div>
     </div>
-    <div class="dp-price-box">
+    <div class="dp-price-box${String(p.startingPrice || '').trim().length > 28 ? ' long' : ''}">
       <div class="dp-price">${e.startingPrice}</div>
       ${e.pricePerSqft?`<div class="dp-psf">${e.pricePerSqft}</div>`:''}
       <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+(e.constructionStage||'Under Construction')}</span></div>
@@ -162,15 +162,18 @@
     const amenities = splitList(p.amenities).map(escapeHtml);
     const sheetBlock = renderSheetExtras(p);
     const map = mapsHref(p);
-    const fact = (v,l) => v ? `<div class="stat-b"><div class="stat-b-v">${v}</div><div class="stat-b-l">${l}</div></div>` : '';
+    // A sentence in a fact cell ("1 Covered Car Park per Apartment, Total 8…") is set smaller, so
+    // one long value does not make every tile in its row a tall empty box.
+    const longCls = v => String(v || '').replace(/&[a-z#0-9]+;/gi, 'x').length > 22 ? ' long' : '';
+    const fact = (v,l) => v ? `<div class="stat-b${longCls(v)}"><div class="stat-b-v">${v}</div><div class="stat-b-l">${l}</div></div>` : '';
     return `
     <div class="tab-panel active">
       <div class="sec">
         <div class="sec-title">📊 Key Facts</div>
         <div class="stats-g">
-          <div class="stat-b"><div class="stat-b-v">${e.config||'—'}</div><div class="stat-b-l">Configuration</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
-          <div class="stat-b"><div class="stat-b-v">${e.possession||'—'}</div><div class="stat-b-l">Possession</div></div>
+          <div class="stat-b${longCls(e.config)}"><div class="stat-b-v">${e.config||'—'}</div><div class="stat-b-l">Configuration</div></div>
+          <div class="stat-b${longCls(e.sqftRange)}"><div class="stat-b-v">${e.sqftRange||'—'}</div><div class="stat-b-l">Area</div></div>
+          <div class="stat-b${longCls(e.possession)}"><div class="stat-b-v">${e.possession||'—'}</div><div class="stat-b-l">Possession</div></div>
           ${fact(e.floorNo,'Floor')}
           ${fact(e.facing,'Facing')}
           ${fact(e.bathrooms,'Bathrooms')}

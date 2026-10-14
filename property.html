@@ -24,7 +24,11 @@
      sheet value from turning that into a sideways scroll. clip rather than
      hidden so it does not become a scroll container and break the sticky
      tabs inside it. */
-  #dp.standalone{position:static;display:block;min-height:100dvh;animation:none;overflow-x:clip;}
+  /* overflow-y must be VISIBLE here: the shared #dp rule makes it a scroll box (overflow-y:auto)
+     with overscroll-behavior:contain, and a scroll box as tall as its content never scrolls —
+     the wheel and a finger stopped inside it and never reached the page, so a shared link could
+     not be scrolled at all. Visible + clip is not a scroll container: the page scrolls. */
+  #dp.standalone{position:static;display:block;min-height:100dvh;animation:none;overflow:visible;overflow-x:clip;overscroll-behavior:auto;}
   /* Loading skeleton — shown only until the first document read lands. */
   .sk{background:linear-gradient(90deg,var(--border) 25%,var(--bg) 50%,var(--border) 75%);
       background-size:200% 100%;animation:skwave 1.3s ease-in-out infinite;border-radius:7px;}
