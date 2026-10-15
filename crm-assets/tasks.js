@@ -126,10 +126,11 @@
   }
 
   // ── The page ──
+  function label(s) { return s === 'done' ? '✓ Completed' : (M().STATUS_LABEL[s] || ''); }
   function statusSelect(t, cls) {
     var r = rights(t);
-    var opts = M().STATUSES.map(function (s) { return '<option value="' + s[0] + '"' + (t.status === s[0] ? ' selected' : '') + '>' + esc(s[1]) + '</option>'; }).join('');
-    if (!r.edit) return '<span class="tsk-st s-' + esc(t.status) + '">' + esc(M().STATUS_LABEL[t.status] || '') + '</span>';
+    var opts = M().STATUSES.map(function (s) { return '<option value="' + s[0] + '"' + (t.status === s[0] ? ' selected' : '') + '>' + esc(label(s[0])) + '</option>'; }).join('');
+    if (!r.edit) return '<span class="tsk-st s-' + esc(t.status) + '">' + esc(label(t.status)) + '</span>';
     return '<select class="tsk-st sel s-' + esc(t.status) + (cls ? ' ' + cls : '') + '" aria-label="Status of ' + esc(t.title) + '"'
       + ' onclick="event.stopPropagation()" onkeydown="event.stopPropagation()" onchange="PinTasks.setStatus(' + jsArg(t.id) + ', this.value)">' + opts + '</select>';
   }
@@ -174,7 +175,7 @@
   }
   function stat(key, n, label, f) {
     var on = (f.due && filt.due === f.due && filt.status === (f.status || 'open')) || (f.status && !f.due && filt.status === f.status && filt.due === 'any');
-    return '<button type="button" class="tsk-stat k-' + key + (on ? ' on' : '') + '" aria-pressed="' + on + '" onclick="PinTasks.quick(' + jsArg(key) + ')">'
+    return '<button type="button" class="tsk-stat k-' + key + (n ? ' has' : '') + (on ? ' on' : '') + '" aria-pressed="' + on + '" onclick="PinTasks.quick(' + jsArg(key) + ')">'
       + '<b>' + n + '</b><span>' + esc(label) + '</span></button>';
   }
   function render() {
@@ -242,7 +243,7 @@
     var people = roster();
     var segs = M().STATUSES.map(function (s) {
       return '<button type="button" class="tsk-seg-b s-' + s[0] + (t.status === s[0] ? ' on' : '') + '" aria-pressed="' + (t.status === s[0]) + '"' + dis
-        + ' onclick="PinTasks.field(\'status\', ' + jsArg(s[0]) + ')">' + esc(s[1]) + '</button>';
+        + ' onclick="PinTasks.field(\'status\', ' + jsArg(s[0]) + ')">' + esc(label(s[0])) + '</button>';
     }).join('');
     var prim = '<option value="">Choose a person…</option>' + people.map(function (e) {
       return '<option value="' + esc(e) + '"' + (t.primary === e ? ' selected' : '') + '>' + esc(nameOf(e)) + '</option>';

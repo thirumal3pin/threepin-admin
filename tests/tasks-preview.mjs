@@ -222,6 +222,11 @@ console.log('\nRajesh (assignee) — desktop');
   const u2 = await page.evaluate(() => window.__writes.filter(x => x.op === 'update').slice(-1)[0]);
   ok('Completing it from the form saves, with a history line', u2 && u2.patch.status === 'done' && u2.patch.completedAt > 0 && /Completed/.test(u2.patch.history.slice(-1)[0].text), JSON.stringify(u2 && u2.patch));
   await page.screenshot({ path: join(OUT, 'desk-assignee-list.png') });
+  await page.evaluate(() => PinTasks.filter('status', 'all'));
+  const done = await page.evaluate(() => { const r = [...document.querySelectorAll('#tasksView .tsk-row.s-done select.tsk-st')][0]; return r ? { text: r.options[r.selectedIndex].text, color: getComputedStyle(r).color } : null; });
+  ok('A completed task shows a green ✓ Completed', done && done.text === '✓ Completed' && /rgb\(21, 128, 61\)/.test(done.color), JSON.stringify(done));
+  await page.screenshot({ path: join(OUT, 'desk-assignee-all.png') });
+  await page.evaluate(() => PinTasks.filter('status', 'open'));
 
   // Daily task
   await page.evaluate(() => toggleView('today'));
