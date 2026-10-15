@@ -63,8 +63,12 @@ async function main() {
   } catch (e) {
     if (e.code !== 'auth/user-not-found') throw e;
     createdPassword = args.password || randomBytes(9).toString('base64url');
-    userRecord = await auth.createUser({ email: args.email, password: createdPassword });
+    userRecord = await auth.createUser({ email: args.email, password: createdPassword, emailVerified: true });
   }
+  // The team's own address, confirmed: a first "Continue with Google" with the same email then ADDS
+  // Google to this account. Unconfirmed, Firebase would remove the password on that first Google
+  // sign-in instead.
+  if (!userRecord.emailVerified) userRecord = await auth.updateUser(userRecord.uid, { emailVerified: true });
 
   await auth.setCustomUserClaims(userRecord.uid, { tenantId: args.tenantId });
 
