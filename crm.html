@@ -200,6 +200,7 @@ function toggleDensity(){
   <!-- MAIN -->
   <main id="main">
     <div id="todayView" style="display:none"></div>
+    <div id="tasksView" style="display:none"></div>
     <div id="kanbanView"></div>
     <div id="listView" style="display:none"></div>
     <div id="followupsView" style="display:none"></div>
@@ -933,6 +934,8 @@ function toggleDensity(){
   import * as crmPipeline from './crm-assets/pipeline.js';
   import * as leadAttention from './crm-assets/leadAttention.js';
   import * as crmMentions from './crm-assets/mentions.js';
+  import * as PinTaskModel from './shared-assets/task-model.js';
+  window.PinTaskModel = PinTaskModel;
   import * as trackVO from './track-assets/voiceover.js';
   window.trackVO = trackVO;
   window.crmPipeline = crmPipeline;
@@ -943,6 +946,7 @@ function toggleDensity(){
 </script>
 <script src="crm-assets/dashboardView.js"></script>
 <script src="crm-assets/today.js"></script>
+<script src="crm-assets/tasks.js"></script>
 <script src="crm-assets/calendar.js"></script>
 <script src="shared-assets/appnav.js"></script>
 <script src="crm-assets/nav-boot.js"></script>

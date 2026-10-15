@@ -76,6 +76,10 @@
       note: 'Your visits and tasks for today',
     },
     {
+      id: 'tasks', label: 'Tasks', icon: 'fa-solid fa-list-check', page: 'crm', nav: 'tasks', badge: 'tasks',
+      note: 'Work assigned to the team, and to you',
+    },
+    {
       id: 'calendar', label: 'Team calendar', icon: 'fa-regular fa-calendar-days', page: 'crm', nav: 'calendar',
       note: 'Who is where, and when everyone is free',
     },
@@ -224,7 +228,7 @@
     if (!n) return '';
     // A seller with no listing card is revenue sitting untouched — it earns
     // the same red treatment as an overdue follow-up or a property missing data.
-    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting';
+    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting' || item.badge === 'tasks';
     return '<span class="rl-badge' + (alert ? ' alert' : '') + '" aria-hidden="true">' + (n > 99 ? '99+' : n) + '</span>'
       + '<span class="sr-only"> (' + n + ')</span>';
   }

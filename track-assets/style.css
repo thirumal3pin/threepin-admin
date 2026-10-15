@@ -1819,7 +1819,19 @@ button.ps-mem:hover { border-color: var(--ink3); }
 .cf-tog span { display: flex; flex-direction: column; gap: 2px; }
 .cf-tog b { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .cf-tog small { font-size: 12px; color: var(--ink3); line-height: 1.4; }
+/* Tasks: pick people by tapping them; the picked ones are filled in ink with a tick. */
+.cf-pick { font: inherit; font-size: 13px; font-weight: 600; min-height: 34px; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--border); background: var(--card); color: var(--ink2); cursor: pointer; }
+.cf-pick:hover:not(:disabled) { border-color: var(--border2); color: var(--ink); }
+.cf-pick.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.cf-pick:disabled { cursor: default; opacity: .75; }
+.cf-sub { font-size: 12px; font-weight: 600; color: var(--ink2); margin-top: 4px; }
+.cf-subn { font-weight: 400; color: var(--ink3); }
+.cf-vrow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 0; border-top: 1px dashed var(--border); }
+.cf-vwho b { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.cf-vwho small { font-size: 11.5px; color: var(--ink3); }
+#cfTasks { scroll-margin-top: 70px; }
 @media (max-width: 760px) {
+  .cf-vrow { grid-template-columns: 1fr; gap: 6px; }
   .cf-wrap { padding: 4px 12px 60px; }
   .cf-sec { grid-template-columns: 1fr; gap: 10px; padding: 14px; }
 }

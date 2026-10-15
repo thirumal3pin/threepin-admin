@@ -1997,7 +1997,7 @@ function showAllAlerts(){
 // Which view is showing is the rail's job to display — the four buttons and
 // the Board/List dropdown that used to live in the header are entries in it
 // now. toggleView only has to show the right pane and tell the rail.
-const CRM_VIEWS = ['today', 'kanban', 'list', 'followups', 'dashboard', 'calendar'];
+const CRM_VIEWS = ['today', 'tasks', 'kanban', 'list', 'followups', 'dashboard', 'calendar'];
 function toggleView(view){
   currentView = view;
   if(view==='kanban' || view==='list') lastBrowseView = view;
@@ -2013,6 +2013,7 @@ function toggleView(view){
   if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else if(view==='today'){ try{ loadMyEvents(false); }catch(e){} if(window.renderTodayView) window.renderTodayView(); }
   else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }
+  else if(view==='tasks'){ if(window.renderTasksView) window.renderTasksView(); }
   else applyFilters();
 }
 function updateNavState(){
@@ -2022,7 +2023,7 @@ function updateNavState(){
   // on there and only get in the way.
   // Analytics counts every lead, so the search and filters (which it ignores) go too — they said
   // "Showing 0 of 60 · TailorTalk only" over a chart of all 60.
-  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard';
+  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard' && currentView !== 'tasks';
   document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
   document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
   // The Filters panel and its "Showing N of M" line sit outside the chip row: they follow it.

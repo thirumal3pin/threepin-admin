@@ -33,6 +33,7 @@ import { displayName } from '../crm-assets/mentions.js';
 import * as TG from './tags.js';
 import * as EF from './edit-flow.js';
 import * as CFG from './track-config.js';
+import * as TM from '../shared-assets/task-model.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -1056,6 +1057,7 @@ const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || 
 // people anyone sends to a property, so they are not offered; a new teammate added in the CRM is.
 const ROLE_MAILBOX = /^(sales|admin|info|support|accounts?|hr|office|contact|hello|no-?reply)$/;
 window.applyTrackTeamSnapshot = map => {
+  teamEmailsAll = [...new Set(Object.values(map && typeof map === 'object' ? map : {}).map(m => String((m && m.email) || '').trim().toLowerCase()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))];
   const seenE = new Set(), seenN = new Set();
   const next = Object.values(map && typeof map === 'object' ? map : {})
     .map(m => String((m && m.email) || '').trim().toLowerCase())
@@ -4429,17 +4431,75 @@ window.cfRemoveDoc = n => saveConfig({ docItems: config.docItems.filter(x => CFG
 window.cfResetDocs = () => saveConfig({ docItems: [...CFG.DEFAULT_DOCS] }, 'Starting list back');
 window.cfRemoveTag = t => saveConfig({ tags: config.tags.filter(x => TG.tagKey(x) !== TG.tagKey(t)) }, 'Tag removed');
 // A field's change can fire again as the redraw takes it away (it loses focus): one redraw at a time.
-let cfDrawing = false, cfStale = false;
+let cfDrawing = false, cfStale = false, cfScrolledToTasks = false;
 document.addEventListener('focusout', e => {
   const el = document.getElementById('settingsView');
   if (cfStale && el && el.contains(e.target)) setTimeout(() => { if (cfStale && !inUse('settingsView')) { cfStale = false; renderSettings(); } }, 0);
 });
+// ── Tasks (the CRM's Tasks page): who assigns, and who sees whose. Its own document, which only a
+// manager can change (firestore.rules → taskConfigs). Everyone else sees it here, read only.
+let taskCfg = null, teamEmailsAll = [];
+window.applyTrackTaskConfig = c => { taskCfg = c; if (currentView === 'settings') renderSettings(); };
+const taskPeople = () => [...new Set([...teamEmailsAll, ...team.map(t => t.email), ...TM.managersOf(taskCfg), ...Object.keys((taskCfg && taskCfg.viewers) || {})])]
+  .filter(Boolean).sort((a, b) => displayName(a).localeCompare(displayName(b)));
+async function saveTaskCfg(next, what) {
+  if (!TM.isManager(taskCfg, currentUserEmail)) return toast('Only ' + TM.managersOf(taskCfg).map(displayName).join(' and ') + ' can change this', true);
+  const was = taskCfg;
+  taskCfg = Object.assign({}, taskCfg || {}, TM.normaliseConfig(next));
+  renderSettings();
+  try {
+    const r = await window.trackFirebase.saveTaskConfig(taskCfg);
+    if (r && r.restampError) toast(what + ' · saved, but some tasks did not update yet — change any setting here again to finish', true);
+    else toast(what + (r && r.tasksUpdated ? ` · ${r.tasksUpdated} task${r.tasksUpdated === 1 ? '' : 's'} updated` : ''), true);
+  } catch (e) {
+    console.error('Task configuration save failed:', e);
+    taskCfg = was; renderSettings();
+    toast(e && e.code === 'permission-denied' ? 'Not allowed — only a task manager can change this' : 'Could not save — check your connection', true);
+  }
+}
+window.cfTaskManager = email => {
+  const cur = TM.managersOf(taskCfg), on = cur.includes(email);
+  if (on && cur.length === 1) return toast('Someone has to be able to assign tasks', true);
+  if (on && TM.lc(email) === TM.lc(currentUserEmail) && !confirm('Remove yourself? You will no longer be able to assign tasks or change this.')) return;
+  saveTaskCfg({ managers: on ? cur.filter(e => e !== email) : [...cur, email], viewers: (taskCfg && taskCfg.viewers) || {} }, on ? displayName(email) + ' no longer assigns tasks' : displayName(email) + ' can assign tasks');
+};
+window.cfTaskView = (viewer, person) => {
+  const viewers = JSON.parse(JSON.stringify((taskCfg && taskCfg.viewers) || {}));
+  const list = TM.canViewPeople(taskCfg, viewer), on = list.includes(person);
+  viewers[viewer] = on ? list.filter(e => e !== person) : [...list, person];
+  saveTaskCfg({ managers: TM.managersOf(taskCfg), viewers }, on ? `${displayName(viewer)} no longer sees ${displayName(person)}'s tasks` : `${displayName(viewer)} can see ${displayName(person)}'s tasks`);
+};
+function tasksSectionHtml(sec) {
+  const people = taskPeople(), mgr = TM.isManager(taskCfg, currentUserEmail), mgrs = TM.managersOf(taskCfg);
+  const dis = mgr ? '' : ' disabled';
+  const chipBtn = (on, label, js, title) => `<button type="button" class="cf-pick${on ? ' on' : ''}" aria-pressed="${on}"${dis} onclick="${js}"${title ? ` title="${esc(title)}"` : ''}>${on ? '✓ ' : ''}${esc(label)}</button>`;
+  const managersRow = people.map(e => chipBtn(mgrs.includes(e), displayName(e), `cfTaskManager(${jsq(e)})`)).join('');
+  const rows = people.filter(e => !mgrs.includes(e)).map(v => {
+    const sees = TM.canViewPeople(taskCfg, v);
+    const others = people.filter(e => e !== v);
+    return `<div class="cf-vrow"><div class="cf-vwho"><b>${esc(displayName(v))}</b><small>${sees.length ? 'sees ' + sees.length + ' other' + (sees.length === 1 ? '' : 's') : 'own tasks only'}</small></div>
+      <div class="cf-chips">${others.map(p => chipBtn(sees.includes(p), displayName(p), `cfTaskView(${jsq(v)}, ${jsq(p)})`, `${displayName(v)} sees ${displayName(p)}'s tasks`)).join('')}</div></div>`;
+  }).join('');
+  return `<div id="cfTasks">${sec('Tasks', 'Who assigns tasks, and who sees whose. A person always sees the tasks assigned to them; those who assign see everyone\'s.'
+      + (mgr ? '' : ` <b>Only ${esc(mgrs.map(displayName).join(' and '))} can change this.</b>`), `
+    <div class="cf-sub">Can assign tasks and see every task</div>
+    <div class="cf-chips">${managersRow || '<span class="cf-none">No team set yet</span>'}</div>
+    <div class="cf-sub">Can also see another person's tasks <span class="cf-subn">(to read; only the people on a task change it)</span></div>
+    ${rows || '<span class="cf-none">Everyone on the team can assign tasks.</span>'}`)}</div>`;
+}
 function renderSettings() {
   const host = document.getElementById('settingsView');
   if (!host) return;
   if (cfDrawing) { setTimeout(renderSettings, 0); return; }
   cfDrawing = true;
   try { drawSettings(host); } finally { cfDrawing = false; }
+  // Arriving from the Tasks page's "Who sees what": open at the Tasks section, once it is on screen.
+  if (location.hash === '#cfTasks' && !cfScrolledToTasks) setTimeout(() => {
+    const el = document.getElementById('cfTasks');
+    if (!el || cfScrolledToTasks || !el.offsetParent) return;
+    cfScrolledToTasks = true;
+    el.scrollIntoView({ block: 'start' });
+  }, 80);
 }
 function drawSettings(host) {
   const people = shootPeople().map(p => p.name).filter(n => !config.editors.some(e => sameName(e, n)));
@@ -4477,6 +4537,7 @@ function drawSettings(host) {
       <div class="cf-chips">${config.docItems.length ? config.docItems.map(n => chip(n, `cfRemoveDoc(${jsq(n)})`)).join('') : '<span class="cf-none">No documents — the checklist is hidden</span>'}</div>
       <div class="cf-add"><input id="cfDoc" type="text" placeholder="New document, e.g. Society NOC" maxlength="60" onkeydown="if(event.key==='Enter'){event.preventDefault();cfAddDoc()}"><button type="button" class="tk-btn" onclick="cfAddDoc()">Add document</button>
       ${JSON.stringify(config.docItems) === JSON.stringify([...CFG.DEFAULT_DOCS]) ? '' : '<button type="button" class="tk-btn ghost" onclick="cfResetDocs()">Starting list</button>'}</div>`)}
+    ${tasksSectionHtml(sec)}
     ${sec('Team', 'Who can be picked for a shoot or an edit. The team is kept in the CRM by the owner.', `
       <div class="cf-chips">${team.length ? team.map(t => `<span class="cf-chip" title="${esc(t.email)}">${esc(t.name)}</span>`).join('') : '<span class="cf-none">No team set yet</span>'}</div>`)}
   </div>`;

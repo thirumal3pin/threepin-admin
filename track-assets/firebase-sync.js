@@ -31,6 +31,7 @@ import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 import { defaultStages } from './track-pipeline.js';
+import * as TaskModel from '../shared-assets/task-model.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -116,6 +117,11 @@ function subscribeToData(tenantId){
     snap => { if(window.applyPostingSnapshot) window.applyPostingSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id }))); },
     err => console.error('Firestore postTracker sync error:', err));
 
+  // Who assigns tasks and who sees whose (Settings → Configurations → Tasks; the CRM's Tasks page).
+  onSnapshot(doc(db, 'taskConfigs', tenantId),
+    snap => { if(window.applyTrackTaskConfig) window.applyTrackTaskConfig(snap.exists() ? snap.data() : null); },
+    err => { console.error('Firestore task configuration sync error:', err); if(window.applyTrackTaskConfig) window.applyTrackTaskConfig(null); });
+
   // The team (settings/{tenant}.team, set by the owner in the CRM), for "Shoot assigned to".
   onSnapshot(doc(db, 'settings', tenantId),
     snap => {
@@ -175,6 +181,32 @@ window.trackFirebase = {
     const patch = keys && keys.length ? Object.fromEntries(keys.map(k => ['trackConfig.' + k, cfg[k]])) : { trackConfig: cfg };
     try { await updateDoc(ref, patch); }
     catch(e){ if(e && e.code === 'not-found') await setDoc(ref, { trackConfig: cfg }, { merge: true }); else throw e; }
+  },
+  // Tasks: who assigns, who sees whose. Only a manager may save it (the rules say so too). Every
+  // task then carries the new visibility (its visibleTo keys), so a person given (or no longer
+  // given) someone's tasks sees the change at once.
+  async saveTaskConfig(cfg){
+    if(!currentTenantId) throw new Error('No tenant');
+    const T = currentTenantId, next = TaskModel.normaliseConfig(cfg);
+    const by = (auth.currentUser && auth.currentUser.email || '').toLowerCase();
+    const saveCfg = () => updateDoc(doc(db, 'taskConfigs', T), { tenantId: T, managers: next.managers, viewers: next.viewers, updatedAt: Date.now(), updatedBy: by });
+    const restamp = async () => {
+      const snap = await getDocs(query(collection(db, 'tasks'), where('tenantId', '==', T)));
+      const changed = snap.docs.filter(d => JSON.stringify(d.data().visibleTo || []) !== JSON.stringify(TaskModel.visibleToFor(d.data(), next, T)));
+      for (let i = 0; i < changed.length; i += 400) {
+        const batch = writeBatch(db);
+        changed.slice(i, i + 400).forEach(d => batch.update(d.ref, { visibleTo: TaskModel.visibleToFor(d.data(), next, T) }));
+        await batch.commit();
+      }
+      return changed.length;
+    };
+    // A manager taking themselves off the list re-stamps the tasks FIRST, while still allowed to.
+    if (!next.managers.includes(by)) { const n = await restamp(); await saveCfg(); return { saved: true, tasksUpdated: n }; }
+    await saveCfg();
+    // Saved. Re-stamping the tasks is reported on its own: it is safe to repeat, and the next save
+    // repeats it — the configuration is never reported as unsaved when it was saved.
+    try { return { saved: true, tasksUpdated: await restamp() }; }
+    catch (e) { return { saved: true, tasksUpdated: 0, restampError: String(e && e.message || e) }; }
   },
   async deletePosting(id){
     if(!currentTenantId) throw new Error('No tenant');

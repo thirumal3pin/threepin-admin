@@ -203,6 +203,65 @@ service cloud.firestore {
       allow read, write: if ownsTenantDoc(tid);
     }
 
+    // ---------------------------------------------------------------------
+    // TASKS (the CRM's Tasks page and Daily task; shared-assets/task-model.js is the same rules
+    // in code). Managers — taskConfigs/{tid}.managers, Thirumal and Swami to start with — assign
+    // tasks, see every task and set who sees whose. The people a task is assigned to see it and
+    // may change everything on it except who it is assigned to. Anyone else sees a task only
+    // when a manager has let them see one of its people's tasks; that is stored on the task as
+    // visibleTo keys "tenant|email", so a person's query (visibleTo array-contains their key) and
+    // this rule read the same field.
+    //
+    // The configuration is its own document, not a field of settings/{tid}: settings is
+    // writable by everyone on the tenant, and who-sees-whom must not be. It is created once by
+    // an admin script; only a manager can change it afterwards, and never to an empty list.
+    // ---------------------------------------------------------------------
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+    // A person is who their email says only when that email is confirmed (Google always is; the
+    // team's password accounts are marked so) — so nobody becomes "Thirumal" by typing his address.
+    function emailVerified() {
+      return request.auth.token.get('email_verified', false) == true;
+    }
+    function taskConfigPath() {
+      return /databases/$(database)/documents/taskConfigs/$(tenantId());
+    }
+    function isTaskManager() {
+      return isSignedInWithTenant() && emailVerified() && exists(taskConfigPath())
+        && myEmail() in get(taskConfigPath()).data.managers;
+    }
+    // What a task must look like once written, whoever writes it.
+    function validTask(d) {
+      return d.status in ['todo', 'doing', 'done']
+        && d.title is string && d.title.size() > 0 && d.title.size() <= 140
+        && d.description is string && d.description.size() <= 4000
+        && d.history is list && d.history.size() <= 60;
+    }
+
+    match /taskConfigs/{tid} {
+      allow read: if ownsTenantDoc(tid);
+      allow update: if ownsTenantDoc(tid) && emailVerified()
+        && myEmail() in resource.data.managers
+        && request.resource.data.tenantId == tid
+        && request.resource.data.managers is list
+        && request.resource.data.managers.size() > 0;
+      allow create, delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isSignedInWithTenant() && (
+        (emailVerified() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
+        || (resource.data.tenantId == tenantId() && isTaskManager()));
+      allow create: if writingOwnTenantField() && isTaskManager() && validTask(request.resource.data);
+      allow delete: if ownsTenantField() && isTaskManager();
+      allow update: if ownsTenantField() && writingOwnTenantField() && validTask(request.resource.data) && (
+        isTaskManager()
+        || (emailVerified() && myEmail() in resource.data.assignees
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+                 ['title', 'description', 'status', 'due', 'link', 'updatedAt', 'updatedBy', 'statusAt', 'completedAt', 'history'])));
+    }
+
     // Property notes + timeline events, scoped by the PARENT property's
     // tenant exactly like leads/{leadId}/notes above — rules do not cascade
     // into subcollections, so this match is required or the dashboard's

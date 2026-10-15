@@ -227,6 +227,7 @@
   }
 
   function rowHtml(item) {
+    if (item.kind === 'task') return window.PinTasks ? window.PinTasks.todayRowHtml(item.task) : '';
     var l = item.lead;
     // A meeting belongs to the calendar, not to a lead. Everything below that
     // reaches for l.id has to cope with there being none.
@@ -368,6 +369,8 @@
         if (it.mine) { mine++; if (it.overdue) waiting++; }
       } else if (it.kind === 'vo') {
         if (it.mine) mine++;
+      } else if (it.kind === 'task') {
+        mine++;
       }
     });
     return { mine: mine, waiting: waiting };
@@ -416,9 +419,12 @@
     var meetings = meetingsToday().map(function (m) { return { kind: 'meeting', meeting: m, at: m.at, lead: null }; });
     var calls = callsDue();
     var asks = askedOfMe();
+    // Tasks assigned to you (crm-assets/tasks.js): late ones, the ones due in this span, undated ones.
+    var mytasks = window.PinTasks ? window.PinTasks.todayItems(endOfSpan()) : [];
+    var lateTasks = mytasks.filter(function (t) { return t.overdue; }).length;
     if (window.crmFirebase && window.crmFirebase.watchTrackTasks) window.crmFirebase.watchTrackTasks();
     var vos = voiceOvers();
-    var total = visits.length + meetings.length + calls.length + asks.length + (voIsMe() ? vos.length : 0);
+    var total = visits.length + meetings.length + calls.length + asks.length + mytasks.length + (voIsMe() ? vos.length : 0);
 
     var me = person(currentUserEmail);
     var late = calls.filter(function (c) { return c.overdue; }).length;
@@ -432,6 +438,7 @@
       if (visits.length) bits.push(visits.length + (visits.length === 1 ? ' visit' : ' visits'));
       if (meetings.length) bits.push(meetings.length + (meetings.length === 1 ? ' meeting' : ' meetings'));
       if (calls.length) bits.push(calls.length + (calls.length === 1 ? ' call' : ' calls') + (late ? ' (' + late + ' late)' : ''));
+      if (mytasks.length) bits.push(mytasks.length + (mytasks.length === 1 ? ' task' : ' tasks') + (lateTasks ? ' (' + lateTasks + ' late)' : ''));
       if (asks.length) bits.push(asks.length + (asks.length === 1 ? ' thing asked of you' : ' things asked of you'));
       if (vos.length && voIsMe()) bits.push(vos.length + (vos.length === 1 ? ' voice-over' : ' voice-overs') + ' to make');
       summary = bits.join(' · ');
@@ -454,6 +461,8 @@
         meetings, 'No meetings ' + spanWord() + '.')
       + sectionHtml('Calls due', 'Follow-ups due ' + (span === 'day' ? 'by the end of today' : 'by the end of ' + spanWord().replace('this ', 'the ')) + ', including any you missed.',
         calls, 'Nothing due ' + spanWord() + '.')
+      + sectionHtml('Tasks for you', 'Assigned to you on the Tasks page: the late ones, the ones due ' + spanWord() + ', and any with no date. Change the status right here.',
+        mytasks, 'No task assigned to you is due ' + spanWord() + '.')
       + sectionHtml('Asked of you', 'Where a colleague put your name in a note on a lead.',
         asks, 'Nobody is waiting on you.')
       // Shoot & Media: shown to the voice-over person always, to everyone else while there are some.

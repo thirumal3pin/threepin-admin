@@ -3,6 +3,7 @@ import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js'
 import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
 import { rebuildLeadViews } from './_lead-views.js';
+import * as TM from '../shared-assets/task-model.js';
 
 // The digest, then the day's lead-views rebuild (one transaction per view document): room for both.
 export const maxDuration = 60;
@@ -301,6 +302,117 @@ async function digestForTenant(db, tenantId) {
   return { tenantId, skipped: false, results, rebuild };
 }
 
+// ═══════ TASKS — the emails (rules in shared-assets/task-model.js) ═══════
+// Sent from here because this endpoint already sends the morning email, and the Vercel plan allows
+// no new endpoint (12 is the limit). Two kinds:
+//   • on an event the page reports (POST ?action=task): a task assigned or reassigned → the people
+//     put on it; its status changed → everyone on it and the managers. The server re-reads the task
+//     and decides who is emailed — the page only says what happened, and only someone on the task
+//     (or a manager) can say it.
+//   • each morning (the cron below): every person's tasks that are late or due today.
+const CRM_BASE = process.env.CRM_BASE_URL || 'https://admin.threepin.in';
+const taskUrl = id => `${CRM_BASE}/crm.html?nav=tasks&task=${encodeURIComponent(id)}`;
+const fmtDueIst = due => due ? new Date(due + 'T12:00:00+05:30').toLocaleDateString('en-IN', { timeZone: TZ, day: 'numeric', month: 'short', year: 'numeric' }) : 'No due date';
+
+function taskCardHtml(t, lead) {
+  const people = TM.assigneesOf(t);
+  const sec = people.slice(1).map(displayName).join(', ');
+  return `<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;border:1px solid #eee;border-radius:8px;">
+    <tr><td style="padding:12px 14px;border-bottom:1px solid #eee;">
+      <div style="font-size:16px;font-weight:700;color:#0A0A0A;">${escapeHtml(t.title || 'Task')}</div>
+      ${t.description ? `<div style="color:#444;margin-top:6px;white-space:pre-wrap;">${escapeHtml(String(t.description).slice(0, 1500))}</div>` : ''}
+    </td></tr>
+    <tr><td style="padding:10px 14px;color:#444;line-height:1.7;">
+      <b>Status:</b> ${escapeHtml(TM.STATUS_LABEL[t.status] || '—')}<br>
+      <b>Due:</b> ${escapeHtml(fmtDueIst(t.due))}${TM.dueBucket(t) === 'overdue' ? ' <span style="color:#B91C1C;font-weight:700;">(overdue)</span>' : ''}<br>
+      <b>Assigned to:</b> ${escapeHtml(displayName(people[0] || ''))}${sec ? ` · also ${escapeHtml(sec)}` : ''}<br>
+      ${t.link && t.link.label ? `<b>Linked to:</b> ${escapeHtml((t.link.kind === 'lead' ? 'Lead ' : 'Property ') + t.link.label)}<br>` : ''}
+      ${t.createdBy ? `<b>From:</b> ${escapeHtml(displayName(t.createdBy))}` : ''}
+    </td></tr>
+  </table>`;
+}
+function taskMailHtml(kicker, lead, body) {
+  return `<div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#0A0A0A;max-width:640px;">
+    <div style="padding:0 0 14px;border-bottom:3px solid #FE8D00;margin-bottom:14px;">
+      <div style="font-size:20px;font-weight:700;letter-spacing:-.03em;">3 PIN Realty</div>
+      <div style="font-size:11px;color:#A85C00;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-top:3px;">${escapeHtml(kicker)}</div>
+    </div>
+    <p style="font-size:14px;margin:0 0 14px;">${lead}</p>
+    ${body}
+  </div>`;
+}
+const openButton = (url, label) => `<p style="margin:18px 0 0;"><a href="${url}" style="display:inline-block;background:#FF8A00;color:#1A1206;text-decoration:none;font-weight:700;padding:10px 18px;border-radius:8px;font-family:sans-serif;font-size:14px;">${escapeHtml(label)}</a></p>`;
+
+async function handleTaskEvent(request, user) {
+  const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
+  let body = {};
+  try { body = await request.json(); } catch (e) { return json({ ok: false, error: 'Bad request' }, 400); }
+  const id = String(body.id || ''), event = String(body.event || '');
+  if (!id || !['assigned', 'status'].includes(event)) return json({ ok: false, error: 'Bad request' }, 400);
+  const db = getDb();
+  const [snap, cfgSnap] = await Promise.all([db.collection('tasks').doc(id).get(), db.collection('taskConfigs').doc(user.tenantId).get()]);
+  if (!snap.exists) return json({ ok: false, error: 'No such task' }, 404);
+  const t = snap.data();
+  if (t.tenantId !== user.tenantId) return json({ ok: false, error: 'No such task' }, 404);
+  const cfg = cfgSnap.exists ? cfgSnap.data() : null;
+  const actor = TM.lc(user.email);
+  if (!user.email_verified) return json({ ok: false, error: 'Not allowed' }, 403);
+  // Only someone the task concerns may set off its emails — and only for a change they have just
+  // made themselves, emailed once: a page cannot make the server mail the team again and again.
+  const isMgr = TM.isManager(cfg, actor);
+  if (!isMgr && !TM.isAssignee(t, actor)) return json({ ok: false, error: 'Not allowed' }, 403);
+  if (event === 'assigned' && !isMgr) return json({ ok: false, error: 'Only a manager assigns' }, 403);
+  const stamp = event === 'status' ? Number(t.statusAt || 0) : Number(t.updatedAt || 0);
+  if (TM.lc(t.updatedBy) !== actor || !stamp || Date.now() - stamp > 10 * 60 * 1000) return json({ ok: false, error: 'No recent change by you' }, 409);
+  const sentKey = event === 'status' ? 'status' : 'assigned';
+  if (t.notified && Number(t.notified[sentKey]) === stamp) return json({ ok: true, sent: 0, already: true });
+  await snap.ref.set({ notified: { ...(t.notified || {}), [sentKey]: stamp } }, { merge: true });
+  const to = TM.recipientsFor(event, t, cfg, actor, event === 'assigned' ? body.added : null);
+  const who = displayName(actor) || actor;
+  let subject, html, text;
+  if (event === 'assigned') {
+    subject = `Task for you: ${t.title}`;
+    html = taskMailHtml('New task', `<b>${escapeHtml(who)}</b> assigned you a task.`, taskCardHtml(t) + openButton(taskUrl(id), 'Open the task'));
+    text = `${who} assigned you a task: ${t.title}\nDue: ${fmtDueIst(t.due)}\n${t.description ? '\n' + t.description + '\n' : ''}\nOpen: ${taskUrl(id)}`;
+  } else {
+    const from = TM.STATUS_LABEL[body.from] || '';
+    const now = TM.STATUS_LABEL[t.status] || '';
+    subject = `${now}: ${t.title}`;
+    html = taskMailHtml('Task update', `<b>${escapeHtml(who)}</b> changed the status${from ? ` from <b>${escapeHtml(from)}</b>` : ''} to <b>${escapeHtml(now)}</b>.`,
+      taskCardHtml(t) + openButton(taskUrl(id), 'Open the task'));
+    text = `${who} changed "${t.title}"${from ? ' from ' + from : ''} to ${now}.\nOpen: ${taskUrl(id)}`;
+  }
+  const results = await Promise.all(to.map(async email => {
+    const r = await sendEmail(email, subject, text, html);
+    return { to: email, ok: !!(r && r.ok), error: r && r.error };
+  }));
+  const sent = results.filter(r => r.ok).length;
+  return json({ ok: !results.length || sent > 0, sent, results });
+}
+
+// Each person's late and due-today tasks, one email each, once a day (settings.lastTaskDigestDate).
+async function taskDigestForTenant(db, tenantId, alreadySent) {
+  const snap = await db.collection('tasks').where('tenantId', '==', tenantId).get();
+  const by = TM.morningListFor(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+  const done = new Set(alreadySent || []);
+  // In parallel (the cron's minute is shared with the follow-up digest and the lead-views rebuild).
+  return Promise.all(Object.entries(by).filter(([email]) => !done.has(email)).map(async ([email, list]) => {
+    const late = list.filter(t => TM.dueBucket(t) === 'overdue').length;
+    const rows = list.map(t => `<tr>
+      <td style="padding:8px 10px;border-bottom:1px solid #eee;"><a href="${taskUrl(t.id)}" style="color:#0A0A0A;font-weight:600;text-decoration:none;">${escapeHtml(t.title || 'Task')}</a>
+        ${t.link && t.link.label ? `<div style="color:#888;font-size:12px;">${escapeHtml(t.link.label)}</div>` : ''}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #eee;white-space:nowrap;${TM.dueBucket(t) === 'overdue' ? 'color:#B91C1C;font-weight:700;' : 'color:#A35A00;font-weight:600;'}">${TM.dueBucket(t) === 'overdue' ? 'Overdue · ' + escapeHtml(fmtDueIst(t.due)) : 'Due today'}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #eee;white-space:nowrap;">${escapeHtml(TM.STATUS_LABEL[t.status] || '')}</td>
+    </tr>`).join('');
+    const html = taskMailHtml('Your tasks today', `Good morning, ${escapeHtml(displayName(email) || '')}. ${list.length} ${list.length === 1 ? 'task needs' : 'tasks need'} you today${late ? ` — ${late} ${late === 1 ? 'is' : 'are'} overdue` : ''}.`,
+      `<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">${rows}</table>` + openButton(`${CRM_BASE}/crm.html?nav=tasks`, 'Open your tasks'));
+    const text = list.map(t => `- ${t.title} (${TM.dueBucket(t) === 'overdue' ? 'overdue, was due ' + fmtDueIst(t.due) : 'due today'}, ${TM.STATUS_LABEL[t.status] || ''})`).join('\n') + `\n\nOpen: ${CRM_BASE}/crm.html?nav=tasks`;
+    const subject = `Your tasks today: ${list.length}${late ? ` (${late} overdue)` : ''}`;
+    const r = await sendEmail(email, subject, text, html);
+    return { to: email, ok: !!(r && r.ok), error: r && r.error, tasks: list.length };
+  }));
+}
+
 // Triggered by Vercel Cron (see vercel.json) once a day, or manually from
 // the CRM's "Send Digest Now" button (POST, Firebase-auth'd, one tenant).
 //
@@ -339,6 +451,25 @@ export async function GET(request) {
     try {
       const sSnap = await settingsRef.get();
       const s = sSnap.exists ? sSnap.data() : {};
+      // Tasks first, on their own day mark, so a follow-up digest already sent (or failing) never
+      // stops anyone's "your tasks today".
+      if (s.lastTaskDigestDate !== today) {
+        try {
+          // Who already had theirs today (a run that failed for some is retried for those only).
+          const sentBefore = s.taskDigestSent && s.taskDigestSent.date === today ? s.taskDigestSent.to || [] : [];
+          const tr = await taskDigestForTenant(db, tenantId, sentBefore);
+          const sentNow = [...sentBefore, ...tr.filter(x => x.ok).map(x => x.to)];
+          await settingsRef.set({
+            taskDigestSent: { date: today, to: sentNow },
+            ...(tr.every(x => x.ok) ? { lastTaskDigestDate: today } : {}),
+            lastTaskDigestRun: { at: Date.now(), results: tr }
+          }, { merge: true });
+          summary.push({ tenantId, tasks: tr.map(x => ({ to: x.to, ok: x.ok, tasks: x.tasks })) });
+        } catch (e) {
+          console.error('followup-digest: task digest for', tenantId, 'failed:', e);
+          summary.push({ tenantId, tasksError: String((e && e.message) || e) });
+        }
+      }
       if (s.lastDigestSentDate === today) { summary.push({ tenantId, skipped: 'already-sent-today' }); continue; }
 
       const r = await digestForTenant(db, tenantId);
@@ -378,6 +509,7 @@ export async function POST(request) {
       headers: { 'Content-Type': 'application/json' }
     });
   }
+  if (new URL(request.url).searchParams.get('action') === 'task') return handleTaskEvent(request, user);
   const db = getDb();
   const r = await digestForTenant(db, user.tenantId);
   // Record manual sends too (for the "last sent" indicator), but deliberately

@@ -6,6 +6,7 @@ import {
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { diffPaths, applyPaths } from '../shared-assets/lead-views.js';
 import { isUntouchedCard } from '../track-assets/seller-sync.js';
+import * as TaskModel from '../shared-assets/task-model.js';
 // The board's own rule for "a card nobody worked on" (crm-assets/app.js markNotSeller).
 window.isUntouchedCard = isUntouchedCard;
 import {
@@ -155,6 +156,45 @@ function subscribeToData(tenantId){
     // it with a lead, so it is configuration rather than data.
     if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
   }, (err) => console.error('Firestore settings sync error:', err));
+}
+
+// ═══════ TASKS (shared-assets/task-model.js holds the rules) ═══════
+// The configuration first (who manages, who sees whose), then the tasks this person may see: a
+// manager every task of the tenant, anyone else the tasks whose visibleTo carries their key —
+// exactly the two shapes of query the Firestore rules allow. A change in the configuration
+// (someone made a manager, or let see another's tasks) re-opens the right query.
+let tasksUnsub = null, tasksMode = null, taskCfgWatched = false, taskCfg = null;
+function signedInEmail(){ return (auth.currentUser && auth.currentUser.email || '').toLowerCase(); }
+function watchTasksQuery(mode){
+  if(mode === tasksMode && tasksUnsub) return;
+  if(tasksUnsub){ try { tasksUnsub(); } catch (e) {} tasksUnsub = null; }
+  tasksMode = mode;
+  const me = signedInEmail();
+  if(!me || !currentTenantId) return;
+  const q = mode === 'all'
+    ? query(collection(db, 'tasks'), where('tenantId', '==', currentTenantId))
+    : query(collection(db, 'tasks'), where('visibleTo', 'array-contains', TaskModel.visKey(currentTenantId, me)));
+  tasksUnsub = onSnapshot(q, snap => {
+    if (window.applyTasksSnapshot) window.applyTasksSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id })), mode, null, snap.metadata.fromCache);
+  }, err => {
+    // Not a manager after all (the configuration says otherwise on the server): the person's own.
+    if (mode === 'all' && err && err.code === 'permission-denied') { tasksUnsub = null; watchTasksQuery('mine'); return; }
+    console.error('Firestore tasks sync error:', err);
+    if (window.applyTasksSnapshot) window.applyTasksSnapshot(null, mode, err);
+  });
+}
+function watchTasks(){
+  if(taskCfgWatched || !currentTenantId) return;
+  taskCfgWatched = true;
+  onSnapshot(doc(db, 'taskConfigs', currentTenantId), snap => {
+    taskCfg = snap.exists() ? snap.data() : null;
+    if (window.applyTaskConfig) window.applyTaskConfig(taskCfg);
+    watchTasksQuery(TaskModel.isManager(taskCfg, signedInEmail()) ? 'all' : 'mine');
+  }, err => {
+    console.error('Firestore task configuration sync error:', err);
+    if (window.applyTaskConfig) window.applyTaskConfig(null);
+    watchTasksQuery('mine');
+  });
 }
 
 // Shoot & Media's cards and stages, read only, for Daily task's voice-overs (track-assets/voiceover.js).
@@ -335,6 +375,29 @@ window.crmFirebase = {
   }, { merge: true }).catch(e => console.error('Firestore save dashboard email settings error:', e))
 };
 
+// Tasks: a new task is written whole; a change writes only the fields that changed, so a person a
+// task is assigned to never "touches" the fields the rules keep for the managers.
+window.crmTasks = {
+  create: (task) => setDoc(doc(db, 'tasks', task.id), { ...task, tenantId: currentTenantId }),
+  update: (id, patch) => updateDoc(doc(db, 'tasks', id), { ...patch, tenantId: currentTenantId }),
+  remove: (id) => deleteDoc(doc(db, 'tasks', id)),
+  // The emails go from the server, which re-reads the task and decides who gets one; this only says
+  // what happened. Never throws: a task that saved is saved, whether or not the email went.
+  notify: async (id, event, extra) => {
+    try {
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+      if (!token) return { ok: false, error: 'not signed in' };
+      const res = await fetch('/api/followup-digest?action=task', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, event, ...(extra || {}) })
+      });
+      return res.ok ? await res.json() : { ok: false, error: 'HTTP ' + res.status };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  },
+  config: () => taskCfg,
+  tenantId: () => currentTenantId
+};
+
 window.crmAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOutAndForget(auth),
@@ -367,6 +430,7 @@ onAuthStateChanged(auth, async (user) => {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
     } else {
       subscribeToData(currentTenantId);
+      watchTasks();
     }
   } else {
     currentTenantId = null;
