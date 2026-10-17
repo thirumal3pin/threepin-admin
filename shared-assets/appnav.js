@@ -123,6 +123,7 @@
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
         { id: 'shoots', label: 'Shoots', icon: 'fa-regular fa-calendar-check', page: 'track', nav: 'shoots' },
         { id: 'editor', label: 'Editor', icon: 'fa-solid fa-scissors', page: 'track', nav: 'editor' },
+        { id: 'mediaCalendar', label: 'Calendar', icon: 'fa-regular fa-calendar-days', page: 'track', nav: 'calendar' },
         { id: 'posting', label: 'Posting', icon: 'fa-solid fa-bullhorn', page: 'track', nav: 'posting', badge: 'posting' },
         { id: 'sellers', label: 'Sellers', icon: 'fa-solid fa-tag', page: 'track', nav: 'sellers', badge: 'sellers' },
         { id: 'settings', label: 'Settings', icon: 'fa-solid fa-sliders', page: 'track', nav: 'settings' },

@@ -105,7 +105,7 @@
     var b = String((cfg && cfg.voiceBy) || '').trim(), e = String((cfg && cfg.voiceByEmail) || '').trim().toLowerCase();
     if (b !== vo.by || e !== vo.email) { vo.by = b; vo.email = e; redraw(); }
   };
-  var VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+  var VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', ads: 'Ads', all: 'Video' };
   // By email when Settings has it (picked from the team); by name otherwise.
   function voIsMe() {
     if (vo.email) return isMe(vo.email);

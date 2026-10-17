@@ -10,7 +10,7 @@
 
 import { stageKeyOf, stageKindOf } from './track-pipeline.js';
 
-export const VO_OUTLETS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
+export const VO_OUTLETS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab'], ['ads', 'Ads']];
 const planned = (x, k) => !!(x.forPlan && (x.forPlan[k] || (k === 'igReel' && x.forPlan.insta)));
 const hasOutletVoice = x => !!(x.forVoice && Object.values(x.forVoice).some(v => v === 'vo' || v === 'live'));
 

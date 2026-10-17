@@ -376,6 +376,29 @@ window.pgPostsFor = (l, channels) => {
   idx.memo.set(mk, out);
   return out;
 };
+// The posts, for the calendar: one per row and moment — the outlets going out together are one post
+// ("Story + Reel"). Scheduled and live have a time; one only planned has its day (an outlet's, or the
+// row's own when no outlet is chosen yet).
+window.pgCalendarPosts = () => {
+  const out = [];
+  for (const t of trackers) {
+    const name = G.displayName(t, trackers), root = t.repostOf || t.id;
+    const groups = new Map();
+    for (const c of G.CHANNELS) {
+      const ch = t.channels[c.key];
+      const at = ch.status === 'live' ? (ch.liveAt || ch.at) : ch.status === 'scheduled' ? ch.at : ch.status === 'yet' ? ch.day : 0;
+      if (!at) continue;
+      const timed = ch.status !== 'yet', k = ch.status + '|' + at;
+      if (!groups.has(k)) groups.set(k, { rowId: t.id, root, series: G.isSeries(t), name, code: t.propertyCode || '', status: ch.status, at, timed, labels: [], keys: [] });
+      groups.get(k).labels.push(c.label);
+      groups.get(k).keys.push(c.key);
+    }
+    if (!groups.size && t.plannedDate && !G.CHANNEL_KEYS.some(k => t.channels[k].status === 'live' || t.channels[k].status === 'scheduled'))
+      groups.set('plan', { rowId: t.id, root, series: G.isSeries(t), name, code: t.propertyCode || '', status: 'yet', at: t.plannedDate, timed: false, labels: [], keys: [] });
+    out.push(...groups.values());
+  }
+  return out;
+};
 // A series, for its board card: its name and its properties.
 window.pgSeriesInfo = id => {
   const s = byId(id);
@@ -629,6 +652,7 @@ function renderPosting() {
   memMemo = null; serIdx = null;   // …and each series' properties
   try { drawPosting(el); } finally { famIdx = null; }
 }
+let flash = null;   // the row just jumped to, lit up for the flash's length (a redraw keeps it lit)
 function drawPosting(el) {
   pinBelowHeader();
   const q = window.trackSearchText ? window.trackSearchText() : '';
@@ -659,8 +683,12 @@ function drawPosting(el) {
     ${window.trackApi && window.trackApi.editSheetHtml ? `<div class="pg-edsheet">${window.trackApi.editSheetHtml()}</div>` : ''}`;
   if (focusId) {
     const c = document.getElementById('pg-' + focusId);
-    if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('pg-flash'); }
+    if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('pg-flash'); flash = { id: focusId, until: Date.now() + 1600 }; }
     focusId = null;
+  } else if (flash && Date.now() < flash.until) {
+    // A redraw right after a jump (the inventory arriving, say) keeps the row lit up — and in view.
+    const c = document.getElementById('pg-' + flash.id);
+    if (c) c.classList.add('pg-flash');
   }
 }
 
@@ -1135,6 +1163,15 @@ window.pgJump = id => {
   if (dlg) closeQuiet();
   if (mode !== 'sheet') { mode = 'sheet'; try { localStorage.setItem(K_MODE, mode); } catch (e) {} }
   filters = new Set(); order = null; focusId = id; renderPosting();
+};
+// From the Calendar: the Sheet, its week strip on the post's week, and the row lit up (a series' post
+// to its block on the Series tab).
+window.pgSheetAt = (id, at) => {
+  const t = byId(id); if (!t) return;
+  if (isSer(t)) return window.pgOpenSeries(rootOf(t).id);
+  if (at) weekOffset = Math.round((G.mondayOf(at) - G.mondayOf(now())) / (7 * 86400000));
+  if (!sheetWeek) { sheetWeek = true; try { localStorage.setItem('posting.sheetWeek', 'on'); } catch (e) {} }
+  window.pgJump(id);
 };
 
 // Totals for the rows on screen: what the filter and search have left.

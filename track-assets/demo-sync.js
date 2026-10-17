@@ -59,11 +59,18 @@ Youtube - T nagar series`;
 // Three listings to try the brochure panel on: one to link to an existing property, one brand
 // new, one whose owner typed the code with an extra zero.
 const stageId = k => (defaultStages().find(s => s.key === k) || {}).id;
+const DAY0 = new Date(new Date(NOW).setHours(0, 0, 0, 0)).getTime();   // today, midnight
 let listings = [
   { id: 'demo_l1', tenantId: T, title: '2BHK in T Nagar', location: 'T Nagar', config: '2 BHK', stageId: stageId('shoot_done'), media: {}, tags: ['Resale'], ownerInformed: true, createdAt: NOW - 6 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
   { id: 'demo_l2', tenantId: T, title: 'Villa near ECR', location: 'Kottivakkam', config: '4 BHK', stageId: stageId('shoot_done'), media: {}, tags: ['New Dev.', 'Collab'], createdAt: NOW - 4 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
   { id: 'demo_l4', tenantId: T, title: '3BHK sea view, Besant Nagar', location: 'Besant Nagar', config: '3 BHK', stageId: stageId('media_ready'), tags: ['Resale', 'Sea view'], media: { photos: true, floorPlan: true, video: true }, need: { photos: true, floorPlan: true, video: true }, photosLink: 'https://drive.google.com/drive/folders/demo4', forPlan: { igStory: true, igReel: true, yt: true }, forDone: { igStory: true, igReel: true }, forVoice: { igStory: 'vo', igReel: 'vo', yt: 'live' }, forVo: { igReel: true }, brochure: { code: 'TBES0004', doneAt: NOW - D }, brochureLink: 'https://drive.google.com/file/d/demo4', ownerInformed: true, createdAt: NOW - 9 * D, updatedAt: NOW - D, stageChangedAt: NOW - D },
-  { id: 'demo_l3', tenantId: T, title: 'LUX 49 apartment', location: 'Thiruvanmiyur', stageId: stageId('details'), media: {}, brochure: { code: 'THVA0001' }, createdAt: NOW - 2 * D, updatedAt: NOW - D, stageChangedAt: NOW - 2 * D }
+  { id: 'demo_l3', tenantId: T, title: 'LUX 49 apartment', location: 'Thiruvanmiyur', stageId: stageId('details'), media: {}, brochure: { code: 'THVA0001' }, createdAt: NOW - 2 * D, updatedAt: NOW - D, stageChangedAt: NOW - 2 * D },
+  // For the Calendar: shoots booked this week, one shot, and its edits planned.
+  { id: 'demo_l5', tenantId: T, title: '3BHK, Anna Nagar West', location: 'Anna Nagar', config: '3 BHK', stageId: stageId('shoot_scheduled'), media: {}, shootAt: DAY0 + D + 11 * H, shootAssignee: 'Rajesh', ownerInformed: true, forPlan: { igReel: true, yt: true, ads: true }, createdAt: NOW - 3 * D, updatedAt: NOW - H, stageChangedAt: NOW - D },
+  { id: 'demo_l6', tenantId: T, title: 'Duplex, Mylapore', location: 'Mylapore', config: '4 BHK', stageId: stageId('shoot_scheduled'), media: {}, shootAt: DAY0 + 16 * H, shootAssignee: 'Kumar Studio', forPlan: { igStory: true, collab: true }, createdAt: NOW - 3 * D, updatedAt: NOW - H, stageChangedAt: NOW - D },
+  { id: 'demo_l7', tenantId: T, title: '2BHK, Velachery', location: 'Velachery', config: '2 BHK', stageId: stageId('shoot_done'), media: { photos: true, video: true }, shootAt: DAY0 - D + 10 * H, shootDoneAt: DAY0 - D + 12 * H, shootAssignee: 'Rajesh',
+    cuts: { igStory: { status: 'planned', by: 'Anu', planAt: DAY0, dueAt: DAY0 + D }, igReel: { status: 'planned', by: 'Anu', planAt: DAY0, dueAt: DAY0 + D }, yt: { status: 'active', by: 'Karthik', planAt: DAY0 - 2 * D, dueAt: DAY0 - D, startedAt: NOW - 2 * D }, ads: { status: 'planned', by: 'Karthik', planAt: DAY0 + D, dueAt: DAY0 + 2 * D } }, forPlan: { igStory: true, igReel: true, yt: true, ads: true },
+    createdAt: NOW - 5 * D, updatedAt: NOW - H, stageChangedAt: NOW - D }
 ];
 
 const INVENTORY = [

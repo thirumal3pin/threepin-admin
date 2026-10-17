@@ -246,5 +246,15 @@ check('…a Media ready card with nothing left to cut, too', postGate({}, 'live'
 check('…and a card made from Posting for its brochure', postGate({ source: 'posting' }, 'live', { stageKey: 'shoot_done' }).ok);
 check('…but Media ready with a cut still to make is held', !postGate({}, 'live', { stageKey: 'media_ready', cutsLeft: 1 }).ok);
 check('Checklist agrees: an edited-before card is not flagged', checks({}, { stageKey: 'live', posts: { scheduled: 1 } }).gap === '');
+
+// Ads: an outlet of its own — shot and edited like a collab, never posted from the Posting tab
+{
+  const { CUTS, CUT_SHORT, postless, channelsOfCut: chs, cutKeys: keys, setCut: set } = await import('../track-assets/edit-flow.js');
+  check('Ads is an outlet, after Collab', CUTS.map(c => c[0]).join() === 'igStory,igReel,fbReel,yt,collab,ads' && CUT_SHORT.ads === 'Ads');
+  check('…not posted from Posting, like a collab', postless('ads') && postless('collab') && !postless('yt') && chs({}, 'ads').length === 0);
+  eq('…a card planned for ads has its cut', keys({ forPlan: { yt: true, ads: true } }, []), ['yt', 'ads']);
+  const r = set({ forPlan: { ads: true } }, 'ads', 'plan', { by: 'Karthik', planAt: NOW }, NOW, 'admin@x');
+  check('…planned on its own, and Shoot for kept the same', r.ok && r.patch.cuts.ads.status === 'planned' && r.patch.forPlan.ads === true && r.patch.forDone.ads === false, JSON.stringify(r.patch && r.patch.forPlan));
+}
 console.log(failed ? `\n${failed} failure(s)` : '\nAll good.');
 process.exit(failed ? 1 : 0);

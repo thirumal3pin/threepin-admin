@@ -41,7 +41,7 @@ const blk = () => p.$eval('.tk-card[data-id="v1"] .tk-blockers', c => c.textCont
 const sel = l => `#dpFor select[aria-label="${l} voice"]`;
 ok('the Shoot section has no single whole-shoot Voice any more', !(await p.$('select[aria-label="Voice"]')));
 const rows = await p.$$eval('#dpFor .tk-brief-r', r => r.map(x => x.textContent.trim().split(/\s+/).slice(0, 2).join(' ')));
-ok('lists Insta Story, Insta Reel, FB Reel, YouTube, Collab', JSON.stringify(rows.map(r => r.replace(/\s*(Voice\?|—).*$/, ''))) === JSON.stringify(['Insta Story', 'Insta Reel', 'FB Reel', 'YouTube', 'Collab']), JSON.stringify(rows));
+ok('lists Insta Story, Insta Reel, FB Reel, YouTube, Collab, Ads', JSON.stringify(rows.map(r => r.replace(/\s*(Voice\?|—).*$/, ''))) === JSON.stringify(['Insta Story', 'Insta Reel', 'FB Reel', 'YouTube', 'Collab', 'Ads']), JSON.stringify(rows));
 ok('…voice is asked only for what is planned (none yet)', !(await p.$('#dpFor select')));
 await p.check('#dpFor input[aria-label="Insta Reel planned"]'); await settle();
 await p.check('#dpFor input[aria-label="YouTube planned"]'); await settle();

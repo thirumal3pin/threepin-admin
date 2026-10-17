@@ -205,19 +205,23 @@ function startOfDay(ts) { const d = new Date(ts); d.setHours(0, 0, 0, 0); return
 // ── Cuts: one edit per outlet ──
 // A property is edited per outlet — the Reel on Monday, YouTube on Thursday — and posted per outlet. A
 // CUT is one property × one outlet, with its own edit (the same record as above) kept on the card:
-//   cuts: { igStory|igReel|fbReel|yt|collab: { status, by, planAt, dueAt, startedAt, doneAt, note, log } }
+//   cuts: { igStory|igReel|fbReel|yt|collab|ads: { status, by, planAt, dueAt, startedAt, doneAt, note, log } }
 // The FB Reel is the Insta Reel's video unless the card says otherwise (fbOwnCut): then it is a cut of
 // its own. "Made" on the card's Shoot for is that cut's edit done; the two are kept the same.
 // A card from before cuts: its one edit stands for each outlet planned on it, and a "made" tick is done.
-export const CUTS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
-export const CUT_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+export const CUTS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab'], ['ads', 'Ads']];
+export const CUT_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', ads: 'Ads', all: 'Video' };
+// Shot and edited, but not posted from the Posting tab: a collab goes out on the partner's page, an ad
+// runs from the ads manager. Their edit done is the end of them here.
+export const POSTLESS = ['collab', 'ads'];
+export const postless = k => POSTLESS.includes(k);
 // 'all': a card edited before outlets were split, with no outlet ticked — its one edit stands for every
 // outlet (it shows as "Video") until outlets are planned.
 const ALL_CHANNELS = ['igStory', 'igReel', 'fbReel', 'yt'];
 export const fbOwnCut = x => !!(x && x.fbOwnCut);
 export const cutOfChannel = (x, ch) => (ch === 'fbReel' && !fbOwnCut(x) ? 'igReel' : ch);
 export function channelsOfCut(x, k) {
-  if (k === 'collab') return [];
+  if (postless(k)) return [];
   if (k === 'all') return ALL_CHANNELS;
   if (k === 'igReel') return fbOwnCut(x) ? ['igReel'] : ['igReel', 'fbReel'];
   return [k];
@@ -228,7 +232,7 @@ const outletMade = (x, k) => !!(x && x.forDone && (x.forDone[k] || (k === 'igRee
 // Is this cut wanted at all: planned on Shoot for (a folded FB Reel counts for the Reel's cut).
 export const cutPlanned = (x, k) => outletPlanned(x, k) || (k === 'igReel' && !fbOwnCut(x) && outletPlanned(x, 'fbReel'));
 // The outlets a cut stands for that are planned (its own key always).
-const cutOutlets = (x, k) => (k === 'collab' ? ['collab'] : k === 'all' ? [] : channelsOfCut(x, k).filter(ch => ch === k || outletPlanned(x, ch)));
+const cutOutlets = (x, k) => (postless(k) ? [k] : k === 'all' ? [] : channelsOfCut(x, k).filter(ch => ch === k || outletPlanned(x, ch)));
 
 // ── A card from before cuts, read ONCE into cuts ──
 // What its old single edit, its log and its Shoot for "made" ticks mean per outlet, as the card stands
@@ -322,7 +326,7 @@ export function setCut(x, k, action, opts, now, who) {
   if (rec.shared) r.editLog = [];
   const fold = m => { const o = { ...((x && x[m]) || {}) }; if (o.insta) { o.igReel = true; o.insta = false; } return o; };
   const forDone = fold('forDone'), forPlan = fold('forPlan');
-  for (const ch of (k === 'collab' ? ['collab'] : k === 'all' ? [] : channelsOfCut(x, k))) {
+  for (const ch of (postless(k) ? [k] : k === 'all' ? [] : channelsOfCut(x, k))) {
     if (action !== 'reset' && (ch === k || forPlan[ch])) forPlan[ch] = true;
     if (ch === k || forPlan[ch]) forDone[ch] = r.edit.status === EDIT_STATUS.DONE;
   }

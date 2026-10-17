@@ -34,6 +34,7 @@ import * as TG from './tags.js';
 import * as EF from './edit-flow.js';
 import * as CFG from './track-config.js';
 import * as TM from '../shared-assets/task-model.js';
+import * as CAL from './shoot-calendar.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -48,9 +49,8 @@ let mModalMode = 'add';
 let mModalEditId = null;
 let currentUserEmail = null;
 let trackInited = false;
-let stageFilter = new Set();
 
-const TRACK_VIEWS = ['board', 'shoots', 'sellers', 'posting', 'settings'];
+const TRACK_VIEWS = ['board', 'shoots', 'calendar', 'sellers', 'posting', 'settings'];
 const DAY = 86400000;
 
 // Board or list, remembered per device. The board is for moving work along;
@@ -75,7 +75,8 @@ function setBoardMode(m) {
 window.setBoardMode = setBoardMode;
 function renderModeToggle() {
   const fb = document.getElementById('tkFilterBar');
-  if (fb) fb.classList.toggle('ed-mode', boardMode === 'editor');   // its own order there: Sort hidden
+  if (fb) fb.classList.toggle('ed-mode', boardMode === 'editor');
+  renderFilterBar();   // the Editor has filters and a Sort of its own: the bar shows the view's
   const el = document.getElementById('tkModeTog');
   if (!el) return;
   el.innerHTML = [['board', 'Board'], ['list', 'List'], ['editor', 'Editor']].map(([m, label]) =>
@@ -162,8 +163,7 @@ function refreshAll() {
   // the field away mid-word (and its blur would save the half-typed text). Their own actions
   // (a filter picked, a save) redraw as before: they call applyFilters directly.
   try { if (viewBusy()) viewStale = true; else applyFilters(); } catch (e) { console.error(e); }
-  try { renderFilterBar(); } catch (e) { console.error(e); }
-  try { renderModeToggle(); } catch (e) { console.error(e); }
+  try { renderModeToggle(); } catch (e) { console.error(e); }   // and the filter bar, for the view
   try { updateSellerBadge(); } catch (e) { console.error(e); }
   try { openPendingListing(); } catch (e) { console.error(e); }
 }
@@ -290,7 +290,7 @@ function leadById(id) {
 // Sellers: "Set aside" stays open (or shut) across redraws.
 let sellersAsideOpen = false;
 window.__setSellersAside = v => { sellersAsideOpen = !!v; };
-const VIEW_IDS = { board: 'boardView', shoots: 'shootsView', settings: 'settingsView', sellers: 'sellersView' };
+const VIEW_IDS = { board: 'boardView', shoots: 'shootsView', calendar: 'calendarView', settings: 'settingsView', sellers: 'sellersView' };
 let viewStale = false;
 function viewBusy() {
   const id = VIEW_IDS[currentView];
@@ -304,12 +304,12 @@ document.addEventListener('focusout', () => {
 function applyFilters() {
   viewStale = false;
   forgetBrochures();
-  const q = currentSearch;
+  const q = currentSearch, f = F();
   filtered = listings.filter(x => {
-    if (stageFilter.size && !stageFilter.has(x.stageId)) return false;
-    if (brochureFilter && brochureOf(x) !== brochureFilter) return false;
-    if (ownerAgentFilter.size) { const ag = listingAgents(x); if (!(ag.length ? ag.some(e => ownerAgentFilter.has(e)) : ownerAgentFilter.has('none'))) return false; }
-    if (tagFilter.size && !TG.cleanTags(x.tags).some(t => tagFilter.has(TG.tagKey(t)))) return false;
+    if (f.stage.size && !f.stage.has(x.stageId)) return false;
+    if (f.brochure && brochureOf(x) !== f.brochure) return false;
+    if (f.agent.size) { const ag = listingAgents(x); if (!(ag.length ? ag.some(e => f.agent.has(e)) : f.agent.has('none'))) return false; }
+    if (f.tag.size && !TG.cleanTags(x.tags).some(t => f.tag.has(TG.tagKey(t)))) return false;
     if (!q) return true;
     const l = x.leadId ? leadById(x.leadId) : null;
     // A series card is found by its name and any of its properties.
@@ -323,6 +323,7 @@ function applyFilters() {
   // A shoot phone (agent mode) sees the Editor view, never the full board.
   if (currentView === 'board') { const m = myAgent ? 'editor' : boardMode; m === 'list' ? renderList() : m === 'editor' ? renderEditor() : renderBoard(); }
   else if (currentView === 'shoots') renderShoots();
+  else if (currentView === 'calendar') renderCalendar();
   // The Posting tab redraws through its own guard: never while someone is typing in it or has a
   // dialog open. It redraws when its rows, the search text or the listings (their tags) changed.
   else if (currentView === 'posting') { const r = window.refreshPosting || window.renderPosting; if (r) r(); }
@@ -351,7 +352,8 @@ function toggleView(view, fromMenu) {
   applyFilters();
 }
 window.toggleView = toggleView;
-const navActive = () => currentView === 'board' && (boardMode === 'editor' || myAgent) ? 'editor' : currentView;
+// The calendar's menu item has its own id: "calendar" is the CRM's Team calendar.
+const navActive = () => currentView === 'board' && (boardMode === 'editor' || myAgent) ? 'editor' : currentView === 'calendar' ? 'mediaCalendar' : currentView;
 
 function onSearch(v) {
   currentSearch = String(v || '').toLowerCase();
@@ -374,12 +376,17 @@ window.onSearch = onSearch;
 // button: most visits are to read the board, not to narrow it.
 // Stage and Agent are multi-select dropdowns, and Sort is one choice shared by the board and the
 // list. Ten stage chips ran off the edge of the bar and overlapped the Board/List switch.
-let ownerAgentFilter = new Set();     // emails, or 'none' for Unassigned
-let tagFilter = new Set();           // tag keys (lower case); a listing with any of them shows
-// The brochure is a filter, not a column: '' (all) · none · requested · building · created.
-let brochureFilter = '';
+// The Editor keeps filters and a Sort of its own: narrowing the board to one stage does not empty
+// the editor's columns, and the other way round. A shoot phone is always on the Editor's.
+//   stage: stage ids · agent: emails, or 'none' for Unassigned · tag: tag keys (lower case; a listing
+//   with any of them shows) · brochure: '' (all) · none · requested · building · created — the
+//   brochure is a filter, not a column.
+const newFilters = () => ({ stage: new Set(), agent: new Set(), tag: new Set(), brochure: '' });
+const FILTERS = { board: newFilters(), editor: newFilters() };
+const filterView = () => (myAgent || boardMode === 'editor' ? 'editor' : 'board');
+const F = () => FILTERS[filterView()];
 const BROCHURE_FILTERS = [['', 'All'], ['none', 'Not started'], ['requested', 'Requested'], ['building', 'On its way'], ['created', 'Created']];
-window.setBrochureFilter = v => { brochureFilter = BROCHURE_FILTERS.some(([k]) => k === v) ? v : ''; renderFilterBar(); applyFilters(); };
+window.setBrochureFilter = v => { F().brochure = BROCHURE_FILTERS.some(([k]) => k === v) ? v : ''; renderFilterBar(); applyFilters(); };
 const SORT_KEY = 'track.sort';
 const SORTS = [
   ['urgency', 'Needs attention'],
@@ -403,12 +410,50 @@ function setBoardSort(k) {
   applyFilters();
 }
 window.setBoardSort = setBoardSort;
+// The Editor's own Sort, on its cards (one per cut). A tie falls back to the nearest deadline, the
+// order the Editor had before it had a Sort.
+const ED_SORT_KEY = 'track.edSort';
+const ED_SORTS = [
+  ['deadline', 'Nearest deadline'],
+  ['shoot', 'Shoot date'],
+  ['newest', 'Newest first'],
+  ['oldest', 'Oldest first'],
+  ['updated', 'Last updated'],
+  ['editor', 'Editor A–Z'],
+  ['outlet', 'Outlet'],
+  ['name', 'Name A–Z']
+];
+let edSortKey = 'deadline';
+try { const v = localStorage.getItem(ED_SORT_KEY); if (ED_SORTS.some(([k]) => k === v)) edSortKey = v; } catch (e) {}
+function setEditorSort(k) {
+  edSortKey = ED_SORTS.some(([s]) => s === k) ? k : 'deadline';
+  try { localStorage.setItem(ED_SORT_KEY, edSortKey); } catch (e) {}
+  applyFilters();
+}
+window.setEditorSort = setEditorSort;
+const hasNum = v => v != null && v !== 0 && isFinite(v);   // no value sinks to the end
+const numCmp = (f, dir) => (a, b) => { const x = f(a), y = f(b); return !hasNum(x) && !hasNum(y) ? 0 : !hasNum(x) ? 1 : !hasNum(y) ? -1 : dir * (x - y); };
+const textCmp = f => (a, b) => { const x = String(f(a) || '').toLowerCase(), y = String(f(b) || '').toLowerCase(); return !x && !y ? 0 : !x ? 1 : !y ? -1 : x.localeCompare(y); };
+function sortEdItems(items) {
+  const cutIdx = it => { const i = EF.CUTS.findIndex(c => c[0] === it.k); return i < 0 ? EF.CUTS.length : i; };
+  const deadline = (a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || cutIdx(a) - cutIdx(b);
+  const came = new Map(), cameIn = it => { if (!came.has(it.x)) came.set(it.x, sellerItem(it.x).intake); return came.get(it.x); };
+  const by = {
+    shoot: numCmp(it => it.x.shootAt, 1),
+    newest: numCmp(cameIn, -1),
+    oldest: numCmp(cameIn, 1),
+    updated: numCmp(it => it.x.updatedAt, -1),
+    editor: textCmp(it => edWhoEdit(it)[0]),
+    outlet: (a, b) => cutIdx(a) - cutIdx(b),
+    name: textCmp(it => cardName(it.x))
+  }[edSortKey];
+  return items.sort((a, b) => (by && by(a, b)) || deadline(a, b));
+}
 function sortCards(arr) {
   const items = arr.map(x => ({ x, it: sellerItem(x) }));
   const idx = o => stages.findIndex(s => s.id === o.x.stageId);
   const urgent = (a, b) => cardUrgency(b.x) - cardUrgency(a.x) || (b.x.updatedAt || 0) - (a.x.updatedAt || 0);
-  const has = v => v != null && v !== 0 && isFinite(v);   // no value sinks to the end
-  const num = (f, dir) => (a, b) => { const x = f(a), y = f(b); return !has(x) && !has(y) ? 0 : !has(x) ? 1 : !has(y) ? -1 : dir * (x - y); };
+  const num = numCmp;
   const by = {
     newest: num(o => o.it.intake, -1),
     oldest: num(o => o.it.intake, 1),
@@ -429,21 +474,15 @@ function listingAgents(x) {
   const l = x.leadId ? leadById(x.leadId) : null;
   return [l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
 }
-function toggleStageFilter(id) {
-  if (stageFilter.has(id)) stageFilter.delete(id); else stageFilter.add(id);
-  renderFilterBar(); applyFilters();
-}
-function clearStageFilter() { stageFilter = new Set(); renderFilterBar(); applyFilters(); }
-function toggleAgentFilter(v) {
-  if (ownerAgentFilter.has(v)) ownerAgentFilter.delete(v); else ownerAgentFilter.add(v);
-  renderFilterBar(); applyFilters();
-}
-function clearAgentFilter() { ownerAgentFilter = new Set(); renderFilterBar(); applyFilters(); }
-function toggleTagFilter(k) {
-  if (tagFilter.has(k)) tagFilter.delete(k); else tagFilter.add(k);
-  renderFilterBar(); applyFilters();
-}
-function clearTagFilter() { tagFilter = new Set(); renderFilterBar(); applyFilters(); }
+// One filter of the view's set: a value in or out, or all of them cleared.
+function toggleIn(set, v) { if (set.has(v)) set.delete(v); else set.add(v); renderFilterBar(); applyFilters(); }
+function clearOf(key) { F()[key].clear(); renderFilterBar(); applyFilters(); }
+const toggleStageFilter = id => toggleIn(F().stage, id);
+const clearStageFilter = () => clearOf('stage');
+const toggleAgentFilter = v => toggleIn(F().agent, v);
+const clearAgentFilter = () => clearOf('agent');
+const toggleTagFilter = k => toggleIn(F().tag, k);
+const clearTagFilter = () => clearOf('tag');
 Object.assign(window, { toggleStageFilter, clearStageFilter, toggleAgentFilter, clearAgentFilter, toggleTagFilter, clearTagFilter });
 // Every tag in use — the starting four, on listings, and on Posting rows of their own.
 const allTags = () => TG.catalog(config.tags, ...listings.map(l => l.tags), ...((window.pgOwnTagLists && window.pgOwnTagLists()) || []));
@@ -463,46 +502,47 @@ window.toggleTrackFilters = toggleTrackFilters;
 function renderFilterBar() {
   const el = document.getElementById('tkFilterBar');
   if (!el) return;
+  const f = F(), ed = filterView() === 'editor';
   const btn = document.getElementById('tkFiltersBtn');
   if (btn) {
-    const nOn = (stageFilter.size ? 1 : 0) + (ownerAgentFilter.size ? 1 : 0) + (tagFilter.size ? 1 : 0) + (brochureFilter ? 1 : 0);
+    const nOn = (f.stage.size ? 1 : 0) + (f.agent.size ? 1 : 0) + (f.tag.size ? 1 : 0) + (f.brochure ? 1 : 0);
     btn.classList.toggle('on', !!nOn);
     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Filters${nOn ? `<span class="lf-badge">${nOn}</span>` : ''}`;
   }
   const openId = (el.querySelector('details[open]') || {}).id;
   const row = (on, onclick, dot, label, n) => `<label class="tk-dd-row"><input type="checkbox" ${on ? 'checked' : ''} onchange="${onclick}">${dot}<span class="tk-dd-l">${esc(label)}</span><span class="tk-dd-n">${n}</span></label>`;
-  const stageRows = stages.map(s => row(stageFilter.has(s.id), `toggleStageFilter('${s.id}')`,
+  const stageRows = stages.map(s => row(f.stage.has(s.id), `toggleStageFilter('${s.id}')`,
     `<i class="tk-cdot" style="background:${s.color}"></i>`, s.name, listings.filter(x => x.stageId === s.id).length)).join('');
   const emails = [...new Set(listings.flatMap(listingAgents))].sort();
-  const agentRows = row(ownerAgentFilter.has('none'), `toggleAgentFilter('none')`, '', 'Unassigned', listings.filter(x => !listingAgents(x).length).length)
-    + emails.map(e => row(ownerAgentFilter.has(e), `toggleAgentFilter('${esc(e)}')`, '', personName(e), listings.filter(x => listingAgents(x).includes(e)).length)).join('');
+  const agentRows = row(f.agent.has('none'), `toggleAgentFilter('none')`, '', 'Unassigned', listings.filter(x => !listingAgents(x).length).length)
+    + emails.map(e => row(f.agent.has(e), `toggleAgentFilter('${esc(e)}')`, '', personName(e), listings.filter(x => listingAgents(x).includes(e)).length)).join('');
   const names = (set, all, nameOf) => !set.size ? all : set.size <= 2 ? [...set].map(nameOf).join(', ') : set.size + ' selected';
-  const stageLabel = names(stageFilter, 'All stages', id => (stageById(id) || {}).name || id);
-  const agentLabel = names(ownerAgentFilter, 'Everyone', e => e === 'none' ? 'Unassigned' : personName(e));
+  const stageLabel = names(f.stage, 'All stages', id => (stageById(id) || {}).name || id);
+  const agentLabel = names(f.agent, 'Everyone', e => e === 'none' ? 'Unassigned' : personName(e));
   const tagCat = allTags();
-  const tagRows = tagCat.map(t => row(tagFilter.has(TG.tagKey(t)), `toggleTagFilter(${jsq(TG.tagKey(t))})`, `<i class="tk-cdot tg-dot ${TG.tagClass(t)}"></i>`, t, listings.filter(x => TG.hasTag(x.tags, t)).length)).join('');
-  const tagLabel = names(tagFilter, 'All', k => (tagCat.find(t => TG.tagKey(t) === k) || k));
+  const tagRows = tagCat.map(t => row(f.tag.has(TG.tagKey(t)), `toggleTagFilter(${jsq(TG.tagKey(t))})`, `<i class="tk-cdot tg-dot ${TG.tagClass(t)}"></i>`, t, listings.filter(x => TG.hasTag(x.tags, t)).length)).join('');
+  const tagLabel = names(f.tag, 'All', k => (tagCat.find(t => TG.tagKey(t) === k) || k));
   el.innerHTML = `
-    <details class="tk-dd${stageFilter.size ? ' on' : ''}" id="ddStage"${openId === 'ddStage' ? ' open' : ''}>
+    <details class="tk-dd${f.stage.size ? ' on' : ''}" id="ddStage"${openId === 'ddStage' ? ' open' : ''}>
       <summary><span class="tk-dd-k">Stage</span><span class="tk-dd-v">${esc(stageLabel)}</span><span class="tk-caret">▾</span></summary>
       <div class="tk-dd-pop">${stageRows}
-        ${stageFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearStageFilter()">Show all stages</button>` : ''}</div>
+        ${f.stage.size ? `<button type="button" class="tk-dd-clear" onclick="clearStageFilter()">Show all stages</button>` : ''}</div>
     </details>
-    <details class="tk-dd${ownerAgentFilter.size ? ' on' : ''}" id="ddAgent"${openId === 'ddAgent' ? ' open' : ''}>
+    <details class="tk-dd${f.agent.size ? ' on' : ''}" id="ddAgent"${openId === 'ddAgent' ? ' open' : ''}>
       <summary><span class="tk-dd-k">Agent</span><span class="tk-dd-v">${esc(agentLabel)}</span><span class="tk-caret">▾</span></summary>
       <div class="tk-dd-pop">${agentRows}
-        ${ownerAgentFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearAgentFilter()">Show everyone</button>` : ''}</div>
+        ${f.agent.size ? `<button type="button" class="tk-dd-clear" onclick="clearAgentFilter()">Show everyone</button>` : ''}</div>
     </details>
-    <details class="tk-dd${tagFilter.size ? ' on' : ''}" id="ddTag"${openId === 'ddTag' ? ' open' : ''}>
+    <details class="tk-dd${f.tag.size ? ' on' : ''}" id="ddTag"${openId === 'ddTag' ? ' open' : ''}>
       <summary><span class="tk-dd-k">Tags</span><span class="tk-dd-v">${esc(tagLabel)}</span><span class="tk-caret">▾</span></summary>
       <div class="tk-dd-pop">${tagRows}
-        ${tagFilter.size ? `<button type="button" class="tk-dd-clear" onclick="clearTagFilter()">Show all tags</button>` : ''}</div>
+        ${f.tag.size ? `<button type="button" class="tk-dd-clear" onclick="clearTagFilter()">Show all tags</button>` : ''}</div>
     </details>
-    <label class="tk-dd tk-dd-pick tk-dd-bro${brochureFilter ? ' on' : ''}"><span class="tk-dd-k">Brochure</span>
-      <select onchange="setBrochureFilter(this.value)" aria-label="Brochure">${BROCHURE_FILTERS.map(([k, l]) => `<option value="${k}"${brochureFilter === k ? ' selected' : ''}>${esc(l)}${k ? ' (' + listings.filter(x => brochureOf(x) === k).length + ')' : ''}</option>`).join('')}</select>
+    <label class="tk-dd tk-dd-pick tk-dd-bro${f.brochure ? ' on' : ''}"><span class="tk-dd-k">Brochure</span>
+      <select onchange="setBrochureFilter(this.value)" aria-label="Brochure">${BROCHURE_FILTERS.map(([k, l]) => `<option value="${k}"${f.brochure === k ? ' selected' : ''}>${esc(l)}${k ? ' (' + listings.filter(x => brochureOf(x) === k).length + ')' : ''}</option>`).join('')}</select>
     </label>
     <label class="tk-dd tk-dd-sort"><span class="tk-dd-k">Sort</span>
-      <select onchange="setBoardSort(this.value)" aria-label="Sort">${SORTS.map(([k, l]) => `<option value="${k}"${boardSortKey === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      <select onchange="${ed ? 'setEditorSort' : 'setBoardSort'}(this.value)" aria-label="${ed ? 'Sort the Editor' : 'Sort'}">${(ed ? ED_SORTS : SORTS).map(([k, l]) => `<option value="${k}"${(ed ? edSortKey : boardSortKey) === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
     </label>`;
 }
 // A dropdown closes when you click anywhere else, like any menu.
@@ -522,7 +562,8 @@ function renderBoard() {
     board.innerHTML = `<div class="tk-empty"><div class="tk-empty-i">📋</div><div class="tk-empty-t">Setting up the board…</div></div>`;
     return;
   }
-  const shown = stageFilter.size ? stages.filter(s => stageFilter.has(s.id)) : stages;
+  const sf = FILTERS.board.stage;
+  const shown = sf.size ? stages.filter(s => sf.has(s.id)) : stages;
   board.innerHTML = `<div class="tk-board">${shown.map(stage => {
     const cards = sortCards(filtered.filter(x => x.stageId === stage.id));
     const late = cards.filter(isLate).length;
@@ -1890,9 +1931,16 @@ function keepDpScroll() {
   const put = () => { DP_SCROLLERS.forEach((sel, i) => { const el = document.querySelector(sel); if (el && at[i]) el.scrollTop = at[i]; }); if (win) window.scrollTo(0, win); };
   queueMicrotask(put); requestAnimationFrame(put);
 }
-function openDetail(id) {
+// How the card opens: 'full' (the whole record) or 'editor' (from the Editor, and an edit on the
+// Calendar: the basics, the shoot, the edits, the posts). A redraw of the open card keeps its mode.
+let dpMode = 'full';
+function openDetail(id, mode) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
+  if (mode === 'editor' || mode === 'full') dpMode = mode;
+  else if (currentDetailId !== id || !document.getElementById('dp').classList.contains('open')) dpMode = 'full';
+  document.getElementById('dp').classList.toggle('dp-ed', dpMode === 'editor' && !isSeriesCard(x));
+  if (dpMode === 'editor' && !isSeriesCard(x)) return openEdDetail(x);
   if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) keepDpScroll();
   if (isSeriesCard(x)) return openSeriesDetail(x);
   // Redrawing the same listing (a tick, a save) keeps what was open and what was half-typed.
@@ -2037,6 +2085,69 @@ function openDetail(id) {
   } catch (e) {}
 }
 window.openDetail = openDetail;
+window.openEdDetail = id => openDetail(id, 'editor');
+
+// ── The editor's view of a card: what an editor needs, nothing else ──
+// The basics; the shoot and its footage; Shoot for (outlets and their voice); each outlet's edit, with
+// the same buttons as the Editor; each outlet's post. "Full record" opens everything else.
+function openEdDetail(x) {
+  const same = currentDetailId === x.id && document.getElementById('dp').classList.contains('open');
+  const scroll = same ? (document.getElementById('dpBody') || {}).scrollTop || 0 : 0;
+  currentDetailId = x.id;
+  const stage = stageById(x.stageId), m = x.media || {};
+  document.getElementById('dpTitle').textContent = cardName(x);
+  document.getElementById('dpSub').innerHTML = [
+    x.propertyCode ? `<span class="tk-code">${esc(x.propertyCode)}</span>` : '',
+    x.location ? esc(x.location) : '', x.config ? esc(x.config) : '',
+    stage ? `<span class="tk-pill" style="background:${stage.color}22;color:${stage.color}">${esc(stage.name)}</span>` : ''
+  ].filter(Boolean).join(' · ');
+  const row = (label, val) => `<tr><th scope="row">${esc(label)}</th><td>${val}</td></tr>`;
+  const got = MEDIA_KEYS.filter(([k]) => m[k]).map(([, l]) => l);
+  const who = shooterName(x);
+  const shoot = `<section class="tk-sec ed-dsec">
+      <div class="tk-sec-hdr">Shoot</div>
+      <table class="ed-dt"><tbody>
+        ${row('When', x.shootAt ? `<b>${esc(fmtDateTime(x.shootAt))}</b>${isShot(x) ? '' : ` <span class="tk-rel">${esc(relDays(x.shootAt))}</span>`}` : '<span class="tk-muted">Not booked yet</span>')}
+        ${row('Shot by', who ? esc(who) : '<span class="tk-muted">—</span>')}
+        ${row('Status', x.shootDoneAt ? `<span class="ed-dok">✓ Shot</span> ${esc(fmtDay(x.shootDoneAt))}` : isShot(x) ? '<span class="ed-dok">✓ Shot</span>' : x.shootAt ? 'Booked' : '—')}
+        ${row('Captured', got.length ? esc(got.join(', ')) : '<span class="tk-muted">Nothing marked yet</span>')}
+        ${x.shootNotes ? row('From the shoot', esc(x.shootNotes)) : ''}
+      </tbody></table>
+      ${linkRow('Footage (Drive)', x.photosLink, x.id, 'photosLink')}
+    </section>`;
+  // Each planned outlet's post: where it stands in Posting, and the way there.
+  const outs = FOR_KEYS.filter(([k]) => forPlanned(x, k));
+  const postCell = k => {
+    if (EF.postless(k)) return '<span class="tk-muted">Not posted from Posting</span>';
+    const p = window.pgPostsFor ? window.pgPostsFor(x, [k]) : null;
+    const st = !p || !p.total ? '<span class="tk-muted">Not planned</span>'
+      : p.live ? `<span class="ed-dok">● Live</span> ${esc(fmtDay(p.lastLiveAt))}${p.lastUrl ? ` · <a href="${esc(p.lastUrl)}" target="_blank" rel="noopener">open ↗</a>` : ''}`
+      : p.scheduled ? `Scheduled · <b>${esc(fmtDateTime(p.nextAt))}</b>` : `Planned · ${esc(fmtDay(p.planDay))} <span class="tk-muted">(no time yet)</span>`;
+    const go = p && p.rowId ? `<button type="button" class="tk-btn sm ghost" onclick="calOpen('post', ${jsq(p.rowId)}, ${Number(p.nextAt || p.planDay || p.lastLiveAt) || 0})">In Posting →</button>`
+      : window.pgPlanPost ? `<button type="button" class="tk-btn sm ghost" onclick="pgPlanPost('${x.id}','${k}')">Plan post</button>` : '';
+    return `<span class="ed-dpost">${st}</span>${go}`;
+  };
+  const posts = `<section class="tk-sec ed-dsec">
+      <div class="tk-sec-hdr">Posts</div>
+      ${outs.length ? `<table class="ed-dt"><tbody>${outs.map(([k, l]) => row(l, postCell(k))).join('')}</tbody></table>` : '<div class="tk-hint">No outlet ticked in Shoot for yet.</div>'}
+    </section>`;
+  document.getElementById('dpBody').innerHTML = `<div class="ed-detail">
+      <div class="ed-dtop"><span class="tk-sub2">Editor's view — the shoot, the edits and the posts</span>
+        <button type="button" class="tk-btn sm ghost" onclick="openDetail('${x.id}','full')">Full record →</button></div>
+      ${shoot}
+      ${editSectionHtml(x)}
+      ${posts}
+      ${forSectionHtml(x, 'What this shoot is cut for, and the voice for each.')}
+    </div>`;
+  openDpLayer();
+  document.getElementById('dp').classList.add('open');
+  if (scroll) document.getElementById('dpBody').scrollTop = scroll;
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set('listing', x.id);
+    history.replaceState(null, '', u.pathname + u.search);
+  } catch (e) {}
+}
 // The entry under an open card is the page WITHOUT ?listing= (a card opened from a link included):
 // closing the card, or Back, lands there — and a reload then does not open the card again.
 function openDpLayer() {
@@ -2607,11 +2718,11 @@ function setNeed(id, key, on) {
 window.setFlag = setFlag; window.setMedia = setMedia; window.setRemarks = setRemarks; window.setNeed = setNeed;
 
 // ── Shoot for: each outlet this shoot is cut for — planned, done, and its voice ──
-// The same outlets as the Posting tab, plus collabs. Voice is per outlet: a YouTube walkthrough
+// The same outlets as the Posting tab, plus collabs and ads. Voice is per outlet: a YouTube walkthrough
 // is often shot with voice while the Reel gets a voice-over made separately, so "voice-over
 // made" is ticked per outlet too.
-const FOR_KEYS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab']];
-const FOR_ICON = { igStory: 'fa-brands fa-instagram', igReel: 'fa-brands fa-instagram', fbReel: 'fa-brands fa-facebook', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake' };
+const FOR_KEYS = [['igStory', 'Insta Story'], ['igReel', 'Insta Reel'], ['fbReel', 'FB Reel'], ['yt', 'YouTube'], ['collab', 'Collab'], ['ads', 'Ads']];
+const FOR_ICON = { igStory: 'fa-brands fa-instagram', igReel: 'fa-brands fa-instagram', fbReel: 'fa-brands fa-facebook', yt: 'fa-brands fa-youtube', collab: 'fa-solid fa-handshake', ads: 'fa-solid fa-rectangle-ad' };
 const VOICE = { live: 'With V/O', vo: 'V/O Reqd. separately' };
 const forLabel = key => (FOR_KEYS.find(k => k[0] === key) || [, key])[1];
 // "Instagram" ticked before the outlets were split (shipped for a day) reads as the Reel, and the
@@ -2629,7 +2740,7 @@ const forVoMade = (x, k) => !!(x.forVo && x.forVo[k]);
 // Voice-over by) — with their name here, and in their Daily task. Shown on the board card, the series
 // card, the Editor view's cards and the card's Shoot for.
 const voFor = x => (VO.voDue(x, stages) ? VO.voLeft(x) : []);
-const VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', all: 'Video' };
+const VO_SHORT = { igStory: 'Story', igReel: 'Reel', fbReel: 'FB Reel', yt: 'YouTube', collab: 'Collab', ads: 'Ads', all: 'Video' };
 const voNames = list => list.map(o => VO_SHORT[o.k] || o.label).join(', ');
 // keys: only these outlets (an Editor card's cut); none: all of them.
 const voOf = (x, keys) => voFor(x).filter(o => !keys || o.k === 'all' || keys.includes(o.k));
@@ -3782,7 +3893,7 @@ const took = (a, b) => (a && b && b - a >= 60000 ? EF.span(b - a) : '');
 // Plan or move this outlet's post — in Posting's own schedule dialog, on the property's Posting row
 // (made from the card if it has none): one place for posts, read back here.
 function postBtns(x, k, c) {
-  if (k === 'collab' || k === 'all' || !window.pgPlanPost) return '';
+  if (EF.postless(k) || k === 'all' || !window.pgPlanPost) return '';
   const chs = EF.channelsOfCut(x, k).filter(ch => ch === k || forPlanned(x, ch));
   const SH = { igStory: 'Story', igReel: 'Insta', fbReel: 'FB', yt: 'YouTube' };
   return chs.map(ch => `<button type="button" class="tk-btn sm ghost" onclick="pgPlanPost('${x.id}','${ch}')" title="Schedule this post in Posting">${chs.length > 1 ? 'Post ' + SH[ch] : (c.postAt ? 'Move post' : 'Plan post')}</button>`).join('');
@@ -3796,7 +3907,7 @@ function editSectionHtml(x) {
     return `<div class="tk-cutrow">
       <div class="tk-cut-n">${cutIcon(k)} <b>${esc(EF.cutLabel(x, k))}</b></div>
       <div class="tk-cut-s"><b class="tk-ed-s ${e.status || 'none'}">${esc(st)}</b>${e.by ? ` · ${esc(e.by)}` : ''}${e.planAt ? ` · edit ${esc(fmtDay(e.planAt))}` : ''}${e.dueAt ? ` · deliver ${esc(fmtDay(e.dueAt))}` : ''}${e.doneAt ? ` · done ${esc(fmtDay(e.doneAt))}${took(e.startedAt, e.doneAt) ? ' (' + esc(took(e.startedAt, e.doneAt)) + ')' : ''}` : ''}
-        <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : k === 'collab' ? '' : 'No post in Posting yet'}</span>
+        <span class="tk-sub2">${c.postAt ? 'Post ' + esc(postWhen(c)) : c.posts.live ? 'Posted ' + esc(fmtDay(c.posts.lastLiveAt)) : EF.postless(k) ? '' : 'No post in Posting yet'}</span>
         ${finalLinkLine(x, k, e)}
         ${log.length ? `<details class="tk-cutlog"><summary>${log.length} earlier edit${log.length === 1 ? '' : 's'}</summary>${log.map(l => `<div class="tk-cutlog-r"><span>${esc(l.by || '—')} · done ${esc(fmtDay(l.doneAt))}${took(l.startedAt, l.doneAt) ? ' (' + esc(took(l.startedAt, l.doneAt)) + ')' : ''}</span><button type="button" class="tk-link" title="Not a real edit — take it out of the history" onclick="edForget('${x.id}','${k}',${jsq(l.by)},${Number(l.doneAt)})">Remove</button></div>`).join('')}</details>` : ''}</div>
       <div class="tk-cut-a">
@@ -3998,7 +4109,7 @@ function edSheetHtml(list) {
   const rows = (list || listings).map(x => ({ x, c: edCtx(x), ks: cutsOfCard(x) }))
     .filter(r => !PARKED.includes(r.c.stageKey) && (r.c.shot || r.ks.some(k => EF.cutEdit(r.x, k).status === 'done' || EF.cutEdit(r.x, k).status === 'active')));
   const done = r => r.ks.length > 0 && r.ks.every(k => EF.cutEdit(r.x, k).status === 'done');
-  const cols = [...(rows.some(r => r.ks.includes('all')) ? ['all'] : []), 'igStory', 'igReel', ...(rows.some(r => EF.fbOwnCut(r.x)) ? ['fbReel'] : []), 'yt', 'collab'];
+  const cols = [...(rows.some(r => r.ks.includes('all')) ? ['all'] : []), 'igStory', 'igReel', ...(rows.some(r => EF.fbOwnCut(r.x)) ? ['fbReel'] : []), 'yt', 'collab', 'ads'];
   const nDone = rows.filter(done).length;
   const shown = (sheetLeft ? rows.filter(r => !done(r)) : rows)
     .sort((a, b) => (done(a) - done(b)) || ((b.x.shootDoneAt || 0) - (a.x.shootDoneAt || 0)));
@@ -4012,8 +4123,8 @@ function edSheetHtml(list) {
     return `<div class="sh-c" data-l="${esc(k === 'igReel' && !EF.fbOwnCut(x) ? 'Reel + FB' : VO_SHORT[k])}"><span class="sh-s ${cls}">${label}</span>${e.by ? `<span class="sh-by">${esc(e.by)}</span>` : ''}${vo ? `<span class="sh-vo${vo === 'V/O needed' ? ' need' : ''}" title="Voice-over still to make">🎙 ${vo}</span>` : ''}${post}</div>`;
   };
   const head = `<div class="sh-r sh-h"><div>Property</div><div>Shot</div>${cols.map(k => `<div>${esc(k === 'igReel' ? 'Reel (+FB)' : VO_SHORT[k])}</div>`).join('')}</div>`;
-  const body = shown.map(r => `<div class="sh-r${done(r) ? ' all-done' : ''}" onclick="openDetail('${r.x.id}')">
-      <div class="sh-n" role="button" tabindex="0" onkeydown="if(event.key==='Enter')openDetail('${r.x.id}')">${isSeriesCard(r.x) ? '<span class="tk-code ser">Series</span>' : (codeChip(r.x) || '')}<b>${esc(cardName(r.x))}</b></div>
+  const body = shown.map(r => `<div class="sh-r${done(r) ? ' all-done' : ''}" onclick="openEdDetail('${r.x.id}')">
+      <div class="sh-n" role="button" tabindex="0" onkeydown="if(event.key==='Enter')openEdDetail('${r.x.id}')">${isSeriesCard(r.x) ? '<span class="tk-code ser">Series</span>' : (codeChip(r.x) || '')}<b>${esc(cardName(r.x))}</b></div>
       <div class="sh-d" data-l="Shot">${r.x.shootDoneAt ? esc(fmtDay(r.x.shootDoneAt)) : '—'}</div>
       ${r.ks.length ? cols.map(k => cell(r.x, k, r.ks)).join('') : `<div class="sh-c sh-warn" style="grid-column: span ${cols.length}">Nothing ticked in Shoot for yet</div>`}
     </div>`).join('');
@@ -4101,7 +4212,7 @@ function edCardHtml(it) {
   const voKeys = edVoKeys(it);
   const vo = col !== 'shoot_planned' && col !== 'posted' ? voChip(x, voKeys) : '';
   return `<div class="tk-card ed-card${pr.late ? ' late' : ''}${ser ? ' ser' : ''}" draggable="true" tabindex="0" role="link" data-id="${x.id}"${k ? ` data-cut="${k}"` : ''}
-      aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openDetail('${x.id}')" onkeydown="onCardKeydown(event,'${x.id}')">
+      aria-label="Open ${esc(cardName(x))}${k ? ' — ' + esc(EF.cutLabel(x, k)) : ''}" ondragstart="onCardDragStart(event,'${x.id}');edSetDragCut(${kq})" ondragend="onCardDragEnd(event)" onclick="openEdDetail('${x.id}')" onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();openEdDetail('${x.id}')}">
     <div class="ed-top">${code}${due}</div>
     <div class="ed-name">${esc(cardName(x))}</div>
     ${refLine(x, cardName(x))}
@@ -4124,8 +4235,8 @@ function edItems(list) {
     const shootCol = { shoot_planned: [], shoot_done: [] };
     for (const k of ks) {
       const c = edCtx(x, k), e = EF.cutEdit(x, k);
-      // A cut with no outlet to post to (Collab) is finished once its edit is done.
-      if (k === 'collab' && e.status === 'done') continue;
+      // A cut with no outlet to post to (Collab, Ads) is finished once its edit is done.
+      if (EF.postless(k) && e.status === 'done') continue;
       const col = EF.editColumn(cutPseudo(x, k), c);
       if (!col) continue;
       if (col === 'shoot_planned' || col === 'shoot_done') shootCol[col].push(k);
@@ -4164,10 +4275,101 @@ function edTrackHtml() {
   };
   const me = edPerson ? tr.find(r => sameName(r.name, edPerson)) : null;
   const past = me && me.done.length ? `<div class="ed-past"><div class="ed-past-h">${esc(me.name)} — past edits <span class="tk-count">${me.done.length}</span></div>
-    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<div class="ed-prow"><button type="button" class="ed-prow-o" onclick="openDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${took(d.startedAt, d.doneAt) ? ' · took ' + esc(took(d.startedAt, d.doneAt)) : ''}</span></button>${d.earlier && d.k ? `<button type="button" class="tk-link ed-prow-x" title="Not ${esc(d.by || 'their')} edit — done by mistake, redone since: take it out of the history" onclick="edForget('${d.id}','${d.k}',${jsq(d.by)},${Number(d.doneAt)})">Remove</button>` : ''}</div>`).join('')}</div>
+    <div class="ed-prows">${me.done.slice(0, edPastAll ? 50 : 6).map(d => `<div class="ed-prow"><button type="button" class="ed-prow-o" onclick="openEdDetail('${d.id}')"><span>${esc(d.title)}</span><span class="tk-sub2">${esc(fmtDay(d.doneAt))}${took(d.startedAt, d.doneAt) ? ' · took ' + esc(took(d.startedAt, d.doneAt)) : ''}</span></button>${d.earlier && d.k ? `<button type="button" class="tk-link ed-prow-x" title="Not ${esc(d.by || 'their')} edit — done by mistake, redone since: take it out of the history" onclick="edForget('${d.id}','${d.k}',${jsq(d.by)},${Number(d.doneAt)})">Remove</button>` : ''}</div>`).join('')}</div>
     ${me.done.length > 6 ? `<button type="button" class="tk-link" onclick="edPastToggle()">${edPastAll ? 'Show fewer' : `Show all ${me.done.length}`}</button>` : ''}</div>` : '';
   return `<section class="ed-track"><div class="ed-track-h"><b>Editors</b><span class="tk-sub2">live · tap one to see only their work and past edits</span></div>
     <div class="ed-tiles">${tr.map(tile).join('')}</div>${past}</section>`;
+}
+// ── The Editor as a list: one row per card, a filter on every column ──
+// The same cards as the columns (after the bar's filters, Person and Checklist), in the Editor's Sort.
+// Columns or list is kept on the device; the column filters last the visit, like the bar's.
+let edLayout = 'board';
+try { edLayout = localStorage.getItem('track.edLayout') === 'list' ? 'list' : 'board'; } catch (e) {}
+let edColF = {};          // { prop, outlet, col, person, due, post, vo }
+let edColFOpen = false;   // on a phone the column filters fold behind one button
+Object.assign(window, {
+  setEdLayout: v => { edLayout = v === 'list' ? 'list' : 'board'; try { localStorage.setItem('track.edLayout', edLayout); } catch (e) {} renderEditor(); },
+  setEdColF: (k, v) => { edColF = { ...edColF, [k]: String(v || '') }; if (!edColF[k]) delete edColF[k]; renderEditor(); },
+  clearEdColF: () => { edColF = {}; renderEditor(); },
+  edColFToggle: () => { edColFOpen = !edColFOpen; renderEditor(); }
+});
+const ED_DUE = [['late', 'Late'], ['today', 'Due today'], ['soon', 'Due soon'], ['later', 'Later'], ['none', 'No date']];
+const ED_POST = [['none', 'Not planned'], ['planned', 'Planned, no time'], ['scheduled', 'Scheduled'], ['live', 'Live'], ['na', 'Not posted here']];
+const ED_VO = [['needed', 'V/O to ask'], ['asked', 'V/O asked'], ['none', 'No V/O']];
+const ED_EDIT = { '': 'Not planned', planned: 'Planned', active: 'Editing', done: 'Edited' };
+// What a row says, column by column — and what its filters match on.
+function edRowFacts(it) {
+  const { x, k, c, pr } = it;
+  const outlets = k ? [k] : (it.cuts || []);
+  const due = pr.late ? 'late' : pr.today ? 'today' : pr.soon ? 'soon' : pr.at ? 'later' : 'none';
+  const post = k && EF.postless(k) ? 'na' : c.posts.live ? 'live' : c.posts.scheduled ? 'scheduled' : c.posts.planned ? 'planned' : 'none';
+  const vl = edVoList(it), vo = !vl.length ? 'none' : vl.some(o => o.ask) ? 'asked' : 'needed';
+  return { outlets, due, post, vo, who: edWho(it), name: cardName(x) };
+}
+function edColPass(it, skip) {
+  const r = it.facts;
+  const on = k => k !== skip && edColF[k];
+  if (on('prop') && ![r.name, it.x.propertyCode, it.x.location].filter(Boolean).join(' ').toLowerCase().includes(edColF.prop.trim().toLowerCase())) return false;
+  if (on('outlet') && !r.outlets.includes(edColF.outlet)) return false;
+  if (on('col') && it.col !== edColF.col) return false;
+  if (on('person') && !(edColF.person === '-' ? !r.who.length : r.who.some(n => sameName(n, edColF.person)))) return false;
+  if (on('due') && r.due !== edColF.due) return false;
+  if (on('post') && r.post !== edColF.post) return false;
+  if (on('vo') && r.vo !== edColF.vo) return false;
+  return true;
+}
+function edListHtml(mine) {
+  for (const it of mine) it.facts = edRowFacts(it);
+  const rows = sortEdItems(mine.filter(it => edColPass(it)));
+  const nOn = Object.keys(edColF).length;
+  // Each column's choices, counted over the rows the OTHER column filters leave.
+  const count = (key, fn) => mine.filter(it => edColPass(it, key) && fn(it)).length;
+  const sel = (key, label, opts) => `<label class="ed-lf-c" data-l="${esc(label)}"><select onchange="setEdColF('${key}', this.value)" aria-label="Filter ${esc(label)}" class="${edColF[key] ? 'on' : ''}">
+      <option value="">All</option>${opts.filter(o => o[2] || edColF[key] === o[0]).map(([v, l, n]) => `<option value="${esc(v)}"${edColF[key] === v ? ' selected' : ''}>${esc(l)} (${n})</option>`).join('')}</select></label>`;
+  const outletKeys = [...new Set(mine.flatMap(it => it.facts.outlets))];
+  const outletOpts = [...EF.CUTS.map(c => c[0]), 'all'].filter(k => outletKeys.includes(k)).map(k => [k, EF.CUT_SHORT[k] || k, count('outlet', it => it.facts.outlets.includes(k))]);
+  const people = [];
+  for (const it of mine) for (const n of it.facts.who) if (!people.some(p => sameName(p, n))) people.push(n);
+  people.sort((a, b) => a.localeCompare(b));
+  const personOpts = [...people.map(n => [n, n, count('person', it => it.facts.who.some(w => sameName(w, n)))]), ['-', 'Nobody yet', count('person', it => !it.facts.who.length)]];
+  const filters = `
+    <label class="ed-lf-c ed-lf-prop" data-l="Property"><input type="search" id="edLfProp" value="${esc(edColF.prop || '')}" placeholder="Name or code" oninput="setEdColF('prop', this.value)" aria-label="Filter Property" class="${edColF.prop ? 'on' : ''}"></label>
+    ${sel('outlet', 'Outlet', outletOpts)}
+    ${sel('col', 'Status', EF.ED_COLS.map(c => [c.key, c.label, count('col', it => it.col === c.key)]))}
+    ${sel('person', 'Person', personOpts)}
+    ${sel('due', 'Edit / deadline', ED_DUE.map(([v, l]) => [v, l, count('due', it => it.facts.due === v)]))}
+    ${sel('post', 'Post', ED_POST.map(([v, l]) => [v, l, count('post', it => it.facts.post === v)]))}
+    ${sel('vo', 'V/O', ED_VO.map(([v, l]) => [v, l, count('vo', it => it.facts.vo === v)]))}`;
+  const colLabel = k => (EF.ED_COLS.find(c => c.key === k) || {}).label || k;
+  const row = it => {
+    const { x, k, c, pr } = it, r = it.facts, e = k ? EF.cutEdit(x, k) : null, ser = isSeriesCard(x);
+    const outlet = k ? `<span class="ed-lo">${cutIcon(k)} ${esc(EF.cutLabel(x, k))}</span>` : r.outlets.length ? `<span class="tk-sub2">Shoot for</span> ${esc(r.outlets.map(o => EF.CUT_SHORT[o] || o).join(', '))}` : '<span class="tk-muted">—</span>';
+    const deadline = pr.at ? `<span class="ed-due${pr.late ? ' bad' : pr.today ? ' hot' : pr.soon ? ' warn' : ''}">${esc(WHAT[pr.what])} ${esc(pr.what === 'delivery' ? fmtDay(pr.at) : pr.what === 'post' ? postWhen(c) : fmtDateTime(pr.at))}${pr.late ? ' · late' : ''}</span>` : '';
+    const edit = e ? `<b>${esc(ED_EDIT[e.status] || '')}</b>${e.planAt || e.dueAt ? `<span class="tk-sub2">${e.planAt ? 'edit ' + esc(fmtDay(e.planAt)) : ''}${e.planAt && e.dueAt ? ' · ' : ''}${e.dueAt ? 'deliver ' + esc(fmtDay(e.dueAt)) : ''}</span>` : ''}${deadline}`
+      : (c.shootAt && pr.what !== 'shoot' ? `<span class="tk-sub2">Shoot ${esc(fmtDateTime(c.shootAt))}</span>` : '') + deadline;
+    const post = r.post === 'na' ? '<span class="tk-muted">Not posted here</span>' : r.post === 'live' ? `<span class="ed-lp live">● Live</span>${c.posts.lastLiveAt ? `<span class="tk-sub2">${esc(fmtDay(c.posts.lastLiveAt))}</span>` : ''}`
+      : c.postAt ? `<span class="ed-lp">${esc(r.post === 'scheduled' ? 'Scheduled' : 'Planned')}</span><span class="tk-sub2">${esc(postWhen(c))}</span>` : '<span class="tk-muted">Not planned</span>';
+    const vo = r.vo === 'asked' ? '<span class="tk-vo">V/O asked</span>' : r.vo === 'needed' ? '<span class="tk-vo need">V/O to ask</span>' : '<span class="tk-muted">—</span>';
+    return `<div class="ed-lr ed-lrow${pr.late ? ' late' : ''}" role="row" tabindex="0" onclick="openEdDetail('${x.id}')" onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();openEdDetail('${x.id}')}">
+      <span class="ed-lc ed-lc-prop" role="cell">${ser ? `<span class="tk-code ser">Series · ${seriesInfo(x).members.length}</span>` : (codeChip(x) || '')}<b>${esc(r.name)}</b></span>
+      <span class="ed-lc" role="cell" data-l="Outlet">${outlet}</span>
+      <span class="ed-lc" role="cell" data-l="Status"><span class="ed-lstage ed-${it.col}">${esc(colLabel(it.col))}</span></span>
+      <span class="ed-lc" role="cell" data-l="Person">${r.who.length ? esc(r.who.join(', ')) : '<span class="tk-muted">Nobody yet</span>'}</span>
+      <span class="ed-lc" role="cell" data-l="Edit / deadline">${edit || '<span class="tk-muted">—</span>'}</span>
+      <span class="ed-lc" role="cell" data-l="Post">${post}</span>
+      <span class="ed-lc" role="cell" data-l="V/O">${vo}</span>
+    </div>`;
+  };
+  return `<div class="ed-list">
+    <div class="ed-lbar"><span><b>${rows.length}</b> of ${mine.length} card${mine.length === 1 ? '' : 's'}</span>
+      <button type="button" class="tk-filtoggle tk-ftog ed-lf-btn${nOn ? ' on' : ''}" aria-expanded="${edColFOpen}" onclick="edColFToggle()">Column filters${nOn ? `<span class="lf-badge">${nOn}</span>` : ''}</button>
+      ${nOn ? `<button type="button" class="tk-link" onclick="clearEdColF()">Clear column filters</button>` : ''}</div>
+    <div class="ed-lt" role="table" aria-label="Editor list">
+      <div class="ed-lr ed-lh" role="row"><span role="columnheader">Property</span><span role="columnheader">Outlet</span><span role="columnheader">Status</span><span role="columnheader">Person</span><span role="columnheader">Edit / deadline</span><span role="columnheader">Post</span><span role="columnheader">V/O</span></div>
+      <div class="ed-lr ed-lf${edColFOpen ? ' open' : ''}" role="row">${filters}</div>
+      ${rows.map(row).join('') || `<div class="ed-lnone">${nOn ? 'No card matches these column filters.' : 'Nothing here.'}</div>`}
+    </div>
+  </div>`;
 }
 function renderEditor() {
   const host = document.getElementById('boardView');
@@ -4186,6 +4388,8 @@ function renderEditor() {
   if (config.voiceBy && !people.some(n => sameName(n, config.voiceBy))) people.push(config.voiceBy);   // their V/O work
   const late = mine.filter(it => it.pr.late).length, today = mine.filter(it => it.pr.today).length;
   const sx = host.querySelector('.ed-board') ? host.querySelector('.ed-board').scrollLeft : 0;
+  // Typing in the list's Property filter redraws the view: the box keeps its focus and caret.
+  const typing = document.activeElement && document.activeElement.id === 'edLfProp' ? document.activeElement.selectionStart : null;
   // A shoot phone: whose it is, the day's run sheet one tap away, and the way out of "this is me".
   const agentBar = myAgent ? `<div class="ed-agent"><span>This phone is <b>${esc(myAgent)}</b>'s</span><button type="button" class="tk-btn sm" onclick="toggleView('shoots')">Today's shoots →</button><button type="button" class="tk-link" onclick="setMyAgent('')">not ${esc(myAgent)}?</button></div>` : '';
   host.innerHTML = `<div class="ed-wrap">
@@ -4201,10 +4405,11 @@ function renderEditor() {
           <option value="edit"${edCheck === 'edit' ? ' selected' : ''}>Post planned, edit not planned (${nGap('edit')})</option>
           <option value="vo"${edCheck === 'vo' ? ' selected' : ''}>V/O needed or asked (${nVo})</option>
         </select></label>
-      <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''}${nVo && edCheck !== 'vo' ? ` · <button type="button" class="tk-link ed-vo-n" onclick="setEdCheck('vo')"><i class="fa-solid fa-microphone" aria-hidden="true"></i> ${nVoAsked ? `${nVoAsked} V/O asked${config.voiceBy ? ' · ' + esc(config.voiceBy) : ''}` : ''}${nVoAsked && nVoNeed ? ', ' : ''}${nVoNeed ? `${nVoNeed} to ask` : ''}</button>` : ''} · nearest deadline first</span>
+      <span class="ed-sum"><b>${mine.length}</b> card${mine.length === 1 ? '' : 's'}${late ? ` · <b class="bad">${late} late</b>` : ''}${today ? ` · <b class="hot">${today} due today</b>` : ''}${nVo && edCheck !== 'vo' ? ` · <button type="button" class="tk-link ed-vo-n" onclick="setEdCheck('vo')"><i class="fa-solid fa-microphone" aria-hidden="true"></i> ${nVoAsked ? `${nVoAsked} V/O asked${config.voiceBy ? ' · ' + esc(config.voiceBy) : ''}` : ''}${nVoAsked && nVoNeed ? ', ' : ''}${nVoNeed ? `${nVoNeed} to ask` : ''}</button>` : ''}</span>
+      <div class="tk-sortbar ed-layout" role="group" aria-label="Columns or list">${[['board', 'Columns'], ['list', 'List']].map(([v, l]) => `<button type="button" class="tk-sbtn${edLayout === v ? ' on' : ''}" aria-pressed="${edLayout === v}" onclick="setEdLayout('${v}')">${l}</button>`).join('')}</div>
     </div>
-    <div class="tk-board ed-board">${EF.ED_COLS.map(col => {
-      const cards = mine.filter(it => it.col === col.key).sort((a, b) => (b.pr.late - a.pr.late) || (a.pr.rank - b.pr.rank) || String(cardName(a.x)).localeCompare(cardName(b.x)) || EF.CUTS.findIndex(c => c[0] === a.k) - EF.CUTS.findIndex(c => c[0] === b.k));
+    ${edLayout === 'list' ? edListHtml(mine) : `<div class="tk-board ed-board">${EF.ED_COLS.map(col => {
+      const cards = sortEdItems(mine.filter(it => it.col === col.key));
       const nLate = cards.filter(it => it.pr.late).length;
       return `<div class="tk-col ed-col ed-${col.key}${cards.length ? '' : ' ed-empty'}" title="${cards.length ? '' : esc(col.label + ' — ' + col.hint)}" ondragover="onColDragOver(event)" ondragleave="onColDragLeave(event)" ondrop="edColDrop(event,'${col.key}')">
         <div class="tk-col-hdr"><div class="tk-col-head"><span class="tk-col-title">${esc(col.label)}</span></div><div class="tk-col-rule">${esc(col.hint)}</div>
@@ -4212,10 +4417,11 @@ function renderEditor() {
         <div class="tk-col-body">
           ${cards.map(edCardHtml).join('') || '<div class="tk-col-none">Nothing here</div>'}
         </div></div>`;
-    }).join('')}</div>
+    }).join('')}</div>`}
     ${edSheetHtml(filtered)}
   </div>`;
   const b = host.querySelector('.ed-board'); if (b && sx) b.scrollLeft = sx;
+  if (typing != null) { const inp = document.getElementById('edLfProp'); if (inp) { inp.focus(); try { inp.setSelectionRange(typing, typing); } catch (e) {} } }
 }
 // Dropping a cut on one of the editor's own columns moves its edit; the others follow the shoot and Posting.
 function edColDrop(e, colKey) {
@@ -4331,9 +4537,111 @@ const inUse = id => { const a = document.activeElement, el = document.getElement
 // under an open dialog).
 setInterval(() => {
   if (currentView === 'board' && (boardMode === 'editor' || myAgent) && !draggedId && !document.querySelector('.tk-ov.open') && document.visibilityState === 'visible' && !inUse('boardView')) renderEditor();
+  // The calendar too: its now line and what has gone late.
+  if (currentView === 'calendar' && document.visibilityState === 'visible' && !viewBusy()) renderCalendar();
 }, 60000);
 // The Posting tab's rows changed: series names, post dates and "Post scheduled" follow.
+// ═══════ CALENDAR — shoots, edit plans and posts ═══════
+// The drawing is in shoot-calendar.js. Here: the events, from the cards and the Posting rows, and the
+// choices, kept on the device — week or month, the kind, the person. The calendar always opens on today.
+const CAL_K = 'track.cal';
+const calSt = { span: 'week', type: 'all', person: '', at: CAL.startOfDay(Date.now()), sel: CAL.startOfDay(Date.now()) };
+try {
+  const s = JSON.parse(localStorage.getItem(CAL_K) || '{}');
+  if (s.span === 'month') calSt.span = 'month';
+  if (['all', ...CAL.TYPES.map(t => t[0])].includes(s.type)) calSt.type = s.type;
+  if (typeof s.person === 'string') calSt.person = s.person;
+} catch (e) {}
+const calSave = () => { try { localStorage.setItem(CAL_K, JSON.stringify({ span: calSt.span, type: calSt.type, person: calSt.person })); } catch (e) {} };
+// Whoever shoots it, by one name: a teammate's as the team spells it, whatever was typed on the card.
+function shooterName(x) {
+  const n = String(x.shootAssignee || '').trim();
+  const mate = team.find(t => (x.shootAssigneeEmail && t.email === x.shootAssigneeEmail) || sameName(t.name, n));
+  return mate ? mate.name : n;
+}
+function calendarEvents(now) {
+  const out = [], today = CAL.startOfDay(now);
+  // A card's people — on its shoot and its edits. Its posts are theirs too, for a person's calendar.
+  const peopleOf = new Map();
+  const addPerson = (id, n) => { const s = peopleOf.get(id) || []; if (n && !s.some(p => sameName(p, n))) s.push(n); peopleOf.set(id, s); };
+  for (const x of listings) {
+    const name = cardName(x);
+    // A shoot is on a property's own card (a series is shot property by property): booked on an open
+    // card, or done.
+    if (!isSeriesCard(x) && x.shootAt && (x.shootDoneAt || stageKindOfId(x.stageId) === 'open')) {
+      const who = shooterName(x), done = isShot(x);
+      out.push({ id: 's:' + x.id, type: 'shoot', title: name, outlets: FOR_KEYS.map(f => f[0]).filter(k => forPlanned(x, k)), what: [x.propertyCode, x.location].filter(Boolean).join(' · '), code: x.propertyCode,
+        start: x.shootAt, end: x.shootAt + CAL.HOUR, allDay: false, people: who ? [who] : [], done, late: !done && x.shootAt < today, open: { kind: 'listing', id: x.id } });
+      addPerson(x.id, who);
+    }
+    // Edits: one per plan. Outlets planned together (one editor, the same days) are one edit: "Story + Reel".
+    const plans = new Map();
+    for (const k of Object.keys(EF.cutsView(x)).filter(k => k === 'all' || EF.CUTS.some(c => c[0] === k))) {
+      const e = EF.cutEdit(x, k);
+      if (!e.status || !(e.planAt || e.dueAt || e.startedAt || e.doneAt)) continue;
+      if (k === 'fbReel' && !EF.fbOwnCut(x) && e.status !== 'done') continue;   // the FB Reel is the Insta Reel's video
+      const key = [e.by, e.planAt, e.dueAt, e.status].join('|');
+      if (!plans.has(key)) plans.set(key, { e, ks: [] });
+      plans.get(key).ks.push(k);
+    }
+    for (const [key, { e, ks }] of plans) {
+      // Its plan days; with none, the day it was started (or finished).
+      const from = CAL.startOfDay(e.planAt || e.dueAt || e.startedAt || e.doneAt), last = CAL.startOfDay(e.dueAt || e.planAt || e.startedAt || e.doneAt);
+      out.push({ id: 'e:' + x.id + ':' + key, type: 'edit', title: name, outlets: ks.flatMap(k => k === 'igReel' && !EF.fbOwnCut(x) ? ['igReel', 'fbReel'] : [k]), what: ks.map(k => EF.cutLabel(x, k)).join(' + ') + (e.status === 'active' ? ' · editing' : ''), code: x.propertyCode,
+        start: from, end: CAL.addDays(Math.max(from, last), 1), allDay: true, people: e.by ? [e.by] : [],
+        done: e.status === 'done', late: e.status !== 'done' && !!e.dueAt && CAL.startOfDay(e.dueAt) < today, open: { kind: 'edit', id: x.id } });
+      addPerson(x.id, e.by);
+    }
+  }
+  // Posts: each belongs to its property's card — by code, or a series by its row.
+  const byCode = new Map(listings.filter(x => !isSeriesCard(x) && keyOfCode(x.propertyCode)).map(x => [keyOfCode(x.propertyCode), x]));
+  const bySeries = new Map(listings.filter(x => isSeriesCard(x) && x.postingId).map(x => [x.postingId, x]));
+  for (const p of (window.pgCalendarPosts ? window.pgCalendarPosts() : [])) {
+    const card = p.series ? bySeries.get(p.root) : byCode.get(keyOfCode(p.code));
+    const live = p.status === 'live';
+    out.push({ id: 'p:' + p.rowId + ':' + p.status + ':' + p.at, type: 'post', title: p.name, code: p.code, outlets: p.keys || [],
+      what: (p.labels.join(' + ') || 'no outlet chosen yet') + (live ? ' · live' : p.timed ? '' : ' · planned'),
+      start: p.timed ? p.at : CAL.startOfDay(p.at), end: p.timed ? p.at + 30 * 60000 : CAL.addDays(p.at, 1), allDay: !p.timed,
+      people: card ? (peopleOf.get(card.id) || []) : [], done: live, late: !live && CAL.startOfDay(p.at) < today,
+      open: { kind: 'post', id: p.rowId } });
+  }
+  return out;
+}
+function renderCalendar() {
+  const el = document.getElementById('calendarView');
+  if (!el || currentView !== 'calendar') return;
+  const now = Date.now(), all = calendarEvents(now);
+  // The person picker: everyone with work on the calendar, and the one chosen even when they have none now.
+  const people = [];
+  for (const e of all) for (const n of e.people) if (!people.some(p => sameName(p, n))) people.push(n);
+  if (calSt.person && !people.some(p => sameName(p, calSt.person))) people.push(calSt.person);
+  people.sort((a, b) => a.localeCompare(b));
+  const events = CAL.filterEvents(all, { type: calSt.type, person: calSt.person, q: currentSearch }, sameName);
+  const st = { ...calSt, person: people.find(p => sameName(p, calSt.person)) || '', peopleList: people };
+  el.innerHTML = `<div class="tc">${CAL.headHtml(st, events, now)}${CAL.bodyHtml(st, events, now)}</div>`;
+}
+// Moving to another month picks today if it is in it, else nothing (the month shows a hint).
+const calDefaultSel = () => { const t = CAL.startOfDay(Date.now()); return calSt.span !== 'month' || CAL.startOfMonth(t) === CAL.startOfMonth(calSt.at) ? t : null; };
+Object.assign(window, {
+  calMove: d => { calSt.at = CAL.move(calSt.span, calSt.at, d > 0 ? 1 : -1); calSt.sel = calDefaultSel(); renderCalendar(); },
+  calToday: () => { calSt.at = CAL.startOfDay(Date.now()); calSt.sel = calSt.at; renderCalendar(); },
+  calSpan: s => { calSt.span = s === 'month' ? 'month' : 'week'; calSt.sel = calDefaultSel(); calSave(); renderCalendar(); },
+  calType: t => { calSt.type = ['all', ...CAL.TYPES.map(x => x[0])].includes(t) ? t : 'all'; calSave(); renderCalendar(); },
+  calPerson: p => { calSt.person = String(p || ''); calSave(); renderCalendar(); },
+  calPick: d => { calSt.sel = Number(d) || null; renderCalendar(); },
+  // A shoot opens its card; an edit, the card's editor's view; a post, its row on Posting's Sheet, the
+  // week strip on its week.
+  calOpen: (kind, id, at) => {
+    if (kind === 'post') {
+      if (document.getElementById('dp').classList.contains('open')) closeDetail();   // the card's "In Posting →": the Sheet must show
+      toggleView('posting'); if (window.pgSheetAt) window.pgSheetAt(id, Number(at) || 0); return;
+    }
+    openDetail(id, kind === 'edit' ? 'editor' : 'full');
+  }
+});
+
 window.trackPostingChanged = () => {
+  if (currentView === 'calendar') { if (viewBusy()) viewStale = true; else renderCalendar(); return; }
   if (currentView !== 'board' || draggedId || inUse('boardView')) return;
   const m = myAgent ? 'editor' : boardMode;
   if (m === 'list') renderList(); else if (m === 'editor') renderEditor(); else renderBoard();
