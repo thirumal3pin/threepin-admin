@@ -61,10 +61,43 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
   console.log(`        Editor view: ${edCards} cards — ${JSON.stringify(await page.$$eval('.ed-col', c => c.map(x => x.querySelector('.tk-count').textContent)))}`);
   ok('Editor view: no sideways page scroll', !(await wide()));
   await page.screenshot({ path: `tests/out/live-${name}-editor.png` });
-  await page.evaluate(() => setBoardMode('board')); await page.waitForTimeout(200);
+  // The Editor's list and the editor's view of a card, and the Calendar (since 03e9e2f).
+  if (!(await page.evaluate(() => typeof window.setEdLayout === 'function' && !!document.getElementById('calendarView')))) {
+    console.log('        (Calendar and the Editor list are not deployed here yet)');
+  } else {
+    await page.evaluate(() => setEdLayout('list')); await page.waitForTimeout(500);
+    const lrows = await page.$$eval('.ed-lrow', r => r.length);
+    ok('Editor list: one row per card, the same cards as the columns', !!(await page.$('.ed-lt')) && lrows === edCards, `${lrows} rows, ${edCards} cards`);
+    ok('Editor list: a filter on every column', (await page.$$('.ed-lf .ed-lf-c')).length === 7);
+    ok('Editor list: no sideways page scroll', !(await wide()));
+    await page.screenshot({ path: `tests/out/live-${name}-editor-list.png` });
+    if (lrows) {
+      await page.click('.ed-lrow >> nth=0'); await page.waitForTimeout(700);
+      const dv = await page.evaluate(() => ({ ed: document.getElementById('dp').classList.contains('dp-ed'), secs: [...document.querySelectorAll('#dpBody .tk-sec-hdr')].map(h => h.textContent.trim()) }));
+      // A series card opens its own (full) view; a property card the editor's view.
+      ok('A card opens in the editor\'s view (or a series in its own)', dv.ed ? JSON.stringify(dv.secs) === JSON.stringify(['Shoot', 'Edit — per outlet', 'Posts', 'Shoot for']) : dv.secs.length > 0, JSON.stringify(dv));
+      await page.screenshot({ path: `tests/out/live-${name}-editor-view.png` });
+      await page.evaluate(() => closeDetail()); await page.waitForTimeout(300);
+    }
+    await page.evaluate(() => setEdLayout('board')); await page.waitForTimeout(200);
+    await page.evaluate(() => toggleView('calendar', true)); await page.waitForTimeout(600);
+    const sum = await page.evaluate(() => (document.querySelector('.tc-sum') || {}).textContent || '');
+    console.log(`        Calendar this week: ${sum.replace(/\s+/g, ' ').trim()}`);
+    ok('Calendar: the week draws (columns on a desk, a day list on a phone)', (await page.$$(name === 'phone' ? '.tc-aday' : '.tc-wh')).length === 7);
+    ok('Calendar week: no sideways scroll', !(await wide()));
+    await page.screenshot({ path: `tests/out/live-${name}-calendar-week.png` });
+    await page.evaluate(() => calSpan('month')); await page.waitForTimeout(500);
+    const cells = await page.$$eval('.tc-md', c => c.length);
+    ok('Calendar: the month draws, whole weeks', cells >= 28 && cells % 7 === 0, cells);
+    ok('Calendar month: no sideways scroll', !(await wide()));
+    await page.screenshot({ path: `tests/out/live-${name}-calendar-month.png` });
+    await page.evaluate(() => calSpan('week')); await page.waitForTimeout(200);
+  }
+  await page.evaluate(() => { toggleView('board', true); setBoardMode('board'); }); await page.waitForTimeout(200);
 
   await page.evaluate(() => toggleView('settings', true)); await page.waitForTimeout(400);
-  ok('Settings → Configurations draws', /Configurations/.test(await page.textContent('#settingsView')) && (await page.$$('.cf-sec')).length === 9 && /Documents checklist/.test(await page.textContent('#settingsView')) && /Voice-over by/.test(await page.textContent('#settingsView')));
+  const cf = await page.evaluate(() => ({ title: /Configurations/.test(document.getElementById('settingsView').textContent), secs: [...document.querySelectorAll('.cf-sec h3')].map(h => h.textContent.trim()), vo: /Voice-over by/.test(document.getElementById('settingsView').textContent) }));
+  ok('Settings → Configurations draws', cf.title && ['Editors', 'Voice-over', 'Edit deadlines', 'Series', 'Team calendar', 'Tags', 'Documents checklist', 'Tasks', 'Team'].every(s => cf.secs.includes(s)) && cf.vo, JSON.stringify(cf));
   ok('Settings: no sideways scroll', !(await wide()));
   await page.screenshot({ path: `tests/out/live-${name}-settings.png` });
 
