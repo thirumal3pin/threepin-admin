@@ -742,6 +742,9 @@ a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
 .sync-kind{margin-left:auto;font-size: 11px;font-weight:700;letter-spacing:.06em;color:var(--ink3);}
 .sync-row.new .sync-kind{color:var(--green);}
 .sync-f{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;font-size:12.5px;padding:2px 0;}
+/* A sheet column can have a long name: in the sync preview its label wraps instead of running off the dialog. */
+.sync-f .chg-field{white-space:normal;overflow-wrap:anywhere;max-width:100%;}
+.sync-f .chg-from,.sync-f .chg-to{overflow-wrap:anywhere;min-width:0;}
 .sync-more{font-size:11.5px;color:var(--ink3);padding-top:3px;}
 .sync-done{background:var(--green-bg);border:1px solid #BBF7D0;border-radius:10px;padding:16px;font-size:15px;font-weight:650;color:var(--green);text-align:center;}
 .sync-done-sub{font-size:12.5px;font-weight:500;color:var(--ink3);margin-top:5px;}

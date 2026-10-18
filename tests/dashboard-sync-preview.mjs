@@ -46,7 +46,9 @@ const SYNC_PREVIEW = {
     { id:'ANR003', name:'3BHK Apartment - Anna Nagar', kind:'update',
       fields:[{ field:'startingPrice', from:'3,25,00,000', to:'3,15,00,000' }] },
     { id:'VLC001', name:'2BHK Velachery', kind:'update',
-      fields:[{ field:'possession', from:'Ready', to:'Immediate' }] },
+      fields:[{ field:'possession', from:'Ready', to:'Immediate' },
+        // A sheet column of its own (sheetExtras): its own line, by the sheet's name — a long one.
+        { field:'Registration & Documentation Charges Payable', from:'', to:'Approximately 7.5% of the guideline value, payable directly by the purchaser at the sub-registrar office' }] },
   ],
 };
 
@@ -192,6 +194,16 @@ const noRepeat = await page.evaluate(() => {
 ok('Select all skips what is already written', noRepeat.ticked === 1, JSON.stringify(noRepeat));
 
 await page.screenshot({ path: join(OUT, 'sync-per-property.png') });
+
+// A sheet column's change shows its name, what it was and what it becomes; on a phone the long name
+// and value wrap inside the dialog.
+const col = await page.evaluate(() => [...document.querySelectorAll('#syncBody .sync-f')].map(f => f.textContent.replace(/\s+/g, ' ').trim()).find(t => /Registration/.test(t)) || '');
+ok('A sheet column is listed by its own name, with its new value', /Registration & Documentation Charges Payable/.test(col) && /7\.5% of the guideline value/.test(col) && !/\(map\)|keys/.test(col), col);
+await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+const fits = await page.evaluate(() => { const f = [...document.querySelectorAll('#syncBody .sync-f')].find(x => /Registration/.test(x.textContent)); const b = document.getElementById('syncBody'); return !!f && f.getBoundingClientRect().right <= b.getBoundingClientRect().right + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1; });
+ok('…on a phone it wraps inside the dialog, no sideways scroll', fits);
+await page.screenshot({ path: join(OUT, 'sync-phone.png') });
+await page.setViewportSize({ width: 1440, height: 950 }); await page.waitForTimeout(200);
 
 // ── 3. Deleting a property that cards and leads still point at says so first ──
 console.log('\n── delete warning ──');

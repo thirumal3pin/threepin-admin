@@ -321,9 +321,14 @@ export function diffProperty(before, after){
   for(const [k, v] of Object.entries(after)){
     if(k === 'updatedAt' || k === 'source') continue;
     const prev = before ? before[k] : undefined;
+    // The sheet's own columns (no dashboard field of their own): one line per column that changed,
+    // named as the sheet names it, so the preview says WHAT changed — not "(map) → 2 keys". A column
+    // gone from the sheet shows as cleared (planSync's staleExtras removes it).
     if(k === 'sheetExtras'){
-      if(JSON.stringify(prev || {}) !== JSON.stringify(v)){
-        changes.push({ field:k, from:'(map)', to:`${Object.keys(v).length} keys` });
+      const was = (prev && typeof prev === 'object') ? prev : {}, now = (v && typeof v === 'object') ? v : {};
+      for(const col of [...new Set([...Object.keys(was), ...Object.keys(now)])]){
+        const a = was[col] == null ? '' : String(was[col]), b = now[col] == null ? '' : String(now[col]);
+        if(a !== b) changes.push({ field:col, from:a, to:b });
       }
       continue;
     }
