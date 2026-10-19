@@ -2104,9 +2104,32 @@ window.openEdDetail = id => openDetail(id, 'editor');
 // ── The editor's view of a card: what an editor needs, nothing else ──
 // The basics; the shoot and its footage; Shoot for (outlets and their voice); each outlet's edit, with
 // the same buttons as the Editor; each outlet's post. "Full record" opens everything else.
+// A Drive link, as something the page can show: a folder's photos as a grid, or one file's preview.
+function driveEmbed(url) {
+  const u = String(url || '');
+  let m = u.match(/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?id=|folderview\?id=)([\w-]{10,})/);
+  if (m) return `https://drive.google.com/embeddedfolderview?id=${m[1]}#grid`;
+  m = u.match(/drive\.google\.com\/file\/d\/([\w-]{10,})/);
+  return m ? `https://drive.google.com/file/d/${m[1]}/preview` : '';
+}
+let edPhotosShown = null;   // the card whose photos are shown in its editor's view
+window.edTogglePhotos = id => { edPhotosShown = edPhotosShown === id ? null : id; openDetail(id); };
+// The photos link pasted in the editor's view: the card's own (what the brochure and Posting read).
+window.edSetPhotos = (id, value) => {
+  const x = listings.find(l => l.id === id);
+  if (!x) return;
+  const v = String(value || '').trim();
+  if (v === String(x.photosLink || '').trim()) return;
+  if (v && !/^https?:\/\//i.test(v)) { toast('That does not look like a link — paste the Drive folder link'); return; }
+  if (v && driveEmbed(v)) edPhotosShown = id;   // a Drive link: shown straight away
+  mutate(id, o => { o.photosLink = v; }, v ? 'Drive photo folder set' : 'Drive photo folder cleared');
+  if (currentDetailId === id) openDetail(id);
+};
 function openEdDetail(x) {
   const same = currentDetailId === x.id && document.getElementById('dp').classList.contains('open');
   const scroll = same ? (document.getElementById('dpBody') || {}).scrollTop || 0 : 0;
+  // Pasting the photos link while the card redraws (someone's save): the box keeps what is in it.
+  const phIn = same && document.activeElement && document.activeElement.id === 'edPhIn' ? document.activeElement.value : null;
   currentDetailId = x.id;
   const stage = stageById(x.stageId), m = x.media || {};
   document.getElementById('dpTitle').textContent = cardName(x);
@@ -2127,7 +2150,24 @@ function openEdDetail(x) {
         ${row('Captured', got.length ? esc(got.join(', ')) : '<span class="tk-muted">Nothing marked yet</span>')}
         ${x.shootNotes ? row('From the shoot', esc(x.shootNotes)) : ''}
       </tbody></table>
-      ${linkRow('Footage (Drive)', x.photosLink, x.id, 'photosLink')}
+    </section>`;
+  // The photos: the card's Drive link, pasted here — or the Property dashboard's when the card has none
+  // — opened in Drive, or shown right in the card.
+  const inv = realCode(x.propertyCode) && inventory ? inventory.find(q => String(q.propertyCode || '').toUpperCase() === String(x.propertyCode).toUpperCase()) : null;
+  const own = String(x.photosLink || '').trim(), invLink = !own && inv && /^https?:\/\//i.test(inv.photosLink || '') ? inv.photosLink : '';
+  const link = own || invLink, embed = driveEmbed(link), shown = edPhotosShown === x.id && !!embed;
+  const photos = `<section class="tk-sec ed-dsec" id="edPhotos">
+      <div class="tk-sec-hdr">Photos</div>
+      <div class="ed-ph-row">
+        <input type="url" id="edPhIn" class="ed-ph-in" value="${esc(own)}" placeholder="Paste the Google Drive folder link" aria-label="Photos link (Google Drive)"
+          onchange="edSetPhotos('${x.id}', this.value)" onpaste="setTimeout(() => edSetPhotos('${x.id}', this.value), 0)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}">
+        ${link ? `<a class="tk-btn sm" href="${esc(link)}" target="_blank" rel="noopener">Open in Drive ↗</a>` : ''}
+        ${embed ? `<button type="button" class="tk-btn sm${shown ? '' : ' primary'}" onclick="edTogglePhotos('${x.id}')">${shown ? 'Hide photos' : 'Show photos here'}</button>` : ''}
+      </div>
+      ${invLink ? `<div class="tk-hint">Not on this card yet — this is <b>${esc(x.propertyCode)}</b>'s link in the Property dashboard. Paste one above to give the card its own.</div>` : ''}
+      ${link && !embed ? `<div class="tk-hint">This link cannot be shown here — open it in Drive.</div>` : ''}
+      ${shown ? `<iframe class="ed-ph-frame" src="${esc(embed)}" title="Photos — ${esc(cardName(x))}" loading="lazy" referrerpolicy="no-referrer"></iframe>
+        <div class="tk-hint">Blank or asking to sign in? The folder must be shared with your Google account (or anyone with the link) — Open in Drive works either way.</div>` : ''}
     </section>`;
   // Each planned outlet's post: where it stands in Posting, and the way there.
   const outs = FOR_KEYS.filter(([k]) => forPlanned(x, k));
@@ -2149,6 +2189,7 @@ function openEdDetail(x) {
       <div class="ed-dtop"><span class="tk-sub2">Editor's view — the shoot, the edits and the posts</span>
         <button type="button" class="tk-btn sm ghost" onclick="openDetail('${x.id}','full')">Full record →</button></div>
       ${shoot}
+      ${photos}
       ${editSectionHtml(x)}
       ${posts}
       ${forSectionHtml(x, 'What this shoot is cut for, and the voice for each.')}
@@ -2156,6 +2197,9 @@ function openEdDetail(x) {
   openDpLayer();
   document.getElementById('dp').classList.add('open');
   if (scroll) document.getElementById('dpBody').scrollTop = scroll;
+  if (phIn != null) { const i = document.getElementById('edPhIn'); if (i) { i.value = phIn; i.focus(); } }
+  // A mapped card with no link of its own shows the Property dashboard's: read it, then redraw once.
+  if (!inventory && realCode(x.propertyCode) && !String(x.photosLink || '').trim()) loadInventory().then(() => { if (currentDetailId === x.id && dpMode === 'editor') openEdDetail(listings.find(l => l.id === x.id) || x); });
   try {
     const u = new URL(location.href);
     u.searchParams.set('listing', x.id);

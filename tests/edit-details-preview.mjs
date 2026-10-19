@@ -23,7 +23,8 @@ const LISTINGS = [{ id: 'lst_m', tenantId: T, leadId: 'tt_raj', sellerName: 'Raj
   askingPrice: 'Expected price ₹1.45 crores, fully…', propertyCode: 'MYLA0004', stageId: sid('shoot_scheduled'), media: {}, source: 'seller-sync',
   createdAt: NOW - 30 * D, updatedAt: NOW - D, stageChangedAt: NOW - 6 * D }];
 const INV = [{ id: 'MYLA0004', propertyCode: 'MYLA0004', name: '2 BHK Apartment - Loganathan Colony, Mylapore', location: 'Loganathan Colony, Mylapore, Chennai',
-  config: '2 BHK', startingPrice: '₹1.40 Cr (Negotiable)', sqftRange: '1,219', uds: '400', type: 'Apartment' }];
+  config: '2 BHK', startingPrice: '₹1.40 Cr (Negotiable)', sqftRange: '1,219', uds: '400', type: 'Apartment',
+  photosLink: 'https://drive.google.com/drive/u/0/folders/1QY4zxYFV9zGJzWagM25WzMTxuZsXxsdy' }];
 
 const STUB = `
 window.__saved = [];
@@ -119,7 +120,24 @@ await page.fill('.tk-card[data-id="lst_m"] .tk-pname-in', 'Sai Vignesh Apartment
 await page.keyboard.press('Enter'); await page.waitForTimeout(300);
 ok('Renaming on the tile itself still works', (await card(page)).title === 'Sai Vignesh Apartment, Mylapore');
 
-// 5. A phone: the form fits.
+// 5. The editor's view: paste the photos link, open it, see the photos in the card.
+// (Linking the card above copied MYLA0004's link onto it: cleared, to see the fallback.)
+await page.evaluate(() => window.trackApi.mutate('lst_m', l => { l.photosLink = ''; }, null)); await page.waitForTimeout(200);
+await page.evaluate(() => openEdDetail('lst_m')); await page.waitForTimeout(600);
+let ph = await page.evaluate(() => ({ box: !!document.getElementById('edPhIn'), open: (document.querySelector('#edPhotos a[href*="drive.google.com"]') || {}).href || '', hint: (document.querySelector('#edPhotos .tk-hint') || {}).textContent || '' }));
+ok('Editor\'s view: a Photos box; with no link on the card, the Property dashboard\'s is offered', ph.box && /1QY4zxYFV9zGJzWagM25WzMTxuZsXxsdy/.test(ph.open) && /MYLA0004/.test(ph.hint), JSON.stringify(ph));
+await page.click('#edPhotos button:has-text("Show photos here")'); await page.waitForTimeout(300);
+ok('…"Show photos here" shows the folder in the card', /embeddedfolderview\?id=1QY4zxYFV9zGJzWagM25WzMTxuZsXxsdy/.test(await page.evaluate(() => (document.querySelector('#edPhotos iframe') || {}).src || '')));
+await page.fill('#edPhIn', 'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv');
+await page.press('#edPhIn', 'Enter'); await page.waitForTimeout(400);
+ph = await page.evaluate(() => ({ saved: window.trackApi.listings().find(l => l.id === 'lst_m').photosLink, frame: (document.querySelector('#edPhotos iframe') || {}).src || '', hint: (document.querySelector('#edPhotos .tk-hint') || {}).textContent || '' }));
+ok('Pasting a Drive link saves it on the card and shows its photos', ph.saved === 'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv' && /embeddedfolderview\?id=1AbCdEfGhIjKlMnOpQrStUv/.test(ph.frame) && !/MYLA0004/.test(ph.hint), JSON.stringify(ph));
+await page.fill('#edPhIn', 'not a link'); await page.press('#edPhIn', 'Enter'); await page.waitForTimeout(300);
+ok('…something that is not a link is refused', (await page.evaluate(() => window.trackApi.listings().find(l => l.id === 'lst_m').photosLink)) === 'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv');
+await page.screenshot({ path: join(OUT, 'editor-photos.png') });
+await page.evaluate(() => closeDetail()); await page.waitForTimeout(200);
+
+// 6. A phone: the form fits.
 page = await open({ width: 390, height: 844 });
 await page.evaluate(() => openEditModal('lst_m', 'MYLA0004')); await page.waitForTimeout(700);
 const fits = await page.evaluate(() => { const b = document.querySelector('#mModal .tk-box'); const r = b.getBoundingClientRect(); return r.right <= window.innerWidth + 1 && [...b.querySelectorAll('input, select')].every(e => { const q = e.getBoundingClientRect(); return !q.width || q.right <= r.right + 1; }); });

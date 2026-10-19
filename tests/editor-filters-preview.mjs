@@ -187,7 +187,7 @@ console.log('The editor\'s view');
 await page.click('.ed-lrow:has-text("Velachery 2BHK")');
 await page.waitForTimeout(400);
 const dv = await page.evaluate(() => ({ ed: document.getElementById('dp').classList.contains('dp-ed'), secs: [...document.querySelectorAll('#dpBody .tk-sec-hdr')].map(h => h.textContent.trim()) }));
-ok('From the Editor a card opens in the editor\'s view: the shoot, the edits, the posts, Shoot for — nothing else', dv.ed && JSON.stringify(dv.secs) === JSON.stringify(['Shoot', 'Edit — per outlet', 'Posts', 'Shoot for']), JSON.stringify(dv));
+ok('From the Editor a card opens in the editor\'s view: the shoot, its photos, the edits, the posts, Shoot for — nothing else', dv.ed && JSON.stringify(dv.secs) === JSON.stringify(['Shoot', 'Photos', 'Edit — per outlet', 'Posts', 'Shoot for']), JSON.stringify(dv));
 await page.evaluate(() => openDetail('l3'));
 await page.waitForTimeout(200);
 ok('…a redraw of the open card keeps the editor\'s view', await page.evaluate(() => document.getElementById('dp').classList.contains('dp-ed')));

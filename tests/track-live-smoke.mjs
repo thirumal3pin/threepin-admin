@@ -75,7 +75,7 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
       await page.click('.ed-lrow >> nth=0'); await page.waitForTimeout(700);
       const dv = await page.evaluate(() => ({ ed: document.getElementById('dp').classList.contains('dp-ed'), secs: [...document.querySelectorAll('#dpBody .tk-sec-hdr')].map(h => h.textContent.trim()) }));
       // A series card opens its own (full) view; a property card the editor's view.
-      ok('A card opens in the editor\'s view (or a series in its own)', dv.ed ? JSON.stringify(dv.secs) === JSON.stringify(['Shoot', 'Edit — per outlet', 'Posts', 'Shoot for']) : dv.secs.length > 0, JSON.stringify(dv));
+      ok('A card opens in the editor\'s view (or a series in its own)', dv.ed ? JSON.stringify(dv.secs) === JSON.stringify(['Shoot', 'Photos', 'Edit — per outlet', 'Posts', 'Shoot for']) : dv.secs.length > 0, JSON.stringify(dv));
       await page.screenshot({ path: `tests/out/live-${name}-editor-view.png` });
       await page.evaluate(() => closeDetail()); await page.waitForTimeout(300);
     }
