@@ -95,6 +95,19 @@ for (const [name, viewport] of [['desktop', { width: 1440, height: 950 }], ['pho
   }
   await page.evaluate(() => { toggleView('board', true); setBoardMode('board'); }); await page.waitForTimeout(200);
 
+  // A mapped card: renamed from its page, its details edited, filled from the Property dashboard —
+  // the form opened and closed, never saved.
+  const mapped = await page.evaluate(() => (window.trackApi.listings().find(l => l.propertyCode && l.kind !== 'series') || {}).id || '');
+  if (mapped && await page.evaluate(() => typeof window.openEditModal === 'function' && !!document.getElementById('mm_deal'))) {
+    await page.evaluate(id => openDetail(id), mapped); await page.waitForTimeout(700);
+    ok('A card page: ✎ by the name, Edit details at the top, Use … details', !!(await page.$('#dpTitle .dp-rename')) && !!(await page.$('.tk-sum-acts button:has-text("Edit details")')) && !!(await page.$('button:has-text("details"):has-text("Use ")')));
+    await page.evaluate(id => openEditModal(id, window.trackApi.listings().find(l => l.id === id).propertyCode), mapped); await page.waitForTimeout(2500);
+    const form = await page.evaluate(() => ({ open: document.getElementById('mModal').classList.contains('open'), fields: ['mm_deal', 'mm_propType', 'mm_sqft', 'mm_uds'].every(id => !!document.getElementById(id)), from: !document.getElementById('mmFrom').hidden && /MYLA|Filled from|already matches/.test(document.getElementById('mmFrom').textContent) }));
+    ok('…the form: For, type, size, UDS; filled from the Property dashboard (not saved)', form.open && form.fields && form.from, JSON.stringify(form));
+    ok('…the form fits, no sideways scroll', !(await wide()));
+    await page.evaluate(() => { closeModal(); closeDetail(); }); await page.waitForTimeout(300);
+  } else console.log('        (Edit details is not deployed here yet)');
+
   await page.evaluate(() => toggleView('settings', true)); await page.waitForTimeout(400);
   const cf = await page.evaluate(() => ({ title: /Configurations/.test(document.getElementById('settingsView').textContent), secs: [...document.querySelectorAll('.cf-sec h3')].map(h => h.textContent.trim()), vo: /Voice-over by/.test(document.getElementById('settingsView').textContent) }));
   ok('Settings → Configurations draws', cf.title && ['Editors', 'Voice-over', 'Edit deadlines', 'Series', 'Team calendar', 'Tags', 'Documents checklist', 'Tasks', 'Team'].every(s => cf.secs.includes(s)) && cf.vo, JSON.stringify(cf));
