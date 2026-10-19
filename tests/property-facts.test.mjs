@@ -29,6 +29,12 @@ eq('Super built-up, carpet and UDS each get their own label', read('Super Built 
 eq('A villa with its land is a villa, not a plot', read('Rent in my villa ECR muttukadu || Land area 4500sqft || Building area 3500 sqft'),
   { deal: 'rent', type: 'villa', config: null, sizes: ['4,500 sqft land', '3,500 sqft'], price: null });
 eq('Nothing to read gives nothing', read('Hi'), { deal: null, type: null, config: null, sizes: [], price: null });
+// "for Rent in Mylapore – 8,600 Sq. Ft.": the number after "rent" is the area — never the rent.
+eq('An area after the word "rent" is not the rent', read('Office Floor for Rent in Mylapore – 8,600 Sq. Ft.'),
+  { deal: 'rent', type: 'commercial', config: 'Commercial', sizes: ['8,600 sqft'], price: null });
+eq('…the rent after it still is', read('For rent, 1200 sqft, rent 30,000').price, '₹30,000/month');
+eq('…nor grounds or a BHK count', [read('rent 2 grounds').price, read('Rent in Adyar 3 BHK').price], [null, null]);
+eq('…and a plain rent figure still reads', [read('Rent 25000').price, read('expected rent 45k').price], ['₹25,000/month', '₹45,000/month']);
 eq('Sorting by size uses the built-up area first', sortSize(extractPropertyFacts('2858sqft land 7000sqft built up house')), 7000);
 eq('Prices sort by value: crores above lakhs', extractPropertyFacts('3.6 crores').priceValue > extractPropertyFacts('95 lakhs').priceValue, true);
 

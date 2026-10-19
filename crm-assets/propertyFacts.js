@@ -98,9 +98,15 @@ export function extractPropertyFacts(texts) {
     out.price = `₹${fmtNum(n)}${hi ? '–' + fmtNum(hi) : ''} ${crore ? 'Cr' : 'L'}`;
     if (!out.deal && !rent) out.deal = 'sale';
   } else {
+    // "for Rent in Mylapore – 8,600 Sq. Ft." — the number after "rent" there is the area, not the
+    // rent: a figure followed by an area unit (or not ending there: "8,60" of "8,600"), or one
+    // already read as a size, is never a monthly rent.
+    const AREA_AFTER = '(?![\\d,]|\\.\\d|\\s*(?:sq|sft|square|ft\\b|feet|cents?\\b|grounds?\\b|acres?\\b|bhk))';
+    const isSize = m => out.sizes.some(z => z.sqft === Math.round(num(m[1])));
+    const afterWord = [...all.matchAll(new RegExp(`(?:rent|expect(?:ed|ing)?)[^\\d]{0,24}${NUM}${AREA_AFTER}\\s*(?:₹|k\\b)?`, 'gi'))].find(m => !isSize(m));
     const monthly = all.match(new RegExp(`(?:₹|rs\\.?)?\\s*${NUM}\\s*(?:₹|rs\\.?|\\/-)?\\s*(?:per month|\\/month|\\/ month|pm|monthly)\\b`, 'i'))
       || (out.deal === 'rent' ? all.match(new RegExp(`${NUM}\\s*(?:₹|rs\\b|\\/-)`, 'i')) : null)
-      || all.match(new RegExp(`(?:rent|expect(?:ed|ing)?)[^\\d]{0,24}${NUM}\\s*(?:₹|k\\b)?`, 'i'));
+      || afterWord;
     if (monthly) {
       let n = num(monthly[1]);
       if (/k\b/i.test(monthly[0]) && n < 1000) n *= 1000;
