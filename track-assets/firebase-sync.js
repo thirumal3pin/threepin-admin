@@ -308,6 +308,7 @@ function invRow(d) {
   return {
     id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || '',
     config: p.config || '', startingPrice: p.startingPrice || '', type: p.type || '',
+    sqftRange: p.sqftRange || '', uds: p.uds || '',   // a card's "Use … details" (built-up area, UDS)
     photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut
   };
 }

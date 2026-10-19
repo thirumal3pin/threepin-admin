@@ -126,11 +126,20 @@
   <div class="tk-box">
     <div class="tk-box-hdr"><b id="mmTitle">New listing</b><button type="button" class="tk-x" onclick="closeModal()">✕</button></div>
     <div class="tk-box-body">
+      <div class="mm-from" id="mmFrom" hidden></div>
       <label for="mm_title">Title</label><input id="mm_title" type="text" placeholder="3BHK in Nungambakkam">
       <label for="mm_propertyCode">Property ID</label><div class="bp-codewrap"><input id="mm_propertyCode" type="text" placeholder="TNAG0002 — type to see existing codes" autocomplete="off" spellcheck="false" role="combobox" aria-controls="mmCodeSug" oninput="window.bpModalCode && bpModalCode(this.value)" onfocus="window.bpModalCode && bpModalCode(this.value)" onblur="window.bpModalSugClose && bpModalSugClose()"><div id="mmCodeSug" class="bp-sug" role="listbox"></div></div><div id="mmCodeHint" class="bp-mmhint"></div>
       <label for="mm_location">Location</label><input id="mm_location" type="text" placeholder="Nungambakkam">
       <label for="mm_config">Configuration</label><input id="mm_config" type="text" placeholder="3 BHK">
       <label for="mm_askingPrice">Asking price</label><input id="mm_askingPrice" type="text" placeholder="₹2.1 Cr">
+      <div class="mm-2col">
+        <div><label for="mm_deal">For</label><select id="mm_deal"><option value="">Not set</option><option value="sale">Sale</option><option value="rent">Rent</option></select></div>
+        <div><label for="mm_propType">Property type</label><select id="mm_propType"><option value="">Not set</option><option value="apartment">Apartment</option><option value="villa">Villa</option><option value="house">Independent house</option><option value="land">Land / plot</option><option value="commercial">Commercial</option></select></div>
+      </div>
+      <div class="mm-2col">
+        <div><label for="mm_sqft">Built-up area <span class="tk-opt">sq.ft</span></label><input id="mm_sqft" type="text" inputmode="numeric" placeholder="1,219"></div>
+        <div><label for="mm_uds">UDS <span class="tk-opt">sq.ft</span></label><input id="mm_uds" type="text" inputmode="numeric" placeholder="400"></div>
+      </div>
       <label for="mm_sellerName">Owner name</label><input id="mm_sellerName" type="text">
       <label for="mm_sellerPhone">Owner phone</label><input id="mm_sellerPhone" type="tel">
       <label for="mm_shootAssignee">Shoot assigned to</label><select id="mm_shootAssignee" onchange="shooterPicked(this)"></select>

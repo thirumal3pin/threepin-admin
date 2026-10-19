@@ -2289,3 +2289,13 @@ button.tk-ref:hover { color: var(--ink); text-decoration: underline; }
 @media (max-width: 760px) {
   .ed-dt th { width: 38%; }
 }
+
+/* ── Edit details: the card's name and what its tile shows; renamed from the card page too ── */
+.dp-rename { font: inherit; font-size: 14px; line-height: 1; vertical-align: 3px; margin-left: 4px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--ink3); cursor: pointer; }
+.dp-rename:hover { color: var(--ink); border-color: var(--border2); }
+.mm-2col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.mm-2col > div { min-width: 0; display: flex; flex-direction: column; }
+.tk-box-body .mm-2col > div > label:first-child { margin-top: 11px; }
+.mm-2col select, .mm-2col input { width: 100%; }
+.mm-from { font-size: 12.5px; line-height: 1.45; color: var(--ink2); background: var(--blue-bg); border: 1px solid var(--blue-line); border-radius: var(--r1, 8px); padding: 8px 11px; margin-bottom: 10px; }
+#mModal .mm-filled { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue-line); background: var(--blue-bg); }

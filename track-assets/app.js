@@ -1688,15 +1688,26 @@ const areaOf = s => {
 };
 const SELLER_CHANNELS = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website chat' };
 
+// The card's own sizes (Edit details): built-up area and UDS, in sq.ft, shaped as the chat's are.
+function cardSizes(x) {
+  const n = v => { const m = String(v == null ? '' : v).replace(/,/g, '').match(/\d+(?:\.\d+)?/); return m ? Math.round(Number(m[0])) : 0; };
+  const fmt = v => v.toLocaleString('en-IN');
+  const out = [];
+  if (n(x.sqft)) out.push({ kind: 'built', sqft: n(x.sqft), label: `${fmt(n(x.sqft))} sqft` });
+  if (n(x.uds)) out.push({ kind: 'uds', sqft: n(x.uds), label: `${fmt(n(x.uds))} sqft UDS` });
+  return out;
+}
 function sellerItem(x) {
   const lead = x.leadId ? leadById(x.leadId) : null;
   const fromChat = (lead && lead.tt && lead.tt.facts) || null;
   const typed = extractPropertyFacts([lead && lead.lastNote && lead.lastNote.text, lead && lead.propertyInterest, lead && lead.budget, x.title, x.config, x.askingPrice, x.remarks, x.lastNote && x.lastNote.text].filter(Boolean));
+  // What the card itself says (Edit details) wins over what was read from the chat or the lead's words.
+  const mine = cardSizes(x), read = ((fromChat && fromChat.sizes && fromChat.sizes.length) ? fromChat.sizes : typed.sizes) || [];
   const f = {
-    deal: (fromChat && fromChat.deal) || typed.deal,
-    type: (fromChat && fromChat.type) || typed.type,
+    deal: x.deal || (fromChat && fromChat.deal) || typed.deal,
+    type: x.propType || (fromChat && fromChat.type) || typed.type,
     config: x.config || (fromChat && fromChat.config) || typed.config,
-    sizes: ((fromChat && fromChat.sizes && fromChat.sizes.length) ? fromChat.sizes : typed.sizes) || [],
+    sizes: [...mine, ...read.filter(s => !mine.some(m => m.kind === s.kind))],
     price: x.askingPrice || (fromChat && fromChat.price) || typed.price,
     priceValue: (x.askingPrice ? extractPropertyFacts(x.askingPrice).priceValue : null) || (fromChat && fromChat.priceValue) || typed.priceValue || 0
   };
@@ -1895,6 +1906,7 @@ function summaryHtml(x, lead, stage) {
           ${lead ? ` · <span class="tk-sum-ch">${esc(it.channel)}</span>` : ''}</div>
       </div>
       <div class="tk-sum-acts">
+        <button class="tk-btn sm" onclick="openEditModal('${x.id}')" title="Name, price, sale or rent, type, size, UDS — what the tile shows">✎ Edit details</button>
         ${lead ? `<button class="tk-btn sm" onclick="openSellerPreview('${x.id}')">Preview</button>
           <a class="tk-btn ghost sm" href="${esc(crmLeadHref(lead.id, x.id))}">Open in CRM →</a>`
           : `<button class="tk-btn sm" onclick="openLinkLead('${x.id}')">Link a CRM lead</button>`}
@@ -1952,7 +1964,8 @@ function openDetail(id, mode) {
   const stage = stageById(x.stageId);
   const lead = x.leadId ? leadById(x.leadId) : null;
   const m = x.media || {};
-  document.getElementById('dpTitle').textContent = x.title || x.propertyCode || 'Untitled listing';
+  // The name, renamed right here (✎ opens Edit details on the Title).
+  document.getElementById('dpTitle').innerHTML = `${esc(x.title || x.propertyCode || 'Untitled listing')} <button type="button" class="dp-rename" onclick="openEditModal('${x.id}');setTimeout(() => { const t = document.getElementById('mm_title'); if (t) { t.focus(); t.select(); } }, 60)" title="Rename, or edit the details the tile shows" aria-label="Rename or edit details">✎</button>`;
   document.getElementById('dpSub').innerHTML = [
     x.propertyCode ? `<span class="tk-code">${esc(x.propertyCode)}</span>` : '<span class="tk-code none">not mapped to inventory</span>',
     x.location ? esc(x.location) : '', x.config ? esc(x.config) : '', x.askingPrice ? esc(x.askingPrice) : ''
@@ -1972,6 +1985,7 @@ function openDetail(id, mode) {
       <div class="tk-sec-hdr">Inventory</div>
       <div class="tk-kv"><span>Property ID</span>${x.propertyCode ? `<b>${esc(x.propertyCode)}</b>` : '<i>not mapped</i>'}</div>
       <button class="tk-btn" onclick="openMapProperty('${x.id}')">${x.propertyCode ? 'Change or remove mapping' : 'Map to a property'}</button>
+      ${x.propertyCode ? `<button class="tk-btn" onclick="openEditModal('${x.id}', ${jsq(x.propertyCode)})" title="Fill this card's name, price, sale or rent, type, size and UDS from ${esc(x.propertyCode)} in the Property dashboard — you check them before saving">Use ${esc(x.propertyCode)}'s details</button>` : ''}
       ${x.propertyCode ? `<a class="tk-btn ghost" href="dashboard.html?property=${encodeURIComponent(x.propertyCode)}" target="_blank" rel="noopener" title="The full record: notes, internal notes, matching buyers">Open property →</a>` : ''}
     </div>
 
@@ -3559,6 +3573,11 @@ const FORM_FIELDS = [
   ['location', 'Location', 'text', 'Nungambakkam'],
   ['config', 'Configuration', 'text', '3 BHK'],
   ['askingPrice', 'Asking price', 'text', '₹2.1 Cr'],
+  // What the card's tile shows: over what was read from the chat.
+  ['deal', 'For', 'select', ''],
+  ['propType', 'Property type', 'select', ''],
+  ['sqft', 'Built-up area (sq.ft)', 'text', ''],
+  ['uds', 'UDS (sq.ft)', 'text', ''],
   ['sellerName', 'Owner name', 'text', ''],
   ['sellerPhone', 'Owner phone', 'tel', ''],
   ['shootAssignee', 'Shoot assigned to', 'text', ''],
@@ -3572,7 +3591,8 @@ function fillShooterPick(current) {
 function openAddModal() {
   mModalMode = 'add'; mModalEditId = null;
   document.getElementById('mmTitle').textContent = 'New listing';
-  FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = ''; });
+  FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) { el.value = ''; el.classList.remove('mm-filled'); } });
+  const from = document.getElementById('mmFrom'); if (from) { from.hidden = true; from.innerHTML = ''; }
   fillShooterPick('');
   document.getElementById('mmErr').textContent = '';
   const hint = document.getElementById('mmCodeHint'); if (hint) hint.innerHTML = '';
@@ -3580,12 +3600,27 @@ function openAddModal() {
   loadInventory();
   document.getElementById('mModal').classList.add('open');
 }
-function openEditModal(id) {
+// fromCode: fill the form from that Property dashboard record (the inventory's name, price, sizes…) —
+// shown, not saved: the person checks it and presses Save.
+function openEditModal(id, fromCode) {
   const x = listings.find(l => l.id === id);
   if (!x) return;
+  if (fromCode && !inventory) { toast('Reading the Property dashboard…'); loadInventory().then(() => openEditModal(id, fromCode)); return; }
   mModalMode = 'edit'; mModalEditId = id;
   document.getElementById('mmTitle').textContent = 'Edit listing';
-  FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) el.value = x[k] || ''; });
+  FORM_FIELDS.forEach(([k]) => { const el = document.getElementById('mm_' + k); if (el) { el.value = x[k] || ''; el.classList.remove('mm-filled'); } });
+  const p = fromCode && inventory ? inventory.find(q => q.propertyCode === fromCode) : null;
+  if (p) {
+    const facts = extractPropertyFacts([p.type, p.name, p.startingPrice].filter(Boolean));
+    const fill = { title: p.name, location: p.location, config: p.config, askingPrice: p.startingPrice, sqft: p.sqftRange, uds: p.uds, propType: facts.type || '', deal: facts.deal || '' };
+    for (const [k, v] of Object.entries(fill)) {
+      const el = document.getElementById('mm_' + k);
+      if (el && String(v || '').trim() && el.value !== String(v).trim()) { el.value = String(v).trim(); el.classList.add('mm-filled'); }
+    }
+  }
+  const filled = p ? document.querySelectorAll('#mModal .mm-filled').length : 0;
+  document.getElementById('mmFrom').innerHTML = p ? (filled ? `Filled from <b>${esc(fromCode)}</b> in the Property dashboard — ${filled} field${filled === 1 ? '' : 's'} changed (marked). Check them, then Save.` : `This card already matches <b>${esc(fromCode)}</b>.`) : '';
+  document.getElementById('mmFrom').hidden = !p;
   // After the loop: the picker selects the person whatever the stored spelling ("swami" is Swami).
   fillShooterPick(x.shootAssignee);
   // A code kept for the brochure (not yet in the dashboard) shows in the same box.
