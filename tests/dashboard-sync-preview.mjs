@@ -47,9 +47,15 @@ const SYNC_PREVIEW = {
       fields:[{ field:'startingPrice', from:'3,25,00,000', to:'3,15,00,000' }] },
     { id:'VLC001', name:'2BHK Velachery', kind:'update',
       fields:[{ field:'possession', from:'Ready', to:'Immediate' },
+        // The sheet has less than the dashboard: applied, the old value kept in Notes.
+        { field:'parking', from:'3 cars per floor (9 spaces in total)', to:'9', keep:true },
         // A sheet column of its own (sheetExtras): its own line, by the sheet's name — a long one.
         { field:'Registration & Documentation Charges Payable', from:'', to:'Approximately 7.5% of the guideline value, payable directly by the purchaser at the sub-registrar office' }] },
   ],
+  // What earlier syncs replaced — for the person to pick into Notes.
+  recover:[{ id:'TNAG0002', name:'2BHK Apartment for Sale in T. Nagar', items:[
+    { field:'parking', from:'1 Open Car Park + Space for 1 Additional Car', to:'1', takenAt:'2026-10-15T07:00:32.458Z' },
+    { field:'Main Door Facing', from:'East & South Entrance', to:'', takenAt:'2026-09-13T08:00:00.000Z' }] }],
 };
 
 const STUB = `
@@ -89,6 +95,8 @@ const page = await (async () => {
     // Record what the dashboard asks the sync endpoint for, and answer it.
     if (url.pathname === '/api/sync-inventory') {
       const body = JSON.parse(route.request().postData() || '{}');
+      if (body.recover || body.decline)
+        return route.fulfill({ contentType:'application/json', body: JSON.stringify({ ok:true, recovered: (body.recover || []).length ? 1 : 0, ids: ['TNAG0002'], declined: (body.decline || []).length }) });
       const reply = body.dryRun
         ? SYNC_PREVIEW
         : { ok:true, ...SYNC_PREVIEW, dryRun:false,
@@ -148,6 +156,9 @@ ok('Apply selected is hidden until something is ticked', ui.applySelShown === 'n
 // One property, on its own.
 const one = await page.evaluate(async () => {
   const row = document.querySelector('#syncBody .sync-row[data-sync-id="ANR003"]');
+  // A line not suggested can be ticked too: the old price kept in Notes.
+  const kt = row.querySelector('.sync-keep-t input');
+  kt.checked = true; kt.dispatchEvent(new Event('change', { bubbles: true }));
   row.querySelector('.sync-one-btn').click();
   await new Promise(r => setTimeout(r, 400));
   return {
@@ -159,6 +170,7 @@ const one = await page.evaluate(async () => {
 });
 console.log('   ', JSON.stringify(one));
 ok('Update sends only that property', one.sent && one.sent.dryRun === false && JSON.stringify(one.sent.only) === '["ANR003"]', JSON.stringify(one.sent));
+ok('…with the old values ticked to keep in Notes (one ticked by hand)', JSON.stringify(one.sent.keep) === '{"ANR003":["startingPrice"]}', JSON.stringify(one.sent && one.sent.keep));
 ok('the row shows it was applied', one.applied && one.btnDisabled, JSON.stringify(one));
 ok('the remaining count drops', /Apply all 2/.test(one.applyAll || ''), one.applyAll);
 
@@ -182,6 +194,7 @@ const many = await page.evaluate(async () => {
 console.log('   ', JSON.stringify(many));
 ok('Apply selected names how many are ticked', /Apply 1 selected/.test(many.label || ''), many.label);
 ok('…and sends exactly those', JSON.stringify(many.sent.only) === '["VLC001"]', JSON.stringify(many.sent));
+ok('…the suggested "Keep old in Notes" goes with it (parking), the rest just updates', JSON.stringify(many.sent.keep) === '{"VLC001":["parking"]}', JSON.stringify(many.sent.keep));
 ok('…and marks them applied', many.applied, String(many.applied));
 ok('only the untouched one is left', /Apply all 1/.test(many.applyAll || ''), many.applyAll);
 
@@ -202,8 +215,34 @@ ok('A sheet column is listed by its own name, with its new value', /Registration
 await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
 const fits = await page.evaluate(() => { const f = [...document.querySelectorAll('#syncBody .sync-f')].find(x => /Registration/.test(x.textContent)); const b = document.getElementById('syncBody'); return !!f && f.getBoundingClientRect().right <= b.getBoundingClientRect().right + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1; });
 ok('…on a phone it wraps inside the dialog, no sideways scroll', fits);
+const keep = await page.evaluate(() => ({
+  boxes: [...document.querySelectorAll('#syncBody .sync-keep-t input')].map(i => i.dataset.id + ':' + i.dataset.field + ':' + (i.checked ? 'on' : 'off')),
+  hint: (document.querySelector('#syncBody .sync-keep-hint') || {}).textContent || '' }));
+ok('Every update line with an old value can keep it in Notes; the shortened one comes ticked', keep.boxes.includes('VLC001:parking:on') && keep.boxes.includes('VLC001:possession:off') && !keep.boxes.some(b => /Registration/.test(b)) && /Keep old in Notes/.test(keep.hint) && /just an update/.test(keep.hint), JSON.stringify(keep));
+
+// Detail earlier syncs replaced: tick what to keep, the rest is "just an update".
+await page.evaluate(() => { const b = document.getElementById('syncRecover'); if (b) { b.open = true; b.scrollIntoView(); } });
+await page.locator('#syncRecover').screenshot({ path: join(OUT, 'sync-recover.png') }).catch(() => {});
+await page.locator('#syncBody .sync-row[data-sync-id="VLC001"]').screenshot({ path: join(OUT, 'sync-keep-row.png') }).catch(() => {});
+const rec = await page.evaluate(async () => {
+  const box = document.getElementById('syncRecover');
+  if (!box) return { none: true };
+  box.open = true;
+  const cbs = [...box.querySelectorAll('.sync-rec-cb')];
+  const listed = cbs.length, allTicked = cbs.every(c => c.checked);
+  cbs[1].checked = false;   // the door facing: just an update
+  box.querySelector('.sync-rec-btn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const after = document.getElementById('syncRecover');
+  return { listed, allTicked, sent: window.__syncCalls[window.__syncCalls.length - 1], done: (after && after.querySelector('.sync-rec-done') || {}).textContent || '', plain: !!after && after.tagName === 'DIV' && !after.querySelector('summary') };
+});
+ok('Earlier syncs: each old value listed, ticked to start with', rec.listed === 2 && rec.allTicked, JSON.stringify(rec));
+ok('…Save sends the ticked to keep and the unticked as just an update', rec.sent && JSON.stringify(rec.sent.recover) === JSON.stringify([{ id: 'TNAG0002', field: 'parking', from: '1 Open Car Park + Space for 1 Additional Car' }]) && JSON.stringify(rec.sent.decline) === JSON.stringify([{ id: 'TNAG0002', field: 'Main Door Facing', from: 'East & South Entrance' }]), JSON.stringify(rec.sent));
+ok('…and says what was done, in place of the list (no stray "Details" heading)', /saved in the Notes of 1 property/.test(rec.done) && /1 left as just an update/.test(rec.done) && rec.plain, JSON.stringify(rec));
 await page.screenshot({ path: join(OUT, 'sync-phone.png') });
 await page.setViewportSize({ width: 1440, height: 950 }); await page.waitForTimeout(200);
+await page.locator('#syncBody .sync-row[data-sync-id="VLC001"]').screenshot({ path: join(OUT, 'sync-keep-row-desk.png') }).catch(() => {});
+await page.locator('#syncRecover').screenshot({ path: join(OUT, 'sync-recover-desk.png') }).catch(() => {});
 
 // ── 3. Deleting a property that cards and leads still point at says so first ──
 console.log('\n── delete warning ──');

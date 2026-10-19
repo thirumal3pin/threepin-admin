@@ -339,6 +339,121 @@ export function diffProperty(before, after){
   return changes;
 }
 
+// ── Nothing lost when the sheet shortens a value ──
+// The sheet often holds less than the dashboard: its Car_Parking_(No) column is a count, so
+// "3 cars per floor (9 spaces in total)" becomes "9". The sheet still wins the field — but the old
+// value goes into the property's Notes, so the detail is kept. Only when the new value is a
+// REDUCTION of the old one (every word of it already in the old one, or blank) that drops more than
+// formatting (1219 → 1,219, Rs. → ₹) or the field's own name ("Power Backup Available" → "Available").
+// A replacement — a new price, a new link, Available → Sold — is the sheet's update, not lost detail.
+// A value cleared because it now sits whole in another field (Nearby → Nearby landmark) is not lost.
+const KEEP_STOP = new Set(['rs', 'inr', 'per', 'the', 'a', 'an', 'of', 'in', 'and', 'is', 'to', 'for', 'with', 'at', 'on', 'chennai', 'sq', 'ft', 'sqft']);
+const words = s => String(s == null ? '' : s).toLowerCase().replace(/(\d),(?=\d)/g, '$1').match(/[a-z]+|\d+(?:\.\d+)?/g) || [];
+const fieldWords = f => new Set(words(String(f).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ')));
+const phrase = s => ' ' + words(s).join(' ') + ' ';
+export function detailLost(field, from, to, after){
+  if(!String(from == null ? '' : from).trim()) return false;
+  const fromW = new Set(words(from)), toW = words(to).filter(w => !KEEP_STOP.has(w));
+  if(toW.some(w => !fromW.has(w))) return false;   // a replacement, not a reduction
+  const own = fieldWords(field), kept = new Set(toW);
+  if(![...fromW].some(w => !KEEP_STOP.has(w) && !own.has(w) && !kept.has(w))) return false;
+  // Cleared: kept if the whole old value now sits in another field.
+  if(!String(to == null ? '' : to).trim()){
+    const p = phrase(from);
+    const others = Object.entries(after || {}).flatMap(([k, v]) => k === 'sheetExtras' ? Object.entries(v || {}).filter(([c]) => c !== field).map(([, x]) => x) : k === field ? [] : [v]);
+    if(others.some(v => phrase(v).includes(p))) return false;
+  }
+  return true;
+}
+// A field's name for a person: "parkingType" → "Parking type"; a sheet column keeps its own name.
+const fieldLabel = f => /[ _()]/.test(f) ? String(f) : String(f).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().replace(/^./, c => c.toUpperCase());
+// The note written for one property: each old value, and what the sheet put in its place.
+const dayIST = t => new Date(t || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const keepLine = c => `• ${fieldLabel(c.field)}${c.takenAt ? ` (until ${dayIST(c.takenAt)})` : ''}: ${c.from}${c.to ? ` — the sheet now says “${c.to}”` : ' — the sheet has it blank now'}`;
+export function keepNoteText(items, when){
+  return `Kept from before the Inventory sheet sync (${dayIST(when)}), so the detail is not lost:\n` + items.map(keepLine).join('\n');
+}
+
+// The person's ticks: for each property, exactly the fields whose OLD value goes into its Notes (an
+// old value only — a field with nothing before has nothing to keep). Replaces the suggestion.
+export function keepFromChoice(plan, keep){
+  return plan.updates.map(u => {
+    const ticked = new Set((Array.isArray(keep && keep[u.id]) ? keep[u.id] : []).map(String));
+    return { id: u.id, items: u.changes.filter(c => ticked.has(c.field) && String(c.from || '').trim()).map(c => ({ field: c.field, from: c.from, to: c.to })) };
+  }).filter(k => k.items.length);
+}
+
+// ── Detail that EARLIER syncs replaced (before 19 Oct 2026 nothing was kept) ──
+// Every sync run snapshots what it changed (syncBackups). Per property: each sheet-owned field whose
+// old value had detail its current value does not (detailLost), one per distinct old value — less
+// what was already recovered into Notes. The person picks which to keep; nothing is written here.
+const str = v => (v == null ? '' : String(v)).trim();
+const lostKey = (id, field, from) => id + '\u0000' + field + '\u0000' + str(from);
+// "Just an update" choices — old values the person chose NOT to keep — so they are not offered again.
+// Kept beside the snapshots (server-only; no tenantId field, so the snapshot query never sees it).
+const decisionsRef = db => db.collection('syncBackups').doc('keepDecisions_' + TENANT_ID);
+export async function findLostDetail(db, existing){
+  const current = existing || await loadExistingProperties(db);
+  const owned = new Set(Object.values(FIELD_MAP));
+  const snap = await db.collection('syncBackups').where('tenantId', '==', TENANT_ID).get();
+  // A run made since the dialog asks (keepDecided) had each old value decided there: not offered again.
+  const runs = snap.docs.map(d => d.data()).filter(r => !r.keepDecided).sort((a, b) => String(a.takenAt).localeCompare(String(b.takenAt)));
+  const declined = new Set(((await decisionsRef(db).get()).data() || {}).declined || []);
+  const lost = new Map();
+  for(const run of runs){
+    for(const p of run.properties || []){
+      const now = current.get(p.id), old = p.data || {};
+      if(!now) continue;
+      const items = lost.get(p.id) || [];
+      const add = (field, from, to) => {
+        if(!str(from) || str(from) === str(to) || !detailLost(field, from, to, now) || declined.has(lostKey(p.id, field, from))) return;
+        if(items.some(i => i.field === field && i.from === str(from))) return;
+        items.push({ field, from: str(from), to: str(to), takenAt: run.takenAt });
+      };
+      for(const k of owned) if(k !== 'sheetExtras' && k in old) add(k, old[k], now[k]);
+      for(const [col, v] of Object.entries(old.sheetExtras || {})) add(col, v, (now.sheetExtras || {})[col]);
+      if(items.length) lost.set(p.id, items);
+    }
+  }
+  // Less what is already in Notes (each recovered note lists the old values it holds).
+  const entries = [...lost];
+  const done = await Promise.all(entries.map(([id]) => db.collection('properties').doc(id).collection('notes').where('source', '==', 'inventory-sync-recovered').get()));
+  const out = [];
+  entries.forEach(([id, items], n) => {
+    const had = new Set(done[n].docs.flatMap(d => (d.data().items || []).map(i => i.field + '\u0000' + i.from)));
+    const left = items.filter(i => !had.has(i.field + '\u0000' + i.from));
+    if(left.length) out.push({ id, name: (current.get(id) || {}).name || '', items: left });
+  });
+  return out;
+}
+// The picked ones, into Notes: one note per property; the ones left unticked remembered as "just an
+// update". `picks` / `declines` = [{ id, field, from }] — each matched against what findLostDetail
+// finds now, so only a real old value of that property is ever written or recorded.
+export async function writeRecoveredNotes(db, picks, declines){
+  const want = new Set((picks || []).map(p => lostKey(p.id, p.field, p.from)));
+  const skip = new Set((declines || []).map(p => lostKey(p.id, p.field, p.from)));
+  const found = await findLostDetail(db);
+  const real = new Set(found.flatMap(f => f.items.map(i => lostKey(f.id, i.field, i.from))));
+  const newly = [...skip].filter(k => real.has(k) && !want.has(k));
+  if(newly.length){
+    const ref = decisionsRef(db), had = ((await ref.get()).data() || {}).declined || [];
+    await ref.set({ kind: 'keep-decisions', declined: [...new Set([...had, ...newly])], updatedAt: new Date().toISOString() });
+  }
+  const now = Date.now(), written = [];
+  for(const f of found){
+    const items = f.items.filter(i => want.has(lostKey(f.id, i.field, i.from)));
+    if(!items.length) continue;
+    const id = `n${now}r${written.length}`;
+    await db.collection('properties').doc(f.id).collection('notes').doc(id).set({
+      id, kind: 'note', eventDate: '', createdAt: now, author: 'Inventory sync', source: 'inventory-sync-recovered',
+      text: 'Kept from before earlier Inventory sheet syncs, so the detail is not lost:\n' + items.map(keepLine).join('\n'),
+      items: items.map(i => ({ field: i.field, from: i.from }))
+    });
+    written.push(f.id);
+  }
+  return written;
+}
+
 // ── Pending-edit protection ──
 // A dashboard edit that hasn't been carried into the Inventory sheet yet must
 // NOT be overwritten by a sync — otherwise "edit in dashboard, forget to
@@ -376,7 +491,7 @@ export async function loadPendingProtections(db){
 export function planSync(rows, existing, onlyId, queueFill, protections){
   const headers = rows[0] || [];
   const plan = { headers, creates: [], updates: [], unchanged: 0, writes: [], matchedIds: new Set(),
-                 protectedFields: [], skippedDeleted: [], staleExtras: [] };
+                 protectedFields: [], skippedDeleted: [], staleExtras: [], keepNotes: [] };
 
   for(let i = 1; i < rows.length; i++){
     let prop = rowToProperty(headers, rows[i] || []);
@@ -424,6 +539,12 @@ export function planSync(rows, existing, onlyId, queueFill, protections){
 
     if(!before) prop = withCreateDefaults(prop);
     const changes = diffProperty(before, prop);
+    // An old value with detail the new data does not have: marked for the preview, kept in Notes on write.
+    if(before){
+      const keep = changes.filter(c => detailLost(c.field, c.from, c.to, prop));
+      keep.forEach(c => { c.keep = true; });
+      if(keep.length) plan.keepNotes.push({ id: prop.id, items: keep.map(c => ({ field: c.field, from: c.from, to: c.to })) });
+    }
 
     // sheetExtras keys the sheet no longer produces. They matter because a
     // { merge: true } write deep-merges maps: it can add and overwrite keys
@@ -470,14 +591,28 @@ export function unmappedHeaders(headers){
 // drop a key from a map is to replace the whole field, and update() does
 // exactly that for a top-level field, unlike set({merge:true}). It runs after
 // its own set() so the document is guaranteed to exist by then.
-export async function commitWrites(db, writes, staleExtras = []){
+export async function commitWrites(db, writes, staleExtras = [], keepNotes = []){
   for(let i = 0; i < writes.length; i += 400){
     const batch = db.batch();
     writes.slice(i, i + 400).forEach(p => batch.set(db.collection('properties').doc(p.id), p, { merge: true }));
     await batch.commit();
   }
-  if(!staleExtras.length) return;
   const byId = new Map(writes.map(p => [p.id, p]));
+  // The old values the sheet shortened, into each written property's Notes (properties/{id}/notes —
+  // the dashboard's Notes & events log). Only for properties actually written by this run.
+  const notes = keepNotes.filter(k => byId.has(k.id) && k.items && k.items.length);
+  const now = Date.now();
+  for(let i = 0; i < notes.length; i += 400){
+    const batch = db.batch();
+    notes.slice(i, i + 400).forEach((k, j) => {
+      const id = `n${now}s${i + j}`;
+      batch.set(db.collection('properties').doc(k.id).collection('notes').doc(id),
+        { id, text: keepNoteText(k.items, now), kind: 'note', eventDate: '', createdAt: now, author: 'Inventory sync', source: 'inventory-sync',
+          items: k.items.map(c => ({ field: c.field, from: c.from })) });
+    });
+    await batch.commit();
+  }
+  if(!staleExtras.length) return;
   const pending = staleExtras.filter(st => byId.has(st.id));
   for(let i = 0; i < pending.length; i += 400){
     const batch = db.batch();

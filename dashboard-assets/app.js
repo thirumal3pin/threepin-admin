@@ -2226,13 +2226,23 @@ let syncBusy = false;
 
 // `only` is the list of property ids the person ticked. Absent means the whole
 // plan, which is what the Apply-all button still sends.
+// On an apply, the "Keep old in Notes" ticks go with it — for every property applied, the fields whose
+// old value is kept (none ticked: just the update).
 async function callSync(dryRun, only){
+  const body = only && only.length ? { dryRun, only } : { dryRun };
+  if(!dryRun){
+    const ids = only && only.length ? only : syncPendingChanges().map(c => c.id);
+    body.keep = Object.fromEntries(ids.map(id => [id, [...(syncKeep.get(id) || [])]]));
+  }
+  return postSync(body);
+}
+async function postSync(body){
   const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
   if(!token) throw new Error('You appear to be signed out. Reload and sign in again.');
   const res = await fetch('/api/sync-inventory', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(only && only.length ? { dryRun, only } : { dryRun })
+    body: JSON.stringify(body)
   });
   let data;
   try{ data = await res.json(); }
@@ -2247,6 +2257,55 @@ async function callSync(dryRun, only){
 let syncPlanData = null;
 let syncSelected = new Set();
 let syncApplied = new Set();
+// Per property, the fields whose old value is kept in Notes when it is applied (the person's ticks;
+// pre-ticked where the sheet's value has less than the dashboard's).
+let syncKeep = new Map();
+function toggleSyncKeep(cb){
+  const id = cb.dataset.id, field = cb.dataset.field;
+  const set = syncKeep.get(id) || new Set();
+  if(cb.checked) set.add(field); else set.delete(field);
+  syncKeep.set(id, set);
+  cb.closest('.sync-keep-t').classList.toggle('on', cb.checked);
+}
+// Detail earlier syncs replaced: the person ticks what to keep in Notes; the rest is "just an update".
+let syncRecover = [];
+async function saveSyncRecover(btn){
+  const boxes = [...document.querySelectorAll('#syncBody .sync-rec-cb')];
+  const pick = cb => { const [p, i] = cb.dataset.k.split('.').map(Number); const r = syncRecover[p], it = r && r.items[i]; return it ? { id: r.id, field: it.field, from: it.from } : null; };
+  const recover = boxes.filter(cb => cb.checked).map(pick).filter(Boolean);
+  const decline = boxes.filter(cb => !cb.checked).map(pick).filter(Boolean);
+  if(!recover.length && !decline.length) return;
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try{
+    const d = await postSync({ recover, decline });
+    const box = document.getElementById('syncRecover');
+    if(box) box.outerHTML = `<div class="sync-recover" id="syncRecover"><div class="sync-rec-done">✓ ${d.recovered ? `Old values saved in the Notes of ${d.recovered} propert${d.recovered===1?'y':'ies'}` : 'Nothing added to Notes'}${decline.length ? ` · ${decline.length} left as just an update` : ''}.</div></div>`;
+    showToast(d.recovered ? `✓ Kept in Notes for ${d.recovered} propert${d.recovered===1?'y':'ies'}` : '✓ Saved');
+  }catch(e){
+    btn.disabled = false; btn.textContent = original;
+    showToast(e.message);
+  }
+}
+function syncRecoverHtml(list){
+  syncRecover = list || [];
+  if(!syncRecover.length) return '';
+  const n = syncRecover.reduce((a, p) => a + p.items.length, 0);
+  const day = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day:'numeric', month:'short' }); };
+  return `<details class="sync-recover" id="syncRecover"${(syncPlanData && (syncPlanData.created + syncPlanData.updated) === 0) ? ' open' : ''}>
+    <summary><b>📝 Detail earlier syncs replaced</b><span>${syncRecover.length} propert${syncRecover.length===1?'y':'ies'} · ${n} old value${n===1?'':'s'} — pick what to keep in Notes</span></summary>
+    <div class="sync-rec-hint"><b>Ticked:</b> the old value is saved in that property's Notes. <b>Unticked:</b> just an update — left as the sheet has it, and not asked again. The property itself is not changed either way.</div>
+    ${syncRecover.map((p, pi) => `<div class="sync-rec-p">
+      <div class="sync-rec-h"><span class="chg-code">${escapeHtml(p.id)}</span><span class="chg-name">${escapeHtml(p.name || '')}</span></div>
+      ${p.items.map((it, ii) => `<label class="sync-rec-i"><input type="checkbox" class="sync-rec-cb" data-k="${pi}.${ii}" checked>
+        <span class="sync-rec-t"><span class="chg-field">${escapeHtml(it.field)}</span>
+          <span class="sync-rec-old">${escapeHtml(it.from)}</span>
+          <span class="chg-arrow">→</span> <span class="chg-to">${escapeHtml(it.to || '—')}</span>
+          ${it.takenAt ? `<span class="sync-rec-when">until ${escapeHtml(day(it.takenAt))}</span>` : ''}</span></label>`).join('')}
+    </div>`).join('')}
+    <div class="sync-rec-bar"><button type="button" class="sync-rec-btn" onclick="saveSyncRecover(this)">Save choices</button></div>
+  </details>`;
+}
 
 function syncPendingChanges(){
   return ((syncPlanData && syncPlanData.changes) || []).filter(c => !syncApplied.has(c.id));
@@ -2268,6 +2327,7 @@ function markSyncRowApplied(id){
   row.classList.add('applied');
   const pick = row.querySelector('.sync-pick');
   if(pick){ pick.checked = false; pick.disabled = true; }
+  row.querySelectorAll('.sync-keep-t input').forEach(cb => { cb.disabled = true; });   // decided with the write
   const one = row.querySelector('.sync-one-btn');
   if(one){ one.textContent = 'Updated'; one.disabled = true; }
 }
@@ -2295,13 +2355,19 @@ function renderSyncPreview(d){
   syncPlanData = d;
   syncSelected = new Set();
   syncApplied = new Set();
+  // Pre-ticked: where the sheet's value has less than the dashboard's.
+  syncKeep = new Map((d.changes || []).map(c => [c.id, new Set((c.fields || []).filter(f => f.keep).map(f => f.field))]));
   const rows = (d.changes || []).map(c => {
+    const sid = escapeHtml(c.id);
+    // Every line with an old value can keep it in Notes — the person decides; the sheet's value applies either way.
+    const keepT = f => c.kind === 'update' && String(f.from || '').trim()
+      ? `<label class="sync-keep-t${f.keep ? ' on' : ''}" title="Save the old value in this property's Notes — the sheet's value is applied either way">
+          <input type="checkbox" data-id="${sid}" data-field="${escapeHtml(f.field)}"${f.keep ? ' checked' : ''} onchange="toggleSyncKeep(this)"> 📝 Keep old in Notes</label>` : '';
     const fields = (c.fields || []).map(f =>
       `<div class="sync-f"><span class="chg-field">${escapeHtml(f.field)}</span>
         <span class="chg-from">${escapeHtml(f.from || '—')}</span>
         <span class="chg-arrow">→</span>
-        <span class="chg-to">${escapeHtml(f.to || '—')}</span></div>`).join('');
-    const sid = escapeHtml(c.id);
+        <span class="chg-to">${escapeHtml(f.to || '—')}</span>${keepT(f)}</div>`).join('');
     return `<div class="sync-row ${c.kind==='create'?'new':''}" data-sync-id="${sid}">
       <div class="sync-head">
         <label class="sync-pick-l"><input type="checkbox" class="sync-pick" aria-label="Select ${sid}"
@@ -2338,9 +2404,12 @@ function renderSyncPreview(d){
            <label class="sync-pick-l"><input type="checkbox" id="syncPickAll" onchange="toggleSyncAll(this.checked)"> Select all</label>
            <span class="sync-pickbar-hint">Tick the ones you want, or press Update on a single property.</span>
          </div>
+         ${(d.changes || []).some(c => c.kind === 'update')
+            ? `<div class="sync-keep-hint">📝 On each line: tick <b>Keep old in Notes</b> to save the dashboard's old value in that property's Notes, or leave it as <b>just an update</b>. The sheet's value is applied either way. Ticked for you where the sheet has less (a count in place of “3 cars per floor…”).</div>` : ''}
          ${(d.changesTotal || 0) > (d.changes || []).length
             ? `<div class="sync-more">Showing ${(d.changes||[]).length} of ${d.changesTotal} changed properties &mdash; Apply all still writes every one.</div>` : ''}
-         <div class="sync-list">${rows}</div>`}`;
+         <div class="sync-list">${rows}</div>`}
+    ${syncRecoverHtml(d.recover)}`;
 }
 
 async function openSyncModal(){

@@ -111,7 +111,7 @@ async function main(){
   plan.updates.forEach(u => {
     console.log(`  ~ UPDATE ${u.id.padEnd(10)} ${trunc(u.name, 46)}`);
     u.changes.slice(0, 6).forEach(c =>
-      console.log(`      ${c.field.padEnd(18)} ${trunc(c.from, 28)}  →  ${trunc(c.to, 28)}`));
+      console.log(`      ${c.field.padEnd(18)} ${trunc(c.from, 28)}  →  ${trunc(c.to, 28)}${c.keep ? '   (shortened — offered in the dashboard to keep in Notes)' : ''}`));
     if(u.changes.length > 6) console.log(`      …and ${u.changes.length - 6} more field(s)`);
   });
 
@@ -157,7 +157,20 @@ async function main(){
     .sort().reverse().slice(40)
     .forEach(f => { try { fs.unlinkSync(path.join(backupDir, f)); } catch {} });
 
-  await commitWrites(db, plan.writes, plan.staleExtras);
+  // A run on the schedule has nobody to ask, so it writes no Notes. Where it shortens a value, the
+  // property's prior state goes to syncBackups (as the dashboard's runs do), and the dashboard's Sync
+  // dialog offers those old values under "Detail earlier syncs replaced" — the person ticks what to keep.
+  const offer = plan.keepNotes.filter(k => existing.has(k.id));
+  if(offer.length){
+    const runId = `sync-cli-${new Date().toISOString().replace(/[:.]/g,'-')}`;
+    await db.collection('syncBackups').doc(runId).set({
+      takenAt: new Date().toISOString(), tenantId: TENANT_ID, triggeredBy: 'scheduled sync',
+      note: 'Prior state of the properties this scheduled run shortened, for the dashboard to offer into Notes.',
+      properties: offer.map(k => ({ id: k.id, data: existing.get(k.id) }))
+    });
+    console.log(`\n${offer.length} propert${offer.length===1?'y':'ies'} had a value shortened — offered in the dashboard's Sync dialog to keep in Notes.`);
+  }
+  await commitWrites(db, plan.writes, plan.staleExtras);   // no Notes: the person picks them in the dashboard
   console.log(`\n✓ Wrote ${plan.writes.length} propert${plan.writes.length === 1 ? 'y' : 'ies'}. ${plan.orphans.length} left untouched.`);
 }
 

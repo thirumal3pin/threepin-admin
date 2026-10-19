@@ -1,14 +1,19 @@
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import {
   getSheetsToken, readInventoryRows, readQueueFill, planSync, unmappedHeaders,
-  commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID
+  commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID,
+  findLostDetail, writeRecoveredNotes, keepFromChoice
 } from './_inventory-shared.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
 // scripts/sync-inventory.js — both import api/_inventory-shared.js, so the
 // button and the scheduled run can never disagree about what a column means.
 //
-// POST with a Firebase ID token. Body: { dryRun?: boolean }.
+// POST with a Firebase ID token. Body: { dryRun?: boolean, only?: [ids], keep?: { id: [fields] },
+//   recover?: [{ id, field, from }], decline?: [{ id, field, from }] }.
+// keep: for each property applied, the fields whose OLD value goes into its Notes (the person's ticks);
+// absent, the suggestion (detailLost) is used. recover / decline: old values earlier syncs replaced —
+// the ticked into Notes, the unticked remembered as "just an update" — nothing else happens on that call.
 // A dry run reports what would change and writes nothing, which is what the
 // dashboard requests first so the user can see the diff before committing.
 
@@ -48,6 +53,16 @@ export async function POST(request){
   catch { return json({ error: 'Server credential is malformed.' }, 500); }
 
   try {
+    // Detail earlier syncs replaced: only the old values picked, into Notes. Nothing else changes.
+    if(Array.isArray(body.recover) || Array.isArray(body.decline)){
+      const clean = list => (Array.isArray(list) ? list : []).filter(p => p && p.id && p.field).slice(0, 500)
+        .map(p => ({ id: String(p.id), field: String(p.field), from: String(p.from == null ? '' : p.from) }));
+      const picks = clean(body.recover), declines = clean(body.decline);
+      if(!picks.length && !declines.length) return json({ error: 'Nothing was picked.' }, 400);
+      const ids = await writeRecoveredNotes(getDb(), picks, declines);
+      return json({ ok: true, recovered: ids.length, ids, declined: declines.length });
+    }
+
     const sheetsToken = await getSheetsToken(sa);
     const rows = await readInventoryRows(sheetsToken);
     const queueFill = await readQueueFill(sheetsToken);
@@ -79,11 +94,13 @@ export async function POST(request){
       changes: [...plan.creates.map(c => ({ id:c.id, name:c.name, kind:'create', fields:[] })),
                 ...plan.updates.map(u => ({
                   id: u.id, name: u.name, kind: 'update',
-                  fields: u.changes.slice(0, 40).map(c => ({ field:c.field, from:c.from, to:c.to })),
+                  fields: u.changes.slice(0, 40).map(c => ({ field:c.field, from:c.from, to:c.to, ...(c.keep ? { keep:true } : {}) })),
                   moreFields: Math.max(u.changes.length - 40, 0)
                 }))].slice(0, 400),
       changesTotal: plan.creates.length + plan.updates.length
     };
+    // The preview also lists what earlier syncs replaced, for the person to pick into Notes.
+    if(dryRun) summary.recover = (await findLostDetail(db, existing)).slice(0, 200);
 
     if(dryRun || !plan.writes.length) return json({ ok: true, ...summary });
 
@@ -94,10 +111,15 @@ export async function POST(request){
     if(only){
       plan.writes = plan.writes.filter(p => only.has(p.id));
       plan.staleExtras = plan.staleExtras.filter(st => only.has(st.id));
+      plan.keepNotes = plan.keepNotes.filter(k => only.has(k.id));
       if(!plan.writes.length){
         return json({ error: 'Those properties have nothing left to change — the sheet may have moved on. Re-run the preview.' }, 409);
       }
     }
+
+    // The person's ticks decide which old values go into Notes: exactly the fields ticked, per
+    // property (an old value only — a field with nothing before has nothing to keep).
+    if(body.keep && typeof body.keep === 'object') plan.keepNotes = keepFromChoice(plan, body.keep);
 
     // Vercel's filesystem is ephemeral, so the CLI's file backup is no use
     // here. The prior state of every property this run modifies goes into
@@ -112,12 +134,13 @@ export async function POST(request){
         takenAt: new Date().toISOString(),
         tenantId: TENANT_ID,
         triggeredBy: user.email || user.uid || '',
+        keepDecided: true,   // each old value was kept in Notes or not by the person's ticks: never offered again
         note: 'Pre-sync snapshot of every property this run modified. Newly created properties are absent by design.',
         properties: before
       });
     }
 
-    await commitWrites(db, plan.writes, plan.staleExtras);
+    await commitWrites(db, plan.writes, plan.staleExtras, plan.keepNotes);
     return json({ ok: true, ...summary, written: plan.writes.length,
                   appliedIds: plan.writes.map(p => p.id),
                   backupId: before.length ? runId : null });
