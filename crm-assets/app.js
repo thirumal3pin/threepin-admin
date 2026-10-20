@@ -3073,6 +3073,38 @@ function keepScrollAcross(render, rootId, selectors){
 renderBoard = keepScrollAcross(renderBoard, 'kanbanView', ['.kanban', '.kcol', '.kcol-body']);
 renderList = keepScrollAcross(renderList, 'listView', ['.lv-scroll', '.list-view']);
 
+// ═══════ BOARD SCROLL AXIS LOCK ═══════
+// The board scrolls both ways in one box, so a trackpad swipe that is not
+// perfectly straight drifted diagonally — scrolling down a column slid the
+// board sideways, and reading across the stages crept down. A swipe now
+// locks to the direction it starts in and keeps it until the fingers (and
+// the momentum after them) stop. A wheel event already on one axis — every
+// mouse wheel, and shift + wheel — is left to the browser untouched.
+(function lockBoardScrollAxis(){
+  const view = document.getElementById('kanbanView');
+  if(!view) return;
+  const IDLE_MS = 160;
+  let axis = null, lastAt = 0;
+  view.addEventListener('wheel', e => {
+    if(e.ctrlKey) return; // pinch-zoom
+    const board = e.target.closest && e.target.closest('.kanban');
+    if(!board) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? board.clientHeight : 1;
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    const now = e.timeStamp || performance.now();
+    if(!axis || now - lastAt > IDLE_MS) axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    lastAt = now;
+    if(!dx || !dy) return; // already straight: native scrolling, smoothing and chaining
+    e.preventDefault();
+    if(axis === 'x'){ board.scrollLeft += dx; return; }
+    const before = board.scrollTop;
+    board.scrollTop += dy;
+    // Past the board's own bottom or top the page takes the rest, as it would natively.
+    const left = dy - (board.scrollTop - before);
+    if(Math.abs(left) >= 1) window.scrollBy(0, left);
+  }, { passive:false });
+})();
+
 // ═══════ LIST VIEW SCROLL AFFORDANCE ═══════
 // The table is wider than any screen. Without a visible edge on the side that
 // still has content, the box looks finished and nobody thinks to scroll it —
