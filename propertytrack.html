@@ -155,7 +155,7 @@
     <div class="tk-box-hdr"><b>Book the shoot</b><button type="button" class="tk-x" onclick="closeShootModal()">✕</button></div>
     <div class="tk-box-body">
       <label for="shDate">Date</label><input id="shDate" type="date">
-      <label for="shTime">Time</label><input id="shTime" type="time" step="1800" value="10:00">
+      <label for="shTime">Time</label><select id="shTime"></select>
       <label for="shWho">Assigned to</label>
       <select id="shWho" onchange="shooterPicked(this)"></select>
       <label for="shContact">Site contact</label><input id="shContact" type="tel" placeholder="Who opens the door">

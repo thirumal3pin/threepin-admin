@@ -2306,3 +2306,5 @@ button.tk-ref:hover { color: var(--ink); text-decoration: underline; }
 .mm-2col select, .mm-2col input { width: 100%; }
 .mm-from { font-size: 12.5px; line-height: 1.45; color: var(--ink2); background: var(--blue-bg); border: 1px solid var(--blue-line); border-radius: var(--r1, 8px); padding: 8px 11px; margin-bottom: 10px; }
 #mModal .mm-filled { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue-line); background: var(--blue-bg); }
+/* The day and the time it goes out, side by side: the time is a list in 30-minute steps */
+.pg-when { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 8px; }

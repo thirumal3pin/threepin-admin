@@ -971,3 +971,19 @@ export function toCsv(trackers) {
   });
   return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
 }
+
+// ── Times, picked in 30-minute steps ──
+// The browser's own time picker lists every minute (Chrome ignores step="1800"), so a time is a list
+// instead: 12:00 AM … 11:30 PM. hm is "HH:MM"; a time off the half hour (saved before) is kept in the
+// list so it is not lost. empty: the label of a "no time" first option, or none.
+export function timeOptions(hm, empty) {
+  const p = n => String(n).padStart(2, '0');
+  const label = m => { const h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}:${p(mm)} ${h < 12 ? 'AM' : 'PM'}`; };
+  const cur = /^\d{1,2}:\d{2}$/.test(String(hm || '')) ? hm.split(':').map(Number) : null;
+  const curM = cur ? cur[0] * 60 + cur[1] : -1;
+  const mins = [];
+  for (let m = 0; m < 1440; m += 30) mins.push(m);
+  if (curM >= 0 && curM % 30) mins.push(curM), mins.sort((a, b) => a - b);
+  return (empty != null ? `<option value=""${curM < 0 ? ' selected' : ''}>${empty}</option>` : '')
+    + mins.map(m => `<option value="${p(Math.floor(m / 60))}:${p(m % 60)}"${m === curM ? ' selected' : ''}>${label(m)}</option>`).join('');
+}

@@ -35,6 +35,7 @@ import * as EF from './edit-flow.js';
 import * as CFG from './track-config.js';
 import * as TM from '../shared-assets/task-model.js';
 import * as CAL from './shoot-calendar.js';
+import { timeOptions } from './posting.js';
 
 // ═══════ STATE ═══════
 let listings = [];
@@ -3044,7 +3045,7 @@ function openShootModal(id) {
   shootFor = id;
   const d = x.shootAt ? new Date(x.shootAt) : null;
   document.getElementById('shDate').value = d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
-  document.getElementById('shTime').value = d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '10:00';
+  document.getElementById('shTime').innerHTML = timeOptions(d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '10:00');
   // Picked from the team (and anyone sent before), never retyped.
   const who = document.getElementById('shWho');
   who.innerHTML = shooterOptions(x.shootAssignee);

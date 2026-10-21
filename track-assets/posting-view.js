@@ -1635,7 +1635,7 @@ function openDlg(kind, id, key) {
     const start = (c && c.at) || (dayBase ? dayBase + 10 * 3600000 : nextHour());
     title = `Schedule ${chan.label}`;
     body = `<p class="tk-hint" style="margin-top:0">${nm}${dayBase ? ' · planned ' + esc(G.dayLabel(dayBase)) : ''}</p>
-      <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" step="1800" value="${localInput(start)}">
+      <label for="pgAt">Date and time it goes out</label><div class="pg-when"><input id="pgAt" type="date" value="${localInput(start).slice(0, 10)}"><select id="pgAtTime" aria-label="Time it goes out">${G.timeOptions(localInput(start).slice(11))}</select></div>
       <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${gateHtml(t, 'schedule', key)}${c && c.status === 'scheduled' ? `
       <div class="pg-unsched">
         <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
@@ -1779,7 +1779,7 @@ function pgBulkRender() {
   const host = $('pgBulkList'); if (!host || !dlg || !dlg.entries) return;
   host.innerHTML = dlg.entries.map((e, i) => `<div class="bk-row" data-n="${e.n}">
       <input class="bk-day" type="date" value="${e.day}" aria-label="Date for entry ${i + 1}" onchange="pgBulkWhen(${e.n}, 'day', this.value)">
-      <input class="bk-time" type="time" step="1800" value="${e.time}" aria-label="Time for entry ${i + 1}, optional" onchange="pgBulkWhen(${e.n}, 'time', this.value)">
+      <select class="bk-time" aria-label="Time for entry ${i + 1}, optional" onchange="pgBulkWhen(${e.n}, 'time', this.value)">${G.timeOptions(e.time, 'No time')}</select>
       <div class="bk-prop">
         ${e.sel
           ? `<div class="bk-chip"><span class="bk-kind">${e.sel.kind === 't' ? 'Tracked' : 'Dashboard'}</span><b>${esc(e.sel.label)}</b><button type="button" class="bk-unpick" onclick="pgBulkUnpick(${e.n})" aria-label="Change property">✕</button></div>`
@@ -2208,7 +2208,7 @@ window.pgOpenSeriesDlg = id => {
     <div id="pgSerMembers" class="sd-mems"></div>
     ${editing || converting ? '' : `<div class="sd-when">
       <div><label for="pgSerDay">Goes out on <span class="tk-opt">optional — or schedule later</span></label><input id="pgSerDay" type="date"></div>
-      <div><label for="pgSerTime">Time <span class="tk-opt">empty = planned for the day</span></label><input id="pgSerTime" type="time" step="1800"></div>
+      <div><label for="pgSerTime">Time <span class="tk-opt">empty = planned for the day</span></label><select id="pgSerTime">${G.timeOptions('', 'No time')}</select></div>
     </div>
     <label>Goes out as</label><div class="bk-types sd-types" id="pgSerTypes"></div>`}
     <label for="pgSerNote">Notes <span class="tk-opt">optional</span></label><input id="pgSerNote" type="text" value="${esc(t ? t.note : '')}" placeholder="e.g. CEO: one Reel for all three, Friday">
@@ -2479,7 +2479,7 @@ window.pgSave = () => {
   let r;
   switch (dlg.kind) {
     case 'schedule': {
-      const at = $('pgAt').value ? new Date($('pgAt').value).getTime() : 0;
+      const at = $('pgAt').value ? new Date($('pgAt').value + 'T' + ($('pgAtTime').value || '10:00')).getTime() : 0;
       const gs = gateFor(t, 'schedule', k);
       const editBy = !gs.ok && gs.need === 'plan' ? planEditFor(t, k, at) : '';
       if (!gs.ok && !gateFor(t, 'schedule', k).ok) return err(gs.text);
