@@ -1635,7 +1635,7 @@ function openDlg(kind, id, key) {
     const start = (c && c.at) || (dayBase ? dayBase + 10 * 3600000 : nextHour());
     title = `Schedule ${chan.label}`;
     body = `<p class="tk-hint" style="margin-top:0">${nm}${dayBase ? ' · planned ' + esc(G.dayLabel(dayBase)) : ''}</p>
-      <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" value="${localInput(start)}">
+      <label for="pgAt">Date and time it goes out</label><input id="pgAt" type="datetime-local" step="1800" value="${localInput(start)}">
       <p class="tk-hint">It shows as <b>Due</b> when the time passes. It becomes <b>Posted live</b> only when you confirm it.</p>${gateHtml(t, 'schedule', key)}${c && c.status === 'scheduled' ? `
       <div class="pg-unsched">
         <div class="pg-unsched-t">Scheduled for <b>${esc(fmt(c.at))}</b> — not going ahead?</div>
@@ -1779,7 +1779,7 @@ function pgBulkRender() {
   const host = $('pgBulkList'); if (!host || !dlg || !dlg.entries) return;
   host.innerHTML = dlg.entries.map((e, i) => `<div class="bk-row" data-n="${e.n}">
       <input class="bk-day" type="date" value="${e.day}" aria-label="Date for entry ${i + 1}" onchange="pgBulkWhen(${e.n}, 'day', this.value)">
-      <input class="bk-time" type="time" value="${e.time}" aria-label="Time for entry ${i + 1}, optional" onchange="pgBulkWhen(${e.n}, 'time', this.value)">
+      <input class="bk-time" type="time" step="1800" value="${e.time}" aria-label="Time for entry ${i + 1}, optional" onchange="pgBulkWhen(${e.n}, 'time', this.value)">
       <div class="bk-prop">
         ${e.sel
           ? `<div class="bk-chip"><span class="bk-kind">${e.sel.kind === 't' ? 'Tracked' : 'Dashboard'}</span><b>${esc(e.sel.label)}</b><button type="button" class="bk-unpick" onclick="pgBulkUnpick(${e.n})" aria-label="Change property">✕</button></div>`
@@ -1930,10 +1930,18 @@ function gateFor(t, action, key) {
 function gateHtml(t, action, key) {
   const g = gateFor(t, action, key);
   if (g.ok) return '';
+  // Scheduling is not held back by an unplanned edit: Schedule plans it (planEditFor).
+  if (action === 'schedule' && g.need === 'plan') return `<div class="pg-gate ok" id="pgGate">${esc(g.text.replace(/ — a post with a time needs its edit planned\.$/, ''))} — scheduling plans it: editing from tomorrow, delivered by the post's day.<div><button type="button" class="tk-btn sm" onclick="pgPlanEdit()">Plan it myself instead</button></div></div>`;
   const st = (() => { const t2 = t && listingOf(rootOf(t)), api = window.trackApi; return t2 && api && api.cutEdit ? api.cutEdit(t2, api.cutOfChannel(t2, key)).status : ''; })();
   return `<div class="pg-gate" id="pgGate">${esc(g.text)}<div>${g.need === 'done' && st
     ? '<button type="button" class="tk-btn sm primary" onclick="pgEditDone()">The edit is done — mark it</button>'
     : '<button type="button" class="tk-btn sm" onclick="pgPlanEdit()">Plan the edit</button>'}</div></div>`;
+}
+// A post given a time with no edit planned: the edit is planned for it (the board's autoPlanEdit).
+function planEditFor(t, key, at) {
+  const l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
+  if (!l || !api || !api.autoPlanEdit) return '';
+  return api.autoPlanEdit(l.id, api.cutOfChannel(l, key), at);
 }
 window.pgEditDone = () => {
   const t = dlg && byId(dlg.id), l = t ? listingOf(rootOf(t)) : null, api = window.trackApi;
@@ -2200,7 +2208,7 @@ window.pgOpenSeriesDlg = id => {
     <div id="pgSerMembers" class="sd-mems"></div>
     ${editing || converting ? '' : `<div class="sd-when">
       <div><label for="pgSerDay">Goes out on <span class="tk-opt">optional — or schedule later</span></label><input id="pgSerDay" type="date"></div>
-      <div><label for="pgSerTime">Time <span class="tk-opt">empty = planned for the day</span></label><input id="pgSerTime" type="time"></div>
+      <div><label for="pgSerTime">Time <span class="tk-opt">empty = planned for the day</span></label><input id="pgSerTime" type="time" step="1800"></div>
     </div>
     <label>Goes out as</label><div class="bk-types sd-types" id="pgSerTypes"></div>`}
     <label for="pgSerNote">Notes <span class="tk-opt">optional</span></label><input id="pgSerNote" type="text" value="${esc(t ? t.note : '')}" placeholder="e.g. CEO: one Reel for all three, Friday">
@@ -2471,11 +2479,13 @@ window.pgSave = () => {
   let r;
   switch (dlg.kind) {
     case 'schedule': {
-      const gs = gateFor(t, 'schedule', k); if (!gs.ok) return err(gs.text);
       const at = $('pgAt').value ? new Date($('pgAt').value).getTime() : 0;
+      const gs = gateFor(t, 'schedule', k);
+      const editBy = !gs.ok && gs.need === 'plan' ? planEditFor(t, k, at) : '';
+      if (!gs.ok && !gateFor(t, 'schedule', k).ok) return err(gs.text);
       r = G.setChannel(t, k, 'scheduled', { at }, now());
       if (!r.ok) return err(r.error);
-      persist(r.tracker, at < now() ? 'Scheduled — that time has passed, so it shows as due' : 'Scheduled'); break;
+      persist(r.tracker, (at < now() ? 'Scheduled — that time has passed, so it shows as due' : 'Scheduled') + (editBy ? ` · edit planned for ${editBy}, delivered by the post day` : '')); break;
     }
     case 'live': {
       // A post goes live once its edit is done (an already-live post is only being corrected).
@@ -2603,7 +2613,8 @@ window.pgSave = () => {
       // A post with a time needs its edit planned (where the property has a board card).
       const held = entries.filter(e => e.at && e.keys.length).map(e => {
         const t0 = e.trackerId ? byId(e.trackerId) : e.inv ? trackedByCode(e.inv.propertyCode) || { id: '', propertyCode: e.inv.propertyCode } : null;
-        const held = t0 ? e.keys.filter(k => !gateFor(t0, 'schedule', k).ok) : [];
+        // No edit planned: it is planned now, delivered by this post's day — only what still fails holds.
+        const held = t0 ? e.keys.filter(k => { const g = gateFor(t0, 'schedule', k); if (!g.ok && g.need === 'plan') planEditFor(t0, k, e.at); return !gateFor(t0, 'schedule', k).ok; }) : [];
         return held.length ? `${t0.id ? dn(t0) : e.inv.propertyCode} (${held.map(k => G.SHORT_CH[k]).join(', ')})` : '';
       }).filter(Boolean);
       if (held.length) return err(`Plan the edit first for ${held.join(', ')} — or leave the time empty to plan the day.`);

@@ -2114,6 +2114,15 @@ function driveEmbed(url) {
 }
 let edPhotosShown = null;   // the card whose photos are shown in its editor's view
 window.edTogglePhotos = id => { edPhotosShown = edPhotosShown === id ? null : id; openDetail(id); };
+// The frame opens at one row of photos — Drive's page is another site's, so its height cannot be read.
+// Expand makes it tall for a full folder; the frame's corner drags it to any height in between.
+let edPhotosTall = false;
+window.edPhotosSize = () => {
+  edPhotosTall = !edPhotosTall;
+  const f = document.getElementById('edPhFrame'), b = document.getElementById('edPhSize');
+  if (f) { f.style.height = ''; f.classList.toggle('tall', edPhotosTall); }
+  if (b) b.textContent = edPhotosTall ? 'Collapse ↑' : 'Expand ↓';
+};
 // The photos link pasted in the editor's view: the card's own (what the brochure and Posting read).
 window.edSetPhotos = (id, value) => {
   const x = listings.find(l => l.id === id);
@@ -2166,7 +2175,8 @@ function openEdDetail(x) {
       </div>
       ${invLink ? `<div class="tk-hint">Not on this card yet — this is <b>${esc(x.propertyCode)}</b>'s link in the Property dashboard. Paste one above to give the card its own.</div>` : ''}
       ${link && !embed ? `<div class="tk-hint">This link cannot be shown here — open it in Drive.</div>` : ''}
-      ${shown ? `<iframe class="ed-ph-frame" src="${esc(embed)}" title="Photos — ${esc(cardName(x))}" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      ${shown ? `<iframe class="ed-ph-frame${edPhotosTall ? ' tall' : ''}" id="edPhFrame" src="${esc(embed)}" title="Photos — ${esc(cardName(x))}" loading="lazy" referrerpolicy="no-referrer"></iframe>
+        <div class="ed-ph-more"><button type="button" class="tk-btn sm ghost" id="edPhSize" onclick="edPhotosSize()">${edPhotosTall ? 'Collapse ↑' : 'Expand ↓'}</button></div>
         <div class="tk-hint">Blank or asking to sign in? The folder must be shared with your Google account (or anyone with the link) — Open in Drive works either way.</div>` : ''}
     </section>`;
   // Each planned outlet's post: where it stands in Posting, and the way there.
@@ -2617,6 +2627,7 @@ window.trackApi = {
   span: ms => EF.span(ms),
   createSeriesCard: seed => createSeriesCard(seed),
   editStep: (id, action, k) => edStep(id, action, null, k),
+  autoPlanEdit: (id, k, postAt) => autoPlanEdit(id, k, postAt),
   // Forward only, open cards only (advanceTo): a post live in Posting moves its card to Live.
   advance: (id, key, why) => { const x = listings.find(l => l.id === id); if (!x) return; advanceTo(id, key, why); if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id); },
   shot: x => edCtx(x).shot,
@@ -4045,6 +4056,23 @@ function edStep(id, action, opts, k) {
   toast(`${EF.cutLabel(x, k)}: ${ED_HIST[action]}`);
 }
 window.edStep = edStep;
+// A post given a time while its cut has no edit planned: the edit is planned for it rather than the
+// post held back — editing from tomorrow (the post's day, if that comes first), delivered by the post's
+// day, by the editor the plan would offer first. Returns who it went to, or '' when nothing was planned.
+function autoPlanEdit(id, k, postAt) {
+  const x = listings.find(l => l.id === id);
+  if (!x || !k || EF.cutEdit(x, k).status) return '';
+  const day0 = ts => { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const t = new Date(); t.setDate(t.getDate() + 1);
+  const tomorrow = day0(t), dueAt = postAt ? day0(postAt) : 0;
+  const planAt = dueAt && dueAt < tomorrow ? dueAt : tomorrow;
+  const by = (isSeriesCard(x) ? '' : x.shootAssignee) || meName();
+  const r = EF.setCut(x, k, 'plan', { by, planAt, dueAt }, Date.now(), meName());
+  if (!r.ok) return '';
+  mutate(id, l => { Object.assign(l, r.patch); foldInsta(l); }, `${EF.cutLabel(x, k)}: Edit planned with its post — <b>${esc(by)}</b>, ${esc(fmtDay(planAt))}${dueAt ? ', deliver by ' + esc(fmtDay(dueAt)) : ''}`);
+  if (currentDetailId === id && document.getElementById('dp').classList.contains('open')) openDetail(id);
+  return by;
+}
 
 // ── The finished video, where it is (optional): pasted once the edit is done, shown in Posting ──
 // x.finalLinks = { <cut>: { url, at, by } }. Never asked for and never required — a cut with no link
