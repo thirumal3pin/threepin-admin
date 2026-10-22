@@ -260,8 +260,9 @@ const LEADS = [
   { id: 'V5', tenantId: T, name: 'Not Booked', source: 'manual', stageId: sid('new'), createdAt: NOW - 2 * D, updatedAt: NOW - D, reached: { new: NOW - 2 * D } },
 ];
 const CRM_STUB = `
+window.__savedLeads = [];
 window.crmFirebase = {
-  saveLead: async () => {}, deleteLead: async () => {}, getLeadNotes: async () => [], getLeadHistory: async () => [],
+  saveLead: async l => { window.__savedLeads.push(JSON.parse(JSON.stringify(l))); }, deleteLead: async () => {}, getLeadNotes: async () => [], getLeadHistory: async () => [],
   saveNote: async () => {}, deleteNoteDoc: async () => {}, saveHistory: async () => {}, savePipeline: async () => {},
   getBotConfig: async () => null, saveBotConfig: async () => {}, saveEnquiryTypes: async () => {}, saveProperties: async () => {},
   saveFollowupDigestSettings: async () => {}, saveDashboardEmailSettings: async () => {}, releaseLeadField: async () => {},
@@ -305,7 +306,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   const url = await page.evaluate(() => window.__opened.at(-1));
   ok('WhatsApp: straight to the lead\'s chat', url && url.startsWith('https://wa.me/919840011111?text='), url && url.slice(0, 40));
   // Another property picked: the message follows it.
-  await page.selectOption('#svmProp', 'ASNC001');
+  await page.click('#svmPropSearch');
+  await page.fill('#svmPropSearch', 'asnc001');
+  await page.keyboard.press('Enter');
   m = await msg(page);
   ok('Another property picked: its details, the commercial emoji', m.startsWith('🏢') && m.includes('Commercial / Retail Space, Ashok Nagar') && !m.includes('UDS'));
   ok('The dialog fits the screen', await fits(page));
@@ -329,9 +332,52 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   await page.waitForTimeout(100);
   m = await msg(page);
   ok('Nothing to go on: "Pick the property", and the message still whole', await page.inputValue('#svmProp') === '' && /pick the property/i.test(await page.textContent('#svmFor')) && m.includes("Dear Sir/Ma'am,") && m.endsWith('*Team 3 PIN Realty*') && !m.includes('Property Details'));
-  await page.selectOption('#svmProp', 'MYLA002');
-  ok('…picked: its details come in', (await msg(page)).includes('• *Property:* MAHA Palace'));
+  await page.click('#svmPropSearch');
+  await page.fill('#svmPropSearch', 'maha palace');
+  await page.keyboard.press('Enter');
+  ok('…typed "maha palace", Enter: its details come in', (await msg(page)).includes('• *Property:* MAHA Palace') && await page.inputValue('#svmProp') === 'MYLA002');
   await page.keyboard.press('Escape');
+
+  // ── Booking the visit: the property typed for, not scrolled for ──
+  await page.evaluate(() => openVisitEditor('V1'));
+  await page.waitForFunction(() => document.getElementById('svPropSearch') && document.querySelectorAll('#svProp option').length > 100, null, { timeout: 5000 });
+  ok('Visit booking: a search box for the property, showing the one booked', /NGMA002/.test(await page.inputValue('#svPropSearch')) && await page.isHidden('#svProp'));
+  const top = async q => { await page.fill('#svPropSearch', q); await page.waitForTimeout(30); return page.$$eval('#svSheet .ppk-opt', bs => bs.map(b => b.textContent)); };
+  let r = await top('ngma002');
+  ok('By code: "ngma002" → NGMA002 first', /^NGMA002/.test(r[0] || ''), r[0]);
+  r = await top('srivaradha');
+  ok('By title: "srivaradha" → the Srivaradha flats', r.length >= 1 && r.slice(0, 2).every(t => /varadha/i.test(t)), r.slice(0, 3).join(' | '));
+  r = await top('uds 675');
+  ok('By details: "uds 675" → NGMA002', r.some(t => /NGMA002/.test(t)), r.slice(0, 3).join(' | '));
+  r = await top('rent porur');
+  ok('By details: "rent porur" → the Porur rentals first', /POR000/.test(r[0] || '') && /POR000/.test(r[1] || ''), r.slice(0, 3).join(' | '));
+  r = await top('3 bhk anna nagar');
+  ok('"3 bhk anna nagar" → Anna Nagar 3BHKs (spacing does not matter)', r.length >= 2 && r.slice(0, 3).filter(t => /^(AN|p17)/.test(t) || /Anna Nagar/i.test(t)).length >= 2, r.slice(0, 4).join(' | '));
+  await page.screenshot({ path: join(OUT, `crm-booking-search-${viewport.width}.png`) });
+  ok('…the details line shows where it matched', await page.$eval('#svSheet .ppk-opt', b => !!b.querySelector('small')));
+  r = await top('zzqqxx');
+  ok('Nothing matches: says so, "Something not in the inventory…" still offered', /No property has/.test(await page.textContent('#svSheet .ppk-list')) && r.some(t => /not in the inventory/.test(t)));
+  await page.fill('#svPropSearch', 'mylapore 6bhk');
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter');
+  ok('↑ ↓ Enter picks: MAHA Palace (MYLA002) chosen', await page.inputValue('#svProp') === 'MYLA002' && /MYLA002/.test(await page.inputValue('#svPropSearch')));
+  await page.click('#svPropSearch');
+  await page.fill('#svPropSearch', 'not in the inventory');
+  await page.keyboard.press('Enter');
+  ok('"Something not in the inventory…": the free-text box opens', await page.inputValue('#svProp') === '__free' && await page.isVisible('#svPropFree'));
+  await page.click('#svPropSearch');
+  await page.fill('#svPropSearch', 'POR0002');
+  await page.keyboard.press('Enter');
+  ok('…and back to a property: the free-text box closes', await page.inputValue('#svProp') === 'POR0002' && await page.isHidden('#svPropFree'));
+  await page.click('#svPropSearch');
+  await page.keyboard.press('Escape');
+  ok('Escape: the list closes, the choice kept — the booking form stays open', await page.isHidden('#svSheet .ppk-list') && /POR0002/.test(await page.inputValue('#svPropSearch')));
+  await page.screenshot({ path: join(OUT, `crm-booking-${viewport.width}.png`) });
+  await page.evaluate(() => saveVisitEdit('V1'));
+  await page.waitForTimeout(400);
+  const savedLead = await page.evaluate(() => window.__savedLeads.filter(l => l.id === 'V1').at(-1));
+  ok('Saved: the visit is booked for the property typed for', savedLead && savedLead.siteVisitProperty === 'POR0002', JSON.stringify(savedLead && savedLead.siteVisitProperty));
+  await page.evaluate(() => closeVisitEditor && closeVisitEditor());
 
   for (const [id, why] of [['V4', 'cancelled'], ['V5', 'not booked']]) {
     await page.evaluate(i => openDetail(i), id);

@@ -274,6 +274,11 @@ function mount() {
     </div>
   </div>`;
   document.body.appendChild(el);
+  // In the CRM the property is picked: typed for by its code, its title or its details (property-picker.js).
+  if (window.PinPropertyPicker) window.PinPropertyPicker.attach($('svmProp'), {
+    lookup: v => (S && v && S.properties.find(p => keyOf(p) === v)) || null,
+    placeholder: 'Type a code, a name, an area, BHK… or pick'
+  });
   el.addEventListener('click', e => {
     if (e.target === el) return close();
     const t = e.target.closest('[data-svm],[data-title]');

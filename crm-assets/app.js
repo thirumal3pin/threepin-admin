@@ -3747,6 +3747,11 @@ function openVisitEditor(id){
   // — meant the button produced nothing at all: no form, no spinner, no error.
   // The inventory only fills one dropdown, so it can arrive late.
   document.body.insertAdjacentHTML('beforeend', visitSchedulerHtml(l));
+  // The property: typed for — its code, its title or anything in its details — not scrolled for.
+  if(window.PinPropertyPicker) window.PinPropertyPicker.attach(document.getElementById('svProp'), {
+    lookup: v => v && v !== '__free' ? (inventory || []).find(p => (propertyCodeOf(p) || p.name) === v) || null : null,
+    placeholder: 'Type a code, a name, an area, BHK… or pick'
+  });
   const d = document.getElementById('svDate');
   if(d) d.focus();
   loadVisitAvailability();

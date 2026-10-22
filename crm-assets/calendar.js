@@ -1241,6 +1241,9 @@
     return true;
   }
   document.addEventListener('keydown', function (e) {
+    // A search box's open list inside the sheet (the property picker) takes Escape first: it closes
+    // the list, not the whole sheet.
+    if (e.key === 'Escape' && e.target && e.target.getAttribute && e.target.getAttribute('aria-expanded') === 'true') return;
     if (e.key === 'Escape' && closeTopSheet()) { e.stopPropagation(); return; }
     // Tab stays inside the sheet on top: it never wanders to the lead or page behind it.
     if (e.key === 'Tab') {

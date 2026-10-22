@@ -810,7 +810,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
   width:min(440px,100%);max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:7px;}
 .cal-sheet-in h3{margin:0 0 4px;font-size:16px;}
 .cal-sheet-in label{font-family:var(--mono);font-size: 11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);margin-top:4px;}
-.cal-sheet-in input[type=text],.cal-sheet-in input[type=date],.cal-sheet-in input[type=time],.cal-sheet-in select{
+.cal-sheet-in input[type=text],.cal-sheet-in input[type=search],.cal-sheet-in input[type=date],.cal-sheet-in input[type=time],.cal-sheet-in select{
   font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);border-radius:var(--r2);
   background:var(--bg);color:var(--ink);min-height:38px;width:100%;box-sizing:border-box;}
 .cm-when{display:flex;gap:8px;}
@@ -888,7 +888,7 @@ h1,h2,h3,.dp-title,.dash-sec-headline,.modal-title{text-wrap:balance;}
 .sv-sheet textarea{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
   border-radius:var(--r2);background:var(--bg);color:var(--ink);width:100%;box-sizing:border-box;
   resize:vertical;min-height:66px;}
-.sv-sheet select,.sv-sheet input[type=text]{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
+.sv-sheet select,.sv-sheet input[type=text],.sv-sheet input[type=search]{font:inherit;font-size:13px;padding:8px 9px;border:1px solid var(--border);
   border-radius:var(--r2);background:var(--bg);color:var(--ink);min-height:38px;width:100%;box-sizing:border-box;}
 .sv-agents{display:flex;flex-direction:column;gap:5px;}
 /* One per line, because the free/busy note beside each name is the point and
