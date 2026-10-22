@@ -1525,3 +1525,12 @@ a.nm-row{ text-decoration:none; }
 .mk-none{font-size:12.5px;color:var(--ink3);}
 .mk-retry{font:inherit;font-size:12px;font-weight:600;border:1px solid var(--border);background:var(--card);color:var(--ink);border-radius:6px;padding:3px 8px;cursor:pointer;}
 @media (max-width:560px){ .mk-row{flex-direction:column;} .mk-acts{flex-direction:row;align-items:center;gap:14px;} }
+/* The Map Pin row: the pin, Change / Add, and the box to paste the Maps link into */
+.conn-mapname{color:var(--ink3);font-size:13px;}
+.conn-mapedit{margin-left:10px;border:1px solid var(--border);background:var(--white);color:var(--ink2);border-radius:7px;padding:2px 9px;font-size:12px;font-weight:600;cursor:pointer;}
+.conn-mapedit:hover{border-color:var(--ink);color:var(--ink);}
+.conn-mapform{display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%;}
+.conn-mapform input{flex:1 1 240px;min-width:0;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font:inherit;font-size:13.5px;background:var(--bg);color:var(--ink);}
+.conn-mapform input:focus{outline:none;border-color:var(--ink);background:var(--white);}
+.conn-mapform .conn-maperr{flex-basis:100%;font-size:12px;color:var(--red,#b91c1c);}
+#dpMapRow .conn-v{flex:1;min-width:0;}

@@ -63,6 +63,15 @@
       encodeURIComponent(v + (p.location ? ', ' + p.location : ''));
   }
 
+  // The Map Pin row of Location & Connectivity: the pin, and — on the dashboard, where it can be
+  // saved — Change / Add. The same pin the site visit message sends (shared-assets/site-visit.js).
+  function mapRowInner(p){
+    const map = mapsHref(p), raw = String(p.mapLink||'').trim();
+    const name = raw && !/^https?:\/\//i.test(raw) ? ` <span class="conn-mapname">(“${escapeHtml(raw)}” — a place name, not a Maps link)</span>` : '';
+    const edit = window.editMapPin ? ` <button type="button" class="conn-mapedit" onclick="editMapPin('${escapeHtml(p.id)}')">${raw ? '✏️ Change' : '+ Add the Maps link'}</button>` : '';
+    return `<div class="conn-k">Map Pin</div><div class="conn-v">${map ? `<a href="${escapeHtml(map)}" target="_blank" rel="noopener" class="conn-maplink">📍 Open in Google Maps ↗</a>${name}` : '<span class="conn-mapname">No map pin yet</span>'}${edit}</div>`;
+  }
+
   // What an agent needs to know they can send RIGHT NOW, before the client
   // asks: brochure, photos, location pin, shareable details. Rendered as one
   // chips row — green means one tap away, dimmed means not on file yet.
@@ -195,7 +204,7 @@
         <div class="sec-title">📍 Location & Connectivity</div>
         <div class="conn-wrap">
           ${e.zone?`<div class="conn-row"><div class="conn-k">Zone</div><div class="conn-v">${e.zone}</div></div>`:''}
-          ${map?`<div class="conn-row"><div class="conn-k">Map Pin</div><div class="conn-v"><a href="${escapeHtml(map)}" target="_blank" rel="noopener" class="conn-maplink">📍 Open in Google Maps ↗</a></div></div>`:''}
+          ${map || window.editMapPin ? `<div class="conn-row" id="dpMapRow">${mapRowInner(p)}</div>` : ''}
           ${e.nearby?`<div class="conn-row"><div class="conn-k">Nearby</div><div class="conn-v">${e.nearby}</div></div>`:''}
           ${e.nearbyLandmark?`<div class="conn-row"><div class="conn-k">Landmark</div><div class="conn-v">${e.nearbyLandmark}</div></div>`:''}
           ${e.connectivity?`<div class="conn-row"><div class="conn-k">Connectivity</div><div class="conn-v">${e.connectivity}</div></div>`:''}
@@ -456,10 +465,11 @@
 
   window.PinPropertyView = {
     setResolver: fn => { resolveProperty = fn; },
+    get: id => resolveProperty(id),
     hero, overviewTab, specsTab, pitchTab, renderSheetExtras,
     propertyUrl, cacheProperty, cachedProperty,
     escapeHtml, esc, isReady, splitList,
-    mapsHref, resourceChips,
+    mapsHref, resourceChips, mapRowInner,
     SHARE_ICON, prefersNativeShare
   };
 

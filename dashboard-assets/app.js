@@ -2888,3 +2888,90 @@ document.addEventListener('mousedown', e => {
   if(id === 'shareDetailsModal') closeShareDetailsModal();
   else if(id === 'syncModal') closeSyncModal();
 });
+
+// ═══════ SITE VISIT CONFIRMATION ═══════
+// The WhatsApp confirmation for a visit to this property (shared-assets/site-visit.js writes it from the
+// property): asked only the client's name and the time. Who meets them: the team by name — the
+// property's own agent first.
+const SITE_VISIT_SKIP = /^(sales|admin|info|office|accounts|support|hello|team|contact)$/i;
+function siteVisitTeam(){
+  return propTeam.filter(e => !SITE_VISIT_SKIP.test(String(e).split('@')[0])).map(e => ({ email: e, name: agentNameOf(e) }));
+}
+async function openSiteVisit(id){
+  const p = properties.find(x => x.id === id);
+  if(!p) return showToast('Property not found');
+  if(!window.openSiteVisitDialog) return showToast('Still loading — try again in a moment');
+  await loadPropTeam();
+  const a = Array.isArray(p.assignedAgent) ? p.assignedAgent[0] : p.assignedAgent;
+  window.openSiteVisitDialog({ property: p, team: siteVisitTeam(), host: a ? agentNameOf(a) : '', toast: showToast, onSaveMap: saveSiteVisitMap });
+}
+// ═══════ THE MAP PIN — one value, wherever it is given ═══════
+// Given in the site visit dialog or changed in the Map Pin row of Location & Connectivity: saved on
+// the property (so the header link, the Map Pin row, the map view and the next site visit message all
+// read it), logged in the property's Notes, and kept as a dashboard edit (propertyChanges) so the
+// Inventory sync does not put the sheet's old pin back before the sheet is updated.
+async function setPropertyMap(id, url, via){
+  const p = properties.find(x => x.id === id);
+  if(!p) return false;
+  const prev = String(p.mapLink || '').trim(), next = String(url || '').trim();
+  if(prev === next) return true;
+  p.mapLink = next;
+  refreshMapSpots(p);
+  try{
+    await window.dashboardFirebase.saveProperty(p);
+  }catch(e){
+    p.mapLink = prev;
+    refreshMapSpots(p);
+    showToast('✗ Could not save the map pin — check your connection and try again');
+    return false;
+  }
+  recordChanges(p, 'update', [{ field:'mapLink', label:'Map Pin', from: prev, to: next }]);
+  const text = !next ? `📍 Map pin removed (was ${prev})`
+    : prev ? `📍 Map pin changed${via ? ' — ' + via : ''}: ${next} (was ${prev})`
+    : `📍 Map pin added${via ? ' — ' + via : ''}: ${next}`;
+  const entry = { id: 'n' + Date.now(), text, kind: 'note', eventDate: '', createdAt: Date.now(),
+    author: (window.dashboardAuth && window.dashboardAuth.getUserEmail && window.dashboardAuth.getUserEmail()) || '' };
+  if(notesLoaded[id]){ (notes[id] = notes[id] || []).push(entry); repaintNotes(id); }
+  try{ await window.dashboardFirebase.savePropertyNote(id, entry); }catch(e){ /* the pin is saved; the log line is the extra */ }
+  showToast(next ? 'Map pin saved — on the property and in its Notes' : 'Map pin removed');
+  return true;
+}
+// Where the open property page shows the pin: the header link and the Map Pin row.
+function refreshMapSpots(p){
+  if(currentDetailId !== p.id) return;
+  const hero = document.getElementById('dpHero');
+  if(hero) hero.innerHTML = PinPropertyView.hero(p);
+  const row = document.getElementById('dpMapRow');
+  if(row) row.innerHTML = PinPropertyView.mapRowInner(p);
+}
+// Change / Add in the Map Pin row: paste the link, Save (Enter) or Cancel (Escape). Empty removes it.
+function editMapPin(id){
+  const p = properties.find(x => x.id === id);
+  const row = document.getElementById('dpMapRow');
+  if(!p || !row) return;
+  const cur = /^https?:\/\//i.test(String(p.mapLink || '').trim()) ? String(p.mapLink).trim() : '';
+  row.querySelector('.conn-v').innerHTML = `<div class="conn-mapform">
+    <input type="url" id="dpMapIn" value="${escapeHtml(cur)}" placeholder="Paste the Google Maps link — https://maps.app.goo.gl/…"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();saveMapPin('${escapeHtml(id)}')}else if(event.key==='Escape'){event.stopPropagation();refreshMapSpots(properties.find(x=>x.id==='${escapeHtml(id)}'))}">
+    <button type="button" class="conn-mapedit" onclick="saveMapPin('${escapeHtml(id)}')">Save</button>
+    <button type="button" class="conn-mapedit" onclick="refreshMapSpots(properties.find(x=>x.id==='${escapeHtml(id)}'))">Cancel</button>
+    <span class="conn-maperr" id="dpMapErr"></span></div>`;
+  const inp = document.getElementById('dpMapIn');
+  inp.focus(); inp.select();
+}
+async function saveMapPin(id){
+  const p = properties.find(x => x.id === id);
+  const v = (document.getElementById('dpMapIn') || {}).value || '';
+  const url = v.trim();
+  if(url && !/^https?:\/\/\S+$/i.test(url)){
+    const e = document.getElementById('dpMapErr');
+    if(e) e.textContent = 'That is not a link — open the place in Google Maps, Share → Copy link, and paste it here.';
+    return;
+  }
+  if(url === '' && p && p.mapLink && !confirm('Remove the map pin from this property?')) return;
+  const done = await setPropertyMap(id, url, 'on the property page');
+  if(done && p) refreshMapSpots(p);
+}
+Object.assign(window, { editMapPin, saveMapPin, refreshMapSpots });
+// The Maps link pasted in the site visit dialog.
+function saveSiteVisitMap(p0, url){ return setPropertyMap(p0.id, url, 'for a site visit'); }

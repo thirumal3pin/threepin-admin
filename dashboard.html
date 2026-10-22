@@ -201,6 +201,7 @@
       </button>
       <div class="dp-hdr-actions">
         <button class="dp-hact share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
+        <button class="dp-hact" onclick="openSiteVisit(currentDetailId)" title="Write the WhatsApp site visit confirmation for this property">📅 Site visit</button>
         <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
         <button class="dp-hact crm-btn" id="dpCrm" onclick="openLeadCrm(currentDetailId)">📋 Lead CRM</button>
         <button class="dp-hact" id="dpSoldOut" onclick="toggleSoldOut(currentDetailId)">🏷️ Mark Sold Out</button>
@@ -526,6 +527,7 @@
 <script src="dashboard-assets/brochure-form.js"></script>
 <!-- The code rules the Property & Media board's brochure panel uses, so both places agree on what a duplicate is. -->
 <script type="module">import * as B from './track-assets/brochure-flow.js'; window.BrochureCodes = B;</script>
+<script type="module">import { openSiteVisitDialog } from './shared-assets/site-visit.js'; window.openSiteVisitDialog = openSiteVisitDialog;</script>
 <script src="shared-assets/appnav.js"></script>
 <script src="dashboard-assets/nav-boot.js"></script>
 <script type="module" src="dashboard-assets/firebase-sync.js"></script>

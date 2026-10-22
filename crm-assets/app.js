@@ -3644,7 +3644,7 @@ function visitRowHtml(l){
       ${who ? `<span class="sv-team">${who}</span>` : ''}
       ${v.at && !agents.length ? '<span class="sv-by warn">nobody assigned yet</span>' : ''}
     </span>
-    <span class="st-item-acts"><button type="button" class="tt-btn${v.at && !agents.length ? '' : ' quiet'}" onclick="openVisitEditor('${l.id}')">${!v.at ? 'Schedule' : agents.length ? 'Reschedule' : 'Assign agent'}</button></span>
+    <span class="st-item-acts"><button type="button" class="tt-btn${v.at && !agents.length ? '' : ' quiet'}" onclick="openVisitEditor('${l.id}')">${!v.at ? 'Schedule' : agents.length ? 'Reschedule' : 'Assign agent'}</button>${v.at && v.status !== 'cancelled' && v.status !== 'done' ? `<button type="button" class="tt-btn" onclick="openVisitMessage('${l.id}')" title="The WhatsApp confirmation for the client, written from the property">💬 Confirmation</button>` : ''}</span>
     ${reasons ? `<div class="sv-reasons">${reasons}</div>` : ''}
     ${myAnswerHtml(l, v)}
   </div>`;
@@ -3670,6 +3670,28 @@ function myAnswerHtml(l, v){
     </span>
   </div>`;
 }
+
+// The client's WhatsApp confirmation, from the booking: the client, the time, the property booked (or the
+// lead's one linked property), the agent sent — shared-assets/site-visit.js writes it from the property.
+const VISIT_HOST_SKIP = /^(sales|admin|info|office|accounts|support|hello|team|contact)$/i;
+async function openVisitMessage(id){
+  const l = leads.find(x => x.id === id);
+  if(!l) return;
+  if(!window.openSiteVisitDialog) return showToast('Still loading — try again in a moment');
+  const props = await loadInventory();
+  const v = window.crmPipeline.visitOf(l);
+  const linked = (l.propertyCodes || []).map(c => props.find(p => p.id === c || leadHasPropertyCode(p, c))).filter(Boolean);
+  const key = v.property || (linked.length === 1 ? (propertyCodeOf(linked[0]) || linked[0].name) : '');
+  const name = e => window.crmMentions.displayName(e) || e;
+  const team = teamRoster().filter(e => !VISIT_HOST_SKIP.test(e.split('@')[0])).map(e => ({ email: e, name: name(e) }));
+  const sent = visitAgentsOf(l).find(e => !VISIT_HOST_SKIP.test(String(e).split('@')[0]));
+  window.openSiteVisitDialog({
+    properties: props, propertyKey: key, name: l.name || '', phone: l.phone || '',
+    at: v.at || 0, team, host: sent ? name(sent) : '', toast: showToast
+  });
+}
+const leadHasPropertyCode = (p, c) => { const k = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return !!c && (k(p.propertyCode) === k(c) || k(p.id) === k(c)); };
+window.openVisitMessage = openVisitMessage;
 
 let answeringVisit = false;
 function answerVisit(id, response, reason){
