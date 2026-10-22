@@ -34,7 +34,9 @@ import { columnLetter, resolveQueueColumns, mapToDashboardProperty, parseQueuePr
 //                                       (defaults to the one already in api/)
 //   GOOGLE_IMPERSONATE_EMAIL    — defaults to thirumal@threepin.in
 
-const BROCHURE_FOLDER = '/Users/swaminathannagarajan/Downloads/Product brochure ';
+// BROCHURE_FOLDER env var lets a stand-in Mac run a delivery when the
+// scheduler Mac is unavailable.
+const BROCHURE_FOLDER = process.env.BROCHURE_FOLDER || '/Users/swaminathannagarajan/Downloads/Product brochure ';
 const QUEUE_SHEET_ID = '1MlepLxnA1-OzHHYd-8S1YKRPCk3Cvz8g1md3eWthsY4';
 const QUEUE_TAB = "'Form Responses 1'";
 const INVENTORY_SHEET_ID = '1X53_F-S9ezL70Dy2c7a6DG06ljD7bGCb3HauysPMZ8I';
