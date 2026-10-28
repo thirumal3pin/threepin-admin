@@ -17,9 +17,10 @@ leads through conversation.
 | `nav-boot.js` | Wires this page into the shared app rail (`../shared-assets/`). Board, List, Follow-ups, Analytics and Daily task are panes of this one page, so the rail switches them without a reload. |
 | `firebase-sync.js` | Firebase Authentication + Firestore realtime sync (leads + pipeline stages). |
 | `../api/meta-webhook.js` | Vercel serverless function that receives Meta's Lead Ads webhook and writes leads into Firestore. |
-| `../api/whatsapp-bot-webhook.js` | Vercel serverless function that receives WhatsApp messages, runs them through Claude, replies, and writes/updates the lead. |
-| `../api/bot-test-message.js` | Authenticated endpoint the CRM's "Live Test Chat" panel calls to try the bot without a real WhatsApp message. |
-| `../api/_bot-shared.js` | Shared code between the two bot endpoints above (system prompt builder, tool definition, Firebase Admin init). |
+| `easy.js`, `easy.css` | Eåsy's ask box — the corner button and chat. Calls `/api/easy`. |
+| `../api/bot-test-message.js` | Authenticated endpoint the CRM's "Live Test Chat" panel calls to try the bot (draft workflow + Knowledge Base, answered by Claude) without a real WhatsApp message. Also serves `/api/easy` (`?op=easy`). |
+| `../api/_easy.js` | Eåsy: answers the team's questions from the tenant's leads, tasks and properties. Read-only — it drafts, never sends or changes. |
+| `../api/_bot-shared.js` | Shared bot code (system prompt builder, tool definition, Firebase Admin init). |
 
 ## How it's different from the property dashboard
 

@@ -87,15 +87,47 @@ export function makeStore() {
 }
 
 // ── Admin-SDK-like ──
+let autoIds = 0;
+const autoId = () => 'auto' + Date.now().toString(36) + (++autoIds).toString(36);
+const fieldOf = (d, f) => segsOf(f).reduce((o, k) => (o == null ? undefined : o[k]), d);
+const OPS = {
+  '==': (a, b) => a === b, '!=': (a, b) => a !== b, '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b,
+  'in': (a, b) => (b || []).includes(a), 'array-contains': (a, b) => Array.isArray(a) && a.includes(b)
+};
+
 export function adminDb(store) {
   const P = (coll, id) => coll + '/' + id;
   const ref = (coll, id) => ({
     id, path: P(coll, id), _coll: coll,
-    collection: c => ({ doc: i => ref(P(coll, id) + '/' + c, i) }),
+    collection: c => collRef(P(coll, id) + '/' + c),
     get: async () => { const d = store.get(P(coll, id)); return { id, exists: d !== undefined, data: () => d, ref: ref(coll, id) }; },
     set: async (data, opts) => store.set(P(coll, id), data, opts || {}),
     update: async patch => store.update(P(coll, id), patch),
     delete: async () => store.delete(P(coll, id))
+  });
+  // A collection (top-level or a subcollection) and the queries on it: where / orderBy / limit, chained.
+  const query = (path, q) => ({
+    where: (f, op, v) => query(path, { ...q, where: [...q.where, [f, op, v]] }),
+    orderBy: (f, dir = 'asc') => query(path, { ...q, order: [...q.order, [f, dir]] }),
+    limit: n => query(path, { ...q, limit: n }),
+    get: async () => {
+      let out = [];
+      for (const [p, d] of store.docs) {
+        const parts = p.split('/');
+        if (parts.slice(0, -1).join('/') !== path) continue;
+        if (!q.where.every(([f, op, v]) => (OPS[op] || OPS['=='])(fieldOf(d, f), v))) continue;
+        out.push({ id: parts[parts.length - 1], d });
+      }
+      for (const [f, dir] of [...q.order].reverse()) out.sort((a, b) => { const x = fieldOf(a.d, f), y = fieldOf(b.d, f); return (x > y ? 1 : x < y ? -1 : 0) * (dir === 'desc' ? -1 : 1); });
+      if (q.limit != null) out = out.slice(0, q.limit);
+      const docs = out.map(({ id, d }) => ({ id, exists: true, data: () => clone(d), ref: ref(path, id) }));
+      return { docs, empty: !docs.length, size: docs.length, forEach: fn => docs.forEach(fn) };
+    }
+  });
+  const collRef = path => ({
+    ...query(path, { where: [], order: [], limit: null }),
+    doc: id => ref(path, id == null ? autoId() : id),
+    add: async data => { const r = ref(path, autoId()); await r.set(data); return r; }
   });
   const writer = ops => ({
     set: (r, d, o) => { ops.push(() => store.set(r.path, d, o || {})); },
@@ -103,16 +135,7 @@ export function adminDb(store) {
     delete: r => { ops.push(() => store.delete(r.path)); }
   });
   const db = {
-    collection: c => ({
-      doc: id => ref(c, id),
-      where: (f, op, v) => ({
-        get: async () => {
-          const out = [];
-          for (const [p, d] of store.docs) { const parts = p.split('/'); if (parts.length === 2 && parts[0] === c && d[f] === v) out.push({ id: parts[1], data: () => clone(d), ref: ref(c, parts[1]) }); }
-          return { docs: out, empty: !out.length };
-        }
-      })
-    }),
+    collection: c => collRef(c),
     getAll: async (...refs) => Promise.all(refs.map(r => r.get())),
     batch: () => { const ops = []; return { ...writer(ops), commit: async () => store.atomic(ops) }; },
     runTransaction: async fn => { const ops = []; const t = { ...writer(ops), get: r => r.get(), getAll: (...rs) => Promise.all(rs.map(r => r.get())) }; const out = await fn(t); store.atomic(ops); return out; }

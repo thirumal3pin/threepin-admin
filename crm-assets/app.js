@@ -6545,7 +6545,7 @@ function renderBotChat(){
     win.innerHTML = '<div class="bot-chat-empty">Send a message to test the bot with your current draft workflow.</div>';
     return;
   }
-  win.innerHTML = botTestHistory.map(m=>`<div class="bot-msg ${m.role}">${m.content}</div>`).join('');
+  win.innerHTML = botTestHistory.map(m=>`<div class="bot-msg ${m.role}">${escapeHtml(m.content)}</div>`).join('');
   win.scrollTop = win.scrollHeight;
 }
 
@@ -6573,7 +6573,11 @@ async function sendBotTestMessage(){
     renderBotChat();
   } catch(e){
     console.error('Bot test message error:', e);
-    showToast('Test message failed — see console');
+    // Unanswered — take it back out so the next try doesn't send it twice.
+    if(botTestHistory.length && botTestHistory[botTestHistory.length-1].role === 'user') botTestHistory.pop();
+    inp.value = text;
+    renderBotChat();
+    showToast(`Test message failed: ${e.message}`);
   }
 }
 function clearBotTestChat(){
