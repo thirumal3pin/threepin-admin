@@ -88,11 +88,14 @@ await seed();
 // ── Serving ──
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp', '.woff2': 'font/woff2' };
-const GSTATIC = /https:\/\/www\.gstatic\.com\/firebasejs\/[\d.]+\/firebase-(app|auth|firestore)\.js/g;
+// Any reference to the Firebase CDN — written out whole or built from its prefix (crm-assets/easy.js).
+const GSTATIC = /https:\/\/www\.gstatic\.com\/firebasejs\/[\d.]+\/firebase-/g;
 const DEV_MODULES = {
   '/__dev/firebase-firestore.js': "import '/scripts/dev/replica.mjs';\nexport * from '/tests/_fake-gstatic.mjs';\n",
   '/__dev/firebase-auth.js': "export * from '/scripts/dev/firebase-auth.mjs';\n",
-  '/__dev/firebase-app.js': "export * from '/tests/_fake-gstatic-app.mjs';\n"
+  '/__dev/firebase-app.js': "export * from '/tests/_fake-gstatic-app.mjs';\n",
+  // Finance's uploads: nothing is stored locally.
+  '/__dev/firebase-storage.js': "export const getStorage = () => ({});\nexport const ref = (s, p) => ({ fullPath: p });\nexport const uploadBytes = async r => ({ ref: r });\nexport const getDownloadURL = async r => 'about:blank#' + r.fullPath;\nexport const deleteObject = async () => {};\n"
 };
 const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(s => s.trim().split('=')).filter(x => x[0]).map(([k, v]) => [k, decodeURIComponent(v || '')]));
 const whoami = req => ({ email: cookies(req).easyDevAs || AGENT, tenantId: T });
@@ -152,7 +155,8 @@ const server = http.createServer(async (req, res) => {
     let data = readFileSync(file);
     if (ext === '.js' || ext === '.mjs' || ext === '.html') {
       const s = data.toString('utf8');
-      if (GSTATIC.test(s)) data = s.replace(GSTATIC, (_, which) => `/__dev/firebase-${which}.js`);
+      GSTATIC.lastIndex = 0;
+      if (GSTATIC.test(s)) data = s.replace(GSTATIC, '/__dev/firebase-');
       GSTATIC.lastIndex = 0;
     }
     return send(res, 200, TYPES[ext] || 'application/octet-stream', data);

@@ -251,6 +251,49 @@ try {
   ok('The plan card works on the phone', await phone.locator('.easy-plan li').count() >= 5);
   await phone.screenshot({ path: `${OUT}/06-phone.png` });
 
+  // ═══ Every admin page ═══
+  console.log('\nEvery admin page');
+  for (const [file, label] of [['dashboard.html', 'Properties'], ['propertytrack.html', 'the board'], ['3pinfinance.html', 'Finance'], ['index.html', 'Home']]) {
+    const pg = await (async () => {
+      const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const p2 = await ctx2.newPage();
+      await p2.route('**/*', r => { const u = new URL(r.request().url()); return u.hostname === 'localhost' ? r.continue() : r.abort(); });
+      await p2.goto(`http://localhost:${port}/${file}`);
+      return p2;
+    })();
+    const shown = await pg.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 }).then(() => true).catch(() => false);
+    ok(`Eåsy is on ${label} (${file})`, shown);
+    if (shown) {
+      await pg.click('.easy-fab');
+      const t2 = await ask(pg, 'What is my day?');
+      ok(`…and answers there`, /Your day/.test(t2), t2.slice(0, 80));
+      const lb = pg.locator('.easy-plan .easy-lead').first();
+      if (await lb.count()) {
+        await lb.click();
+        await pg.waitForURL(/crm\.html\?lead=/, { timeout: 5000 }).catch(() => {});
+        ok('…Open lead goes to that lead in the CRM', /crm\.html\?lead=L_/.test(pg.url()), pg.url());
+      }
+    }
+    await pg.context().close();
+  }
+  // Finance on a phone: the bottom tabs stay clear.
+  {
+    const ctx3 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const p3 = await ctx3.newPage();
+    await p3.route('**/*', r => { const u = new URL(r.request().url()); return u.hostname === 'localhost' ? r.continue() : r.abort(); });
+    await p3.goto(`http://localhost:${port}/3pinfinance.html`);
+    if (await p3.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 }).then(() => true).catch(() => false)) {
+      const clear = await p3.evaluate(() => {
+        const bar = document.querySelector('.bottom'); const fab = document.querySelector('.easy-fab').getBoundingClientRect();
+        if (!bar || getComputedStyle(bar).display === 'none') return true;
+        return fab.bottom <= bar.getBoundingClientRect().top + 1;
+      });
+      ok('Finance on a phone: the Eåsy button sits above the bottom tabs', clear);
+      await p3.screenshot({ path: `${OUT}/07-finance-phone.png` });
+    } else ok('Finance on a phone: Eåsy appears', false);
+    await ctx3.close();
+  }
+
   // ═══ An agent who is not the admin ═══
   console.log('\nAs an agent (not the admin)');
   const ctx = phone.context();

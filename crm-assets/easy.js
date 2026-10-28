@@ -1,10 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════
 // EÅSY — the CRM's assistant (Eåsy Requirements Document v2, MVP).
 //
-// Plug-and-play: this file and easy.css are the whole page side. Remove the two lines in
-// crm.html and Eåsy is gone; set EASY_DISABLED=1 on the server and the button never appears.
-// The only things it reads from the page are crmAuth (the sign-in), openDetail (to open a
-// lead) and the page's `leads` list (for the Log call picker) — all optional.
+// Plug-and-play: this file and easy.css are the whole page side, on every admin page (CRM,
+// Properties, the property page, the board, Finance, Home). Remove their two lines from a page
+// and Eåsy is gone there; set EASY_DISABLED=1 on the server and the button never appears.
+// It needs nothing from the page: the sign-in is whichever the page has (crmAuth,
+// dashboardAuth, trackAuth, financeAuth — or Firebase's own, all one project), and it appears
+// only once someone is signed in. On the CRM it opens a lead in place and uses the page's
+// lead list for Log call; elsewhere it opens crm.html?lead=… and asks the server for the list.
 //
 // Talks to /api/easy:
 //   { history }                      a question → { reply, drafts, changes, links, plan }
@@ -30,8 +33,34 @@
   }
   const leadBtn = id => id ? `<button type="button" class="easy-lead" data-lead="${esc(id)}">Open lead</button>` : '';
 
+  // Whoever is signed in on this page. Every console signs in to the same Firebase project; the
+  // home page keeps no object of its own, so Firebase is asked directly (the app it already started).
+  const AUTHS = ['crmAuth', 'dashboardAuth', 'trackAuth', 'financeAuth'];
+  const FB = 'https://www.gstatic.com/firebasejs/12.16.0/firebase-';
+  async function idToken(){
+    for(const k of AUTHS){
+      const a = window[k];
+      if(a && typeof a.getIdToken === 'function'){
+        const t = await Promise.resolve(a.getIdToken()).catch(() => null);
+        if(t) return t;
+      }
+    }
+    try {
+      const [{ getApps }, { getAuth }] = await Promise.all([import(FB + 'app.js'), import(FB + 'auth.js')]);
+      const app = getApps()[0];
+      const u = app && getAuth(app).currentUser;
+      if(u) return await u.getIdToken();
+    } catch(e){}
+    return null;
+  }
+  const onCrm = () => !!window.crmAuth && typeof window.openDetail === 'function' && !!document.getElementById('dp');
+  function openLead(id){
+    if(onCrm()){ setOpen(false); openDetail(id); }
+    else location.href = 'crm.html?lead=' + encodeURIComponent(id);
+  }
+
   async function post(body){
-    const token = window.crmAuth && await window.crmAuth.getIdToken();
+    const token = await idToken();
     if(!token) throw new Error('Sign in first');
     const res = await fetch('/api/easy', {
       method:'POST',
@@ -238,7 +267,7 @@
     const chip = e.target.closest('.easy-chip');
     if(chip){ ask(chip.textContent); return; }
     const lead = e.target.closest('.easy-lead');
-    if(lead){ if(typeof openDetail === 'function'){ setOpen(false); openDetail(lead.dataset.lead); } return; }
+    if(lead){ openLead(lead.dataset.lead); return; }
     const btn = e.target.closest('[data-do]');
     if(!btn) return;
     const card = btn.closest('.easy-card');
@@ -298,11 +327,14 @@
   }
 
   // ── Log call (MVP-09): the lead and what was said; Eåsy prepares the note and the follow-up ──
-  root.querySelector('.easy-logcall').addEventListener('click', () => {
+  root.querySelector('.easy-logcall').addEventListener('click', async () => {
     if(panel.hidden) setOpen(true);
     if(log.querySelector('.easy-callform')) return;
     dropChips();
-    const list = (typeof leads !== 'undefined' && Array.isArray(leads)) ? leads : [];
+    // The CRM has every lead on the page already; anywhere else the server sends the short list.
+    let list = (onCrm() && typeof leads !== 'undefined' && Array.isArray(leads)) ? leads : null;
+    if(!list){ try { list = (await post({ action:'leads' })).leads || []; } catch(e){ list = []; } }
+    if(log.querySelector('.easy-callform')) return;
     const recent = [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 200);
     const el = add('easy-card easy-callform', `
       <div class="easy-card-head">📞 Notes after a call</div>
@@ -374,12 +406,25 @@
   }
 
   // ── Switched on? Only then does the button appear and the reminders start. ──
+  // Waits for a sign-in (a page may still be on its login screen), however long that takes.
   (async function boot(){
-    for(let i = 0; i < 40 && !(window.crmAuth && await window.crmAuth.getIdToken().catch(() => null)); i++) await new Promise(r => setTimeout(r, 500));
+    while(!(await idToken())) await new Promise(r => setTimeout(r, 1500));
     try { await post({ action:'ping' }); }
     catch(e){ if(e.disabled) return; }
     root.hidden = false;
+    liftAboveBars();
     poll();
     setInterval(poll, POLL_MS);
   })();
+
+  // On a phone, Finance has bottom tabs and the property page a bottom action bar: sit above them.
+  function liftAboveBars(){
+    const bars = [...document.querySelectorAll('.bottom, .mobile-actionbar')];
+    const lift = () => {
+      const h = Math.max(0, ...bars.map(b => { const s = getComputedStyle(b); return s.display === 'none' || s.position !== 'fixed' ? 0 : b.getBoundingClientRect().height; }));
+      root.style.setProperty('--easy-lift', h + 'px');
+    };
+    lift();
+    addEventListener('resize', lift);
+  }
 })();

@@ -85,7 +85,7 @@ const S = d => ({ type: 'string', description: d });
 
 const TOOLS = [
   { name: 'my_day', description: "The signed-in agent's plan for today (MVP-10): site visits at their times, then escalations, hot leads, overdue and due follow-ups, tasks, leads going cold, seller-detail chases and unconfirmed messages, each placed in a 30-minute slot. Use for \"what is my day\", \"plan my day\", \"who do I follow up today\", \"what should I do next\".", input_schema: obj({}) },
-  { name: 'search_leads', description: 'Find leads by any words — name, phone, area, budget, configuration, source, stage name. Every word must match. Empty query lists the most recently touched. cold_days lists only open leads untouched for at least that many days.', input_schema: obj({ query: S('Words to match, e.g. "velachery 3bhk" or "shiva"'), cold_days: { type: 'integer', description: 'Only leads untouched for at least this many days' } }) },
+  { name: 'search_leads', description: 'Find leads by any words — name, phone, area, budget, configuration, source, stage name. Every word must match. Empty query lists the most recently touched. For "who went cold" use cold_days: 7 — that gives the deals that went quiet 7–21 days ago, most important first; older silent leads are left out on purpose. Use a bigger number only when the agent names a longer gap ("silent for a month" → 30).', input_schema: obj({ query: S('Words to match, e.g. "velachery 3bhk" or "shiva"'), cold_days: { type: 'integer', description: '7 for "going cold"; more only when the agent names a longer gap' } }) },
   { name: 'lead_summary', description: "One lead in full (MVP-07): requirement, stage, last contact, the latest chat messages, the team's notes, the site visit, the next planned step and the best-matching properties. Use for \"summary of Shiva\" and before drafting to that lead. Needs the lead id from search_leads.", input_schema: obj({ id: S('Lead id') }, ['id']) },
   { name: 'search_properties', description: 'Find properties by any words — area, configuration ("2 BHK"), project name, property code, facing. Every word must match.', input_schema: obj({ query: S('Words to match, e.g. "anna nagar 3 bhk"') }) },
   { name: 'property_summary', description: "One property in full (MVP-06): facts, price, status, how complete it is and what is missing (MVP-03), the site visits so far, the brochure link and the owner's name. Takes the property code (e.g. ANN001) or id.", input_schema: obj({ code: S('Property code or id') }, ['code']) },
@@ -108,6 +108,8 @@ You read, you draft, and you prepare changes. You never send anything and never 
 - Any message for a lead or a property owner goes through draft_message (or ask_owner_for_missing), one per person, never as text in your reply. Then say in one line what you drafted.
 - Adding or changing a property, and saving a note, go through the propose_ tools; the agent confirms on the card. Say what you prepared in one line; do not ask "shall I?" — the card asks.
 Write drafts the way a polite Chennai agent writes on WhatsApp, in Tamil if the person writes in Tamil. Never put an owner's phone number in a message to a lead, and never share a property's exact address with a lead — area and landmark only.
+
+Be precise and brief. For "who to follow up", "what should I do" and similar, give only the few that matter most right now — at most 5 to 8, most important first, one short line each with the reason — and say how many lower-priority ones you left out rather than listing them. Old, inactive leads are not worth mentioning unless a follow-up on them is actually due. Never paste a long list; offer "say 'show more' for the rest".
 
 Keep answers short and scannable: a line or two, then a short list if needed. Use ₹ and Indian number style (L, Cr). When you name a lead, add its id in this exact form so the page can link it: [lead:THE_ID].`;
 
@@ -190,14 +192,24 @@ function makeTools(db, user, now, out) {
       const [ls, st, tasks, gaps, drafts] = await Promise.all([leads(), stages(), own('tasks'), own(C.gaps), own(C.drafts)]);
       const plan = ED.buildDayPlan({ leads: ls, stages: st, tasks, gaps, drafts, email: user.email, now });
       out.plan = plan;
-      return { you: user.email, plan: plan.map(p => ({ time: p.time, priority: p.priority, title: p.title, detail: p.detail || null, leadId: p.leadId || null })) };
+      return { you: user.email, plan: plan.map(p => ({ time: p.time, priority: p.priority, title: p.title, detail: p.detail || null, leadId: p.leadId || null })),
+        lowerPriorityNotListed: plan.more || 0 };
     },
 
     async search_leads({ query, cold_days } = {}) {
       const [ls, st] = await Promise.all([leads(), stages()]);
-      let list = ls;
-      if (cold_days) list = list.filter(l => !['won', 'lost'].includes(kindOf(l, st)) && (now - (l.updatedAt || 0)) >= cold_days * 86400000);
-      const rows = list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map(l => leadRow(l, st)).filter(r => matches(r, wordsOf(query)));
+      if (cold_days) {
+        // Going cold: open leads that were moving and went quiet recently — not every old record.
+        // Most valuable first (the deal furthest along, hot, then the most recently quiet).
+        const quiet = l => now - (l.updatedAt || 0);
+        const rows = ls.filter(l => !['won', 'lost', 'hold'].includes(kindOf(l, st)) && !isBusinessLead(l)
+            && quiet(l) >= cold_days * 86400000 && quiet(l) <= (cold_days <= 14 ? 21 : Math.ceil(cold_days * 1.5)) * 86400000
+            && (ED.leadWeight(l, st) >= 2 || ED.isHot(l)))
+          .sort((a, b) => ED.leadWeight(b, st) - ED.leadWeight(a, st) || (ED.isHot(b) - ED.isHot(a)) || quiet(a) - quiet(b))
+          .map(l => leadRow(l, st)).filter(r => matches(r, wordsOf(query)));
+        return { total: rows.length, leads: rows.slice(0, 10), note: 'Recently gone quiet and worth a follow-up, most important first. Older inactive leads are left out on purpose.' };
+      }
+      const rows = [...ls].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map(l => leadRow(l, st)).filter(r => matches(r, wordsOf(query)));
       return { total: rows.length, leads: rows.slice(0, MAX_ROWS) };
     },
 
@@ -438,6 +450,12 @@ async function owned(db, user, coll, id) {
 export async function easyHandle({ db, user, body, now = Date.now() }) {
   body = body || {};
   if (body.action === 'ping') return [{ enabled: true }, 200];
+
+  // The Log call picker on pages other than the CRM (which has every lead on the page already).
+  if (body.action === 'leads') {
+    const ls = await db.collection('leads').where('tenantId', '==', user.tenantId).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id })));
+    return [{ leads: ls.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 200).map(l => ({ id: l.id, name: l.name || null, phone: l.phone || null, updatedAt: l.updatedAt || 0 })) }, 200];
+  }
 
   // "Sent?" — the agent's answer after Send opened their WhatsApp (MVP-08). Eåsy can't see the send.
   if (body.action === 'draft') {

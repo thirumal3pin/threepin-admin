@@ -75,6 +75,29 @@ const visitBlocks = plan.filter(p => p.kind === 'visit').map(v => [v.at - 30 * M
 check('No slot overlaps a visit and its travel time', placed.every(p => !visitBlocks.some(([a, b]) => p.slot < b && p.slot + 30 * MIN > a)), placed.map(p => ED.istTime(p.slot)));
 check('Slots never start before now', placed.every(p => p.slot >= NOW - 30 * MIN));
 check('Every item has a time to show', plan.every(p => p.time));
+// The owner's rule (28 Oct): only what matters now — 200 old leads must not flood the plan.
+const old = Array.from({ length: 200 }, (_, i) => ({ id: 'OLD' + i, name: 'Old ' + i, stageId: i % 2 ? 'new' : 'options',
+  followUpAt: NOW - (30 + i) * DAY, updatedAt: NOW - (40 + i) * DAY }));
+const live = [
+  { id: 'NEG', name: 'Negotiating, follow-up long overdue', stageId: 'negotiation', followUpAt: NOW - 40 * DAY, updatedAt: NOW - 40 * DAY },
+  { id: 'RECENT', name: 'New, follow-up due yesterday', stageId: 'new', followUpAt: NOW - DAY, updatedAt: NOW - 3 * DAY },
+  { id: 'HOLD', name: 'On hold', stageId: 'on_hold', followUpAt: NOW - DAY, updatedAt: NOW - 3 * DAY },
+  ...Array.from({ length: 12 }, (_, i) => ({ id: 'COOL' + i, name: 'Cooling ' + i, stageId: i < 3 ? 'visit_done' : 'options', updatedAt: NOW - (8 + i) * DAY }))
+];
+const flood = ED.buildDayPlan({ leads: [...leadsNow(), ...old, ...live], stages, tasks: [], email: AGENT, now: NOW });
+const nonVisit = flood.filter(p => p.kind !== 'visit');
+check('200 old leads do not flood the plan: at most 12 items besides the visits', nonVisit.length <= ED.MAX_PLAN, nonVisit.length);
+const busyDay = ED.buildDayPlan({ leads: [...leadsNow(), ...Array.from({ length: 20 }, (_, i) => ({ id: 'DUE' + i, name: 'Due ' + i, stageId: i < 4 ? 'visit_done' : 'options', followUpAt: NOW - HOUR, updatedAt: NOW - 2 * DAY }))], stages, email: AGENT, now: NOW });
+check('20 real follow-ups today: the top 12 listed, the rest counted, not listed', busyDay.filter(p => p.kind !== 'visit').length === ED.MAX_PLAN && busyDay.more > 0, busyDay.more);
+check('…the deals furthest along are among those listed', ['DUE0', 'DUE1', 'DUE2', 'DUE3'].every(id => busyDay.some(p => p.leadId === id)));
+check('…no lead with only a long-stale follow-up date and no live deal', !flood.some(p => /^OLD/.test(p.leadId || '')), flood.filter(p => /^OLD/.test(p.leadId || '')).map(p => p.leadId));
+check('…a live deal with an old follow-up date still counts (negotiating)', flood.some(p => p.leadId === 'NEG'));
+check('…a follow-up due yesterday counts', flood.some(p => p.leadId === 'RECENT') || flood.more > 0);
+check('…a lead on hold does not', !flood.some(p => p.leadId === 'HOLD'));
+check('…going cold is at most 5, the deals furthest along first', nonVisit.filter(p => /going cold/.test(p.title)).length <= 5 && nonVisit.filter(p => /going cold/.test(p.title)).slice(0, 3).every(p => /COOL[012]$/.test(p.leadId) || p.leadId === 'L_lakshmi'), nonVisit.filter(p => /going cold/.test(p.title)).map(p => p.leadId));
+check('…the visits are always there', flood.filter(p => p.kind === 'visit').length === 2);
+check('…escalation (Meena, negotiating) still first', nonVisit[0].leadId === 'L_meena', nonVisit.slice(0, 3).map(p => p.leadId));
+
 const plan2 = ED.buildDayPlan({ leads: leadsNow(), stages, tasks: [], email: AGENT2, now: NOW });
 check('Another agent\'s plan leaves out visits only this agent is on', !plan2.some(p => p.kind === 'visit'));
 
@@ -121,6 +144,19 @@ section('MVP-07 — lead summary');
   check('…and matching properties from the match engine', Array.isArray(r.matchedProperties));
   const { r: cold } = await tool('search_leads', { cold_days: 7 });
   check('Leads untouched for 7 days: Lakshmi, not the won one', cold.leads.some(l => l.id === 'L_lakshmi') && !cold.leads.some(l => l.id === 'L_ravi'));
+  store.set('leads/L_ancient', { id: 'L_ancient', tenantId: T, name: 'Ancient', stageId: 'options', updatedAt: NOW - 200 * DAY, followUpAt: NOW - 190 * DAY });
+  const { r: cold2 } = await tool('search_leads', { cold_days: 7 });
+  check('…a lead silent for 200 days is not "going cold" (it is old, not cooling)', !cold2.leads.some(l => l.id === 'L_ancient'));
+  check('…and the cold list is short', cold2.leads.length <= 10);
+  store.set('leads/L_40', { id: 'L_40', tenantId: T, name: 'Forty days', stageId: 'options', updatedAt: NOW - 40 * DAY });
+  const { r: cold14 } = await tool('search_leads', { cold_days: 14 });
+  check('Even asked with 14 days, a lead silent for 40 days is not "going cold"', !cold14.leads.some(l => l.id === 'L_40'));
+  const { r: month } = await tool('search_leads', { cold_days: 30 });
+  check('…but "silent for a month" (30) does find it', month.leads.some(l => l.id === 'L_40'));
+  store.delete('leads/L_40');
+  store.delete('leads/L_ancient');
+  const [lp] = await easyHandle({ db, user: ME, body: { action: 'leads' }, now: NOW });
+  check('The Log call list for other pages: name, phone, id only', lp.leads.length >= 8 && lp.leads.every(l => Object.keys(l).sort().join() === 'id,name,phone,updatedAt'));
   const { r: none } = await tool('lead_summary', { id: 'nope' });
   check('An unknown lead is "No such lead", not a guess', none.error === 'No such lead');
 }

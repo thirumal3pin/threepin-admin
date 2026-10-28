@@ -6,7 +6,7 @@
 // Numbers and rules are the Eåsy Requirements Document (v2), Part C — the section is named on each.
 
 import { computeAttention, isBusinessLead, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
-import { stageKindOf, visitOf, visitIsOpen } from '../crm-assets/pipeline.js';
+import { stageKindOf, stageKeyOf, visitOf, visitIsOpen } from '../crm-assets/pipeline.js';
 import * as TM from '../shared-assets/task-model.js';
 
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -68,6 +68,19 @@ export const PROPERTY_EDITABLE = {
 
 // Part C, C5 MVP-10: escalation, fixed visit, hot, deadline, due, normal.
 export const PRIORITY = { escalation: 0, fixed: 1, hot: 2, deadline: 3, due: 4, normal: 5 };
+export const MAX_PLAN = 12;                 // items besides the visits; the rest is a count
+const MAX_ESCALATIONS = 5;
+const MAX_COLD = 5;
+const FOLLOW_UP_FRESH = 14 * DAY;           // an overdue follow-up older than this is stale unless the deal is live
+
+// How far along a lead is — what makes it worth a person's time today. -1: parked (on hold).
+const STAGE_WEIGHT = { negotiation: 5, visit_done: 4, visit_pending: 4, send_details: 3, options: 2, sourcing: 1, new: 1, on_hold: -1 };
+export const isHot = l => !!(l && l.tt && /hot/i.test(String(l.tt.status || '')));
+const isWarm = l => !!(l && l.tt && /warm/i.test(String(l.tt.status || '')));
+export function leadWeight(lead, stages) {
+  const key = stageKeyOf((stages || []).find(s => s.id === lead.stageId) || null);
+  return key in STAGE_WEIGHT ? STAGE_WEIGHT[key] : 1;
+}
 const SLOT = 30 * MIN;
 const VISIT_BLOCK = 90 * MIN;       // the visit and the travel around it (proposed)
 
@@ -90,23 +103,39 @@ export function buildDayPlan({ leads = [], stages = [], tasks = [], gaps = [], d
       push({ kind: 'visit', priority: 'fixed', at: v.at, leadId: l.id, title: `Site visit — ${l.name || 'lead'}${v.property ? ' at ' + v.property : ''}`, property: v.property || null });
     }
   }
-  for (const l of leads) {
-    if (isClosed(l, stages) || isBusinessLead(l)) continue;
+  // Only what matters now. A live deal or a hot lead always counts; an old lead only when a
+  // follow-up is genuinely due (owner's rule, 28 Oct 2026) — not every record with a stale date.
+  const weight = l => leadWeight(l, stages);
+  const quiet = l => now - (l.updatedAt || 0);
+  const live = l => weight(l) >= 3 || isHot(l);
+  let cold = 0, esc = 0;
+  for (const l of [...leads].sort((a, b) => weight(b) - weight(a) || quiet(a) - quiet(b))) {
+    if (isClosed(l, stages) || isBusinessLead(l) || weight(l) < 0) continue;
     const top = computeAttention(l, { stages, now })[0];
-    if (top && top.severity === 'critical') push({ kind: 'escalation', priority: 'escalation', leadId: l.id, title: `${l.name || 'Lead'}: ${top.label}`, detail: top.detail || null });
+    // An escalation is critical AND current: raised in the last 7 days, or on a live deal.
+    if (top && top.severity === 'critical' && esc < MAX_ESCALATIONS && (live(l) || now - (top.at || now) <= 7 * DAY)) {
+      esc++;
+      push({ kind: 'escalation', priority: 'escalation', leadId: l.id, weight: weight(l), title: `${l.name || 'Lead'}: ${top.label}`, detail: top.detail || null });
+    }
   }
   for (const l of leads) {
-    if (isClosed(l, stages) || isBusinessLead(l)) continue;
-    const hot = l.tt && /hot/i.test(String(l.tt.status || ''));
-    if (l.followUpAt && l.followUpAt <= endOfDay) {
-      push({ kind: 'follow_up', priority: hot ? 'hot' : l.followUpAt < istAt(now, 0) ? 'deadline' : 'due', leadId: l.id,
-        title: `Follow up ${l.name || 'lead'}`, detail: l.followUpAt < now ? 'was due ' + istDate(l.followUpAt) : 'due ' + istTime(l.followUpAt) });
-    } else if (hot && (now - (l.updatedAt || 0)) > DAY) {
-      push({ kind: 'follow_up', priority: 'hot', leadId: l.id, title: `Call ${l.name || 'lead'} — hot lead`, detail: 'no team contact for a day' });
-    } else if ((now - (l.updatedAt || 0)) >= 7 * DAY) {
-      // MVP-12: going cold — 7 days with no contact (proposed).
-      push({ kind: 'follow_up', priority: 'normal', leadId: l.id, title: `Follow up ${l.name || 'lead'} — going cold`, detail: `no contact for ${Math.floor((now - (l.updatedAt || 0)) / DAY)} days` });
+    if (isClosed(l, stages) || isBusinessLead(l) || weight(l) < 0) continue;
+    const hot = isHot(l);
+    const fu = l.followUpAt;
+    if (fu && fu <= endOfDay && (fu >= now - FOLLOW_UP_FRESH || live(l))) {
+      push({ kind: 'follow_up', priority: hot ? 'hot' : fu < istAt(now, 0) ? 'deadline' : 'due', leadId: l.id, weight: weight(l),
+        title: `Follow up ${l.name || 'lead'}`, detail: fu < now ? 'was due ' + istDate(fu) : 'due ' + istTime(fu) });
+    } else if (hot && quiet(l) > DAY && quiet(l) < 30 * DAY) {
+      push({ kind: 'follow_up', priority: 'hot', leadId: l.id, weight: weight(l), title: `Call ${l.name || 'lead'} — hot lead`, detail: 'no team contact for a day' });
     }
+  }
+  // MVP-12, going cold: went quiet 7–21 days ago and was actually moving. The few that matter most.
+  const cooling = leads.filter(l => !isClosed(l, stages) && !isBusinessLead(l) && !seen.has('follow_up' + l.id)
+    && quiet(l) >= 7 * DAY && quiet(l) <= 21 * DAY && (weight(l) >= 2 || isHot(l) || isWarm(l)))
+    .sort((a, b) => weight(b) - weight(a) || quiet(a) - quiet(b));
+  for (const l of cooling) {
+    if (cold++ >= MAX_COLD) break;
+    push({ kind: 'follow_up', priority: 'normal', leadId: l.id, weight: weight(l), title: `Follow up ${l.name || 'lead'} — going cold`, detail: `no contact for ${Math.floor(quiet(l) / DAY)} days` });
   }
   for (const t of TM.morningListFor(tasks, now)[lc(email)] || []) {
     items.push({ kind: 'task', priority: TM.dueBucket(t, now) === 'overdue' ? 'deadline' : 'due', taskId: t.id, title: t.title, detail: t.link && t.link.label || null });
@@ -118,9 +147,12 @@ export function buildDayPlan({ leads = [], stages = [], tasks = [], gaps = [], d
     if (d.status === 'opened' && lc(d.by) === lc(email)) items.push({ kind: 'message', priority: 'due', draftId: d.id, title: `Did the message to ${d.toName} go?`, detail: 'tap Sent once it is sent' });
   }
 
-  // Visits hold their time; everything else fills the free 30-minute slots, most important first.
+  // Visits hold their time; everything else fills the free 30-minute slots, most important first —
+  // within a priority, the deal furthest along — and only the top of the list (the rest is counted).
   const fixed = items.filter(i => i.kind === 'visit').sort((a, b) => a.at - b.at);
-  const rest = items.filter(i => i.kind !== 'visit').sort((a, b) => PRIORITY[a.priority] - PRIORITY[b.priority]);
+  const ranked = items.filter(i => i.kind !== 'visit').sort((a, b) => PRIORITY[a.priority] - PRIORITY[b.priority] || (b.weight || 0) - (a.weight || 0));
+  const rest = ranked.slice(0, MAX_PLAN);
+  const more = ranked.length - rest.length;
   const busy = fixed.map(v => [v.at - 30 * MIN, v.at + VISIT_BLOCK]);
   const start = Math.max(istAt(now, workFrom), Math.ceil(now / SLOT) * SLOT);
   const stop = istAt(now, workTo);
@@ -132,7 +164,7 @@ export function buildDayPlan({ leads = [], stages = [], tasks = [], gaps = [], d
   }
   for (const v of fixed) v.slot = v.at;
   const plan = [...fixed, ...rest].sort((a, b) => (a.slot == null) - (b.slot == null) || (a.slot || 0) - (b.slot || 0) || PRIORITY[a.priority] - PRIORITY[b.priority]);
-  return plan.map(it => ({ ...it, time: it.slot ? istTime(it.slot) : 'later today' }));
+  return Object.assign(plan.map(it => ({ ...it, time: it.slot ? istTime(it.slot) : 'later today' })), { more });
 }
 
 // ── Reminders (MVP-11, MVP-12, MVP-13) ─────────────────────────────────
