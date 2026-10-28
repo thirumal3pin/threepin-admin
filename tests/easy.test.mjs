@@ -317,6 +317,13 @@ section('Reminders through the handler');
   check('The page gets the 2-hour reminder and the gist', o.reminders.some(r => r.kind === 'visit') && o.reminders.some(r => r.kind === 'gist'));
   const g = o.reminders.find(r => r.kind === 'gist');
   check('…the gist carries the lead\'s last note', g.gist.lead.lastNotes.some(t => /father/.test(t)));
+  forget();
+  const [sc] = await easyHandle({ db, user: ME, body: { action: 'schedule' }, now: NOW });
+  check('The schedule holds the hours ahead, each with its window', sc.schedule.length >= 4 && sc.schedule.every(e => e.key && e.from < e.until), sc.schedule.map(e => e.key));
+  check('…the visit reminder shows from 2 hours before until the visit', sc.schedule.some(e => e.kind === 'visit' && e.leadId === 'L_priya' && e.until - e.from === 2 * HOUR));
+  check('…Priya\'s gist is in it already, though not due yet (the page times it)', sc.schedule.some(e => e.kind === 'gist' && e.leadId === 'L_priya' && e.from > NOW));
+  check('…what is due now from the schedule is exactly what the reminders ask gives', JSON.stringify(ED.dueNow(sc.schedule, NOW).map(e => e.key).sort()) === JSON.stringify(o.reminders.map(e => e.key).sort()));
+  check('…nothing in it has already ended', sc.schedule.every(e => e.until > NOW));
   const [o2] = await easyHandle({ db, user: OTHER, body: { action: 'reminders' }, now: NOW });
   check('Another agent does not get this agent\'s visits', !o2.reminders.some(r => r.kind === 'visit' || r.kind === 'gist'));
 }

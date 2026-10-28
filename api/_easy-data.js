@@ -173,30 +173,38 @@ export function buildDayPlan({ leads = [], stages = [], tasks = [], gaps = [], d
  * What should pop up for this agent right now. Each reminder has a stable key so the page shows it
  * once (the page keeps the keys it has shown). `windowMs` is how far back a missed one still shows.
  */
-export function remindersDue({ leads = [], stages = [], properties = [], email, now, windowMs = 15 * MIN }) {
+/**
+ * The agent's reminders for the hours ahead, each with the window in which it shows: [from, until).
+ * The page fetches this a few times a day and times the reminders itself (crm-assets/easy.js), so
+ * a reminder costs no database read when it fires. Keys are stable: the page shows each once.
+ *   MVP-11  a visit: from 2 hours before until it starts
+ *   MVP-13  the gist: from 10 minutes before until half an hour after
+ *   MVP-12  a follow-up: from its time, for `windowMs`
+ */
+export function scheduleFor({ leads = [], stages = [], properties = [], email, now, horizonMs = 16 * HOUR, windowMs = 15 * MIN }) {
   const out = [];
+  const add = e => { if (e.until > now && e.from < now + horizonMs) out.push(e); };
   for (const l of leads) {
     const v = visitOf(l);
     if (visitIsOpen(v) && visitIsMine(l, email)) {
       const p = findPropertyFor(v.property, properties);
-      // MVP-11: two hours before.
-      const r2 = v.at - 2 * HOUR;
-      if (now >= r2 && now < v.at && now - r2 < 2 * HOUR) {
-        out.push({ key: `visit2h:${l.id}:${v.at}`, kind: 'visit', leadId: l.id, at: v.at,
-          title: `Site visit at ${istTime(v.at)} — ${l.name || 'lead'}`,
-          body: [p ? `${p.propertyCode || ''} ${p.name || ''}`.trim() : v.property, p && p.mapLink ? 'Map: ' + p.mapLink : null].filter(Boolean).join(' · ') });
-      }
-      // MVP-13: the gist, ten minutes before.
-      const g = v.at - 10 * MIN;
-      if (now >= g && now < v.at + 30 * MIN) out.push({ key: `gist:${l.id}:${v.at}`, kind: 'gist', leadId: l.id, at: v.at, title: `In 10 minutes: ${l.name || 'lead'}`, gist: visitGist(l, p) });
+      add({ key: `visit2h:${l.id}:${v.at}`, kind: 'visit', leadId: l.id, at: v.at, from: v.at - 2 * HOUR, until: v.at,
+        title: `Site visit at ${istTime(v.at)} — ${l.name || 'lead'}`,
+        body: [p ? `${p.propertyCode || ''} ${p.name || ''}`.trim() : v.property, p && p.mapLink ? 'Map: ' + p.mapLink : null].filter(Boolean).join(' · ') });
+      add({ key: `gist:${l.id}:${v.at}`, kind: 'gist', leadId: l.id, at: v.at, from: v.at - 10 * MIN, until: v.at + 30 * MIN,
+        title: `In 10 minutes: ${l.name || 'lead'}`, gist: visitGist(l, p) });
     }
-    // MVP-12: a follow-up at its time.
-    if (l.followUpAt && now >= l.followUpAt && now - l.followUpAt < windowMs && !isClosed(l, stages)) {
-      out.push({ key: `fu:${l.id}:${l.followUpAt}`, kind: 'follow_up', leadId: l.id, at: l.followUpAt, title: `Follow up ${l.name || 'lead'} now`, body: l.propertyInterest || '' });
+    if (l.followUpAt && !isClosed(l, stages)) {
+      add({ key: `fu:${l.id}:${l.followUpAt}`, kind: 'follow_up', leadId: l.id, at: l.followUpAt, from: l.followUpAt, until: l.followUpAt + windowMs,
+        title: `Follow up ${l.name || 'lead'} now`, body: l.propertyInterest || '' });
     }
   }
-  return out;
+  return out.sort((a, b) => a.from - b.from);
 }
+
+// What shows right now: the schedule's entries whose window holds `now`.
+export const dueNow = (schedule, now) => (schedule || []).filter(e => e.from <= now && now < e.until);
+export const remindersDue = args => dueNow(scheduleFor(args), args.now);
 
 export function findPropertyFor(ref, properties) {
   if (!ref) return null;

@@ -18,12 +18,29 @@
 // ═══════════════════════════════════════════════════════════════════════
 (function(){
   const SUGGESTIONS = ['What is my day?', 'Who went cold? Draft the follow-ups', 'What is missing on my properties?', 'Seller summaries for this week'];
-  // Reminders are asked for every 5 minutes, by the tab in front, once across all open tabs of this
-  // browser: each ask costs Firestore reads, and the free plan stops every page at 50K a day.
-  const POLL_MS = 5 * 60000;
-  const POLL_KEY = 'easy.lastPoll';
-  const SHOWN_KEY = 'easy.shownReminders';
-  const history = [];   // { role, text }
+  // ── Kept in this browser, so Eåsy asks the server only when it has to ──
+  // Every server ask can cost Firestore reads (and the free plan stops every page at 50K a day —
+  // it did on 28 Oct 2026, when each open page asked for reminders every minute). So, per person:
+  //   the day's schedule   fetched at most every 20 minutes (and right after a change Eåsy made),
+  //                        by one tab, shared by every page and tab; reminders are timed from it here
+  //   the chat             kept for the day across pages and reloads (↺ starts a new one)
+  //   answers              the same question in the same place within 5 minutes is answered from
+  //                        here, with its time and ↻ Refresh — no reads, no model call
+  //   the Log call list    kept for 30 minutes
+  const SCHED_TTL = 20 * 60000, ANSWER_TTL = 5 * 60000, LEADS_TTL = 30 * 60000;
+  let me = '';          // the signed-in email, from the sign-in token — keys everything below
+  const K = name => 'easy.' + name + '.' + (me || 'anon');
+  const load = name => { try { return JSON.parse(localStorage.getItem(K(name)) || 'null'); } catch(e){ return null; } };
+  const keep = (name, v) => { try { localStorage.setItem(K(name), JSON.stringify(v)); } catch(e){} };
+  const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const hhmm = t => new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  const hash = str => { let h = 5381; for(let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  function emailFromToken(t){
+    if(/^dev:/.test(t)) return t.slice(4).toLowerCase();
+    try { const b = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return String(JSON.parse(decodeURIComponent(escape(atob(b + '==='.slice((b.length + 3) % 4))))).email || '').toLowerCase(); }
+    catch(e){ return ''; }
+  }
+  let history = [];   // { role, text }
   let busy = false;
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -75,6 +92,8 @@
     return data;
   }
 
+  const INTRO = `<p class="easy-hello">Tap 🎤 and speak — in English or Tamil — or type. I read, draft and prepare changes; you send, and you say Yes before anything is saved.</p>
+        <div class="easy-chips">${SUGGESTIONS.map(s => `<button type="button" class="easy-chip">${esc(s)}</button>`).join('')}</div>`;
   const root = document.createElement('div');
   root.className = 'easy';
   root.hidden = true;     // shown once the server says Eåsy is on
@@ -86,14 +105,12 @@
         <div class="easy-head-btns">
           <button type="button" class="easy-lang" title="Language you speak in">EN</button>
           <button type="button" class="easy-speaker" title="Read answers aloud" aria-pressed="true">🔊</button>
+          <button type="button" class="easy-new" title="New chat" aria-label="New chat">↺</button>
           <button type="button" class="easy-logcall" title="Notes after a call">📞 Log call</button>
           <button type="button" class="easy-close" aria-label="Close">×</button>
         </div>
       </header>
-      <div class="easy-log" aria-live="polite">
-        <p class="easy-hello">Tap 🎤 and speak — in English or Tamil — or type. I read, draft and prepare changes; you send, and you say Yes before anything is saved.</p>
-        <div class="easy-chips">${SUGGESTIONS.map(s => `<button type="button" class="easy-chip">${esc(s)}</button>`).join('')}</div>
-      </div>
+      <div class="easy-log" aria-live="polite">${INTRO}</div>
       <form class="easy-form">
         <button type="button" class="easy-mic" title="Speak" aria-label="Speak">🎤</button>
         <input class="easy-input" type="text" placeholder="Ask Eåsy…" autocomplete="off" maxlength="1000">
@@ -261,6 +278,65 @@
     (data.changes || []).forEach(changeCard);
   }
 
+  // ── The chat, kept for the day ──
+  // What is on screen (cards and their state included) and what goes back to the model. A card
+  // half-way through (Log call open, "Looking…") is not kept.
+  let saveTimer = null;
+  function writeChat(){
+    saveTimer = null;
+    if(!me) return;
+    const c = log.cloneNode(true);
+    c.querySelectorAll('.easy-callform, .easy-chips').forEach(x => x.remove());
+    c.querySelectorAll('.easy-dots').forEach(x => { const m = x.closest('.easy-msg'); if(m) m.remove(); });
+    keep('chat', { day: istToday(), history: history.slice(-24), html: c.innerHTML.slice(-150000) });
+  }
+  // At most every 300 ms however busy the chat is, and always on the way out of the page.
+  function saveChat(){ if(me && !saveTimer) saveTimer = setTimeout(writeChat, 300); }
+  addEventListener('pagehide', () => { if(saveTimer){ clearTimeout(saveTimer); writeChat(); } });
+  function restoreChat(){
+    const c = load('chat');
+    if(!(c && c.day === istToday() && c.html && c.html.includes('easy-msg'))) return false;
+    log.innerHTML = c.html;
+    history = Array.isArray(c.history) ? c.history : [];
+    log.scrollTop = log.scrollHeight;
+    return true;
+  }
+  root.querySelector('.easy-new').addEventListener('click', () => {
+    if(busy) return;
+    stopListening(); hush();
+    history = [];
+    log.innerHTML = INTRO;
+    keep('chat', null);
+    input.focus();
+  });
+  // A draft edited by hand is kept as edited.
+  log.addEventListener('input', e => { if(e.target.matches('textarea.easy-draft-text')){ e.target.textContent = e.target.value; saveChat(); } });
+  new MutationObserver(() => saveChat()).observe(log, { childList: true, subtree: true, characterData: true });
+
+  // ── Answers kept for 5 minutes: the same question after the same answer ──
+  // The key is the question and what came before it — skipping earlier askings of this same
+  // question, so asking it twice in a row finds the first answer.
+  const norm = t => String(t || '').toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+  function answerKey(text){
+    let i = history.length - 1;
+    while(i >= 1 && history[i].role === 'assistant' && history[i - 1].role === 'user' && norm(history[i - 1].text) === norm(text)) i -= 2;
+    return hash(norm(text)) + ':' + hash(i >= 0 ? history[i].text : '');
+  }
+  function cachedAnswer(key){
+    const all = load('answers') || {};
+    const a = all[key];
+    return a && Date.now() - a.at < ANSWER_TTL ? a : null;
+  }
+  function keepAnswer(key, data){
+    // Only what reads: an answer that drafted or prepared something is never replayed.
+    if((data.drafts && data.drafts.length) || (data.changes && data.changes.length)) return;
+    const all = load('answers') || {};
+    for(const [k, v] of Object.entries(all)) if(Date.now() - v.at > ANSWER_TTL) delete all[k];
+    all[key] = { at: Date.now(), data: { reply: data.reply, plan: data.plan, links: data.links } };
+    keep('answers', all);
+  }
+  const forgetAnswers = () => keep('answers', null);
+
   // ── Clicks ──
   function markDraft(card, status){
     const t = card.querySelector('.easy-draft-text');
@@ -269,6 +345,8 @@
   log.addEventListener('click', async e => {
     const chip = e.target.closest('.easy-chip');
     if(chip){ ask(chip.textContent); return; }
+    const again = e.target.closest('.easy-refresh');
+    if(again){ again.closest('.easy-asof').remove(); ask(again.dataset.q, { fresh: true }); return; }
     const lead = e.target.closest('.easy-lead');
     if(lead){ openLead(lead.dataset.lead); return; }
     const btn = e.target.closest('[data-do]');
@@ -297,6 +375,8 @@
       try{
         const r = await post({ action:'confirm', changeId: card.dataset.change, yes: act === 'yes' });
         row.innerHTML = r.status === 'applied' ? `<span class="easy-ok">✓ ${esc(r.done || 'Done')}</span>` : '<span class="easy-q">Not saved</span>';
+        // Something changed: saved answers may be out of date, and a new follow-up belongs in the schedule.
+        if(r.status === 'applied'){ forgetAnswers(); refreshSchedule(true); }
       } catch(err){ row.innerHTML = `<span class="easy-err-text">${esc(err.message)}</span>`; }
     }
   });
@@ -309,12 +389,28 @@
     input.value = '';
     dropChips();
     add('easy-user', (opts.voice ? '🎤 ' : '') + esc(text));
+    const key = answerKey(text);
     history.push({ role:'user', text });
+    // Asked a moment ago, after the same answer: the saved answer, with its time and ↻ Refresh.
+    const saved = !opts.fresh && cachedAnswer(key);
+    if(saved){
+      const d = saved.data;
+      add('easy-bot', render(d.reply || ''));
+      showResult(d);
+      add('easy-asof', `Answered at ${esc(hhmm(saved.at))} <button type="button" class="easy-refresh" data-q="${esc(text)}">↻ Refresh</button>`);
+      if(opts.voice) say(d.reply);
+      history.push({ role:'assistant', text: d.reply || '' });
+      busy = false;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
     const wait = add('easy-bot', '<span class="easy-dots">Looking</span>');
     try{
       const data = await post({ history, voice: !!opts.voice });
       wait.innerHTML = render(data.reply || '');
       showResult(data);
+      keepAnswer(key, data);
+      if((data.changes && data.changes.length) || (data.drafts && data.drafts.length)) forgetAnswers();
       if(opts.voice) say(data.reply);
       // What was drafted and prepared goes back as text too, so "make it shorter" knows what it was.
       const extra = [...(data.drafts || []).map(d => `[Drafted for ${d.toName}: ${d.text}]`), ...(data.changes || []).map(c => `[Prepared: ${c.title} ${c.lines.join('; ')}]`)].join('\n');
@@ -336,7 +432,11 @@
     dropChips();
     // The CRM has every lead on the page already; anywhere else the server sends the short list.
     let list = (onCrm() && typeof leads !== 'undefined' && Array.isArray(leads)) ? leads : null;
-    if(!list){ try { list = (await post({ action:'leads' })).leads || []; } catch(e){ list = []; } }
+    if(!list){
+      const c = load('leads');
+      if(c && Date.now() - c.at < LEADS_TTL) list = c.leads;
+      else { try { list = (await post({ action:'leads' })).leads || []; keep('leads', { at: Date.now(), leads: list }); } catch(e){ list = (c && c.leads) || []; } }
+    }
     if(log.querySelector('.easy-callform')) return;
     const recent = [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 200);
     const el = add('easy-card easy-callform', `
@@ -373,10 +473,27 @@
     });
   });
 
-  // ── Reminders (MVP-11/12/13): asked each minute while the page is open ──
-  let shown = [];
-  try { shown = JSON.parse(localStorage.getItem(SHOWN_KEY) || '[]'); } catch(e){ shown = []; }
-  const remember = key => { shown = [...shown.filter(k => k !== key), key].slice(-300); try { localStorage.setItem(SHOWN_KEY, JSON.stringify(shown)); } catch(e){} };
+  // ── Reminders (MVP-11/12/13): timed here, from the day's schedule ──
+  // The schedule comes from the server at most every 20 minutes, asked by one tab (the one in
+  // front) and shared with every page and tab; checking it each half-minute costs nothing.
+  // Every tab reads which reminders have been shown, so each shows once.
+  const shownList = () => load('shown') || [];
+  const remember = key => keep('shown', [...shownList().filter(k => k !== key), key].slice(-300));
+  let fetching = null;
+  function refreshSchedule(force){
+    const s = load('schedule');
+    if(!force && s && Date.now() - s.at < SCHED_TTL) return Promise.resolve(s);
+    if(!force && document.visibilityState !== 'visible') return Promise.resolve(s);
+    const lock = Number(load('schedLock')) || 0;
+    if(!force && Date.now() - lock < 60000) return Promise.resolve(s);    // another tab is asking
+    if(fetching) return fetching;
+    keep('schedLock', Date.now());
+    fetching = post({ action:'schedule' })
+      .then(d => { const ns = { at: Date.now(), items: d.schedule || [] }; keep('schedule', ns); return ns; })
+      .catch(() => s)
+      .finally(() => { fetching = null; });
+    return fetching;
+  }
   let asked = false;
   function askNotifyPermission(){
     if(asked || !('Notification' in window) || Notification.permission !== 'default') return;
@@ -391,16 +508,13 @@
       }
     } catch(e){}
   }
-  async function poll(){
-    if(document.visibilityState !== 'visible') return;
-    let last = 0;
-    try { last = Number(localStorage.getItem(POLL_KEY)) || 0; } catch(e){}
-    if(Date.now() - last < POLL_MS - 5000) return;          // another tab asked just now
-    try { localStorage.setItem(POLL_KEY, String(Date.now())); } catch(e){}
+  async function tick(){
     try{
-      const data = await post({ action:'reminders' });
-      for(const r of data.reminders || []){
-        if(shown.includes(r.key)) continue;
+      const s = await refreshSchedule(false);
+      const now = Date.now();
+      const shown = shownList();
+      for(const r of (s && s.items) || []){
+        if(!(r.from <= now && now < r.until) || shown.includes(r.key)) continue;
         remember(r.key);
         dropChips();
         reminderCard(r);
@@ -418,11 +532,15 @@
     while(!(await idToken())) await new Promise(r => setTimeout(r, 1500));
     try { await post({ action:'ping' }); }
     catch(e){ if(e.disabled) return; }
+    me = emailFromToken((await idToken()) || '');
+    restoreChat();
     root.hidden = false;
     liftAboveBars();
-    poll();
-    setInterval(poll, 60000);                               // a check, not a request: poll() asks at most every 5 min
-    document.addEventListener('visibilitychange', poll);
+    tick();
+    setInterval(tick, 30000);                               // looks at the saved schedule; asks the server at most every 20 min
+    document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') tick(); });
+    // Another tab started a new chat, or the day changed: keep this one in step when it comes to the front.
+    addEventListener('storage', e => { if(e.key === K('chat') && e.newValue === 'null' && !busy){ history = []; log.innerHTML = INTRO; } });
   })();
 
   // On a phone, Finance has bottom tabs and the property page a bottom action bar: sit above them.

@@ -251,6 +251,52 @@ try {
   ok('The plan card works on the phone', await phone.locator('.easy-plan li').count() >= 5);
   await phone.screenshot({ path: `${OUT}/06-phone.png` });
 
+  // ═══ Kept in the browser: the chat, answers, the schedule ═══
+  console.log('\nKept in the browser');
+  const calls = [];
+  page.context().on('request', r => { if (r.url().includes('/api/easy')) { try { const b = JSON.parse(r.postData() || '{}'); calls.push(b.action || (b.history ? 'ask' : '?')); } catch (e) {} } });
+  // The same question again, straight after the same answer: answered from the browser.
+  await page.click('.easy-new');
+  ok('↺ New chat clears the conversation', await page.locator('.easy-log .easy-msg').count() === 0 && await page.isVisible('.easy-chips'));
+  calls.length = 0;
+  await ask(page, 'What is my day?');
+  ok('A question asks the server once', calls.filter(c => c === 'ask').length === 1, calls);
+  await ask(page, 'Thanks');
+  calls.length = 0;
+  const t1 = await ask(page, 'What is my day?');
+  ok('…asked again after a different answer, it goes to the server', calls.filter(c => c === 'ask').length === 1, calls);
+  calls.length = 0;
+  await ask(page, 'What is my day?');
+  ok('…asked again straight after the same answer: answered from the browser, no server call', calls.length === 0, calls);
+  ok('…shown with its time and ↻ Refresh', await page.locator('.easy-asof .easy-refresh').count() >= 1 && /Answered at/.test(await page.locator('.easy-asof').last().innerText()));
+  await page.locator('.easy-refresh').last().click();
+  await page.waitForFunction(() => !document.querySelector('.easy-dots'), null, { timeout: 30000 });
+  ok('↻ Refresh asks the server again', calls.filter(c => c === 'ask').length === 1, calls);
+  // The chat follows you to another page and survives a reload.
+  const kept = await page.locator(".easy-log .easy-msg").count();
+  await page.goto(`http://localhost:${port}/dashboard.html`);
+  await page.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 });
+  await page.click('.easy-fab');
+  ok('The chat is still there on another page', await page.locator('.easy-log .easy-msg').count() === kept, `${await page.locator('.easy-log .easy-msg').count()} vs ${kept}`);
+  calls.length = 0;
+  await page.reload();
+  await page.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 });
+  await page.waitForTimeout(1500);
+  ok('…and after a reload; the day\'s schedule is not fetched again (it is kept for 20 minutes)', !calls.includes('schedule') && !calls.includes('reminders'), calls);
+  await page.click('.easy-fab');
+  t = await ask(page, 'And who went cold?');
+  ok('…the conversation carries on from where it was', t.length > 0);
+  // Two more tabs, as people keep them: still no extra schedule asks.
+  calls.length = 0;
+  const extra = [await page.context().newPage(), await page.context().newPage()];
+  for (const [i, pg] of extra.entries()) await pg.goto(`http://localhost:${port}/${i ? 'propertytrack.html' : 'crm.html'}`);
+  await page.waitForTimeout(4000);
+  ok('Opening two more tabs costs no schedule fetch', !calls.includes('schedule') && !calls.includes('reminders'), calls);
+  for (const pg of extra) await pg.close();
+  await page.goto(`http://localhost:${port}/crm.html`);
+  await page.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 });
+  await page.click('.easy-fab');
+
   // ═══ Every admin page ═══
   console.log('\nEvery admin page');
   for (const [file, label] of [['dashboard.html', 'Properties'], ['propertytrack.html', 'the board'], ['3pinfinance.html', 'Finance'], ['index.html', 'Home']]) {

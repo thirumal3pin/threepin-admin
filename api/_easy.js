@@ -509,14 +509,17 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
   }
 
   // Reminders the page polls for (MVP-11 visit, MVP-12 follow-up, MVP-13 gist).
-  if (body.action === 'reminders') {
+  // The hours ahead (MVP-11/12/13): the page asks a few times a day and times each reminder itself.
+  // 'reminders' — what is due right now — is the older page's every-minute ask, kept cheap for it.
+  if (body.action === 'schedule' || body.action === 'reminders') {
     const T = user.tenantId;
+    const horizon = 16 * HOUR_MS;
     const [ls, st, ps] = await Promise.all([
       loadLeads(db, T), loadStages(db, T),
       // Only the properties of visits coming up (the reminder and the gist name them): one read
       // each — by document id, else by code — not the whole inventory.
       loadLeads(db, T).then(async ls => {
-        const refs = [...new Set(ls.map(l => visitOf(l)).filter(v => v.at && v.property && v.at > now - HOUR_MS && v.at < now + 3 * HOUR_MS).map(v => String(v.property)))];
+        const refs = [...new Set(ls.map(l => visitOf(l)).filter(v => v.at && v.property && v.at > now - HOUR_MS && v.at < now + horizon).map(v => String(v.property)))];
         const found = await Promise.all(refs.slice(0, 10).map(async ref => {
           try {
             const byId = await db.collection('properties').doc(ref).get();
@@ -528,13 +531,14 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
         return found.filter(Boolean);
       })
     ]);
-    const due = ED.remindersDue({ leads: ls, stages: st, properties: ps, email: user.email, now });
-    // The gist carries the lead's last notes.
-    await Promise.all(due.filter(r => r.kind === 'gist').map(async r => {
+    const all = ED.scheduleFor({ leads: ls, stages: st, properties: ps, email: user.email, now, horizonMs: horizon });
+    const list = body.action === 'schedule' ? all : ED.dueNow(all, now);
+    // The gist carries the lead's last notes (two reads per visit — a handful a day).
+    await Promise.all(list.filter(r => r.kind === 'gist').map(async r => {
       const notes = await db.collection('leads').doc(r.leadId).collection('notes').orderBy('createdAt', 'desc').limit(2).get().then(s => s.docs.map(d => d.data())).catch(() => []);
       r.gist.lead.lastNotes = notes.map(n => n.text);
     }));
-    return [{ reminders: due, at: now }, 200];
+    return [body.action === 'schedule' ? { schedule: list, at: now } : { reminders: list, at: now }, 200];
   }
 
   const messages = cleanHistory(body.history);
