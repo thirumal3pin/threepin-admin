@@ -18,7 +18,10 @@
 // ═══════════════════════════════════════════════════════════════════════
 (function(){
   const SUGGESTIONS = ['What is my day?', 'Who went cold? Draft the follow-ups', 'What is missing on my properties?', 'Seller summaries for this week'];
-  const POLL_MS = 60000;
+  // Reminders are asked for every 5 minutes, by the tab in front, once across all open tabs of this
+  // browser: each ask costs Firestore reads, and the free plan stops every page at 50K a day.
+  const POLL_MS = 5 * 60000;
+  const POLL_KEY = 'easy.lastPoll';
   const SHOWN_KEY = 'easy.shownReminders';
   const history = [];   // { role, text }
   let busy = false;
@@ -389,7 +392,11 @@
     } catch(e){}
   }
   async function poll(){
-    if(document.visibilityState === 'hidden' && !('Notification' in window)) return;
+    if(document.visibilityState !== 'visible') return;
+    let last = 0;
+    try { last = Number(localStorage.getItem(POLL_KEY)) || 0; } catch(e){}
+    if(Date.now() - last < POLL_MS - 5000) return;          // another tab asked just now
+    try { localStorage.setItem(POLL_KEY, String(Date.now())); } catch(e){}
     try{
       const data = await post({ action:'reminders' });
       for(const r of data.reminders || []){
@@ -414,7 +421,8 @@
     root.hidden = false;
     liftAboveBars();
     poll();
-    setInterval(poll, POLL_MS);
+    setInterval(poll, 60000);                               // a check, not a request: poll() asks at most every 5 min
+    document.addEventListener('visibilitychange', poll);
   })();
 
   // On a phone, Finance has bottom tabs and the property page a bottom action bar: sit above them.

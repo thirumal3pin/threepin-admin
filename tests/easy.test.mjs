@@ -11,7 +11,7 @@ import { makeStore, adminDb } from './fake-firestore.mjs';
 import { rebuildLeadViews } from '../api/_lead-views.js';
 import { easySeed, T, AGENT, AGENT2 } from './fixtures/easy-seed.mjs';
 import * as ED from '../api/_easy-data.js';
-import { easyHandle, setEasyClient, waDigits, easyEnabled } from '../api/_easy.js';
+import { easyHandle, setEasyClient, waDigits, easyEnabled, forget } from '../api/_easy.js';
 
 let passed = 0, failed = 0;
 const check = (label, cond, detail) => { if (cond) passed++; else { failed++; console.log('  FAIL  ' + label + (detail !== undefined ? ' — ' + (typeof detail === 'string' ? detail : JSON.stringify(detail)) : '')); } };
@@ -27,6 +27,8 @@ const db = adminDb(store);
 const leadsNow = () => [...store.docs].filter(([p]) => /^leads\/[^/]+$/.test(p)).map(([p, d]) => ({ ...d, id: p.split('/')[1] }));
 await rebuildLeadViews(db, T, leadsNow(), NOW);
 const stages = docs['pipelines/' + T].stages;
+// A lead added or removed as the CRM does it: the lead and its row in the lead views together.
+const putLead = async (id, data) => { if (data) store.set('leads/' + id, data); else store.delete('leads/' + id); await rebuildLeadViews(db, T, leadsNow(), NOW); };
 const ME = { email: AGENT, email_verified: true, tenantId: T };
 const OTHER = { email: AGENT2, email_verified: true, tenantId: T };
 
@@ -39,6 +41,7 @@ const say = text => ({ stop_reason: 'end_turn', content: [{ type: 'text', text }
 // What the tools answered, from the request the handler sent after running them.
 const results = () => { const last = requests[requests.length - 1].messages.at(-1); return last.content.map(c => ({ ok: !c.is_error, v: c.is_error ? c.content : JSON.parse(c.content) })); };
 async function chat(user, text, steps) {
+  forget();          // each scenario reads the store as it is now (the 1-minute cache is tested on its own)
   script = steps; requests = [];
   const [o, status] = await easyHandle({ db, user, body: { history: [{ role: 'user', text }] }, now: NOW });
   return { o, status };
@@ -144,17 +147,17 @@ section('MVP-07 — lead summary');
   check('…and matching properties from the match engine', Array.isArray(r.matchedProperties));
   const { r: cold } = await tool('search_leads', { cold_days: 7 });
   check('Leads untouched for 7 days: Lakshmi, not the won one', cold.leads.some(l => l.id === 'L_lakshmi') && !cold.leads.some(l => l.id === 'L_ravi'));
-  store.set('leads/L_ancient', { id: 'L_ancient', tenantId: T, name: 'Ancient', stageId: 'options', updatedAt: NOW - 200 * DAY, followUpAt: NOW - 190 * DAY });
+  await putLead('L_ancient', { id: 'L_ancient', tenantId: T, name: 'Ancient', stageId: 'options', updatedAt: NOW - 200 * DAY, followUpAt: NOW - 190 * DAY });
   const { r: cold2 } = await tool('search_leads', { cold_days: 7 });
   check('…a lead silent for 200 days is not "going cold" (it is old, not cooling)', !cold2.leads.some(l => l.id === 'L_ancient'));
   check('…and the cold list is short', cold2.leads.length <= 10);
-  store.set('leads/L_40', { id: 'L_40', tenantId: T, name: 'Forty days', stageId: 'options', updatedAt: NOW - 40 * DAY });
+  await putLead('L_40', { id: 'L_40', tenantId: T, name: 'Forty days', stageId: 'options', updatedAt: NOW - 40 * DAY });
   const { r: cold14 } = await tool('search_leads', { cold_days: 14 });
   check('Even asked with 14 days, a lead silent for 40 days is not "going cold"', !cold14.leads.some(l => l.id === 'L_40'));
   const { r: month } = await tool('search_leads', { cold_days: 30 });
   check('…but "silent for a month" (30) does find it', month.leads.some(l => l.id === 'L_40'));
-  store.delete('leads/L_40');
-  store.delete('leads/L_ancient');
+  await putLead('L_40', null);
+  await putLead('L_ancient', null);
   const [lp] = await easyHandle({ db, user: ME, body: { action: 'leads' }, now: NOW });
   check('The Log call list for other pages: name, phone, id only', lp.leads.length >= 8 && lp.leads.every(l => Object.keys(l).sort().join() === 'id,name,phone,updatedAt'));
   const { r: none } = await tool('lead_summary', { id: 'nope' });
@@ -309,6 +312,7 @@ section('MVP-16 — team overview');
 
 section('Reminders through the handler');
 {
+  forget();
   const [o] = await easyHandle({ db, user: ME, body: { action: 'reminders' }, now: NOW });
   check('The page gets the 2-hour reminder and the gist', o.reminders.some(r => r.kind === 'visit') && o.reminders.some(r => r.kind === 'gist'));
   const g = o.reminders.find(r => r.kind === 'gist');

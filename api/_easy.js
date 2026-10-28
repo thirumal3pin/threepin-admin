@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
-import { writeLead } from './_lead-views.js';
+import { writeLead, readLeads } from './_lead-views.js';
 import { computeAttention, SEVERITY_RANK, isBusinessLead } from '../crm-assets/leadAttention.js';
 import { stageKindOf, visitOf, VISIT_STATUS } from '../crm-assets/pipeline.js';
 import * as TM from '../shared-assets/task-model.js';
@@ -113,14 +113,35 @@ Be precise and brief. For "who to follow up", "what should I do" and similar, gi
 
 Keep answers short and scannable: a line or two, then a short list if needed. Use ₹ and Indian number style (L, Cr). When you name a lead, add its id in this exact form so the page can link it: [lead:THE_ID].`;
 
+// ── Reading, cheaply ──────────────────────────────────────────────────────
+// Firestore bills a read per document, and the free plan stops every page at 50K a day (it did,
+// 28 Oct 2026, when each open page asked for reminders every minute and each ask read every lead
+// and property). So: leads come from the lead views (~1 read per 20 leads, as the CRM reads
+// them), and a warm function keeps what it read for a short while — leads 1 minute, the
+// pipeline and the inventory 10 minutes. A change Eåsy makes clears the cache it touched.
+const HOUR_MS = 60 * 60 * 1000;
+const TTL = { leads: 60 * 1000, stages: 10 * 60 * 1000, props: 10 * 60 * 1000 };
+const cache = new Map();          // `${what}:${tenant}` → { at, p }
+function cached(what, tenant, load) {
+  const k = what + ':' + tenant, hit = cache.get(k);
+  if (hit && Date.now() - hit.at < TTL[what]) return hit.p;
+  const p = load().catch(e => { cache.delete(k); throw e; });
+  cache.set(k, { at: Date.now(), p });
+  return p;
+}
+export const forget = (what, tenant) => { for (const k of [...cache.keys()]) if ((!what || k.startsWith(what + ':')) && (!tenant || k.endsWith(':' + tenant))) cache.delete(k); };
+const loadLeads = (db, T) => cached('leads', T, () => readLeads(db, T));
+const loadStages = (db, T) => cached('stages', T, () => db.collection('pipelines').doc(T).get().then(s => (s.exists ? s.data().stages : null) || []));
+const loadProps = (db, T) => cached('props', T, () => db.collection('properties').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id }))));
+
 // ── The tools ─────────────────────────────────────────────────────────────
 
 function makeTools(db, user, now, out) {
   let leadsP, stagesP, propsP, cfgP;
   const T = user.tenantId;
-  const stages = () => stagesP || (stagesP = db.collection('pipelines').doc(T).get().then(s => (s.exists ? s.data().stages : null) || []));
-  const leads = () => leadsP || (leadsP = db.collection('leads').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id }))));
-  const props = () => propsP || (propsP = db.collection('properties').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id }))));
+  const stages = () => stagesP || (stagesP = loadStages(db, T));
+  const leads = () => leadsP || (leadsP = loadLeads(db, T));
+  const props = () => propsP || (propsP = loadProps(db, T));
   const config = () => cfgP || (cfgP = db.collection('taskConfigs').doc(T).get().then(s => (s.exists ? s.data() : null)));
   const own = (coll) => db.collection(coll).where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id })));
   const kindOf = (l, st) => stageKindOf(st.find(x => x.id === l.stageId) || null);
@@ -389,7 +410,8 @@ async function applyChange(db, user, change) {
   const T = user.tenantId, now = Date.now(), who = lc(user.email);
   const p = change.payload || {};
   if (change.kind === 'property_add') {
-    const list = await db.collection('properties').where('tenantId', '==', T).get().then(s => s.docs.map(d => d.data()));
+    forget('props', T);
+    const list = await loadProps(db, T);
     if (list.some(x => codeKey(x.propertyCode) === codeKey(p.code))) return { error: `${p.code} already exists — ask again to get the next free code` };
     const data = { ...p.fields, tenantId: T, propertyCode: p.code, listingStatus: 'draft', addedBy: who, addedVia: 'easy', createdAt: now, updatedAt: now, updatedBy: who };
     await db.collection('properties').doc(p.code).set(data);
@@ -453,7 +475,7 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
 
   // The Log call picker on pages other than the CRM (which has every lead on the page already).
   if (body.action === 'leads') {
-    const ls = await db.collection('leads').where('tenantId', '==', user.tenantId).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id })));
+    const ls = await loadLeads(db, user.tenantId);
     return [{ leads: ls.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 200).map(l => ({ id: l.id, name: l.name || null, phone: l.phone || null, updatedAt: l.updatedAt || 0 })) }, 200];
   }
 
@@ -481,6 +503,7 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
     if (lc(c.data.by) !== lc(user.email)) return [{ error: 'Only the person who asked can confirm this' }, 403];
     if (!body.yes) { await c.ref.set({ status: 'declined', decidedAt: Date.now() }, { merge: true }); return [{ ok: true, status: 'declined' }, 200]; }
     const r = await applyChange(db, user, c.data);
+    forget(null, user.tenantId);    // what it changed is read fresh next time
     await c.ref.set({ status: r.error ? 'failed' : 'applied', decidedAt: Date.now(), result: r.error || r.done }, { merge: true });
     return [r.error ? { error: r.error } : { ok: true, status: 'applied', done: r.done }, r.error ? 409 : 200];
   }
@@ -489,9 +512,21 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
   if (body.action === 'reminders') {
     const T = user.tenantId;
     const [ls, st, ps] = await Promise.all([
-      db.collection('leads').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id }))),
-      db.collection('pipelines').doc(T).get().then(s => (s.exists ? s.data().stages : null) || []),
-      db.collection('properties').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id })))
+      loadLeads(db, T), loadStages(db, T),
+      // Only the properties of visits coming up (the reminder and the gist name them): one read
+      // each — by document id, else by code — not the whole inventory.
+      loadLeads(db, T).then(async ls => {
+        const refs = [...new Set(ls.map(l => visitOf(l)).filter(v => v.at && v.property && v.at > now - HOUR_MS && v.at < now + 3 * HOUR_MS).map(v => String(v.property)))];
+        const found = await Promise.all(refs.slice(0, 10).map(async ref => {
+          try {
+            const byId = await db.collection('properties').doc(ref).get();
+            if (byId.exists && byId.data().tenantId === T) return { ...byId.data(), id: byId.id };
+            const q = await db.collection('properties').where('tenantId', '==', T).where('propertyCode', '==', ref.toUpperCase().replace(/\s+/g, '')).limit(1).get();
+            return q.docs[0] ? { ...q.docs[0].data(), id: q.docs[0].id } : null;
+          } catch (e) { return null; }      // the reminder still goes, without the property's facts
+        }));
+        return found.filter(Boolean);
+      })
     ]);
     const due = ED.remindersDue({ leads: ls, stages: st, properties: ps, email: user.email, now });
     // The gist carries the lead's last notes.
