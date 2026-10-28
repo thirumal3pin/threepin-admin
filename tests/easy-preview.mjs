@@ -65,7 +65,7 @@ async function openCrm(port, viewport) {
   });
   const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(`pageerror ${viewport.width}px: ${e.message}`));
-  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR|maps|favicon/i.test(m.text())) errors.push(`console ${viewport.width}px: ${m.text()}`); });
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR|maps|favicon|Firestore leads sync error/i.test(m.text())) errors.push(`console ${viewport.width}px: ${m.text()}`); });
   // Only this machine: fonts and the like from the internet are not needed for the test.
   await page.route('**/*', r => { const u = new URL(r.request().url()); return u.hostname === 'localhost' ? r.continue() : r.abort(); });
   await page.goto(`http://localhost:${port}/crm.html`);
@@ -296,6 +296,37 @@ try {
   await page.goto(`http://localhost:${port}/crm.html`);
   await page.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 20000 });
   await page.click('.easy-fab');
+
+  // ═══ The database's daily limit, said plainly (shared-assets/quota-notice.js) ═══
+  await page.evaluate(() => console.error('Firestore leads sync error:', Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' })));
+  ok('An ordinary error shows no limit banner', await page.locator('[role="alert"]', { hasText: 'daily limit' }).count() === 0);
+  await page.evaluate(() => console.error('Firestore leads sync error:', Object.assign(new Error('Quota exceeded.'), { code: 'resource-exhausted' })));
+  const banner = page.locator('[role="alert"]', { hasText: 'daily limit' });
+  ok('Firestore out of quota → one plain banner on the page, with the reset time', await banner.count() === 1 && /resets at about \d{1,2}:\d\d [ap]m/.test(await banner.innerText()), await banner.count() ? await banner.innerText() : 'none');
+  await page.screenshot({ path: `${OUT}/08-quota-banner.png` });
+  await banner.locator('button').click();
+
+  // ═══ The admin's switch ═══
+  console.log('\nThe admin\'s switch');
+  ok('The admin sees the ⏻ switch', await page.isVisible('.easy-power'));
+  page.once('dialog', d => d.accept());
+  await page.click('.easy-power');
+  await page.waitForSelector('.easy.is-off', { state: 'attached', timeout: 5000 });
+  ok('Switched off: the admin\'s button dims and the panel says how to switch it back', await page.locator('.easy-offnote [data-power="on"]').count() === 1 && await page.isDisabled('.easy-input'));
+  {
+    const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    await ctxA.addCookies([{ name: 'easyDevAs', value: 'pradeep@threepin.in', url: `http://localhost:${port}` }]);
+    const pa = await ctxA.newPage();
+    await pa.route('**/*', r => { const u = new URL(r.request().url()); return u.hostname === 'localhost' ? r.continue() : r.abort(); });
+    await pa.goto(`http://localhost:${port}/crm.html`);
+    await pa.waitForFunction(() => typeof leads !== 'undefined' && leads.length > 5, null, { timeout: 20000 });
+    await pa.waitForTimeout(2500);
+    ok('…an agent sees no Eåsy at all, and the CRM works', await pa.locator('.easy-fab').isHidden());
+    await ctxA.close();
+  }
+  await page.locator('.easy-offnote [data-power="on"]').click();
+  await page.waitForFunction(() => !document.querySelector('.easy.is-off'), null, { timeout: 5000 });
+  ok('Switched back on by the admin, from the panel', await page.isEnabled('.easy-input') && await page.locator('.easy-offnote').count() === 0);
 
   // ═══ Every admin page ═══
   console.log('\nEvery admin page');

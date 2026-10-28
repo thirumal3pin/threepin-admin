@@ -35,7 +35,70 @@ const MAX_TURNS = 8;          // tool rounds per question
 const MAX_HISTORY = 12;       // past messages the page may send back
 const MAX_ROWS = 25;
 const MAX_DRAFT = 1000;       // a wa.me link stays reliable under this (Part C, C3)
-const C = { drafts: 'easyDrafts', changes: 'easyChanges', gaps: 'easyGaps', audit: 'easyAudit' };
+const C = { drafts: 'easyDrafts', changes: 'easyChanges', gaps: 'easyGaps', audit: 'easyAudit', meter: 'easyMeter', config: 'easyConfig' };
+
+// ── The daily read budget ─────────────────────────────────────────────────
+// Eåsy may not use more than this many Firestore reads a day for a tenant (EASY_DAILY_READS
+// overrides). Past it, the background work stops and questions are told when it comes back; the
+// agent's own Send / Yes still go through. The count is kept in easyMeter/{tenant}_{day}, the day
+// being Google's quota day (US Pacific), and is what Eåsy actually read (metered below).
+export const EASY_DAILY_READS = () => Number(process.env.EASY_DAILY_READS) || 8000;
+const PT = 'America/Los_Angeles';
+export const quotaDay = now => new Date(now).toLocaleDateString('en-CA', { timeZone: PT });
+// When Google's quota day next starts, in Indian time ("12:30 pm") — midnight Pacific, DST and all.
+export function resetTimeIST(now) {
+  const today = quotaDay(now);
+  for (let h = 0; h < 48; h++) {
+    const t = Math.floor(now / 3600e3) * 3600e3 + h * 3600e3;
+    if (quotaDay(t) !== today && quotaDay(t - 3600e3) === today) {
+      return new Date(t).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
+    }
+  }
+  return 'midnight US time';
+}
+export const isQuotaError = e => !!e && (e.code === 8 || e.code === 'resource-exhausted' || /RESOURCE_EXHAUSTED|quota/i.test(String(e.message || '')));
+const quotaAnswer = now => [{ quota: true, error: `The database has reached its free daily limit, so the admin site is paused until about ${resetTimeIST(now)} today (Google resets it at midnight US time). Nothing is lost.` }, 503];
+
+// Counts every document Eåsy reads, in one place: the database handed to the handler is this
+// wrapper. Anything given back to Firestore (a batch, a transaction, getAll) is unwrapped first.
+function metered(db, counter) {
+  const raw = new WeakMap();
+  const un = x => (x && raw.get(x)) || x;
+  const wrapRef = (target, kind) => {
+    const p = new Proxy(target, { get(t, k) {
+      const v = t[k];
+      if (typeof v !== 'function') return v;
+      if (k === 'get') return async (...a) => {
+        const r = await v.apply(t, a);
+        counter.n += kind === 'doc' ? 1 : Math.max(1, (r.docs || []).length);
+        return r;
+      };
+      if (kind === 'doc' && k === 'collection') return (...a) => wrapRef(v.apply(t, a), 'query');
+      if (kind === 'query' && ['where', 'orderBy', 'limit', 'select', 'startAfter', 'limitToLast'].includes(k)) return (...a) => wrapRef(v.apply(t, a), 'query');
+      if (kind === 'query' && k === 'doc') return (...a) => wrapRef(v.apply(t, a), 'doc');
+      return v.bind(t);
+    } });
+    raw.set(p, target);
+    return p;
+  };
+  const wrapWriter = w => new Proxy(w, { get(t, k) {
+    const v = t[k];
+    if (typeof v !== 'function') return v;
+    if (k === 'get') return async (...a) => { const out = await v.apply(t, a.map(un)); counter.n += out && out.docs ? Math.max(1, out.docs.length) : 1; return out; };
+    if (k === 'getAll') return async (...a) => { const out = await v.apply(t, a.map(un)); counter.n += out.length; return out; };
+    return (...a) => { const out = v.apply(t, a.map(un)); return out === t ? p2(out) : out; };
+  } });
+  const p2 = w => wrapWriter(w);
+  return new Proxy(db, { get(t, k) {
+    const v = t[k];
+    if (typeof v !== 'function') return v;
+    if (k === 'collection') return (...a) => wrapRef(v.apply(t, a), 'query');
+    if (k === 'getAll') return async (...refs) => { const out = await v.apply(t, refs.map(un)); counter.n += refs.length; return out; };
+    if (k === 'batch') return (...a) => wrapWriter(v.apply(t, a));
+    if (k === 'runTransaction') return (fn, ...a) => v.call(t, tx => fn(wrapWriter(tx)), ...a);
+    return v.bind(t);
+  } });
+}
 
 let _anthropic;
 function getAnthropic() {
@@ -120,7 +183,7 @@ Keep answers short and scannable: a line or two, then a short list if needed. Us
 // them), and a warm function keeps what it read for a short while — leads 1 minute, the
 // pipeline and the inventory 10 minutes. A change Eåsy makes clears the cache it touched.
 const HOUR_MS = 60 * 60 * 1000;
-const TTL = { leads: 60 * 1000, stages: 10 * 60 * 1000, props: 10 * 60 * 1000 };
+const TTL = { leads: 60 * 1000, stages: 10 * 60 * 1000, props: 10 * 60 * 1000, config: 60 * 1000, team: 10 * 60 * 1000 };
 const cache = new Map();          // `${what}:${tenant}` → { at, p }
 function cached(what, tenant, load) {
   const k = what + ':' + tenant, hit = cache.get(k);
@@ -131,6 +194,9 @@ function cached(what, tenant, load) {
 }
 export const forget = (what, tenant) => { for (const k of [...cache.keys()]) if ((!what || k.startsWith(what + ':')) && (!tenant || k.endsWith(':' + tenant))) cache.delete(k); };
 const loadLeads = (db, T) => cached('leads', T, () => readLeads(db, T));
+// The admin's on/off switch (easyConfig/{tenant}.off) and who the admins are (taskConfigs managers).
+const loadConfig = (db, T) => cached('config', T, () => db.collection(C.config).doc(T).get().then(s => (s.exists ? s.data() : {})));
+const loadTeam = (db, T) => cached('team', T, () => db.collection('taskConfigs').doc(T).get().then(s => (s.exists ? s.data() : null)));
 const loadStages = (db, T) => cached('stages', T, () => db.collection('pipelines').doc(T).get().then(s => (s.exists ? s.data().stages : null) || []));
 const loadProps = (db, T) => cached('props', T, () => db.collection('properties').where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id }))));
 
@@ -468,10 +534,51 @@ async function owned(db, user, coll, id) {
   return snap.exists && snap.data().tenantId === user.tenantId ? { ref, data: snap.data() } : null;
 }
 
-/** One Eåsy request, given the database, the signed-in user and the body. Returns [object, status]. */
+/**
+ * One Eåsy request, given the database, the signed-in user and the body. Returns [object, status].
+ * Within the day's read budget, it runs (counted); past it, Eåsy rests. A database that has run out
+ * of its quota is said so plainly, with the time it comes back.
+ */
 export async function easyHandle({ db, user, body, now = Date.now() }) {
   body = body || {};
-  if (body.action === 'ping') return [{ enabled: true }, 200];
+  // On or off for the whole team — the admin's switch, in Eåsy itself (no deploy). Off: nothing
+  // else runs; an admin still gets the button, to turn it back on.
+  let cfg, admin;
+  try { [cfg, admin] = await Promise.all([loadConfig(db, user.tenantId), loadTeam(db, user.tenantId).then(t => TM.isManager(t, user.email))]); }
+  catch (e) { if (isQuotaError(e)) return quotaAnswer(now); throw e; }
+  if (body.action === 'switch') {
+    if (!admin) return [{ error: 'Only an admin can switch Eåsy on or off' }, 403];
+    const off = !body.on;
+    await db.collection(C.config).doc(user.tenantId).set({ off, by: lc(user.email), at: now }, { merge: true });
+    forget('config', user.tenantId);
+    return [{ ok: true, off, admin }, 200];
+  }
+  if (body.action === 'ping') return [{ enabled: !cfg.off, off: !!cfg.off, admin }, 200];
+  if (cfg.off) return [{ disabled: true, off: true, error: 'Eåsy is switched off by the admin' }, 503];
+  const day = quotaDay(now);
+  const meterRef = db.collection(C.meter).doc(`${user.tenantId}_${day}`);
+  let used = 0;
+  try { const m = await meterRef.get(); used = m.exists ? Number(m.data().reads) || 0 : 0; }
+  catch (e) { if (isQuotaError(e)) return quotaAnswer(now); throw e; }
+  const cap = EASY_DAILY_READS();
+  if (used >= cap && !['draft', 'confirm'].includes(body.action)) {
+    const back = resetTimeIST(now);
+    if (body.action === 'schedule') return [{ schedule: [], at: now, paused: true }, 200];
+    if (body.action === 'reminders') return [{ reminders: [], at: now, paused: true }, 200];
+    if (body.action === 'leads') return [{ leads: [], paused: true }, 200];
+    return [{ paused: true, drafts: [], changes: [], links: [], plan: null,
+      reply: `I've used today's share of database reads, so I'm resting to keep the CRM running for everyone. I'll be back after ${back}. Everything else in the CRM works as usual.` }, 200];
+  }
+  const counter = { n: 1 };          // the meter read itself
+  let res;
+  try { res = await handle({ db: metered(db, counter), user, body, now }); }
+  catch (e) { if (isQuotaError(e)) return quotaAnswer(now); throw e; }
+  // One write a request; a lost update under a race only makes the count a little low.
+  await meterRef.set({ tenantId: user.tenantId, day, reads: used + counter.n, updatedAt: now }, { merge: true }).catch(() => {});
+  return res;
+}
+
+async function handle({ db, user, body, now }) {
 
   // The Log call picker on pages other than the CRM (which has every lead on the page already).
   if (body.action === 'leads') {
@@ -572,6 +679,7 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
           if (!fn) throw new Error('Unknown tool');
           return { type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(await fn(b.input || {})) };
         } catch (e) {
+          if (isQuotaError(e)) throw e;
           console.error('easy: tool failed', b.name, e);
           return { type: 'tool_result', tool_use_id: b.id, content: 'That lookup failed: ' + (e.message || 'error'), is_error: true };
         }
@@ -580,6 +688,7 @@ export async function easyHandle({ db, user, body, now = Date.now() }) {
     }
     return done('That took too many steps — try asking it in a simpler way.');
   } catch (e) {
+    if (isQuotaError(e)) throw e;
     console.error('easy: failed', e);
     const status = e instanceof Anthropic.RateLimitError ? 429 : 502;
     return [{ error: status === 429 ? 'Eåsy is busy — try again in a minute' : 'Eåsy could not answer just now' }, status];

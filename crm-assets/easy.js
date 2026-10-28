@@ -42,6 +42,7 @@
   }
   let history = [];   // { role, text }
   let busy = false;
+  let isAdmin = false, isOff = false;   // the admin's switch (Eåsy on or off for the whole team)
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   // Plain text → safe HTML: **bold**, line breaks, and [lead:ID] as an open-lead button.
@@ -88,7 +89,12 @@
       body: JSON.stringify(body)
     });
     const data = await res.json().catch(() => ({}));
-    if(!res.ok) { const e = new Error(data.error || 'Eåsy could not answer just now'); e.disabled = !!data.disabled; throw e; }
+    if(!res.ok) {
+      const e = new Error(data.error || 'Eåsy could not answer just now'); e.disabled = !!data.disabled;
+      // Switched off while this page was open: an admin keeps the button (to switch it back), others lose it.
+      if(e.disabled && body.action !== 'ping'){ if(isAdmin && data.off) setOff(true); else root.hidden = true; }
+      throw e;
+    }
     return data;
   }
 
@@ -105,6 +111,7 @@
         <div class="easy-head-btns">
           <button type="button" class="easy-lang" title="Language you speak in">EN</button>
           <button type="button" class="easy-speaker" title="Read answers aloud" aria-pressed="true">🔊</button>
+          <button type="button" class="easy-power" title="Switch Eåsy off for everyone" aria-label="Switch Eåsy on or off" hidden>⏻</button>
           <button type="button" class="easy-new" title="New chat" aria-label="New chat">↺</button>
           <button type="button" class="easy-logcall" title="Notes after a call">📞 Log call</button>
           <button type="button" class="easy-close" aria-label="Close">×</button>
@@ -384,7 +391,7 @@
 
   async function ask(text, opts = {}){
     text = String(text || '').trim();
-    if(!text || busy) return;
+    if(!text || busy || isOff) return;
     busy = true;
     input.value = '';
     dropChips();
@@ -473,6 +480,26 @@
     });
   });
 
+  // ── On / off for the whole team (admins only) ──
+  const powerBtn = root.querySelector('.easy-power');
+  function setOff(off){
+    isOff = off;
+    root.classList.toggle('is-off', off);
+    powerBtn.title = off ? 'Switch Eåsy on for everyone' : 'Switch Eåsy off for everyone';
+    input.disabled = micBtn.disabled = off;
+    input.placeholder = off ? 'Eåsy is off for everyone' : 'Ask Eåsy…';
+    const note = log.querySelector('.easy-offnote');
+    if(off && !note) add('easy-card easy-offnote', '<div class="easy-card-head">Eåsy is off</div><div>No one sees Eåsy and it reads nothing, until you switch it back on. The rest of the site works as usual.</div><div class="easy-row"><button type="button" class="easy-btn primary" data-power="on">Switch Eåsy on</button></div>');
+    if(!off && note) note.remove();
+  }
+  async function switchEasy(on){
+    if(!on && !confirm('Switch Eåsy off for everyone?\n\nNo one will see Eåsy and it will read nothing until an admin switches it back on. The rest of the site keeps working.')) return;
+    try { const r = await post({ action:'switch', on }); setOff(r.off); if(!r.off) tick(); }
+    catch(e){ add('easy-bot easy-err', esc(e.message)); }
+  }
+  powerBtn.addEventListener('click', () => switchEasy(isOff));
+  log.addEventListener('click', e => { const b = e.target.closest('[data-power]'); if(b) switchEasy(b.dataset.power === 'on'); });
+
   // ── Reminders (MVP-11/12/13): timed here, from the day's schedule ──
   // The schedule comes from the server at most every 20 minutes, asked by one tab (the one in
   // front) and shared with every page and tab; checking it each half-minute costs nothing.
@@ -509,6 +536,7 @@
     } catch(e){}
   }
   async function tick(){
+    if(isOff) return;
     try{
       const s = await refreshSchedule(false);
       const now = Date.now();
@@ -530,11 +558,16 @@
   // Waits for a sign-in (a page may still be on its login screen), however long that takes.
   (async function boot(){
     while(!(await idToken())) await new Promise(r => setTimeout(r, 1500));
-    try { await post({ action:'ping' }); }
-    catch(e){ if(e.disabled) return; }
+    let st = { enabled: true };
+    try { st = await post({ action:'ping' }); }
+    catch(e){ if(e.disabled) return; }                     // the site's master switch (Vercel)
+    isAdmin = !!st.admin;
+    if(st.off && !isAdmin) return;                          // switched off by the admin: no button
     me = emailFromToken((await idToken()) || '');
     restoreChat();
     root.hidden = false;
+    root.querySelector('.easy-power').hidden = !isAdmin;
+    setOff(!!st.off);
     liftAboveBars();
     tick();
     setInterval(tick, 30000);                               // looks at the saved schedule; asks the server at most every 20 min

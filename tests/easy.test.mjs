@@ -328,6 +328,57 @@ section('Reminders through the handler');
   check('Another agent does not get this agent\'s visits', !o2.reminders.some(r => r.kind === 'visit' || r.kind === 'gist'));
 }
 
+section('The daily read budget');
+{
+  const { quotaDay, resetTimeIST, isQuotaError } = await import('../api/_easy.js');
+  const meter = `easyMeter/${T}_${quotaDay(NOW)}`;
+  const before = (store.get(meter) || {}).reads || 0;
+  await tool('lead_summary', { id: 'L_shiva' });
+  const after = (store.get(meter) || {}).reads || 0;
+  check('Every request adds what it read to the day\'s meter', after > before, [before, after]);
+  check('…the meter day is Google\'s quota day (US Pacific)', /^\d{4}-\d\d-\d\d$/.test(quotaDay(NOW)));
+  check('The reset time is shown in Indian time (12:30 pm while the US is on summer time)', resetTimeIST(NOW) === '12:30 pm', resetTimeIST(NOW));
+  check('…and 1:30 pm in winter', resetTimeIST(Date.UTC(2026, 11, 10, 6, 0)) === '1:30 pm', resetTimeIST(Date.UTC(2026, 11, 10, 6, 0)));
+  store.set(meter, { reads: 999999 }, { merge: true });
+  forget();
+  script = [];   // no model call may happen
+  const [rest] = await easyHandle({ db, user: ME, body: { history: [{ role: 'user', text: 'What is my day?' }] }, now: NOW });
+  check('Past the budget a question gets a plain "resting" answer — no model call, no reads', rest.paused && /resting/.test(rest.reply) && /12:30 pm/.test(rest.reply));
+  const [sch] = await easyHandle({ db, user: ME, body: { action: 'schedule' }, now: NOW });
+  check('…the background schedule stops', sch.paused && sch.schedule.length === 0);
+  const { o: dr } = await chat(ME, 'x', []);
+  check('…(and the model is not asked)', dr.paused === true);
+  store.set(meter, { reads: 0 }, { merge: true });
+  // Firestore out of quota: said plainly, with the time it comes back.
+  const failing = { collection: () => ({ doc: () => ({ get: async () => { throw Object.assign(new Error('8 RESOURCE_EXHAUSTED: Quota exceeded.'), { code: 8 }); } }) }) };
+  const [q, qs] = await easyHandle({ db: failing, user: ME, body: { action: 'schedule' }, now: NOW });
+  check('The database out of quota: a 503 that says so, and when it resets', qs === 503 && q.quota && /12:30 pm/.test(q.error), q);
+  check('Quota errors are recognised in each form Firestore gives them', isQuotaError({ code: 8 }) && isQuotaError({ code: 'resource-exhausted' }) && isQuotaError({ message: 'Quota exceeded' }) && !isQuotaError({ code: 5 }));
+}
+
+section('The admin\'s on/off switch');
+{
+  forget();
+  let [p] = await easyHandle({ db, user: ME, body: { action: 'ping' }, now: NOW });
+  check('ping says on, and who is an admin', p.enabled && !p.off && p.admin === true);
+  [p] = await easyHandle({ db, user: OTHER, body: { action: 'ping' }, now: NOW });
+  check('…an agent is not an admin', p.admin === false);
+  const [no, ns] = await easyHandle({ db, user: OTHER, body: { action: 'switch', on: false }, now: NOW });
+  check('An agent cannot switch Eåsy off', ns === 403 && /Only an admin/.test(no.error));
+  const [off] = await easyHandle({ db, user: ME, body: { action: 'switch', on: false }, now: NOW });
+  check('The admin switches it off for everyone', off.off === true && store.get(`easyConfig/${T}`).off === true);
+  forget();
+  const [x, xs] = await easyHandle({ db, user: OTHER, body: { action: 'schedule' }, now: NOW });
+  check('…off: nothing runs (503, "switched off by the admin")', xs === 503 && x.off && /switched off/.test(x.error));
+  [p] = await easyHandle({ db, user: OTHER, body: { action: 'ping' }, now: NOW });
+  check('…ping tells the page it is off', p.off === true && p.enabled === false);
+  const [on] = await easyHandle({ db, user: ME, body: { action: 'switch', on: true }, now: NOW });
+  check('The admin switches it back on', on.off === false && store.get(`easyConfig/${T}`).off === false);
+  forget();
+  const [y, ys] = await easyHandle({ db, user: OTHER, body: { action: 'schedule' }, now: NOW });
+  check('…and it runs again', ys === 200 && Array.isArray(y.schedule));
+}
+
 section('Safety');
 {
   const { o } = await chat(ME, 'x', [{ stop_reason: 'refusal', content: [] }]);
