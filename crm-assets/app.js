@@ -624,11 +624,12 @@ const FOCUS_FILTERS = [
 // Per device (localStorage), like the theme — one person's working view, not a team setting.
 const LEAD_FILTER_KEY = 'crmLeadFilter';
 const LEAD_SCOPES = ['all', 'tt', 'other', 'business'];
-let leadFilter = { scope:'all', status:null, focus:null, agents:[] };
+let leadFilter = { scope:'all', status:null, focus:null, agents:[], stages:[] };
 try{
   const saved = JSON.parse(localStorage.getItem(LEAD_FILTER_KEY) || 'null');
   if(saved && LEAD_SCOPES.includes(saved.scope)) leadFilter = { scope: saved.scope, status: saved.scope==='tt' ? (saved.status || null) : null, focus: FOCUS_FILTERS.some(f=>f.key===saved.focus) ? saved.focus : null,
-    agents: Array.isArray(saved.agents) ? saved.agents.filter(x => typeof x === 'string') : (typeof saved.agent === 'string' && saved.agent ? [saved.agent] : []) };
+    agents: Array.isArray(saved.agents) ? saved.agents.filter(x => typeof x === 'string') : (typeof saved.agent === 'string' && saved.agent ? [saved.agent] : []),
+    stages: Array.isArray(saved.stages) ? saved.stages.filter(x => typeof x === 'string') : [] };
 }catch(e){}
 
 const TT_STATUS_FILTERS = [
@@ -658,6 +659,7 @@ function passesLeadFilter(l){
   if(propertyFilter) return leadHasProperty(l, propertyFilter);
   if(!inScope(l, leadFilter.scope, leadFilter.status)) return false;
   if(leadFilter.agents.length && !leadFilter.agents.some(f => matchesAgentFilter(l, f))) return false;
+  if(leadFilter.stages.length && !leadFilter.stages.includes(l.stageId)) return false;
   const focus = leadFilter.focus && FOCUS_FILTERS.find(f => f.key===leadFilter.focus);
   return focus ? focus.test(l) : true;
 }
@@ -682,6 +684,17 @@ function setLeadAgents(list){
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
+}
+// Stages, several at once like agents: tick Visited and Negotiating to see both. Empty = every stage.
+function setLeadStages(list){
+  leadFilter = { ...leadFilter, stages: [...new Set((list || []).filter(Boolean))] };
+  saveLeadFilter();
+  renderLeadFilterBar();
+  applyFilters();
+}
+function toggleLeadStageFilter(id){
+  const cur = leadFilter.stages;
+  setLeadStages(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]);
 }
 function setLeadAgentFilter(v){ setLeadAgents(v ? [v] : []); }
 function toggleLeadAgentFilter(v){
@@ -770,13 +783,13 @@ function saveLeadFilter(){
   try{ localStorage.setItem(LEAD_FILTER_KEY, JSON.stringify(leadFilter)); }catch(e){}
 }
 function setLeadScope(scope){
-  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus, agents: leadFilter.agents || [] };
+  leadFilter = { scope: LEAD_SCOPES.includes(scope) ? scope : 'all', status:null, focus: leadFilter.focus, agents: leadFilter.agents || [], stages: leadFilter.stages || [] };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
 }
 function setLeadStatusFilter(key){
-  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus, agents: leadFilter.agents || [] };
+  leadFilter = { scope:'tt', status: leadFilter.scope==='tt' && leadFilter.status===key ? null : key, focus: leadFilter.focus, agents: leadFilter.agents || [], stages: leadFilter.stages || [] };
   saveLeadFilter();
   renderLeadFilterBar();
   applyFilters();
@@ -814,7 +827,7 @@ function renderLeadFilterBar(){
     + '</span>';
   // The focus and TailorTalk-status chips live in a panel behind one Filters button, like a shop's
   // filter page: the bar never scrolls, and the button says how many are on while the panel is shut.
-  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0);
+  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0) + (leadFilter.stages.length ? 1 : 0);
   html += `<button type="button" class="lf-more${nOn ? ' on' : ''}" aria-expanded="${filterPanelOpen}" aria-controls="leadFilterPanel" onclick="toggleFilterPanel()">`
     + `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>`
     + `Filters${nOn ? `<span class="lf-badge">${nOn}</span>` : ''}<span class="lf-caret" aria-hidden="true">${filterPanelOpen ? '▴' : '▾'}</span></button>`;
@@ -847,16 +860,18 @@ function renderFilterPanel(){
   const status = leadFilter.scope === 'tt'
     ? TT_STATUS_FILTERS.map(f => chip('', leadFilter.status===f.key, `setLeadStatusFilter('${f.key}')`, f.label, ttSales.filter(f.test).length)).join('')
     : '';
-  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0);
+  const stageChips = stages.map(st => chip('', leadFilter.stages.includes(st.id), `toggleLeadStageFilter('${escapeHtml(st.id)}')`, escapeHtml(st.name), scoped.filter(l => l.stageId === st.id).length)).join('');
+  const nOn = (leadFilter.focus ? 1 : 0) + (leadFilter.status ? 1 : 0) + (leadFilter.stages.length ? 1 : 0);
   el.hidden = false;
   el.innerHTML = `<div class="lfp-group"><div class="lfp-h">Show only <small>pick one</small></div><div class="lfp-chips">${focus}</div></div>`
+    + (stageChips ? `<div class="lfp-group"><div class="lfp-h">Stage <small>pick any</small></div><div class="lfp-chips">${stageChips}</div></div>` : '')
     + (status ? `<div class="lfp-group"><div class="lfp-h">TailorTalk status <small>pick one</small></div><div class="lfp-chips">${status}</div></div>` : '')
     + (leadFilter.scope !== 'tt' ? `<div class="lfp-note">Hot, Warm, Cold and AI paused appear here when <b>TailorTalk</b> is picked above.</div>` : '')
     + `<div class="lfp-foot"><button type="button" class="lfp-reset" onclick="resetPanelFilters()"${nOn ? '' : ' disabled'}>Reset</button>`
     + `<button type="button" class="lfp-done" onclick="toggleFilterPanel(false)">Show ${filteredLeads.length} lead${filteredLeads.length===1?'':'s'}</button></div>`;
 }
 function resetPanelFilters(){
-  leadFilter = { ...leadFilter, focus:null, status:null };
+  leadFilter = { ...leadFilter, focus:null, status:null, stages:[] };
   saveLeadFilter();
   applyFilters();
   renderLeadFilterBar();
@@ -877,6 +892,9 @@ function activeLeadFilters(){
   if(leadFilter.agents.length){
     const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentName(f);
     out.push({ label: 'Agent: ' + leadFilter.agents.map(nameOf).join(', '), clear: 'setLeadAgents([])' });
+  }
+  if(leadFilter.stages.length){
+    out.push({ label: 'Stage: ' + leadFilter.stages.map(id => { const st = stageById(id); return st ? st.name : id; }).join(', '), clear: 'setLeadStages([])' });
   }
   if(currentSearch) out.push({ label: `Search “${currentSearch}”`, clear: 'clearSearch()' });
   const cols = currentView === 'list' ? Object.keys(listColumnFilters) : [];
@@ -902,7 +920,7 @@ function clearListColumnFilters(){
   if(currentView === 'list') renderList();
 }
 function clearAllLeadFilters(){
-  leadFilter = { scope:'all', status:null, focus:null, agents:[] };
+  leadFilter = { scope:'all', status:null, focus:null, agents:[], stages:[] };
   saveLeadFilter();
   listColumnFilters = {};
   const inp = document.getElementById('searchInput');
@@ -962,13 +980,13 @@ function currentViewState(){
   const list = lastBrowseView === 'list';
   return {
     scope: leadFilter.scope, status: leadFilter.status || null, focus: leadFilter.focus || null,
-    agents: [...(leadFilter.agents || [])].sort(),
+    agents: [...(leadFilter.agents || [])].sort(), stages: [...(leadFilter.stages || [])].sort(),
     search: currentSearch || '', view: list ? 'list' : 'kanban',
     sortCol: list && listSortCol ? listSortCol : null, sortDir: list && listSortCol ? listSortDir : null,
     colFilters: list ? colFilters : {}
   };
 }
-const viewStateKey = s => JSON.stringify([s.scope, s.status || null, s.focus || null, [...(s.agents || [])].sort(), (s.search || '').toLowerCase(), s.view, s.sortCol || null, s.sortDir || null, Object.keys(s.colFilters || {}).sort().map(k => [k, [...s.colFilters[k]].sort()])]);
+const viewStateKey = s => JSON.stringify([s.scope, s.status || null, s.focus || null, [...(s.agents || [])].sort(), [...(s.stages || [])].sort(), (s.search || '').toLowerCase(), s.view, s.sortCol || null, s.sortDir || null, Object.keys(s.colFilters || {}).sort().map(k => [k, [...s.colFilters[k]].sort()])]);
 function activeSavedView(){
   const key = viewStateKey(currentViewState());
   return Object.values(savedViews).find(v => v && viewStateKey(v) === key) || null;
@@ -979,7 +997,8 @@ function viewSummary(v){
   const status = v.status && TT_STATUS_FILTERS.find(f => f.key === v.status);
   const cols = Object.keys(v.colFilters || {}).length;
   const ag = (v.agents || []).map(a => a === 'none' ? 'Unassigned' : a === 'me' ? 'Mine' : agentName(a)).join(' + ');
-  return [scope, status && status.label, focus && focus.label, ag && `Agent: ${ag}`, v.search && `“${v.search}”`, v.view === 'list' ? 'List' : 'Board', cols && `${cols} column filter${cols === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+  const st = (v.stages || []).map(id => { const x = stageById(id); return x ? x.name : id; }).join(' + ');
+  return [scope, status && status.label, focus && focus.label, ag && `Agent: ${ag}`, st && `Stage: ${st}`, v.search && `“${v.search}”`, v.view === 'list' ? 'List' : 'Board', cols && `${cols} column filter${cols === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
 }
 function renderViewsCtl(){
   const el = document.getElementById('viewsCtl');
@@ -1046,7 +1065,8 @@ function applySavedView(id){
     scope: LEAD_SCOPES.includes(v.scope) ? v.scope : 'all',
     status: v.scope === 'tt' && TT_STATUS_FILTERS.some(f => f.key === v.status) ? v.status : null,
     focus: FOCUS_FILTERS.some(f => f.key === v.focus) ? v.focus : null,
-    agents: Array.isArray(v.agents) ? v.agents.slice() : []
+    agents: Array.isArray(v.agents) ? v.agents.slice() : [],
+    stages: Array.isArray(v.stages) ? v.stages.slice() : []
   };
   saveLeadFilter();
   const inp = document.getElementById('searchInput');
