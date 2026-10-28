@@ -83,7 +83,9 @@ function leadClaude() {
   return _leadClaude;
 }
 // Several CRM tabs refresh every few minutes; TailorTalk is pulled at most this often per tenant.
-const REFRESH_PULL_EVERY_MS = 2 * 60000;
+// The pull is only the safety net for a missed webhook, and each one re-reads every lead active
+// since the last (5–8 reads a lead) — every 10 minutes, not 2 (the free plan's 50K reads a day).
+const REFRESH_PULL_EVERY_MS = 10 * 60000;
 // Bulk re-reads (admin-ai with apply) run on Claude Haiku, like the lead summaries.
 const BULK_MODEL = 'claude-haiku-4-5';
 

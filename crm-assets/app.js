@@ -220,11 +220,25 @@ function toggleLeadAutomation(){
   if(next) liveRefresh(true);
 }
 let liveRefreshTimer = null, liveRefreshRunning = false, lastLiveRefresh = 0;
+// One refresh every 5 minutes per browser, not per tab: each costs database reads on the server, and
+// the tabs share what it brings (the Firestore snapshot). The tab in front asks; the others see the
+// time the last one asked (localStorage) and wait.
+const LIVE_REFRESH_MS = 5*60*1000, LIVE_REFRESH_KEY = 'crm.lastLiveRefresh';
+function liveRefreshDue(){
+  let last = lastLiveRefresh;
+  try{ last = Math.max(last, Number(localStorage.getItem(LIVE_REFRESH_KEY)) || 0); }catch(e){}
+  return Date.now() - last > LIVE_REFRESH_MS - 5000;
+}
+function sharedLiveRefresh(){
+  if(document.visibilityState !== 'visible' || !liveRefreshDue()) return;
+  try{ localStorage.setItem(LIVE_REFRESH_KEY, String(Date.now())); }catch(e){}
+  liveRefresh(false);
+}
 function startLiveRefresh(){
   if(liveRefreshTimer) return;
-  setTimeout(() => liveRefresh(false), 4000);
-  liveRefreshTimer = setInterval(() => { if(document.visibilityState === 'visible') liveRefresh(false); }, 5*60*1000);
-  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && Date.now() - lastLiveRefresh > 5*60*1000) liveRefresh(false); });
+  setTimeout(sharedLiveRefresh, 4000);
+  liveRefreshTimer = setInterval(sharedLiveRefresh, 60*1000);   // a check; it asks at most every 5 minutes per browser
+  document.addEventListener('visibilitychange', sharedLiveRefresh);
 }
 async function liveRefresh(loud){
   if(liveRefreshRunning || !window.crmAuth) return;

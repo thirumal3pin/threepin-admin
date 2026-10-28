@@ -170,7 +170,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   const verdict = answer.verdict;
   // Properties the lead is about, as far as the inventory knows them (crm-assets/propertyLinks.js).
   const candidates = codesIn(verdict.visit && verdict.visit.property, state && state.profile && state.profile.properties_discussed, lead.propertyInterest);
-  const known = candidates.length ? await inventoryIds(db, tenantId, now) : new Set();
+  const known = candidates.length ? await knownInventory(db, tenantId, candidates) : new Set();
   if (!apply) {
     const d = decideLeadChanges({ lead, verdict, stages, now, run: { model: runRecord.model, chatLen }, enquiryTypes });
     const { ai, ...fields } = d.patch;
@@ -204,7 +204,16 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   return summary;
 }
 
+// Which of these codes are this tenant's properties: one read per code the chat mentioned (one to
+// three, usually) — not the whole inventory, which cost a read per property on every AI run
+// (130+ a run, thousands a day on the free plan's 50K; 28 Oct 2026). A property's id is its code.
+export async function knownInventory(db, tenantId, codes) {
+  const snaps = await Promise.all([...new Set(codes)].slice(0, 10).map(c => db.collection('properties').doc(String(c)).get().catch(() => null)));
+  return new Set(snaps.filter(s => s && s.exists && (s.data() || {}).tenantId === tenantId).map(s => s.id));
+}
+
 // Inventory document ids for a tenant, cached per function instance for 10 minutes (ids only).
+// Kept for callers that need the whole list; the AI run uses knownInventory.
 const INVENTORY_TTL_MS = 10 * 60000;
 const inventoryCache = new WeakMap(); // db → Map(tenantId → { at, ids })
 export async function inventoryIds(db, tenantId, now = Date.now()) {
