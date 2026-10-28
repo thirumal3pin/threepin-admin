@@ -103,7 +103,7 @@ try {
 
   // Voice: speak a question, hear the answer.
   ok('The 🎤 button is in the ask box', await page.isVisible('.easy-mic') && await page.isEnabled('.easy-mic'));
-  ok('Reminders are read aloud too', await page.evaluate(() => window.__spoken.length) >= 1);
+  ok('Reminders are shown, not read aloud (no voice out of nowhere)', await page.evaluate(() => window.__spoken.length) === 0);
   await page.evaluate(() => { window.__spoken.length = 0; window.__heard = 'what is my day'; });
   let before = await page.locator('.easy-log .easy-bot').count();
   await page.click('.easy-mic');

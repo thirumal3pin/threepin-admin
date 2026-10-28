@@ -92,7 +92,8 @@
     if(!res.ok) {
       const e = new Error(data.error || 'Eåsy could not answer just now'); e.disabled = !!data.disabled;
       // Switched off while this page was open: an admin keeps the button (to switch it back), others lose it.
-      if(e.disabled && body.action !== 'ping'){ if(isAdmin && data.off) setOff(true); else root.hidden = true; }
+      // Either way the page goes quiet at once — no saved schedule left to remind from.
+      if(e.disabled && body.action !== 'ping'){ isOff = true; hush(); keep('schedule', null); if(isAdmin && data.off) setOff(true); else root.hidden = true; }
       throw e;
     }
     return data;
@@ -517,7 +518,7 @@
     keep('schedLock', Date.now());
     fetching = post({ action:'schedule' })
       .then(d => { const ns = { at: Date.now(), items: d.schedule || [] }; keep('schedule', ns); return ns; })
-      .catch(() => s)
+      .catch(e => e.disabled ? null : s)
       .finally(() => { fetching = null; });
     return fetching;
   }
@@ -547,8 +548,7 @@
         dropChips();
         reminderCard(r);
         notify(r);
-        // Heard as well as seen, when the page is in front and the speaker is on.
-        if(document.visibilityState === 'visible') say(r.kind === 'gist' ? `${r.title}. ${(r.gist && r.gist.lead && r.gist.lead.wants) || ''}` : r.title);
+        // Seen, not heard: Eåsy speaks only to answer a question asked by voice, never on its own.
         if(panel.hidden) dot.hidden = false;
       }
     } catch(e){}
