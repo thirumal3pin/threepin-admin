@@ -185,19 +185,52 @@
   // Reading aloud: the words only — no ids, no markdown, no links.
   function speakable(text){
     return String(text || '').replace(/\[lead:[^\]]+\]/g, '').replace(/\*\*/g, '').replace(/https?:\/\/\S+/g, 'the link')
-      .replace(/^[•\-\d.)\s]+/gm, '').replace(/\n{2,}/g, '. ').replace(/\n/g, '. ').replace(/\s{2,}/g, ' ').trim();
+      .replace(/^\s*(?:[•*-]|\d{1,2}[.)])\s+/gm, '').replace(/\n{2,}/g, '. ').replace(/\n/g, '. ').replace(/\s{2,}/g, ' ').trim();
   }
+  // The voice: an Indian woman's, the most natural one this device has. The first en-IN voice was
+  // often a man's compact one (Rishi on a Mac). Ranked: the language, a woman's voice by name, a
+  // natural / neural / premium / enhanced one, a cloud one over a compact one; a man's voice last.
+  // Edge: Neerja (Natural) · Mac: Isha / Tara / Veena (System Settings → Accessibility → Spoken
+  // Content → Manage Voices adds Isha (Premium)) · Android: Google's English (India) voice.
+  const FEMALE = /\b(neerja|isha|tara|veena|heera|kalpana|sangeeta|kajal|aditi|raveena|swara|pallavi|vani|shruti|female|woman)\b/i;
+  const MALE = /\b(rishi|aman|ravi|prabhat|hemant|kunal|valluvar|male|man)\b/i;
+  const NATURAL = /natural|neural|premium|enhanced|online|wavenet|studio/i;
+  function voiceFor(lang){
+    const vs = ('speechSynthesis' in window && speechSynthesis.getVoices()) || [];
+    const base = lang.slice(0, 2);
+    const score = v => {
+      const l = String(v.lang || '').replace('_', '-');
+      let s = l === lang ? 100 : l.startsWith(base + '-') ? (base === 'en' && /en-GB/.test(l) ? 30 : 20) : -1000;
+      if(FEMALE.test(v.name)) s += 40;
+      if(MALE.test(v.name.replace(/female|woman/ig, ''))) s -= 60;
+      if(NATURAL.test(v.name)) s += 25;
+      if(v.localService === false) s += 5;
+      return s;
+    };
+    return vs.map(v => [v, score(v)]).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || null;
+  }
+  if('speechSynthesis' in window) speechSynthesis.addEventListener && speechSynthesis.addEventListener('voiceschanged', () => {
+    const v = voiceFor('en-IN');
+    speakerBtn.title = v ? `Eåsy's voice: ${v.name}` : 'Read answers aloud';
+  });
   function say(text){
     if(!speakOn || !('speechSynthesis' in window)) return;
     const t = speakable(text);
     if(!t) return;
     hush();
-    const u = new SpeechSynthesisUtterance(t.length > 900 ? t.slice(0, t.lastIndexOf('. ', 900) + 1 || 900) : t);
-    u.lang = /[஀-௿]/.test(t) ? 'ta-IN' : 'en-IN';
-    const v = speechSynthesis.getVoices().find(x => x.lang === u.lang) || speechSynthesis.getVoices().find(x => x.lang && x.lang.startsWith(u.lang.slice(0, 2)));
-    if(v) u.voice = v;
-    u.rate = 1.02;
-    speechSynthesis.speak(u);
+    const lang = /[஀-௿]/.test(t) ? 'ta-IN' : 'en-IN';
+    const v = voiceFor(lang);
+    // Sentence by sentence: Chrome stops a long utterance after ~15 s, and the first words start sooner.
+    const all = t.length > 900 ? t.slice(0, t.lastIndexOf('. ', 900) + 1 || 900) : t;
+    const parts = all.split(/(?<=[.!?])\s+/);
+    for(const p of parts){
+      if(!p.trim()) continue;
+      const u = new SpeechSynthesisUtterance(p.trim());
+      u.lang = lang;
+      if(v) u.voice = v;
+      u.rate = 1.1; u.pitch = 1.05;
+      speechSynthesis.speak(u);
+    }
   }
   function hush(){ try { if('speechSynthesis' in window) speechSynthesis.cancel(); } catch(e){} }
 

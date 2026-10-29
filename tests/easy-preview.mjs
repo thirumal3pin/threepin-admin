@@ -110,7 +110,7 @@ try {
   await page.waitForFunction(n => { const b = document.querySelectorAll('.easy-log .easy-bot'); return b.length > n && !b[b.length - 1].querySelector('.easy-dots'); }, before, { timeout: 30000 });
   ok('Speaking a question sends it by itself, marked 🎤', /🎤 what is my day/.test(await page.locator('.easy-user').last().innerText()));
   ok('…in English by default', (await page.evaluate(() => window.__langs.at(-1))) === 'en-IN');
-  ok('…and the answer is read aloud, without ids or symbols', await page.evaluate(() => window.__spoken.length === 1 && /day/i.test(window.__spoken[0].text) && !/\[lead:|\*\*/.test(window.__spoken[0].text)), await page.evaluate(() => window.__spoken));
+  ok('…and the answer is read aloud, sentence by sentence, without ids or symbols', await page.evaluate(() => { const all = window.__spoken.map(s => s.text).join(' '); return window.__spoken.length >= 1 && /day/i.test(all) && !/\[lead:|\*\*/.test(all) && !/(^|\s):\d\d/.test(all) && window.__spoken.every(s => !/^(env|local)\b/.test(s.text)); }), await page.evaluate(() => window.__spoken));
   await page.click('.easy-lang');
   ok('The language switch goes to Tamil', (await page.innerText('.easy-lang')).trim() === 'தமிழ்');
   await page.evaluate(() => { window.__heard = 'இன்றைய வேலை என்ன'; });
