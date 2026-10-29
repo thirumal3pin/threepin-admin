@@ -56,8 +56,11 @@ CHAT.push(
   { role:'assistant', at: NOW - 3 * 3600000, content:'A whatsapp template message was sent to user.',
     meta:{ type:'template', template_name:'post_visit_feedback',
            template_params:{ property_name:'anna nagar I block', name:'Thirumal', property_code:'-' } } },
-  { role:'assistant', at: NOW - 2.5 * 3600000, content:'How did your visit go?',
-    meta:{ type:'reply', user_message:"I didn't visit anything", text:'How did your visit go?' } }
+  // A WhatsApp reply, as TailorTalk sends it (stored before replies were read right): the content runs
+  // the message replied to and the reply together; meta.text is what was replied to, user_message the reply.
+  { role:'human_agent', at: NOW - 2.6 * 3600000, content:'Hi Raj, this is Thirumal from 3 PIN Realty. Please let me know your preferred date for a site visit.' },
+  { role:'user', at: NOW - 2.5 * 3600000, content:"Hi Raj, this is Thirumal from 3 PIN Realty. Please let me know your preferred date for a site visit.:\nHi what's the name of this property?",
+    meta:{ type:'reply', user_message:"Hi what's the name of this property?", text:'Hi Raj, this is Thirumal from 3 PIN Realty. Please let me know your preferred date for a site visit.', replied_to_message_id:'wamid.X' } }
 );
 
 const STUB = `
@@ -168,6 +171,14 @@ async function run(engine, name, viewport) {
         locLink: !!box.querySelector('.tt-m-loc[href*="maps"]'),
         templateName: /post_visit_feedback/.test(t),
         quoted: !!box.querySelector('.tt-m-quote'),
+        // The lead's reply is the message; what they replied to is the small quote on top — never the
+        // other way round, and the quoted text is not repeated in the message.
+        replyRight: (() => {
+          const q = [...box.querySelectorAll('.tt-m-quote')].find(e => /preferred date for a site visit/.test(e.textContent));
+          const bubble = q && q.parentElement;
+          const rest = bubble ? bubble.textContent.replace(q.textContent, '') : '';
+          return !!q && !/name of this property/.test(q.textContent) && /name of this property/.test(rest) && !/preferred date for a site visit/.test(rest);
+        })(),
         // The bug an agent would actually report.
         noObjectObject: !/\[object Object\]/.test(t),
         noBarePlaceholder: !/\[audio\]|\[document\]|\[location\]|\[image\]/.test(t)
@@ -183,6 +194,7 @@ async function run(engine, name, viewport) {
     ok('a shared location opens on a map', media.locLink);
     ok('a template says which template went out', media.templateName);
     ok('a reply quotes what it answered', media.quoted);
+    ok('...the lead\'s words are the message, what they replied to is the quote (not reversed)', media.replyRight, JSON.stringify(media));
     ok('nothing is left as a bare placeholder', media.noBarePlaceholder, JSON.stringify(media));
   }
 

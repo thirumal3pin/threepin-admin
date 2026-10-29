@@ -235,7 +235,21 @@ export function normaliseChat(history) {
       const meta = JSON.stringify(m.metadata);
       if (meta.length <= 2000) out.meta = m.metadata;
     }
+    // The identity is what TailorTalk sent, so a message stored before is still the same message.
     out.k = chatKey(out);
+    // A WhatsApp reply to an earlier message: TailorTalk's content is "<the message replied to>:\n<the
+    // reply>", with the reply alone in metadata.user_message and the message replied to in
+    // metadata.text. The content is the lead's own words; what they replied to stays in meta.text,
+    // trimmed when long (a whole brochure blurb is often what they reply to), never dropped.
+    const md = m && m.metadata;
+    if (md && md.type === 'reply' && typeof md.user_message === 'string' && md.user_message.trim()) {
+      out.content = md.user_message;
+      if (!out.meta) out.meta = {
+        type: 'reply', user_message: md.user_message,
+        text: String(md.text || '').slice(0, 700) + (String(md.text || '').length > 700 ? '…' : ''),
+        ...(md.replied_to_message_id ? { replied_to_message_id: String(md.replied_to_message_id) } : {})
+      };
+    }
     return out;
   });
 }
@@ -245,7 +259,14 @@ export function normaliseChat(history) {
 export function mergeChat(existing, incoming) {
   const byKey = new Map();
   (existing || []).forEach((m, i) => { if (m && m.k) byKey.set(m.k, { ...m, i: m.i ?? i }); });
-  (incoming || []).forEach(m => { if (m && m.k && !byKey.has(m.k)) byKey.set(m.k, m); });
+  (incoming || []).forEach(m => {
+    if (!m || !m.k) return;
+    const had = byKey.get(m.k);
+    // A reply stored before replies were read right (its content the quoted message and the reply run
+    // together): the same message, now with the lead's own words as its content.
+    if (had && m.meta && m.meta.type === 'reply' && had.content !== m.content) byKey.set(m.k, { ...had, content: m.content, meta: m.meta });
+    else if (!had) byKey.set(m.k, m);
+  });
   let chat = Array.from(byKey.values()).sort((a, b) => (a.at - b.at) || ((a.i || 0) - (b.i || 0)));
   let truncated = false;
   let bytes = JSON.stringify(chat).length;
@@ -274,6 +295,9 @@ function lastAt(chat, roles) {
 // The words of a customer message. A reply to an earlier message can arrive with its text in
 // metadata and "[object Object]" as the content.
 function userText(m) {
+  // A WhatsApp reply: the lead's own words, not the message they replied to (see normaliseChat).
+  const r = m && m.meta && m.meta.type === 'reply' && String(m.meta.user_message || '').trim();
+  if (r) return r;
   const c = String(m.content || '').trim();
   if (c && c !== '[object Object]') return c;
   const meta = m.meta || {};
@@ -439,7 +463,7 @@ export function planUpdate({ envelope, lead, state, leadId, tenantId, stages, en
     const cut = s => (s ? (s.length > 200 ? s.slice(0, 199) + '…' : s) : null);
     const lastUser = [...chat].reverse().find(m => m.role === 'user' && m.content);
     const lastReply = [...chat].reverse().find(m => (m.role === 'assistant' || m.role === 'human_agent') && m.content && !isNoReplyMarker(m));
-    const quote = cut(lastUser && lastUser.content);
+    const quote = cut(lastUser && userText(lastUser));
     const reply = cut(lastReply && lastReply.content);
     const shown = def && def.quoteFrom === 'both'
       ? [quote, reply && `3 PIN: ${reply}`].filter(Boolean).join(' — ')

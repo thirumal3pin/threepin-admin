@@ -2200,8 +2200,9 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
   border-left: 3px solid var(--border2, #D4CFC5);
   background: rgba(0,0,0,.035); border-radius: 0 7px 7px 0;
   font-size: 11.5px; color: var(--ink3, #655E59);
-  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* Two lines of it, clamped inside the padding so a third line never shows half-cut. */
+.tt-m-qt { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ═══════ ESCALATED, ON THE CARD ═══════
    Somebody asked for a person. It reads as its own thing rather than as one

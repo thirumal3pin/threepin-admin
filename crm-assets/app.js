@@ -1353,7 +1353,8 @@ function ttActivityDays(l, st){
     if(m.role==='user'){
       if(!d.lead && prev && m.at - prev.at > TT_RETURN_GAP_MS) d.cameBackAfter = m.at - prev.at;
       d.lead++;
-      if(!d.quote && m.content) d.quote = m.content;
+      const said = m.meta && m.meta.type === 'reply' && m.meta.user_message ? m.meta.user_message : m.content;
+      if(!d.quote && said) d.quote = said;
     } else if(m.role==='human_agent'){
       d.team++;
     } else {
@@ -1450,10 +1451,14 @@ function ttMsgBody(m){
       + (params ? `<div class="tt-m-sub">${say(params)}</div>` : '');
   }
 
-  // A reply carries what it was replying to. Quoting it is how every chat app
-  // shows this, and without it the answer reads as a non-sequitur.
-  const quoted = type === 'reply' && meta.user_message ? `<div class="tt-m-quote">${say(meta.user_message)}</div>` : '';
-  const text = m.content || meta.text || meta.message || '';
+  // A WhatsApp reply to an earlier message, as every chat app shows it: what they replied to, quoted
+  // small on top (meta.text), and what they wrote (meta.user_message) as the message. TailorTalk's
+  // content runs the two together — "<the message replied to>:\n<the reply>" — so it is not used.
+  const isReply = type === 'reply' && String(meta.user_message || '').trim();
+  const q = isReply ? String(meta.text || '').trim() : '';
+  const q1 = q.replace(/\s+/g, ' ');
+  const quoted = q ? `<div class="tt-m-quote" title="${escapeHtml(q)}"><div class="tt-m-qt">${say(q1.length > 220 ? q1.slice(0, 219).trimEnd() + '…' : q1)}</div></div>` : '';
+  const text = isReply ? meta.user_message : (m.content || meta.text || meta.message || '');
   // Some content arrives as TailorTalk's own angle-bracket narration
   // ("<User shared a video: video.mp4>"); when a typed type has already been
   // rendered above we never reach here, so what is left is worth showing.

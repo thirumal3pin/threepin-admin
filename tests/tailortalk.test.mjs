@@ -631,5 +631,24 @@ section('Firestore: payloads that cannot be used');
   check('TailorTalk down: the pull fails without moving anything', threw);
 }
 
+// ── A WhatsApp reply to an earlier message (the shape TailorTalk really sends) ──
+{
+  const quoted = 'Hi Raj,\n\nThis is Thirumal from 3 PIN Realty.\n\nPlease let me know your preferred date and time for a site visit.';
+  const raw = { role: 'user', content: quoted + ':\nHi what\'s the name of this property?', time: '2026-10-29T14:04:29+00:00',
+    metadata: { text: quoted, user_message: "Hi what's the name of this property?", type: 'reply', replied_to_message_id: 'wamid.X' } };
+  const [m] = normaliseChat([raw]);
+  eq('A reply is stored as the lead\'s own words', m.content, "Hi what's the name of this property?");
+  eq('...with what they replied to kept in meta.text', m.meta.text, quoted);
+  // Stored before the fix: the same message (same key), its content the two run together.
+  const old = { ...m, content: raw.content };
+  const merged = mergeChat([old], [m]).chat;
+  eq('A reply stored the old way is corrected, not stored twice', [merged.length, merged[0].content], [1, "Hi what's the name of this property?"]);
+  // A reply to a long brochure blurb: metadata over the size limit is trimmed, not dropped.
+  const long = 'x'.repeat(3000);
+  const [m2] = normaliseChat([{ role: 'user', content: long + ':\nIs it available?', time: '2026-10-29T14:05:00+00:00', metadata: { text: long, user_message: 'Is it available?', type: 'reply' } }]);
+  check('A reply to a long message keeps the reply and a trimmed quote', m2.content === 'Is it available?' && m2.meta.type === 'reply' && m2.meta.text.length <= 701, JSON.stringify({ c: m2.content, t: m2.meta && m2.meta.text.length }));
+  eq('A plain message is untouched', normaliseChat([{ role: 'user', content: 'Thanks', time: '2026-10-29T14:06:00+00:00', metadata: null }])[0].content, 'Thanks');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

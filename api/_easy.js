@@ -311,7 +311,7 @@ function makeTools(db, user, now, out) {
         stages(), props(), notesOf(ref),
         ref.collection('tailortalk').doc('state').get()
           .then(s => ((s.exists && s.data().chat) || []).filter(m => m && m.content).slice(-6)
-            .map(m => ({ from: m.role === 'user' ? 'lead' : m.role === 'human_agent' ? 'team' : 'bot', text: String(m.content).slice(0, 400) })))
+            .map(m => ({ from: m.role === 'user' ? 'lead' : m.role === 'human_agent' ? 'team' : 'bot', text: String(m.meta && m.meta.type === 'reply' && m.meta.user_message ? m.meta.user_message : m.content).slice(0, 400) })))
           .catch(() => [])
       ]);
       const best = PinMatch.propertiesFor(lead, list, { now, minPct: 55, limit: 3 })

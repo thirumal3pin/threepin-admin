@@ -156,6 +156,12 @@ function speaker(m, leadName) {
 }
 
 function messageText(m) {
+  // A WhatsApp reply: what the lead wrote, and what they were replying to (stored before the reply's
+  // content was its own words, the two ran together in content).
+  if (m.role === 'user' && m.meta && m.meta.type === 'reply' && String(m.meta.user_message || '').trim()) {
+    const to = String(m.meta.text || '').trim();
+    return clip(m.meta.user_message, MAX_MESSAGE_CHARS) + (to ? ` [replying to: "${clip(to, 160)}"]` : '');
+  }
   if (m.role === 'user' || m.role === 'human_agent') return clip(m.content, MAX_MESSAGE_CHARS);
   const text = clip(m.content, MAX_AI_MESSAGE_CHARS);
   if (!text.endsWith('…')) return text;
