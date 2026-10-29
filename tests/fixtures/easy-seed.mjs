@@ -21,6 +21,7 @@ export function easySeed(now = Date.now()) {
   put('settings/' + T, {});
   // An account that is already set up: the CRM and dashboard add their own demo records otherwise.
   put('leadsSeededFlags/' + T, { done: true, at: now });
+  put('easyConfig/' + T, { on: true, off: false, by: AGENT, at: now });      // Eåsy is off until an admin turns it on
   put('propertiesSeededFlags/' + T, { done: true, at: now });
 
   // ── Properties: the snapshot, with codes by area (MED001, POO002, …) ──

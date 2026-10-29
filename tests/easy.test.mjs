@@ -200,6 +200,7 @@ let draftId;
   check('Send marks it opened, with the edited text', x.status === 'opened' && store.get('easyDrafts/' + draftId).text === 'Hi Shiva — edited.');
   [x] = await easyHandle({ db, user: ME, body: { action: 'draft', draftId, status: 'sent' }, now: NOW });
   check('"Sent? Yes" marks it sent', store.get('easyDrafts/' + draftId).status === 'sent');
+  store.set('easyConfig/t_other', { on: true });     // Eåsy on there too, so it is the tenant check that stops it
   const [, s] = await easyHandle({ db, user: { ...ME, tenantId: 't_other' }, body: { action: 'draft', draftId, status: 'sent' }, now: NOW });
   check('Another tenant cannot touch it', s === 404);
 }
@@ -358,6 +359,13 @@ section('The daily read budget');
 
 section('The admin\'s on/off switch');
 {
+  const saved = store.get(`easyConfig/${T}`);
+  store.delete(`easyConfig/${T}`);
+  forget();
+  let [p0] = await easyHandle({ db, user: OTHER, body: { action: 'ping' }, now: NOW });
+  const [z, zs] = await easyHandle({ db, user: OTHER, body: { action: 'schedule' }, now: NOW });
+  check('Never switched on: Eåsy is off and runs nothing', p0.off === true && p0.enabled === false && zs === 503 && z.disabled);
+  store.set(`easyConfig/${T}`, saved);
   forget();
   let [p] = await easyHandle({ db, user: ME, body: { action: 'ping' }, now: NOW });
   check('ping says on, and who is an admin', p.enabled && !p.off && p.admin === true);
@@ -366,14 +374,14 @@ section('The admin\'s on/off switch');
   const [no, ns] = await easyHandle({ db, user: OTHER, body: { action: 'switch', on: false }, now: NOW });
   check('An agent cannot switch Eåsy off', ns === 403 && /Only an admin/.test(no.error));
   const [off] = await easyHandle({ db, user: ME, body: { action: 'switch', on: false }, now: NOW });
-  check('The admin switches it off for everyone', off.off === true && store.get(`easyConfig/${T}`).off === true);
+  check('The admin switches it off for everyone', off.off === true && store.get(`easyConfig/${T}`).on === false);
   forget();
   const [x, xs] = await easyHandle({ db, user: OTHER, body: { action: 'schedule' }, now: NOW });
   check('…off: nothing runs (503, "switched off by the admin")', xs === 503 && x.off && /switched off/.test(x.error));
   [p] = await easyHandle({ db, user: OTHER, body: { action: 'ping' }, now: NOW });
   check('…ping tells the page it is off', p.off === true && p.enabled === false);
   const [on] = await easyHandle({ db, user: ME, body: { action: 'switch', on: true }, now: NOW });
-  check('The admin switches it back on', on.off === false && store.get(`easyConfig/${T}`).off === false);
+  check('The admin switches it back on', on.off === false && store.get(`easyConfig/${T}`).on === true);
   forget();
   const [y, ys] = await easyHandle({ db, user: OTHER, body: { action: 'schedule' }, now: NOW });
   check('…and it runs again', ys === 200 && Array.isArray(y.schedule));

@@ -311,8 +311,11 @@ try {
   ok('The admin sees the ⏻ switch', await page.isVisible('.easy-power'));
   page.once('dialog', d => d.accept());
   await page.click('.easy-power');
-  await page.waitForSelector('.easy.is-off', { state: 'attached', timeout: 5000 });
-  ok('Switched off: the admin\'s button dims and the panel says how to switch it back', await page.locator('.easy-offnote [data-power="on"]').count() === 1 && await page.isDisabled('.easy-input'));
+  await page.waitForSelector('.easy', { state: 'hidden', timeout: 5000 });
+  ok('Switched off: the eåsy button is gone, even for the admin', await page.locator('.easy-fab').isHidden());
+  await page.evaluate(() => toggleMoreMenu && toggleMoreMenu());
+  ok('…and the ⋮ menu says "✨ Eåsy: Off", next to Lead automation', (await page.innerText('#easyBtn')).trim() === '✨ Eåsy: Off' && await page.evaluate(() => document.getElementById('autoBtn').nextElementSibling.id === 'easyBtn'));
+  await page.screenshot({ path: `${OUT}/09-menu-off.png` });
   {
     const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     await ctxA.addCookies([{ name: 'easyDevAs', value: 'pradeep@threepin.in', url: `http://localhost:${port}` }]);
@@ -321,12 +324,18 @@ try {
     await pa.goto(`http://localhost:${port}/crm.html`);
     await pa.waitForFunction(() => typeof leads !== 'undefined' && leads.length > 5, null, { timeout: 20000 });
     await pa.waitForTimeout(2500);
-    ok('…an agent sees no Eåsy at all, and the CRM works', await pa.locator('.easy-fab').isHidden());
+    ok('…an agent sees no Eåsy and no menu item, and the CRM works', await pa.locator('.easy-fab').isHidden() && await pa.locator('#easyBtn').count() === 0);
     await ctxA.close();
   }
-  await page.locator('.easy-offnote [data-power="on"]').click();
-  await page.waitForFunction(() => !document.querySelector('.easy.is-off'), null, { timeout: 5000 });
-  ok('Switched back on by the admin, from the panel', await page.isEnabled('.easy-input') && await page.locator('.easy-offnote').count() === 0);
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('easyBtn'), null, { timeout: 20000 });
+  ok('After a reload the admin still has the menu item, and no button', (await page.textContent('#easyBtn')).trim() === '✨ Eåsy: Off' && await page.locator('.easy-fab').isHidden());
+  page.once('dialog', d => d.accept());
+  await page.evaluate(() => document.getElementById('easyBtn').click());
+  await page.waitForSelector('.easy:not([hidden]) .easy-fab', { timeout: 5000 });
+  ok('Turned back on from the ⋮ menu: the button is back and the menu says On', (await page.textContent('#easyBtn')).trim() === '✨ Eåsy: On' && await page.isVisible('.easy-fab'));
+  await page.click('.easy-fab');
+  ok('…and it answers again', /day/i.test(await ask(page, 'what is my day')));
 
   // ═══ Every admin page ═══
   console.log('\nEvery admin page');

@@ -4,6 +4,7 @@
 // Plug-and-play: this file and easy.css are the whole page side, on every admin page (CRM,
 // Properties, the property page, the board, Finance, Home). Remove their two lines from a page
 // and Eåsy is gone there; set EASY_DISABLED=1 on the server and the button never appears.
+// Day to day it is off until an admin turns it on: "✨ Eåsy: On/Off" in the CRM's ⋮ menu (or ⏻ in the panel).
 // It needs nothing from the page: the sign-in is whichever the page has (crmAuth,
 // dashboardAuth, trackAuth, financeAuth — or Firebase's own, all one project), and it appears
 // only once someone is signed in. On the CRM it opens a lead in place and uses the page's
@@ -93,7 +94,7 @@
       const e = new Error(data.error || 'Eåsy could not answer just now'); e.disabled = !!data.disabled;
       // Switched off while this page was open: an admin keeps the button (to switch it back), others lose it.
       // Either way the page goes quiet at once — no saved schedule left to remind from.
-      if(e.disabled && body.action !== 'ping'){ isOff = true; hush(); keep('schedule', null); if(isAdmin && data.off) setOff(true); else root.hidden = true; }
+      if(e.disabled && body.action !== 'ping'){ keep('schedule', null); setOff(true); }
       throw e;
     }
     return data;
@@ -482,24 +483,37 @@
   });
 
   // ── On / off for the whole team (admins only) ──
+  // Off: no button for anyone, nothing read, nothing said. The admin's switch is "✨ Eåsy: On/Off"
+  // in the CRM's ⋮ menu (next to Lead automation), and ⏻ in the panel while it is on.
   const powerBtn = root.querySelector('.easy-power');
   function setOff(off){
     isOff = off;
-    root.classList.toggle('is-off', off);
-    powerBtn.title = off ? 'Switch Eåsy on for everyone' : 'Switch Eåsy off for everyone';
-    input.disabled = micBtn.disabled = off;
-    input.placeholder = off ? 'Eåsy is off for everyone' : 'Ask Eåsy…';
-    const note = log.querySelector('.easy-offnote');
-    if(off && !note) add('easy-card easy-offnote', '<div class="easy-card-head">Eåsy is off</div><div>No one sees Eåsy and it reads nothing, until you switch it back on. The rest of the site works as usual.</div><div class="easy-row"><button type="button" class="easy-btn primary" data-power="on">Switch Eåsy on</button></div>');
-    if(!off && note) note.remove();
+    root.hidden = off;
+    if(off){ hush(); stopListening(); if(!panel.hidden) setOpen(false); }
+    else if(started) tick(); else start();
+    menuItem();
+  }
+  function menuItem(){
+    const after = document.getElementById('autoBtn');
+    if(!isAdmin || !after) return;
+    let b = document.getElementById('easyBtn');
+    if(!b){
+      b = document.createElement('button');
+      b.type = 'button'; b.className = 'more-dd-item'; b.id = 'easyBtn';
+      b.addEventListener('click', () => { if(typeof window.closeMoreMenu === 'function') window.closeMoreMenu(); switchEasy(isOff); });
+      after.insertAdjacentElement('afterend', b);
+    }
+    b.textContent = isOff ? '✨ Eåsy: Off' : '✨ Eåsy: On';
   }
   async function switchEasy(on){
-    if(!on && !confirm('Switch Eåsy off for everyone?\n\nNo one will see Eåsy and it will read nothing until an admin switches it back on. The rest of the site keeps working.')) return;
-    try { const r = await post({ action:'switch', on }); setOff(r.off); if(!r.off) tick(); }
-    catch(e){ add('easy-bot easy-err', esc(e.message)); }
+    const msg = on
+      ? 'Turn Eåsy on for everyone?\n\nThe team gets the eåsy button on every admin page. It reads at most 8,000 database records a day, then rests until the next day.'
+      : 'Turn Eåsy off for everyone?\n\nNo one will see Eåsy and it will read nothing until an admin turns it back on. The rest of the site keeps working.';
+    if(!confirm(msg)) return;
+    try { const r = await post({ action:'switch', on }); setOff(r.off); }
+    catch(e){ if(!e.disabled) alert(e.message); }
   }
-  powerBtn.addEventListener('click', () => switchEasy(isOff));
-  log.addEventListener('click', e => { const b = e.target.closest('[data-power]'); if(b) switchEasy(b.dataset.power === 'on'); });
+  powerBtn.addEventListener('click', () => switchEasy(false));
 
   // ── Reminders (MVP-11/12/13): timed here, from the day's schedule ──
   // The schedule comes from the server at most every 20 minutes, asked by one tab (the one in
@@ -556,24 +570,27 @@
 
   // ── Switched on? Only then does the button appear and the reminders start. ──
   // Waits for a sign-in (a page may still be on its login screen), however long that takes.
-  (async function boot(){
-    while(!(await idToken())) await new Promise(r => setTimeout(r, 1500));
-    let st = { enabled: true };
-    try { st = await post({ action:'ping' }); }
-    catch(e){ if(e.disabled) return; }                     // the site's master switch (Vercel)
-    isAdmin = !!st.admin;
-    if(st.off && !isAdmin) return;                          // switched off by the admin: no button
-    me = emailFromToken((await idToken()) || '');
+  let started = false;
+  function start(){
+    if(started) return;
+    started = true;
     restoreChat();
-    root.hidden = false;
-    root.querySelector('.easy-power').hidden = !isAdmin;
-    setOff(!!st.off);
+    powerBtn.hidden = !isAdmin;
     liftAboveBars();
     tick();
     setInterval(tick, 30000);                               // looks at the saved schedule; asks the server at most every 20 min
     document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') tick(); });
     // Another tab started a new chat, or the day changed: keep this one in step when it comes to the front.
     addEventListener('storage', e => { if(e.key === K('chat') && e.newValue === 'null' && !busy){ history = []; log.innerHTML = INTRO; } });
+  }
+  (async function boot(){
+    while(!(await idToken())) await new Promise(r => setTimeout(r, 1500));
+    let st;
+    try { st = await post({ action:'ping' }); }
+    catch(e){ return; }                                     // the site's master switch (Vercel), or no answer: stay hidden
+    isAdmin = !!st.admin;
+    me = emailFromToken((await idToken()) || '');
+    setOff(!!st.off);                                       // off: hidden, and an admin gets the ⋮ menu item to turn it on
   })();
 
   // On a phone, Finance has bottom tabs and the property page a bottom action bar: sit above them.

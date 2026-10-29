@@ -57,8 +57,6 @@
 @keyframes easy-pulse{50%{box-shadow:0 0 0 6px var(--red-bg,#FDECEC);}}
 .easy-power[hidden]{display:none;}
 /* Switched off by the admin: only an admin sees the button, dimmed, to switch it back on. */
-.easy.is-off .easy-fab{opacity:.55;filter:grayscale(1);}
-.easy.is-off .easy-power{background:var(--brand);border-color:var(--brand);color:var(--on-brand,#14120F);}
 .easy-new,.easy-power{border:1.5px solid var(--border2);background:var(--card);color:var(--ink);border-radius:99px;min-width:34px;padding:4px 9px;font-family:var(--sans);font-size:15px;font-weight:700;cursor:pointer;line-height:1.1;}
 /* A saved answer: when it was given, and a way to ask again. */
 .easy-asof{align-self:flex-start;max-width:none;padding:0 2px;font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:8px;}

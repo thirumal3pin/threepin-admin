@@ -194,7 +194,9 @@ function cached(what, tenant, load) {
 }
 export const forget = (what, tenant) => { for (const k of [...cache.keys()]) if ((!what || k.startsWith(what + ':')) && (!tenant || k.endsWith(':' + tenant))) cache.delete(k); };
 const loadLeads = (db, T) => cached('leads', T, () => readLeads(db, T));
-// The admin's on/off switch (easyConfig/{tenant}.off) and who the admins are (taskConfigs managers).
+// The admin's on/off switch (easyConfig/{tenant}.on) and who the admins are (taskConfigs managers).
+// Off until an admin turns it on — from the CRM's ⋮ menu, or ⏻ in the panel.
+const isOn = cfg => !!cfg && cfg.on === true;
 const loadConfig = (db, T) => cached('config', T, () => db.collection(C.config).doc(T).get().then(s => (s.exists ? s.data() : {})));
 const loadTeam = (db, T) => cached('team', T, () => db.collection('taskConfigs').doc(T).get().then(s => (s.exists ? s.data() : null)));
 const loadStages = (db, T) => cached('stages', T, () => db.collection('pipelines').doc(T).get().then(s => (s.exists ? s.data().stages : null) || []));
@@ -541,20 +543,20 @@ async function owned(db, user, coll, id) {
  */
 export async function easyHandle({ db, user, body, now = Date.now() }) {
   body = body || {};
-  // On or off for the whole team — the admin's switch, in Eåsy itself (no deploy). Off: nothing
-  // else runs; an admin still gets the button, to turn it back on.
+  // On or off for the whole team — the admin's switch (no deploy), off until an admin turns it on.
+  // Off: nothing else runs, and the page shows no button; an admin turns it on from the ⋮ menu.
   let cfg, admin;
   try { [cfg, admin] = await Promise.all([loadConfig(db, user.tenantId), loadTeam(db, user.tenantId).then(t => TM.isManager(t, user.email))]); }
   catch (e) { if (isQuotaError(e)) return quotaAnswer(now); throw e; }
   if (body.action === 'switch') {
     if (!admin) return [{ error: 'Only an admin can switch Eåsy on or off' }, 403];
     const off = !body.on;
-    await db.collection(C.config).doc(user.tenantId).set({ off, by: lc(user.email), at: now }, { merge: true });
+    await db.collection(C.config).doc(user.tenantId).set({ on: !off, off, by: lc(user.email), at: now }, { merge: true });
     forget('config', user.tenantId);
     return [{ ok: true, off, admin }, 200];
   }
-  if (body.action === 'ping') return [{ enabled: !cfg.off, off: !!cfg.off, admin }, 200];
-  if (cfg.off) return [{ disabled: true, off: true, error: 'Eåsy is switched off by the admin' }, 503];
+  if (body.action === 'ping') return [{ enabled: isOn(cfg), off: !isOn(cfg), admin }, 200];
+  if (!isOn(cfg)) return [{ disabled: true, off: true, error: 'Eåsy is switched off by the admin' }, 503];
   const day = quotaDay(now);
   const meterRef = db.collection(C.meter).doc(`${user.tenantId}_${day}`);
   let used = 0;
