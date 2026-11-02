@@ -1989,6 +1989,11 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .td-n{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--brand-ink);
   background:var(--brand-soft);border:1px solid var(--brand-line);border-radius:999px;padding:1px 7px;}
 .td-sec-note{font-size:12px;color:var(--ink4);margin:3px 0 10px;}
+/* Sort box at the right of a section heading. */
+.td-sort{margin-left:auto;}
+.td-sort select{font:600 12px var(--sans);letter-spacing:normal;text-transform:none;color:var(--ink2);
+  background:var(--card);border:1px solid var(--border);border-radius:999px;padding:4px 10px;cursor:pointer;max-width:190px;}
+.td-sort select:hover{border-color:var(--ink4);color:var(--ink);}
 .td-empty{font-size:13px;color:var(--ink4);padding:16px 14px;border:1px dashed var(--border);
   border-radius:var(--r2);background:var(--bg);}
 

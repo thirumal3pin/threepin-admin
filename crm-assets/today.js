@@ -35,6 +35,39 @@
     if (span === 'month') { d.setDate(1); d.setMonth(d.getMonth() + 1); return d.getTime() - 1; }
     return endOfToday();
   }
+  // How each section is ordered — picked per section from the Sort box beside its heading, and
+  // remembered on this device. "Suggested" is each section's own order (yours first, then by time).
+  var SORTS = [['default', 'Suggested'], ['old', 'Most overdue first'], ['new', 'Newest first'], ['name', 'Name A–Z'], ['active', 'Recently active']];
+  var sorts = {};
+  try { sorts = JSON.parse(localStorage.getItem('pinTodaySort') || '{}') || {}; } catch (e) { sorts = {}; }
+  function nameOfItem(it) {
+    return String((it.lead && it.lead.name) || (it.meeting && it.meeting.title) || (it.task && it.task.title) || (it.x && cardTitle(it.x)) || '').toLowerCase();
+  }
+  function activeAt(it) { var l = it.lead; return l ? Math.max(l.updatedAt || 0, (l.tt && l.tt.lastMessageAt) || 0, l.createdAt || 0) : (it.at || 0); }
+  // Undated (a task with no due date) goes last whichever way the dates run.
+  function dated(at) { return typeof at === 'number' && isFinite(at); }
+  function sortItems(key, items) {
+    var how = sorts[key] || 'default';
+    if (how === 'default') return items;
+    var out = items.slice();
+    if (how === 'name') out.sort(function (a, b) { return nameOfItem(a).localeCompare(nameOfItem(b)); });
+    else if (how === 'active') out.sort(function (a, b) { return activeAt(b) - activeAt(a); });
+    else out.sort(function (a, b) {
+      if (!dated(a.at) || !dated(b.at)) return dated(a.at) ? -1 : dated(b.at) ? 1 : 0;
+      return how === 'old' ? a.at - b.at : b.at - a.at;
+    });
+    return out;
+  }
+  // Whole days past due, counted in calendar days: a call due yesterday evening is 1 day late this morning.
+  function daysLate(at) {
+    var d = new Date(at); d.setHours(0, 0, 0, 0);
+    return Math.round((startOfToday() - d.getTime()) / DAY);
+  }
+  function lateTag(at) {
+    var n = daysLate(at);
+    return '<em title="Due ' + esc(new Date(at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })) + '">' + (n > 0 ? n + 'd late' : 'late') + '</em>';
+  }
+
   function spanWord() { return span === 'week' ? 'this week' : span === 'month' ? 'this month' : 'today'; }
   function dayTag(ts) {
     if (ts >= startOfToday() && ts <= endOfToday()) return '';
@@ -303,7 +336,7 @@
     } else if (item.kind === 'call') {
       if (item.overdue) cls += ' is-late';
       if (item.mine) cls += ' is-mine';
-      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? '<em>late</em>' : dayTag(item.at)) + (item.mine ? mineMark(false) : '') + '</span>'
+      head = '<span class="td-time">' + esc(clock(item.at)) + (item.overdue ? lateTag(item.at) : dayTag(item.at)) + (item.mine ? mineMark(false) : '') + '</span>'
         + '<span class="td-main"><span class="td-what">' + esc(latestNote(l) || 'Follow up') + '</span>'
         + '<span class="td-who">' + esc(l.name || 'Unnamed lead') + '</span></span>';
       body = phoneLine('Client', l.name, l.phone)
@@ -376,15 +409,23 @@
     return { mine: mine, waiting: waiting };
   }
 
-  function sectionHtml(title, note, items, emptyLine) {
+  function sectionHtml(key, title, note, items, emptyLine) {
     var m = mineIn(items);
+    items = sortItems(key, items);
+    var how = sorts[key] || 'default';
+    var sortBox = items.length > 1
+      ? '<label class="td-sort">'
+        + '<select onchange="PinToday.setSort(\'' + key + '\', this.value)" aria-label="Sort ' + esc(title.toLowerCase()) + '" title="Sort ' + esc(title.toLowerCase()) + '">'
+        + SORTS.map(function (o) { return '<option value="' + o[0] + '"' + (how === o[0] ? ' selected' : '') + '>' + (o[0] === 'default' ? 'Sort: ' : '') + esc(o[1]) + '</option>'; }).join('')
+        + '</select></label>'
+      : '';
     return '<section class="td-sec">'
       + '<h2 class="td-sec-h"><span class="td-sec-t">' + esc(title) + '</span>'
       + (items.length ? '<span class="td-n">' + items.length + '</span>' : '')
       + (m.mine ? '<span class="td-sec-mine' + (m.waiting ? ' waiting' : '') + '"'
           + ' title="' + m.mine + ' of these ' + (m.mine === 1 ? 'is' : 'are') + ' yours'
           + (m.waiting ? ', ' + m.waiting + ' still unanswered' : '') + '">'
-          + MINE_ICON + m.mine + '</span>' : '') + '</h2>'
+          + MINE_ICON + m.mine + '</span>' : '') + sortBox + '</h2>'
       + '<p class="td-sec-note">' + esc(note) + '</p>'
       + (items.length ? items.map(rowHtml).join('') : '<p class="td-empty">' + esc(emptyLine) + '</p>')
       + '</section>';
@@ -394,6 +435,11 @@
     setSpan: function (next) {
       span = next === 'week' || next === 'month' ? next : 'day';
       try { localStorage.setItem('pinTodaySpan', span); } catch (e) { /* remembered only for this visit */ }
+      window.renderTodayView();
+    },
+    setSort: function (key, how) {
+      if (how === 'default') delete sorts[key]; else sorts[key] = how;
+      try { localStorage.setItem('pinTodaySort', JSON.stringify(sorts)); } catch (e) { /* remembered only for this visit */ }
       window.renderTodayView();
     },
     answer: function (id, response, reason) {
@@ -455,18 +501,18 @@
             + ' onclick="PinToday.setSpan(\'' + o[0] + '\')">' + o[1] + '</button>';
         }).join('') + '</div>'
       + '</header>'
-      + sectionHtml('Site visits', 'Booked ' + spanWord() + '. Open one for both numbers before you leave.',
+      + sectionHtml('visits', 'Site visits', 'Booked ' + spanWord() + '. Open one for both numbers before you leave.',
         visits, 'No visits booked ' + spanWord() + '.')
-      + sectionHtml('Meetings', 'With the team. Open one to answer it or to join the call.',
+      + sectionHtml('meetings', 'Meetings', 'With the team. Open one to answer it or to join the call.',
         meetings, 'No meetings ' + spanWord() + '.')
-      + sectionHtml('Calls due', 'Follow-ups due ' + (span === 'day' ? 'by the end of today' : 'by the end of ' + spanWord().replace('this ', 'the ')) + ', including any you missed.',
+      + sectionHtml('calls', 'Calls due', 'Follow-ups due ' + (span === 'day' ? 'by the end of today' : 'by the end of ' + spanWord().replace('this ', 'the ')) + ', including any you missed.',
         calls, 'Nothing due ' + spanWord() + '.')
-      + sectionHtml('Tasks for you', 'Assigned to you on the Tasks page: the late ones, the ones due ' + spanWord() + ', and any with no date. Change the status right here.',
+      + sectionHtml('tasks', 'Tasks for you', 'Assigned to you on the Tasks page: the late ones, the ones due ' + spanWord() + ', and any with no date. Change the status right here.',
         mytasks, 'No task assigned to you is due ' + spanWord() + '.')
-      + sectionHtml('Asked of you', 'Where a colleague put your name in a note on a lead.',
+      + sectionHtml('asks', 'Asked of you', 'Where a colleague put your name in a note on a lead.',
         asks, 'Nobody is waiting on you.')
       // Shoot & Media: shown to the voice-over person always, to everyone else while there are some.
-      + (vos.length || voIsMe() ? sectionHtml('Voice-overs to make', 'Asked for by the editor once the rough cut is ready'
+      + (vos.length || voIsMe() ? sectionHtml('vos', 'Voice-overs to make', 'Asked for by the editor once the rough cut is ready'
           + (vo.by ? ' — ' + vo.by + '\u2019s to make' : '') + '. Oldest ask first.', vos, 'No voice-over asked for.') : '')
       + '</div>';
   };
