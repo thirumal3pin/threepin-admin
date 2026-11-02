@@ -42,7 +42,8 @@
   function dueText(t) {
     var b = M().dueBucket(t);
     if (b === 'none') return t.status === 'done' ? '' : 'No due date';
-    if (b === 'overdue') return 'Overdue · ' + fmtDue(t.due);
+    // Whole days past the due date, counted in Indian days — as late calls say it on Daily task.
+    if (b === 'overdue') { var n = Math.round((Date.parse(M().istDay(Date.now())) - Date.parse(t.due)) / 86400000); return (n > 0 ? n + 'd late' : 'Overdue') + ' · was due ' + fmtDue(t.due); }
     if (b === 'today') return 'Due today';
     if (b === 'done') return t.due ? 'Was due ' + fmtDue(t.due) : '';
     return 'Due ' + fmtDue(t.due);

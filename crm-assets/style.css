@@ -2305,6 +2305,7 @@ a.td-act{text-decoration:none;display:inline-flex;align-items:center;}
 .tsk-st.s-done{color:light-dark(#15803D,#86EFAC);border-color:light-dark(#BBF7D0,rgba(74,222,128,.38));background:light-dark(#F0FDF4,rgba(34,197,94,.13));}
 .tsk-st option{color:var(--ink);background:var(--raised);}
 .td-row.tsk-today{cursor:default;}
+.td-row.tsk-today.b-overdue .tsk-d{color:light-dark(#991B1B,#FCA5A5);font-weight:650;}
 .td-row.tsk-today:hover{border-color:var(--border2);}
 
 /* The form */
