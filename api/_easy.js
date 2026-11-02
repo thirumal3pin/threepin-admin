@@ -425,7 +425,12 @@ function makeTools(db, user, now, out) {
     async brochure({ code }) {
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
-      if (p.brochureLink) { out.links.push({ label: `Brochure — ${codeOf(p)}`, url: p.brochureLink }); return { code: codeOf(p), brochure: p.brochureLink, shownAsLink: true }; }
+      // Brochure_Link may list several files, comma-separated: a link for each, the brochure first.
+      const urls = String(p.brochureLink || '').split(/[\s,]+/).filter(u => /^https?:\/\//i.test(u));
+      if (urls.length) {
+        urls.forEach((url, i) => out.links.push({ label: `${i ? 'File ' + (i + 1) : 'Brochure'} — ${codeOf(p)}`, url }));
+        return { code: codeOf(p), brochure: urls[0], otherFiles: urls.slice(1), shownAsLink: true };
+      }
       return { code: codeOf(p), brochure: null, note: 'No brochure on this property yet. New brochures come from the brochure pipeline; the photos link and highlights should be filled first.', missing: ED.completeness(p).missing };
     },
 

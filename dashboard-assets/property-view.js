@@ -232,6 +232,8 @@
     const map = mapsHref(p);
     const group = t => `<tr class="spec-group"><td colspan="2">${t}</td></tr>`;
     const link = (url,label) => url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${label} ↗</a>` : '—';
+    // The sheet's Brochure_Link can hold several files, comma-separated: one link each, ours first.
+    const brochures = String(p.brochureLink||'').split(/[\s,]+/).filter(u => /^https?:\/\//i.test(u));
     return `
     <div class="tab-panel">
       <div class="sec"><table class="spec-t">
@@ -275,7 +277,7 @@
         ${e.powerBackup?`<tr><td>Power Backup</td><td>${e.powerBackup}</td></tr>`:''}
         ${e.approval?`<tr><td>Approval</td><td>${e.approval}</td></tr>`:''}
         ${group('Resources & Contact')}
-        <tr><td>Brochure</td><td>${link(p.brochureLink,'Open Brochure')}</td></tr>
+        <tr><td>Brochure</td><td>${brochures.length ? brochures.map((u,i) => link(u, i ? 'File '+(i+1) : 'Open Brochure')).join(' · ') : '—'}</td></tr>
         <tr><td>Photos</td><td>${link(p.photosLink,'Open Photo Folder')}</td></tr>
         <tr><td>Contact</td><td>${e.contactName} — ${e.contactNumber}</td></tr>
         ${p.sheetExtras&&p.sheetExtras['Owner_Builder_Contact']?`<tr><td>Owner / Builder</td><td>${escapeHtml(p.sheetExtras['Owner_Builder_Contact'])}</td></tr>`:''}

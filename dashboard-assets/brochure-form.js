@@ -226,7 +226,8 @@ function bfPreviewCard(code){
   const e = escapeHtml, B = bfRules();
   const meta = [p.location, p.config, p.type, p.status].filter(Boolean).map(e).join(' · ');
   const link = (href, label) => B.isUrl(href) ? `<a href="${e(href)}" target="_blank" rel="noopener">${label} ↗</a>` : '';
-  const extra = [link(p.photosLink, '📷 Photos'), link(p.brochureLink, '📄 Brochure')].filter(Boolean).join('');
+  // Brochure_Link may list several files, comma-separated — the first is the brochure.
+  const extra = [link(p.photosLink, '📷 Photos'), link(String(p.brochureLink || '').split(/[\s,]+/)[0], '📄 Brochure')].filter(Boolean).join('');
   const details = String(p.detailsText || '').replace(/\s+/g, ' ').trim();
   return `<div class="bf-prev">
     <div class="bf-prev-top"><span class="bf-prev-code">${e(p.propertyCode || p.id)}</span>${p.soldOut ? '<span class="bf-prev-sold">Sold</span>' : ''}</div>
