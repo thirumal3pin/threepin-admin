@@ -78,6 +78,95 @@
   // No leading zero: the clock column is narrow, and "3:00 PM" fits on one
   // line where "03:00 PM" wraps and stops looking like a time.
   function clock(ts) { return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
+  // ── When you last opened each row ──
+  // The same late call sits on this screen day after day, and nothing said whether you had already
+  // looked at it this morning. Each row now remembers when YOU opened it: the closed row says
+  // "3h ago", the open one lists the last few times. One sitting counts once (a row opened and
+  // shut five times in ten minutes was looked at once), and while you are in that sitting the row
+  // shows the time BEFORE it — that is the one that answers "did I already check this?".
+  // Kept on this device at once, and in your own todayOpens document so the phone and the laptop
+  // agree (crmTodayOpens in firebase-sync.js). Opening a row never writes to the lead.
+  var SITTING = 30 * 60000, OPEN_KEEP = 8, OPEN_DAYS = 45;
+  var opens = {}, opensFor = null, opensSave = null;
+  function opensKey() { return 'pinTodayOpens:' + String(currentUserEmail || '').toLowerCase(); }
+  function tidyOpens(map) {
+    var cut = Date.now() - OPEN_DAYS * DAY, out = {};
+    Object.keys(map || {}).forEach(function (k) {
+      var list = (Array.isArray(map[k]) ? map[k] : []).filter(function (t) { return typeof t === 'number' && t > cut; })
+        .sort(function (a, b) { return b - a; })
+        .filter(function (t, i, all) { return !i || all[i - 1] - t > 1000; }).slice(0, OPEN_KEEP);
+      if (list.length) out[k] = list;
+    });
+    return out;
+  }
+  function mergeOpens(a, b) {
+    var out = {};
+    [a, b].forEach(function (m) { Object.keys(m || {}).forEach(function (k) { out[k] = (out[k] || []).concat(m[k] || []); }); });
+    return tidyOpens(out);
+  }
+  // Loaded once per person: from this device straight away, then from Firestore when it answers.
+  function loadOpens() {
+    if (!currentUserEmail || opensFor === currentUserEmail) return;
+    opensFor = currentUserEmail;
+    try { opens = tidyOpens(JSON.parse(localStorage.getItem(opensKey()) || '{}')); } catch (e) { opens = {}; }
+    var remote = window.crmTodayOpens;
+    if (remote) remote.load().then(function (m) {
+      if (!m) return;
+      opens = mergeOpens(opens, m);
+      keepOpens(false);
+      redraw();
+    }).catch(function () { /* this device's record still stands */ });
+  }
+  function keepOpens(remoteToo) {
+    try { localStorage.setItem(opensKey(), JSON.stringify(opens)); } catch (e) { /* the remote copy still has it */ }
+    if (!remoteToo || !window.crmTodayOpens) return;
+    clearTimeout(opensSave);
+    opensSave = setTimeout(function () { window.crmTodayOpens.save(opens).catch(function () { /* kept on this device */ }); }, 2000);
+  }
+  function recordOpen(key) {
+    var list = opens[key] || [];
+    if (list.length && Date.now() - list[0] < SITTING) return;
+    opens[key] = [Date.now()].concat(list).slice(0, OPEN_KEEP);
+    keepOpens(true);
+  }
+  function openKeyOf(item) {
+    if (item.kind === 'visit') return 'visit:' + item.lead.id + ':' + item.at;
+    if (item.kind === 'call') return 'call:' + item.lead.id;
+    if (item.kind === 'ask') return 'ask:' + item.lead.id + ':' + item.mention.at;
+    if (item.kind === 'meeting') return 'meeting:' + item.meeting.id;
+    if (item.kind === 'vo') return 'vo:' + item.x.id;
+    return '';
+  }
+  function ago(ts) {
+    var m = Math.round((Date.now() - ts) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
+  }
+  function whenOpened(ts) {
+    var day = new Date(ts); day.setHours(0, 0, 0, 0);
+    var d = Math.round((startOfToday() - day.getTime()) / DAY);
+    return (d === 0 ? 'today ' : d === 1 ? 'yesterday ' : new Date(ts).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ', ') + clock(ts);
+  }
+  // The closed row: the last time you looked before now. Nothing at all on a row you have never opened.
+  function seenTag(key) {
+    var list = opens[key] || [];
+    if (!list.length) return '';
+    var inSitting = Date.now() - list[0] < SITTING;
+    var shown = inSitting ? list[1] : list[0];
+    var text = 'opened ' + (shown ? ago(shown) : 'just now');
+    var title = 'You opened this ' + (list.length === 1 ? 'once' : list.length + (list.length === OPEN_KEEP ? '+' : '') + ' times') + ' — last ' + whenOpened(list[0]);
+    return '<span class="td-seen" title="' + esc(title) + '"><i class="fa-regular fa-eye" aria-hidden="true"></i>' + esc(text) + '</span>';
+  }
+  // The open row: when you looked, newest first.
+  function seenField(key) {
+    var list = opens[key] || [];
+    if (!list.length) return '';
+    return '<div class="td-f"><dt>You opened it</dt><dd>' + esc(list.map(whenOpened).join(' · '))
+      + (list.length === OPEN_KEEP ? ' <span class="td-none">and earlier</span>' : '') + '</dd></div>';
+  }
   function dayName(ts) { return new Date(ts).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }); }
   function person(email) {
     var M = window.crmMentions;
@@ -380,9 +469,11 @@
       + '</div>';
 
     var openNow = item.kind === 'meeting' && item.meeting.mine === 'needsAction';
-    return '<details class="' + cls + '"' + (openNow ? ' open' : '') + '><summary>' + head
+    var okey = openKeyOf(item);
+    return '<details class="' + cls + '"' + (openNow ? ' open' : '') + (okey ? ' data-open-key="' + esc(okey) + '"' : '') + '><summary>' + head
+      + (okey ? seenTag(okey) : '')
       + '<i class="td-chev fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
-      + '<div class="td-body"><dl class="td-dl">' + body + '</dl>' + acts + '</div></details>';
+      + '<div class="td-body"><dl class="td-dl">' + body + (okey ? seenField(okey) : '') + '</dl>' + acts + '</div></details>';
   }
 
   // How many of a section are yours. Beside the heading, so you can tell
@@ -460,6 +551,18 @@
   window.renderTodayView = function () {
     var host = document.getElementById('todayView');
     if (!host) return;
+    loadOpens();
+    // A row you opened is a row you looked at. The click on its heading, not the `toggle` event: a
+    // meeting waiting for your answer is drawn already open, and that fires `toggle` with nobody there.
+    // Enter and Space on the heading arrive as a click too.
+    if (!host.dataset.opensWired) {
+      host.dataset.opensWired = '1';
+      host.addEventListener('click', function (e) {
+        var s = e.target && e.target.closest ? e.target.closest('summary') : null;
+        var d = s && s.parentElement;
+        if (d && !d.open && d.dataset.openKey) recordOpen(d.dataset.openKey);
+      });
+    }
 
     var visits = visitsToday();
     var meetings = meetingsToday().map(function (m) { return { kind: 'meeting', meeting: m, at: m.at, lead: null }; });

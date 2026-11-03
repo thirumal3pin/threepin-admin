@@ -2018,6 +2018,10 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .td-what{display:block;font-size:14px;font-weight:600;color:var(--ink);line-height:1.35;
   overflow-wrap:anywhere;}
 .td-who{display:block;font-size:12px;color:var(--ink3);margin-top:1px;}
+/* When you last opened the row (crm-assets/today.js seenTag) — quiet: it answers a question, it is not a task. */
+.td-seen{flex:none;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;
+  color:var(--ink4);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.td-seen i{font-size:11px;}
 .td-chev{flex:none;font-size:10px;color:var(--ink4);transition:transform .18s var(--ease);}
 .td-row[open] .td-chev{transform:rotate(180deg);}
 

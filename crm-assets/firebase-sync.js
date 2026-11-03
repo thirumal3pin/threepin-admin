@@ -398,6 +398,25 @@ window.crmTasks = {
   tenantId: () => currentTenantId
 };
 
+// Daily task: when this person opened each row (crm-assets/today.js). One small document per person,
+// apart from the leads, so opening a row never rewrites a lead or wakes the board. Read once, written
+// whole — the page merges what it read before it writes. Until the todayOpens rule is live the read
+// and the write are refused, and the page keeps the record on the device alone.
+const todayOpensRef = () => (auth.currentUser && currentTenantId) ? doc(db, 'todayOpens', currentTenantId + '__' + auth.currentUser.uid) : null;
+window.crmTodayOpens = {
+  load: async () => {
+    const ref = todayOpensRef();
+    if (!ref) return null;
+    const snap = await getDoc(ref);
+    return snap.exists() ? (snap.data().opens || {}) : {};
+  },
+  save: (opens) => {
+    const ref = todayOpensRef();
+    if (!ref) return Promise.resolve();
+    return setDoc(ref, { tenantId: currentTenantId, email: auth.currentUser.email || '', opens, updatedAt: Date.now() });
+  }
+};
+
 window.crmAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOutAndForget(auth),

@@ -132,6 +132,16 @@ service cloud.firestore {
       // no client-side write path exists today.
     }
 
+    // Daily task: when each person opened each row (crm-assets/today.js). One document per person,
+    // {tenant}__{uid}; nobody else reads or writes it, and it holds nothing but the open times.
+    match /todayOpens/{docId} {
+      allow read, delete: if isSignedInWithTenant() && docId == tenantId() + '__' + request.auth.uid;
+      allow create, update: if isSignedInWithTenant() && docId == tenantId() + '__' + request.auth.uid
+        && request.resource.data.tenantId == tenantId()
+        && request.resource.data.keys().hasOnly(['tenantId', 'email', 'opens', 'updatedAt'])
+        && request.resource.data.opens is map;
+    }
+
     // A user can only read their own users/{uid} record (their tenantId,
     // business name, role) — never anyone else's.
     match /users/{uid} {

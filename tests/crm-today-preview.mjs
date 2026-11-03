@@ -67,6 +67,11 @@ window.crmFirebase = {
   saveAutomationSettings: async () => {}, saveView: async () => {}, deleteView: async () => {},
   getInventory: async () => (${JSON.stringify(INV)})
 };
+// Your open times kept in Firestore: Vignesh's visit was opened on another device five hours ago.
+window.crmTodayOpens = {
+  load: async () => ({ ${JSON.stringify('visit:L2:' + atHour(17))}: [${NOW - 5 * 3600000}] }),
+  save: async (m) => { window.__savedOpens = m; }
+};
 window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => '${T}' };
 window.onCrmAuthChange({ email: 'thirumal@threepin.in' });
 window.applyPipelineSnapshot(${JSON.stringify(STAGES)});
@@ -95,6 +100,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   console.log(viewport.width === 390 ? 'On a phone' : 'On a laptop');
   const ctx = await browser.newContext({ viewport });
   const page = await ctx.newPage();
+  // On this device, Arun's visit was last opened two days ago.
+  await page.addInitScript(([k, t]) => {
+    try { localStorage.setItem('pinTodayOpens:thirumal@threepin.in', JSON.stringify({ [k]: [t] })); } catch (e) { /* no storage */ }
+  }, ['visit:L4:' + atHour(10), NOW - 2 * 86400000 - 3600000]);
   page.on('pageerror', e => errors.push(`${viewport.width}px pageerror: ${e.message}`));
   page.on('console', m => {
     if (m.type() !== 'error') return;
@@ -348,6 +357,40 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   ok('...marked yours when you make the voice-overs, and counted in your day', vo.mine === 1 && /1 voice-over to make/.test(vo.sub), JSON.stringify(vo));
   ok('...it opens the card on Shoot & Media', vo.href === 'propertytrack.html?listing=l1', vo.href);
   ok('...someone else makes them: still listed, not marked yours, not in your count', vo.otherMine === 0 && !/voice-over/.test(vo.otherSub), JSON.stringify(vo));
+
+  // ── WHEN YOU LAST OPENED IT ──
+  // The same late call sits here day after day; the row has to say whether you already looked.
+  const seen = await page.evaluate(async () => {
+    window.renderTodayView();
+    const rowOf = name => [...document.querySelectorAll('#todayView details.td-row')].find(r => r.querySelector('.td-who') && r.querySelector('.td-who').textContent.includes(name));
+    const chip = name => { const r = rowOf(name); const c = r && r.querySelector('summary .td-seen'); return c ? c.textContent.trim() : ''; };
+    const out = { arun: chip('Arun S'), vignesh: chip('Vignesh R'), kirthikaBefore: chip('Kirthika P') };
+    const k = rowOf('Kirthika P');
+    k.querySelector('summary').click();                       // open: counted
+    await new Promise(r => setTimeout(r, 50));
+    k.querySelector('summary').click();                       // shut
+    k.querySelector('summary').click();                       // open again in the same sitting: not counted again
+    await new Promise(r => setTimeout(r, 50));
+    const store = JSON.parse(localStorage.getItem('pinTodayOpens:thirumal@threepin.in') || '{}');
+    out.kirthikaCount = (store[k.dataset.openKey] || []).length;
+    out.meetingLogged = Object.keys(store).some(x => x.indexOf('meeting:') === 0);
+    window.renderTodayView();
+    const k2 = rowOf('Kirthika P');
+    out.kirthikaAfter = chip('Kirthika P');
+    out.kirthikaTitle = (k2.querySelector('summary .td-seen') || {}).title || '';
+    out.field = [...k2.querySelectorAll('.td-f')].map(f => f.textContent.replace(/\s+/g, ' ')).find(t => /You opened it/i.test(t)) || '';
+    await new Promise(r => setTimeout(r, 2300));
+    out.saved = !!(window.__savedOpens && window.__savedOpens[k.dataset.openKey] && Object.keys(window.__savedOpens).some(x => x.indexOf('visit:L2:') === 0));
+    return out;
+  });
+  ok('a row you opened two days ago says so before you open it', /2d ago/.test(seen.arun), seen.arun);
+  ok('...and one opened on another device counts too', /5h ago/.test(seen.vignesh), seen.vignesh);
+  ok('...a row you have never opened says nothing', seen.kirthikaBefore === '', seen.kirthikaBefore);
+  ok('opening a row records it', /just now/.test(seen.kirthikaAfter) && /once/.test(seen.kirthikaTitle), JSON.stringify(seen));
+  ok('...opening it again in the same sitting counts once', seen.kirthikaCount === 1, seen.kirthikaCount);
+  ok('...the open row lists when you looked', /You opened it/i.test(seen.field) && /today/.test(seen.field), seen.field);
+  ok('...a meeting drawn already open is not counted as opened', !seen.meetingLogged);
+  ok('...and the record is kept for your other devices', seen.saved, JSON.stringify(seen));
 
   await page.screenshot({ path: join(ROOT, 'tests/out/today-' + viewport.width + '.png') });
   await ctx.close();
