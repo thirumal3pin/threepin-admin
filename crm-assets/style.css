@@ -2360,3 +2360,79 @@ a.td-act{text-decoration:none;display:inline-flex;align-items:center;}
   .tsk-hacts{width:100%;}
   .tsk-hacts .tsk-btn{flex:1;justify-content:center;}
 }
+
+/* ═══════ WHATSAPP CAMPAIGNS, AS A LEAD SEES THEM ═══════
+   The reply and the opt-out on a card, the campaign history on the lead page,
+   and the "Replied to campaigns" rows on Daily task (app.js, today.js). */
+a.tt-btn{text-decoration:none;}
+a.tt-btn:hover{text-decoration:none;}
+.tt-chip.cmp-reply{background:var(--green-bg);color:var(--green);box-shadow:inset 2px 0 0 var(--green);}
+.lv-cmp{display:inline-flex;gap:4px;margin-left:7px;vertical-align:1px;}
+.lv-cmp .tt-chip{font-size:10.5px;padding:2px 6px;}
+
+/* The lead page section. */
+.cmpl-compact{display:flex;align-items:center;justify-content:space-between;gap:8px 16px;flex-wrap:wrap;
+  padding:9px 12px;border:1px dashed var(--border);border-radius:var(--r2);}
+.cmpl-compact-l{font-size:12.5px;color:var(--ink3);}
+.cmpl-count{font-family:var(--mono);font-size:11px;color:var(--ink4);margin:-4px 0 8px;}
+.cmpl-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px;}
+.cmpl-row{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:10px 12px;min-width:0;}
+.cmpl-row.open{border-color:var(--green-line);box-shadow:inset 3px 0 0 var(--green);}
+.cmpl-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
+.cmpl-name{font:inherit;font-size:13.5px;font-weight:600;color:var(--ink);text-align:left;min-width:0;overflow-wrap:anywhere;
+  background:none;border:0;padding:0;}
+button.cmpl-name{cursor:pointer;color:var(--blue);}
+button.cmpl-name:hover{text-decoration:underline;}
+.cmpl-st{flex:none;font-size:11px;font-weight:600;border-radius:var(--r1);padding:2px 7px;background:var(--bg2);color:var(--ink3);}
+.cmpl-st.failed{background:var(--red-bg);color:var(--red);}
+.cmpl-st.replied{background:var(--green-bg);color:var(--green);}
+.cmpl-sub{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin-top:3px;font-size:12px;color:var(--ink3);}
+.cmpl-sub code{font-family:var(--mono);font-size:11px;color:var(--ink3);background:var(--bg2);border-radius:5px;padding:1px 5px;overflow-wrap:anywhere;}
+.cmpl-reply{margin-top:7px;padding-top:7px;border-top:1px solid var(--border);font-size:13px;color:var(--ink);overflow-wrap:anywhere;}
+.cmpl-reply q{font-weight:500;}
+.cmpl-means{display:block;font-size:12px;color:var(--ink3);margin-top:2px;}
+.cmpl-means b{color:var(--green);font-weight:600;}
+.cmpl-more{margin-top:7px;font:inherit;font-size:12px;font-weight:600;color:var(--blue);background:none;border:0;padding:4px 0;cursor:pointer;}
+.cmpl-more:hover{text-decoration:underline;}
+.cmpl-optout{font-size:12.5px;color:var(--ink2);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);
+  padding:9px 12px;margin-bottom:10px;box-shadow:inset 3px 0 0 var(--ink4);}
+.cmpl-optout b{color:var(--ink);}
+
+/* The switch. A real checkbox (so the keyboard, a screen reader and a tap all work), drawn as a switch. */
+.cmpl-switch{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;align-items:center;margin-top:12px;cursor:pointer;}
+.cmpl-switch.compact{margin-top:0;}
+.cmpl-switch input{grid-row:span 2;appearance:none;-webkit-appearance:none;margin:0;flex:none;width:34px;height:20px;border-radius:99px;
+  background:var(--border2);position:relative;cursor:pointer;transition:background .15s;}
+.cmpl-switch input::before{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s;}
+.cmpl-switch input:checked{background:var(--red);}
+.cmpl-switch input:checked::before{transform:translateX(14px);}
+.cmpl-switch input:focus-visible{outline:2px solid var(--brand);outline-offset:2px;}
+.cmpl-switch input:disabled{opacity:.55;cursor:default;}
+.cmpl-switch-t{font-size:13px;font-weight:600;color:var(--ink);}
+.cmpl-switch-s{font-size:11.5px;color:var(--ink4);}
+.cmpl-switch.compact .cmpl-switch-s{display:none;}
+.cmpl-switch.compact input{grid-row:auto;}
+/* Two of them: "No offers" (Marketing) and "No WhatsApp messages at all". */
+.cmpl-switches{display:flex;flex-direction:column;gap:10px;margin-top:12px;padding-top:11px;border-top:1px solid var(--border);}
+.cmpl-switches .cmpl-switch{margin-top:0;}
+.cmpl-switches.compact{flex-direction:row;flex-wrap:wrap;gap:8px 18px;margin-top:0;padding-top:0;border-top:0;}
+.cmpl-switch:has(input:disabled){cursor:default;}
+.cmpl-optout.mk{box-shadow:inset 3px 0 0 var(--amber,#B45309);}
+.cmpl-confirmed{font-size:12.5px;font-weight:600;color:var(--green);background:var(--green-bg);border-radius:var(--r2);
+  padding:7px 12px;margin-bottom:10px;}
+.cmpl-row.open.info{border-color:var(--border2);box-shadow:inset 3px 0 0 var(--ink4);}
+.cmpl-means b.info{color:var(--ink2);}
+.sv-by.ok{color:var(--green);font-weight:600;}
+.bell-item.info{box-shadow:inset 3px 0 0 var(--border2);}
+
+/* Daily task: a reply is somebody waiting on us, in their own words. */
+.td-row.is-reply{border-left:3px solid var(--green);}
+.td-row.is-reply-info{border-left:3px solid var(--border2);}
+.td-row.is-later{border-left-style:dashed;}
+.td-callat{display:inline-block;font-size:11.5px;font-weight:600;color:var(--green);background:var(--green-bg);
+  border-radius:var(--r1);padding:1px 7px;margin-left:4px;white-space:nowrap;vertical-align:1px;}
+.td-known-h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);margin:14px 0 6px;}
+.td-q{color:var(--ink2);font-style:italic;}
+.td-link{font:inherit;font-size:12.5px;font-weight:600;color:var(--blue);background:none;border:0;padding:0 0 0 6px;cursor:pointer;}
+.td-link:hover{text-decoration:underline;}

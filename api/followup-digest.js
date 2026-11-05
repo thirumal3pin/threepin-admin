@@ -4,6 +4,7 @@ import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
 import { rebuildLeadViews } from './_lead-views.js';
 import * as TM from '../shared-assets/task-model.js';
+import { campaignDigest, campaignDigestText, campaignDigestHtml } from './_campaign-loop.js';
 
 // The digest, then the day's lead-views rebuild (one transaction per view document): room for both.
 export const maxDuration = 60;
@@ -15,7 +16,9 @@ function actionItems(leadsSnap, stages, now = Date.now()) {
   const items = [];
   leadsSnap.forEach(d => {
     const l = d.data();
-    const top = computeAttention(l, { stages, now })[0];
+    // An info item (an opt-out, "not this one") is something to know, never "needs action" —
+    // the same rule as the CRM's bell (crm-assets/leadAttention.js).
+    const top = computeAttention(l, { stages, now }).filter(a => !a.info)[0];
     if (top && SEVERITY_RANK[top.severity] >= SEVERITY_RANK.high) items.push({ lead: l, top });
   });
   return items.sort((a, b) => (SEVERITY_RANK[b.top.severity] - SEVERITY_RANK[a.top.severity]) || ((a.top.at || 0) - (b.top.at || 0)));
@@ -110,7 +113,9 @@ function updatedByLabel(l) {
 function leadLine(l) {
   return `${l.name || 'Lead'} — ${l.phone || 'no phone'} — ${l.propertyInterest || 'no property noted'} — agent ${updatedByLabel(l)}`;
 }
-function formatDigestText(overdue, days, startOfToday, actions = [], stages = [], mentions = []) {
+// The WhatsApp campaigns section (api/_campaign-loop.js campaignDigest): yesterday's campaigns,
+// replies still waiting for a person, template approvals and rejections. Nothing to say, no section.
+function formatDigestText(overdue, days, startOfToday, actions = [], stages = [], mentions = [], campaigns = null) {
   const lines = ['Follow-up digest', ''];
   if (mentions.length) {
     lines.push(`MENTIONED YOU (${mentions.length}):`);
@@ -138,9 +143,11 @@ function formatDigestText(overdue, days, startOfToday, actions = [], stages = []
     lines.push('');
   });
   if (!overdue.length && !days.some(a => a.length)) lines.push(`Nothing due in the next ${LOOKAHEAD_DAYS} days.`);
+  const cmp = campaignDigestText(campaigns, '-');
+  if (cmp.length) lines.push('', 'WHATSAPP CAMPAIGNS:', ...cmp);
   return lines.join('\n').trim();
 }
-function formatWhatsAppDigest(overdue, days, startOfToday, actions = [], stages = []) {
+function formatWhatsAppDigest(overdue, days, startOfToday, actions = [], stages = [], campaigns = null) {
   const lines = ['📅 *Follow-up digest*', ''];
   if (actions.length) {
     lines.push(`🔴 Needs action now (${actions.length}):`);
@@ -163,6 +170,8 @@ function formatWhatsAppDigest(overdue, days, startOfToday, actions = [], stages 
     lines.push('');
   });
   if (!overdue.length && !days.some(a => a.length)) lines.push(`Nothing due in the next ${LOOKAHEAD_DAYS} days. 🎉`);
+  const cmp = campaignDigestText(campaigns, '•');
+  if (cmp.length) lines.push('', '📣 WhatsApp campaigns:', ...cmp);
   return lines.join('\n').trim();
 }
 function escapeHtml(s) {
@@ -236,7 +245,7 @@ function mentionSectionHtml(mentions) {
       ${rows}
     </table>`;
 }
-function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = [], mentions = []) {
+function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = [], mentions = [], campaigns = null) {
   let body = mentionSectionHtml(mentions) + actionSectionHtml(actions, stages);
   body += sectionHtml('⚠️ Overdue', '#B91C1C', overdue, false);
   days.forEach((arr, i) => { body += sectionHtml(`📅 ${dayLabel(i, startOfToday)}`, i === 0 ? '#B45309' : '#1D4ED8', arr, true); });
@@ -245,7 +254,7 @@ function formatDigestHtml(overdue, days, startOfToday, actions = [], stages = []
       <div style="font-size:20px;font-weight:700;letter-spacing:-.03em;">3 PIN Realty</div>
       <div style="font-size:11px;color:#A85C00;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-top:3px;">Follow-up digest</div>
     </div>
-    ${body || `<p style="font-family:sans-serif;color:#888;">Nothing due in the next ${LOOKAHEAD_DAYS} days.</p>`}
+    ${body || `<p style="font-family:sans-serif;color:#888;">Nothing due in the next ${LOOKAHEAD_DAYS} days.</p>`}${campaignDigestHtml(campaigns)}
   </div>`;
 }
 
@@ -273,10 +282,18 @@ async function digestForTenant(db, tenantId) {
   const stages = pipelineSnap.exists ? (pipelineSnap.data().stages || []) : [];
   const { overdue, days, startOfToday } = bucketLeads(leadsSnap, stages);
   const actions = actionItems(leadsSnap, stages);
+  // A campaign section that cannot be built never stops the digest. Template statuses need
+  // TailorTalk's token; without it that part is simply left out.
+  let campaigns = null;
+  try {
+    campaigns = await campaignDigest(db, tenantId, { leads: leadsSnap.docs.map(d => d.data()), now: readAt, token: process.env.TAILORTALK_AGENT_TOKEN || null });
+  } catch (e) {
+    console.error('followup-digest: campaign section failed:', e);
+  }
 
   const results = [];
   if (waRecipients.length) {
-    const message = formatWhatsAppDigest(overdue, days, startOfToday, actions, stages);
+    const message = formatWhatsAppDigest(overdue, days, startOfToday, actions, stages, campaigns);
     for (const raw of waRecipients) {
       const to = normalizePhone(raw);
       if (!to) continue;
@@ -293,13 +310,19 @@ async function digestForTenant(db, tenantId) {
     for (const to of emailRecipients) {
       // The same digest for everyone, plus the notes that mention this recipient.
       const mine = openMentionsFor(allLeads, to);
-      const text = formatDigestText(overdue, days, startOfToday, actions, stages, mine);
-      const html = formatDigestHtml(overdue, days, startOfToday, actions, stages, mine);
+      const text = formatDigestText(overdue, days, startOfToday, actions, stages, mine, campaigns);
+      const html = formatDigestHtml(overdue, days, startOfToday, actions, stages, mine, campaigns);
       const r = await sendEmail(to, mine.length ? `${subject} · ${mine.length} mention${mine.length === 1 ? '' : 's'}` : subject, text, html);
       results.push({ channel: 'email', to, ...r });
     }
   }
-  return { tenantId, skipped: false, results, rebuild };
+  // The template statuses this digest reported are recorded only by the caller, once the day's
+  // send is marked done (the cron) — a failed send or a manual "Send now" never uses up the news.
+  const commitCampaign = async () => {
+    if (!campaigns || typeof campaigns.commit !== 'function') return;
+    try { await campaigns.commit(); } catch (e) { console.error('followup-digest: template statuses not recorded:', e); }
+  };
+  return { tenantId, skipped: false, results, rebuild, commitCampaign };
 }
 
 // ═══════ TASKS — the emails (rules in shared-assets/task-model.js) ═══════
@@ -485,6 +508,7 @@ export async function GET(request) {
         lastDigestRun: { at: Date.now(), source: 'cron', date: today, results: r.results }
       }, { merge: true });
       summary.push({ tenantId, sent: r.results });
+      await r.commitCampaign();
       await r.rebuild();
     } catch (e) {
       console.error('followup-digest: tenant', tenantId, 'failed:', e);
@@ -518,7 +542,8 @@ export async function POST(request) {
   await db.collection('settings').doc(user.tenantId).set({
     lastDigestRun: { at: Date.now(), source: 'manual', results: r.results }
   }, { merge: true }).catch(() => {});
+  // Never r.commitCampaign(): template changes stay news for the scheduled digest.
   await r.rebuild();
-  const { rebuild, ...out } = r;
+  const { rebuild, commitCampaign, ...out } = r;
   return new Response(JSON.stringify(out), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

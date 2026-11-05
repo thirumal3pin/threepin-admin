@@ -42,7 +42,8 @@ export function createFakeDb() {
       collection: name => collectionRef(`${path}/${name}`),
       async get() { stats.reads++; return snap(this); },
       async set(data, opts) { applySet(this, data, opts); },
-      async update(data) { applyUpdate(this, data); }
+      async update(data) { applyUpdate(this, data); },
+      async delete() { stats.writes++; store.delete(this.path); }
     };
   }
 
@@ -110,7 +111,18 @@ export function createFakeDb() {
         async commit() { ops.forEach(op => op()); }
       };
     },
+    // Serializable like the real one: a transaction waits for the one before it, so two that
+    // read the same document never both act on what they read.
     async runTransaction(fn) {
+      const prev = txChain;
+      let release;
+      txChain = new Promise(r => { release = r; });
+      await prev;
+      try { return await runTx(fn); } finally { release(); }
+    }
+  };
+  let txChain = Promise.resolve();
+  async function runTx(fn) {
       const ops = [];
       let wrote = false;
       const t = {
@@ -125,12 +137,14 @@ export function createFakeDb() {
       const result = await fn(t);
       ops.forEach(op => op());
       return result;
-    },
+  }
+  Object.assign(db, {
+    async getAll(...refs) { return Promise.all(refs.map(r => r.get())); },
     // test helpers
     _store: store,
     _stats: stats,
     _get: path => clone(store.get(path)),
     _list: prefix => [...store.keys()].filter(p => p.startsWith(prefix + '/') && p.split('/').length === prefix.split('/').length + 1)
-  };
+  });
   return db;
 }

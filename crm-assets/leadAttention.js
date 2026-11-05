@@ -69,6 +69,98 @@ export function teamOwes(lead) {
   return next;
 }
 
+// ── A reply to a WhatsApp campaign ──
+// The server (api/_campaign-loop.js) reads the reply, files it under one of these actions and
+// keeps the newest on lead.campaignReply. Open by exactly the rule above: it happened after the
+// team last touched the lead (and after the import's look-back), and the server never moves
+// updatedAt when it writes campaign fields — so the first person to act on the lead closes it.
+//   label    what the bell, the board and the digest say, given the campaign's name in quotes
+//   means    the short form, for the lead's campaign history
+//   next     the step to take, for Daily task
+//   severity "not now" has its own follow-up a month out — it stays off the "do it today" pile
+//   info     something to KNOW, not a job: shown, but never counted as "needs a person" (an
+//            opt-out, "stop offers", "not this one"). The server has already acted on all three.
+//   aside    for an info line, what has already happened, in a few words
+//   silent   "ok", "thanks", a visit confirmed — recorded in the history, never an item at all
+const CR_ACTIONS = {
+  call:       { means: 'Asked for a call',            next: 'Call them',                                      label: c => `Asked for a call after ${c}` },
+  visit:      { means: 'Wants a site visit',          next: 'Call to fix a time for the visit',               label: c => `Wants a site visit after ${c}` },
+  options:    { means: 'Wants options or details',    next: 'Send matching options or the details',           label: c => `Wants options or details after ${c}` },
+  feedback:   { means: 'Gave feedback',               next: 'Read it and reply — call if it needs one',        label: (c, r) => `Replied ${quote(r.text, 40)} to ${/feedback/i.test(`${r.template || ''} ${r.campaignName || ''}`) ? 'visit feedback' : c}` },
+  not_now:    { means: 'Said not now',                next: 'Nothing today — a follow-up is set for later',    label: c => `Said not now to ${c}`, severity: 'medium' },
+  found:      { means: 'Says they found a property',  next: 'Confirm, then mark the lead Lost',                label: c => `Says they found a property — replied to ${c}` },
+  reschedule: { means: 'Wants to reschedule the visit', next: 'Agree a new time for the visit',               label: () => 'Wants to reschedule the site visit' },
+  referral:   { means: 'Wants to refer someone',      next: 'Call and get their friend’s name & number',       label: () => 'Wants to refer someone — get the name & number' },
+  seller:     { means: 'Wants to sell or list a property', next: 'Call about their property — where, what, the price they want', label: () => 'Wants to sell/list a property' },
+  loan:       { means: 'Needs home-loan help',        next: 'Call and talk them through the home loan',        label: () => 'Needs home-loan help' },
+  not_this:   { means: 'Not interested in this one',  next: 'Nothing to do — other offers still go to them',   label: (c, r) => `Not interested in ${r.property || r.code ? quote(r.property || r.code, 48) : c} — noted`,
+                severity: 'medium', info: true, aside: 'other offers still go to them' },
+  marketing_optout: { means: 'Asked to stop offers',  next: 'Nothing to do — no more offers; visit messages still go', label: () => 'Asked to stop offers (visit messages still OK)',
+                severity: 'medium', info: true, aside: 'no more offers — visit reminders and feedback still go' },
+  optout:     { means: 'Asked to stop messages',      next: 'Nothing to do — campaigns leave them out from now on', label: () => 'Wants to stop WhatsApp messages',
+                severity: 'medium', info: true, aside: 'campaigns leave them out from now on' },
+  ack:        { means: 'Said OK / thanks',            next: 'Nothing to do',                                   label: c => `Said OK to ${c}`, severity: 'low', info: true, silent: true },
+  other:      { means: 'Replied',                     next: 'Read the reply and answer it',                    label: c => `Replied to ${c}` }
+};
+// A lead in Negotiating or Won who says they "found a property" has most likely found OURS.
+const FOUND_BOOKED = { means: 'Says they booked', next: 'Call — find out whether it was with us', label: () => 'Says they booked — check if it was with us' };
+
+/** The reply actions that never need a person — counted nowhere as "needs a person". The Campaigns
+ *  dashboard (campaignModel.js) uses this same set, so the bell, Daily task and it agree. */
+export const REPLY_NO_PERSON = ['ack', 'optout', 'marketing_optout', 'not_this'];
+
+function quote(s, max) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  return '“' + (t.length > max ? t.slice(0, max - 1) + '…' : t) + '”';
+}
+
+/**
+ * The meaning of a campaign reply action: { key, means, next, severity, info, silent, aside, label(reply) }.
+ * `ctx.stageKey` (the lead's column) changes what "found a property" means.
+ */
+export function campaignReplyMeta(action, ctx = {}) {
+  const key = CR_ACTIONS[action] ? action : 'other';
+  const a = key === 'found' && ['negotiation', 'won'].includes(ctx && ctx.stageKey) ? { ...CR_ACTIONS.found, ...FOUND_BOOKED } : CR_ACTIONS[key];
+  return {
+    key, means: a.means, next: a.next, severity: a.severity || 'high',
+    info: !!a.info, silent: !!a.silent, aside: a.aside || '',
+    label: r => a.label(quote((r && (r.campaignName || r.template)) || 'a campaign', 48), r || {})
+  };
+}
+
+/** lead.campaignReply while it still needs a person (or noting), else null. An "ok"/"thanks" never does. */
+export function openCampaignReply(lead) {
+  const r = lead && lead.campaignReply;
+  if (!r || !r.at || r.action === 'ack') return null;
+  const since = Math.max(lead.updatedAt || 0, (lead.tt && lead.tt.attentionFrom) || 0);
+  return r.at > since ? r : null;
+}
+
+/** THE rule for "this campaign reply needs a person": open, and not one of REPLY_NO_PERSON. The
+ *  bell, Daily task and the board count with it; the Campaigns dashboard uses the same set. */
+export function replyNeedsPerson(lead) {
+  const r = openCampaignReply(lead);
+  return !!r && !REPLY_NO_PERSON.includes(r.action);
+}
+
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** A time the reply named ("after 6", "tomorrow morning") — reply.followUpAt — while it is still ahead. */
+export function replyCallAt(reply, now = Date.now()) {
+  const t = reply && Number(reply.followUpAt);
+  return t && isFinite(t) && t > now ? t : null;
+}
+/** "6 PM today", "10:30 AM tomorrow", "Sat 5 Dec, 10 AM" — in India time, wherever this runs. */
+export function callAtText(ts, now = Date.now()) {
+  const d = new Date(ts + IST_OFFSET);
+  const h = d.getUTCHours(), m = d.getUTCMinutes();
+  const t = `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`;
+  const days = Math.floor((ts + IST_OFFSET) / DAY) - Math.floor((now + IST_OFFSET) / DAY);
+  if (days === 0) return `${t} today`;
+  if (days === 1) return `${t} tomorrow`;
+  return `${WD[d.getUTCDay()]} ${d.getUTCDate()} ${MON[d.getUTCMonth()]}, ${t}`;
+}
+
 /**
  * @param {object} lead
  * @param {object} ctx  { stages, now, signalLabel?: (key) => string }
@@ -83,7 +175,7 @@ export function computeAttention(lead, ctx = {}) {
   const kind = stageKindOf(stage);
   const closed = kind === 'won' || kind === 'lost';
   const out = [];
-  const add = (k, severity, label, detail = null, at = null) => out.push({ key: k, severity, label, detail, at });
+  const add = (k, severity, label, detail = null, at = null) => { const it = { key: k, severity, label, detail, at }; out.push(it); return it; };
 
   const tt = lead.tt || null;
   const ai = lead.ai || null;
@@ -91,8 +183,28 @@ export function computeAttention(lead, ctx = {}) {
   const since = Math.max(touched, (tt && tt.attentionFrom) || 0);
   const business = isBusinessLead(lead);
 
-  // Follow-ups the team set apply to every lead, including vendors.
-  const fuOverdue = !closed && lead.followUpAt && lead.followUpAt < now;
+  // A campaign reply asks for a person whatever column the lead is in — a Lost lead answering
+  // "share similar options" is exactly what a re-engagement campaign is sent for.
+  // A time they named ("call me after 6") is when the call is due: until then the item says
+  // "Call at 6 PM today" and is not urgent. "OK" / "thanks" is no item at all; an opt-out or
+  // "not this one" is a line to know (info), never counted as needing a person.
+  const reply = openCampaignReply(lead);
+  const replyNeeds = !!reply && !REPLY_NO_PERSON.includes(reply.action);
+  if (reply) {
+    const m = campaignReplyMeta(reply.action, { stageKey: key });
+    const callAt = replyCallAt(reply, now);
+    const said = reply.text ? quote(reply.text, 120) : null;
+    if (!m.silent) {
+      const item = add('campaign_reply', callAt && m.severity === 'high' ? 'medium' : m.severity, m.label(reply),
+        callAt ? `Call at ${callAtText(callAt, now)}${said ? ' · ' + said : ''}` : said, callAt || reply.at);
+      if (m.info) item.info = true;
+    }
+  }
+
+  // Follow-ups the team set apply to every lead, including vendors. One the reply itself set
+  // ("Asked for a call — …", due now) is that same job, said already by the line above.
+  const fuOverdue = !closed && lead.followUpAt && lead.followUpAt < now
+    && !(replyNeeds && lead.followUpBy === 'campaign');
 
   if (business) {
     if (fuOverdue) add('followup_overdue', 'high', 'Follow-up overdue', `was due ${ago(now - lead.followUpAt)} ago`, lead.followUpAt);
@@ -208,7 +320,8 @@ export function topAttention(lead, ctx) {
   return computeAttention(lead, ctx)[0] || null;
 }
 
-// "Needs action" = anything medium or above. Low items are hints.
+// "Needs action" = anything medium or above. Low items are hints; info items (an opt-out, "not
+// this one") are things to know, not to do.
 export function needsAction(lead, ctx) {
-  return computeAttention(lead, ctx).some(a => SEVERITY_RANK[a.severity] >= SEVERITY_RANK.medium);
+  return computeAttention(lead, ctx).some(a => !a.info && SEVERITY_RANK[a.severity] >= SEVERITY_RANK.medium);
 }

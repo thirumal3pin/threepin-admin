@@ -77,6 +77,13 @@ window.applyLeadsSnapshot = function(list, fromServer, info){
   const kept = new Map();
   for(const x of leads) if(x && (x.notes !== undefined || x.history !== undefined)) kept.set(x.id, x);
   leads = list;
+  // An opt-out switched on the lead page is shown at once; once the server's write is in the list,
+  // the lead itself says it.
+  for(const [id, o] of cmpOptShown){
+    const x = leads.find(y => y && y.id === id);
+    if(!x || Date.now() - o.at >= CMP_OPT_HOLD
+       || ((!('all' in o) || !!x.waOptOut === o.all) && (!('marketing' in o) || !!x.waMarketingOptOut === o.marketing))) cmpOptShown.delete(id);
+  }
   // Threads a lead's own document still carries (from before they moved to subcollections).
   docThreads = new Map(leads.filter(l => l && (Array.isArray(l.notes) || Array.isArray(l.history))).map(l => [l.id, { notes: l.notes, history: l.history }]));
   for(const cur of leads){
@@ -114,6 +121,7 @@ window.applyLeadsSnapshot = function(list, fromServer, info){
       document.getElementById('dpName').textContent = l.name;
       renderDetailInfo(l);
       renderFollowUpSpotlight(l);
+      renderCampaignSection(l);
       const fuD = document.getElementById('noteFollowUpDate'), fuT = document.getElementById('noteFollowUpTime');
       if(fuD && fuT && String(l.followUpAt || '') !== (fuD.dataset.shownFor || '')
          && String(parseFollowUpRaw(fuD.value, fuT.value) || '') === (fuD.dataset.shown || '')) renderNoteFollowUpFields(l);
@@ -369,6 +377,7 @@ function applyFilters(){
   else if(currentView==='list') renderList();
   else if(currentView==='followups') renderFollowups();
   else if(currentView==='today' && window.renderTodayView) window.renderTodayView();
+  else if(isCampaignView(currentView) && window.campaignsLeadsChanged) window.campaignsLeadsChanged();
   updateViewsChip();
   renderActiveFilters();
   if(filterPanelOpen) renderFilterPanel();
@@ -471,6 +480,51 @@ function ttOpenAlerts(l){
 function ttIsWaiting(l){ return ttOpenAlerts(l).some(a => a.key==='waiting'); }
 function ttNeedsAttention(l){ return needsActionUi(l); }
 
+// ── WhatsApp campaigns, as a lead sees them ──
+// The server keeps lead.campaignLog (newest first), lead.campaignReply (the newest answer) and
+// lead.waOptOut; what a reply means and whether it is still open live in leadAttention.js, so the
+// board, the bell, Daily task and the morning digest can never read the same reply differently.
+function cmpOpenReply(l){ return window.leadAttention && window.leadAttention.openCampaignReply ? window.leadAttention.openCampaignReply(l) : null; }
+// The lead is passed so "found a property" can read as "says they booked" for a lead in Negotiating or Won.
+function cmpReplyMeta(action, l){
+  const A = window.leadAttention;
+  return A && A.campaignReplyMeta ? A.campaignReplyMeta(action, { stageKey: l ? stageKeyOfId(l.stageId) : null })
+    : { key:'other', means:'Replied', next:'Read the reply and answer it', severity:'high', info:false, aside:'', label: () => 'Replied to a campaign' };
+}
+// One rule for "this reply needs a person" (leadAttention.replyNeedsPerson): an opt-out, "not this
+// one" and "ok, thanks" never do, so the bell, Daily task and the Campaigns dashboard count alike.
+function cmpNeedsPerson(l){ return !!(window.leadAttention && window.leadAttention.replyNeedsPerson && window.leadAttention.replyNeedsPerson(l)); }
+// Turned on or off from the lead page a moment ago: shown at once, until the snapshot carrying
+// the server's write agrees. Never written onto the lead object — the server owns these fields,
+// and the page's own saves would otherwise send them back.
+//   leadId → { all?: true|false, marketing?: true|false, at }
+const cmpOptShown = new Map();
+const CMP_OPT_HOLD = 2 * 60000;   // a write the snapshot never confirms stops being shown after this
+function cmpOptSaid(l, scope){
+  const o = l && cmpOptShown.get(l.id);
+  return o && scope in o && Date.now() - o.at < CMP_OPT_HOLD ? o[scope] : undefined;
+}
+// "No WhatsApp messages at all" — lead.waOptOut.
+function waOptedOut(l){
+  if(!l) return false;
+  const said = cmpOptSaid(l, 'all');
+  return said === undefined ? !!l.waOptOut : said;
+}
+// "No offers (Marketing)" — lead.waMarketingOptOut. Visit reminders and feedback (Utility) still go.
+// No messages at all includes no offers.
+function waNoOffers(l){
+  if(!l) return false;
+  if(waOptedOut(l)) return true;
+  const said = cmpOptSaid(l, 'marketing');
+  return said === undefined ? !!l.waMarketingOptOut : said;
+}
+// For every screen that is not this file — the Campaigns wizard, the journeys — which reads the lead
+// object and so would miss a switch flipped a second ago: { all, marketing } as the page shows it.
+window.crmLeadOptOut = function(leadId){
+  const l = leads.find(x => x && x.id === leadId);
+  return { all: waOptedOut(l), marketing: waNoOffers(l) };
+};
+
 // ═══════ PIPELINE, ATTENTION AND LEAD AUTOMATION (client side) ═══════
 // What each column means lives in crm-assets/pipeline.js; what needs a person lives in
 // crm-assets/leadAttention.js — both bridged onto window in crm.html and shared with the
@@ -491,7 +545,8 @@ function attentionFor(l){
   return list;
 }
 function topAttentionUi(l){ return attentionFor(l)[0] || null; }
-function needsActionUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.medium); }
+// An info item (an opt-out, "not this one") is something to know, never "needs action".
+function needsActionUi(l){ return attentionFor(l).some(a => !a.info && SEV_RANK[a.severity] >= SEV_RANK.medium); }
 function isUrgentUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >= SEV_RANK.high); }
 
 // ── What earns red ──
@@ -501,7 +556,15 @@ function isUrgentUi(l){ return attentionFor(l).some(a => SEV_RANK[a.severity] >=
 // past the time it was due — which is also precisely what the Overdue filter
 // selects, so the board and the filter can never tell you different stories.
 const OVERDUE_KEYS = new Set(['promise_overdue', 'followup_overdue', 'visit_outcome', 'window_closing']);
-function isOverdueUi(l){ return attentionFor(l).some(a => OVERDUE_KEYS.has(a.key)); }
+// A campaign reply that set the follow-up stands in for "Follow-up overdue" (leadAttention.js says
+// the job once), so it is red, and in the Overdue filter, exactly when that follow-up would be —
+// and not before a time they named ("call me after 6").
+function isOverdueUi(l){
+  return attentionFor(l).some(a => OVERDUE_KEYS.has(a.key)
+    || (a.key === 'campaign_reply' && !a.info && l.followUpBy === 'campaign' && l.followUpAt && l.followUpAt < Date.now()
+        && !(window.leadAttention.replyCallAt && window.leadAttention.replyCallAt(l.campaignReply))
+        && stageKindOfId(l.stageId) !== 'won' && stageKindOfId(l.stageId) !== 'lost'));
+}
 function stageKeyOfId(stageId){
   const s = stageById(stageId);
   return s && window.crmPipeline ? window.crmPipeline.stageKeyOf(s) : null;
@@ -1126,6 +1189,35 @@ function ttChips(l){
   if(t.locked) bits.push('<span class="tt-chip paused" title="The AI is paused on this chat in TailorTalk">🔒 AI paused</span>');
   if(t.lastMessageAt) bits.push(`<span class="tt-chip time" title="Last message from the lead">💬 ${timeAgo(t.lastMessageAt)}</span>`);
   return bits;
+}
+
+// Two facts from WhatsApp campaigns worth a glance on the card: an answer nobody has acted on yet,
+// and a lead the team must not message. Ahead of TailorTalk's chips, because the card shows three
+// and "they asked us to stop" outranks "warm".
+function campaignChips(l){
+  const bits = [];
+  const r = cmpOpenReply(l);
+  if(r && cmpNeedsPerson(l)){
+    const m = cmpReplyMeta(r.action, l);
+    bits.push(`<span class="tt-chip action cmp-reply" title="${escapeHtml(m.label(r) + (r.text ? ' — “' + r.text + '”' : ''))}">↩ ${escapeHtml(m.means)}</span>`);
+  }
+  if(waOptedOut(l)) bits.push(`<span class="tt-chip muted cmp-optout" title="${escapeHtml(waOptOutWhy(l) || 'Asked not to be messaged on WhatsApp')}">🚫 No WhatsApp msgs</span>`);
+  else if(waNoOffers(l)) bits.push(`<span class="tt-chip muted cmp-nooffers" title="${escapeHtml((waOptOutWhy(l, 'marketing') || 'Asked for no offers') + ' — visit reminders and feedback still go')}">🔕 No offers</span>`);
+  return bits;
+}
+// Who turned it on and when, in words: "They replied asking to stop · 4 Nov" / "Set by Swami · 4 Nov".
+// scope 'all' reads lead.waOptOut*, 'marketing' lead.waMarketingOptOut*.
+function waOptOutWhy(l, scope = 'all'){
+  const mk = scope === 'marketing';
+  if(!(mk ? waNoOffers(l) : waOptedOut(l))) return '';
+  const field = mk ? 'waMarketingOptOut' : 'waOptOut';
+  if(cmpOptSaid(l, mk ? 'marketing' : 'all') === true && !l[field]) return `Set by ${agentName(currentUserEmail) || 'you'} · just now`;
+  const why = String(l[field + 'Reason'] || '');
+  const by = why.match(/^set by\s+(.+)$/i);
+  const who = /^replied/i.test(why) ? (mk ? 'They replied asking to stop offers' : 'They replied asking to stop')
+    : /131050/.test(why) ? 'They stopped offers from 3 PIN in WhatsApp'
+    : by ? `Set by ${agentName(by[1].trim())}` : (why ? why.charAt(0).toUpperCase() + why.slice(1) : mk ? 'Asked for no offers' : 'Asked not to be messaged');
+  return who + (l[field + 'At'] ? ` · ${fmtDay(l[field + 'At'])}` : '');
 }
 
 function sourceBadge(l){
@@ -1886,13 +1978,16 @@ window.answerMeeting = function(id, response, reason){
 // closes its reasons, so the number comes down as work is done — a badge that
 // only ever grows is one people stop looking at.
 const ALERT_SEV = { high: 0, medium: 1, low: 2 };
-function alertItems(){
+// `info` = the lines that are only to know (an opt-out, "not this one"): listed under their own
+// heading, never counted — the badge is what needs a person, and nothing else.
+function alertItems(info){
   const out = [];
   for(const l of leads){
     if(isBusinessLead(l)) continue;
     for(const a of attentionFor(l)){
       if(a.key === 'ai_suggestion') continue;
       if(ALERT_SEV[a.severity] > 1) continue;   // low noise stays on the lead
+      if(!!a.info !== !!info) continue;
       out.push({ lead: l, a });
     }
   }
@@ -1954,15 +2049,19 @@ function renderAlertMenu(which){
       <span class="bell-item-t">${escapeHtml(e.title)}</span>
       <span class="bell-item-w">${escapeHtml(fmtEventTime(e))}${e.where ? ' · ' + escapeHtml(e.where) : ''}</span>
     </button>`);
-  const leadRows = items.slice(0, 8).map(({ lead: l, a }) => `<button type="button" class="bell-item ${a.severity}" onclick="openAlert('${l.id}')">
+  const leadRow = ({ lead: l, a }) => `<button type="button" class="bell-item ${a.info ? 'info' : a.severity}" onclick="openAlert('${l.id}')">
       <span class="bell-item-t">${escapeHtml(a.label)}</span>
       <span class="bell-item-w">${escapeHtml(l.name || 'Lead')}${a.detail ? ' · ' + escapeHtml(a.detail) : ''}</span>
-    </button>`);
+    </button>`;
+  const leadRows = items.slice(0, 8).map(leadRow);
+  const known = alertItems(true);
+  const knowRows = known.slice(0, 4).map(leadRow);
 
   const html = bellGroup(waiting.length === 1 ? '1 invitation to answer' : waiting.length + ' invitations to answer', askRows)
     + bellGroup(today.length === 1 ? '1 on today' : today.length + ' on today', todayRows)
     + bellGroup(items.length === 1 ? '1 lead needs a person' : items.length + ' leads need a person', leadRows,
-        items.length > leadRows.length ? `<button type="button" class="bell-more" onclick="showAllAlerts()">See all ${items.length} on the board</button>` : '');
+        items.length > leadRows.length ? `<button type="button" class="bell-more" onclick="showAllAlerts()">See all ${items.length} on the board</button>` : '')
+    + bellGroup('Good to know', knowRows);
 
   menu.innerHTML = html || '<div class="bell-empty">Nothing needs you right now.</div>';
 }
@@ -2005,6 +2104,12 @@ function toggleAlerts(e, where){
         menu.style.right = 'auto';
         menu.style.left = '12px';
       }
+    } else {
+      // The header's bell sits mid-header on a phone, so the menu hung off its right edge started
+      // past the left edge of the screen. Pulled back inside, keeping the same gutter.
+      menu.style.right = '';
+      const m = menu.getBoundingClientRect();
+      if(m.left < 12) menu.style.right = Math.round(m.left - 12) + 'px';
     }
   }
 }
@@ -2036,7 +2141,9 @@ function showAllAlerts(){
 // Which view is showing is the rail's job to display — the four buttons and
 // the Board/List dropdown that used to live in the header are entries in it
 // now. toggleView only has to show the right pane and tell the rail.
-const CRM_VIEWS = ['today', 'tasks', 'kanban', 'list', 'followups', 'dashboard', 'calendar'];
+const CRM_VIEWS = ['today', 'tasks', 'kanban', 'list', 'followups', 'dashboard', 'calendar', 'campaigns'];
+// WhatsApp Campaigns is one pane (#campaignsView) with four screens, each its own rail entry.
+const isCampaignView = v => v === 'campaigns' || /^cmp-/.test(String(v || ''));
 function toggleView(view){
   currentView = view;
   if(view==='kanban' || view==='list') lastBrowseView = view;
@@ -2047,9 +2154,10 @@ function toggleView(view){
   try{ renderBoardSortCtl(); }catch(e){}
   CRM_VIEWS.forEach(v=>{
     const el = document.getElementById(v==='kanban' ? 'kanbanView' : v+'View');
-    if(el) el.style.display = view===v ? '' : 'none';
+    if(el) el.style.display = (v==='campaigns' ? isCampaignView(view) : view===v) ? '' : 'none';
   });
-  if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
+  if(isCampaignView(view)){ if(window.renderCampaignsView) window.renderCampaignsView(view); }
+  else if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else if(view==='today'){ try{ loadMyEvents(false); }catch(e){} if(window.renderTodayView) window.renderTodayView(); }
   else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }
   else if(view==='tasks'){ if(window.renderTasksView) window.renderTasksView(); }
@@ -2062,7 +2170,7 @@ function updateNavState(){
   // on there and only get in the way.
   // Analytics counts every lead, so the search and filters (which it ignores) go too — they said
   // "Showing 0 of 60 · TailorTalk only" over a chart of all 60.
-  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard' && currentView !== 'tasks';
+  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard' && currentView !== 'tasks' && !isCampaignView(currentView);
   document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
   document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
   // The Filters panel and its "Showing N of M" line sit outside the chip row: they follow it.
@@ -2799,10 +2907,12 @@ function leadCardHtml(l, sort){
   const chips = [];
   const mention = myOpenMention(l);
   if(mention) chips.push(`<span class="tt-chip mention" title="${escapeHtml((window.crmMentions.displayName(mention.by || '') || 'Someone') + ': ' + (mention.text || ''))}">@ you</span>`);
+  chips.push(...campaignChips(l));
   chips.push(...ttChips(l));
   // The step line already says what the team owes; the alert line says the NEXT different thing.
+  // A campaign reply that set the follow-up is that same step in other words.
   const attn = attentionFor(l);
-  const coveredByStep = a => step && STEP_KEYS.has(a.key);
+  const coveredByStep = a => step && (STEP_KEYS.has(a.key) || (a.key === 'campaign_reply' && l.followUpBy === 'campaign' && step.due === l.followUpAt));
   const alertItem = attn.find(a => SEV_RANK[a.severity] >= SEV_RANK.medium && !coveredByStep(a));
   const extra = attn.filter(a => a !== alertItem && !coveredByStep(a)).length;
   const aiMoved = l.ai && l.ai.lastMove && Date.now() - l.ai.lastMove.at < 48*3600000 && l.stageId === stageIdForKey(l.ai.lastMove.to);
@@ -3073,7 +3183,7 @@ function renderList(){
       // the primary way into a lead, so it cannot be click-only.
       return `<tr class="${sel ? 'sel' : ''}" tabindex="0" role="link" aria-label="Open ${escapeHtml(l.name)}" onclick="openDetail('${l.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${l.id}');}">
         <td class="lv-sel" onclick="event.stopPropagation()"><input type="checkbox" aria-label="Select ${escapeHtml(l.name)}" ${sel ? 'checked' : ''} onclick="toggleBulkLead('${l.id}', this.checked)"></td>
-        <td class="lv-name"><b>${escapeHtml(l.name)}</b></td>
+        <td class="lv-name"><b>${escapeHtml(l.name)}</b>${(c => c.length ? `<span class="lv-cmp">${c.join('')}</span>` : '')(campaignChips(l))}</td>
         <td>${escapeHtml(l.phone||l.email||'—')}</td>
         <td>${l.channel?channelLabel(l.channel):'—'}</td>
         <td>${escapeHtml(l.enquiryType||'—')}</td>
@@ -3682,11 +3792,21 @@ function visitRowHtml(l){
     <span class="sv-val${said ? '' : ' none'}">${said ? escapeHtml(said) : 'No date yet'}
       ${who ? `<span class="sv-team">${who}</span>` : ''}
       ${v.at && !agents.length ? '<span class="sv-by warn">nobody assigned yet</span>' : ''}
+      ${visitConfirmedHtml(l, v)}
     </span>
     <span class="st-item-acts"><button type="button" class="tt-btn${v.at && !agents.length ? '' : ' quiet'}" onclick="openVisitEditor('${l.id}')">${!v.at ? 'Schedule' : agents.length ? 'Reschedule' : 'Assign agent'}</button>${v.at && v.status !== 'cancelled' && v.status !== 'done' ? `<button type="button" class="tt-btn" onclick="openVisitMessage('${l.id}')" title="The WhatsApp confirmation for the client, written from the property">💬 Confirmation</button>` : ''}</span>
     ${reasons ? `<div class="sv-reasons">${reasons}</div>` : ''}
     ${myAnswerHtml(l, v)}
   </div>`;
+}
+
+// The client answered the visit reminder with "Confirmed" / "ok" (lead.siteVisitConfirmedAt, set by
+// the server from the WhatsApp reply). Only for THIS visit: given after it was booked (or, with no
+// booking time, in the week before it) — not one left over from a visit since moved.
+function visitConfirmedHtml(l, v){
+  const at = l.siteVisitConfirmedAt;
+  if(!at || !v.at || v.status === 'cancelled' || at < (v.setAt || v.at - 7 * 86400000) || at > v.at + 86400000) return '';
+  return `<span class="sv-by ok" title="${escapeHtml(fmtWhen(at))}">✓ Confirmed the visit by WhatsApp · ${escapeHtml(fmtDay(at))}</span>`;
 }
 
 // The agent's own answer, on the lead, for whoever is signed in. The same act
@@ -4181,7 +4301,23 @@ function renderStandSection(l){
     parts.push(`<div class="st-attn">${attn.map(a => {
       const btns = [];
       if(a.key === 'visit_outcome') btns.push(`<button type="button" class="tt-btn" onclick="markVisitedUi('${l.id}')">They visited</button>`);
-      if(a.key.startsWith('signal:') || ['waiting_for_team','escalated','flagged','promise_overdue','team_owes','window_closing','followup_overdue','visit_unscheduled','feedback_due','negotiation_stalled','hold_due','lead_silent','visit_outcome'].includes(a.key)) btns.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
+      // A campaign reply is answered by talking to them. An opt-out, "stop offers" or "not this
+      // one" is only acknowledged: the server has already acted on it.
+      const r = a.key === 'campaign_reply' ? cmpOpenReply(l) : null;
+      const rm = r ? cmpReplyMeta(r.action, l) : null;
+      if(rm && rm.info){
+        btns.push(`<button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(a.label))})">Noted</button>`);
+        return `<div class="st-item ${a.severity} info">
+          <div class="st-item-main"><div class="st-item-t">${escapeHtml(a.label)}</div><div class="st-item-d">${a.detail ? escapeHtml(a.detail) + ' · ' : ''}${escapeHtml(rm.aside)}</div></div>
+          <div class="st-item-acts">${btns.join('')}</div>
+        </div>`;
+      }
+      if(r){
+        const tel = String(l.phone || '').replace(/[^\d+]/g, ''), wa = waHref(l.phone);
+        if(tel) btns.push(`<a class="tt-btn" href="tel:${escapeHtml(tel)}" onclick="noteCallStarted('${l.id}')">📞 Call</a>`);
+        if(wa) btns.push(`<a class="tt-btn" href="${escapeHtml(wa)}" target="_blank" rel="noopener">💬 WhatsApp</a>`);
+      }
+      if(a.key.startsWith('signal:') || ['campaign_reply','waiting_for_team','escalated','flagged','promise_overdue','team_owes','window_closing','followup_overdue','visit_unscheduled','feedback_due','negotiation_stalled','hold_due','lead_silent','visit_outcome'].includes(a.key)) btns.push(`<button type="button" class="tt-btn" onclick="openFollowUpLogModal('${l.id}')">Log follow-up</button>`);
       if(a.key === 'stale') btns.push(`<button type="button" class="tt-btn" onclick="changeStage('${l.id}','${stageIdForKey('lost')}')">Close as lost</button>`);
       btns.push(`<button type="button" class="tt-btn quiet" onclick="markHandledUi('${l.id}', ${escapeHtml(JSON.stringify(a.label))})">Handled</button>`);
       return `<div class="st-item ${a.severity}">
@@ -4211,6 +4347,155 @@ function renderStandSection(l){
   const read = ai.at ? `AI read this lead ${timeAgo(ai.at)}${ai.confidence ? ' · ' + ai.confidence + ' confidence' : ''}${ai.error ? ' · last read failed: ' + escapeHtml(ai.error) : ''}` : (canRead ? 'Not read by the AI yet' : 'No chat or notes for the AI to read');
   parts.push(`<div class="st-foot"><span>${read}</span>${canRead ? `<button type="button" class="tt-btn quiet" ${checking?'disabled':''} onclick="recheckLead('${l.id}')">${checking ? 'Reading…' : 'Re-check'}</button>` : ''}</div>`);
   el.innerHTML = parts.join('');
+}
+
+// ═══════ WHATSAPP CAMPAIGNS ON THE LEAD PAGE ═══════
+//
+// Which campaigns reached this lead, what they said back and what that meant, and the two switches
+// that keep them out: "No offers" (Marketing — new listings, price drops; visit reminders and
+// feedback still go) and "No WhatsApp messages at all". The section is not in crm.html: it is placed
+// here, after Lead Info, the first time a lead opens, so the Campaigns feature stays removable in
+// one piece.
+//
+// A lead with no campaigns and no opt-out gets only the switches, on one quiet line — enough to
+// honour "please don't message me" said on a call, without a heading over nothing.
+const CMP_LOG_SHOWN = 4;
+const cmpLogExpanded = new Set();
+const cmpOptBusy = new Set();
+const CMP_STATUS = { sent: 'Sent', failed: 'Failed', replied: 'Replied' };
+function cmpSectionEl(){
+  let sec = document.getElementById('dpCmpSec');
+  if(sec) return sec;
+  const before = document.getElementById('dpMatchSec') || document.getElementById('dpTtSec');
+  if(!before || !before.parentNode) return null;
+  sec = document.createElement('div');
+  sec.className = 'sec cmpl-sec';
+  sec.id = 'dpCmpSec';
+  sec.hidden = true;
+  before.parentNode.insertBefore(sec, before);
+  return sec;
+}
+// "No messages at all" includes no offers, so while it is on the offers switch shows on and rests.
+function cmpSwitchesHtml(l, compact){
+  const all = waOptedOut(l), mk = waNoOffers(l), busy = cmpOptBusy.has(l.id);
+  const one = (scope, on, locked, title, hint) => `<label class="cmpl-switch${compact ? ' compact' : ''}" data-scope="${scope}">
+    <input type="checkbox" role="switch" ${on ? 'checked' : ''} ${busy || locked ? 'disabled' : ''} onchange="setWaOptOut('${l.id}', this.checked, '${scope}')" aria-describedby="cmplHint-${scope}">
+    <span class="cmpl-switch-t">${title}</span>
+    <span class="cmpl-switch-s" id="cmplHint-${scope}">${busy ? 'Saving…' : escapeHtml(hint)}</span>
+  </label>`;
+  return `<div class="cmpl-switches${compact ? ' compact' : ''}">`
+    + one('marketing', mk, all, 'No offers (Marketing)',
+        all ? 'Covered by “no WhatsApp messages at all”' : mk ? waOptOutWhy(l, 'marketing') + ' · visit messages still go' : 'Offers and new listings leave this lead out; visit messages still go')
+    + one('all', all, false, 'No WhatsApp messages at all',
+        all ? waOptOutWhy(l) : 'Every campaign leaves this lead out, visit reminders too')
+    + '</div>';
+}
+// A reply's meaning in the history. An "ok" to a visit reminder is the client confirming the visit.
+function cmpMeansOf(e, m){
+  return e.action === 'ack' && /visit|remind|confirm/i.test(`${e.template || ''} ${e.name || ''}`) ? 'Confirmed the visit' : m.means;
+}
+function renderCampaignSection(l){
+  const sec = cmpSectionEl();
+  if(!sec) return;
+  const log = (Array.isArray(l.campaignLog) ? l.campaignLog : []).filter(e => e && (e.name || e.template));
+  const optedOut = waOptedOut(l), noOffers = waNoOffers(l);
+  if(!log.length && !noOffers && !l.siteVisitConfirmedAt){
+    // Nothing to message on, nothing to say.
+    if(!l.phone){ sec.hidden = true; sec.innerHTML = ''; return; }
+    sec.hidden = false;
+    sec.classList.add('compact');
+    sec.innerHTML = `<div class="cmpl-compact"><span class="cmpl-compact-l">📣 No WhatsApp campaigns yet</span>${cmpSwitchesHtml(l, true)}</div>`;
+    return;
+  }
+  sec.hidden = false;
+  sec.classList.remove('compact');
+  const open = cmpOpenReply(l);
+  const A = window.leadAttention;
+  const callAt = open && A && A.replyCallAt ? A.replyCallAt(open) : null;
+  const expanded = cmpLogExpanded.has(l.id);
+  const shown = expanded ? log : log.slice(0, CMP_LOG_SHOWN);
+  const rows = shown.map(e => {
+    const st = CMP_STATUS[e.status] ? e.status : 'sent';
+    const m = e.reply ? cmpReplyMeta(e.action, l) : null;
+    const isOpen = !!(open && e.status === 'replied' && open.campaignId === e.id);
+    const link = e.id
+      ? `<button type="button" class="cmpl-name" onclick="openCampaignFromLead('${escapeHtml(e.id)}')" title="Open this campaign on the Campaigns screen">${escapeHtml(e.name || e.template)}</button>`
+      : `<span class="cmpl-name">${escapeHtml(e.name || e.template)}</span>`;
+    const flag = !isOpen ? '' : m.info ? ' · <b class="info">not noted yet</b>'
+      : ` · <b>needs a person</b>${callAt ? ` · call at ${escapeHtml(A.callAtText(callAt))}` : ''}`;
+    return `<li class="cmpl-row${isOpen ? (m.info ? ' open info' : ' open') : ''}">
+      <div class="cmpl-top">${link}<span class="cmpl-st ${st}">${CMP_STATUS[st]}</span></div>
+      <div class="cmpl-sub">${e.template ? `<code>${escapeHtml(e.template)}</code>` : ''}${e.at ? `<span title="${escapeHtml(fmtWhen(e.at))}">${escapeHtml(fmtDay(e.at))} · ${timeAgo(e.at)}</span>` : ''}</div>
+      ${e.reply ? `<div class="cmpl-reply"><q>${escapeHtml(e.reply)}</q><span class="cmpl-means">${escapeHtml(cmpMeansOf(e, m))}${e.replyAt ? ' · ' + timeAgo(e.replyAt) : ''}${flag}</span></div>` : ''}
+    </li>`;
+  }).join('');
+  const more = log.length > CMP_LOG_SHOWN
+    ? `<button type="button" class="cmpl-more" onclick="toggleCampaignLog('${l.id}')">${expanded ? 'Show fewer' : `Show all ${log.length}`}</button>` : '';
+  const sent = log.length, replied = log.filter(e => e.status === 'replied').length;
+  sec.innerHTML = `<div class="sec-title">📣 WhatsApp campaigns</div>
+    ${optedOut ? `<div class="cmpl-optout" role="note">🚫 <b>Not messaged on WhatsApp.</b> ${escapeHtml(waOptOutWhy(l))}. Campaigns leave this lead out.</div>`
+      : noOffers ? `<div class="cmpl-optout mk" role="note">🔕 <b>No offers.</b> ${escapeHtml(waOptOutWhy(l, 'marketing'))}. Visit reminders and feedback messages still go.</div>` : ''}
+    ${l.siteVisitConfirmedAt ? `<div class="cmpl-confirmed">✓ Confirmed the visit by WhatsApp · <span title="${escapeHtml(fmtWhen(l.siteVisitConfirmedAt))}">${escapeHtml(fmtDay(l.siteVisitConfirmedAt))}</span></div>` : ''}
+    ${log.length ? `<div class="cmpl-count">${sent} campaign${sent === 1 ? '' : 's'}${replied ? ` · ${replied} replied` : ''}</div><ul class="cmpl-list">${rows}</ul>${more}` : ''}
+    ${cmpSwitchesHtml(l, false)}`;
+}
+function toggleCampaignLog(id){
+  if(cmpLogExpanded.has(id)) cmpLogExpanded.delete(id); else cmpLogExpanded.add(id);
+  const l = leads.find(x => x.id === id);
+  if(l) renderCampaignSection(l);
+}
+// The campaign, on the Campaigns screen — its delivery, its replies, everyone else it went to.
+function openCampaignFromLead(id){
+  closeDetail();
+  toggleView('cmp-history');
+  if(window.PinCampaigns && typeof window.PinCampaigns.openCampaign === 'function') window.PinCampaigns.openCampaign(id);
+}
+// The server keeps the lead and the campaign settings' opt-out lists in step, and notes it in the
+// lead's history (op 'optout', scope 'all' | 'marketing').
+async function setWaOptOut(id, on, scope){
+  scope = scope === 'marketing' ? 'marketing' : 'all';
+  const field = scope === 'marketing' ? 'waMarketingOptOut' : 'waOptOut';
+  const l = leads.find(x => x.id === id);
+  if(!l || cmpOptBusy.has(id)) return;
+  // They asked, in writing, to stop. Starting again is a decision, not a slip of the thumb.
+  if(!on && /^replied|131050/i.test(String(l[field + 'Reason'] || '')) && cmpOptSaid(l, scope) === undefined
+     && !confirm(scope === 'marketing'
+       ? `${l.name || 'This lead'} asked for no offers. Send them offers again anyway?`
+       : `${l.name || 'This lead'} replied asking not to be messaged. Put them back into WhatsApp campaigns anyway?`)){
+    renderCampaignSection(l);
+    return;
+  }
+  cmpOptBusy.add(id);
+  renderCampaignSection(l);
+  try{
+    const idToken = window.crmAuth && window.crmAuth.getIdToken ? await window.crmAuth.getIdToken() : null;
+    if(!idToken) throw new Error('Please log in again');
+    const res = await fetch('/api/tailortalk?action=campaign', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken },
+      body: JSON.stringify({ op: 'optout', leadId: id, on: !!on, scope })
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || data.ok === false) throw new Error(data.error || `Request failed (${res.status})`);
+    // Shown at once — on the card, the list, the Campaigns wizard (window.crmLeadOptOut) — until the
+    // snapshot carrying the server's write agrees. Not needed if that snapshot is already here.
+    const cur = leads.find(x => x.id === id) || l;
+    const o = { ...(cmpOptShown.get(id) || {}) };
+    if(!!cur[field] !== !!on) o[scope] = !!on; else delete o[scope];
+    if('all' in o || 'marketing' in o) cmpOptShown.set(id, { ...o, at: Date.now() }); else cmpOptShown.delete(id);
+    forgetAttention(id);
+    showToast(scope === 'marketing'
+      ? (on ? '✓ No offers from now on — visit messages still go' : '✓ Offers can go to them again')
+      : (on ? '✓ Not messaged on WhatsApp from now on' : '✓ Back in WhatsApp campaigns'));
+  } catch(e){
+    showToast(`Could not change it — ${e.message || 'check your connection'}`);
+  } finally {
+    cmpOptBusy.delete(id);
+    const cur = leads.find(x => x.id === id) || l;
+    if(currentDetailId === id){ renderCampaignSection(cur); renderVisitSection(cur); }
+    applyFilters();
+    if(isCampaignView(currentView) && window.campaignsLeadsChanged) window.campaignsLeadsChanged();
+  }
 }
 
 // ═══════ ADD / EDIT LEAD MODAL ═══════
@@ -5063,6 +5348,7 @@ function openDetail(id){
   // loadLeadThreads() once the notes arrive — the notes carry the objections,
   // which move the answer more than any stored field does.
   renderMatchingProperties(l);
+  renderCampaignSection(l);
   ttChatExpanded.delete(id);
   tlExpanded.delete(id);
   renderTtSection(l);

@@ -105,6 +105,16 @@
       ],
     },
     {
+      id: 'wa', label: 'WhatsApp Campaigns', icon: 'fa-brands fa-whatsapp', page: 'crm',
+      note: 'Templates, lead lists and campaigns through TailorTalk',
+      items: [
+        { id: 'campaigns', label: 'Dashboard', icon: 'fa-solid fa-gauge-high', page: 'crm', nav: 'campaigns' },
+        { id: 'cmp-templates', label: 'Templates', icon: 'fa-regular fa-file-lines', page: 'crm', nav: 'cmp-templates' },
+        { id: 'cmp-new', label: 'New campaign', icon: 'fa-regular fa-paper-plane', page: 'crm', nav: 'cmp-new' },
+        { id: 'cmp-history', label: 'Campaigns', icon: 'fa-solid fa-clock-rotate-left', page: 'crm', nav: 'cmp-history' },
+      ],
+    },
+    {
       id: 'finance', label: 'Finance', icon: 'fa-solid fa-indian-rupee-sign', page: 'finance',
       note: 'Deals, bills, invoices and the books',
       groups: FIN_GROUPS.map(function (g) {

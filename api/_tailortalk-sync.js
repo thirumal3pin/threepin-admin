@@ -16,6 +16,7 @@ import {
   planUpdate, isTestEnvelope, contactParts, phoneKey, ttLeadDocId, isBusinessCategory, BUSINESS_ENQUIRY_TYPE
 } from './_tailortalk-shared.js';
 import { viewMeta, rowWrites, applyRowWrites, withRowFallback } from './_lead-views.js';
+import { applyCampaignReplies, hasTemplateEntry } from './_campaign-loop.js';
 
 // Stages and enquiry types change rarely; a warm function re-reading them on every chat
 // message would double its reads for nothing.
@@ -233,6 +234,21 @@ export async function applyTailorTalkEvent(db, tenantId, envelope, { now = Date.
   return { ok: true, ...result };
 }
 
+// After a lead is written: its answers to WhatsApp campaigns (api/_campaign-loop.js), whether they
+// came by webhook or by a pull. A chat with no template TailorTalk sent costs nothing — no read at
+// all. Never throws: a reply that could not be recorded is logged, and the next webhook or the
+// nightly sync records it (each reply is recorded once, however often it is seen).
+// Returns null when there is nothing to do, else a promise (the webhook hands it to waitUntil).
+export function campaignRepliesAfter(db, tenantId, envelope, result, { now = Date.now() } = {}) {
+  const d = envelope && envelope.data;
+  if (!result || !result.ok || !result.leadId || result.test || !d || !hasTemplateEntry(d.chat_history)) return null;
+  return applyCampaignReplies(db, tenantId, result.leadId, null, d.chat_history, { now, contact: d.lead_contact || null })
+    .catch(e => {
+      console.error('campaign replies for ' + result.leadId + ' failed:', (e && e.message) || e);
+      return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+    });
+}
+
 // ─── pull: import, daily sync, "Sync TailorTalk" ─────────────────────────────
 //
 // get_leads returns the whole lead object — the same shape a webhook carries — so a pulled lead
@@ -288,6 +304,8 @@ export async function pullTailorTalkPage(db, tenantId, token, { startAfter = nul
   if (startAfter) body.start_after = startAfter;
   const res = await fetchImpl(GET_LEADS, {
     method: 'POST',
+    // A TailorTalk that hangs must not hold the whole request until the platform kills it.
+    signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
     headers: { Authorization: `Agent ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -305,8 +323,12 @@ export async function pullTailorTalkPage(db, tenantId, token, { startAfter = nul
     const lastMsg = Date.parse(lead.last_message_time) || 0;
     if (stopBefore && lastMsg && lastMsg < stopBefore) { reachedOld = true; break; }
     try {
-      const r = await applyTailorTalkEvent(db, tenantId, { webhook_trigger: 'sync', event_type: 'lead', occurred_at: new Date(now).toISOString(), data: lead }, { now });
+      const envelope = { webhook_trigger: 'sync', event_type: 'lead', occurred_at: new Date(now).toISOString(), data: lead };
+      const r = await applyTailorTalkEvent(db, tenantId, envelope, { now });
       processed++;
+      // A reply to a campaign that a webhook missed (or the nightly replay of one already recorded).
+      const replies = campaignRepliesAfter(db, tenantId, envelope, r, { now });
+      if (replies) await replies;
       if (r.created) created++; else if (r.unchanged) unchanged++; else if (r.ok) updated++;
       if (r.ok && r.leadId && !r.unchanged) changedLeadIds.push(r.leadId);
     } catch (e) {

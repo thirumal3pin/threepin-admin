@@ -24,6 +24,9 @@
 //   POST /api/tailortalk?action=refresh  the CRM on open and every few minutes (login): the
 //        newest page of TailorTalk leads, then whatever lead automation is due.
 //   POST /api/tailortalk?action=ai-lead  "Re-check" on a lead page (login): { leadId }.
+//   POST /api/tailortalk?action=campaign WhatsApp Campaigns (login): { op, … } — templates, AI
+//        writing, lead lists, test sends and campaigns through TailorTalk's Template API.
+//        See api/_campaign.js.
 //   POST /api/tailortalk?action=admin-ai maintenance (Bearer CRM_ADMIN_KEY): preview or apply
 //        lead automation over many leads, { apply, leadIds?, cursor?, limit? }.
 //
@@ -32,6 +35,10 @@
 // 10 minutes after the first unread message). Every webhook, CRM refresh and the nightly sync
 // reads whatever is due (api/_lead-automation.js), after the webhook has already been answered
 // (waitUntil), so TailorTalk never waits on the AI.
+//
+// Replies to WhatsApp campaigns (api/_campaign-loop.js) are recorded the same way: after the
+// webhook is answered, and again by every pull (refresh, "Sync TailorTalk", the nightly sync) —
+// each reply once, however often it is seen.
 //
 // Environment (Vercel → Settings → Environment Variables):
 //   TAILORTALK_WEBHOOK_KEY   a long random string; the same one goes in the webhook URL
@@ -48,7 +55,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { waitUntil } from '@vercel/functions';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
-import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull } from './_tailortalk-sync.js';
+import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull, campaignRepliesAfter } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
   automationSettings, runLeadAutomation, queueLeadAutomation, drainQueue
@@ -57,6 +64,7 @@ import { teamCalendar, syncVisitEvent, syncTeamMeeting, visitReplies, respondToV
 import { visitOf } from '../crm-assets/pipeline.js';
 import { writeLead } from './_lead-views.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { campaignAction, makeDeps } from './_campaign.js';
 
 export const maxDuration = 60;
 const SYNC_BUDGET_MS = 40000;
@@ -132,6 +140,12 @@ async function webhookPost(request, url) {
     console.error('tailortalk webhook failed:', e);
     return json({ ok: false, error: 'Temporary failure, please retry' }, 500);
   }
+
+  // A reply to a WhatsApp campaign: recorded after TailorTalk has its answer (never slows or fails
+  // the webhook — campaignRepliesAfter catches its own errors). A retry that changed nothing is
+  // still looked at: the first attempt's recording may not have finished.
+  const replies = campaignRepliesAfter(db, tenantId, envelope, result);
+  if (replies) waitUntil(replies);
 
   if (result.ok && result.leadId && !result.test && !result.unchanged) {
     try {
@@ -641,6 +655,44 @@ async function calendarPost(request) {
   }
 }
 
+// WhatsApp Campaigns. The AI that writes templates and picks leads uses the summaries' key
+// (ANTHROPIC_API_KEY): a campaign is a person's one-off ask, like a summary, not the background
+// automation that has its own key.
+const CAMPAIGN_MODELS = ['claude-sonnet-5-5', 'claude-haiku-4-5-20251001'];
+let _campaignClaude;
+function campaignAi() {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!_campaignClaude) _campaignClaude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return async ({ system, user, maxTokens }) => {
+    let err;
+    for (const model of CAMPAIGN_MODELS) {
+      try {
+        const r = await _campaignClaude.messages.create({ model, max_tokens: maxTokens || 1000, system, messages: [{ role: 'user', content: user }] });
+        return r.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      } catch (e) {
+        err = e;
+        // A model this key cannot use: try the next. Anything else is the real error.
+        if (!(e && (e.status === 404 || e.status === 400 && /model/i.test(e.message || '')))) throw e;
+      }
+    }
+    throw err;
+  };
+}
+
+async function campaignPost(request) {
+  const user = await crmUser(request);
+  if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
+  let body = {};
+  try { body = await request.json(); } catch { /* validated per op */ }
+  try {
+    const r = await campaignAction(getDb(), user, process.env.TAILORTALK_AGENT_TOKEN, body, makeDeps({ ai: campaignAi() }));
+    return json(r, r && r.ok === false && !r.notConfigured ? 400 : 200);
+  } catch (e) {
+    console.error('campaign ' + (body && body.op) + ' failed:', e);
+    return json({ ok: false, error: String((e && e.message) || e).slice(0, 300) }, 502);
+  }
+}
+
 export async function POST(request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action') || 'webhook';
@@ -650,6 +702,7 @@ export async function POST(request) {
   if (action === 'ai-lead') return aiLeadPost(request);
   if (action === 'admin-ai') return adminAiPost(request);
   if (action === 'calendar') return calendarPost(request);
+  if (action === 'campaign') return campaignPost(request);
   return json({ ok: false, error: 'Unknown action' }, 404);
 }
 

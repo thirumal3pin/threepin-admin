@@ -134,6 +134,7 @@
     if (item.kind === 'visit') return 'visit:' + item.lead.id + ':' + item.at;
     if (item.kind === 'call') return 'call:' + item.lead.id;
     if (item.kind === 'ask') return 'ask:' + item.lead.id + ':' + item.mention.at;
+    if (item.kind === 'reply') return 'reply:' + item.lead.id + ':' + item.at;
     if (item.kind === 'meeting') return 'meeting:' + item.meeting.id;
     if (item.kind === 'vo') return 'vo:' + item.x.id;
     return '';
@@ -284,7 +285,7 @@
     var booked = {};
     visitsToday().forEach(function (v) { booked[v.lead.id] = 1; });
     return (leads || []).filter(function (l) {
-      return l.followUpAt && l.followUpAt <= to && !closedLead(l) && !booked[l.id];
+      return l.followUpAt && l.followUpAt <= to && !closedLead(l) && !booked[l.id] && !replyOwnsFollowUp(l);
     }).map(function (l) {
       // Mine = I am the lead's agent or its secondary. Listed first and marked, so "Your day"
       // starts with your own calls rather than the whole company's.
@@ -292,6 +293,42 @@
       var mine = !!me && [l.assignedAgent, l.secondaryAgent].some(function (e) { return e && String(e).toLowerCase() === me; });
       return { kind: 'call', lead: l, at: l.followUpAt, overdue: l.followUpAt < Date.now(), mine: mine };
     }).sort(function (a, b) { return (b.mine - a.mine) || (a.at - b.at); });
+  }
+
+  // ── Answers to WhatsApp campaigns ──
+  // Every reply nobody has acted on since it came in (leadAttention.js decides "open", the same rule
+  // as the bell). Newest first: a "call me" from ten minutes ago is the warmest lead on the screen —
+  // but one who said "call me after 6" waits below the rest until six.
+  // Replies are all already in, so the span toggle does not change this list — only what is due does.
+  // Two lists from one rule (leadAttention.replyNeedsPerson): the replies that need a person, which
+  // are counted, and the ones only to know — an opt-out, "stop offers", "not this one" — listed
+  // under them and never counted. An "ok" / "thanks" is neither.
+  function campaignReplies(info) {
+    var A = window.leadAttention;
+    if (!A || !A.openCampaignReply || !A.replyNeedsPerson) return [];
+    var me = String(typeof currentUserEmail === 'string' ? currentUserEmail : '').toLowerCase();
+    var now = Date.now();
+    return (leads || []).map(function (l) {
+      var r = A.openCampaignReply(l);
+      if (!r || A.replyNeedsPerson(l) === !!info) return null;
+      var meta = A.campaignReplyMeta(r.action, { stageKey: stageKeyOfLead(l) });
+      if (meta.silent) return null;
+      var mine = !!me && [l.assignedAgent, l.secondaryAgent].some(function (e) { return e && String(e).toLowerCase() === me; });
+      return { kind: 'reply', lead: l, reply: r, meta: meta, at: r.at, callAt: A.replyCallAt ? A.replyCallAt(r, now) : null, mine: mine };
+    }).filter(Boolean).sort(function (a, b) { return (b.mine - a.mine) || (!!a.callAt - !!b.callAt) || (b.at - a.at); });
+  }
+  function stageKeyOfLead(l) {
+    var s = typeof stageById === 'function' ? stageById(l.stageId) : null;
+    return s && window.crmPipeline ? window.crmPipeline.stageKeyOf(s) : null;
+  }
+  // The follow-up a reply set ("Asked for a call — …") is that reply's row, not a second one under Calls due.
+  function replyOwnsFollowUp(l) {
+    var A = window.leadAttention;
+    return l.followUpBy === 'campaign' && !!(A && A.replyNeedsPerson && A.replyNeedsPerson(l));
+  }
+  // The section is only for an office that sends campaigns.
+  function campaignsInUse() {
+    return (leads || []).some(function (l) { return (Array.isArray(l.campaignLog) && l.campaignLog.length) || l.campaignReply; });
   }
 
   function askedOfMe() {
@@ -435,6 +472,28 @@
           var s = typeof stageById === 'function' ? stageById(l.stageId) : null;
           return s ? s.name : '';
         })());
+    } else if (item.kind === 'reply') {
+      var r = item.reply, mt = item.meta;
+      var callAtWords = item.callAt && window.leadAttention.callAtText ? window.leadAttention.callAtText(item.callAt) : '';
+      if (item.mine) cls += ' is-mine';
+      cls += mt.info ? ' is-reply-info' : item.callAt ? ' is-reply is-later' : ' is-reply';
+      // A time they named is the time on the row: "Call at 6 PM today", and not late before then.
+      head = '<span class="td-time">' + (item.callAt ? esc(clock(item.callAt)) + dayTag(item.callAt) : esc(clock(item.at)) + dayTag(item.at)) + (item.mine ? mineMark(false) : '') + '</span>'
+        + '<span class="td-main"><span class="td-what">' + esc(mt.label(r))
+        + (callAtWords ? ' <span class="td-callat">Call at ' + esc(callAtWords) + '</span>' : '') + '</span>'
+        + '<span class="td-who">' + esc(l.name || 'Unnamed lead')
+        + (r.text ? ' · <q class="td-q">' + esc(r.text.length > 90 ? r.text.slice(0, 89) + '…' : r.text) + '</q>' : '') + '</span></span>';
+      body = '<div class="td-f"><dt>They said</dt><dd class="td-pre">' + esc(r.text || '(no text)') + '</dd></div>'
+        + '<div class="td-f"><dt>Campaign</dt><dd>' + esc(r.campaignName || r.template || 'A campaign')
+        + (r.campaignId ? ' <button type="button" class="td-link" onclick="PinToday.openCampaign(\'' + esc(r.campaignId) + '\')">Open it</button>' : '') + '</dd></div>'
+        + field('Next step', callAtWords ? mt.next + ' — at ' + callAtWords + ', the time they asked for' : mt.next)
+        + field('Replied', new Date(r.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))
+        + (mt.info ? '' : phoneLine('Client', l.name, l.phone))
+        + field('Looking for', l.propertyInterest)
+        + field('Where it stands', (function () {
+          var s = typeof stageById === 'function' ? stageById(l.stageId) : null;
+          return s ? s.name : '';
+        })());
     } else {
       var m = item.mention;
       head = '<span class="td-time td-time-ask">Task</span>'
@@ -466,6 +525,7 @@
       + (item.kind === 'ask' ? '<button type="button" class="td-act done" onclick="markMentionDone(\'' + id + '\')">✓ Done</button>' : '')
       // A call row logs the call where it is: what happened and the next follow-up, one sheet.
       + (item.kind === 'call' ? '<button type="button" class="td-act go" onclick="openFollowUpLogModal(\'' + id + '\')">✓ Log call</button>' : '')
+      + (item.kind === 'reply' ? replyActs(item, id) : '')
       + '</div>';
 
     var openNow = item.kind === 'meeting' && item.meeting.mine === 'needsAction';
@@ -474,6 +534,20 @@
       + (okey ? seenTag(okey) : '')
       + '<i class="td-chev fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
       + '<div class="td-body"><dl class="td-dl">' + body + (okey ? seenField(okey) : '') + '</dl>' + acts + '</div></details>';
+  }
+
+  // A reply is answered by talking to them, then logged — which is what closes it. An opt-out,
+  // "stop offers" or "not this one" only needs noting: the server has already acted on it.
+  function replyActs(item, id) {
+    var l = item.lead, label = item.meta.label(item.reply);
+    var handled = '<button type="button" class="td-act done" onclick="markHandledUi(\'' + id + '\', ' + esc(JSON.stringify(label)) + ')">✓ ' + (item.meta.info ? 'Noted' : 'Handled') + '</button>';
+    if (item.meta.info) return handled;
+    var tel = String(l.phone || '').replace(/[^\d+]/g, '');
+    var wa = typeof waHref === 'function' ? waHref(l.phone) : null;
+    return (tel ? '<a class="td-act" href="tel:' + esc(tel) + '" onclick="noteCallStarted(\'' + id + '\')">📞 Call</a>' : '')
+      + (wa ? '<a class="td-act" href="' + esc(wa) + '" target="_blank" rel="noopener">💬 WhatsApp</a>' : '')
+      + '<button type="button" class="td-act go" onclick="openFollowUpLogModal(\'' + id + '\')">✓ Log call</button>'
+      + handled;
   }
 
   // How many of a section are yours. Beside the heading, so you can tell
@@ -491,6 +565,8 @@
         if (it.meeting.mine === 'needsAction') { mine++; waiting++; }
       } else if (it.kind === 'call') {
         if (it.mine) { mine++; if (it.overdue) waiting++; }
+      } else if (it.kind === 'reply') {
+        if (it.mine) { mine++; if (!it.meta.info) waiting++; }
       } else if (it.kind === 'vo') {
         if (it.mine) mine++;
       } else if (it.kind === 'task') {
@@ -500,7 +576,9 @@
     return { mine: mine, waiting: waiting };
   }
 
-  function sectionHtml(key, title, note, items, emptyLine) {
+  // `known`: rows only to know (an opt-out, "not this one"), listed under the section's own rows,
+  // outside its count, its "yours" mark and its sort.
+  function sectionHtml(key, title, note, items, emptyLine, known) {
     var m = mineIn(items);
     items = sortItems(key, items);
     var how = sorts[key] || 'default';
@@ -519,6 +597,7 @@
           + MINE_ICON + m.mine + '</span>' : '') + sortBox + '</h2>'
       + '<p class="td-sec-note">' + esc(note) + '</p>'
       + (items.length ? items.map(rowHtml).join('') : '<p class="td-empty">' + esc(emptyLine) + '</p>')
+      + (known && known.length ? '<div class="td-known"><h3 class="td-known-h">Just so you know · nothing to do</h3>' + known.map(rowHtml).join('') + '</div>' : '')
       + '</section>';
   }
 
@@ -541,6 +620,9 @@
       var why = prompt('Why can' + '\u2019' + 't you make it? Everyone invited sees this.', '');
       if (why === null) return;
       if (typeof window.answerMeeting === 'function') window.answerMeeting(id, 'declined', String(why).trim().slice(0, 300));
+    },
+    openCampaign: function (id) {
+      if (typeof openCampaignFromLead === 'function') openCampaignFromLead(id);
     },
     openMeeting: function (id) {
       if (typeof toggleView === 'function') toggleView('calendar');
@@ -568,12 +650,14 @@
     var meetings = meetingsToday().map(function (m) { return { kind: 'meeting', meeting: m, at: m.at, lead: null }; });
     var calls = callsDue();
     var asks = askedOfMe();
+    var replies = campaignsInUse() ? campaignReplies(false) : null;
+    var repliesKnown = replies ? campaignReplies(true) : [];
     // Tasks assigned to you (crm-assets/tasks.js): late ones, the ones due in this span, undated ones.
     var mytasks = window.PinTasks ? window.PinTasks.todayItems(endOfSpan()) : [];
     var lateTasks = mytasks.filter(function (t) { return t.overdue; }).length;
     if (window.crmFirebase && window.crmFirebase.watchTrackTasks) window.crmFirebase.watchTrackTasks();
     var vos = voiceOvers();
-    var total = visits.length + meetings.length + calls.length + asks.length + mytasks.length + (voIsMe() ? vos.length : 0);
+    var total = visits.length + meetings.length + calls.length + asks.length + mytasks.length + (voIsMe() ? vos.length : 0) + (replies ? replies.length : 0);
 
     var me = person(currentUserEmail);
     var late = calls.filter(function (c) { return c.overdue; }).length;
@@ -587,6 +671,7 @@
       if (visits.length) bits.push(visits.length + (visits.length === 1 ? ' visit' : ' visits'));
       if (meetings.length) bits.push(meetings.length + (meetings.length === 1 ? ' meeting' : ' meetings'));
       if (calls.length) bits.push(calls.length + (calls.length === 1 ? ' call' : ' calls') + (late ? ' (' + late + ' late)' : ''));
+      if (replies && replies.length) bits.push(replies.length + (replies.length === 1 ? ' campaign reply' : ' campaign replies'));
       if (mytasks.length) bits.push(mytasks.length + (mytasks.length === 1 ? ' task' : ' tasks') + (lateTasks ? ' (' + lateTasks + ' late)' : ''));
       if (asks.length) bits.push(asks.length + (asks.length === 1 ? ' thing asked of you' : ' things asked of you'));
       if (vos.length && voIsMe()) bits.push(vos.length + (vos.length === 1 ? ' voice-over' : ' voice-overs') + ' to make');
@@ -610,6 +695,8 @@
         meetings, 'No meetings ' + spanWord() + '.')
       + sectionHtml('calls', 'Calls due', 'Follow-ups due ' + (span === 'day' ? 'by the end of today' : 'by the end of ' + spanWord().replace('this ', 'the ')) + ', including any you missed.',
         calls, 'Nothing due ' + spanWord() + '.')
+      + (replies ? sectionHtml('replies', 'Replied to campaigns', 'Answers to a WhatsApp campaign that nobody has acted on yet. Call or log it and it leaves this list.',
+        replies, 'No replies waiting.', repliesKnown) : '')
       + sectionHtml('tasks', 'Tasks for you', 'Assigned to you on the Tasks page: the late ones, the ones due ' + spanWord() + ', and any with no date. Change the status right here.',
         mytasks, 'No task assigned to you is due ' + spanWord() + '.')
       + sectionHtml('asks', 'Asked of you', 'Where a colleague put your name in a note on a lead.',

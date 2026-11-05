@@ -234,6 +234,9 @@ export function normaliseChat(history) {
     if (m && m.metadata && typeof m.metadata === 'object') {
       const meta = JSON.stringify(m.metadata);
       if (meta.length <= 2000) out.meta = m.metadata;
+      // A template sent with long values is still a template: what it was is kept, the values not
+      // (api/_campaign-loop.js finds replies to campaigns by these two fields).
+      else if (m.metadata.type === 'template' && m.metadata.template_name) out.meta = { type: 'template', template_name: String(m.metadata.template_name).slice(0, 200) };
     }
     // The identity is what TailorTalk sent, so a message stored before is still the same message.
     out.k = chatKey(out);
