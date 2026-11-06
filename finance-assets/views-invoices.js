@@ -10,7 +10,7 @@
 
 import {
   fmt, esc, num, today, getState, bal, pname, dname, deal,
-  invoiceOutstanding, duplicateNumbers, invoiceTotals, netOfGst, withGst, issueNumber, A, invoiceServices, knownClient,
+  invoiceOutstanding, duplicateNumbers, invoiceTotals, netOfGst, withGst, issueNumber, A, invoiceServices, knownClient, KNOWN_CLIENTS,
 } from './finance-core.js';
 import { empty, note, tag, table, toast, modal, closeModal, dueCell, confirmDialog, picker } from './ui.js';
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
@@ -85,7 +85,8 @@ export function renderInvoices() {
     return `<h1>Invoices</h1>
       ${note('Closing a deal with GST raises its invoice for you. For anything else, use <b>New invoice</b>.', 'info')}
       ${empty('<b>No invoices yet.</b><br>Raise one here, or close a deal and its GST invoice is generated, numbered and stored for you.',
-      '<button class="btn primary" type="button" onclick="finInvoices.create()">New invoice</button>')}`;
+      '<button class="btn primary" type="button" onclick="finInvoices.create()">New invoice</button>')}
+      ${clientsSection()}`;
   }
 
   // A missing GSTIN or bank account does not block anything, but it does make the PDF wrong,
@@ -157,6 +158,8 @@ export function renderInvoices() {
     }).join(''),
     `<tr><td colspan="4" data-label="Total raised">Total raised</td><td class="n">${fmt(total)}</td><td colspan="3"></td></tr>
        <tr><td colspan="4" data-label="Still to collect">Still to collect</td><td class="n">${fmt(unpaid)}</td><td colspan="3"></td></tr>`, { stack: true })}
+
+    ${clientsSection()}
 
     <input type="file" id="invUpload" accept="application/pdf" hidden>`;
 }
@@ -362,6 +365,20 @@ function wireLines() {
   });
 }
 
+// Everyone who can be billed, clients first and A to Z — then a client from the hand-made
+// invoices the app has no record of yet, offered to add with their details.
+function clientChoices(q = '') {
+  const s = getState();
+  const want = String(q).trim().toLowerCase();
+  const hit = p => !want || (p.name + ' ' + (p.gstin || '') + ' ' + (p.phone || '')).toLowerCase().includes(want);
+  const list = s.parties.filter(p => !p.__pending && p.name && p.name !== '__account_request' && hit(p))
+    .sort((a, b) => ((a.type === 'client' ? 0 : 1) - (b.type === 'client' ? 0 : 1)) || a.name.localeCompare(b.name))
+    .slice(0, 50);
+  const missing = KNOWN_CLIENTS.filter(k => !s.parties.some(p => k.match.test(p.name || '')) && (!want || k.name.toLowerCase().includes(want) || k.match.test(want)))
+    .map(k => ({ __new: true, known: true, name: k.name }));
+  return [...missing, ...list];
+}
+
 function mountEditor() {
   const s = getState();
   picker(document.getElementById('edParty'), {
@@ -369,10 +386,9 @@ function mountEditor() {
     placeholder: 'Search or add a client',
     allowNew: true,
     newLabel: 'Add client',
-    describe: p => p.__new ? `${p.name} (new client)` : `${p.name}${p.gstin ? ' · ' + p.gstin : p.phone ? ' · ' + p.phone : ''}`,
-    search: async q => s.parties
-      .filter(p => !q || (p.name + ' ' + (p.gstin || '') + ' ' + (p.phone || '')).toLowerCase().includes(q.toLowerCase()))
-      .slice(0, 12),
+    describe: p => p.__new ? `${p.name} (${p.known ? 'from invoice 056 — adds them' : 'new client'})`
+      : `${p.name}${p.gstin ? ' · ' + p.gstin : p.phone ? ' · ' + p.phone : ''}${p.type && p.type !== 'client' ? ' · ' + p.type : ''}`,
+    search: async q => clientChoices(q),
     onChange: v => {
       ed.party = v ? (v.__new ? { __new: true, name: v.name, type: 'client' } : v.id) : null;
       fillBillTo(v && !v.__new ? v : v ? { name: v.name } : null);
@@ -427,6 +443,8 @@ function openEditor(preset = {}) {
   });
   document.querySelector('#ov .modal')?.classList.add('wide');
   mountEditor();
+  // Opened for a client (the Invoice button on their row): their billing details, filled.
+  if (typeof ed.party === 'string') fillBillTo(getState().parties.find(p => p.id === ed.party));
 }
 
 // The PDF is generated the moment an invoice is issued and filed against it (Drive or Storage,
@@ -484,6 +502,32 @@ function manageBody(inv) {
       <button class="btn" type="button" onclick="finInvoices.store('${esc(inv.id)}')">${inv.pdfPath ? 'Save a fresh PDF' : 'Save PDF'}</button>
       <button class="btn ghost" type="button" onclick="fin.closeModal();finInvoices.upload('${esc(inv.id)}')">Upload my own</button>
     </div>`;
+}
+
+// The clients, with what prints on their invoices — so a missing address or GSTIN is seen
+// here, not on a PDF already sent. Anyone billed so far counts, whatever their type.
+function clientsSection() {
+  const s = getState();
+  const billed = new Set(s.invoices.map(i => i.partyId));
+  const list = s.parties.filter(p => !p.__pending && p.name && p.name !== '__account_request' && (p.type === 'client' || billed.has(p.id)))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const todo = KNOWN_CLIENTS.filter(k => !s.parties.some(p => k.match.test(p.name || '')));
+  return `
+    <h2 style="margin-top:32px">Your clients <span class="muted">(${list.length})</span></h2>
+    ${todo.length ? note(`<b>${esc(todo.map(k => k.name).join(', '))}</b> ${todo.length === 1 ? 'is' : 'are'} on your hand-made invoices but not here yet.
+      <div class="actions" style="margin:10px 0 0">${todo.map(k => `<button class="btn" type="button" onclick="finInvoices.addKnown(${esc(JSON.stringify(k.name))})">Add ${esc(k.name)}</button>`).join('')}</div>`, 'info') : ''}
+    ${list.length ? table(
+    `<th>Client</th><th>GSTIN</th><th>Address</th><th>Phone</th><th></th>`,
+    list.map(p => `<tr>
+        <td class="lead">${esc(p.name)}</td>
+        <td class="small" data-label="GSTIN">${p.gstin ? esc(p.gstin) : '<span class="faint">—</span>'}</td>
+        <td class="small" data-label="Address">${p.address ? esc(p.address) : '<span class="faint">missing</span>'}</td>
+        <td class="small" data-label="Phone">${esc(p.phone || '—')}</td>
+        <td class="n nowrap">
+          <button class="btn ghost sm" type="button" onclick="finAdmin.editParty('${esc(p.id)}')">Edit</button>
+          <button class="btn ghost sm" type="button" onclick="finInvoices.create({party:'${esc(p.id)}'})">Invoice</button>
+        </td></tr>`).join(''), '', { stack: true })
+    : empty('No clients yet. Add one, or pick “Add client” on a new invoice.', '<button class="btn" type="button" onclick="finAdmin.editParty()">Add a client</button>')}`;
 }
 
 export function mountInvoices() {
@@ -552,6 +596,16 @@ if (typeof window !== 'undefined') {
         if (btn) { btn.disabled = false; redrawTotals(); }
         box.innerHTML = `<div class="ferr err">${esc(e.message || 'Could not issue the invoice')}</div>`;
       }
+    },
+
+    // A client from the hand-made invoices, added with what those invoices print.
+    async addKnown(name) {
+      const k = knownClient(name);
+      if (!k) return;
+      try {
+        await SY.saveParty(null, { name: k.name, type: k.type, address: k.address, gstin: k.gstin, state: k.state });
+        toast(`${k.name} added`);
+      } catch (e) { toast(e.message || 'Could not add them'); }
     },
 
     manage(id) {
