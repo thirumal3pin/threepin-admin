@@ -2279,6 +2279,30 @@ export const COMPANY_PRESET = {
   chequeFavour: '3 Pin Realty',
   bankDetails: { accountName: '3 Pin Realty', accountNo: '50527652526', ifsc: 'IDIB000A641', bankName: 'Indian Bank', branch: 'Anna Nagar (West)' },
 };
+// Clients billed on the hand-made invoices, with the details those invoices print. Used to fill
+// a client record still missing them — never to overwrite what is already there.
+export const KNOWN_CLIENTS = [
+  { name: 'Sri Suprabhatham Builder', match: /supra\s*bh?a[dt]h?am/i, type: 'client',
+    address: '21/1, 21st Street, 4th Main Road, Nanganallur, Chennai - 600061', gstin: '33AEDPR4488N1ZV', state: 'Tamil Nadu' },
+];
+const CLIENT_KEYS = ['address', 'gstin', 'state'];
+export const knownClient = name => KNOWN_CLIENTS.find(c => c.match.test(String(name || ''))) || null;
+// The known details a client record is missing, as a patch — {} when it has them all or is unknown.
+export function clientPatch(party) {
+  const k = knownClient(party?.name);
+  if (!k) return {};
+  return Object.fromEntries(CLIENT_KEYS.filter(f => !String(party[f] ?? '').trim()).map(f => [f, k[f]]));
+}
+// Every known client, against the records: which to complete and which to add.
+export function knownClientsTodo(parties = S.parties) {
+  return KNOWN_CLIENTS.map(k => {
+    const p = (parties || []).find(x => k.match.test(x.name || ''));
+    if (!p) return { add: { name: k.name, type: k.type, ...Object.fromEntries(CLIENT_KEYS.map(f => [f, k[f]])) } };
+    const patch = clientPatch(p);
+    return Object.keys(patch).length ? { id: p.id, name: p.name, patch } : null;
+  }).filter(Boolean);
+}
+
 export function presetPatch(settings = S.settings) {
   const s = settings || {};
   const empty = v => !String(v ?? '').trim();

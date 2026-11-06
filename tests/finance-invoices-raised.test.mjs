@@ -10,7 +10,7 @@
 import {
   getState, num, bal, openInvoices, sideInvoiced, gstr1Rows, liveInvoice,
   invoiceTotals, netOfGst, withGst, issueNumber, expandPrefix, highestIssued, counterPatch,
-  invoiceServices, DEFAULT_INVOICE_SERVICES, PL_GROUPS, A, presetPatch, COMPANY_PRESET,
+  invoiceServices, DEFAULT_INVOICE_SERVICES, PL_GROUPS, A, presetPatch, COMPANY_PRESET, knownClient, clientPatch, knownClientsTodo,
 } from '../finance-assets/finance-core.js';
 import { EV, validateEvent } from '../finance-assets/finance-events.js';
 import { invoiceModel } from '../finance-assets/finance-invoice.js';
@@ -156,6 +156,14 @@ section('Company details — one click fills them from invoice 056');
   check('An empty profile gets PAN, GSTIN, address and the Indian Bank account', p0.pan === 'DHEPS4381A' && p0.gstin === '33DHEPS4381A1ZJ' && /Anna Nagar West/.test(p0.address) && p0.bankDetails.accountNo === '50527652526' && p0.bankDetails.ifsc === 'IDIB000A641', p0);
   check('…the seeded name becomes 3 Pin Realty', p0.companyName === '3 Pin Realty');
   check('…but a field already filled in is left alone', p0.bankDetails.bankName === 'HDFC');
+  check('Sri Suprabhatham Builder is known by name, however written',
+    ['sri suprabhatham builders', 'Sri Suprabadham Builder', 'SRI SUPRABATHAM', 'Supra Bhatham'].every(n => knownClient(n)?.gstin === '33AEDPR4488N1ZV'));
+  const blank = { id: 'X', name: 'Sri Suprabhatham Builder', gstin: '', address: '' };
+  const cp = clientPatch(blank);
+  check('A client record with no details gets the address and GSTIN from invoice 056', cp.gstin === '33AEDPR4488N1ZV' && /Nanganallur/.test(cp.address) && cp.state === 'Tamil Nadu', cp);
+  check('…but a GSTIN already on it stays', !('gstin' in clientPatch({ ...blank, gstin: '33ZZZ' })));
+  check('Not a client yet: one is added', knownClientsTodo([]).length === 1 && knownClientsTodo([])[0].add.gstin === '33AEDPR4488N1ZV');
+  check('Complete: nothing to do', knownClientsTodo([{ id: 'X', name: 'Sri Suprabhatham Builder', ...knownClient('suprabhatham') }]).length === 0);
   check('A complete profile needs nothing', Object.keys(presetPatch({ ...COMPANY_PRESET })).length === 0, presetPatch({ ...COMPANY_PRESET }));
 }
 

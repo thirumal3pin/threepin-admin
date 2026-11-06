@@ -6,7 +6,7 @@
 
 import {
   ACCOUNTS, A, EXP, fmt, esc, num, today, ym, addMonths, mlabel,
-  getState, bal, schedule, fyOf, lastIssued, seriesPrefix, COUNTERS, counterPatch, issueNumber, invoiceServices, presetPatch,
+  getState, bal, schedule, fyOf, lastIssued, seriesPrefix, COUNTERS, counterPatch, issueNumber, invoiceServices, presetPatch, knownClientsTodo,
 } from './finance-core.js';
 import { stat, empty, note, tag, table, toast, confirmDialog } from './ui.js';
 import * as SY from './finance-sync.js';
@@ -89,8 +89,8 @@ export function renderProfile() {
       </ul>
     </div>
 
-    ${presetOffer() ? note(`<b>Fill in from your invoice 056?</b> ${esc(presetOffer())} — the company, PAN, GSTIN, address and bank
-      details exactly as your hand-made invoices print them. Only empty fields are filled.
+    ${presetOffer() ? note(`<b>Fill in from your invoice 056?</b> ${esc(presetOffer())} — exactly as your hand-made invoices
+      print them. Only empty fields are filled; nothing you have typed is changed.
       <div class="actions" style="margin:10px 0 0"><button class="btn primary" type="button" onclick="finAdmin.fillPreset()">Fill them in</button></div>`) : ''}
 
     <form id="profileForm" onsubmit="return false">
@@ -531,7 +531,8 @@ export function presetOffer(settings = st().settings) {
   if (name && !/3\s*pin/i.test(name)) return '';
   const p = presetPatch(settings);
   const names = { companyName: 'name', pan: 'PAN', gstin: 'GSTIN', address: 'address', state: 'state', phone: 'phone', email: 'email', chequeFavour: 'cheque name', bankDetails: 'bank details' };
-  return Object.keys(p).map(k => names[k] || k).join(', ');
+  const clients = knownClientsTodo().map(c => `${c.name || c.add.name}'s address and GSTIN`);
+  return [...Object.keys(p).map(k => names[k] || k), ...clients].join(', ');
 }
 
 // ═══════ SERVICES YOU INVOICE ═══════
@@ -625,9 +626,11 @@ if (typeof window !== 'undefined') {
 
     async fillPreset() {
       const patch = presetPatch(st().settings);
-      if (!Object.keys(patch).length) return toast('Already filled in');
+      const clients = knownClientsTodo();
+      if (!Object.keys(patch).length && !clients.length) return toast('Already filled in');
       try {
-        await SY.saveSettings(patch);
+        if (Object.keys(patch).length) await SY.saveSettings(patch);
+        for (const c of clients) await SY.saveParty(c.id || null, c.patch || c.add);
         toast('Filled in from invoice 056');
         window.fin.repaint ? window.fin.repaint() : window.fin.go('profile');
       } catch (e) { toast(e.message || 'Could not save'); }

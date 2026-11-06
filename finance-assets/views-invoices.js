@@ -10,7 +10,7 @@
 
 import {
   fmt, esc, num, today, getState, bal, pname, dname, deal,
-  invoiceOutstanding, duplicateNumbers, invoiceTotals, netOfGst, withGst, issueNumber, A, invoiceServices,
+  invoiceOutstanding, duplicateNumbers, invoiceTotals, netOfGst, withGst, issueNumber, A, invoiceServices, knownClient,
 } from './finance-core.js';
 import { empty, note, tag, table, toast, modal, closeModal, dueCell, confirmDialog, picker } from './ui.js';
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
@@ -282,7 +282,11 @@ function editorBody() {
 }
 
 function fillBillTo(p) {
-  ed.billTo = { name: p?.name || '', address: p?.address || '', gstin: p?.gstin || '', state: p?.state || '', phone: p?.phone || '', email: p?.email || '' };
+  // A client billed before on a hand-made invoice brings what that invoice printed, wherever
+  // their record is still empty — and issuing saves it onto the record.
+  const k = knownClient(p?.name) || {};
+  const pick = f => String(p?.[f] || '').trim() || k[f] || '';
+  ed.billTo = { name: p?.name || '', address: pick('address'), gstin: pick('gstin'), state: pick('state'), phone: p?.phone || '', email: p?.email || '' };
   const box = document.getElementById('edBill');
   box.hidden = !ed.party;
   for (const k of ['name', ...BILL_KEYS.map(([x]) => x)]) {
