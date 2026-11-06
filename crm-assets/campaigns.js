@@ -1175,9 +1175,12 @@
         }
       }
       var missing = C.missingVars(vars, values);
+      // Values the lead had none of, filled from the step-2 fallback — said on the row, so the
+      // words are not mistaken for something the CRM knows about them. A per-lead edit is theirs.
+      var fb = C.fellBack ? C.fellBack(vars, mapping, values).filter(function (v) { return !(v in ed); }) : [];
       var can = !hold && !missing.length;
       if (can) ctx.sentNumbers.add(contact);
-      rows.push({ key: key, lead: lead, name: name, contact: contact, prop: prop, visit: visit, values: values, hold: hold, missing: missing, can: can, manual: !lead, hand: !!byHand,
+      rows.push({ key: key, lead: lead, name: name, contact: contact, prop: prop, visit: visit, values: values, hold: hold, missing: missing, fb: fb, can: can, manual: !lead, hand: !!byHand,
         mediaUrl: mUrl, mediaName: mName, on: can && !w.unchecked[key],
         why: lead ? (w.ai ? w.ai.picks[lead.id] : (w.journey && w.journey.reasons && w.journey.reasons[lead.id]) || '') : '' });
     }
@@ -1271,10 +1274,17 @@
         var m = w.mapping[v] || {}, cx = /^\d+$/.test(v) || C.autoSource(v) === 'fixed' ? varContext(t, v) : null;
         // A numbered variable is named by the words around it: “visit to {{2}} on”.
         var label = '<span class="cmp-mapv"><code>{{' + esc(v) + '}}</code>' + (cx ? '<small class="cmp-varctx">' + esc((cx.before ? '…' + cx.before + ' ' : '') + '{{' + v + '}}' + (cx.after ? ' ' + cx.after + '…' : '')) + '</small>' : '') + '</span>';
+        // A source that can come up empty takes a fallback: the words used for a lead with no
+        // value, so they get the message instead of being held back. Names already say "there".
+        var canFall = m.source && m.source !== 'fixed' && m.source !== 'lead_name' && m.source !== 'first_name';
+        var hint = (C.FALLBACK_HINTS || {})[m.source];
         return '<div class="cmp-map">' + label + '<select id="cmpMap_' + esc(v) + '" onchange="PinCampaigns.mapVar(' + js(v) + ',\'source\',this.value)" aria-label="Value for {{' + esc(v) + '}}' + (cx ? ', ' + esc(cx.before + ' … ' + cx.after) : '') + '">' + srcOpts(v) + '</select>'
-          + (m.source === 'fixed' ? '<input id="cmpMapT_' + esc(v) + '" value="' + esc(m.text || '') + '" placeholder="Text for everyone" aria-label="Text for {{' + esc(v) + '}}" oninput="PinCampaigns.mapVar(' + js(v) + ',\'text\',this.value,1)">' : (help[m.source] ? '<small class="cmp-muted cmp-srchelp">' + esc(help[m.source]) + '</small>' : '')) + '</div>';
+          + (m.source === 'fixed' ? '<input id="cmpMapT_' + esc(v) + '" value="' + esc(m.text || '') + '" placeholder="Text for everyone" aria-label="Text for {{' + esc(v) + '}}" oninput="PinCampaigns.mapVar(' + js(v) + ',\'text\',this.value,1)">'
+            : '<div class="cmp-mapfb">' + (help[m.source] ? '<small class="cmp-muted cmp-srchelp">' + esc(help[m.source]) + '</small>' : '')
+              + (canFall ? '<input id="cmpMapF_' + esc(v) + '" value="' + esc(m.fallback || '') + '" placeholder="If a lead has none, use…' + (hint ? ' e.g. ' + esc(hint) : '') + '" aria-label="Words for {{' + esc(v) + '}} when a lead has no value" oninput="PinCampaigns.mapVar(' + js(v) + ',\'fallback\',this.value,1)">' : '')
+              + '</div>') + '</div>';
       }).join('') + '</div>' : '<p class="cmp-muted">This template has no variables.</p>')
-      + '<p class="cmp-note">Anyone left with an empty variable is held back — WhatsApp refuses those messages. Each value can be changed per lead in the next step.</p>'
+      + '<p class="cmp-note">Anyone left with an empty variable is held back — WhatsApp refuses those messages — unless you give words to use instead. Each value can be changed per lead in the next step.</p>'
       + (t ? '<div class="cmp-livebox"><div class="cmp-prevlabel">' + (sample ? 'As ' + esc(C.greetingName(sample.name) || sample.name || 'the first person') + ' will read it' : 'With the values filled in') + '</div>' + bubble(t, sample ? sample.values : {}, { mediaName: sample ? sample.mediaName : '' }) + '</div>' : '')
       + '</section>'
       + (media ? '<section class="cmp-card"><h2 class="cmp-h2">Brochure or photo</h2>'
@@ -1388,6 +1398,7 @@
       + '<div class="cmp-muted">' + esc(meta.join(' · ')) + '</div>'
       + (r.why ? '<div class="cmp-why">' + (S.wiz && S.wiz.ai ? '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> ' : '') + esc(r.why) + '</div>' : '')
       + (r.hold ? '<div class="cmp-hold">' + esc(r.hold) + '</div>' : r.missing.length ? '<div class="cmp-hold">Missing ' + r.missing.map(function (m) { return '{{' + esc(m) + '}}'; }).join(', ') + ' — fill it in</div>' : '')
+      + (!r.hold && r.fb && r.fb.length ? '<div class="cmp-muted cmp-fbnote">Using your fallback for ' + r.fb.map(function (m) { return '{{' + esc(m) + '}}'; }).join(', ') + '</div>' : '')
       + '</div>'
       + (vars.length && r.contact && !r.hold ? '<div class="cmp-rvals">' + vars.map(function (vv) {
         // A numbered variable is named by what fills it: "2 · Property name".
@@ -2054,7 +2065,7 @@
     setWiz: function (k, v) { if (S.wiz) { S.wiz[k] = v; saveWiz(); } },
     setName: function (v) { if (S.wiz) { S.wiz.name = v; saveWiz(); } },
     setFlag: function (k, v) { if (S.wiz) { S.wiz[k] = !!v; saveWiz(); } },
-    mapVar: function (v, k, val, typing) { var m = S.wiz.mapping[v] = S.wiz.mapping[v] || { source: 'fixed', text: '' }; m[k] = val; rerenderSoon(typing); },
+    mapVar: function (v, k, val, typing) { var m = S.wiz.mapping[v] = S.wiz.mapping[v] || { source: k === 'fallback' ? CM().autoSource(v) : 'fixed', text: '' }; m[k] = val; rerenderSoon(typing); },
     quick: function (q) { S.wiz.quick = q; S.wiz.limit = 150; render(); },
     filter: function (k, v, typing) { S.wiz.f[k] = v; S.wiz.limit = 150; rerenderSoon(typing); },
     toggleStage: function (id) { var f = S.wiz.f, list = f.stages || (f.stages = []), i = list.indexOf(id); if (i >= 0) list.splice(i, 1); else list.push(id); S.wiz.limit = 150; render(); },

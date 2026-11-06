@@ -282,5 +282,19 @@ section('unchanged: cost, quiet hours');
   check('quiet hours', C.inQuietHours(Date.UTC(2026, 10, 5, 21) - 5.5 * H) && !C.inQuietHours(Date.UTC(2026, 10, 5, 12) - 5.5 * H));
 }
 
+section('fallback words — a lead with no value still gets the message');
+{
+  const vars = ['name', 'property', 'code', 'visit_date'];
+  const mapping = { name: { source: 'lead_name' }, property: { source: 'property', fallback: 'your property' }, code: { source: 'code' }, visit_date: { source: 'visit_date', fallback: '  soon ' } };
+  const none = C.valuesFor(vars, mapping, { lead: { name: 'Ravi Kumar' }, prop: null, visit: null });
+  check('no property: the fallback words', none.property === 'your property', none);
+  check('no visit: the fallback, trimmed', none.visit_date === 'soon', none);
+  check('no fallback given: still empty, so held back', none.code === '' && C.missingVars(vars, none).join() === 'code', C.missingVars(vars, none));
+  check('which values fell back', C.fellBack(vars, mapping, none).join() === 'property,visit_date', C.fellBack(vars, mapping, none));
+  const has = C.valuesFor(vars, mapping, { lead: { name: 'Ravi' }, prop: { id: 'MADA0001', propertyCode: 'MADA0001', name: 'Radiance Solitaire' }, visit: null });
+  check('a lead with a property: theirs, not the fallback', /Radiance/.test(has.property) && !C.fellBack(vars, mapping, has).includes('property'), has);
+  check('a suggestion for each source that can be empty', C.FALLBACK_HINTS.property === 'your property' && 'visit_date' in C.FALLBACK_HINTS);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

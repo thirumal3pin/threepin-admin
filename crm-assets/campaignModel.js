@@ -285,13 +285,31 @@ export function sourceValue(source, { lead, prop, visit, agent, text } = {}) {
   }
 }
 
+// The words a variable falls back to when a lead has no value for it — "your property" for a
+// lead with none linked — so they get the message instead of being held back. Only suggestions:
+// the person types their own, and an empty fallback holds the lead back as before.
+export const FALLBACK_HINTS = {
+  property: 'your property', code: '', area: 'your preferred area', price: 'on request', config: 'your preferred size',
+  visit_date: 'soon', visit_time: 'a time that suits you', agent_name: 'our team', agent_phone: '',
+  req_area: 'your preferred area', req_config: 'your preferred size', req_budget: 'your budget',
+};
+
 export function valuesFor(vars, mapping, ctx) {
   const out = {};
   for (const v of vars) {
     const m = (mapping && mapping[v]) || { source: autoSource(v) };
-    out[v] = sourceValue(m.source, { ...ctx, text: m.text });
+    const got = sourceValue(m.source, { ...ctx, text: m.text });
+    out[v] = String(got == null ? '' : got).trim() ? got : String(m.fallback || '').trim();
   }
   return out;
+}
+
+// Which of a lead's values came from a fallback, for the list to say so.
+export function fellBack(vars, mapping, values) {
+  return vars.filter(v => {
+    const fb = String(((mapping && mapping[v]) || {}).fallback || '').trim();
+    return fb && String((values || {})[v] == null ? '' : values[v]).trim() === fb;
+  });
 }
 
 // The variables with no value — a lead with any is not sent.
