@@ -12,7 +12,7 @@ import {
   today,
   ym,
   getState, setState, blank, defaultSettings, normalise, validate, reversalLines,
-  fyOf, num, fmt, monthEndEntries, docStatus,
+  fyOf, num, fmt, monthEndEntries, docStatus, issueNumber,
 } from '../finance-assets/finance-core.js';
 import { EV, PARTY_FIELDS, validateEvent } from '../finance-assets/finance-events.js';
 
@@ -199,7 +199,7 @@ export function save(evKey, values, opts = {}) {
   }
   for (const u of updates) {
     const target = s[COLL_KEY[u.coll]].find(x => x.id === u.id);
-    if (target) applyUpdate(target, link(u.data, keyIds));
+    if (target) applyUpdate(target, { ...link(u.data, keyIds), ...(u._linkTxn && txnId ? { txnId } : {}) });
   }
   for (const a of allocations) {
     const cur = s[COLL_KEY[a.coll]].find(x => x.id === a.id);
@@ -212,9 +212,9 @@ export function save(evKey, values, opts = {}) {
     cur.allocations = [...(cur.allocations || []), { txnId, amt: a.amt, date: postDate, ...(a.writtenOff ? { writtenOff: true } : {}), ...(a.creditNote ? { creditNote: true } : {}) }];
   }
   if (out.creditNote && txnId) {
-    const n = num(s.settings.nextCreditNoteNo) || 1;
-    s.invoices.push({ kind: 'creditnote', ...out.creditNote, id: nid('I'), invoiceNo: (s.settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0'), txnId, status: 'issued' });
-    s.settings.nextCreditNoteNo = n + 1;
+    const issued = issueNumber(s.settings, 'creditnote');
+    s.invoices.push({ kind: 'creditnote', ...out.creditNote, id: nid('I'), invoiceNo: issued.no, txnId, status: 'issued' });
+    Object.assign(s.settings, issued.patch);
   }
 
   if (out.selfInvoice && txnId) {
@@ -226,15 +226,15 @@ export function save(evKey, values, opts = {}) {
   }
 
   if (out.invoice && txnId) {
-    const n = num(s.settings.nextInvoiceNo) || 1;
-    const invoiceNo = (s.settings.invoicePrefix || '3PIN/') + String(n).padStart(3, '0');
+    const issued = issueNumber(s.settings, 'invoice');
+    const invoiceNo = issued.no;
     const invPaid = num(out.invoice.paid);
     s.invoices.push({
       ...out.invoice, id: nid('I'), txnId, invoiceNo,
       paid: invPaid, status: docStatus(num(out.invoice.total) - invPaid, out.invoice.total), allocations: [],
       createdBy: 'test', createdAt: Date.now(),
     });
-    s.settings.nextInvoiceNo = n + 1;
+    Object.assign(s.settings, issued.patch);
   }
   return txnId;
 }

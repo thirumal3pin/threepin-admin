@@ -15,7 +15,7 @@
 // it did not pass.
 
 import {
-  fmtInr, num, words, esc, splitGst, getState, pname, dname, today,
+  fmtInr, num, words, esc, splitGst, getState, pname, dname, today, issueNumber,
 } from './finance-core.js';
 
 // ═══════ jsPDF LOADER ═══════
@@ -72,15 +72,15 @@ async function loadJsPdf() {
 // Deliberately NOT fmt(). fmt() prefixes '₹' (U+20B9), and jsPDF's built-in Helvetica is a
 // Latin-1 font with no rupee glyph — it silently prints garbage (usually a stray accent).
 // Embedding a Unicode font would add ~400 KB to the CDN payload for one character, so the
-// PDF says "Rs." instead. Same Indian digit grouping as fmt(), plus paise, because an
-// invoice is read line by line by the client's accountant.
-function money(n) {
+// PDF says "Rs." / "INR" instead. Indian digit grouping like fmt(); paise only when there are
+// any — "40,000", as the hand-made invoice wrote it.
+function amount(n) {
   const v = num(n);
   const [whole, paise] = Math.abs(v).toFixed(2).split('.');
   const grouped = whole.length > 3
     ? whole.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + whole.slice(-3)
     : whole;
-  return (v < 0 ? '-' : '') + 'Rs. ' + grouped + '.' + paise;
+  return (v < 0 ? '-' : '') + grouped + (paise === '00' ? '' : '.' + paise);
 }
 
 // Model dates stay ISO ('YYYY-MM-DD') like every other date in the finance module — the
@@ -92,10 +92,11 @@ const dmy = iso => {
 
 // ═══════ INVOICE NUMBER ═══════
 
-// Pure, so the Settings screen can preview the next number without touching the counter.
-// A missing counter means the first invoice, not #000.
-export function nextInvoiceNumber(settings = {}) {
-  return (settings.invoicePrefix || '') + String(num(settings.nextInvoiceNo) || 1).padStart(3, '0');
+// The number the next invoice will actually get — the counter's, stepped past any number a
+// document already holds — without touching the counter. A missing counter means the first
+// invoice, not #000.
+export function nextInvoiceNumber(settings = {}, invoices = getState().invoices, date = today()) {
+  return issueNumber(settings, 'invoice', invoices, date).no;
 }
 
 // ═══════ MODEL ═══════
@@ -110,9 +111,10 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   const d = deal || null;
 
   const company = {
-    name: st.companyName || '3 PIN Realty Pvt Ltd',
+    name: st.companyName || '3 PIN Realty',
     address: st.address || '',
     gstin: st.gstin || '',
+    pan: st.pan || '',
     phone: st.phone || '',
     email: st.email || '',
     state: st.state || 'Tamil Nadu',
@@ -120,15 +122,20 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
 
   // A saved invoice keeps the number it was issued with; an unsaved preview shows the one
   // it would get. Never renumber a stored invoice — that is the whole point of the counter.
-  const invoiceNo = inv.no || inv.invoiceNo || nextInvoiceNumber(st);
   const date = inv.date || today();
+  const invoiceNo = inv.no || inv.invoiceNo || nextInvoiceNumber(st, undefined, date);
 
+  // An invoice raised on the Invoices tab carries the billing details it was issued with, so
+  // editing the client later never rewrites an invoice already sent. Older invoices read the
+  // client record as it is now.
+  const bt = inv.billTo || {};
   const billTo = {
-    name: p?.name || pname(inv.partyId),
-    phone: p?.phone || '',
-    gstin: p?.gstin || '',
-    address: p?.address || '',
-    state: p?.state || '',
+    name: bt.name || p?.name || pname(inv.partyId),
+    phone: bt.phone ?? p?.phone ?? '',
+    email: bt.email ?? p?.email ?? '',
+    gstin: bt.gstin ?? p?.gstin ?? '',
+    address: bt.address ?? p?.address ?? '',
+    state: bt.state ?? p?.state ?? '',
   };
 
   // For brokerage the place of supply is where the PROPERTY is (IGST Act s.12(3)), not the
@@ -143,13 +150,17 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
   };
 
   const taxable = num(inv.base ?? inv.taxable);
-  const rate = num(inv.gstRate ?? st.gstRate) || 18;
+  const rate = num(inv.gstRate ?? st.gstRate ?? 18);
+  const sac = inv.sac || st.sacCode || '997221';
 
   const item = {
     desc: inv.desc || 'Brokerage / consultancy services',
-    sac: inv.sac || st.sacCode || '997221',
+    sac,
     taxable,
   };
+  // Numbered lines. An invoice raised by a deal has one, made from its description.
+  const items = (inv.items?.length ? inv.items : [{ desc: item.desc, sac, amt: taxable }])
+    .map((x, i) => ({ n: i + 1, desc: x.desc || '', sac: x.sac || sac, amt: num(x.amt) }));
 
   // Prefer the split that was stored with the transaction: it is what was actually posted
   // to 2200 GST payable, and re-deriving it from today's settings could disagree with the
@@ -176,7 +187,12 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
     accountNo: bd.accountNo || '',
     ifsc: bd.ifsc || '',
     branch: bd.branch || '',
+    // Cheques and DDs are written to this name; usually the account name.
+    favour: st.chequeFavour || bd.accountName || company.name,
   };
+  // A transparent PNG, uploaded or drawn on the Profile tab. Without one the line is left blank
+  // to be signed by hand.
+  const signature = /^data:image\/(png|jpeg);base64,/.test(String(st.signature || '')) ? st.signature : '';
 
   // Fields a GST invoice is not legally valid without, plus the account number the client
   // needs to pay us. Human-readable and HTML-safe because the UI drops these into a warning
@@ -201,41 +217,76 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
     docType: inv.kind === 'creditnote' ? 'CREDIT NOTE'
       : taxTotal > 0.005 ? 'TAX INVOICE'
         : company.gstin ? 'BILL OF SUPPLY' : 'INVOICE',
-    against: inv.against || '', invoiceNo, date, billTo, deal: dealInfo, item, tax, total,
+    against: inv.against || '', invoiceNo, date, dueDate: inv.kind === 'creditnote' ? '' : (inv.dueDate || ''),
+    billTo, deal: dealInfo, item, items, tax, total,
     totalWords: words(total),
-    bank, missing,
+    notes: inv.notes || '',
+    bank, signature, missing,
   };
 }
 
 // ═══════ PDF LAYOUT ═══════
 //
-// A4 is 210 × 297 mm with 14 mm margins, so the content box is 14 → 196. Everything is
-// positioned in mm from the top: one page is a hard constraint (a two-page brokerage
-// invoice looks like a mistake), so the long free-text fields are wrapped AND capped.
+// After the invoice 3 PIN sent by hand before this existed: the document title and number
+// top left, the logo top right, a dark rule, "Issued on" and "Billed to", a lined table, the
+// tax rows and total under it, how to pay bottom left, the signature bottom right, and the
+// office address in a band at the foot. In the brand's orange and near-black rather than the
+// hand-made one's pastel, and with numbered lines and SAC codes the GST rules ask for.
+//
+// A4 is 210 × 297 mm with 14 mm margins, so the content box is 14 → 196. One page is a hard
+// constraint (a two-page invoice looks like a mistake), so free text is wrapped AND capped.
 
 const M = 14;          // left margin
 const R = 196;         // right edge of the content box
-const AMT_X = R - 3;   // right-aligned money column
-const SAC_X = 129;     // SAC column, left aligned
-const COL_AMT = 150;   // where the money column starts
-const LBL_X = COL_AMT - 3; // totals labels are right-aligned to just left of the money
+const NO_X = M + 2;    // line number
+const DESC_X = M + 12; // description
+const SAC_X = 132;     // SAC column, left aligned
+const AMT_X = R - 2;   // right-aligned money column
+const LBL_X = 150;     // totals labels, right-aligned to just left of the money
+
+const ORANGE = [254, 141, 0];   // #FE8D00, the brand orange
+const INK = [33, 33, 33];       // #212121
+const GREY = [115, 115, 115];
+const RULE = [200, 200, 200];
+const BAND = [238, 238, 238];
 
 // jsPDF's own line spacing is derived from the point size; we step in mm ourselves so the
 // block after a wrapped address always starts exactly where we expect it to.
 const step = size => size * 0.42;
 
+// The logo is the repo's logo.jpg, fetched once and held as a data URL for jsPDF. If it cannot
+// be fetched (offline, moved) the invoice prints the company name in its place instead of
+// failing — an invoice without a logo is still an invoice.
+let logoPromise = null;
+function loadLogo() {
+  if (typeof fetch === 'undefined' || typeof FileReader === 'undefined') return Promise.resolve(null);
+  if (!logoPromise) {
+    logoPromise = fetch(new URL('../logo.jpg', import.meta.url))
+      .then(r => (r.ok ? r.blob() : null))
+      .then(blob => blob && new Promise(res => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = () => res(null);
+        fr.readAsDataURL(blob);
+      }))
+      .catch(() => null);
+    logoPromise.then(x => { if (!x) logoPromise = null; });
+  }
+  return logoPromise;
+}
+
 export async function renderInvoicePdf(model) {
-  const JsPDF = await loadJsPdf();
+  const [JsPDF, logo] = await Promise.all([loadJsPdf(), loadLogo()]);
   const m = model || {};
   const company = m.company || {};
   const billTo = m.billTo || {};
   const dl = m.deal || {};
-  const item = m.item || {};
   const tax = m.tax || {};
   const bank = m.bank || {};
+  const items = m.items || [];
 
   const doc = new JsPDF({ unit: 'mm', format: 'a4' });
-  doc.setProperties({ title: 'Tax invoice ' + (m.invoiceNo || ''), creator: company.name || '' });
+  doc.setProperties({ title: (m.docType || 'Invoice') + ' ' + (m.invoiceNo || ''), creator: company.name || '' });
 
   // jsPDF throws on undefined and happily prints "null", so every string goes through here.
   const put = (s, x, y, opt) => {
@@ -251,163 +302,176 @@ export async function renderInvoicePdf(model) {
     rows.forEach((row, i) => doc.text(row, x, y + i * step(size)));
     return y + rows.length * step(size);
   };
-  const grey = () => doc.setTextColor(115, 115, 115);
-  const dark = () => doc.setTextColor(33, 33, 33);
+  const color = c => doc.setTextColor(...c);
   const font = (weight, size) => { doc.setFont('helvetica', weight); doc.setFontSize(size); };
+  const rule = (y, c = RULE, w = 0.4, x1 = M, x2 = R) => { doc.setDrawColor(...c); doc.setLineWidth(w); doc.line(x1, y, x2, y); };
 
-  // ── brand header band ──
-  doc.setFillColor(254, 141, 0);   // #FE8D00
-  doc.rect(0, 0, 210, 26, 'F');
-  doc.setTextColor(255, 255, 255);
-  font('bold', 16);
-  put(company.name, M, 14);
-  font('bold', 13);
-  put(m.docType || 'TAX INVOICE', R, 13, { align: 'right' });
-  font('normal', 7.5);
-  put('Original for recipient', R, 18.5, { align: 'right' });
+  // ── title + number (left), logo (right) ──
+  color(INK); font('bold', 26);
+  put(m.docType === 'TAX INVOICE' ? 'INVOICE' : (m.docType || 'INVOICE'), M, 24);
+  color(ORANGE); font('bold', 10);
+  put('NUMBER : ' + (m.invoiceNo || ''), M, 32, { charSpace: 0.6 });
+  if (m.docType === 'TAX INVOICE') { color(GREY); font('normal', 7.5); put('Tax invoice · original for recipient', M, 37); }
+  if (logo) {
+    // logo.jpg is a square with the mark in its middle; drawn large enough that the mark reads.
+    doc.addImage(logo, 'JPEG', R - 34, 3, 38, 38);
+  } else {
+    color(INK); font('bold', 14); put(company.name, R, 24, { align: 'right' });
+  }
 
-  // ── company details ──
-  let y = 33;
-  grey(); font('normal', 8);
-  y = block(company.address, M, y, 112, 8, 2);
-  const contact = [
-    company.gstin && 'GSTIN: ' + company.gstin,
-    company.phone && 'Phone: ' + company.phone,
-    company.email,
-  ].filter(Boolean).join('   |   ');
-  if (contact) { put(contact, M, y); y += step(8); }
+  // ── the dark rule with an orange line under it ──
+  doc.setFillColor(...INK); doc.rect(0, 42, 210, 3.2, 'F');
+  doc.setFillColor(...ORANGE); doc.rect(0, 45.2, 210, 1, 'F');
 
-  y += 3;
-  doc.setDrawColor(225, 225, 225); doc.setLineWidth(0.3);
-  doc.line(M, y, R, y);
+  // ── issued on / due / place of supply ──
+  let y = 55;
+  const kv = (label, value, x, yy, align) => {
+    color(GREY); font('bold', 9.5);
+    const w = doc.getTextWidth(label + ' ');
+    if (align === 'right') {
+      color(INK); font('bold', 9.5); put(value, x, yy, { align: 'right' });
+      const vw = doc.getTextWidth(String(value || ''));
+      color(GREY); put(label, x - vw - 1.5, yy, { align: 'right' });
+    } else {
+      put(label, x, yy);
+      color(INK); put(value, x + w, yy);
+    }
+  };
+  kv('Issued on:', dmy(m.date), M, y);
+  if (m.dueDate) kv('Due by:', dmy(m.dueDate), R, y, 'right');
+  y += 6;
+  if (m.against) { kv('Against invoice:', m.against, M, y); y += 6; }
+  kv('Place of supply:', m.placeOfSupply, M, y);
+  y += 9;
+
+  // ── billed to ──
+  color(GREY); font('bold', 9.5);
+  put('Billed to:', M, y);
+  y += 7;
+  color(INK); font('bold', 15);
+  y = block(billTo.name, M, y, R - M, 15, 2) + 1;
+  color(INK); font('normal', 9.5);
+  y = block([billTo.address, billTo.state].filter(Boolean).join(', '), M, y, R - M, 9.5, 3);
+  const ids = [billTo.gstin && 'GSTIN - ' + billTo.gstin, billTo.phone, billTo.email].filter(Boolean).join('     ');
+  if (ids) { y += 1.5; color(GREY); font('normal', 9); put(ids, M, y); y += step(9); }
+  if (dl.nickname || dl.propertyName) {
+    color(GREY); font('normal', 8.5);
+    put('Deal: ' + [dl.nickname, [dl.propertyCode, dl.propertyName].filter(Boolean).join(' — ')].filter(Boolean).join('   |   '), M, y);
+    y += step(8.5);
+  }
+  y += 5;
+
+  // ── the lines ──
+  rule(y, [140, 140, 140], 0.8);
+  color(INK); font('bold', 9.5);
+  put('NO.', NO_X, y + 6);
+  put('DESCRIPTION', DESC_X, y + 6);
+  put('SAC', SAC_X, y + 6);
+  put('AMOUNT (INR)', AMT_X, y + 6, { align: 'right' });
+  y += 9;
+  rule(y, [140, 140, 140], 0.8);
   y += 7;
 
-  // ── bill to (left) + invoice meta (right) ──
-  const top = y;
-  grey(); font('bold', 7.5);
-  put('BILL TO', M, top);
-  dark(); font('bold', 10.5);
-  put(billTo.name, M, top + 5.5);
-
-  let ly = top + 10;
-  grey(); font('normal', 8);
-  const who = [billTo.phone, billTo.gstin && 'GSTIN: ' + billTo.gstin].filter(Boolean).join('   |   ');
-  if (who) { put(who, M, ly); ly += step(8); }
-  ly = block(billTo.address, M, ly, 100, 8, 3);
-  if (billTo.state) { put(billTo.state, M, ly); ly += step(8); }
-
-  // Right column: label left, value right-aligned, so the two values stack cleanly.
-  let ry = top;
-  const meta = (label, value) => {
-    grey(); font('normal', 8);
-    put(label, COL_AMT - 26, ry);
-    dark(); font('bold', 9);
-    put(value, R, ry, { align: 'right' });
-    ry += 6;
-  };
-  meta('Invoice no.', m.invoiceNo);
-  meta('Date', dmy(m.date));
-  meta('Place of supply', m.placeOfSupply);
-  if (m.against) meta('Against invoice', m.against);
-
-  y = Math.max(ly, ry) + 4;
-
-  // ── deal line ──
-  const dealBits = [
-    dl.nickname,
-    [dl.propertyCode, dl.propertyName].filter(Boolean).join(' — '),
-  ].filter(Boolean).join('   |   ');
-  if (dealBits) {
-    grey(); font('normal', 8);
-    put('Deal: ' + dealBits, M, y);
-    y += 6;
+  // At most 8 lines on one page; a ninth would push the totals off it.
+  const shown = items.slice(0, 8);
+  for (const it of shown) {
+    color(INK); font('normal', 10);
+    put(String(it.n), NO_X, y);
+    const end = block(it.desc, DESC_X, y, SAC_X - DESC_X - 6, 10, 4);
+    font('normal', 9); color(GREY);
+    put(it.sac, SAC_X, y);
+    color(INK); font('bold', 10);
+    put(amount(it.amt), AMT_X, y, { align: 'right' });
+    y = Math.max(end, y + step(10)) + 4;
   }
-
-  // ── line item table ──
-  const HEAD_H = 8;
-  doc.setFillColor(245, 245, 245);
-  doc.setDrawColor(200, 200, 200); doc.setLineWidth(0.2);
-  doc.rect(M, y, R - M, HEAD_H, 'FD');
-  dark(); font('bold', 8.5);
-  put('Description', M + 3, y + 5.4);
-  put('SAC', SAC_X, y + 5.4);
-  put('Taxable value', AMT_X, y + 5.4, { align: 'right' });
-  y += HEAD_H;
-
-  const ROW_H = 12;
-  doc.rect(M, y, R - M, ROW_H, 'S');
-  font('normal', 9); dark();
-  block(item.desc, M + 3, y + 5.5, 108, 9, 2);
-  font('normal', 8.5);
-  put(item.sac, SAC_X, y + 5.5);
-  font('normal', 9);
-  put(money(item.taxable), AMT_X, y + 5.5, { align: 'right' });
-  y += ROW_H + 1;
-
-  // ── tax rows + total, right-aligned under the money column ──
-  const rowsRight = [];
-  if (num(tax.igst)) {
-    rowsRight.push([`IGST @ ${num(tax.rate)}%`, tax.igst]);
-  } else {
-    rowsRight.push([`CGST @ ${num(tax.halfRate)}%`, tax.cgst]);
-    rowsRight.push([`SGST @ ${num(tax.halfRate)}%`, tax.sgst]);
+  if (items.length > shown.length) {
+    color(GREY); font('normal', 8.5);
+    put(`+ ${items.length - shown.length} more line(s) — see the attached statement`, DESC_X, y);
+    y += 5;
   }
-  font('normal', 9); dark();
-  for (const [label, amt] of rowsRight) {
-    y += 5.5;
+  rule(y - 1, RULE, 0.3);
+  y += 5;
+
+  // ── sub total, tax, total ──
+  const row = (label, amt, bold) => {
+    color(INK); font(bold ? 'bold' : 'normal', 10);
     put(label, LBL_X, y, { align: 'right' });
-    put(money(amt), AMT_X, y, { align: 'right' });
+    put(amount(amt), AMT_X, y, { align: 'right' });
+    y += 6;
+  };
+  row('Sub total', m.item?.taxable ?? items.reduce((a, i) => a + num(i.amt), 0));
+  if (num(tax.igst)) {
+    row(`IGST ${num(tax.rate)}%`, tax.igst);
+  } else if (num(tax.total)) {
+    // The hand-made invoice lists SGST first; so does this one.
+    row(`SGST ${num(tax.halfRate)}%`, tax.sgst);
+    row(`CGST ${num(tax.halfRate)}%`, tax.cgst);
   }
-
-  y += 3;
-  doc.setFillColor(254, 141, 0);
-  doc.rect(COL_AMT - 46, y, R - (COL_AMT - 46), 9, 'F');
-  doc.setTextColor(255, 255, 255); font('bold', 10);
-  put('Total', LBL_X, y + 6, { align: 'right' });
-  put(money(m.total), AMT_X, y + 6, { align: 'right' });
-  y += 9 + 8;
+  doc.setFillColor(...ORANGE); doc.rect(LBL_X - 30, y - 2.5, R - (LBL_X - 30), 1, 'F');
+  y += 6;
+  color(INK); font('bold', 13);
+  put('TOTAL:', LBL_X, y, { align: 'right', charSpace: 0.8 });
+  put('Rs. ' + amount(m.total), AMT_X, y, { align: 'right' });
+  y += 9;
 
   // ── amount in words ──
-  grey(); font('normal', 8);
-  put('Amount in words', M, y);
-  dark(); font('bold', 9);
-  y = block(m.totalWords, M, y + 5, R - M, 9, 2) + 8;
+  font('normal', 9.5); color(GREY);
+  const lbl = 'Amount in words: ';
+  put(lbl, M, y);
+  color(INK); font('bold', 9.5);
+  y = block(m.totalWords, M + doc.getTextWidth(lbl) + 1, y, R - M - doc.getTextWidth(lbl) - 1, 9.5, 2) + 3;
+  if (m.notes) { color(GREY); font('normal', 8.5); y = block('Note: ' + m.notes, M, y, R - M, 8.5, 3) + 2; }
+  rule(y, [140, 140, 140], 0.8);
+  y += 7;
 
-  // ── bank details ──
-  const bankRows = [
-    bank.accountName && ['Account name', bank.accountName],
-    bank.bankName && ['Bank', bank.bankName + (bank.branch ? ', ' + bank.branch : '')],
-    bank.accountNo && ['Account no.', bank.accountNo],
-    bank.ifsc && ['IFSC', bank.ifsc],
+  // ── how to pay (left) + signature (right) ──
+  const pay = [
+    company.pan && ['Our PAN: ', company.pan],
+    company.gstin && ['GSTIN: ', company.gstin],
+    bank.favour && ['Cheque / DD in favour of: ', `"${bank.favour}"`],
+    (bank.accountNo || bank.ifsc) && ['NEFT details', ''],
+    bank.accountName && ['Account name: ', bank.accountName],
+    bank.accountNo && ['Account number: ', bank.accountNo],
+    bank.ifsc && ['IFSC: ', bank.ifsc],
+    (bank.bankName || bank.branch) && ['Bank and branch: ', [bank.bankName, bank.branch].filter(Boolean).join(', ')],
   ].filter(Boolean);
-  if (bankRows.length) {
-    const boxH = 8 + bankRows.length * 4.6;
-    doc.setDrawColor(225, 225, 225); doc.setLineWidth(0.3);
-    doc.rect(M, y, 104, boxH, 'S');
-    grey(); font('bold', 7.5);
-    put('BANK DETAILS', M + 3, y + 5);
-    let by = y + 10;
-    for (const [k, v] of bankRows) {
-      grey(); font('normal', 8); put(k, M + 3, by);
-      dark(); font('normal', 8); put(v, M + 30, by);
-      by += 4.6;
-    }
-    y += boxH;
+  const top = y;
+  for (const [k, v] of pay) {
+    font('bold', 9.5); color(v ? GREY : INK);
+    put(k, M, y);
+    if (v) { color(INK); put(v, M + doc.getTextWidth(k), y); }
+    y += 5.2;
   }
 
-  // ── signature ──
-  // Pinned near the foot of the page, but pushed down if the body ever runs long, so the
-  // two blocks can never overlap on a wordy invoice.
-  const sigY = Math.max(y + 16, 246);
-  dark(); font('normal', 9);
+  // Pinned above the footer band, but pushed down if the body ever runs long.
+  const sigY = Math.max(top + 4, 238);
+  color(INK); font('normal', 9.5);
   put('For ' + (company.name || ''), R, sigY, { align: 'right' });
-  doc.setDrawColor(160, 160, 160); doc.setLineWidth(0.3);
-  doc.line(R - 60, sigY + 18, R, sigY + 18);
-  grey(); font('normal', 8);
+  if (m.signature) {
+    // Fitted into the space above the line, right-aligned, keeping its shape. A broken image
+    // leaves the line blank rather than losing the whole invoice.
+    try {
+      const ip = doc.getImageProperties(m.signature);
+      const k = Math.min(56 / ip.width, 13 / ip.height);
+      const w = ip.width * k, h = ip.height * k;
+      doc.addImage(m.signature, /png/.test(m.signature.slice(0, 20)) ? 'PNG' : 'JPEG', R - w, sigY + 17 - h, w, h);
+    } catch { /* print without it */ }
+  }
+  rule(sigY + 18, [160, 160, 160], 0.3, R - 58, R);
+  color(GREY); font('normal', 8.5);
   put('Authorised signatory', R, sigY + 23, { align: 'right' });
 
-  grey(); font('normal', 7);
-  put('This is a computer-generated invoice.', 105, 288, { align: 'center' });
+  // ── footer band: the office address and how to reach it ──
+  doc.setFillColor(...ORANGE); doc.rect(0, 271, 210, 1.2, 'F');
+  doc.setFillColor(...BAND); doc.rect(0, 272.2, 210, 24.8, 'F');
+  color(INK); font('bold', 8.5);
+  let fy = 279;
+  const addr = doc.splitTextToSize(String(company.address || '').trim(), 170).slice(0, 2);
+  addr.forEach(line => { put(line, 105, fy, { align: 'center' }); fy += 4.2; });
+  const reach = [company.phone && 'Contact: ' + company.phone, company.email && 'Email: ' + company.email].filter(Boolean).join('     ');
+  if (reach) put(reach, 105, fy, { align: 'center' });
+  color(GREY); font('normal', 6.5);
+  put('This is a computer-generated invoice.', 105, 294, { align: 'center' });
 
   return doc.output('blob');
 }

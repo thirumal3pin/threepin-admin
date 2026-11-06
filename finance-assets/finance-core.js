@@ -53,6 +53,12 @@ export const ACCOUNTS = [
   ['4040', 'Other income', 'income'],
   ['4050', 'Bad debts recovered', 'income'],
   ['4060', 'Discounts received', 'income'],
+  // The services 3 PIN invoices besides brokerage, each its own line in the profit and loss so
+  // what each one earns can be read off it.
+  ['4070', 'Collaboration & brand promotion', 'income'],
+  ['4080', 'Marketing services', 'income'],
+  ['4090', 'Advertising income', 'income'],
+  ['4100', 'Studio & shoot income', 'income'],
 
   ['5000', 'Rent', 'expense'],
   ['5010', 'Salaries', 'expense'],
@@ -338,7 +344,7 @@ export const isUndone = t => !!(t && (t.reversedBy || t.reversalOf));
 export function sideInvoiced(d, side) {
   const pid = d?.[side]?.partyId;
   if (!pid) return false;
-  return S.invoices.some(i => i.dealId === d.id && i.partyId === pid && i.kind !== 'creditnote' && i.status !== 'void');
+  return S.invoices.some(i => i.dealId === d.id && i.partyId === pid && liveInvoice(i));
 }
 
 export function bal(code, f = {}) {
@@ -712,6 +718,40 @@ export function gstHeads(tax, intra) {
   return { cgst: half, sgst: r2(t - half), igst: 0 };
 }
 
+// ═══════ INVOICE LINES ═══════
+//
+// An invoice raised on the Invoices tab carries numbered lines at one GST rate. A line is typed
+// before GST or including it — whichever figure is to hand — and the other is worked out. Tax
+// is computed once, on the total, and split by gstHeads(), so the lines, the tax rows and the
+// ledger can never disagree by a paisa.
+// The services offered on a new invoice line. Each fills the line's description, SAC and price
+// and says which income head the invoice books to. Edited on the Settings tab; until it has
+// been, these stand in. The SAC codes are the usual ones for each — a CA should confirm them.
+export const DEFAULT_INVOICE_SERVICES = [
+  { name: 'Collaboration', desc: 'Collaboration charges for facilitating the promotion and marketing of', sac: '998397', price: 0, acc: '4070' },
+  { name: 'Marketing', desc: 'Marketing services for', sac: '998397', price: 0, acc: '4080' },
+  { name: 'Ads', desc: 'Advertising services — campaign for', sac: '998361', price: 0, acc: '4090' },
+  { name: 'Studio shoot', desc: 'Photo and video shoot of', sac: '998382', price: 0, acc: '4100' },
+  { name: 'Consultancy', desc: 'Consultancy services', sac: '998311', price: 0, acc: '4020' },
+];
+export const invoiceServices = (settings = S.settings) =>
+  Array.isArray(settings?.invoiceServices) ? settings.invoiceServices : DEFAULT_INVOICE_SERVICES;
+
+export const netOfGst = (gross, rate) => r2(num(gross) / (1 + num(rate) / 100));
+export const withGst = (amt, rate) => r2(num(amt) * (1 + num(rate) / 100));
+
+export function invoiceTotals(items, rate, placeOfSupply, homeState = S.settings?.state) {
+  const lines = (items || [])
+    .map(i => ({ desc: String(i.desc || '').trim(), sac: String(i.sac || '').trim(), amt: r2(i.amt) }))
+    .filter(i => i.amt > 0);
+  const base = r2(lines.reduce((a, i) => a + i.amt, 0));
+  const tax = r2(base * num(rate) / 100);
+  const home = String(homeState || 'Tamil Nadu').trim().toLowerCase();
+  const pos = String(placeOfSupply || '').trim().toLowerCase();
+  const intra = !pos || pos === home;
+  return { items: lines, base, tax, ...gstHeads(tax, intra), total: r2(base + tax), intra };
+}
+
 export function outputTaxLines(tax, intra, extra = {}) {
   const h = gstHeads(tax, intra);
   return HEADS.filter(k => h[k] > 0.004).map(k => ({ acc: GST_OUTPUT[k], cr: h[k], ...extra }));
@@ -806,7 +846,7 @@ export function gstComputation(month) {
 // Outward register for GSTR-1: every invoice and credit note of the month.
 export function gstr1Rows(month) {
   return S.invoices
-    .filter(i => ym(i.date) === month)
+    .filter(i => ym(i.date) === month && !i.unposted)
     .map(i => {
       const p = S.parties.find(x => x.id === i.partyId);
       const cn = i.kind === 'creditnote';
@@ -1089,7 +1129,7 @@ export function monthPicture(month) {
   const first = m + '-01';
   const last = lastDayOfMonth(m);
   const bills = (S.bills || []).filter(b => b.paid !== undefined && b.status !== 'void');
-  const invs = (S.invoices || []).filter(i => i.paid !== undefined && i.status !== 'void' && i.kind !== 'creditnote');
+  const invs = (S.invoices || []).filter(i => i.paid !== undefined && i.paid !== null && i.status !== 'void' && i.kind !== 'creditnote' && !i.unposted);
 
   const bucket = () => ({ amt: 0, rows: [] });
   const push = (b, row) => { b.rows.push(row); b.amt = r2(b.amt + num(row.amt)); };
@@ -1377,7 +1417,7 @@ export function settlementOf(txnId) {
   const made = [];
   for (const [coll, list] of [['bills', S.bills || []], ['invoices', S.invoices || []]]) {
     for (const d of list) {
-      if (d.txnId !== txnId || d.paid === undefined) continue;
+      if (d.txnId !== txnId || d.paid === undefined || d.paid === null || d.unposted) continue;
       const total = coll === 'bills' ? num(d.net ?? d.total) : num(d.total);
       const left = coll === 'bills' ? billOutstanding(d) : invoiceOutstanding(d);
       made.push({
@@ -1551,7 +1591,7 @@ export function fyStartDate(fy, startMonth) {
 // costs the tax computation adds back. Any account not named in a group still appears, under
 // administration, so nothing can quietly fall out of the statement.
 export const PL_GROUPS = [
-  { key: 'revenue', label: 'Revenue from operations', type: 'income', codes: ['4000', '4010', '4020'] },
+  { key: 'revenue', label: 'Revenue from operations', type: 'income', codes: ['4000', '4010', '4020', '4070', '4080', '4090', '4100'] },
   { key: 'otherinc', label: 'Other income', type: 'income', codes: ['4030', '4040', '4050', '4060'] },
   { key: 'direct', label: 'Direct costs of earning it', type: 'expense', codes: ['5040', '5045'] },
   { key: 'people', label: 'People', type: 'expense', codes: ['5010', '5020', '5030'] },
@@ -2202,6 +2242,104 @@ export function docStatus(outstanding, total) {
   return 'open';
 }
 
+// ═══════ DOCUMENT NUMBERS ═══════
+//
+// Invoices and credit notes are numbered off counters on the settings document, taken in the
+// same transaction as the document itself. That stops two phones taking one number at once,
+// but not a counter that has been wound BACK — and the Settings form did exactly that: it
+// saved every field it showed, so saving a GST rate an hour after opening the page wrote the
+// counter it had read an hour earlier, and the next invoice reused a number already sent to a
+// client. So the number issued is the counter's, or the first one after it no document holds.
+const SERIES = {
+  invoice: { prefix: 'invoicePrefix', counter: 'nextInvoiceNo', fallback: '3PIN/' },
+  creditnote: { prefix: 'creditNotePrefix', counter: 'nextCreditNoteNo', fallback: '3PIN/CN/' },
+};
+
+export const docNumber = (prefix, n) => prefix + String(n).padStart(3, '0');
+// The prefix as configured — it may carry date codes, see expandPrefix().
+export const seriesPrefix = (settings, series = 'invoice') =>
+  (settings || {})[SERIES[series].prefix] || SERIES[series].fallback;
+
+// A prefix can carry the document's month: {MM}, {YY}, {YYYY}, and {FY} for "26-27". So
+// "3PIN{MM}{YY}-" numbers an invoice dated November 2026 3PIN1126-001. The serial after it
+// runs on across months — the month is in the number, the count is not reset by it.
+const PREFIX_CODES = { '{MM}': '\\d{2}', '{YY}': '\\d{2}', '{YYYY}': '\\d{4}', '{FY}': '\\d{2}-\\d{2}' };
+export function expandPrefix(prefix, date = today(), fyStartMonth = S.settings?.fyStartMonth) {
+  const d = String(date || today());
+  const fy = fyOf(d, fyStartMonth);
+  return String(prefix || '')
+    .replaceAll('{MM}', d.slice(5, 7)).replaceAll('{YYYY}', d.slice(0, 4))
+    .replaceAll('{YY}', d.slice(2, 4)).replaceAll('{FY}', fy.slice(2));
+}
+// Every number a prefix can produce, whatever month: the serial is the captured group.
+function prefixPattern(prefix) {
+  const parts = String(prefix || '').split(/(\{MM\}|\{YYYY\}|\{YY\}|\{FY\})/);
+  return new RegExp('^' + parts.map(p => PREFIX_CODES[p] || p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('') + '(\\d+)$');
+}
+
+export function issueNumber(settings = {}, series = 'invoice', invoices = S.invoices, date = today()) {
+  const sr = SERIES[series];
+  const prefix = expandPrefix(seriesPrefix(settings, series), date, settings.fyStartMonth);
+  const taken = new Set((invoices || []).map(i => String(i.invoiceNo || '').trim()));
+  let n = Math.max(1, Math.floor(num(settings[sr.counter])) || 1);
+  while (taken.has(docNumber(prefix, n))) n++;
+  return { no: docNumber(prefix, n), n, patch: { [sr.counter]: n + 1 } };
+}
+
+// The highest serial already issued under a prefix, in any month: the counter has to stay
+// above it.
+export function lastIssued(prefix, invoices = S.invoices) {
+  const re = prefixPattern(prefix);
+  let top = 0, no = '';
+  for (const i of invoices || []) {
+    const m = re.exec(String(i.invoiceNo || '').trim());
+    if (m && Number(m[1]) > top) { top = Number(m[1]); no = m[0]; }
+  }
+  return { top, no };
+}
+export const highestIssued = (prefix, invoices = S.invoices) => lastIssued(prefix, invoices).top;
+
+// The Settings form shows the numbering counters, but every invoice and credit note moves them
+// as it is issued, so the figure the form showed when it was opened may already be stale.
+// Saving it back would wind the counter back and reissue numbers. So a counter is only sent
+// when it was actually edited, and never to a number at or below one already used under its
+// prefix.
+export const COUNTERS = [
+  { key: 'nextInvoiceNo', series: 'invoice', prefixKey: 'invoicePrefix', what: 'invoice' },
+  { key: 'nextCreditNoteNo', series: 'creditnote', prefixKey: 'creditNotePrefix', what: 'credit note' },
+];
+
+export function counterPatch(patch, edited, settings = S.settings, invoices = S.invoices) {
+  const out = { ...patch };
+  for (const c of COUNTERS) {
+    if (!edited.has(c.key)) { delete out[c.key]; continue; }
+    const prefix = out[c.prefixKey] || seriesPrefix(settings, c.series);
+    const { top, no } = lastIssued(prefix, invoices);
+    if (num(out[c.key]) <= top) {
+      throw new Error(`${no} is already issued, so the next ${c.what} number has to be ${top + 1} or more.`);
+    }
+  }
+  return out;
+}
+
+// An invoice that counts: not a credit note, not cancelled, and in the books. A document-only
+// invoice (unposted) is a numbered PDF the books do not know about yet — it bills no deal side,
+// is owed by nobody and is in no return until it is recorded or attached to an entry.
+export const liveInvoice = i => i.kind !== 'creditnote' && i.status !== 'void' && !i.unposted;
+
+// Numbers held by more than one document, each with its documents oldest first — the first
+// one keeps the number, the rest need a new one.
+export function duplicateNumbers(invoices = S.invoices) {
+  const by = {};
+  for (const i of invoices || []) {
+    const no = String(i.invoiceNo || '').trim();
+    if (no) (by[no] = by[no] || []).push(i);
+  }
+  return Object.fromEntries(Object.entries(by)
+    .filter(([, list]) => list.length > 1)
+    .map(([no, list]) => [no, [...list].sort((a, b) => num(a.createdAt) - num(b.createdAt) || String(a.id).localeCompare(String(b.id)))]));
+}
+
 export function openBills(partyId, opts = {}) {
   return (S.bills || [])
     .filter(b => b.paid !== undefined)
@@ -2212,7 +2350,7 @@ export function openBills(partyId, opts = {}) {
 
 export function openInvoices(partyId, dealId) {
   return (S.invoices || [])
-    .filter(i => i.paid !== undefined && i.status !== 'void')
+    .filter(i => i.paid !== undefined && i.paid !== null && i.status !== 'void' && !i.unposted)
     .filter(i => i.kind !== 'creditnote' && (!partyId || i.partyId === partyId) && (!dealId || i.dealId === dealId))
     .filter(i => invoiceOutstanding(i) > HALF_PAISA)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.invoiceNo).localeCompare(String(b.invoiceNo)));

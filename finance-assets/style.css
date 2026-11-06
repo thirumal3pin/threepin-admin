@@ -450,6 +450,23 @@ tr.undone td.lead .tag { text-decoration: none; }
 .modal-head h3 { margin: 0; font-family: var(--serif); font-weight: 400; font-size: 1.3rem; letter-spacing: -.01em; }
 .modal-body { padding: var(--s5); }
 .modal-foot { position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); padding: var(--s3) var(--s5); display: flex; gap: var(--s2); align-items: center; }
+/* The signature on the Profile tab, and the pad it can be drawn on. */
+.sigbox { min-height: 70px; display: flex; align-items: center; padding: var(--s3); border: 1px dashed var(--line-2); border-radius: 12px; background: #fff; margin-bottom: var(--s3); }
+.sigbox img { max-height: 80px; max-width: 100%; }
+.sigpad { width: 100%; height: auto; aspect-ratio: 1120 / 360; border: 1px dashed var(--line-2); border-radius: 12px; background: #fff; touch-action: none; cursor: crosshair; }
+/* The invoice editor: numbered lines want the width. */
+.modal.wide { max-width: 920px; }
+.billto { border: 1px solid var(--line); border-radius: 12px; padding: var(--s3) var(--s4) 0; margin: 0 0 var(--s4); background: var(--card-2); }
+.billto legend { font-size: 12.5px; font-weight: 600; color: var(--ink-2); padding: 0 6px; }
+.invlines table { font-size: 13px; min-width: 680px; }
+.invlines input { min-height: 38px; padding: 6px 8px; width: 100%; }
+.invlines td:first-child { width: 32px; text-align: center; }
+.invlines td:nth-child(5), .invlines td:nth-child(6) { width: 120px; }
+.invlines select { min-height: 38px; padding: 6px 8px; }
+.invtot { width: auto; margin-left: auto; min-width: 300px; font-size: 14px; }
+.invtot td { border: 0; }
+.invtot td { padding: 4px 0 4px 16px; }
+.invtot .grand td { border-top: 2px solid var(--brand); font-weight: 700; font-size: 15px; padding-top: 8px; }
 
 /* ═══════ TOAST ═══════ */
 

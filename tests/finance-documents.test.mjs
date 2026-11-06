@@ -950,4 +950,26 @@ section('The statements an accountant reads');
   check('Every check says what to do about it', health.checks.every(c => c.label && c.detail));
 }
 
+// ═══════ INVOICE NUMBERS ═══════
+//
+// The bug this guards: the Settings form saved back the counter it had read when it was opened,
+// so an invoice raised in between had its number issued a second time.
+
+section('Invoice numbers — a counter wound back never reissues a number');
+{
+  const s = getState();
+  const issuedBefore = s.invoices.filter(i => i.kind !== 'creditnote').map(i => i.invoiceNo);
+  const counter = s.settings.nextInvoiceNo;
+  s.settings.nextInvoiceNo = 1;
+  const rajan = s.parties.find(p => p.name === 'Prakash Builders')?.id || { __new: true, name: 'Numbering Test Client', type: 'client' };
+  save('otherinc', { date: '2026-11-20', party: rajan, desc: 'Consultancy', acc: '4020', amt: 1000, gst: 'yes', gstRate: 18, gstAmt: 180, total: 1180, via: '1000' });
+  save('otherinc', { date: '2026-11-21', party: rajan, desc: 'Consultancy', acc: '4020', amt: 1000, gst: 'yes', gstRate: 18, gstAmt: 180, total: 1180, via: '1000' });
+  const nos = s.invoices.map(i => i.invoiceNo);
+  check('There were invoices already, so the test means something', issuedBefore.length >= 1, String(issuedBefore.length));
+  eq('No invoice number appears twice', new Set(nos).size, nos.length);
+  check('The two new invoices took numbers no earlier invoice holds',
+    s.invoices.slice(-2).every(i => !issuedBefore.includes(i.invoiceNo)), JSON.stringify(s.invoices.slice(-2).map(i => i.invoiceNo)));
+  check('The counter ends past everything issued', s.settings.nextInvoiceNo > counter - 1, `${s.settings.nextInvoiceNo} vs ${counter}`);
+}
+
 report();

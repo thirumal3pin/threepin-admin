@@ -6,10 +6,11 @@
 
 import {
   ACCOUNTS, A, EXP, fmt, esc, num, today, ym, addMonths, mlabel,
-  getState, bal, schedule, fyOf,
+  getState, bal, schedule, fyOf, lastIssued, seriesPrefix, COUNTERS, counterPatch, issueNumber, invoiceServices,
 } from './finance-core.js';
 import { stat, empty, note, tag, table, toast, confirmDialog } from './ui.js';
 import * as SY from './finance-sync.js';
+import { INVOICE_ACCS } from './finance-events.js';
 
 const st = () => getState();
 
@@ -92,7 +93,10 @@ export function renderProfile() {
       <h2>Company</h2>
       <div class="card">
         ${field('Registered name', 'companyName', s.companyName)}
-        ${field('GSTIN', 'gstin', s.gstin, { placeholder: '33XXXXXXXXXXXZX', hint: 'Fifteen characters, starts with your state code (33 for Tamil Nadu).' })}
+        <div class="row2">
+          ${field('GSTIN', 'gstin', s.gstin, { placeholder: '33XXXXXXXXXXXZX', hint: 'Fifteen characters, starts with your state code (33 for Tamil Nadu).' })}
+          ${field('PAN', 'pan', s.pan, { placeholder: 'ABCDE1234F', hint: 'Printed on invoices next to the GSTIN.' })}
+        </div>
         <div class="field">
           <label for="s_address">Registered address</label>
           <textarea id="s_address" data-s="address" rows="3">${esc(s.address || '')}</textarea>
@@ -117,7 +121,23 @@ export function renderProfile() {
           ${field('Account number', 'bankDetails.accountNo', s.bankDetails?.accountNo)}
           ${field('IFSC', 'bankDetails.ifsc', s.bankDetails?.ifsc)}
         </div>
-        ${field('Branch', 'bankDetails.branch', s.bankDetails?.branch)}
+        <div class="row2">
+          ${field('Branch', 'bankDetails.branch', s.bankDetails?.branch)}
+          ${field('Cheques / DDs in favour of', 'chequeFavour', s.chequeFavour, { placeholder: s.bankDetails?.accountName || s.companyName || '', hint: 'Leave blank to use the account name.' })}
+        </div>
+      </div>
+
+      <h2>Signature on invoices</h2>
+      <div class="card">
+        <div class="sigbox">${s.signature ? `<img src="${esc(s.signature)}" alt="Your signature">`
+    : '<span class="small faint">No signature yet — invoices print a blank line to sign by hand.</span>'}</div>
+        <div class="actions">
+          <button class="btn" type="button" onclick="finAdmin.uploadSignature()">Upload an image</button>
+          <button class="btn" type="button" onclick="finAdmin.drawSignature()">Draw it</button>
+          ${s.signature ? '<button class="btn ghost" type="button" onclick="finAdmin.removeSignature()">Remove</button>' : ''}
+        </div>
+        <div class="hint">A photo of your signature on white paper works — the paper is made see-through and the edges trimmed.
+          It prints above "Authorised signatory" on every invoice PDF generated from now on.</div>
       </div>
 
       <h2>Who gets the email digests</h2>
@@ -174,8 +194,8 @@ export function renderSettings() {
       <h2>Invoicing</h2>
       <div class="card">
         <div class="row2">
-          ${field('Invoice prefix', 'invoicePrefix', s.invoicePrefix)}
-          ${field('Next invoice number', 'nextInvoiceNo', s.nextInvoiceNo, { type: 'number', hint: 'Change only if you are continuing a sequence from elsewhere.' })}
+          ${field('Invoice prefix', 'invoicePrefix', s.invoicePrefix, { hint: `{MM} {YY} {YYYY} {FY} take the invoice's month and year — <b>3PIN{MM}{YY}-</b> numbers this month's next invoice <b>${esc(issueNumber({ ...s, invoicePrefix: '3PIN{MM}{YY}-' }, 'invoice').no)}</b>. Next one as set now: <b>${esc(issueNumber(s, 'invoice').no)}</b>.` })}
+          ${field('Next invoice number', 'nextInvoiceNo', s.nextInvoiceNo, { type: 'number', hint: `Change only if you are continuing a sequence from elsewhere. It cannot go back to a number already issued${lastIssued(seriesPrefix(s, 'invoice')).no ? ` — ${esc(lastIssued(seriesPrefix(s, 'invoice')).no)} is the last one` : ''}.` })}
         </div>
         <div class="row2">
           ${field('Credit note prefix', 'creditNotePrefix', s.creditNotePrefix)}
@@ -184,6 +204,17 @@ export function renderSettings() {
         <div class="row2">
           ${field('SAC — brokerage', 'sacCodes.brokerage', s.sacCodes?.brokerage, { hint: '997221 is real-estate agency services.' })}
           ${field('SAC — consultancy', 'sacCodes.consultancy', s.sacCodes?.consultancy, { hint: '998311 is management consulting.' })}
+        </div>
+      </div>
+
+      <h2>Services you invoice</h2>
+      <div class="card">
+        <p class="small muted" style="margin-top:0">Pick one on an invoice line and it fills the description, SAC and price, and books
+          the invoice to its income head — so the profit and loss shows what each service earns. Ask your CA to confirm each SAC.</p>
+        <div id="svcRows">${svcRowsHtml()}</div>
+        <div class="actions">
+          <button class="btn ghost" type="button" onclick="finAdmin.addSvc()">+ Add a service</button>
+          <button class="btn" type="button" onclick="finAdmin.saveSvcs()">Save services</button>
         </div>
       </div>
 
@@ -487,12 +518,148 @@ function updateOpeningSummary() {
       : '<p class="small faint">Fill in what you had and the entry appears here.</p>'}`;
 }
 
+// ═══════ SERVICES YOU INVOICE ═══════
+//
+// Edited as rows in place and saved as one list on the settings document. The rows are read
+// afresh each time Settings is drawn, so an unsaved edit is simply dropped on leaving.
+
+let svcRows = [];
+
+function svcRowsHtml() {
+  svcRows = invoiceServices(st().settings).map(x => ({ ...x }));
+  return drawSvcRows();
+}
+
+function drawSvcRows() {
+  const html = `<div class="tbl-wrap invlines"><table>
+    <thead><tr><th>Service</th><th>Description it starts the line with</th><th>SAC</th><th class="n">Price</th><th>Income head</th><th></th></tr></thead>
+    <tbody>${svcRows.map((r, i) => `<tr>
+      <td><input type="text" value="${esc(r.name)}" oninput="finAdmin.setSvc(${i},'name',this.value)" aria-label="Service name"></td>
+      <td><input type="text" value="${esc(r.desc)}" oninput="finAdmin.setSvc(${i},'desc',this.value)" aria-label="${esc(r.name)} description"></td>
+      <td><input type="text" value="${esc(r.sac)}" oninput="finAdmin.setSvc(${i},'sac',this.value)" style="width:90px" aria-label="${esc(r.name)} SAC"></td>
+      <td><input type="text" inputmode="decimal" value="${num(r.price) || ''}" placeholder="—" oninput="finAdmin.setSvc(${i},'price',this.value)" style="text-align:right" aria-label="${esc(r.name)} price"></td>
+      <td><select onchange="finAdmin.setSvc(${i},'acc',this.value)" aria-label="${esc(r.name)} income head">
+        ${INVOICE_ACCS.map(c => `<option value="${c}" ${r.acc === c ? 'selected' : ''}>${c} · ${esc(A[c]?.name || c)}</option>`).join('')}</select></td>
+      <td><button class="btn ghost sm" type="button" onclick="finAdmin.dropSvc(${i})" aria-label="Remove ${esc(r.name)}">✕</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+  const box = typeof document !== 'undefined' && document.getElementById('svcRows');
+  if (box) box.innerHTML = html;
+  return html;
+}
+
+// ═══════ SIGNATURE ═══════
+//
+// Kept on the settings document as a small transparent PNG data URL, so the invoice PDF can
+// draw it without fetching anything (Drive links are not readable from the page). A photo is
+// cleaned up first: near-white becomes transparent, the ink is trimmed to its edges and the
+// result is scaled to at most 600 × 200 — a few kilobytes.
+
+function cleanSignature(source, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(source, 0, 0, w, h);
+  const img = x.getImageData(0, 0, w, h);
+  const d = img.data;
+  let top = h, left = w, right = -1, bottom = -1;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    if (d[i + 3] < 10 || lum > 190) { d[i + 3] = 0; continue; }
+    const p = i / 4, px = p % w, py = (p - px) / w;
+    if (px < left) left = px; if (px > right) right = px;
+    if (py < top) top = py; if (py > bottom) bottom = py;
+  }
+  if (right < 0) throw new Error('No signature found in that image — try a darker pen on white paper.');
+  x.putImageData(img, 0, 0);
+  const pad = 6;
+  left = Math.max(0, left - pad); top = Math.max(0, top - pad);
+  right = Math.min(w - 1, right + pad); bottom = Math.min(h - 1, bottom + pad);
+  const cw = right - left + 1, chh = bottom - top + 1;
+  const k = Math.min(1, 600 / cw, 200 / chh);
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(cw * k)); out.height = Math.max(1, Math.round(chh * k));
+  out.getContext('2d').drawImage(c, left, top, cw, chh, 0, 0, out.width, out.height);
+  return out.toDataURL('image/png');
+}
+
+async function saveSignature(dataUrl) {
+  await SY.saveSettings({ signature: dataUrl });
+  toast(dataUrl ? 'Signature saved — it prints on invoices from now on' : 'Signature removed');
+  window.fin.go('profile');
+}
+
 // ═══════ ACTIONS ═══════
 
 if (typeof window !== 'undefined') {
   window.finAdmin = {
     verifyCache,
     rebuildCache,
+
+    setSvc(i, k, v) { svcRows[i][k] = k === 'price' ? num(v) : v; },
+    addSvc() { svcRows.push({ name: '', desc: '', sac: '', price: 0, acc: '4020' }); drawSvcRows(); },
+    dropSvc(i) { svcRows.splice(i, 1); drawSvcRows(); },
+    async saveSvcs() {
+      const list = svcRows.map(r => ({ name: String(r.name || '').trim(), desc: String(r.desc || '').trim(), sac: String(r.sac || '').trim(), price: num(r.price), acc: r.acc || '4020' }))
+        .filter(r => r.name);
+      try {
+        await SY.saveSettings({ invoiceServices: list });
+        toast(`${list.length} service${list.length === 1 ? '' : 's'} saved`);
+      } catch (e) { toast(e.message || 'Could not save'); }
+    },
+
+    uploadSignature() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+        try {
+          const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+          const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+          const url = cleanSignature(bmp, Math.round(bmp.width * k), Math.round(bmp.height * k));
+          bmp.close?.();
+          await saveSignature(url);
+        } catch (e) { toast(e.message || 'Could not read that image'); }
+      };
+      input.click();
+    },
+
+    drawSignature() {
+      window.fin.modal({
+        title: 'Draw your signature',
+        body: `<canvas id="sigPad" class="sigpad" width="1120" height="360" aria-label="Signature pad"></canvas>
+          <div class="hint">Sign with a finger, a stylus or the mouse.</div>`,
+        foot: `<button class="btn ghost" type="button" id="sigClear">Clear</button>
+          <div class="spacer"></div>
+          <button class="btn primary" type="button" id="sigSave">Use this signature</button>`,
+      });
+      const pad = document.getElementById('sigPad');
+      const x = pad.getContext('2d');
+      x.lineWidth = 5; x.lineCap = 'round'; x.lineJoin = 'round'; x.strokeStyle = '#1a2a6c';
+      let drawing = false, inked = false;
+      const at = e => {
+        const r = pad.getBoundingClientRect();
+        return [(e.clientX - r.left) * pad.width / r.width, (e.clientY - r.top) * pad.height / r.height];
+      };
+      pad.onpointerdown = e => { drawing = true; pad.setPointerCapture(e.pointerId); x.beginPath(); x.moveTo(...at(e)); };
+      pad.onpointermove = e => { if (!drawing) return; x.lineTo(...at(e)); x.stroke(); inked = true; };
+      pad.onpointerup = pad.onpointercancel = () => { drawing = false; };
+      document.getElementById('sigClear').onclick = () => { x.clearRect(0, 0, pad.width, pad.height); inked = false; };
+      document.getElementById('sigSave').onclick = async () => {
+        if (!inked) { toast('Sign in the box first'); return; }
+        try {
+          const url = cleanSignature(pad, pad.width, pad.height);
+          window.fin.closeModal();
+          await saveSignature(url);
+        } catch (e) { toast(e.message || 'Could not save the signature'); }
+      };
+    },
+
+    async removeSignature() {
+      const ok = await confirmDialog({ title: 'Remove the signature?', message: 'Invoices will print a blank line to sign by hand.', confirmLabel: 'Remove' });
+      if (ok) await saveSignature('');
+    },
 
     async saveProfile() {
       try {
@@ -503,7 +670,9 @@ if (typeof window !== 'undefined') {
 
     async saveSettings() {
       try {
-        await SY.saveSettings(collect('settingsForm'));
+        const edited = new Set(COUNTERS.map(c => c.key)
+          .filter(k => { const el = document.getElementById('s_' + k); return el && el.value !== el.defaultValue; }));
+        await SY.saveSettings(counterPatch(collect('settingsForm'), edited));
         toast('Settings saved');
       } catch (e) { toast(e.message || 'Could not save'); }
     },
@@ -540,7 +709,13 @@ if (typeof window !== 'undefined') {
             <div class="field"><label for="p_state">State</label><input id="p_state" value="${esc(p.state || '')}"
               placeholder="Tamil Nadu"></div>
           </div>
-          <div class="hint">The state decides whether their invoice shows CGST+SGST or IGST.</div>`,
+          <div class="field"><label for="p_address">Billing address</label>
+            <textarea id="p_address" rows="2">${esc(p.address || '')}</textarea></div>
+          <div class="row2">
+            <div class="field"><label for="p_pan">PAN</label><input id="p_pan" value="${esc(p.pan || '')}"></div>
+            <div class="field"><label for="p_contact">Contact person</label><input id="p_contact" value="${esc(p.contact || '')}"></div>
+          </div>
+          <div class="hint">These print on their invoices. The state decides whether an invoice shows CGST+SGST or IGST.</div>`,
         foot: `<button class="btn primary" type="button" onclick="finAdmin.saveParty('${esc(id)}')">Save</button>`,
       });
     },
@@ -549,6 +724,7 @@ if (typeof window !== 'undefined') {
       const v = k => document.getElementById('p_' + k).value.trim();
       await SY.saveParty(id, {
         name: v('name'), phone: v('phone'), email: v('email'), gstin: v('gstin'), state: v('state'),
+        address: v('address'), pan: v('pan'), contact: v('contact'),
       });
       window.fin.closeModal();
       toast('Saved');

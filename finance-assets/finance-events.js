@@ -26,7 +26,7 @@ import {
   openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance, billTaxBack,
   expectedFor, currentPlan, addDays, lastDayOfMonth,
   PAY_METHODS, RECURRING_KINDS, recurringAcc, recurringKindLabel, regenerateSchedule, pettyRoom,
-  awaitingBill, docStatus, monthPicture,
+  awaitingBill, docStatus, monthPicture, liveInvoice, invoiceTotals,
 } from './finance-core.js';
 
 // ═══════ FIELD + PARTY HELPERS ═══════
@@ -454,7 +454,7 @@ EV.register = {
     const d = deal(v.deal);
     if (!d) return need('Pick the deal that registered.');
     if (d.status !== 'open') return need('This deal is already ' + d.status + '.');
-    const unbilled = ['seller', 'buyer'].filter(side => d[side]?.partyId && !S().invoices.some(i => i.dealId === d.id && i.partyId === d[side].partyId && i.kind !== 'creditnote' && i.status !== 'void'));
+    const unbilled = ['seller', 'buyer'].filter(side => d[side]?.partyId && !S().invoices.some(i => i.dealId === d.id && i.partyId === d[side].partyId && liveInvoice(i)));
     return {
       desc: '', lines: [],
       effects: [
@@ -989,6 +989,8 @@ function autoAllocInvoices(v) {
 // (4000), or other billed work (4020).
 function incomeAccOf(inv) {
   if (!inv) return '4000';
+  // An invoice raised on its own says which head it was booked to.
+  if (inv.acc) return inv.acc;
   if (inv.kind === 'other') return '4020';
   // A flat fee was booked to whichever head its type chose; letting the client off part of it
   // has to come back off that same head, or a waived cancellation fee would quietly reduce
@@ -2535,6 +2537,102 @@ EV.otherinc = {
   },
 };
 
+// ═══════ AN INVOICE RAISED ON ITS OWN ═══════
+//
+// Made on the Invoices tab rather than the Record screen: numbered lines, the client's billing
+// details, one GST rate. Recording it in the books is a choice made per invoice — it can be
+// issued as a document only and recorded (or attached to an entry already in the books) later.
+// This event is the "record it" half; finance-sync.js issueInvoice() is the document-only half,
+// and builds the same document from here so the two can never differ. With v.invoiceId it
+// records an invoice already issued, keeping its number, instead of raising a new one.
+export const INVOICE_ACCS = ['4070', '4080', '4090', '4100', '4020', '4000', '4010', '4040'];
+
+EV.raiseinv = {
+  title: 'Invoice raised', group: 'Money in', dir: 'in',
+  when: 'An invoice made on the Invoices tab — numbered lines, the client\'s billing details and GST. Profit goes up by the amount before GST; the GST is owed to the government.',
+  fields: () => [
+    F('date', 'Invoice date', 'date', { def: today() }),
+    F('party', 'Client', 'party', { partyType: 'client' }),
+    F('acc', 'Income head', 'select', { opts: INVOICE_ACCS.map(c => accOpt(c)), def: '4020' }),
+    F('gstRate', 'GST %', 'number', { def: 18 }),
+    F('via', 'Received', 'select', {
+      opts: [['later', 'Not yet — the client will pay later'], ['1000', 'Now — into Bank (1000)'], ['1010', 'Now — into Petty cash (1010)']],
+      def: 'later',
+    }),
+    F('dueDate', 'Payment due by', 'date'),
+  ],
+  check: v => {
+    const t = invoiceTotals(v.items, v.gstRate, v.placeOfSupply);
+    return [
+      ...dateChecks(v),
+      ...partyReq(v, 'party', 'Name the client — an invoice needs someone to bill'),
+      ...(t.base > 0 ? [] : [err(null, 'Add at least one line with an amount')]),
+      ...((v.items || []).some(i => num(i.amt) > 0 && !String(i.desc || '').trim()) ? [err(null, 'Every line with an amount needs a description')] : []),
+      ...(num(v.gstRate) === 0 || GST_RATES.includes(num(v.gstRate)) ? [] : [err('gstRate', 'GST in India is 0.25, 1.5, 3, 5, 12, 18 or 28% — check the rate')]),
+      ...(v.billTo?.gstin && !/^[0-9]{2}[A-Z0-9]{10}[A-Z0-9]{3}$/i.test(String(v.billTo.gstin).replace(/\s/g, '')) ? [err(null, 'The client\'s GSTIN is 15 characters — 2 digits, then 10 of the PAN, then 3')] : []),
+    ];
+  },
+  build: v => {
+    const st = S().settings;
+    const pid = pidOf(v.party);
+    if (!pid) return need('Name the client.');
+    // For a service the place of supply is the recipient's location (IGST Act s.12(2)).
+    const pos = String(v.placeOfSupply || v.billTo?.state || partyState(v.party) || st.state || '').trim();
+    const t = invoiceTotals(v.items, v.gstRate, pos, st.state);
+    if (!t.base) return need('Add a line with an amount.');
+    const date = v.date || today();
+    const later = !v.via || v.via === 'later';
+    const acc = v.acc || '4020';
+    const sac = st.sacCodes?.consultancy || st.sacCode || '998311';
+    const items = t.items.map(i => ({ ...i, sac: i.sac || sac }));
+
+    const lines = [
+      later ? { acc: '1100', dr: t.total, party: pid } : cashLine(v, { acc: v.via, dr: t.total }),
+      { acc, cr: t.base, party: pid, ...(v.dealId ? { deal: v.dealId } : {}) },
+    ];
+    if (t.tax) lines.push(...outputTaxLines(t.tax, t.intra));
+
+    const doc = {
+      kind: 'direct', partyId: pid, dealId: v.dealId || null, acc,
+      items, base: t.base, gstRate: num(v.gstRate), cgst: t.cgst, sgst: t.sgst, igst: t.igst, total: t.total,
+      placeOfSupply: pos, sac: items[0].sac, desc: items.map(i => i.desc).join('; '),
+      date, dueDate: v.dueDate || addDays(date, 30),
+      billTo: v.billTo ? { ...v.billTo, name: v.billTo.name || pnameOf(v.party) } : null,
+      notes: String(v.notes || '').trim(),
+      paid: later ? 0 : t.total,
+    };
+
+    // What was typed into the bill-to box is the client's billing detail from now on, so the
+    // next invoice to them starts filled in.
+    const p = S().parties.find(x => x.id === pid) || {};
+    const keep = Object.fromEntries(['address', 'gstin', 'state', 'phone', 'email', 'pan', 'contact']
+      .map(k => [k, String(v.billTo?.[k] ?? '').trim()])
+      .filter(([k, x]) => x && x !== String(p[k] || '')));
+    const updates = Object.keys(keep).length ? [{ coll: 'parties', id: pid, data: keep }] : [];
+
+    const out = {
+      desc: `Invoice — ${pnameOf(v.party)} — ${items.map(i => i.desc).join('; ')}`.slice(0, 160),
+      lines,
+      effects: [
+        `Income ${fmt(t.base)} this month — profit goes up by that.`,
+        t.tax ? `${fmt(t.tax)} GST charged (${t.intra ? 'CGST + SGST' : 'IGST'}) — owed to the government, not yours.` : '',
+        later ? `${fmt(t.total)} is now owed by ${esc(pnameOf(v.party))}, due ${doc.dueDate}.` : `${fmt(t.total)} arrives in ${A[v.via].name}.`,
+        v.invoiceId ? 'The invoice keeps its number.' : 'The invoice is numbered and its PDF saved.',
+      ].filter(Boolean),
+      updates,
+    };
+    if (v.invoiceId) {
+      out.updates = [...updates, {
+        coll: 'invoices', id: v.invoiceId, _linkTxn: true,
+        data: { unposted: false, acc, paid: doc.paid, status: later ? 'open' : 'paid', allocations: [], postedAt: Date.now() },
+      }];
+    } else {
+      out.invoice = doc;
+    }
+    return out;
+  },
+};
+
 EV.funding = {
   title: 'Capital / director loan received', group: 'Money in', dir: 'in',
   when: '<b>Never income.</b> Share capital is ownership; a director loan is repayable. Either way your profit does not change.',
@@ -2986,7 +3084,7 @@ EV.creditnote = {
     return [
       F('date', 'Date', 'date', { def: today() }),
       F('inv', 'Invoice', 'select', {
-        opts: S().invoices.filter(i => i.kind !== 'creditnote' && i.status !== 'void').map(i => [i.id, `${i.invoiceNo} — ${pname(i.partyId)} — ${fmt(i.total)}`]),
+        opts: S().invoices.filter(liveInvoice).map(i => [i.id, `${i.invoiceNo} — ${pname(i.partyId)} — ${fmt(i.total)}`]),
       }),
       F('why', 'Reason', 'text', { required: true, hint: 'Goes on the credit note.' }),
       F('amt', 'Reduce by (before GST)', 'number', { required: true, hint: inv ? `Invoice was ${fmt(inv.base)} + GST ${fmt(num(inv.cgst) + num(inv.sgst) + num(inv.igst))}` : '' }),
@@ -3134,6 +3232,7 @@ export const CHOOSER = [
 // materialise before it calls build() for real.
 export const PARTY_FIELDS = {
   newdeal: ['seller', 'buyer'],
+  raiseinv: ['party'],
   otherinc: ['party'],
   dealcost: ['vendor'],
   expense: ['vendor'],

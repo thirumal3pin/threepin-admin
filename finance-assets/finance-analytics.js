@@ -284,7 +284,7 @@ export function dealFunnel(state, f = {}) {
 export function collectionDays(state) {
   const spans = [];
   for (const inv of (state.invoices || [])) {
-    if (inv.kind === 'creditnote' || inv.status === 'void') continue;
+    if (inv.kind === 'creditnote' || inv.status === 'void' || inv.unposted) continue;
     // Every payment applied to this invoice, whatever event recorded it. The wait is
     // measured to the payment that finally cleared it, weighted by what each one settled.
     const pays = state.txns

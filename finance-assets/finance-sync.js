@@ -45,6 +45,7 @@ import {
   ACCOUNTS, getState, setState, blank, defaultSettings,
   validate, normalise, reversalLines, fyOf, today, ym, num,
   monthEndEntries, billOutstanding, invoiceOutstanding, docStatus,
+  issueNumber, duplicateNumbers, isUndone,
 } from './finance-core.js';
 import { validateEvent } from './finance-events.js';
 import { EV, PARTY_FIELDS } from './finance-events.js';
@@ -873,7 +874,7 @@ export async function save(evKey, values, opts = {}) {
       logChange(tx, d.coll, d.ref.id);
     }
     for (const u of updates) {
-      tx.update(ref(u.coll, u.id), link(u.data));
+      tx.update(ref(u.coll, u.id), { ...link(u.data), ...(u._linkTxn && txnId ? { txnId } : {}) });
       logChange(tx, u.coll, u.id);
     }
 
@@ -898,11 +899,12 @@ export async function save(evKey, values, opts = {}) {
     }
 
     // A GST invoice takes the next invoice number off the same settings document, in the
-    // same transaction, so the sequence stays gapless and can never double up.
+    // same transaction, so two devices can never take the same one — and issueNumber skips
+    // any number a document already holds, so a counter wound back cannot reissue one either.
     let invoiceId = null, invoiceNo = null;
     if (out.invoice && txnId) {
-      const n = num(settings.nextInvoiceNo) || 1;
-      invoiceNo = (settings.invoicePrefix || '3PIN/') + String(n).padStart(3, '0');
+      const issued = issueNumber(settings, 'invoice', getState().invoices, out.invoice.date || postDate);
+      invoiceNo = issued.no;
       const iref = doc(col('invoices'));
       invoiceId = iref.id;
       const invPaid = num(out.invoice.paid);
@@ -913,15 +915,15 @@ export async function save(evKey, values, opts = {}) {
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
       });
       logChange(tx, 'invoices', invoiceId);
-      patch.nextInvoiceNo = n + 1;
+      Object.assign(patch, issued.patch);
     }
 
     // A partial credit note takes the next number in the credit-note series and is stored
     // against the invoice it reduces. The invoice stays live — only what it is worth changes.
     let creditNoteNo = null;
     if (out.creditNote && txnId) {
-      const n = num(settings.nextCreditNoteNo) || 1;
-      creditNoteNo = (settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0');
+      const issued = issueNumber(settings, 'creditnote', getState().invoices, postDate);
+      creditNoteNo = issued.no;
       const cnref = doc(col('invoices'));
       tx.set(cnref, {
         kind: 'creditnote', ...out.creditNote, invoiceNo: creditNoteNo, txnId, status: 'issued',
@@ -929,7 +931,7 @@ export async function save(evKey, values, opts = {}) {
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
       });
       logChange(tx, 'invoices', cnref.id);
-      patch.nextCreditNoteNo = n + 1;
+      Object.assign(patch, issued.patch);
     }
 
     let selfInvoiceNo = null;
@@ -1098,8 +1100,8 @@ export async function reverse(txnId) {
 
     let creditNoteNo = null;
     if (inv) {
-      const n = num(settings.nextCreditNoteNo) || 1;
-      creditNoteNo = (settings.creditNotePrefix || '3PIN/CN/') + String(n).padStart(3, '0');
+      const issued = issueNumber(settings, 'creditnote', getState().invoices, today());
+      creditNoteNo = issued.no;
       const invFy = fyOf(inv.date, settings.fyStartMonth);
       const window = `${Number(invFy.slice(0, 4)) + 1}-11-30`;
       const cnref = doc(col('invoices'));
@@ -1113,7 +1115,7 @@ export async function reverse(txnId) {
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
       });
       logChange(tx, 'invoices', cnref.id);
-      patch.nextCreditNoteNo = n + 1;
+      Object.assign(patch, issued.patch);
       // The original stops being a live receivable the moment it is credit-noted, or the
       // Owed list and the ageing keep claiming money the ledger has already reversed.
       tx.update(ref('invoices', inv.id), {
@@ -1207,17 +1209,144 @@ export async function createInvoice(data) {
   await runTransaction(db, async tx => {
     const snap = await tx.get(root());
     const s = snap.exists() ? snap.data() : defaultSettings();
-    const nextNo = num(s.nextInvoiceNo) || 1;
-    const invoiceNo = (s.invoicePrefix || '3PIN/') + String(nextNo).padStart(3, '0');
+    const issued = issueNumber(s, 'invoice', getState().invoices, data.date || today());
     tx.set(iref, {
-      ...data, invoiceNo, status: 'unpaid',
+      ...data, invoiceNo: issued.no, status: 'unpaid',
       createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
     });
     logChange(tx, 'invoices', iref.id);
-    tx.update(root(), { nextInvoiceNo: nextNo + 1 });
+    tx.set(root(), issued.patch, { merge: true });
   });
   await pullNow();
   return iref.id;
+}
+
+// An invoice issued as a document only: numbered and saved, nothing posted. It is built by the
+// same event that records one (EV.raiseinv), so recording it later posts exactly what it says.
+export async function issueInvoice(values) {
+  await whenReady();
+  const v = { ...values, via: 'later' };
+  const newParties = [];
+  v.party = resolveParty(v.party, newParties);
+  const problems = validateEvent('raiseinv', v).filter(p => !p.warn);
+  if (problems.length) { clearPendingParties(newParties, false); throw new Error(problems[0].msg); }
+  const out = EV.raiseinv.build(v);
+  if (out.incomplete) { clearPendingParties(newParties, false); throw new Error(out.effects[0] || 'Fill in the invoice'); }
+  const { paid, ...docData } = out.invoice;
+  const iref = doc(col('invoices'));
+  return runTransaction(db, async tx => {
+    const snap = await tx.get(root());
+    const settings = snap.exists() ? snap.data() : defaultSettings();
+    const issued = issueNumber(settings, 'invoice', getState().invoices, docData.date);
+    for (const p of newParties) {
+      tx.set(p.ref, p.record);
+      logChange(tx, 'parties', p.ref.id);
+    }
+    tx.set(iref, {
+      ...docData, invoiceNo: issued.no, unposted: true, status: 'unposted', allocations: [],
+      createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),
+    });
+    logChange(tx, 'invoices', iref.id);
+    for (const u of out.updates || []) {
+      tx.update(ref(u.coll, u.id), u.data);
+      logChange(tx, u.coll, u.id);
+    }
+    tx.set(root(), issued.patch, { merge: true });
+    return { invoiceId: iref.id, invoiceNo: issued.no };
+  }).then(
+    async r => { clearPendingParties(newParties, true); await pullNow(); return r; },
+    e => { clearPendingParties(newParties, false); throw e; },
+  );
+}
+
+// Income entries a document-only invoice can be attached to: the client's, still standing, and
+// not already behind another invoice.
+export function entriesForInvoice(inv) {
+  const s = getState();
+  const held = new Set(s.invoices.filter(i => i.txnId && i.id !== inv.id && i.kind !== 'creditnote').map(i => i.txnId));
+  return s.txns
+    .filter(t => !isUndone(t) && !held.has(t.id))
+    .filter(t => (t.lines || []).some(l => /^4/.test(String(l.acc)) && num(l.cr) > 0 && (!inv.partyId || l.party === inv.partyId)))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+// Attach a document-only invoice to an entry already in the books — income recorded before the
+// invoice was made. Nothing is posted: the entry already says it. If the entry left the money
+// owed (1100) the invoice is open; if it was received there and then, it is paid.
+export async function linkInvoiceToEntry(invoiceId, txnId) {
+  await whenReady();
+  const s = getState();
+  const inv = s.invoices.find(i => i.id === invoiceId);
+  const t = s.txns.find(x => x.id === txnId);
+  if (!inv || !t) throw new Error('Invoice or entry not found');
+  if (!inv.unposted) throw new Error(`${inv.invoiceNo} is already in the books`);
+  if (!entriesForInvoice(inv).some(x => x.id === txnId)) throw new Error('That entry already has an invoice, or has been reversed');
+  const owed = (t.lines || []).some(l => l.acc === '1100' && num(l.dr) > 0);
+  await commitWith((b, log) => {
+    b.update(ref('invoices', invoiceId), {
+      unposted: false, txnId, linkedEntry: true, paid: owed ? 0 : num(inv.total),
+      status: owed ? 'open' : 'paid', allocations: [], postedAt: Date.now(),
+    });
+    log('invoices', invoiceId);
+  });
+}
+
+// Undo an attachment: the invoice goes back to being a document only. Only for one attached to
+// an existing entry with no payment applied — one recorded through the invoice itself is undone
+// by reversing its entry, which issues the credit note the law expects.
+export async function detachInvoice(invoiceId) {
+  await whenReady();
+  const inv = getState().invoices.find(i => i.id === invoiceId);
+  if (!inv) throw new Error('Invoice not found');
+  if (!inv.linkedEntry) throw new Error('This invoice was recorded through its own entry — reverse that entry to undo it');
+  if ((inv.allocations || []).length) throw new Error('A payment is applied to this invoice — reverse the payment first');
+  await commitWith((b, log) => {
+    b.update(ref('invoices', invoiceId), { unposted: true, status: 'unposted', txnId: null, linkedEntry: false, paid: null });
+    log('invoices', invoiceId);
+  });
+}
+
+// The deal an invoice belongs to can be set or changed at any time. It is a label on the
+// invoice: a posted entry's ledger lines stay as they were posted.
+export async function setInvoiceDeal(invoiceId, dealId) {
+  await commitWith((b, log) => {
+    b.update(ref('invoices', invoiceId), { dealId: dealId || null });
+    log('invoices', invoiceId);
+  });
+}
+
+// A number held by two documents — issued before the counter was guarded — is resolved by
+// giving the later one the next free number. The old number stays on the document, and a
+// credit note and its invoice keep pointing at each other, so the trail still reads.
+export async function renumberInvoice(id) {
+  await whenReady();
+  const all = getState().invoices;
+  const inv = all.find(i => i.id === id);
+  if (!inv) throw new Error('Invoice not found');
+  const holders = duplicateNumbers(all)[String(inv.invoiceNo || '').trim()];
+  if (!holders || holders[0].id === id) throw new Error('This one keeps its number — nothing to change');
+  const isCn = inv.kind === 'creditnote';
+  const linked = isCn
+    ? all.filter(i => i.id === inv.againstId)
+    : all.filter(c => c.kind === 'creditnote' && c.againstId === id);
+  const no = await runTransaction(db, async tx => {
+    const snap = await tx.get(root());
+    const settings = snap.exists() ? snap.data() : defaultSettings();
+    const issued = issueNumber(settings, isCn ? 'creditnote' : 'invoice', all, inv.date || today());
+    tx.update(ref('invoices', id), {
+      invoiceNo: issued.no, renumberedFrom: inv.invoiceNo,
+      renumberedAt: Date.now(), renumberedBy: currentUser?.email || 'unknown',
+    });
+    logChange(tx, 'invoices', id);
+    for (const l of linked) {
+      tx.update(ref('invoices', l.id), isCn ? { creditNote: issued.no } : { against: issued.no });
+      logChange(tx, 'invoices', l.id);
+    }
+    tx.set(root(), issued.patch, { merge: true });
+    return issued.no;
+  });
+  await pullNow();
+  return no;
 }
 
 export async function attachInvoicePdf(invoiceId, path, field = 'pdfPath') {

@@ -6,7 +6,7 @@
 
 import {
   sideInvoiced,
-  A, fmt, esc, num, today, getState, bal, pl, pname, dealFigures,
+  A, fmt, esc, num, today, getState, bal, pl, pname, dealFigures, liveInvoice,
 } from './finance-core.js';
 import { stat, signed, empty, note, tag, table, modal } from './ui.js';
 import { renderInvoices, mountInvoices } from './views-invoices.js';
@@ -31,7 +31,7 @@ function cashOnDeal(d) {
 function sideOf(d, side) {
   const s = getState();
   const pid = d[side]?.partyId;
-  const invs = pid ? s.invoices.filter(i => i.dealId === d.id && i.partyId === pid && i.kind !== 'creditnote' && i.status !== 'void') : [];
+  const invs = pid ? s.invoices.filter(i => i.dealId === d.id && i.partyId === pid && liveInvoice(i)) : [];
   const invoiced = invs.reduce((a, i) => a + num(i.base), 0);
   const open = pid ? Math.max(0, bal('1100', { party: pid, deal: d.id })) : 0;
   const expected = num(side === 'seller' ? d.expSeller : d.expBuyer);
