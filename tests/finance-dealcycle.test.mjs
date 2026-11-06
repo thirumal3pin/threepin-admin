@@ -116,7 +116,7 @@ save('dealfee', {
 });
 eq('...but the fee itself bills cleanly, with no token in sight', bal('4030'), 25000);
 eq('...and the client owes it', bal('1100', { party: buyer(), deal: dealId() }), 25000);
-check('...on a numbered invoice like any other', /^3PIN\//.test(lastInv().invoiceNo || ''), lastInv().invoiceNo);
+check('...on a numbered invoice like any other', /^\d{4}-\d{3}$/.test(lastInv().invoiceNo || ''), lastInv().invoiceNo);
 check('...tagged as a fee, not as brokerage', lastInv().kind === 'fee' && lastInv().feeKind === 'cancel', `${lastInv().kind}/${lastInv().feeKind}`);
 check('...and the deal stays cancelled', getState().deals[0].status === 'cancelled');
 balanced('...books balance');

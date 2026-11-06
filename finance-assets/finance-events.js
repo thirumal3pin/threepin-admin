@@ -2583,8 +2583,9 @@ EV.raiseinv = {
     const date = v.date || today();
     const later = !v.via || v.via === 'later';
     const acc = v.acc || '4020';
-    const sac = st.sacCodes?.consultancy || st.sacCode || '998311';
-    const items = t.items.map(i => ({ ...i, sac: i.sac || sac }));
+    // SAC and the due date are both optional: a line carries only the code typed for it (or its
+    // service's), and an invoice with no due date ages from its own date.
+    const items = t.items;
 
     const lines = [
       later ? { acc: '1100', dr: t.total, party: pid } : cashLine(v, { acc: v.via, dr: t.total }),
@@ -2595,8 +2596,8 @@ EV.raiseinv = {
     const doc = {
       kind: 'direct', partyId: pid, dealId: v.dealId || null, acc,
       items, base: t.base, gstRate: num(v.gstRate), cgst: t.cgst, sgst: t.sgst, igst: t.igst, total: t.total,
-      placeOfSupply: pos, sac: items[0].sac, desc: items.map(i => i.desc).join('; '),
-      date, dueDate: v.dueDate || addDays(date, 30),
+      placeOfSupply: pos, sac: (items.find(i => i.sac) || {}).sac || '', desc: items.map(i => i.desc).join('; '),
+      date, dueDate: v.dueDate || null,
       billTo: v.billTo ? { ...v.billTo, name: v.billTo.name || pnameOf(v.party) } : null,
       notes: String(v.notes || '').trim(),
       paid: later ? 0 : t.total,
@@ -2616,7 +2617,7 @@ EV.raiseinv = {
       effects: [
         `Income ${fmt(t.base)} this month — profit goes up by that.`,
         t.tax ? `${fmt(t.tax)} GST charged (${t.intra ? 'CGST + SGST' : 'IGST'}) — owed to the government, not yours.` : '',
-        later ? `${fmt(t.total)} is now owed by ${esc(pnameOf(v.party))}, due ${doc.dueDate}.` : `${fmt(t.total)} arrives in ${A[v.via].name}.`,
+        later ? `${fmt(t.total)} is now owed by ${esc(pnameOf(v.party))}${doc.dueDate ? `, due ${doc.dueDate}` : ''}.` : `${fmt(t.total)} arrives in ${A[v.via].name}.`,
         v.invoiceId ? 'The invoice keeps its number.' : 'The invoice is numbered and its PDF saved.',
       ].filter(Boolean),
       updates,

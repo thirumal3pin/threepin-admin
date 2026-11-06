@@ -9,13 +9,14 @@
 // moment it is issued.
 
 import {
-  fmt, esc, num, today, addDays, getState, bal, pname, dname, deal,
+  fmt, esc, num, today, getState, bal, pname, dname, deal,
   invoiceOutstanding, duplicateNumbers, invoiceTotals, netOfGst, withGst, issueNumber, A, invoiceServices,
 } from './finance-core.js';
 import { empty, note, tag, table, toast, modal, closeModal, dueCell, confirmDialog, picker } from './ui.js';
 import { invoiceModel, downloadInvoice, shareInvoice, renderInvoicePdf } from './finance-invoice.js';
 import { validateEvent, INVOICE_ACCS } from './finance-events.js';
 import * as SY from './finance-sync.js';
+import { presetOffer } from './views-admin.js';
 
 // What the invoice is for, said on the row. A flat fee is not brokerage and a cancellation
 // fee least of all — labelling them all "brokerage" made a GST return hard to check against
@@ -110,6 +111,7 @@ export function renderInvoices() {
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <h1 style="margin:0">Invoices</h1>
       <div class="spacer"></div>
+      <button class="btn" type="button" onclick="finAdmin.editParty()">Add a client</button>
       <button class="btn primary" type="button" onclick="finInvoices.create()">New invoice</button>
     </div>
     <p class="lead">${rows.filter(i => !isCn(i)).length} invoices${rows.some(isCn) ? ` and ${rows.filter(isCn).length} credit note${rows.filter(isCn).length === 1 ? '' : 's'}` : ''}, ${fmt(total)} net. Deal brokerage and other income both raise invoices; reversing an invoiced entry issues a credit note against it.</p>
@@ -124,7 +126,8 @@ export function renderInvoices() {
     ${gaps.length ? note(
     `<b>Your invoices are missing ${gaps.length === 1 ? 'a detail' : 'some details'}:</b> ${esc(gaps.join(', '))}.
        Fill these in on the <a href="#profile" onclick="fin.go('profile');return false">Profile tab</a> — every PDF you
-       generate until then will be incomplete.`) : ''}
+       generate until then will be incomplete.
+       ${presetOffer() ? `<div class="actions" style="margin:10px 0 0"><button class="btn primary" type="button" onclick="finAdmin.fillPreset()">Fill in from invoice 056</button></div>` : ''}`) : ''}
 
     ${table(
     `<th>Number</th><th>Date</th><th>Client</th><th>Deal</th><th class="n">Total</th><th>Due</th><th>Status</th><th></th>`,
@@ -192,7 +195,7 @@ function linesHtml() {
         ${svcs.map((x, k) => `<option value="${k}" ${l.svc === String(k) ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select></td>
       <td><input type="text" data-line="${i}" data-f="desc" value="${esc(l.desc)}" placeholder="What it is for" aria-label="Line ${i + 1} description"></td>
-      <td><input type="text" data-line="${i}" data-f="sac" value="${esc(l.sac)}" placeholder="${esc(getState().settings.sacCodes?.consultancy || '998311')}" aria-label="Line ${i + 1} SAC" style="width:90px"></td>
+      <td><input type="text" data-line="${i}" data-f="sac" value="${esc(l.sac)}" placeholder="optional" aria-label="Line ${i + 1} SAC (optional)" style="width:90px"></td>
       <td><input type="text" data-line="${i}" data-f="amt" inputmode="decimal" value="${esc(l.amt)}" aria-label="Line ${i + 1} amount before GST" style="text-align:right"></td>
       <td><input type="text" data-line="${i}" data-f="gross" inputmode="decimal" value="${esc(l.gross)}" aria-label="Line ${i + 1} amount including GST" style="text-align:right"></td>
       <td>${ed.lines.length > 1 ? `<button class="btn ghost sm" type="button" data-drop="${i}" aria-label="Remove line ${i + 1}">✕</button>` : ''}</td>
@@ -234,11 +237,11 @@ function editorBody() {
 
     <div class="row2">
       <div class="field"><label for="ed_date">Invoice date</label><input type="date" id="ed_date" value="${esc(ed.date)}"></div>
-      <div class="field"><label for="ed_due">Payment due by</label><input type="date" id="ed_due" value="${esc(ed.dueDate)}"></div>
+      <div class="field"><label for="ed_due">Payment due by <span class="faint">(optional)</span></label><input type="date" id="ed_due" value="${esc(ed.dueDate)}"></div>
     </div>
 
     <div class="tbl-wrap invlines"><table>
-      <thead><tr><th>No.</th><th>Service</th><th>Description</th><th>SAC</th><th class="n">Before GST</th><th class="n">With GST</th><th></th></tr></thead>
+      <thead><tr><th>No.</th><th>Service</th><th>Description</th><th>SAC <span class="faint">(optional)</span></th><th class="n">Before GST</th><th class="n">With GST</th><th></th></tr></thead>
       <tbody id="edLines">${linesHtml()}</tbody>
     </table></div>
     <div class="actions" style="margin:8px 0 16px"><button class="btn ghost sm" type="button" id="edAdd">+ Add a line</button></div>
@@ -375,7 +378,7 @@ function mountEditor() {
     el.oninput = () => { ed.billTo[el.dataset.b] = el.value; if (el.dataset.b === 'state') syncPos(); };
   });
   const on = (id, fn, ev = 'input') => { const el = document.getElementById(id); if (el) el.addEventListener(ev, () => fn(el)); };
-  on('ed_date', el => { ed.date = el.value; ed.dueDate = addDays(el.value || today(), 30); document.getElementById('ed_due').value = ed.dueDate; redrawTotals(); });
+  on('ed_date', el => { ed.date = el.value; redrawTotals(); });
   on('ed_due', el => { ed.dueDate = el.value; });
   on('ed_pos', el => { ed.placeOfSupply = el.value; ed.posTouched = true; redrawTotals(); });
   on('ed_notes', el => { ed.notes = el.value; });
@@ -405,7 +408,7 @@ function openEditor(preset = {}) {
   const t = today();
   ed = {
     party: null, billTo: { name: '', address: '', gstin: '', state: '', phone: '', email: '' },
-    date: t, dueDate: addDays(t, 30), placeOfSupply: '', posTouched: false, gstRate: 18,
+    date: t, dueDate: '', placeOfSupply: '', posTouched: false, gstRate: 18,
     lines: [blankLine()], record: 'yes', acc: '4020', via: 'later', dealId: '', notes: '', busy: false,
     ...preset,
   };

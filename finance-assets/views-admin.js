@@ -6,7 +6,7 @@
 
 import {
   ACCOUNTS, A, EXP, fmt, esc, num, today, ym, addMonths, mlabel,
-  getState, bal, schedule, fyOf, lastIssued, seriesPrefix, COUNTERS, counterPatch, issueNumber, invoiceServices,
+  getState, bal, schedule, fyOf, lastIssued, seriesPrefix, COUNTERS, counterPatch, issueNumber, invoiceServices, presetPatch,
 } from './finance-core.js';
 import { stat, empty, note, tag, table, toast, confirmDialog } from './ui.js';
 import * as SY from './finance-sync.js';
@@ -88,6 +88,10 @@ export function renderProfile() {
         </li>`).join('')}
       </ul>
     </div>
+
+    ${presetOffer() ? note(`<b>Fill in from your invoice 056?</b> ${esc(presetOffer())} — the company, PAN, GSTIN, address and bank
+      details exactly as your hand-made invoices print them. Only empty fields are filled.
+      <div class="actions" style="margin:10px 0 0"><button class="btn primary" type="button" onclick="finAdmin.fillPreset()">Fill them in</button></div>`) : ''}
 
     <form id="profileForm" onsubmit="return false">
       <h2>Company</h2>
@@ -194,7 +198,7 @@ export function renderSettings() {
       <h2>Invoicing</h2>
       <div class="card">
         <div class="row2">
-          ${field('Invoice prefix', 'invoicePrefix', s.invoicePrefix, { hint: `{MM} {YY} {YYYY} {FY} take the invoice's month and year — <b>3PIN{MM}{YY}-</b> numbers this month's next invoice <b>${esc(issueNumber({ ...s, invoicePrefix: '3PIN{MM}{YY}-' }, 'invoice').no)}</b>. Next one as set now: <b>${esc(issueNumber(s, 'invoice').no)}</b>.` })}
+          ${field('Invoice prefix', 'invoicePrefix', seriesPrefix(s, 'invoice'), { hint: `{MM} {YY} {YYYY} {FY} take the invoice's month and year. Next invoice: <b>${esc(issueNumber(s, 'invoice').no)}</b>.` })}
           ${field('Next invoice number', 'nextInvoiceNo', s.nextInvoiceNo, { type: 'number', hint: `Change only if you are continuing a sequence from elsewhere. It cannot go back to a number already issued${lastIssued(seriesPrefix(s, 'invoice')).no ? ` — ${esc(lastIssued(seriesPrefix(s, 'invoice')).no)} is the last one` : ''}.` })}
         </div>
         <div class="row2">
@@ -275,7 +279,8 @@ function bankAccountsSection(s) {
 
 function partiesSection() {
   const parties = [...st().parties].sort((a, b) => a.name.localeCompare(b.name));
-  if (!parties.length) return '';
+  const add = '<div class="actions"><button class="btn" type="button" onclick="finAdmin.editParty()">Add a client</button></div>';
+  if (!parties.length) return `<h2>People and companies</h2>${add}`;
 
   // Same name twice is the usual cause: a party typed slightly differently on two entries.
   const byName = {};
@@ -289,6 +294,7 @@ function partiesSection() {
     <h2>People and companies <span class="muted">(${parties.length})</span></h2>
     ${dupes.length ? note(`<b>${dupes.length} name${dupes.length === 1 ? ' appears' : 's appear'} more than once.</b>
       Merging rewrites every journal line onto the one you keep, then removes the duplicate.`) : ''}
+    ${add}
     ${table(
     `<th>Name</th><th>Type</th><th>Phone</th><th class="n">They owe</th><th class="n">You owe</th><th></th>`,
     parties.map(p => `<tr>
@@ -518,6 +524,16 @@ function updateOpeningSummary() {
       : '<p class="small faint">Fill in what you had and the entry appears here.</p>'}`;
 }
 
+// What one click would fill from 3 PIN's own invoice, as a list for the offer — or '' when the
+// Profile has it all, or belongs to some other company.
+export function presetOffer(settings = st().settings) {
+  const name = String(settings?.companyName || '');
+  if (name && !/3\s*pin/i.test(name)) return '';
+  const p = presetPatch(settings);
+  const names = { companyName: 'name', pan: 'PAN', gstin: 'GSTIN', address: 'address', state: 'state', phone: 'phone', email: 'email', chequeFavour: 'cheque name', bankDetails: 'bank details' };
+  return Object.keys(p).map(k => names[k] || k).join(', ');
+}
+
 // ═══════ SERVICES YOU INVOICE ═══════
 //
 // Edited as rows in place and saved as one list on the settings document. The rows are read
@@ -607,6 +623,16 @@ if (typeof window !== 'undefined') {
       } catch (e) { toast(e.message || 'Could not save'); }
     },
 
+    async fillPreset() {
+      const patch = presetPatch(st().settings);
+      if (!Object.keys(patch).length) return toast('Already filled in');
+      try {
+        await SY.saveSettings(patch);
+        toast('Filled in from invoice 056');
+        window.fin.repaint ? window.fin.repaint() : window.fin.go('profile');
+      } catch (e) { toast(e.message || 'Could not save'); }
+    },
+
     uploadSignature() {
       const input = document.createElement('input');
       input.type = 'file';
@@ -693,41 +719,48 @@ if (typeof window !== 'undefined') {
       toast('Removed');
     },
 
+    // With no id, a new client: added with their billing details so an invoice to them can be
+    // previewed complete before anything is issued.
     editParty(id) {
-      const p = st().parties.find(x => x.id === id);
+      const p = id ? st().parties.find(x => x.id === id) : { name: '', type: 'client' };
       if (!p) return;
       window.fin.modal({
-        title: 'Edit ' + p.name,
+        title: id ? 'Edit ' + p.name : 'Add a client',
         body: `
-          <div class="field"><label for="p_name">Name</label><input id="p_name" value="${esc(p.name)}"></div>
+          <div class="field"><label for="p_name">Name</label><input type="text" id="p_name" value="${esc(p.name)}"></div>
           <div class="row2">
-            <div class="field"><label for="p_phone">Phone</label><input id="p_phone" value="${esc(p.phone || '')}"></div>
-            <div class="field"><label for="p_email">Email</label><input id="p_email" value="${esc(p.email || '')}"></div>
+            <div class="field"><label for="p_phone">Phone</label><input type="text" id="p_phone" value="${esc(p.phone || '')}"></div>
+            <div class="field"><label for="p_email">Email</label><input type="email" id="p_email" value="${esc(p.email || '')}"></div>
           </div>
           <div class="row2">
-            <div class="field"><label for="p_gstin">GSTIN</label><input id="p_gstin" value="${esc(p.gstin || '')}"></div>
-            <div class="field"><label for="p_state">State</label><input id="p_state" value="${esc(p.state || '')}"
+            <div class="field"><label for="p_gstin">GSTIN</label><input type="text" id="p_gstin" value="${esc(p.gstin || '')}"></div>
+            <div class="field"><label for="p_state">State</label><input type="text" id="p_state" value="${esc(p.state || '')}"
               placeholder="Tamil Nadu"></div>
           </div>
           <div class="field"><label for="p_address">Billing address</label>
             <textarea id="p_address" rows="2">${esc(p.address || '')}</textarea></div>
           <div class="row2">
-            <div class="field"><label for="p_pan">PAN</label><input id="p_pan" value="${esc(p.pan || '')}"></div>
-            <div class="field"><label for="p_contact">Contact person</label><input id="p_contact" value="${esc(p.contact || '')}"></div>
+            <div class="field"><label for="p_pan">PAN</label><input type="text" id="p_pan" value="${esc(p.pan || '')}"></div>
+            <div class="field"><label for="p_contact">Contact person</label><input type="text" id="p_contact" value="${esc(p.contact || '')}"></div>
           </div>
           <div class="hint">These print on their invoices. The state decides whether an invoice shows CGST+SGST or IGST.</div>`,
-        foot: `<button class="btn primary" type="button" onclick="finAdmin.saveParty('${esc(id)}')">Save</button>`,
+        foot: `<button class="btn primary" type="button" onclick="finAdmin.saveParty('${esc(id || '')}')">${id ? 'Save' : 'Add client'}</button>`,
       });
     },
 
     async saveParty(id) {
       const v = k => document.getElementById('p_' + k).value.trim();
-      await SY.saveParty(id, {
-        name: v('name'), phone: v('phone'), email: v('email'), gstin: v('gstin'), state: v('state'),
-        address: v('address'), pan: v('pan'), contact: v('contact'),
-      });
-      window.fin.closeModal();
-      toast('Saved');
+      const name = v('name');
+      if (!name) return toast('Give the client a name');
+      if (!id && st().parties.some(p => p.name.trim().toLowerCase() === name.toLowerCase())) return toast(`${name} is already a client — edit that one`);
+      try {
+        await SY.saveParty(id || null, {
+          name, phone: v('phone'), email: v('email'), gstin: v('gstin'), state: v('state'),
+          address: v('address'), pan: v('pan'), contact: v('contact'), ...(id ? {} : { type: 'client' }),
+        });
+        window.fin.closeModal();
+        toast(id ? 'Saved' : `${name} added — pick them on New invoice`);
+      } catch (e) { toast(e.message || 'Could not save'); }
     },
 
     async merge(keepId, dropId) {

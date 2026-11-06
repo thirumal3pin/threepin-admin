@@ -255,7 +255,7 @@ export function words(n) {
 
 export function defaultSettings() {
   return {
-    companyName: '3 PIN Realty Pvt Ltd',
+    companyName: '3 Pin Realty',
     gstin: '', address: '', state: 'Tamil Nadu',
     phone: '', email: '',
     gstRate: 18, sacCode: '997221',
@@ -263,7 +263,7 @@ export function defaultSettings() {
     booksStartDate: '2026-09-01',
     tdsEnabled: false,
     tdsRates: { '194H': 2, '194J': 10, '194I': 10, '194C': 2 },
-    invoicePrefix: '3PIN/26-27/', nextInvoiceNo: 1,
+    invoicePrefix: '{MM}{YY}-', nextInvoiceNo: 1,
     creditNotePrefix: '3PIN/CN/26-27/', nextCreditNoteNo: 1,
     sacCodes: { brokerage: '997221', consultancy: '998311' },
     incomeTaxRate: 26,              // 25% + 4% cess. s.115BAA's 25.168% needs Form 10-IC.
@@ -2251,14 +2251,49 @@ export function docStatus(outstanding, total) {
 // counter it had read an hour earlier, and the next invoice reused a number already sent to a
 // client. So the number issued is the counter's, or the first one after it no document holds.
 const SERIES = {
-  invoice: { prefix: 'invoicePrefix', counter: 'nextInvoiceNo', fallback: '3PIN/' },
+  invoice: { prefix: 'invoicePrefix', counter: 'nextInvoiceNo', fallback: '{MM}{YY}-' },
   creditnote: { prefix: 'creditNotePrefix', counter: 'nextCreditNoteNo', fallback: '3PIN/CN/' },
 };
 
 export const docNumber = (prefix, n) => prefix + String(n).padStart(3, '0');
 // The prefix as configured — it may carry date codes, see expandPrefix().
-export const seriesPrefix = (settings, series = 'invoice') =>
-  (settings || {})[SERIES[series].prefix] || SERIES[series].fallback;
+// Invoices are numbered month, year, serial — 1126-057 — with no "3PIN" in front. The prefix
+// the books were first set up with, 3PIN/26-27/, was only ever the default, never a choice, so
+// it counts as unset and gives way to that.
+const SEED_PREFIXES = { invoice: ['3PIN/26-27/'] };
+export const seriesPrefix = (settings, series = 'invoice') => {
+  const p = (settings || {})[SERIES[series].prefix];
+  return p && !(SEED_PREFIXES[series] || []).includes(p) ? p : SERIES[series].fallback;
+};
+
+// 3 PIN's own details, as printed on the invoices it made by hand before this (056). Offered as
+// one click where the Profile is still empty; a field already filled in is never touched.
+export const COMPANY_PRESET = {
+  companyName: '3 Pin Realty',
+  pan: 'DHEPS4381A',
+  gstin: '33DHEPS4381A1ZJ',
+  address: "F-2, W 424, Jayantha Sneham, 'W' Block, 2nd Avenue, Anna Nagar West Extension, Chennai - 600 101",
+  state: 'Tamil Nadu',
+  phone: '+91 98848 83370',
+  email: '3pinrentals@gmail.com',
+  chequeFavour: '3 Pin Realty',
+  bankDetails: { accountName: '3 Pin Realty', accountNo: '50527652526', ifsc: 'IDIB000A641', bankName: 'Indian Bank', branch: 'Anna Nagar (West)' },
+};
+export function presetPatch(settings = S.settings) {
+  const s = settings || {};
+  const empty = v => !String(v ?? '').trim();
+  const patch = {};
+  for (const [k, v] of Object.entries(COMPANY_PRESET)) {
+    if (k === 'bankDetails') continue;
+    // The name the app was seeded with ("3 PIN Realty Pvt Ltd") was never 3 PIN's own.
+    if (empty(s[k]) || (k === 'companyName' && s[k] === '3 PIN Realty Pvt Ltd')) patch[k] = v;
+  }
+  const bd = s.bankDetails || {};
+  const bank = { ...bd };
+  for (const [k, v] of Object.entries(COMPANY_PRESET.bankDetails)) if (empty(bd[k])) bank[k] = v;
+  if (Object.keys(bank).some(k => bank[k] !== bd[k])) patch.bankDetails = bank;
+  return patch;
+}
 
 // A prefix can carry the document's month: {MM}, {YY}, {YYYY}, and {FY} for "26-27". So
 // "3PIN{MM}{YY}-" numbers an invoice dated November 2026 3PIN1126-001. The serial after it

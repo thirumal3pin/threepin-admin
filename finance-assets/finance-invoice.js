@@ -158,9 +158,10 @@ export function invoiceModel({ invoice, party, deal, settings } = {}) {
     sac,
     taxable,
   };
-  // Numbered lines. An invoice raised by a deal has one, made from its description.
+  // Numbered lines. An invoice raised by a deal has one, made from its description; one raised
+  // on the Invoices tab prints the SAC each line was given, and none where it was left blank.
   const items = (inv.items?.length ? inv.items : [{ desc: item.desc, sac, amt: taxable }])
-    .map((x, i) => ({ n: i + 1, desc: x.desc || '', sac: x.sac || sac, amt: num(x.amt) }));
+    .map((x, i) => ({ n: i + 1, desc: x.desc || '', sac: inv.items?.length ? (x.sac || '') : (x.sac || sac), amt: num(x.amt) }));
 
   // Prefer the split that was stored with the transaction: it is what was actually posted
   // to 2200 GST payable, and re-deriving it from today's settings could disagree with the
@@ -364,9 +365,12 @@ export async function renderInvoicePdf(model) {
   // ── the lines ──
   rule(y, [140, 140, 140], 0.8);
   color(INK); font('bold', 9.5);
+  // No line with a SAC: no SAC column, and the description takes its room.
+  const withSac = items.some(i => String(i.sac || '').trim());
+  const descW = (withSac ? SAC_X : AMT_X - 30) - DESC_X - 6;
   put('NO.', NO_X, y + 6);
   put('DESCRIPTION', DESC_X, y + 6);
-  put('SAC', SAC_X, y + 6);
+  if (withSac) put('SAC', SAC_X, y + 6);
   put('AMOUNT (INR)', AMT_X, y + 6, { align: 'right' });
   y += 9;
   rule(y, [140, 140, 140], 0.8);
@@ -377,9 +381,9 @@ export async function renderInvoicePdf(model) {
   for (const it of shown) {
     color(INK); font('normal', 10);
     put(String(it.n), NO_X, y);
-    const end = block(it.desc, DESC_X, y, SAC_X - DESC_X - 6, 10, 4);
+    const end = block(it.desc, DESC_X, y, descW, 10, 4);
     font('normal', 9); color(GREY);
-    put(it.sac, SAC_X, y);
+    if (withSac) put(it.sac, SAC_X, y);
     color(INK); font('bold', 10);
     put(amount(it.amt), AMT_X, y, { align: 'right' });
     y = Math.max(end, y + step(10)) + 4;

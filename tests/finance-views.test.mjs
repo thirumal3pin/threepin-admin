@@ -304,12 +304,12 @@ const bare = invoiceModel({
 });
 check('Missing details are listed', (bare.missing || []).length > 0, 'nothing flagged');
 check('Numbering helper pads correctly',
-  nextInvoiceNumber({ invoicePrefix: '3PIN/26-27/', nextInvoiceNo: 7 }) === '3PIN/26-27/007',
-  nextInvoiceNumber({ invoicePrefix: '3PIN/26-27/', nextInvoiceNo: 7 }));
+  nextInvoiceNumber({ invoicePrefix: 'INV/', nextInvoiceNo: 7 }) === 'INV/007',
+  nextInvoiceNumber({ invoicePrefix: 'INV/', nextInvoiceNo: 7 }));
 
 section('Invoice numbers — never issued twice');
 {
-  const P = '3PIN/26-27/';
+  const P = 'INV/26-27/';
   const held = [5, 6, 7, 8, 9].map(n => ({ id: 'i' + n, invoiceNo: P + String(n).padStart(3, '0'), createdAt: n }));
   // The Settings form saved the counter it had read before 008 and 009 were raised.
   const wound = { invoicePrefix: P, nextInvoiceNo: 8 };
@@ -322,8 +322,8 @@ section('Invoice numbers — never issued twice');
     issueNumber({ creditNotePrefix: '3PIN/CN/26-27/', nextCreditNoteNo: 1 }, 'creditnote', [...held, { invoiceNo: '3PIN/CN/26-27/001' }]).no === '3PIN/CN/26-27/002');
   check('The preview shows the number the invoice will really get',
     nextInvoiceNumber(wound, held) === P + '010', nextInvoiceNumber(wound, held));
-  check('Highest issued is read per prefix', highestIssued(P, [...held, { invoiceNo: '3PIN/25-26/044' }]) === 9);
-  check('A new financial year prefix starts from nothing', highestIssued('3PIN/27-28/', held) === 0);
+  check('Highest issued is read per prefix', highestIssued(P, [...held, { invoiceNo: 'INV/25-26/044' }]) === 9);
+  check('A new financial year prefix starts from nothing', highestIssued('INV/27-28/', held) === 0);
 
   const twice = [...held, { id: 'late', invoiceNo: P + '007', createdAt: 99 }];
   const d = duplicateNumbers(twice);
@@ -338,11 +338,11 @@ section('Invoice numbers — never issued twice');
     !('nextInvoiceNo' in sent) && !('nextCreditNoteNo' in sent) && sent.gstRate === 18, JSON.stringify(sent));
   let msg = '';
   try { counterPatch({ ...stale, nextInvoiceNo: 9 }, new Set(['nextInvoiceNo']), st, held); } catch (e) { msg = e.message; }
-  check('Setting the counter back onto an issued number is refused, naming it', /3PIN\/26-27\/009 is already issued/.test(msg) && /10 or more/.test(msg), msg);
+  check('Setting the counter back onto an issued number is refused, naming it', /INV\/26-27\/009 is already issued/.test(msg) && /10 or more/.test(msg), msg);
   check('Moving the counter forward is allowed',
     counterPatch({ ...stale, nextInvoiceNo: 56 }, new Set(['nextInvoiceNo']), st, held).nextInvoiceNo === 56);
   check('A new prefix may start again at 1',
-    counterPatch({ invoicePrefix: '3PIN/27-28/', nextInvoiceNo: 1 }, new Set(['nextInvoiceNo']), st, held).nextInvoiceNo === 1);
+    counterPatch({ invoicePrefix: 'INV/27-28/', nextInvoiceNo: 1 }, new Set(['nextInvoiceNo']), st, held).nextInvoiceNo === 1);
 }
 
 // ═══════ RESULT ═══════
