@@ -1133,6 +1133,10 @@ const browser = await chromium.launch();
     await page.screenshot({ path: join(OUT, 'campaign-step3-sticky-' + scheme + '.png') });
     await page.evaluate(() => PinCampaigns.step(2)); await page.waitForTimeout(200);
     ok(`phone ${scheme}: step 2 no sideways scroll`, (await overflow(page)) === 0, await overflow(page));
+    // The property dropdown wears the search box (it never did: the select was marked before
+    // attach(), which then skipped it) and lists the inventory.
+    ok(`phone ${scheme}: step 2 has the property search box over the inventory`, await page.evaluate(() =>
+      !!document.getElementById('cmpPropSelSearch') && document.getElementById('cmpPropSel').options.length > 1));
     await shot(page, 'step2-phone-' + scheme);
     await page.evaluate(() => PinCampaigns.openSettings()); await page.waitForTimeout(200);
     await page.fill('#cmpSetTest', '1'); await clickText(page, '.cmp-mfoot .tsk-btn', 'Save');

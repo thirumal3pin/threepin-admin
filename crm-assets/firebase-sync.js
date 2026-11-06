@@ -63,6 +63,11 @@ const DEFAULT_ENQUIRY_TYPES = ['Property Enquiry', 'Seller Listing', 'General'];
 // the `tenantId` custom claim set at provisioning time (scripts/create-tenant.js).
 // A user with no claim yet (not fully onboarded) gets no data access at all.
 let currentTenantId = null;
+// Reads filtered by tenant wait for the sign-in to say which tenant. Asked before that (the
+// Campaigns screen asks for the inventory as the page loads), a query on a null tenant matches
+// nothing, and the CRM kept that empty property list for the rest of the session.
+let tenantWaiters = [];
+const whenTenant = () => currentTenantId ? Promise.resolve(currentTenantId) : new Promise(r => tenantWaiters.push(r));
 let subscribed = false;
 
 function pipelineRef(tenantId){ return doc(db, 'pipelines', tenantId); }
@@ -313,7 +318,7 @@ window.crmFirebase = {
   // matching reads type, BHK, furnishing, facing, possession and more. It was trimmed to seven
   // fields, so invitations went out without the seller and matching worked half-blind. A failed
   // read is passed on (not turned into an empty list) so the pickers can say so.
-  getInventory: () => getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)))
+  getInventory: () => whenTenant().then(tid => getDocs(query(collection(db, 'properties'), where('tenantId', '==', tid))))
     .then(s => s.docs.map(d => { const p = d.data(); return { ...p, id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }; }))
     .catch(e => { console.error('Firestore inventory read error:', e); throw e; }),
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
@@ -450,6 +455,7 @@ onAuthStateChanged(auth, async (user) => {
     } else {
       subscribeToData(currentTenantId);
       watchTasks();
+      tenantWaiters.splice(0).forEach(r => r(currentTenantId));
     }
   } else {
     currentTenantId = null;

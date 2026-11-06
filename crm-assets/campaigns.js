@@ -674,9 +674,18 @@
   function afterRender() {
     if (S.view === 'cmp-new' && S.wiz && S.wiz.step === 2) {
       var sel = document.getElementById('cmpPropSel');
+      // attach() marks the select itself (data-ppk) and skips one already marked — marking it
+      // here first meant the search box never appeared.
       if (sel && !sel.dataset.ppk && window.PinPropertyPicker) {
-        sel.dataset.ppk = '1';
         try { window.PinPropertyPicker.attach(sel, { lookup: function (v) { return propById(v); }, placeholder: 'Type a code, name or area' }); } catch (e) { /* plain select */ }
+      }
+      // No properties to pick from: the inventory was asked for before it could be read (or the
+      // read failed). Ask again, once per visit to this step, and redraw when it arrives.
+      if (!inv().length && !S.invRetry && typeof loadInventory === 'function') {
+        S.invRetry = true;
+        whenFirestore().then(function () { return loadInventory(); }).then(function (list) {
+          if (list && list.length) { S.jCache = null; render(); }
+        }).finally(function () { setTimeout(function () { S.invRetry = false; }, 3000); });
       }
     }
   }

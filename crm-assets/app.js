@@ -5439,10 +5439,12 @@ function retryInventory(leadId){
   loadInventory().then(() => { if(leadId && propLinkOpenFor === leadId) renderPropertyResults(leadId); });
 }
 function loadInventory(){
-  if(inventory) return Promise.resolve(inventory);
+  if(inventory && inventory.length) return Promise.resolve(inventory);
   if(!inventoryLoading){
     inventoryLoading = Promise.resolve(window.crmFirebase && window.crmFirebase.getInventory ? window.crmFirebase.getInventory() : [])
-      .then(list => { inventory = Array.isArray(list) ? list : []; return inventory; })
+      // An empty list is kept for what it says, but not trusted for good: it is what a read made
+      // too early returns, so the next caller asks again.
+      .then(list => { inventory = Array.isArray(list) ? list : []; if(!inventory.length) inventoryLoading = null; return inventory; })
       .catch(() => { inventoryLoading = null; inventoryFailed = true; return []; });
     inventoryFailed = false;
   }
