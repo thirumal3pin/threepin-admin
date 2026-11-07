@@ -145,11 +145,12 @@ function b64url(input){
 // Read-only Sheets token for the service account. Domain-wide delegation is
 // NOT authorised on this project, so no `sub` / impersonation — the sheets are
 // shared directly with the service account address instead.
-export async function getSheetsToken(serviceAccount){
+// Read-only unless a caller asks for more (the Meta leads sync will need to write its team columns).
+export async function getSheetsToken(serviceAccount, scope = 'https://www.googleapis.com/auth/spreadsheets.readonly'){
   const now = Math.floor(Date.now() / 1000);
   const signInput = `${b64url(JSON.stringify({ alg:'RS256', typ:'JWT' }))}.${b64url(JSON.stringify({
     iss: serviceAccount.client_email,
-    scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+    scope,
     aud: 'https://oauth2.googleapis.com/token',
     iat: now, exp: now + 3600
   }))}`;

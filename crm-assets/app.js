@@ -2141,9 +2141,11 @@ function showAllAlerts(){
 // Which view is showing is the rail's job to display — the four buttons and
 // the Board/List dropdown that used to live in the header are entries in it
 // now. toggleView only has to show the right pane and tell the rail.
-const CRM_VIEWS = ['today', 'tasks', 'kanban', 'list', 'followups', 'dashboard', 'calendar', 'campaigns'];
+const CRM_VIEWS = ['today', 'tasks', 'kanban', 'list', 'followups', 'dashboard', 'calendar', 'campaigns', 'metaLeads'];
 // WhatsApp Campaigns is one pane (#campaignsView) with four screens, each its own rail entry.
 const isCampaignView = v => v === 'campaigns' || /^cmp-/.test(String(v || ''));
+// So is Meta Ads Leads (#metaLeadsView, crm-assets/metaLeads.js).
+const isMetaLeadsView = v => v === 'meta-leads' || /^ml-/.test(String(v || ''));
 function toggleView(view){
   currentView = view;
   if(view==='kanban' || view==='list') lastBrowseView = view;
@@ -2154,9 +2156,10 @@ function toggleView(view){
   try{ renderBoardSortCtl(); }catch(e){}
   CRM_VIEWS.forEach(v=>{
     const el = document.getElementById(v==='kanban' ? 'kanbanView' : v+'View');
-    if(el) el.style.display = (v==='campaigns' ? isCampaignView(view) : view===v) ? '' : 'none';
+    if(el) el.style.display = (v==='campaigns' ? isCampaignView(view) : v==='metaLeads' ? isMetaLeadsView(view) : view===v) ? '' : 'none';
   });
   if(isCampaignView(view)){ if(window.renderCampaignsView) window.renderCampaignsView(view); }
+  else if(isMetaLeadsView(view)){ if(window.renderMetaLeadsView) window.renderMetaLeadsView(view); }
   else if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else if(view==='today'){ try{ loadMyEvents(false); }catch(e){} if(window.renderTodayView) window.renderTodayView(); }
   else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }
@@ -2170,7 +2173,7 @@ function updateNavState(){
   // on there and only get in the way.
   // Analytics counts every lead, so the search and filters (which it ignores) go too — they said
   // "Showing 0 of 60 · TailorTalk only" over a chart of all 60.
-  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard' && currentView !== 'tasks' && !isCampaignView(currentView);
+  const isLeadList = currentView !== 'today' && currentView !== 'calendar' && currentView !== 'dashboard' && currentView !== 'tasks' && !isCampaignView(currentView) && !isMetaLeadsView(currentView);
   document.querySelector('.srch-wrap').style.display = isLeadList ? '' : 'none';
   document.querySelector('.lf-row').style.display = isLeadList ? '' : 'none';
   // The Filters panel and its "Showing N of M" line sit outside the chip row: they follow it.

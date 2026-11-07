@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="crm-assets/style.css">
 <link rel="stylesheet" href="crm-assets/easy.css">
 <link rel="stylesheet" href="crm-assets/campaigns.css">
+<link rel="stylesheet" href="crm-assets/metaLeads.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
 <link rel="stylesheet" href="shared-assets/match-panel.css">
 <script>
@@ -220,6 +221,7 @@ function toggleDensity(){
     </div>
     <div id="dashboardView" style="display:none"></div>
     <div id="campaignsView" style="display:none"></div>
+    <div id="metaLeadsView" style="display:none"></div>
   </main>
 
   <button class="mobile-fab" onclick="openAddLeadModal()" aria-label="Add Lead">+</button>
@@ -954,6 +956,8 @@ function toggleDensity(){
   window.crmCampaign = crmCampaign;
   import * as crmJourneys from './crm-assets/journeys.js';
   window.crmJourneys = crmJourneys;
+  import * as metaLeadsModel from './crm-assets/metaLeadsModel.js';
+  window.metaLeadsModel = metaLeadsModel;
   import { openSiteVisitDialog } from './shared-assets/site-visit.js';
   window.openSiteVisitDialog = openSiteVisitDialog;
   window.crmPipeline = crmPipeline;
@@ -967,6 +971,7 @@ function toggleDensity(){
 <script src="crm-assets/tasks.js"></script>
 <script src="crm-assets/calendar.js"></script>
 <script src="crm-assets/campaigns.js"></script>
+<script src="crm-assets/metaLeads.js"></script>
 <script src="shared-assets/appnav.js"></script>
 <script src="shared-assets/install-app.js"></script>
 <script src="crm-assets/nav-boot.js"></script>

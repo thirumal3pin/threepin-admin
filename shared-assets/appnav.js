@@ -115,6 +115,16 @@
       ],
     },
     {
+      id: 'metaads', label: 'Meta Ads Leads', icon: 'fa-brands fa-meta', page: 'crm',
+      note: 'Leads from the Google Sheets your Meta ads fill — test mode',
+      items: [
+        { id: 'meta-leads', label: 'Leads', icon: 'fa-solid fa-users', page: 'crm', nav: 'meta-leads' },
+        { id: 'ml-dupes', label: 'Duplicates', icon: 'fa-regular fa-clone', page: 'crm', nav: 'ml-dupes' },
+        { id: 'ml-analysis', label: 'Analysis', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'ml-analysis' },
+        { id: 'ml-setup', label: 'Setup', icon: 'fa-solid fa-sliders', page: 'crm', nav: 'ml-setup' },
+      ],
+    },
+    {
       id: 'finance', label: 'Finance', icon: 'fa-solid fa-indian-rupee-sign', page: 'finance',
       note: 'Deals, bills, invoices and the books',
       groups: FIN_GROUPS.map(function (g) {

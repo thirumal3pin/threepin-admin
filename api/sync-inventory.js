@@ -4,6 +4,7 @@ import {
   commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID,
   findLostDetail, writeRecoveredNotes, keepFromChoice
 } from './_inventory-shared.js';
+import { metaLeadsPost } from './_meta-leads.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
 // scripts/sync-inventory.js — both import api/_inventory-shared.js, so the
@@ -25,6 +26,9 @@ function json(body, status = 200){
 }
 
 export async function POST(request){
+  // Meta ads leads ride on this function (POST /api/meta-leads → ?op=meta-leads, vercel.json):
+  // the plan's 12 functions are all taken. Everything else about it is in api/_meta-leads.js.
+  if(new URL(request.url).searchParams.get('op') === 'meta-leads') return metaLeadsPost(request);
   const user = await verifyCrmUser(request);
   if(!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
 

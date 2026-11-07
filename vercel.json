@@ -9,7 +9,8 @@
     { "source": "/3pinfinance", "destination": "/3pinfinance.html" },
     { "source": "/api/generate-lead-summary", "destination": "/api/lead-summary?op=generate" },
     { "source": "/api/backfill-lead-summaries", "destination": "/api/lead-summary?op=backfill" },
-    { "source": "/api/easy", "destination": "/api/bot-test-message?op=easy" }
+    { "source": "/api/easy", "destination": "/api/bot-test-message?op=easy" },
+    { "source": "/api/meta-leads", "destination": "/api/sync-inventory?op=meta-leads" }
   ],
   "headers": [
     {
