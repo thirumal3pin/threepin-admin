@@ -129,56 +129,74 @@ const overflow = page => page.evaluate(() => Math.max(0, document.documentElemen
 const browser = await chromium.launch({ channel: 'chrome' });
 console.log('Meta Ads Leads — clicked through');
 try {
-  // ── 1. A manager opens Setup: nothing connected, the three sheets offered ──
+  // ── 1. A manager opens Setup: one line, sheet link → property, the Koyambedu sheet filled in ──
   let { page, ctx } = await openPage(browser);
-  await waitText(page, '#metaLeadsView', /Found in your Drive/);
-  ok('The rail has Meta Ads Leads with its four screens', await page.evaluate(() => ['meta-leads', 'ml-dupes', 'ml-analysis', 'ml-setup'].every(id => document.querySelector(`[data-nav-id="${id}"], [data-id="${id}"]`) || document.body.innerHTML.includes(`'${id}'`) || document.body.innerHTML.includes(`"${id}"`))));
+  await waitText(page, '#metaLeadsView', /Lead sheets → properties/);
+  await page.waitForFunction(() => document.querySelector('.ml-addline .ppk-in') && /SHR0001/.test(document.querySelector('.ml-addline .ppk-in').value), null, { timeout: 8000 });
+  ok('The rail has Meta Ads Leads with its four screens', await page.evaluate(() => ['meta-leads', 'ml-dupes', 'ml-analysis', 'ml-setup'].every(id => document.body.innerHTML.includes(`'${id}'`) || document.body.innerHTML.includes(`"${id}"`))));
   ok('Test mode is said on the page', /Test mode/.test(await text(page, '.ml-test')));
-  ok('The address to share sheets with is shown', (await text(page, '.ml-share')).includes(SA));
-  ok('Suggested: only the Koyambedu sheet → SHR0001 Shriram Codename King Life', /Koyambedu - Leads.*SHR0001.*Shriram Codename King Life/.test(await text(page, '.ml-suggest')) && !/Kodambakkam/.test(await text(page, '.ml-suggest')));
+  ok('The address to share sheets with is in the footnote', (await text(page, '.ml-foot')).includes(SA));
+  ok('First time: the Koyambedu link and SHR0001 Shriram Codename King Life are filled in',
+    (await page.$eval('.ml-addline .ml-link-in', e => e.value)).includes(REAL.KOY) && await page.$eval('.ml-addline .ppk-in', e => e.value) === 'SHR0001 — Shriram Codename King Life');
+  ok('The property is picked from the inventory list', (await page.$$eval('.ml-addline select.ml-psel option', o => o.map(x => x.value))).join(',') === ',ANR005,KDBMC001,SHR0001');
   await shot(page, '1-setup-empty');
 
-  // ── 2. Add it (checked with Google first), then connect the two KDBMC001 sheets by link ──
-  await clickText(page, '.ml-btn', 'Add this sheet');
-  await waitText(page, '#metaLeadsView', /Changes not saved yet/);
-  ok('Koyambedu sheet in the draft → SHR0001', (await page.$$('.ml-src')).length === 1 && await page.$eval('.ml-src .ml-prop-in', e => e.value) === 'SHR0001 — Shriram Codename King Life');
+  // ── 2. Connect: checked with Google, saved at once ──
+  await clickText(page, '.ml-addline .ml-btn', 'Connect');
+  await waitText(page, '.ml-maplist', /Koyambedu - Leads/);
+  let saved = (await db.collection('metaLeadConfigs').doc(T).get()).data();
+  ok('Saved at once: Koyambedu - Leads → SHR0001, its tab', JSON.stringify(saved.sources.map(s => [s.title.trim(), s.propertyCode, s.tabs.map(t => t.title)])) === JSON.stringify([['Koyambedu - Leads', 'SHR0001', ['Sheet1']]]));
+  ok('The add line is cleared for the next sheet', await page.$eval('.ml-addline .ml-link-in', e => e.value) === '' && await page.$eval('.ml-addline select.ml-psel', e => e.value) === '');
+  // Then the two KDBMC001 sheets: paste the link, type to find the property, pick it, Connect.
   for (const id of [REAL.KDB, REAL.KDO]) {
-    await page.fill('.ml-add .ml-search', 'https://docs.google.com/spreadsheets/d/' + id + '/edit?gid=0#gid=0');
-    await clickText(page, '.ml-btn', 'Check sheet');
-    await waitText(page, '.ml-add', /Add to the setup/);
-    ok('Connect a sheet: its tabs found, all Meta exports, ticked', (await page.$$eval('.ml-add .ml-tabrow input', els => els.every(e => e.checked))) && /Meta leads/.test(await text(page, '.ml-add')));
-    await page.fill('.ml-add .ml-prop-in', 'KDBMC001 — Commercial Building for Rent');
-    await clickText(page, '.ml-btn', 'Add to the setup');
+    await page.fill('.ml-addline .ml-link-in', 'https://docs.google.com/spreadsheets/d/' + id + '/edit?gid=0#gid=0');
+    await page.fill('.ml-addline .ppk-in', 'kdbmc');
+    await page.locator('.ml-addline .ppk-opt', { hasText: 'KDBMC001' }).first().click();
+    await clickText(page, '.ml-addline .ml-btn', 'Connect');
+    await page.waitForFunction(n => document.querySelectorAll('.ml-maprow').length === n, id === REAL.KDB ? 2 : 3, { timeout: 8000 });
   }
-  const srcs = await page.$$eval('.ml-src', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
-  ok('Three sheets in the draft', srcs.length === 3, srcs.length);
-  ok('KDBMC sheet: both tabs, property KDBMC001', /office space - Kodambakkam/.test(srcs[1]) && /Sheet1/.test(srcs[1]) && /Sheet3/.test(srcs[1]) && await page.$$eval('.ml-src .ml-prop-in', els => els[1].value) === 'KDBMC001 — Commercial Building for Rent');
-  ok('Nothing saved before Save', !(await db.collection('metaLeadConfigs').doc(T).get()).exists);
-  await shot(page, '2-setup-draft');
-
-  // ── 3. Connect a sheet that is not shared: told exactly who to share it with ──
-  await page.fill('.ml-add .ml-search', `https://docs.google.com/spreadsheets/d/${LOCKED}/edit#gid=0`);
-  await clickText(page, '.ml-btn', 'Check sheet');
-  await waitText(page, '.ml-add', /share it with/);
-  ok('A sheet not shared: the error names the service account', (await text(page, '.ml-add .ml-alert')).includes(SA));
-  await page.fill('.ml-add .ml-search', `https://docs.google.com/spreadsheets/d/${REAL.KOY}/edit`);
-  await clickText(page, '.ml-btn', 'Check sheet');
-  ok('A sheet already connected is refused', /already connected/.test(await text(page, '.ml-add .ml-alert')));
-
-  // ── 4. Save ──
-  await clickText(page, '.ml-btn', 'Save setup');
-  await page.waitForTimeout(400);
-  const saved = (await db.collection('metaLeadConfigs').doc(T).get()).data();
-  ok('Saved: three sheets, their properties and tabs', JSON.stringify(saved.sources.map(s => [s.title.trim(), s.propertyCode, s.tabs.map(t => t.title)])) ===
+  saved = (await db.collection('metaLeadConfigs').doc(T).get()).data();
+  ok('Three sheets saved, each with its property and tabs', JSON.stringify(saved.sources.map(s => [s.title.trim(), s.propertyCode, s.tabs.map(t => t.title)])) ===
     JSON.stringify([['Koyambedu - Leads', 'SHR0001', ['Sheet1']], ['office space - Kodambakkam', 'KDBMC001', ['Sheet1', 'Sheet3']], ['Kodabakkam office', 'KDBMC001', ['Sheet1']]]), saved.sources.map(s => [s.title, s.propertyCode]));
   ok('Saved by the manager', saved.updatedBy === 'admin@threepin.in');
+  ok('Each line shows its property in the picker', JSON.stringify(await page.$$eval('.ml-maprow .ppk-in', els => els.map(e => e.value))) ===
+    JSON.stringify(['SHR0001 — Shriram Codename King Life', 'KDBMC001 — Commercial Building for Rent', 'KDBMC001 — Commercial Building for Rent']));
+  await shot(page, '2-setup-connected');
+
+  // ── 3. Mistakes, said plainly ──
+  await page.fill('.ml-addline .ml-link-in', `https://docs.google.com/spreadsheets/d/${LOCKED}/edit#gid=0`);
+  await clickText(page, '.ml-addline .ml-btn', 'Connect');
+  ok('No property picked: asked for one', /Pick the property/.test(await text(page, '.ml-map .ml-alert')));
+  await page.fill('.ml-addline .ppk-in', 'ANR005');
+  await page.locator('.ml-addline .ppk-opt', { hasText: 'ANR005' }).first().click();
+  await clickText(page, '.ml-addline .ml-btn', 'Connect');
+  await waitText(page, '.ml-map', /share it with/);
+  ok('A sheet not shared: the address to share with, with a Copy button', (await text(page, '.ml-map .ml-alert')).includes(SA) && !!(await page.$('.ml-map .ml-alert .ml-btn')));
+  await shot(page, '2b-not-shared');
+  await page.fill('.ml-addline .ml-link-in', `https://docs.google.com/spreadsheets/d/${REAL.KOY}/edit`);
+  await clickText(page, '.ml-addline .ml-btn', 'Connect');
+  ok('A sheet already connected is refused', /already connected/.test(await text(page, '.ml-map .ml-alert')));
+  ok('…and nothing extra was saved', (await db.collection('metaLeadConfigs').doc(T).get()).data().sources.length === 3);
+  // Changing a line's property is saved at once (and changed back).
+  await page.locator('.ml-maprow').nth(2).locator('.ppk-in').fill('ANR005');
+  await page.locator('.ml-maprow').nth(2).locator('.ppk-opt', { hasText: 'ANR005' }).first().click();
+  await page.waitForFunction(() => !document.querySelector('.ml-maprow .fa-spin'), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  ok('A line\'s property changed: saved at once', (await db.collection('metaLeadConfigs').doc(T).get()).data().sources[2].propertyCode === 'ANR005');
+  await page.locator('.ml-maprow').nth(2).locator('.ppk-in').fill('KDBMC001');
+  await page.locator('.ml-maprow').nth(2).locator('.ppk-opt', { hasText: 'KDBMC001' }).first().click();
+  await page.waitForTimeout(400);
+  ok('…and back', (await db.collection('metaLeadConfigs').doc(T).get()).data().sources[2].propertyCode === 'KDBMC001');
 
   // ── 5. Read the sheets ──
   await clickText(page, '.ml-btn', 'Read the sheets');
-  await waitText(page, '#metaLeadsView', /Read .*ago|Read just now|Read /);
   await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
-  ok('Setup now shows the last read per tab', /Sheet1: 5 · Sheet3: 4/.test(await text(page, '#metaLeadsView')));
-  // Columns of Sheet3, with the header-less column flagged.
+  await page.evaluate(() => MetaLeads.go('ml-setup'));
+  await page.waitForFunction(() => /9 leads/.test(document.querySelector('.ml-maplist') && document.querySelector('.ml-maplist').textContent), null, { timeout: 8000 });
+  ok('Each line shows its leads at the last read', JSON.stringify(await page.$$eval('.ml-maprow .ml-c-status', els => els.map(e => e.textContent.trim()))) === JSON.stringify(['4 leads', '9 leads', '2 leads']));
+  // Details → Columns of Sheet3, with the header-less column flagged.
+  await page.locator('.ml-maprow', { hasText: 'office space - Kodambakkam' }).locator('.ml-link', { hasText: 'Details' }).click();
+  await page.waitForTimeout(250);
   await page.locator('.ml-tabrow', { hasText: 'Sheet3' }).locator('.ml-link').click();
   await page.waitForTimeout(250);
   const cols = await text(page, '.ml-cols');
@@ -280,8 +298,8 @@ try {
 
   // ── 10. A team member who is not a manager ──
   ({ page, ctx } = await openPage(browser, { email: 'swami@threepin.in', path: '?nav=ml-setup' }));
-  await waitText(page, '#metaLeadsView', /Only a manager can change this setup/);
-  ok('Not a manager: Setup is read-only (no Add, no Save, no Remove)', !(await page.$('.ml-add')) && !(await page.$('.ml-src .ml-btn')) && (await page.$$('.ml-src')).length === 3);
+  await waitText(page, '#metaLeadsView', /Only a manager can change this list/);
+  ok('Not a manager: Setup is read-only (no add line, no pickers, no remove)', !(await page.$('.ml-addline')) && !(await page.$('.ml-maprow select')) && !(await page.$('.ml-icon')) && (await page.$$('.ml-maprow')).length === 3);
   await clickText(page, '.ml-btn', 'Read the sheets');
   await page.waitForFunction(() => document.querySelectorAll('.ml-tile').length > 0 || /People/.test(document.body.textContent), null, { timeout: 8000 }).catch(() => {});
   await page.evaluate(() => MetaLeads.go('meta-leads'));

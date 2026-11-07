@@ -42,9 +42,9 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    draft: null, dirty: false, saving: false,
-    add: { link: '', busy: false, result: null, error: null, code: '', tabsOn: {} },
-    suggesting: false, colsFor: null,
+    draft: null, saving: false,
+    add: { link: '', code: '', busy: false, error: null, share: false, prefilled: false },
+    colsFor: null, detailsFor: null,
     busy: {}
   };
 
@@ -89,7 +89,7 @@
     if (S.cfgLoading || (S.cfg && !force)) return;
     S.cfgLoading = true; S.cfgError = null;
     api('config').then(function (d) {
-      S.cfg = d; S.draft = JSON.parse(JSON.stringify(d.sources || [])); S.dirty = false;
+      S.cfg = d; S.draft = JSON.parse(JSON.stringify(d.sources || []));
     }).catch(function (e) { S.cfgError = e.message; })
       .then(function () { S.cfgLoading = false; render(); });
   }
@@ -123,6 +123,7 @@
     if (!MM()) { root.innerHTML = '<div class="ml-wrap"><div class="ml-empty">Loading…</div></div>'; setTimeout(render, 200); return; }
     var body = S.view === 'ml-setup' ? setupHtml() : S.view === 'ml-dupes' ? dupesHtml() : S.view === 'ml-analysis' ? analysisHtml() : leadsHtml();
     root.innerHTML = '<div class="ml-wrap">' + headHtml() + body + '</div>';
+    if (S.view === 'ml-setup') attachPickers();
   }
   function headHtml() {
     var tabs = TABS.map(function (t) {
@@ -347,53 +348,91 @@
   }
 
   // ─── Setup ─────────────────────────────────────────────────────────────
+  // One line per sheet: the sheet's link → the property its leads are for. Every change is saved at
+  // once (no separate Save); the tabs and what each column means are under "Details".
+  function invByCode(code) {
+    var c = String(code || '').toUpperCase();
+    return inv().find(function (x) { return String(x.propertyCode || x.id || '').toUpperCase() === c; }) || null;
+  }
+  function propertySelect(cls, code, attrs) {
+    var list = inv().slice().sort(function (x, y) { return String(x.propertyCode || x.id).localeCompare(String(y.propertyCode || y.id)); });
+    var has = !code || list.some(function (x) { return String(x.propertyCode || x.id).toUpperCase() === String(code).toUpperCase(); });
+    var opts = '<option value="">Pick the property…</option>' +
+      (has ? '' : '<option value="' + esc(code) + '" selected>' + esc(code) + '</option>') +
+      list.map(function (x) {
+        var c = String(x.propertyCode || x.id);
+        return '<option value="' + esc(c) + '"' + (String(code).toUpperCase() === c.toUpperCase() ? ' selected' : '') + '>' + esc(c + (x.name ? ' — ' + x.name : '')) + '</option>';
+      }).join('');
+    return '<select class="ml-psel ' + cls + '" ' + attrs + '>' + opts + '</select>';
+  }
+  function sourceStatus(s) {
+    if (s.on === false) return '<span class="ml-badge">Off</span>';
+    var lr = S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === s.id; });
+    if (!lr) return '<span class="ml-dim">Not read yet</span>';
+    if (!lr.ok) return '<span class="ml-badge bad" title="' + esc(lr.error) + '">' + (/share it/.test(lr.error || '') ? 'Not shared with the app' : 'Cannot read') + '</span>';
+    var n = (lr.rows || []).reduce(function (t, r) { return t + (r.rows || 0); }, 0);
+    return '<span class="ml-badge ok">' + n + ' lead' + (n === 1 ? '' : 's') + '</span>';
+  }
   function setupHtml() {
     if (S.cfgError) return '<div class="ml-alert bad">' + esc(S.cfgError) + ' <button class="ml-btn" onclick="MetaLeads.reload()">Try again</button></div>';
     if (!S.cfg) return '<div class="ml-empty"><i class="fa-solid fa-rotate fa-spin"></i> Loading the setup…</div>';
-    var mgr = !!S.cfg.manager;
-    var share = '<div class="ml-card ml-share"><div><b>Before a sheet can be read</b>, share it with the app’s Google account as <b>Editor</b>:</div>' +
-      '<div class="ml-sa"><code>' + esc(S.cfg.shareWith) + '</code> <button class="ml-btn sm" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')"><i class="fa-regular fa-copy"></i> Copy</button></div>' +
-      '<div class="ml-dim">In the sheet: Share → paste the address → Editor → untick “Notify people” → Send. The person who owns the sheet (or an editor) has to do this.</div></div>';
-    var sources = (S.draft || []).map(function (s, i) { return sourceHtml(s, i, mgr); }).join('');
-    var none = !(S.draft || []).length;
-    var suggest = none && mgr ? '<div class="ml-card ml-suggest"><div class="ml-h">Found in your Drive</div>' +
-      SUGGESTED.map(function (x) { return '<div class="ml-kv"><span>' + esc(x.title) + '</span><b><span class="ml-code">' + esc(x.propertyCode) + '</span> ' + esc(propName(x.propertyCode)) + '</b></div>'; }).join('') +
-      '<button class="ml-btn primary" ' + (S.suggesting ? 'disabled' : '') + ' onclick="MetaLeads.addSuggested()">' + (S.suggesting ? '<i class="fa-solid fa-rotate fa-spin"></i> Checking…' : (SUGGESTED.length === 1 ? 'Add this sheet' : 'Add these ' + SUGGESTED.length)) + '</button>' +
-      ' <span class="ml-dim">Each is checked with Google first; nothing is kept until you press Save.</span></div>' : '';
-    var save = mgr && S.dirty ? '<div class="ml-savebar"><span>Changes not saved yet</span><button class="ml-btn" onclick="MetaLeads.discard()">Discard</button><button class="ml-btn primary" ' + (S.saving ? 'disabled' : '') + ' onclick="MetaLeads.save()">' + (S.saving ? 'Saving…' : 'Save setup') + '</button></div>' : '';
-    return (mgr ? '' : '<div class="ml-alert">Only a manager can change this setup. You can read the sheets and work the leads.</div>') + share + suggest +
-      '<div class="ml-h2">Connected sheets <span class="ml-dim">' + (S.draft || []).length + '</span></div>' +
-      (none ? '<div class="ml-empty">No sheet connected yet.</div>' : sources) +
-      (mgr ? addHtml() : '') + monitorHtml() + save;
+    var mgr = !!S.cfg.manager, list = S.draft || [];
+    // The first time, the Koyambedu sheet is filled in, ready to connect.
+    if (mgr && !list.length && !S.add.prefilled && SUGGESTED.length) { S.add.prefilled = true; S.add.link = MM().sheetUrl(SUGGESTED[0].link); S.add.code = SUGGESTED[0].propertyCode; }
+    var rows = list.map(function (s, i) { return sourceRow(s, i, mgr); }).join('');
+    var lr = S.cfg.lastRead;
+    return '<div class="ml-card ml-map">' +
+        '<div class="ml-map-h"><div><div class="ml-h2">Lead sheets → properties</div><div class="ml-dim">Paste the Google Sheet an ad fills, pick the property it is for. Each sheet’s leads count for that property.</div></div></div>' +
+        (mgr ? addRow() : '<div class="ml-alert">Only a manager can change this list. You can read the sheets and work the leads.</div>') +
+        (list.length ? '<div class="ml-maplist"><div class="ml-mapth"><span>Lead sheet</span><span></span><span>Property</span><span>Leads</span><span></span></div>' + rows + '</div>'
+          : '<div class="ml-empty sm">No sheet connected yet.</div>') +
+      '</div>' +
+      '<div class="ml-foot"><i class="fa-solid fa-circle-info"></i> A sheet must be shared with <code>' + esc(S.cfg.shareWith) + '</code> as Editor <button class="ml-link" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')">Copy</button>' +
+        (lr ? ' · Last read ' + esc(MM().fmtWhen(lr.at)) + (lr.by ? ' by ' + esc(lr.by) : '') : '') + '</div>';
   }
-  function propertyOptions() {
-    return inv().map(function (p) { var c = p.propertyCode || p.id; return '<option value="' + esc(c + ' — ' + (p.name || '')) + '"></option>'; }).join('');
+  function addRow() {
+    var A = S.add;
+    var err = A.error ? '<div class="ml-alert bad">' + esc(A.error) +
+      (A.share ? '<div class="ml-sa"><code>' + esc(S.cfg.shareWith) + '</code> <button class="ml-btn sm" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')"><i class="fa-regular fa-copy"></i> Copy</button></div><div class="ml-dim">In the sheet: Share → paste this address → Editor → Send. Then press Connect again.</div>' : '') + '</div>' : '';
+    return '<div class="ml-addline">' +
+        '<input class="ml-in ml-link-in" placeholder="Paste the Google Sheets link" value="' + esc(A.link) + '" oninput="MetaLeads.addLink(this.value)">' +
+        '<span class="ml-arrow"><i class="fa-solid fa-arrow-right"></i></span>' +
+        '<div class="ml-pick">' + propertySelect('ml-add-prop', A.code, 'onchange="MetaLeads.addCode(this.value)"') + '</div>' +
+        '<button class="ml-btn primary" ' + (A.busy ? 'disabled' : '') + ' onclick="MetaLeads.addSheet()">' + (A.busy ? '<i class="fa-solid fa-rotate fa-spin"></i> Checking…' : '<i class="fa-solid fa-plus"></i> Connect') + '</button>' +
+      '</div>' + err;
   }
-  function lastRows(sourceId, gid) {
-    var lr = S.cfg && S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === sourceId; });
-    var t = lr && (lr.rows || []).find(function (r) { return r.gid === gid; });
-    return t ? t.rows : null;
+  function sourceRow(s, i, mgr) {
+    var open = S.detailsFor === s.id;
+    var tabsOn = (s.tabs || []).filter(function (t) { return t.on !== false; }).length;
+    return '<div class="ml-maprow' + (s.on === false ? ' off' : '') + (open ? ' open' : '') + '">' +
+        '<div class="ml-c-sheet"><a href="' + esc(MM().sheetUrl(s.spreadsheetId)) + '" target="_blank" rel="noopener">' + esc(String(s.title || s.spreadsheetId).trim()) + ' <i class="fa-solid fa-arrow-up-right-from-square"></i></a>' +
+          '<div class="ml-dim">' + tabsOn + ' of ' + (s.tabs || []).length + ' tab' + ((s.tabs || []).length === 1 ? '' : 's') + '</div></div>' +
+        '<span class="ml-arrow"><i class="fa-solid fa-arrow-right"></i></span>' +
+        '<div class="ml-c-prop">' + (mgr ? propertySelect('ml-row-prop', s.propertyCode, 'onchange="MetaLeads.setProp(' + i + ',this.value)"')
+          : '<span class="ml-code">' + esc(s.propertyCode) + '</span> ' + esc(propName(s.propertyCode) || s.propertyName)) + '</div>' +
+        '<div class="ml-c-status">' + sourceStatus(s) + '</div>' +
+        '<div class="ml-c-act">' +
+          (mgr ? '<label class="ml-sw" title="Read this sheet or not"><input type="checkbox" ' + (s.on !== false ? 'checked' : '') + ' onchange="MetaLeads.srcOn(' + i + ',this.checked)"> On</label>' : '') +
+          '<button class="ml-link" onclick="MetaLeads.details(' + js(s.id) + ')">' + (open ? 'Hide' : 'Details') + '</button>' +
+          (mgr ? '<button class="ml-icon" title="Disconnect this sheet" onclick="MetaLeads.remove(' + i + ')"><i class="fa-regular fa-trash-can"></i></button>' : '') +
+        '</div>' +
+        (open ? detailsHtml(s, i, mgr) : '') +
+      '</div>';
   }
-  function sourceHtml(s, i, mgr) {
+  function detailsHtml(s, i, mgr) {
     var lr = S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === s.id; });
     var planTabs = S.plan ? S.plan.tabs.filter(function (t) { return t.spreadsheetId === s.spreadsheetId; }) : [];
     var tabs = (s.tabs || []).map(function (t, j) {
-      var rows = lastRows(s.id, t.gid);
+      var r = lr && (lr.rows || []).find(function (x) { return x.gid === t.gid; });
       var pt = planTabs.find(function (x) { return x.gid === t.gid; });
       var open = S.colsFor === s.id + ':' + t.gid;
       return '<div class="ml-tabrow"><label><input type="checkbox" ' + (t.on !== false ? 'checked' : '') + (mgr ? '' : ' disabled') + ' onchange="MetaLeads.tabOn(' + i + ',' + j + ',this.checked)"> <b>' + esc(t.title) + '</b></label>' +
-        '<span class="ml-dim">' + (rows != null ? rows + ' rows at the last read' : '') + '</span>' +
+        '<span class="ml-dim">' + (r ? r.rows + ' rows at the last read' : '') + '</span>' +
         (pt ? ' <button class="ml-link" onclick="MetaLeads.cols(' + js(s.id + ':' + t.gid) + ')">' + (open ? 'Hide columns' : 'Columns') + (pt.issues.length ? ' <span class="ml-bad">· ' + pt.issues.length + ' to check</span>' : '') + '</button>' : '') +
         (open && pt ? colsHtml(pt, i, j, mgr) : '') + '</div>';
     }).join('');
-    return '<div class="ml-card ml-src' + (s.on === false ? ' off' : '') + '">' +
-      '<div class="ml-src-h"><div><a href="' + esc(MM().sheetUrl(s.spreadsheetId)) + '" target="_blank" rel="noopener"><b>' + esc(String(s.title || s.spreadsheetId).trim()) + '</b> <i class="fa-solid fa-arrow-up-right-from-square"></i></a>' +
-      (lr ? (lr.ok ? ' <span class="ml-badge ok">Read OK</span>' : ' <span class="ml-badge bad" title="' + esc(lr.error) + '">Cannot read</span>') : '') + '</div>' +
-      (mgr ? '<div><label class="ml-sw"><input type="checkbox" ' + (s.on !== false ? 'checked' : '') + ' onchange="MetaLeads.srcOn(' + i + ',this.checked)"> On</label> <button class="ml-btn sm" onclick="MetaLeads.remove(' + i + ')">Remove</button></div>' : '') + '</div>' +
-      '<div class="ml-kv"><span>Property</span><b>' + (mgr ? '<input class="ml-prop-in" list="mlProps" value="' + esc(s.propertyCode + (s.propertyName || propName(s.propertyCode) ? ' — ' + (propName(s.propertyCode) || s.propertyName) : '')) + '" onchange="MetaLeads.setProp(' + i + ',this.value)">' : '<span class="ml-code">' + esc(s.propertyCode) + '</span> ' + esc(propName(s.propertyCode) || s.propertyName)) + '</b></div>' +
-      (lr && !lr.ok ? '<div class="ml-alert bad">' + esc(lr.error) + '</div>' : '') +
-      '<div class="ml-tabs-list">' + tabs + '</div>' +
-      '<datalist id="mlProps">' + propertyOptions() + '</datalist></div>';
+    return '<div class="ml-details">' + (lr && !lr.ok ? '<div class="ml-alert bad">' + esc(lr.error) + '</div>' : '') +
+      '<div class="ml-dim">Tabs read from this sheet' + (S.plan ? '' : ' — read the sheets to see each tab’s columns') + ':</div>' + tabs + '</div>';
   }
   function colsHtml(pt, i, j, mgr) {
     var opts = function (c) {
@@ -405,37 +444,29 @@
         return '<tr' + (c.header ? '' : ' class="nohead"') + '><td>' + MM().colLetter(c.index) + '</td><td>' + esc(c.header || '(no header)') + '</td><td>' +
           (c.role === 'meta' ? '<span class="ml-dim">Meta · ' + esc(c.field) + '</span>' : (mgr ? '<select onchange="MetaLeads.role(' + i + ',' + j + ',' + c.index + ',this.value)">' + opts(c) + '</select>' : esc(MM().ROLES[c.role]))) +
           '</td><td class="ml-dim">' + esc((c.sample || []).slice(0, 2).join(' · ')) + '</td></tr>';
-      }).join('') + '</tbody></table>' + (mgr ? '<div class="ml-dim">A change here is used at the next read after you Save.</div>' : '') + '</div>';
+      }).join('') + '</tbody></table>' + (mgr ? '<div class="ml-dim">Saved at once; used from the next read.</div>' : '') + '</div>';
   }
-  function addHtml() {
-    var A = S.add, r = A.result;
-    var tabs = r ? r.tabs.map(function (t) {
-      return '<div class="ml-tabrow"><label><input type="checkbox" ' + (A.tabsOn[t.gid] ? 'checked' : '') + ' onchange="MetaLeads.addTab(' + t.gid + ',this.checked)"> <b>' + esc(t.title) + '</b></label> ' +
-        '<span class="ml-dim">' + t.count + ' rows</span> ' + (t.looksMeta ? '<span class="ml-badge ok">Meta leads</span>' : '<span class="ml-badge bad">Not a Meta export</span>') +
-        (t.issues.length ? '<div class="ml-issue">' + t.issues.map(esc).join('<br>') + '</div>' : '') + '</div>';
-    }).join('') : '';
-    return '<div class="ml-card ml-add"><div class="ml-h">Connect a sheet</div>' +
-      '<div class="ml-addrow"><input class="ml-search" placeholder="Paste the Google Sheets link" value="' + esc(A.link) + '" oninput="MetaLeads.addLink(this.value)">' +
-      '<button class="ml-btn" ' + (A.busy ? 'disabled' : '') + ' onclick="MetaLeads.inspect()">' + (A.busy ? 'Checking…' : 'Check sheet') + '</button></div>' +
-      (A.error ? '<div class="ml-alert bad">' + esc(A.error) + '</div>' : '') +
-      (r ? '<div class="ml-found"><div><b>' + esc(r.title) + '</b> — ' + r.tabs.length + ' tab' + (r.tabs.length > 1 ? 's' : '') + '</div>' + tabs +
-        '<div class="ml-kv"><span>Property</span><b><input class="ml-prop-in" list="mlProps" placeholder="Type a code or name" value="' + esc(A.code) + '" oninput="MetaLeads.addCode(this.value)"></b></div>' +
-        '<datalist id="mlProps">' + propertyOptions() + '</datalist>' +
-        '<button class="ml-btn primary" onclick="MetaLeads.addToSetup()">Add to the setup</button></div>' : '') + '</div>';
+  // The searchable picker (shared-assets/property-picker.js) over every property select drawn.
+  function attachPickers() {
+    if (!window.PinPropertyPicker) return;
+    document.querySelectorAll('#metaLeadsView select.ml-psel').forEach(function (sel) {
+      window.PinPropertyPicker.attach(sel, { lookup: function (v) { return v ? invByCode(v) : null; }, placeholder: 'Type a code or name, or pick…' });
+    });
   }
-  function monitorHtml() {
-    var lr = S.cfg.lastRead;
-    if (!lr) return '<div class="ml-card"><div class="ml-h">Last read</div><div class="ml-dim">The sheets have not been read yet.</div></div>';
-    return '<div class="ml-card"><div class="ml-h">Last read</div><div class="ml-dim">' + esc(MM().fmtWhen(lr.at)) + (lr.by ? ' by ' + esc(lr.by) : '') + '</div>' +
-      (lr.sheets || []).map(function (s) {
-        return '<div class="ml-kv"><span>' + esc(String(s.title).trim()) + '</span><b>' + (s.ok ? (s.rows || []).map(function (r) { return esc(r.title) + ': ' + r.rows; }).join(' · ') : '<span class="ml-bad">' + esc(s.error) + '</span>') + '</b></div>';
-      }).join('') + '</div>';
+  // Every Setup change is saved at once; on failure the screen goes back to what is saved.
+  function persist(next, done) {
+    if (S.saving) return;
+    S.saving = true;
+    api('save', { sources: next }).then(function (d) {
+      S.cfg.sources = d.sources; S.draft = JSON.parse(JSON.stringify(d.sources));
+      if (done) done();
+    }).catch(function (e) {
+      toast(e.message); S.draft = JSON.parse(JSON.stringify(S.cfg.sources || []));
+    }).then(function () { S.saving = false; render(); });
   }
-
-  // Setup edits — kept in a draft until Save.
-  function codeOf(v) { return String(v || '').split(/\s+[—-]\s+/)[0].trim().toUpperCase(); }
-  function markDirty() { S.dirty = true; render(); }
-  async function inspectLink(link) { return api('inspect', { link: link }); }
+  function clone(x) { return JSON.parse(JSON.stringify(x)); }
+  function inspectLink(link) { return api('inspect', { link: link }); }
+  // A checked sheet → its setup line: every tab that is a Meta lead export, read.
   function fromInspect(r, code) {
     return { spreadsheetId: r.spreadsheetId, title: r.title, propertyCode: code, propertyName: propName(code), on: true,
       tabs: r.tabs.filter(function (t) { return t.looksMeta; }).map(function (t) { return { gid: t.gid, title: t.title, on: true, overrides: {} }; }) };
@@ -461,58 +492,40 @@
     openLead: function (id) { if (typeof openDetail === 'function') openDetail(id); },
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     cols: function (k) { S.colsFor = S.colsFor === k ? null : k; render(); },
-    tabOn: function (i, j, on) { S.draft[i].tabs[j].on = on; markDirty(); },
-    srcOn: function (i, on) { S.draft[i].on = on; markDirty(); },
-    remove: function (i) { if (!confirm('Stop reading “' + String(S.draft[i].title).trim() + '”? Its leads stay in the sheet.')) return; S.draft.splice(i, 1); markDirty(); },
-    setProp: function (i, v) { var c = codeOf(v); S.draft[i].propertyCode = c; S.draft[i].propertyName = propName(c); markDirty(); },
-    role: function (i, j, idx, role) { var t = S.draft[i].tabs[j]; t.overrides = t.overrides || {}; t.overrides[idx] = role; markDirty(); },
-    discard: function () { S.draft = JSON.parse(JSON.stringify(S.cfg.sources || [])); S.dirty = false; render(); },
-    save: function () {
-      var bad = S.draft.filter(function (s) { return !s.propertyCode; });
-      if (bad.length) { toast('Pick a property for ' + String(bad[0].title).trim()); return; }
-      S.saving = true; render();
-      api('save', { sources: S.draft }).then(function (d) {
-        S.cfg.sources = d.sources; S.draft = JSON.parse(JSON.stringify(d.sources)); S.dirty = false; toast('Setup saved');
-        // The overrides change what the rows mean: the plan is redrawn at the next read.
-      }).catch(function (e) { toast(e.message); }).then(function () { S.saving = false; render(); });
+    details: function (id) { S.detailsFor = S.detailsFor === id ? null : id; render(); },
+    tabOn: function (i, j, on) { var n = clone(S.draft); n[i].tabs[j].on = on; persist(n, function () { toast('Saved'); }); },
+    srcOn: function (i, on) { var n = clone(S.draft); n[i].on = on; persist(n, function () { toast(on ? 'On — read with the others' : 'Off — not read'); }); },
+    remove: function (i) {
+      var t = String(S.draft[i].title).trim();
+      if (!confirm('Disconnect “' + t + '”? Its leads stay in the sheet; it is just not read any more.')) return;
+      var n = clone(S.draft); n.splice(i, 1); persist(n, function () { toast('Disconnected'); });
     },
-    addLink: function (v) { S.add.link = v; },
-    addCode: function (v) { S.add.code = v; },
-    addTab: function (gid, on) { S.add.tabsOn[gid] = on; },
-    inspect: function () {
-      var A = S.add;
-      if (!MM().parseSheetLink(A.link)) { A.error = 'That is not a Google Sheets link'; render(); return; }
-      if ((S.draft || []).some(function (s) { return s.spreadsheetId === MM().parseSheetLink(A.link).spreadsheetId; })) { A.error = 'That sheet is already connected'; render(); return; }
-      A.busy = true; A.error = null; A.result = null; render();
+    setProp: function (i, code) {
+      if (!code) return;
+      var n = clone(S.draft); n[i].propertyCode = code; n[i].propertyName = propName(code);
+      persist(n, function () { toast('Now counted for ' + code + ' — read the sheets again to see it'); });
+    },
+    role: function (i, j, idx, role) { var n = clone(S.draft); var t = n[i].tabs[j]; t.overrides = t.overrides || {}; t.overrides[idx] = role; persist(n, function () { toast('Saved — read the sheets again to apply'); }); },
+    addLink: function (v) { S.add.link = v; S.add.prefilled = true; },
+    addCode: function (v) { S.add.code = v; S.add.prefilled = true; },
+    addSheet: function () {
+      var A = S.add, link = MM().parseSheetLink(A.link);
+      A.error = null; A.share = false;
+      if (!link) { A.error = 'Paste the link of a Google Sheet (docs.google.com/spreadsheets/…)'; render(); return; }
+      if (!A.code) { A.error = 'Pick the property these leads are for'; render(); return; }
+      if ((S.draft || []).some(function (s) { return s.spreadsheetId === link.spreadsheetId; })) { A.error = 'That sheet is already connected'; render(); return; }
+      A.busy = true; render();
       inspectLink(A.link).then(function (r) {
-        A.result = r; A.tabsOn = {};
-        r.tabs.forEach(function (t) { A.tabsOn[t.gid] = t.looksMeta; });
-      }).catch(function (e) { A.error = e.message; }).then(function () { A.busy = false; render(); });
-    },
-    addToSetup: function () {
-      var A = S.add, r = A.result, code = codeOf(A.code);
-      if (!code) { toast('Pick the property these leads are for'); return; }
-      var tabs = r.tabs.filter(function (t) { return A.tabsOn[t.gid]; });
-      if (!tabs.length) { toast('Tick at least one tab'); return; }
-      S.draft.push({ spreadsheetId: r.spreadsheetId, title: r.title, propertyCode: code, propertyName: propName(code), on: true,
-        tabs: tabs.map(function (t) { return { gid: t.gid, title: t.title, on: true, overrides: {} }; }) });
-      S.add = { link: '', busy: false, result: null, error: null, code: '', tabsOn: {} };
-      markDirty();
-    },
-    addSuggested: async function () {
-      S.suggesting = true; render();
-      var problems = [];
-      for (var k = 0; k < SUGGESTED.length; k++) {
-        var x = SUGGESTED[k];
-        try {
-          var r = await inspectLink(x.link);
-          if (!S.draft.some(function (s) { return s.spreadsheetId === r.spreadsheetId; })) S.draft.push(fromInspect(r, x.propertyCode));
-        } catch (e) { problems.push(x.title + ': ' + e.message); }
-      }
-      S.suggesting = false; S.dirty = S.draft.length > 0;
-      if (problems.length) S.add.error = problems.join('\n');
-      render();
-      toast(problems.length ? problems.length + ' sheet' + (problems.length > 1 ? 's' : '') + ' could not be opened — see below' : 'Added — check them, then Save');
+        var src = fromInspect(r, A.code);
+        if (!src.tabs.length) throw new Error('No tab in “' + r.title + '” looks like Meta’s lead export (an "id" and a "created_time" column)');
+        var n = clone(S.draft || []); n.push(src);
+        persist(n, function () {
+          toast('Connected: ' + String(r.title).trim() + ' → ' + A.code + '. Press Read the sheets.');
+          S.add = { link: '', code: '', busy: false, error: null, share: false, prefilled: true };
+        });
+      }).catch(function (e) {
+        A.error = e.message; A.share = !!(e.data && e.data.code === 'share');
+      }).then(function () { A.busy = false; render(); });
     }
   };
 
