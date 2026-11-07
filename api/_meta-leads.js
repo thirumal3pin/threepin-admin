@@ -18,6 +18,8 @@
 //   save     the setup                                                                  [managers]
 //   available  the sheets shared with the app, Meta ad lead sheets marked                 [managers]
 //   read     every connected tab's rows, for the page to plan from                     [the team]
+//   brief    the AI's reading of one person: stage, next step and when, requirement, objections
+//   briefs   every stored brief                                                         [the team]
 //   write    the team's columns of a connected tab (assigned, rating, remarks, follow-ups) [the team]
 //            — a new column                                                             [managers]
 //
@@ -30,6 +32,7 @@ import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { getSheetsToken, TENANT_ID } from './_inventory-shared.js';
 import * as TM from '../shared-assets/task-model.js';
 import { parseSheetLink, classifyColumns, columnIssues, ROLES, planSheetWrite } from '../crm-assets/metaLeadsModel.js';
+import { briefAction, briefsAction, defaultClassify } from './_meta-leads-brief.js';
 
 const COLLECTION = 'metaLeadConfigs';
 const EDITS = 'metaLeadEdits';
@@ -50,7 +53,9 @@ export function makeDeps(overrides = {}) {
     fetch: overrides.fetch || ((...a) => fetch(...a)),
     serviceAccount: overrides.serviceAccount,
     token: overrides.token || ((sa, scope) => getSheetsToken(sa, scope)),
-    now: overrides.now || (() => Date.now())
+    now: overrides.now || (() => Date.now()),
+    // The lead AI (api/_lead-ai.js classifyLead) — a stand-in in the tests.
+    classify: overrides.classify || defaultClassify
   };
 }
 
@@ -133,6 +138,10 @@ export async function metaLeadsAction(user, body, deps) {
   const shareWith = (sa && sa.client_email) || 'the app’s service account';
   const action = String((body && body.action) || '');
   const tokenOnce = () => { let p; return () => (p = p || deps.token(sa)); };
+
+  // The AI brief of one person, and every stored brief (api/_meta-leads-brief.js).
+  if (action === 'briefs') return briefsAction(user, deps);
+  if (action === 'brief') return briefAction(user, { ...body }, { ...deps, classify: deps.classify || defaultClassify });
 
   if (action === 'config') {
     const [cfg, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);

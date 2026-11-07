@@ -16,7 +16,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { metaLeadsAction } from '../api/_meta-leads.js';
 import { createFakeDb } from './_fake-firestore.mjs';
-import { SHEETS, CRM_LEADS, STAGES, NOW } from './_meta-leads-fixtures.mjs';
+import { SHEETS, CRM_LEADS, STAGES, NOW, fakeClassify } from './_meta-leads-fixtures.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = join(ROOT, 'tests/out');
@@ -104,7 +104,8 @@ window.__ready = true;
 const db = createFakeDb();
 await db.collection('taskConfigs').doc(T).set({ managers: ['admin@threepin.in'] });
 const sheets = sheetsFetch();
-const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: SA }, token: async () => 'tok', now: () => Date.now() };
+const ai = fakeClassify();
+const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: SA }, token: async () => 'tok', now: () => Date.now(), classify: ai.classify };
 const apiLog = [];
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.jpg': 'image/jpeg', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/json', '.woff2': 'font/woff2' };

@@ -35,6 +35,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import { stageKindOf } from './pipeline.js';
+export { STAGE_DEFS, LOST_REASONS, HOLD_REASONS } from './pipeline.js';
 
 export const TZ = 'Asia/Kolkata';
 const DAY = 86400000;

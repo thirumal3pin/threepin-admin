@@ -16,7 +16,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { metaLeadsAction } from '../api/_meta-leads.js';
 import { createFakeDb } from './_fake-firestore.mjs';
-import { SHEETS, CRM_LEADS, STAGES, NOW } from './_meta-leads-fixtures.mjs';
+import { SHEETS, CRM_LEADS, STAGES, NOW, fakeClassify } from './_meta-leads-fixtures.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = join(ROOT, 'tests/out');
@@ -104,7 +104,8 @@ window.__ready = true;
 const db = createFakeDb();
 await db.collection('taskConfigs').doc(T).set({ managers: ['admin@threepin.in'] });
 const sheets = sheetsFetch();
-const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: SA }, token: async () => 'tok', now: () => Date.now() };
+const ai = fakeClassify();
+const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: SA }, token: async () => 'tok', now: () => Date.now(), classify: ai.classify };
 const apiLog = [];
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.jpg': 'image/jpeg', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/json', '.woff2': 'font/woff2' };
@@ -365,7 +366,39 @@ try {
 
   // ── 9. Reading wrote nothing ──
   ok('The CRM saved nothing (no lead, no note)', (await page.evaluate(() => window.__saves)) === 0);
-  ok('Only the setup was written to the database', JSON.stringify([...db._store.keys()].sort()) === JSON.stringify([`metaLeadConfigs/${T}`, `taskConfigs/${T}`]), [...db._store.keys()]);
+  ok('Only the setup and the AI briefs were written to the database', JSON.stringify([...db._store.keys()].sort()) === JSON.stringify([`metaLeadBriefs/${T}`, `metaLeadConfigs/${T}`, `taskConfigs/${T}`]), [...db._store.keys()]);
+
+  // ── 9b. The AI brief: what to know before the call ──
+  await page.waitForFunction(() => !/AI reading leads/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 15000 }).catch(() => {});
+  const briefed = await page.evaluate(() => document.querySelectorAll('.ml-person').length);
+  const nBriefs = Object.keys((await db.collection('metaLeadBriefs').doc(T).get()).data().b).length;
+  ok('Every person was read by the lead AI, in the background', nBriefs === 12, nBriefs);
+  const nCalls = ai.calls.length;
+  await page.evaluate(() => MetaLeads.go('meta-leads'));
+  await page.waitForTimeout(200);
+  await clickText(page, '.ml-prow', 'Arjun');
+  const brief = await text(page, '.ml-person.open .ml-brief');
+  ok('Opened: "Before you call" — the stage, the next step and when, what they want, what they ruled out', /Before you call/.test(brief) && /Visit planned/.test(brief) && /Tomorrow 11 am/.test(brief) && /Call to confirm the visit time/.test(brief) && /4,000\+ sq\. ft\./.test(brief) && /Ruled out\s*ground floor/.test(brief), brief);
+  ok('…with where it was read from', /Read from 3 enquiries · \d+ sheet notes/.test(brief), brief);
+  ok('…first in the lead, above the work form', await page.evaluate(() => { const b = document.querySelector('.ml-person.open .ml-brief'), w = document.querySelector('.ml-person.open .ml-work'); return b.getBoundingClientRect().top < w.getBoundingClientRect().top; }));
+  await shot(page, '6c-brief');
+  ok('Opening with nothing new: no new AI read', ai.calls.length === nCalls, [nCalls, ai.calls.length]);
+  const dueRows = await page.$$eval('.ml-person', els => els.filter(e => [...e.querySelectorAll('.ml-due')].some(d => /Overdue|Today/.test(d.textContent))).map(e => e.querySelector('.ml-name').childNodes[0].textContent.trim()).sort());
+  ok('List: an overdue follow-up is flagged on the row', dueRows.length > 0, dueRows);
+  await page.locator('.ml-chip.sm', { hasText: 'Follow-up due' }).click();
+  await page.waitForTimeout(200);
+  const dueNames = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()));
+  ok('"Follow-up due": exactly those due today or overdue', JSON.stringify(dueNames.slice().sort()) === JSON.stringify(dueRows) && !dueNames.includes('Arjun'), [dueNames, dueRows]);
+  await page.locator('.ml-chip.sm', { hasText: /^All$/ }).click();
+  await page.selectOption('.ml-tools .ml-sort', 'next');
+  await page.waitForTimeout(200);
+  const order = await page.$$eval('.ml-person', els => els.map(e => [e.querySelector('.ml-name').childNodes[0].textContent.trim(), !!e.querySelector('.ml-due.bad'), !!e.querySelector('.ml-due.bad') && /Lost/.test(e.querySelector('.ml-due.bad').textContent)]));
+  const firstNotDue = order.findIndex(x => !x[1] || x[2]);
+  ok('"What to do next": the overdue first', firstNotDue > 0 && order.slice(0, firstNotDue).every(x => x[1] && !x[2]), order);
+  const lostAt = order.findIndex(x => x[2]);
+  ok('…the lost ones last', lostAt < 0 || order.slice(lostAt).every(x => x[2]), order);
+  await page.selectOption('.ml-tools .ml-sort', 'new');
+
   ok('Google was only read (no cell written)', sheets.calls.every(c => !/:batchUpdate|:append|:clear/.test(c)));
   await ctx.close();
 
@@ -459,7 +492,7 @@ try {
   await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 }).catch(() => {});
   await page.evaluate(() => MetaLeads.go('meta-leads'));
   await page.waitForTimeout(300);
-  ok('…the leads are read on their own, and an agent starts on HIS leads, not-contacted first', (await page.$$('.ml-person')).length === 2 && await page.$eval('.ml-tools select', e => e.value) === '_mine' && await page.$$eval('.ml-tools select', els => els[els.length - 1].value) === 'untouched');
+  ok('…the leads are read on their own, and an agent starts on HIS leads, not-contacted first', (await page.$$('.ml-person')).length === 2 && await page.$eval('.ml-tools select', e => e.value) === '_mine' && await page.$$eval('.ml-tools select', els => els[els.length - 1].value) === 'next');
   await page.evaluate(() => MetaLeads.clearF());
   await page.waitForTimeout(200);
   ok('…and sees everyone with Clear filters', (await page.$$('.ml-person')).length === 12);
@@ -491,7 +524,7 @@ try {
   await page.waitForTimeout(300);
   await page.locator('.ml-sw button', { hasText: 'All' }).click();
   await page.waitForTimeout(200);
-  await page.locator('.ml-tile', { hasText: 'Assigned to me' }).click();
+  await page.locator('.ml-sw button', { hasText: 'My leads' }).click();
   await page.waitForTimeout(250);
   names = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()).sort());
   ok('Agent (Swami): "Assigned to me" — Arjun and Parinita', JSON.stringify(names) === JSON.stringify(['Arjun', 'Parinita']), names);
@@ -511,6 +544,8 @@ try {
   const pr = sheets.data.KDB.tabs[1].values[2];   // Parinita, Sheet3 row 3: Remarks (V) then a header-less column (W) already full
   ok('Agent: rating 4 written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '4' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
   ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /★ 4/.test(await text(page, '.ml-person.open .ml-prow')));
+  await page.waitForTimeout(1200);
+  ok('A note saved: that lead is read again by the AI, with the new note', /Site visit fixed/.test(ai.calls[ai.calls.length - 1] || ''));
   await shot(page, '13-agent-work');
   // A person with rows for two properties: pick which row the form writes; Enter saves.
   await page.evaluate(() => MetaLeads.clearF());

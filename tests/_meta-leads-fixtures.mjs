@@ -141,3 +141,24 @@ export function fakeSheetsFetch(locked = new Set()) {
   };
   return { fetch, calls, data };
 }
+
+// A stand-in for the lead AI (api/_lead-ai.js classifyLead): a fixed, readable verdict from what the
+// case file says, so the brief can be clicked through without Gemini.
+export function fakeClassify(now = Date.now()) {
+  const calls = [];
+  const tomorrow11 = (() => { const d = new Date(now + 5.5 * 3600000 + 86400000); d.setUTCHours(5, 30, 0, 0); return d.getTime(); })();
+  const base = { intent: 'rent', confidence: 'medium', holdReason: null, holdUntil: null, lostReason: null, urgency: 'normal', visit: { status: 'none', at: null, property: null }, want: null };
+  const classify = async ({ caseFile }) => {
+    calls.push(caseFile);
+    // Only what the person and the team wrote — not the case file's own reading notes.
+    const t = caseFile.slice(caseFile.indexOf('AD ENQUIRIES')).toLowerCase();
+    let v;
+    if (/not interested/.test(t)) v = { ...base, stage: 'lost', lostReason: 'not_interested', evidence: 'Remarks: not interested', next: { owner: 'none', action: null, kind: 'none', dueAt: null }, line: 'Said not interested', urgency: 'low' };
+    else if (/visit/.test(t)) v = { ...base, stage: 'visit_pending', evidence: 'Note: visiting', next: { owner: 'team', action: 'Call to confirm the visit time', kind: 'confirm_visit', dueAt: tomorrow11 }, visit: { status: 'requested', at: null, property: null }, line: 'Wants to visit; confirm the time',
+      want: { deal: 'rent', budget_min: null, budget_max: null, budget_unit: 'unknown', areas: ['Kodambakkam'], bhk: [], types: ['commercial'], ready_by: null, size_sqft_min: 4000, must_have: ['gym use'], deal_breakers: ['ground floor'] } };
+    else if (/busy|follow up|rnr|not answering/.test(t)) v = { ...base, stage: 'new', evidence: 'Remarks: busy', next: { owner: 'team', action: 'Call again — they were busy', kind: 'call', dueAt: now - 2 * 86400000 }, line: 'Did not get through yet' };
+    else v = { ...base, stage: 'new', evidence: 'Form only', next: { owner: 'team', action: 'First call: ask what they need', kind: 'call', dueAt: null }, line: 'New enquiry, not called yet' };
+    return { ok: true, model: 'gemini-test', verdict: v };
+  };
+  return { classify, calls };
+}

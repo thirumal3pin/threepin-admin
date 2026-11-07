@@ -298,6 +298,65 @@ async function server(locked) {
     { db: brokenDb, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW });
   eq('The edit log failing: the sheet was written and the answer says so', [s2, r2.applied.length, sheets.data.KDB.tabs[1].values[4][21]], [200, 1, 'Called']);
 }
+// ── The AI brief: what the agent needs before the call ──
+{
+  const B = await import('../api/_meta-leads-brief.js');
+  const db = createFakeDb();
+  const calls = [];
+  let reply = { ok: true, model: 'gemini-test', verdict: { intent: 'rent', stage: 'visit_pending', confidence: 'high', evidence: 'Remarks: probably visit on Monday', next: { owner: 'team', action: 'Call to confirm the Monday visit to KDBMC001', kind: 'confirm_visit', dueAt: NOW + 86400000 }, visit: { status: 'requested', at: null, property: 'KDBMC001' }, holdReason: null, holdUntil: null, lostReason: null, urgency: 'normal', line: 'Visit likely Monday; confirm', want: null } };
+  const classify = async o => { calls.push(o.caseFile); return reply; };
+  const deps = { db, fetch: async () => { throw new Error('no sheets here'); }, serviceAccount: null, token: async () => 'x', now: () => NOW, classify };
+  const act = body => metaLeadsAction({ tenantId: 't_3pin', email: 'agent@threepin.in' }, body, deps);
+  const person = {
+    k: 'p:919884184215', sig: 's1', name: 'Murenu Murugan', crmId: '',
+    props: [{ code: 'KDBMC001', name: 'Commercial Building for Rent' }],
+    rows: [
+      { at: NOW - 15 * 86400000, code: 'KDBMC001', where: 'office space - Kodambakkam › Sheet1', tag: 'old leads', ad: 'Video 2', platform: 'Instagram', form: 'Office space-copy', answers: [['Expected area (in sq. ft.)', '1,000–2,000 sq. ft.'], ['Expected budget per sq. ft.', '₹70–₹100']], assigned: 'Thirumal', rating: '3', notes: [['Remarks', 'Interested, send details']] },
+      { at: NOW - 4 * 86400000, code: 'KDBMC001', where: 'Kodabakkam office › Sheet1', ad: 'Video 1', form: 'T nagar', answers: [['Expected area', '4,000+ sq. ft.']], assigned: 'Thirumal', rating: '3', notes: [['Remarks', 'sent details - probably visit on monday - call back on monday on Nov9, his no 98841 84215']] }
+    ]
+  };
+  let [r, s] = await act({ action: 'brief', person });
+  eq('Brief: read by the lead AI and stored', [s, r.ok, calls.length, r.brief.v.stage, r.brief.v.next.action, r.brief.src], [200, true, 1, 'visit_pending', 'Call to confirm the Monday visit to KDBMC001', { rows: 2, notes: 2, crm: false, crmNotes: 0, chat: 0 }]);
+  const cf = calls[0];
+  ok('The case file: how to read undated sheet notes and dates written in them', /written left to right, oldest first/.test(cf) && /day\/month, this year/.test(cf));
+  ok('…every enquiry with its form answers, oldest first', cf.indexOf('1,000–2,000 sq. ft.') < cf.indexOf('4,000+ sq. ft.') && /Form answers: Expected area \(in sq\. ft\.\): 1,000–2,000 sq\. ft\.; Expected budget per sq\. ft\.: ₹70–₹100/.test(cf));
+  ok('…the team\'s notes and rating in each row', /Remarks: sent details - probably visit on monday/.test(cf) && /rating 3\/5/.test(cf) && /assigned to Thirumal/.test(cf));
+  ok('…a phone number written in a note never leaves the CRM', !/98841 84215/.test(cf) && /\[phone\]/.test(cf));
+  ok('…not a CRM lead: said so', /CRM: not a CRM lead yet/.test(cf));
+  [r] = await act({ action: 'brief', person: { ...person, sig: 's2' } });
+  eq('Asked again with nothing new: the stored answer, no AI call', [r.cached, calls.length, r.brief.sig], [true, 1, 's2']);
+  const more = JSON.parse(JSON.stringify(person)); more.rows[1].notes.push(['Follow up 1', 'Visited, wants 2 floors (9 Nov)']);
+  [r] = await act({ action: 'brief', person: more });
+  eq('A new note: read again', calls.length, 2);
+  reply = { ok: false, error: 'rate limited' };
+  more.rows[1].notes.push(['Follow up 2', 'RNR']);
+  [r] = await act({ action: 'brief', person: more });
+  eq('The AI failing: the error is kept, and so is the last good brief', [r.ok, r.brief.err, r.brief.v.stage], [false, 'rate limited', 'visit_pending']);
+  [r] = await act({ action: 'briefs' });
+  eq('briefs: every stored brief by person', [Object.keys(r.briefs), r.briefs['p:919884184215'].err], [['p:919884184215'], 'rate limited']);
+  // Already a CRM lead: its record, notes and chat are read too — another tenant's lead never.
+  reply = { ok: true, model: 'gemini-test', verdict: { ...reply, intent: 'rent', stage: 'lost', confidence: 'high', evidence: 'x', next: { owner: 'none', action: null, kind: 'none', dueAt: null }, visit: { status: 'none', at: null, property: null }, holdReason: null, holdUntil: null, lostReason: 'not_interested', urgency: 'low', line: 'Took another place', want: null } };
+  await db.collection('leads').doc('L1').set({ tenantId: 't_3pin', name: 'Murenu M', stageId: 'contacted', phone: '9884184215' });
+  await db.collection('leads').doc('L1').collection('notes').doc('n1').set({ text: 'Said he took a place in T Nagar', createdAt: NOW - 3600000, by: 'swami@threepin.in' });
+  await db.collection('leads').doc('L1').collection('tailortalk').doc('state').set({ chat: [{ role: 'user', content: 'Not needed now, thanks', at: NOW - 7200000 }] });
+  await db.collection('pipelines').doc('t_3pin').set({ stages: STAGES });
+  await db.collection('leads').doc('X9').set({ tenantId: 'someone_else', name: 'Other' });
+  [r] = await act({ action: 'brief', person: { ...more, crmId: 'L1' } });
+  const cf2 = calls[calls.length - 1];
+  ok('A CRM lead: its notes and chat are in the case file', /CRM RECORD/.test(cf2) && /took a place in T Nagar/.test(cf2) && /Not needed now, thanks/.test(cf2) && !/\nNow: .*\n[\s\S]*\nNow: /.test(cf2));
+  eq('…and counted', [r.brief.src.crm, r.brief.src.crmNotes, r.brief.src.chat, r.brief.v.lostReason], [true, 1, 1, 'not_interested']);
+  [r] = await act({ action: 'brief', person: { ...more, k: 'p:910000000000', crmId: 'X9' } });
+  ok('Another tenant\'s CRM lead is never read', !/CRM RECORD/.test(calls[calls.length - 1]) && r.brief.src.crm === false);
+  [r, s] = await act({ action: 'brief', person: { k: 'x', rows: [] } });
+  eq('Nothing to read: refused', s, 400);
+  eq('Briefs run on Claude Haiku 4.5, the CRM\'s Claude', B.BRIEF_MODEL, 'claude-haiku-4-5');
+  // The day's cap: past it, nothing is read and the page is told so.
+  await db.collection('metaLeadBriefs').doc('t_3pin').set({ day: new Date(NOW + 5.5 * 3600000).toISOString().slice(0, 10), runs: B.BRIEF_DAILY_CAP }, { merge: true });
+  const before = calls.length;
+  const capped = JSON.parse(JSON.stringify(more)); capped.rows[0].notes.push(['Follow up 1', 'one more']);
+  [r] = await act({ action: 'brief', person: capped });
+  eq('The daily cap reached: no AI call, and the page is told', [calls.length - before, r.ok, r.capped], [0, false, true]);
+}
 eq('cleanSources keeps only known roles', cleanSources([{ spreadsheetId: SHEETS.KOY.id, tabs: [{ gid: 0, overrides: { 18: 'rating', 19: 'meta', x: 'note', 20: 'bogus' } }] }], [], 'a', 1)[0].tabs[0].overrides, { 18: 'rating' });
 
 console.log(failed ? `\n${failed} of ${checks} failed` : `\nAll good (${checks} checks).`);

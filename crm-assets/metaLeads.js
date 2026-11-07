@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -116,9 +116,151 @@
       if (d.errors && d.errors.length) toast('Read, with ' + d.errors.length + ' sheet problem' + (d.errors.length > 1 ? 's' : ''));
       else if (!quiet) toast('Sheets read');
       agentDefault();
+      loadBriefs();
     }).catch(function (e) { S.readError = e.message; })
       .then(function () { S.reading = false; render(); });
   }
+  // ─── The AI brief: stage, next step and when, what they want, objections ──
+  // Read by the CRM's own lead AI on the server (api/_meta-leads-brief.js) from the ad forms, the
+  // sheet's notes and — for a CRM lead — its notes and chat. Stored; asked again only when what the
+  // page would send has changed (sig), or the CRM lead moved since.
+  var STAGE_NAME = {}, LOST_NAME = {}, HOLD_NAME = {};
+  function names() {
+    if (STAGE_NAME.new || !MM() || !MM().STAGE_DEFS) return;
+    MM().STAGE_DEFS.forEach(function (d) { STAGE_NAME[d.key] = d.name; });
+    LOST_NAME = MM().LOST_REASONS || {}; HOLD_NAME = MM().HOLD_REASONS || {};
+  }
+  function hashStr(s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+  function briefInput(p) {
+    var rows = p.enquiries.map(function (e) {
+      var t = e.team;
+      return { at: e.at || 0, code: e.propertyCode, where: String(e.where.sheetTitle || '').trim() + ' › ' + e.where.tab, tag: e.where.tag || '', tabNote: e.where.remark || '',
+        ad: e.ad || '', platform: { ig: 'Instagram', fb: 'Facebook' }[e.platform] || e.platform || '', form: e.form || '',
+        answers: e.answers.map(function (a) { return [a.label, a.value]; }), assigned: t.assigned || '', rating: t.ratingRaw || '',
+        notes: t.remarks.concat(t.followups, t.notes).map(function (n) { return [n.label, n.text]; }) };
+    });
+    var body = { k: p.key, name: p.name || '', crmId: p.crm ? p.crm.id : '', props: p.properties.map(function (c) { return { code: c, name: propName(c) || '' }; }), rows: rows };
+    body.sig = hashStr(JSON.stringify(body) + '|' + (p.crm ? (p.crm.updatedAt || 0) : ''));
+    return body;
+  }
+  function briefStale(p, b) {
+    if (!b) return true;
+    if (b.sig !== briefInput(p).sig) return true;
+    if (b.err && Date.now() - (b.errAt || 0) > 5 * 60000) return true;
+    return false;
+  }
+  function loadBriefs() {
+    api('briefs').then(function (d) { S.briefs = d.briefs || {}; queueBriefs(); softRender(); }).catch(function () { queueBriefs(); });
+  }
+  // Every stale brief, mine first, then the unassigned, then the rest; two at a time.
+  function queueBriefs(first) {
+    if (!S.plan || (S.bCapped && !first)) return;
+    var rank = function (p) { return p.team.agent === me() ? 0 : !p.team.assignedRaw ? 1 : 2; };
+    var want = S.plan.people.filter(function (p) { return !S.brun[p.key] && S.bq.indexOf(p.key) < 0 && briefStale(p, S.briefs[p.key]); })
+      .sort(function (a, b) { return rank(a) - rank(b) || lastAtFor(b) - lastAtFor(a); }).map(function (p) { return p.key; });
+    if (first && S.bq.indexOf(first) < 0 && !S.brun[first]) want.unshift(first);
+    else if (first) { S.bq = [first].concat(S.bq.filter(function (k) { return k !== first; })); }
+    if (!want.length && !S.bq.length) return;
+    if (!S.bq.length && !Object.keys(S.brun).length) { S.bDone = 0; S.bTotal = 0; }
+    S.bq = S.bq.concat(want.filter(function (k) { return S.bq.indexOf(k) < 0; }));
+    S.bTotal = S.bDone + S.bq.length + Object.keys(S.brun).length;
+    pumpBriefs();
+  }
+  function pumpBriefs(force) {
+    while (Object.keys(S.brun).length < 2 && S.bq.length) (function (key) {
+      var p = S.plan && S.plan.people.find(function (x) { return x.key === key; });
+      if (!p) return;
+      S.brun[key] = 1;
+      api('brief', { person: briefInput(p), force: force === key }).then(function (d) {
+        if (d.brief) S.briefs[key] = d.brief;
+        if (d.capped) { S.bq = []; S.bCapped = d.error; toast(d.error); }
+      })
+        .catch(function (e) { S.briefs[key] = Object.assign({}, S.briefs[key] || {}, { k: key, sig: briefInput(p).sig, err: e.message, errAt: Date.now() }); })
+        .then(function () { delete S.brun[key]; S.bDone++; softRender(); pumpBriefs(); });
+    })(S.bq.shift());
+    if (!S.bq.length && !Object.keys(S.brun).length) softRender();
+  }
+  // A redraw never under someone's fingers: while a field here has the focus it waits for the blur.
+  function fieldFocused() { var a = document.activeElement; return !!(a && el() && el().contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); }
+  function softRender() { if (fieldFocused()) { S.needRender = true; return; } S.needRender = false; render(); }
+  document.addEventListener('focusout', function () { setTimeout(function () { if (S.needRender && !fieldFocused()) { S.needRender = false; render(); } }, 60); });
+
+  // When is the next thing due, and what is it — from the brief.
+  var IST = 5.5 * 3600000;
+  function istDay(t) { return Math.floor((t + IST) / 86400000); }
+  function whenText(t) {
+    var d = istDay(t) - istDay(Date.now());
+    var time = new Date(t + IST), hh = time.getUTCHours(), mm = time.getUTCMinutes();
+    var clock = (hh % 12 || 12) + (mm ? ':' + String(mm).padStart(2, '0') : '') + (hh < 12 ? ' am' : ' pm');
+    var showClock = !(hh === 10 && mm === 0) && !(hh === 0 && mm === 0);
+    var day = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : d === -1 ? 'Yesterday' : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][time.getUTCDay()] + ' ' + time.getUTCDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][time.getUTCMonth()];
+    return day + (showClock ? ' ' + clock : '');
+  }
+  // → { state: 'lost'|'hold'|'overdue'|'today'|'later'|'todo'|'waiting'|'none', at, text, action }
+  function nextOf(p) {
+    var b = S.briefs[p.key], v = b && b.v;
+    if (!v) return null;
+    if (v.stage === 'lost') return { state: 'lost', text: 'Lost · ' + (LOST_NAME[v.lostReason] || 'not interested'), action: '' };
+    if (v.stage === 'on_hold') return { state: 'hold', at: v.holdUntil, text: 'On hold' + (v.holdUntil ? ' till ' + whenText(v.holdUntil) : ''), action: v.next.action || '' };
+    var at = v.next.dueAt || (v.visit && v.visit.status === 'scheduled' && v.visit.at) || null;
+    if (v.next.owner === 'team' && at) {
+      var d = istDay(at) - istDay(Date.now());
+      return { state: d < 0 ? 'overdue' : d === 0 ? 'today' : 'later', at: at, text: (d < 0 ? 'Overdue · ' : '') + whenText(at), action: v.next.action || '' };
+    }
+    if (v.next.owner === 'team') return { state: 'todo', text: 'To do', action: v.next.action || '' };
+    if (v.next.owner === 'lead') return { state: 'waiting', text: 'Waiting for them', action: v.next.action || '' };
+    return { state: 'none', text: '', action: '' };
+  }
+  function isDue(p) { var n = nextOf(p); return !!n && (n.state === 'overdue' || n.state === 'today'); }
+  function dueChip(p) {
+    var n = nextOf(p);
+    if (!n || !n.text || n.state === 'none') return '';
+    var cls = { lost: 'bad', overdue: 'bad', today: 'warn', hold: '', later: 'info', todo: 'info', waiting: '' }[n.state] || '';
+    var icon = { lost: 'fa-circle-xmark', hold: 'fa-pause', waiting: 'fa-hourglass-half' }[n.state] || 'fa-phone';
+    return '<span class="ml-badge ml-due ' + cls + '" title="' + esc(n.action || n.text) + '"><i class="fa-solid ' + icon + '"></i> ' + esc(n.text) + '</span>';
+  }
+  function money(n) { return n >= 1e7 ? '₹' + (Math.round(n / 1e5) / 100) + ' Cr' : n >= 1e5 ? '₹' + (Math.round(n / 1e3) / 100) + ' L' : n >= 1e3 ? '₹' + Math.round(n / 1e3) + 'k' : '₹' + n; }
+  function wantChips(w) {
+    if (!w) return '';
+    var c = [];
+    if (w.deal && w.deal !== 'unknown') c.push({ buy: 'Buy', rent: 'Rent', lease: 'Lease', either: 'Buy or rent' }[w.deal]);
+    if (w.budget_min || w.budget_max) c.push((w.budget_min && w.budget_max ? money(w.budget_min) + '–' + money(w.budget_max) : money(w.budget_max || w.budget_min)) + ({ per_month: ' / month', lease_amount: ' lease' }[w.budget_unit] || ''));
+    if (w.size_sqft_min) c.push(w.size_sqft_min.toLocaleString('en-IN') + '+ sq. ft.');
+    (w.bhk || []).forEach(function (n) { c.push(n + ' BHK'); });
+    (w.types || []).forEach(function (t) { c.push({ apartment: 'Apartment', villa: 'Villa', independent_house: 'Independent house', plot: 'Plot', commercial: 'Commercial' }[t] || t); });
+    (w.areas || []).forEach(function (a) { c.push(a); });
+    if (w.ready_by) c.push(w.ready_by === 'immediate' ? 'Needs it now' : 'By ' + w.ready_by);
+    (w.must_have || []).forEach(function (a) { c.push(a); });
+    var out = c.length ? '<div class="ml-bk"><span class="ml-bk-l">Looking for</span><div class="ml-bk-c">' + c.map(function (x) { return '<span class="ml-want">' + esc(x) + '</span>'; }).join('') + '</div></div>' : '';
+    if ((w.deal_breakers || []).length) out += '<div class="ml-bk"><span class="ml-bk-l">Ruled out</span><div class="ml-bk-c">' + w.deal_breakers.map(function (x) { return '<span class="ml-want no">' + esc(x) + '</span>'; }).join('') + '</div></div>';
+    return out;
+  }
+  function briefHtml(p) {
+    names();
+    var b = S.briefs[p.key], v = b && b.v, busy = !!S.brun[p.key] || S.bq.indexOf(p.key) >= 0;
+    var k = js(p.key);
+    var head = '<div class="ml-brief-h"><span class="ml-brief-t"><i class="fa-solid fa-wand-magic-sparkles"></i> Before you call</span>' +
+      (v ? '<span class="ml-stage s-' + esc(v.stage) + '">' + esc(STAGE_NAME[v.stage] || v.stage) + '</span>' + (v.urgency === 'high' ? '<span class="ml-badge bad">Urgent</span>' : '') : '') +
+      '<span class="ml-brief-r">' + (busy ? '<span class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Reading…</span>' : (b && b.at ? '<span class="ml-dim">AI · ' + esc(timeAgoSafe(b.at)) + '</span>' : '')) +
+      (busy ? '' : ' <button class="ml-icon ml-brief-re" title="Read again" onclick="MetaLeads.brief(' + k + ')"><i class="fa-solid fa-rotate-right"></i><span class="ml-sr">Read again</span></button>') + '</span></div>';
+    if (!v) {
+      return '<div class="ml-brief empty">' + head + '<div class="ml-dim">' + (busy ? 'Reading the enquiries, the sheet’s notes' + (p.crm ? ', and the CRM notes and chat' : '') + '…' : (b && b.err ? 'Could not read: ' + esc(b.err) : 'Not read yet.') + ' <button class="ml-link" onclick="MetaLeads.brief(' + k + ')">Read now</button>') + '</div></div>';
+    }
+    var n = nextOf(p) || {};
+    var nextLine = '';
+    if (n.state === 'lost') nextLine = '<div class="ml-next lost"><b>' + esc(n.text) + '</b>' + (v.evidence ? '<div>' + esc(v.evidence) + '</div>' : '') + '</div>';
+    else if (n.state === 'hold') nextLine = '<div class="ml-next hold"><b>' + esc(n.text) + '</b> — ' + esc(HOLD_NAME[v.holdReason] || 'paused by them') + (n.action ? '<div>' + esc(n.action) + '</div>' : '') + '</div>';
+    else if (n.action) nextLine = '<div class="ml-next ' + esc(n.state) + '"><span class="ml-next-w">' + esc(n.state === 'waiting' ? 'Waiting for them' : n.at ? n.text.replace('Overdue · ', 'Overdue — ') : 'Next') + '</span><b>' + esc(n.action) + '</b></div>';
+    var visit = v.visit && v.visit.status !== 'none' ? '<div class="ml-bk"><span class="ml-bk-l">Visit</span><div class="ml-bk-c">' + esc({ requested: 'Asked for', scheduled: 'Fixed', done: 'Done', cancelled: 'Cancelled' }[v.visit.status] || v.visit.status) + (v.visit.at ? ' · ' + esc(whenText(v.visit.at)) : '') + (v.visit.property ? ' · ' + esc(v.visit.property) : '') + '</div></div>' : '';
+    var src = b.src || {};
+    var from = [src.rows ? src.rows + ' enquir' + (src.rows > 1 ? 'ies' : 'y') : '', src.notes ? src.notes + ' sheet note' + (src.notes > 1 ? 's' : '') : 'no sheet notes',
+      src.crm ? 'CRM: ' + src.crmNotes + ' note' + (src.crmNotes === 1 ? '' : 's') + (src.chat ? ', ' + src.chat + ' chat messages' : '') : ''].filter(Boolean).join(' · ');
+    return '<div class="ml-brief">' + head +
+      (v.line ? '<div class="ml-brief-line">' + esc(v.line) + '</div>' : '') + nextLine + visit + wantChips(v.want) +
+      (v.evidence && n.state !== 'lost' ? '<div class="ml-evid">“' + esc(v.evidence) + '”</div>' : '') +
+      '<div class="ml-brief-f">Read from ' + esc(from) + '. The AI can be wrong — check the notes.' + (b.err ? ' <span class="ml-bad">Last refresh failed: ' + esc(b.err) + '</span>' : '') + '</div></div>';
+  }
+
   // The plan is redrawn from the rows already read whenever the CRM's leads change underneath.
   function replan() {
     if (!S.read || !MM()) { S.plan = null; return; }
@@ -146,7 +288,7 @@
     var last = S.read ? 'Read ' + timeAgoSafe(S.read.at) : (S.cfg && S.cfg.lastRead ? 'Last read ' + timeAgoSafe(S.cfg.lastRead.at) : 'Not read yet');
     return '<div class="ml-head"><div class="ml-head-l"><h2 class="ml-title"><i class="fa-brands fa-meta"></i> Meta Ads Leads</h2>' +
       '<div class="ml-sub">From the Google Sheets your Meta ads fill</div></div>' +
-      '<div class="ml-head-r"><span class="ml-last">' + esc(last) + '</span>' +
+      '<div class="ml-head-r">' + (S.bTotal && S.bDone < S.bTotal ? '<span class="ml-last"><i class="fa-solid fa-wand-magic-sparkles"></i> AI reading leads ' + S.bDone + ' / ' + S.bTotal + '</span>' : '') + '<span class="ml-last">' + esc(last) + '</span>' +
       '<button class="ml-btn ml-read' + (S.read ? '' : ' primary') + '" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</button></div></div>' +
       '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> <span>Edits here are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet.</span></div>' +
       '<div class="ml-tabs">' + tabs + '</div>' +
@@ -171,8 +313,8 @@
   }
 
   // ─── Leads ─────────────────────────────────────────────────────────────
-  var FILTERS = [['all', 'All'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
-  var SORTS = [['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z']];
+  var FILTERS = [['all', 'All'], ['due', 'Follow-up due'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
+  var SORTS = [['next', 'What to do next'], ['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z']];
   var DAY_MS = 86400000;
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
   var SLA_MS = 24 * 3600000;
@@ -182,7 +324,7 @@
   function agentDefault() {
     if (S.agentDefaulted || S.fRestored || !S.plan || !S.cfg || S.cfg.manager) return;
     S.agentDefaulted = true;
-    if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; S.f.sort = 'untouched'; }
+    if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; S.f.sort = 'next'; }
   }
   function me() { return (typeof currentUserEmail !== 'undefined' && currentUserEmail) ? String(currentUserEmail).toLowerCase() : ''; }
   function peopleFor(code) {
@@ -199,6 +341,7 @@
     if (f === 'multi' && !p.multiProperty) return false;
     if (f === 'priority' && !MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop)) return false;
     if (f === 'uncontacted' && p.team.contacted) return false;
+    if (f === 'due' && !isDue(p)) return false;
     if (f === 'problems' && !p.issues.length) return false;
     if (F.agent === '_mine' && p.team.agent !== me()) return false;
     if (F.agent === '_none' && p.team.assignedRaw) return false;
@@ -212,13 +355,27 @@
     if (F.days && !rows.some(function (e) { return e.at && e.at > Date.now() - Number(F.days) * DAY_MS; })) return false;
     var q = S.q.trim().toLowerCase();
     if (q) {
-      var hay = [p.name, p.phone, p.email, p.team.assignedRaw, p.crm && p.crm.name].concat(p.team.notes.map(function (n) { return n.text; })).join(' ').toLowerCase();
+      var bv = S.briefs[p.key] && S.briefs[p.key].v;
+      var hay = [p.name, p.phone, p.email, p.team.assignedRaw, p.crm && p.crm.name, bv && bv.line, bv && bv.next && bv.next.action].concat(p.team.notes.map(function (n) { return n.text; })).join(' ').toLowerCase();
       if (hay.indexOf(q) < 0 && String(p.phoneKey).indexOf(q.replace(/\D/g, '') || '§') < 0) return false;
     }
     return true;
   }
   function sorted(list) {
     var by = S.f.sort, out = list.slice();
+    if (by === 'next') {
+      // Due today or overdue (earliest first) → never contacted (longest waiting) → due later →
+      // ours to do → waiting for them → on hold → lost.
+      var rank = function (p) {
+        var n = nextOf(p);
+        if (n && (n.state === 'overdue' || n.state === 'today')) return [0, n.at];
+        if (!p.team.contacted) return [1, firstAtFor(p) || 0];
+        if (!n) return [3, -lastAtFor(p)];
+        return [{ later: 2, todo: 3, waiting: 4, none: 4, hold: 5, lost: 6 }[n.state], n.at || -lastAtFor(p)];
+      };
+      out.sort(function (a, b) { var x = rank(a), y = rank(b); return x[0] - y[0] || x[1] - y[1]; });
+      return out;
+    }
     if (by === 'old') out.sort(function (a, b) { return lastAtFor(a) - lastAtFor(b); });
     else if (by === 'untouched') out.sort(function (a, b) { return (a.team.contacted ? 1 : 0) - (b.team.contacted ? 1 : 0) || firstAtFor(a) - firstAtFor(b); });
     else if (by === 'hot') out.sort(function (a, b) { return (b.team.rating || 0) - (a.team.rating || 0) || lastAtFor(b) - lastAtFor(a); });
@@ -245,7 +402,7 @@
         t(ppl.length, (S.f.agent === '_mine' ? 'Assigned to me' : 'Not assigned') + ' (' + enq + ' enquiries)', '', "MetaLeads.filter('all')") +
         t(lateN, 'Not contacted for over a day', lateN ? 'bad' : '', "MetaLeads.lateFirst()") +
         t(notYet, 'Not contacted yet', notYet ? 'warn' : '', "MetaLeads.filter('uncontacted')") +
-        t(ppl.length - notYet, 'Contacted', '', '') +
+        t(ppl.filter(isDue).length, 'Follow-ups due today', ppl.filter(isDue).length ? 'warn' : '', "MetaLeads.filter('due')") +
         t(ppl.filter(function (x) { return x.team.rating >= 4; }).length, 'Rated 4–5', '', "MetaLeads.setF('rating','4+')") +
         t(pri, 'Revisited — priority', pri ? 'warn' : '', "MetaLeads.filter('priority')") +
         t(ppl.filter(function (x) { return x.crm; }).length, 'Already in the CRM', '', "MetaLeads.filter('crm')") +
@@ -253,7 +410,7 @@
     }
     return '<div class="ml-tiles">' +
       t(a.people, 'People (' + a.enquiries + ' enquiries)', '', "MetaLeads.filter('all')") +
-      t(mine, 'Assigned to me', '', "MetaLeads.setF('agent','_mine')") +
+      t(peopleFor(S.prop).filter(isDue).length, 'Follow-ups due today', peopleFor(S.prop).filter(isDue).length ? 'warn' : '', "MetaLeads.filter('due')") +
       t(a.people - a.assigned, 'Not assigned', a.people - a.assigned ? 'warn' : '', "MetaLeads.setF('agent','_none')") +
       t(late, 'Not contacted for over a day', late ? 'bad' : '', "MetaLeads.lateFirst()") +
       t(a.ratings[5] + a.ratings[4], 'Rated 4–5', '', "MetaLeads.setF('rating','4+')") +
@@ -478,7 +635,7 @@
     var dups = p.dupCodes.filter(function (c) { return S.prop === 'all' || c === S.prop; }).map(function (c) { return '<span class="ml-badge warn" title="More than one row for ' + esc(c) + '">Duplicate ×' + p.enquiries.filter(function (e) { return e.propertyCode === c; }).length + (S.prop === 'all' ? ' ' + esc(c) : '') + '</span>'; }).join(' ');
     var codes = S.prop === 'all' || p.properties.length > 1 ? p.properties.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '';
     var ad = rows.length ? rows[rows.length - 1].ad : '';
-    var status = waitingFlag(p) + ' ' + actionBadge(p);
+    var status = dueChip(p) + ' ' + waitingFlag(p) + ' ' + actionBadge(p);
     return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + '">' +
       '<div class="ml-prow-w">' +
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
@@ -616,7 +773,7 @@
       }
     } catch (e) { errs.push(e.message); }
     S.writing = false;
-    replan(); render();
+    replan(); render(); queueBriefs();
     if (errs.length) toast(errs.length > 1 ? errs[0] + ' (and ' + (errs.length - 1) + ' more)' : errs[0]);
     else if (conflicts.length) {
       toast(conflicts.length + ' change' + (conflicts.length > 1 ? 's were' : ' was') + ' not written — someone changed the sheet. It has been read again: check and save again.');
@@ -649,7 +806,7 @@
     var rows = p.enquiries, crm = p.crm, w = workRow(p);
     var canPick = rows.filter(function (e) { return e.metaId; }).length > 1;
     return '<div class="ml-detail">' +
-      '<div class="ml-col ml-col-work">' + workHtml(p) +
+      '<div class="ml-col ml-col-work">' + briefHtml(p) + workHtml(p) +
         '<div class="ml-h">In the CRM</div>' +
         '<div class="ml-would">' + wouldDo(p) + '</div>' +
         (crm ? '<div class="ml-crm">' +
@@ -980,11 +1137,12 @@
       }, 180);
     },
     more: function () { S.shown += PAGE; render(); },
-    toggle: function (k, force) { S.open = force ? k : (S.open === k ? null : k); if (force) { S.filter = 'all'; S.q = ''; var p = S.plan && S.plan.people.find(function (x) { return x.key === k; }); if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all'; var i = S.plan ? S.plan.people.filter(function (x) { return S.prop === 'all' || x.properties.indexOf(S.prop) >= 0; }).findIndex(function (x) { return x.key === k; }) : -1; if (i >= S.shown) S.shown = i + 1; } render(); if (force) setTimeout(function () { var o = document.querySelector('#metaLeadsView .ml-person.open'); if (o) o.scrollIntoView({ block: 'start' }); }, 30); },
+    toggle: function (k, force) { S.open = force ? k : (S.open === k ? null : k); if (S.open && S.plan) { var op = S.plan.people.find(function (x) { return x.key === S.open; }); if (op && briefStale(op, S.briefs[op.key])) queueBriefs(op.key); } if (force) { S.filter = 'all'; S.q = ''; var p = S.plan && S.plan.people.find(function (x) { return x.key === k; }); if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all'; var i = S.plan ? S.plan.people.filter(function (x) { return S.prop === 'all' || x.properties.indexOf(S.prop) >= 0; }).findIndex(function (x) { return x.key === k; }) : -1; if (i >= S.shown) S.shown = i + 1; } render(); if (force) setTimeout(function () { var o = document.querySelector('#metaLeadsView .ml-person.open'); if (o) o.scrollIntoView({ block: 'start' }); }, 30); },
     openLead: function (id) { if (typeof openDetail === 'function') openDetail(id); },
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
+    brief: function (key) { if (S.brun[key]) return; S.bq = S.bq.filter(function (k) { return k !== key; }); S.bq.unshift(key); S.bTotal = S.bDone + S.bq.length + Object.keys(S.brun).length; pumpBriefs(key); render(); },
     fOpen: function () { S.fOpen = !S.fOpen; render(); },
     layout: function (l) { S.layout = l; S.shown = PAGE; saveF(); render(); },
     tsort: function (k) { S.tsort = S.tsort.key === k ? { key: k, dir: -S.tsort.dir } : { key: k, dir: k === 'at' || k === 'rating' ? -1 : 1 }; saveF(); render(); },
@@ -1086,12 +1244,13 @@
     csv: function () {
       var list = currentList();
       var q = function (v) { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-      var head = ['Name', 'Phone', 'Email', 'Properties', 'First enquiry', 'Last enquiry', 'Enquiries', 'Ads', 'Assigned to', 'Rating', 'Latest note', 'Contacted', 'In the CRM (stage)'];
+      var head = ['Name', 'Phone', 'Email', 'Properties', 'First enquiry', 'Last enquiry', 'Enquiries', 'Ads', 'Assigned to', 'Rating', 'Latest note', 'Contacted', 'In the CRM (stage)', 'AI: stage', 'AI: next step', 'AI: due'];
       var lines = [head.join(',')].concat(list.map(function (p) {
         var rows = rowsFor(p, S.prop);
         return [p.name, p.phoneOk ? p.phoneKey.slice(2) : (p.phone || ''), p.email, p.properties.join(' '), MM().fmtWhen(firstAtFor(p)), MM().fmtWhen(lastAtFor(p)), rows.length,
           Array.from(new Set(rows.map(function (e) { return e.ad; }))).join(' / '), p.team.agent ? agentLabel(p.team.agent) : p.team.assignedRaw,
-          p.team.rating ? String(p.team.rating) : '', p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '', p.team.contacted ? 'yes' : 'no', p.crm ? p.crm.stage : ''].map(q).join(',');
+          p.team.rating ? String(p.team.rating) : '', p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '', p.team.contacted ? 'yes' : 'no', p.crm ? p.crm.stage : '',
+          (S.briefs[p.key] && S.briefs[p.key].v) ? (STAGE_NAME[S.briefs[p.key].v.stage] || S.briefs[p.key].v.stage) : '', (nextOf(p) || {}).action || '', (nextOf(p) || {}).text || ''].map(q).join(',');
       }));
       var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
       var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'meta-ads-leads-' + (S.prop === 'all' ? 'all' : S.prop) + '.csv';
@@ -1126,7 +1285,7 @@
         var keep = S.read ? (S.read.tabs || []).filter(function (t) { return t.sourceId !== id; }) : [];
         var errs = S.read ? (S.read.errors || []).filter(function (e) { return e.sourceId !== id; }) : [];
         S.read = { ok: true, at: d.at, tabs: keep.concat(d.tabs || []), errors: errs.concat(d.errors || []) };
-        replan();
+        replan(); queueBriefs();
         toast(d.errors && d.errors.length ? d.errors[0].error : 'Read — ' + (d.tabs || []).reduce(function (n, t) { return n + Math.max((t.values || []).length - 1, 0); }, 0) + ' rows. Nothing was added to the CRM.');
         loadConfig(true);
       }).catch(function (e) { toast(e.message); }).then(function () {
