@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {},
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -177,8 +177,8 @@
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
   var SLA_MS = 24 * 3600000;
   var FKEY = 'ml.filters';
-  function saveF() { try { localStorage.setItem(FKEY, JSON.stringify({ f: S.f, by: me() })); } catch (e) { /* no storage */ } }
-  (function loadF() { try { var x = JSON.parse(localStorage.getItem(FKEY) || 'null'); if (x && x.f) { S.f = Object.assign(S.f, x.f); S.fRestored = true; } } catch (e) { /* none */ } })();
+  function saveF() { try { localStorage.setItem(FKEY, JSON.stringify({ f: S.f, by: me(), layout: S.layout, tsort: S.tsort })); } catch (e) { /* no storage */ } }
+  (function loadF() { try { var x = JSON.parse(localStorage.getItem(FKEY) || 'null'); if (x && x.f) { S.f = Object.assign(S.f, x.f); S.fRestored = true; } if (x && x.layout) S.layout = x.layout; if (x && x.tsort) S.tsort = x.tsort; } catch (e) { /* none */ } })();
   function agentDefault() {
     if (S.agentDefaulted || S.fRestored || !S.plan || !S.cfg || S.cfg.manager) return;
     S.agentDefaulted = true;
@@ -278,18 +278,113 @@
       (S.writing ? '<span class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Writing to the sheet…</span>' : '<span class="ml-dim">Written to each lead’s row in its sheet' + (S.prop === 'all' ? '' : ' (' + esc(S.prop) + ' rows)') + '.</span>') +
     '</div>';
   }
+  // ─── The table: the sheet's own columns, sortable and filterable ──────────
+  function textsOf(p, role) {
+    var out = [];
+    rowsFor(p, S.prop).forEach(function (e) {
+      [e.team].concat((e.alsoIn || []).map(function (a) { return a.team; })).forEach(function (t) {
+        var list = role === 'remarks' ? t.remarks.concat(t.notes) : t.followups;
+        list.forEach(function (n) { if (out.indexOf(n.text) < 0) out.push(n.text); });
+      });
+    });
+    return out;
+  }
+  var TCOLS = [
+    { key: 'name', label: 'Name', get: function (p) { return p.name || ''; } },
+    { key: 'phone', label: 'Phone', get: function (p) { return p.phone ? MM().displayPhone(p.phone) : ''; } },
+    { key: 'prop', label: 'Property', get: function (p) { return p.properties.join(' '); } },
+    { key: 'at', label: 'Enquired', get: function (p) { return MM().fmtWhen(lastAtFor(p)); }, sort: function (p) { return lastAtFor(p); }, nofilter: true },
+    { key: 'ad', label: 'Ad', get: function (p) { return Array.from(new Set(rowsFor(p, S.prop).map(function (e) { return e.ad; }).filter(Boolean))).join(', '); } },
+    { key: 'agent', label: 'Assigned to', get: function (p) { return p.team.agent ? agentLabel(p.team.agent) : (p.team.assignedRaw || ''); }, pick: true },
+    { key: 'rating', label: 'Rating', get: function (p) { return p.team.rating ? MM().RATING_LABEL[p.team.rating] : ''; }, sort: function (p) { return p.team.rating || 0; }, pick: ['Hot', 'Warm', 'Cold', '—'] },
+    { key: 'remarks', label: 'Remarks (in the sheet)', get: function (p) { return textsOf(p, 'remarks').join(' · '); }, wide: true },
+    { key: 'fu', label: 'Follow-ups', get: function (p) { return textsOf(p, 'followups').join(' · '); }, wide: true },
+    { key: 'done', label: 'Contacted', get: function (p) { return p.team.contacted ? 'Yes' : 'Not yet'; }, pick: ['Yes', 'Not yet'] },
+    { key: 'crm', label: 'CRM', get: function (p) { return p.crm ? (p.crm.stage || 'In CRM') : ''; } }
+  ];
+  function tableRows(list) {
+    var tf = S.tf;
+    var out = list.filter(function (p) {
+      return TCOLS.every(function (c) {
+        var want = String(tf[c.key] || '').trim().toLowerCase();
+        if (!want) return true;
+        var v = String(c.get(p) || '').toLowerCase();
+        if (want === '—') return !v;
+        return c.pick ? v === want : v.indexOf(want) >= 0;
+      });
+    });
+    var col = TCOLS.find(function (c) { return c.key === S.tsort.key; });
+    if (col) {
+      var val = col.sort || function (p) { return String(col.get(p) || '').toLowerCase(); };
+      out.sort(function (a, b) {
+        var x = val(a), y = val(b);
+        // Blanks always last, whichever way.
+        var ex = x === '' || x === 0, ey = y === '' || y === 0;
+        if (ex !== ey) return ex ? 1 : -1;
+        return (x > y ? 1 : x < y ? -1 : 0) * S.tsort.dir;
+      });
+    }
+    return out;
+  }
+  function tableHtml(list) {
+    var rows = tableRows(list);
+    var head = '<tr><th class="ml-tsel"></th>' + TCOLS.map(function (c) {
+      var on = S.tsort.key === c.key;
+      return '<th class="' + (c.wide ? 'wide' : '') + '"><button class="ml-th' + (on ? ' on' : '') + '" onclick="MetaLeads.tsort(' + js(c.key) + ')">' + esc(c.label) + (on ? (S.tsort.dir > 0 ? ' ▲' : ' ▼') : '') + '</button></th>';
+    }).join('') + '</tr>';
+    var agents = Array.from(new Set(list.map(function (p) { return TCOLS[5].get(p); }).filter(Boolean))).sort();
+    var filt = '<tr class="ml-tfilt"><th></th>' + TCOLS.map(function (c) {
+      if (c.nofilter) return '<th></th>';
+      var v = S.tf[c.key] || '';
+      if (c.pick) {
+        var opts = (c.pick === true ? agents.concat(['—']) : c.pick);
+        return '<th><select onchange="MetaLeads.tf(' + js(c.key) + ',this.value)"><option value="">All</option>' + opts.map(function (o) { return '<option' + (v === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select></th>';
+      }
+      return '<th><input type="search" placeholder="Filter" value="' + esc(v) + '" oninput="MetaLeads.tfType(' + js(c.key) + ',this.value)"></th>';
+    }).join('') + '</tr>';
+    var body = rows.slice(0, S.shown).map(function (p) {
+      var open = S.open === p.key;
+      return '<tr class="ml-tr' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + (p.team.contacted ? '' : ' fresh') + '">' +
+        '<td class="ml-tsel"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></td>' +
+        TCOLS.map(function (c) {
+          var v = c.get(p);
+          var cell = c.key === 'rating' && p.team.rating ? ratingChip(p.team.rating)
+            : c.key === 'name' ? '<b>' + esc(v || '(no name)') + '</b>' + (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop) ? ' <span class="ml-badge pri" title="Revisited — priority">⚡</span>' : '')
+            : c.key === 'done' && !p.team.contacted ? waitingFlag(p) || '<span class="ml-dim">Not yet</span>'
+            : esc(v || '—');
+          return '<td class="' + (c.wide ? 'wide' : '') + '" onclick="MetaLeads.toggle(' + js(p.key) + ')" title="' + esc(c.wide ? v : '') + '">' + (c.wide ? '<div class="ml-clamp">' + cell + '</div>' : cell) + '</td>';
+        }).join('') + '</tr>';
+    }).join('');
+    // The lead opened from the table: a side panel, the table still in view behind it.
+    var openP = S.open && rows.find(function (x) { return x.key === S.open; });
+    var drawer = openP ? '<div class="ml-drawer-bg" onclick="MetaLeads.toggle(' + js(openP.key) + ')"></div><aside class="ml-drawer" role="dialog" aria-label="' + esc(openP.name || 'Lead') + '">' +
+      '<div class="ml-drawer-h"><div><div class="ml-name">' + esc(openP.name || '(no name)') + '</div><div class="ml-dim">' + esc(openP.phone ? MM().displayPhone(openP.phone) : 'no phone') + ' · ' + esc(openP.properties.join(', ')) + '</div></div>' +
+      '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.toggle(' + js(openP.key) + ')">✕</button></div>' +
+      '<div class="ml-person open">' + detailHtml(openP) + '</div></aside>' : '';
+    return '<div class="ml-count">' + rows.length + ' of ' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') +
+        (Object.keys(S.tf).some(function (k) { return S.tf[k]; }) ? ' · <button class="ml-link" onclick="MetaLeads.tfClear()">Clear column filters</button>' : '') + '</div>' +
+      bulkBar(rows) +
+      '<div class="ml-tablewrap"><table class="ml-table"><thead>' + head + filt + '</thead><tbody>' + (body || '<tr><td colspan="' + (TCOLS.length + 1) + '" class="ml-dim" style="padding:18px;text-align:center">Nobody matches.</td></tr>') + '</tbody></table></div>' +
+      (rows.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (rows.length - S.shown) + ' left)</button>' : '') + drawer;
+  }
+  // Esc closes the side panel.
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && S.layout === 'table' && S.open && el() && el().style.display !== 'none' && document.querySelector('#metaLeadsView .ml-drawer')) { S.open = null; render(); }
+  });
   function leadsHtml() {
     if (!S.plan) return needRead();
     var a = MM().analyse(S.plan, S.prop === 'all' ? '' : S.prop);
     var list = currentList();
     var chips = FILTERS.map(function (f) { return '<button class="ml-chip sm' + (S.filter === f[0] ? ' on' : '') + '" onclick="MetaLeads.filter(' + js(f[0]) + ')">' + f[1] + '</button>'; }).join('');
     var rows = list.slice(0, S.shown).map(personHtml).join('');
+    var sw = '<div class="ml-layout"><button class="' + (S.layout !== 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'list\')"><i class="fa-solid fa-list"></i> List</button><button class="' + (S.layout === 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'table\')"><i class="fa-solid fa-table"></i> Table</button></div>';
     return propChips(true) + tiles(a, S.prop) +
       '<div class="ml-bar"><div class="ml-chips">' + chips + '</div><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)"></div>' +
-      toolbar() +
-      '<div class="ml-count">' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') + '</div>' +
-      (list.length ? bulkBar(list) + '<div class="ml-list">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') +
-      (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : '');
+      '<div class="ml-tools-w">' + sw + toolbar() + '</div>' +
+      (S.layout === 'table' ? tableHtml(list) :
+        '<div class="ml-count">' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') + '</div>' +
+        (list.length ? bulkBar(list) + '<div class="ml-list">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') +
+        (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : ''));
   }
   function actionBadge(p) {
     var b;
@@ -342,7 +437,10 @@
         '<div class="ml-dim">' + (p.dupCodes.filter(function (c) { return S.prop === 'all' || c === S.prop; }).map(function (c) { return '<span class="ml-badge warn" title="More than one row for ' + esc(c) + '">Duplicate ×' + p.enquiries.filter(function (e) { return e.propertyCode === c; }).length + (S.prop === 'all' ? ' ' + esc(c) : '') + '</span>'; }).join(' ') || esc(rows[0] && rows[0].ad || '')) +
         (S.prop === 'all' || p.properties.length > 1 ? ' ' + p.properties.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '') + '</div></div>' +
         '<div class="ml-team"><div>' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-dim">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
-        '<div class="ml-dim ml-note">' + (last ? esc(last) : waitingFlag(p) || '—') + '</div></div>' +
+        (function () { var rem = textsOf(p, 'remarks'), fu = textsOf(p, 'followups');
+          return (rem.length ? '<div class="ml-note" title="' + esc(rem.join(' · ')) + '"><span class="ml-tn-l">Remarks</span> ' + esc(rem.join(' · ')) + '</div>' : '') +
+            (fu.length ? '<div class="ml-note ml-dim" title="' + esc(fu.join(' · ')) + '"><span class="ml-tn-l">Follow-up</span> ' + esc(fu[fu.length - 1]) + (fu.length > 1 ? ' <span class="ml-dim">(+' + (fu.length - 1) + ')</span>' : '') + '</div>' : '') +
+            (!rem.length && !fu.length ? '<div class="ml-dim ml-note">' + (waitingFlag(p) || '—') + '</div>' : ''); })() + '</div>' +
         '<div class="ml-act">' + actionBadge(p) + (p.crm ? '<div class="ml-dim">' + esc(p.crm.stage || '') + (p.crm.agent ? ' · ' + esc(agentLabel(p.crm.agent)) : '') + '</div>' : '') +
         (p.issues.length ? '<div class="ml-issue"><i class="fa-solid fa-triangle-exclamation"></i> ' + esc(p.issues.join(' · ')) + '</div>' : '') + '</div>' +
       '</button>' +
@@ -807,6 +905,18 @@
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
+    layout: function (l) { S.layout = l; S.shown = PAGE; saveF(); render(); },
+    tsort: function (k) { S.tsort = S.tsort.key === k ? { key: k, dir: -S.tsort.dir } : { key: k, dir: k === 'at' || k === 'rating' ? -1 : 1 }; saveF(); render(); },
+    tf: function (k, v) { S.tf[k] = v; S.shown = PAGE; render(); },
+    tfType: function (k, v) {
+      S.tf[k] = v; S.shown = PAGE;
+      clearTimeout(S.tft); S.tft = setTimeout(function () {
+        render();
+        var box = document.querySelector('#metaLeadsView .ml-tfilt th:nth-child(' + (TCOLS.findIndex(function (c) { return c.key === k; }) + 2) + ') input');
+        if (box) { box.focus(); try { box.setSelectionRange(v.length, v.length); } catch (e) {} }
+      }, 220);
+    },
+    tfClear: function () { S.tf = {}; render(); },
     setF: function (k, v) { S.f[k] = v; S.shown = PAGE; saveF(); if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
     clearF: function () { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; S.filter = 'all'; S.q = ''; saveF(); render(); },
     lateFirst: function () { S.filter = 'uncontacted'; S.f.sort = 'untouched'; render(); },

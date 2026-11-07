@@ -387,6 +387,42 @@ try {
   ok('Written: Sheet1 had no Assigned to column — added (W), Thirumal in rows 2, 5, 6', s1[0][22] === 'Assigned to' && s1[1][22] === 'Thirumal' && s1[4][22] === 'Thirumal' && s1[5][22] === 'Thirumal' && !(s1[2][22] || s1[3][22]), JSON.stringify(s1.map(r => r[22])));
   ok('Written: Sheet3\'s own Assigned to column (T) for Saravana, row 5', s3[4][19] === 'Thirumal');
   ok('The screen follows at once: nobody left unassigned', /Nobody matches/.test(await text(page, '#metaLeadsView')) && /^0/.test((await page.locator('.ml-tile', { hasText: 'Not assigned' }).textContent()).trim()));
+  // ── The table: the sheet's remarks and rating as columns; sort and filter ──
+  await page.evaluate(() => MetaLeads.clearF());
+  await clickText(page, '.ml-layout button', 'Table');
+  await page.waitForTimeout(250);
+  const theads = await page.$$eval('.ml-table thead tr:first-child .ml-th', els => els.map(e => e.textContent.trim()));
+  ok('Table: Name, Phone, Property, Enquired, Ad, Assigned to, Rating, Remarks (in the sheet), Follow-ups, Contacted, CRM', JSON.stringify(theads) === JSON.stringify(['Name', 'Phone', 'Property', 'Enquired', 'Ad', 'Assigned to', 'Rating', 'Remarks (in the sheet)', 'Follow-ups', 'Contacted', 'CRM']), theads);
+  const cellOf = async (name, col) => page.evaluate(([n, c]) => { const r = [...document.querySelectorAll('.ml-table tr.ml-tr')].find(tr => tr.children[1].textContent.includes(n)); return r ? r.children[c + 1].textContent.trim() : null; }, [name, col]);
+  ok('The remarks already in the sheet are shown (Arjun: both sheets\' remarks)', /Sent exact location — gym, 2\.5 km from branch · Purpose: gym 50\/sqft/.test(await cellOf('Arjun', 7)), await cellOf('Arjun', 7));
+  ok('…and the follow-ups', /Visiting today 12PM \(16\/10\) · callback wednesday/.test(await cellOf('Arjun', 8)));
+  await clickText(page, '.ml-th', 'Rating');
+  const firstRating = await page.$eval('.ml-table tr.ml-tr', r => r.children[7].textContent.trim());
+  ok('Sort by Rating: Hot first', firstRating === 'Hot', firstRating);
+  await clickText(page, '.ml-th', 'Rating');
+  const ratings = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[7].textContent.trim()));
+  ok('Click again: the other way, unrated still last', ratings.indexOf('Warm') < ratings.indexOf('Hot') && ratings[ratings.length - 1] === '—', ratings);
+  await page.fill('.ml-tfilt th:nth-child(9) input', 'gym');
+  await page.waitForTimeout(450);
+  let tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
+  ok('Filter the Remarks column: "gym" → Arjun, Vijaya Rani', JSON.stringify(tnames) === JSON.stringify(['Arjun', 'Vijaya Rani']), tnames);
+  await page.evaluate(() => MetaLeads.tfClear());
+  await page.selectOption('.ml-tfilt th:nth-child(8) select', 'Warm');
+  await page.waitForTimeout(250);
+  tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
+  ok('Filter Rating: Warm', JSON.stringify(tnames) === JSON.stringify(['Parinita', 'Queen']), tnames);
+  await page.locator('.ml-table tr.ml-tr', { hasText: 'Queen' }).locator('td').nth(1).click();
+  await page.waitForTimeout(250);
+  ok('A row clicked: the lead opens in a side panel, work form first, nothing cut off', !!(await page.$('.ml-drawer .ml-work')) &&
+    await page.evaluate(() => { const d = document.querySelector('.ml-drawer'); return [...d.querySelectorAll('*')].every(e => !e.getBoundingClientRect().width || e.getBoundingClientRect().right <= d.getBoundingClientRect().right + 1); }));
+  await shot(page, '11b-table');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  ok('Esc closes the side panel', !(await page.$('.ml-drawer')));
+  await page.evaluate(() => MetaLeads.tfClear());
+  await clickText(page, '.ml-layout button', 'List');
+  await page.waitForTimeout(250);
+  ok('List view: the remarks from the sheet are on each row too', /Remarks Sent exact location/.test((await page.locator('.ml-person', { hasText: 'Arjun' }).first().locator('.ml-team').textContent()).replace(/\s+/g, ' ')));
   // The team report.
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
   await page.waitForTimeout(300);
