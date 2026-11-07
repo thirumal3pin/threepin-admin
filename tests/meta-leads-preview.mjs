@@ -440,12 +440,12 @@ try {
   await page.evaluate(() => MetaLeads.clearF());
   await page.waitForTimeout(200);
   await clickText(page, '.ml-prow', 'Lakshmi');
-  await page.fill('#mlwM', 'My new remark');
+  await page.fill('.ml-work textarea.ml-note-in[data-col="19"]', 'My new remark');
   await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
   await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
   ok('A cell changed in the sheet meanwhile: not overwritten', sheets.data.KDB.tabs[0].values[1][19] === 'Changed by someone in the sheet');
   await page.waitForFunction(() => !document.querySelector('.ml-sheet-act .fa-spin') && /Changed by someone/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 }).catch(() => {});
-  ok('…the sheet is read again at once: the form now shows their text', /Changed by someone in the sheet/.test(await page.$eval('#mlwM', e => e.value).catch(() => '')) || /Changed by someone in the sheet/.test(await text(page, '.ml-person.open')));
+  ok('…the sheet is read again at once: the form now shows their text', /Changed by someone in the sheet/.test(await page.$eval('.ml-work textarea.ml-note-in[data-col="19"]', e => e.value).catch(() => '')) || /Changed by someone in the sheet/.test(await text(page, '.ml-person.open')));
   await ctx.close();
 
   // ── 10. A team member who is not a manager — opening the /ads-setup page directly ──
@@ -487,12 +487,26 @@ try {
   await page.selectOption('.ml-work .ml-wgrid > select:first-of-type', { index: 2 });
   await page.waitForTimeout(200);
   ok('…the form says where it writes', /office space - Kodambakkam › Sheet1, row 4/.test(await text(page, '.ml-work .ml-h')));
+  const labels = await page.$$eval('.ml-work .ml-wgrid > label', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  ok('The row\'s notes are listed column by column — Remarks, Follow up 1, Follow up 2 (latest) — each editable',
+    labels.includes('Remarks') && labels.includes('Follow up 1') && labels.includes('Follow up 2 latest') && (await page.$$('.ml-work textarea.ml-note-in')).length === 3, labels);
+  ok('"Add a note" says where it goes: a new Follow up 3', /^Goes into Follow up 3 — a new column/.test(await text(page, '.ml-work .ml-goes')), await text(page, '.ml-work .ml-goes'));
   await page.fill('#mlwF', 'Visited again, wants 2 floors');
   await page.press('#mlwF', 'Enter');
   await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
   await page.waitForTimeout(300);
   const a1 = sheets.data.KDB.tabs[0].values;
   ok('Enter saved it: Sheet1 row 4, both follow-ups full → a new "Follow up 3" column', a1[0][23] === 'Follow up 3' && /^Visited again, wants 2 floors \(/.test(a1[3][23]), JSON.stringify([a1[0][23], a1[3][23]]));
+  const lab2 = await page.$$eval('.ml-work .ml-wgrid > label', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  ok('…now Follow up 3 is listed as the latest, and the next note would go to Follow up 4', lab2.includes('Follow up 3 latest') && /^Goes into Follow up 4/.test(await text(page, '.ml-work .ml-goes')), lab2);
+  await shot(page, '13b-notes');
+  // Edit the latest note in place: written in its own cell, no new column.
+  await page.fill('.ml-work textarea.ml-note-in[data-col="23"]', 'Visited again, wants 2 floors + parking');
+  await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  ok('Editing the latest note: rewritten in Follow up 3 (X4), nothing added', a1[3][23] === 'Visited again, wants 2 floors + parking' && !a1[0][24], JSON.stringify([a1[3][23], a1[0][24]]));
+  ok('…and the older notes untouched', a1[3][19] === 'Sent exact location — gym, 2.5 km from branch' && a1[3][20] === 'Visiting today 12PM (16/10)', JSON.stringify(a1[3].slice(19, 24)));
   // Edit a row cell by cell.
   await page.locator('.ml-person.open .ml-editrow').first().click();
   await page.waitForTimeout(200);

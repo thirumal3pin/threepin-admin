@@ -571,11 +571,22 @@ const DEFAULT_HEADER = { assigned: 'Assigned to', rating: 'Rating', remarks: 'Re
 export const MAX_COLS = 52;   // A…AZ, as far as a tab is read
 
 /**
+ * A row's notes in the order the team writes them: the (first) Remarks column, then every Follow-up
+ * column left to right. cols: classifyColumns' list. → [{ index, header, label, role }]
+ */
+export function noteChain(cols) {
+  const by = role => (cols || []).filter(c => c && c.role === role).sort((a, b) => a.index - b.index);
+  return by('remarks').slice(0, 1).concat(by('followup'));
+}
+
+/**
  * Which cells an edit writes, decided against the tab as it is NOW (values: its rows as read just
  * before writing). Never guesses a row: each edit names its lead by Meta's lead id, found again in
  * the id column (so a sorted or filtered sheet is still written in the right row).
  *   edits: [{ metaId, field: 'assigned'|'rating'|'remarks'|'followup'|'note'|'visit', col?, next?,
  *             value, from? }] or { field: 'header', header } to add a column
+ *   field 'log' → the next note: Remarks if empty, else the cell after the last note written
+ *   (Follow up 1, 2, …), or a new "Follow up N" column past the last.
  *   field 'followup' with next:true → the first EMPTY follow-up cell of that row, or a new
  *   "Follow up N" column. A missing Assigned to / Rating / Remarks column is added.
  *   from: what the person saw in the cell — if the sheet now says something else, the edit is
@@ -636,6 +647,19 @@ export function planSheetWrite({ values, overrides, edits }) {
       let n = f.length + 1;
       while (headers.some(x => x.trim().toLowerCase() === `follow up ${n}`)) n++;
       c = empty ? empty.index : addCol(`Follow up ${n}`);
+    } else if (e.field === 'log') {
+      // The next note in the row's chain — Remarks, then Follow up 1, 2, 3… — in the cell after the
+      // last one written, so the notes run on column by column. Past the last: a new "Follow up N".
+      const chain = noteChain(cols);
+      let last = -1;
+      chain.forEach((x, i) => { if (cell(ri, x.index)) last = i; });
+      if (last + 1 < chain.length) c = chain[last + 1].index;
+      else if (!byRole('remarks').length && last < 0) c = addCol('Remarks');
+      else {
+        let n = byRole('followup').length + 1;
+        while (headers.some(x => x.trim().toLowerCase() === `follow up ${n}`)) n++;
+        c = addCol(`Follow up ${n}`);
+      }
     } else if (e.field === 'note') {
       out.errors.push('Notes are written into a named column');
       continue;

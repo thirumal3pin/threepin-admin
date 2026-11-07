@@ -245,6 +245,20 @@ async function server(locked) {
   eq('Refused: a cell changed since it was read, and a lead no longer there', w.conflicts.map(c => [c.metaId, c.reason]), [['l:1001', 'Changed in the sheet since it was read'], ['l:9999', 'This lead is no longer in the sheet']]);
   // The sheet sorted differently: rows are found by id, not by position.
   const sorted = [V[0], ...V.slice(1).reverse()];
+  {
+    const H = ['id', 'created_time', 'full_name', 'Remarks', 'Follow up 1', 'Follow up 2'];
+    const L = rows => M.planSheetWrite({ values: [H].concat(rows), edits: [{ metaId: 'l:1', field: 'log', value: 'new' }] });
+    eq('Next note: Remarks empty → Remarks', L([['l:1', '', 'A', '', '', '']]).updates, [{ range: 'D2', value: 'new' }]);
+    eq('Next note: Remarks written → Follow up 1', L([['l:1', '', 'A', 'r', '', '']]).updates, [{ range: 'E2', value: 'new' }]);
+    eq('Next note: after the LAST written, not into a gap', L([['l:1', '', 'A', '', 'f1', '']]).updates, [{ range: 'F2', value: 'new' }]);
+    const full = L([['l:1', '', 'A', 'r', 'f1', 'f2']]);
+    eq('Next note: all full → a new "Follow up 3" column', [full.added, full.updates], [[{ col: 6, header: 'Follow up 3' }], [{ range: 'G1', value: 'Follow up 3' }, { range: 'G2', value: 'new' }]]);
+    const two = M.planSheetWrite({ values: [H, ['l:1', '', 'A', 'r', '', '']], edits: [{ metaId: 'l:1', field: 'log', value: 'x' }, { metaId: 'l:1', field: 'log', value: 'y' }] });
+    eq('Two notes in one save: one after the other', two.updates, [{ range: 'E2', value: 'x' }, { range: 'F2', value: 'y' }]);
+    const bare = M.planSheetWrite({ values: [['id', 'full_name'], ['l:1', 'A']], edits: [{ metaId: 'l:1', field: 'log', value: 'z' }] });
+    eq('Next note: no Remarks column yet → one is added', bare.added, [{ col: 2, header: 'Remarks' }]);
+    eq('The note chain: Remarks, then follow-ups left to right', M.noteChain(M.classifyColumns(H, [])).map(c => c.header), ['Remarks', 'Follow up 1', 'Follow up 2']);
+  }
   eq('A sorted sheet: still the right row', M.planSheetWrite({ values: sorted, edits: [{ metaId: 'l:1003', field: 'remarks', value: 'y' }] }).updates, [{ range: 'T4', value: 'y' }]);
   eq('Meta\'s own columns are never written', M.planSheetWrite({ values: V, edits: [{ metaId: 'l:1003', col: 14, value: '999' }] }).errors, ['Column O (phone_number) is Meta\'s own and is not written']);
   eq('A column added by name; a name already there refused', [M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'Budget (confirmed)' }] }).updates, M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'remarks' }] }).errors],

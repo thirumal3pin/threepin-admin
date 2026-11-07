@@ -471,6 +471,17 @@
   function planTab(sid, gid) { return S.plan && S.plan.tabs.find(function (t) { return t.spreadsheetId === sid && t.gid === gid; }); }
   function cellOf(e, col) { var t = readTab(e.where.spreadsheetId, e.where.gid); var r = t && t.values[e.row - 1]; return r && r[col] != null ? String(r[col]).trim() : ''; }
   function teamCols(e) { var pt = planTab(e.where.spreadsheetId, e.where.gid); return pt ? pt.cols.filter(function (c) { return MM().TEAM_ROLES.indexOf(c.role) >= 0; }) : []; }
+  // The row's notes in order (Remarks, Follow up 1, 2…) with what each holds now.
+  function notesOf(e) { return MM().noteChain(teamCols(e)).map(function (c) { return { index: c.index, header: c.header, label: c.header || ('Column ' + MM().colLetter(c.index)), value: cellOf(e, c.index) }; }); }
+  // Where "Add a note" writes: the cell after the last note written, or a new column.
+  function nextNoteLabel(e) {
+    var ch = notesOf(e), last = -1;
+    ch.forEach(function (x, i) { if (x.value) last = i; });
+    if (last + 1 < ch.length) return ch[last + 1].label;
+    if (!firstCol(e, 'remarks') && last < 0) return 'Remarks (a new column)';
+    var n = teamCols(e).filter(function (c) { return c.role === 'followup'; }).length + 1;
+    return 'Follow up ' + n + ' (a new column)';
+  }
   function firstCol(e, role) { return teamCols(e).find(function (c) { return c.role === role; }) || null; }
   function today() { var d = new Date(Date.now() + 5.5 * 3600000); return d.getUTCDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]; }
   function agentOptions(current) {
@@ -491,15 +502,24 @@
     var pickRow = rows.length > 1 ? '<label>Write to</label><select class="ml-f" onchange="MetaLeads.workRow(' + js(p.key) + ',this.value)">' + rows.slice().reverse().map(function (x) {
       return '<option value="' + esc(rowKey(x)) + '"' + (x === e ? ' selected' : '') + '>' + esc(x.propertyCode + ' · ' + String(x.where.sheetTitle).trim() + ' › ' + x.where.tab + ' · ' + MM().fmtWhen(x.at).split(',')[0]) + '</option>';
     }).join('') + '</select>' : '';
-    var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating'), mCol = firstCol(e, 'remarks');
-    var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '', mNow = mCol ? cellOf(e, mCol.index) : '';
-    var k = js(p.key), rated = MM().parseRating(rNow);
+    var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating');
+    var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '';
+    var k = js(p.key), rated = MM().parseRating(rNow), rk = rowKey(e);
+    var notes = notesOf(e).filter(function (x) { return x.value; });
+    var lastNote = notes.length ? notes[notes.length - 1].index : -1;
+    // Every note already in the row, column by column, each editable in place.
+    var notesHtml = notes.map(function (x) {
+      var dk = rk + ':c' + x.index, v = S.drafts[dk] != null ? S.drafts[dk] : x.value;
+      return '<label>' + esc(x.label) + (x.index === lastNote ? ' <span class="ml-latest">latest</span>' : '') + '</label>' +
+        '<textarea class="ml-in ml-note-in" rows="' + Math.min(4, Math.max(1, Math.ceil(v.length / 60))) + '" data-col="' + x.index + '" data-header="' + esc(x.header || '') + '" data-from="' + esc(x.value) + '" oninput="MetaLeads.draft(' + js(rk) + ',\'c' + x.index + '\',this.value)">' + esc(v) + '</textarea>';
+    }).join('');
     return '<div class="ml-work"><div class="ml-h">Work this lead <span class="ml-dim">— written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
       '<div class="ml-wgrid">' + pickRow +
         '<label>Assigned to</label><select class="ml-f" id="mlwA">' + agentOptions(aNow) + '</select>' +
         '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
-        '<label>' + esc(mCol ? mCol.label : 'Remarks') + '</label><textarea class="ml-in" id="mlwM" rows="2" placeholder="What did they say?" oninput="MetaLeads.draft(' + k + ',\'M\',this.value)">' + esc(S.drafts[p.key + ':M'] != null ? S.drafts[p.key + ':M'] : mNow) + '</textarea>' +
-        '<label>Add a follow-up</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="e.g. Busy, call back at 6 pm — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
+        (notes.length ? '<div class="ml-wsub">Notes in the sheet <span class="ml-dim">— edit any of them</span></div>' + notesHtml : '') +
+        '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
+          '<div class="ml-goes">Goes into <b>' + esc(nextNoteLabel(e).replace(' (a new column)', '')) + '</b>' + (/a new column/.test(nextNoteLabel(e)) ? ' — a new column, added to the sheet' : '') + '</div>' +
           '<div class="ml-qchips">' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
           '<label class="ml-dim"><input type="checkbox" id="mlwD" ' + (S.stamp ? 'checked' : '') + ' onchange="MetaLeads.stamp(this.checked)"> add today’s date (' + esc(today()) + ')</label></div>' +
       '</div>' +
@@ -949,19 +969,25 @@
     saveWork: function (key) {
       var p = S.plan.people.find(function (x) { return x.key === key; });
       var e = workRow(p);
-      var A = document.getElementById('mlwA').value, R = document.getElementById('mlwR').value, M = document.getElementById('mlwM').value.trim(), F = document.getElementById('mlwF').value.trim();
-      var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating'), mCol = firstCol(e, 'remarks');
-      var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '', mNow = mCol ? cellOf(e, mCol.index) : '';
-      var groups = {};
+      var A = document.getElementById('mlwA').value, R = document.getElementById('mlwR').value, F = document.getElementById('mlwF').value.trim();
+      var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating');
+      var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '';
+      var groups = {}, rk = rowKey(e), noteKeys = [];
       if (A !== '_keep') { var name = A ? agentLabel(A) : ''; if (name !== aNow && !(A && MM().matchAgent(aNow, roster()) === A)) addEdit(groups, e, { field: 'assigned', value: name, from: aNow }); }
       if (R && MM().parseRating(rNow) !== Number(R)) addEdit(groups, e, { field: 'rating', value: R, from: rNow });
-      if (M !== mNow) addEdit(groups, e, mCol ? { col: mCol.index, header: mCol.header, value: M, from: mNow } : { field: 'remarks', value: M, from: '' });
-      if (F) addEdit(groups, e, { field: 'followup', next: true, value: S.stamp ? F + ' (' + today() + ')' : F });
+      // Notes edited in place: each in its own column, refused if the sheet changed it meanwhile.
+      document.querySelectorAll('#metaLeadsView .ml-work textarea.ml-note-in').forEach(function (t) {
+        var from = t.getAttribute('data-from'), v = t.value.trim();
+        noteKeys.push(rk + ':c' + t.getAttribute('data-col'));
+        if (v !== from) addEdit(groups, e, { col: Number(t.getAttribute('data-col')), header: t.getAttribute('data-header') || '', value: v, from: from });
+      });
+      // A new note: Remarks if empty, else the next follow-up column after the last note.
+      if (F) addEdit(groups, e, { field: 'log', value: S.stamp ? F + ' (' + today() + ')' : F });
       if (!Object.keys(groups).length) { toast('Nothing changed'); return; }
       writeEdits(groups).then(function (r) {
         // Saved: the drafts go. Refused: the remark shows the sheet's new text (to be merged by the
         // person), the typed follow-up stays to be saved again.
-        if (!r.errors.length) { delete S.drafts[key + ':M']; if (!r.conflicts.length) delete S.drafts[key + ':F']; }
+        if (!r.errors.length) { noteKeys.forEach(function (d) { delete S.drafts[d]; }); if (!r.conflicts.length) delete S.drafts[key + ':F']; }
         render();
       });
     },
