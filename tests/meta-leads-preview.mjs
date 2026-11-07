@@ -147,8 +147,8 @@ const clickText = async (page, sel, t) => { await page.locator(sel, { hasText: t
 const waitText = (page, sel, re, timeout = 8000) => page.waitForFunction(([s, r]) => { const e = document.querySelector(s); return e && new RegExp(r).test(e.textContent); }, [sel, re.source], { timeout });
 // The read button: "Read the sheets" before the first read, "Refresh" after; the screen also reads on its own.
 const readAll = async page => {
-  await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-btn.primary'); return b && !b.disabled; }, null, { timeout: 8000 });
-  await page.click('.ml-head .ml-btn.primary');
+  await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-read'); return b && !b.disabled; }, null, { timeout: 8000 });
+  await page.click('.ml-head .ml-read');
   await page.waitForTimeout(150);
   await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
 };
@@ -273,7 +273,9 @@ try {
   await clickText(page, '.ml-prow', 'Arjun');
   const det = await text(page, '.ml-person.open .ml-detail');
   ok('Arjun: every enquiry with date, time, sheet › tab, row, ad', /15 Oct 2026, 2:00 pm/.test(det) && /office space - Kodambakkam › Sheet1 · row 4/.test(det) && /20 Oct 2026, 2:56 pm/.test(det) && /5 days later/.test(det) && /Koyambedu - Leads › Sheet1/.test(det), det.slice(0, 300));
-  ok('Arjun: what the team wrote, and "Swami" read as swami@threepin.in', /Swami → swami@threepin\.in/.test(det) && /Visiting today 12PM/.test(det) && /Purpose: gym/.test(det));
+  ok('Arjun: each enquiry shows what its row says, and "Swami" read as swami@threepin.in', /Visiting today 12PM/.test(det) && /Purpose: gym/.test(det) &&
+    /Sheet3, row 2/.test(await text(page, '.ml-person.open .ml-work .ml-h')) && await page.$eval('.ml-person.open #mlwA', e => e.value) === 'swami@threepin.in');
+  ok('…and "Written in the sheet" is not repeated under the form', !/Written in the sheet/.test(det));
   ok('Arjun: not in the CRM — a sync would add him, marked Revisited and put first for the agent', /new lead for KDBMC001, SHR0001/.test(det) && /Revisited \(duplicate ad lead\)/.test(det));
   ok('Arjun\'s row says duplicate for KDBMC001', /Duplicate ×2/.test(await text(page, '.ml-person.open .ml-prow')));
   await shot(page, '5-person-arjun');
@@ -423,7 +425,8 @@ try {
   await page.evaluate(() => MetaLeads.tfClear());
   await clickText(page, '.ml-layout button', 'List');
   await page.waitForTimeout(250);
-  ok('List view: the remarks from the sheet are on each row too', /Remarks Sent exact location/.test((await page.locator('.ml-person', { hasText: 'Arjun' }).first().locator('.ml-team').textContent()).replace(/\s+/g, ' ')));
+  const arjunNote = (await page.locator('.ml-person', { hasText: 'Arjun' }).first().locator('.ml-team .ml-note').textContent()).replace(/\s+/g, ' ').trim();
+  ok('List view: each row shows its latest note with the column it is in', /^Remarks Purpose: gym 50\/sqft$/.test(arjunNote), arjunNote);
   // The team report.
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
   await page.waitForTimeout(300);
@@ -525,6 +528,12 @@ try {
   ok('/ads opens the Leads screen', /Meta Ads Leads/.test(await text(page, '#metaLeadsView')) && await page.evaluate(() => document.getElementById('metaLeadsView').style.display !== 'none'));
   await readAll(page);
   await page.waitForFunction(() => document.querySelectorAll('.ml-person').length > 0, null, { timeout: 8000 });
+  ok('Phone: the five filters fold behind "Filters"', !(await page.isVisible('.ml-tools .fsel')) && await page.isVisible('.ml-tools .ml-fbtn'));
+  await page.click('.ml-tools .ml-fbtn'); await page.waitForTimeout(150);
+  ok('…"Filters" opens them', (await page.$$eval('.ml-tools .fsel', els => els.filter(e => e.offsetParent).length)) === 5);
+  ok('Phone: the lists that scroll sideways do not widen the page', (await overflow(page)) <= 1, await overflow(page));
+  const nameW = await page.$eval('.ml-person .ml-name', e => e.getBoundingClientRect().width);
+  ok('Phone: a name keeps its width (not squeezed letter by letter)', nameW > 140, nameW);
   await clickText(page, '.ml-prow', 'Arjun');
   ok('Phone: no sideways scroll', (await overflow(page)) <= 1, await overflow(page));
   const cut = await page.evaluate(() => [...document.querySelectorAll('.ml-person.open *')].filter(e => e.getBoundingClientRect().width && e.getBoundingClientRect().right > innerWidth + 1).map(e => e.className || e.tagName).slice(0, 5));

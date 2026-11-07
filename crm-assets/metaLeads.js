@@ -144,11 +144,11 @@
       return '<button class="ml-tab' + (S.view === t[0] ? ' on' : '') + '" onclick="MetaLeads.go(' + js(t[0]) + ')"><i class="' + t[2] + '"></i> ' + t[1] + '</button>';
     }).join('');
     var last = S.read ? 'Read ' + timeAgoSafe(S.read.at) : (S.cfg && S.cfg.lastRead ? 'Last read ' + timeAgoSafe(S.cfg.lastRead.at) : 'Not read yet');
-    return '<div class="ml-head"><div><h2 class="ml-title"><i class="fa-brands fa-meta"></i> Meta Ads Leads</h2>' +
-      '<div class="ml-sub">Leads from the Google Sheets your Meta ads fill, matched to properties and the CRM</div></div>' +
+    return '<div class="ml-head"><div class="ml-head-l"><h2 class="ml-title"><i class="fa-brands fa-meta"></i> Meta Ads Leads</h2>' +
+      '<div class="ml-sub">From the Google Sheets your Meta ads fill</div></div>' +
       '<div class="ml-head-r"><span class="ml-last">' + esc(last) + '</span>' +
-      '<button class="ml-btn primary" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading the sheets…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</button></div></div>' +
-      '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> Changes you make here (assigned to, rating, remarks, follow-ups) are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet — the CRM column shows what a sync would do.</div>' +
+      '<button class="ml-btn ml-read' + (S.read ? '' : ' primary') + '" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</button></div></div>' +
+      '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> <span>Edits here are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet.</span></div>' +
       '<div class="ml-tabs">' + tabs + '</div>' +
       (S.readError ? '<div class="ml-alert bad">' + esc(S.readError) + '</div>' : '') +
       (S.read && S.read.errors && S.read.errors.length ? '<div class="ml-alert bad">' + S.read.errors.map(function (e) { return '<div><b>' + esc(e.title) + '</b> — ' + esc(e.error) + '</div>'; }).join('') + '</div>' : '');
@@ -244,7 +244,7 @@
       t(create, 'Would be new CRM leads', 'brand', "MetaLeads.filter('create')") + '</div>';
   }
   function selectHtml(key, value, options) {
-    return '<select class="ml-f" onchange="MetaLeads.setF(' + js(key) + ',this.value)">' + options.map(function (o) {
+    return '<select class="ml-f' + (key === 'sort' ? ' ml-sort' : ' fsel' + (value ? ' set' : '')) + '" aria-label="' + esc(key) + '" onchange="MetaLeads.setF(' + js(key) + ',this.value)">' + options.map(function (o) {
       return '<option value="' + esc(o[0]) + '"' + (String(value) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
     }).join('') + '</select>';
   }
@@ -254,16 +254,18 @@
     scope.forEach(function (p) { rowsFor(p, S.prop).forEach(function (e) { if (e.ad) ads[e.ad] = 1; tabs[e.where.spreadsheetId + ':' + e.where.gid] = String(e.where.sheetTitle).trim() + ' › ' + e.where.tab; }); });
     var agentOpts = [['', 'Every agent'], ['_mine', 'Assigned to me'], ['_none', 'Not assigned']].concat(roster().map(function (e) { return [e, agentLabel(e)]; }));
     var any = F.agent || F.rating || F.ad || F.tab || F.days || S.q || S.filter !== 'all';
-    return '<div class="ml-tools">' +
+    var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return F[k]; }).length;
+    return '<div class="ml-tools' + (S.fOpen ? ' open' : '') + '">' +
+      '<button class="ml-btn sm ml-fbtn" onclick="MetaLeads.fOpen()"><i class="fa-solid fa-sliders"></i> Filters' + (nSet ? ' <span class="ml-fn">' + nSet + '</span>' : '') + '</button>' +
       selectHtml('agent', F.agent, agentOpts) +
       selectHtml('rating', F.rating, [['', 'Any rating'], ['4+', 'Rated 4 and above'], ['5', 'Rating 5'], ['4', 'Rating 4'], ['3', 'Rating 3'], ['2', 'Rating 2'], ['1', 'Rating 1'], ['none', 'Not rated']]) +
       selectHtml('ad', F.ad, [['', 'Every ad']].concat(Object.keys(ads).sort().map(function (x) { return [x, x]; }))) +
       selectHtml('tab', F.tab, [['', 'Every sheet tab']].concat(Object.keys(tabs).map(function (k) { return [k, tabs[k]]; }))) +
       selectHtml('days', F.days, [['', 'Any date'], ['1', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days']]) +
       '<span class="ml-tools-sep"></span>' +
-      '<label class="ml-dim">Sort</label>' + selectHtml('sort', F.sort, SORTS) +
+      selectHtml('sort', F.sort, SORTS) +
       (any ? '<button class="ml-link" onclick="MetaLeads.clearF()">Clear filters</button>' : '') +
-      '<button class="ml-btn sm" onclick="MetaLeads.csv()" title="Download the people shown as a spreadsheet"><i class="fa-solid fa-download"></i> CSV</button>' +
+      '<button class="ml-btn sm" onclick="MetaLeads.csv()" title="Download the people shown as a spreadsheet"><i class="fa-solid fa-download"></i><span class="ml-hide-s"> CSV</span></button>' +
     '</div>';
   }
   function bulkBar(list) {
@@ -380,10 +382,9 @@
     var rows = list.slice(0, S.shown).map(personHtml).join('');
     var sw = '<div class="ml-layout"><button class="' + (S.layout !== 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'list\')"><i class="fa-solid fa-list"></i> List</button><button class="' + (S.layout === 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'table\')"><i class="fa-solid fa-table"></i> Table</button></div>';
     return propChips(true) + tiles(a, S.prop) +
-      '<div class="ml-bar"><div class="ml-chips">' + chips + '</div><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)"></div>' +
+      '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)"><div class="ml-chips ml-scroll">' + chips + '</div></div>' +
       '<div class="ml-tools-w">' + sw + toolbar() + '</div>' +
       (S.layout === 'table' ? tableHtml(list) :
-        '<div class="ml-count">' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') + '</div>' +
         (list.length ? bulkBar(list) + '<div class="ml-list">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') +
         (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : ''));
   }
@@ -422,37 +423,50 @@
     var ms = Date.now() - t;
     return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="Nothing written on this lead yet">Not contacted · ' + esc(gapText(ms)) + '</span>';
   }
+  // The latest note written for this person (the newest row that has one): its column and text.
+  function latestNote(p) {
+    var rows = rowsFor(p, S.prop).slice().sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+    var count = 0, last = null;
+    rows.forEach(function (e) { var l = e.team.remarks.concat(e.team.followups, e.team.notes); count += l.length; if (l.length) last = l[l.length - 1]; });
+    return last ? { label: last.label, text: last.text, count: count } : null;
+  }
+  // "7 Nov, 3:59 am" this year; the year only when it is another one.
+  function shortWhen(t) {
+    if (!t) return '—';
+    var s = MM().fmtWhen(t), y = String(new Date(Date.now() + 5.5 * 3600000).getUTCFullYear());
+    return s.replace(' ' + y + ',', ',');
+  }
   function personHtml(p) {
     var rows = rowsFor(p, S.prop);
     var open = S.open === p.key;
-    var last = p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '';
     var who = p.team.agent ? agentLabel(p.team.agent) : (p.team.assignedRaw ? p.team.assignedRaw + ' ?' : '');
-    var wa = waLink(p);
+    var wa = waLink(p), note = latestNote(p);
+    var dups = p.dupCodes.filter(function (c) { return S.prop === 'all' || c === S.prop; }).map(function (c) { return '<span class="ml-badge warn" title="More than one row for ' + esc(c) + '">Duplicate ×' + p.enquiries.filter(function (e) { return e.propertyCode === c; }).length + (S.prop === 'all' ? ' ' + esc(c) : '') + '</span>'; }).join(' ');
+    var codes = S.prop === 'all' || p.properties.length > 1 ? p.properties.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '';
+    var ad = rows.length ? rows[rows.length - 1].ad : '';
+    var status = waitingFlag(p) + ' ' + actionBadge(p);
     return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + '">' +
       '<div class="ml-prow-w">' +
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
-      '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')">' +
+      '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' +
         '<div class="ml-who"><div class="ml-name">' + esc(p.name || '(no name)') + (p.crm && p.crm.name && p.crm.name !== p.name ? ' <span class="ml-aka">CRM: ' + esc(p.crm.name) + '</span>' : '') + '</div>' +
         '<div class="ml-phone' + (p.phoneOk ? '' : ' bad') + '">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + '</div></div>' +
-        '<div class="ml-when"><div>' + esc(MM().fmtWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
-        '<div class="ml-dim">' + (p.dupCodes.filter(function (c) { return S.prop === 'all' || c === S.prop; }).map(function (c) { return '<span class="ml-badge warn" title="More than one row for ' + esc(c) + '">Duplicate ×' + p.enquiries.filter(function (e) { return e.propertyCode === c; }).length + (S.prop === 'all' ? ' ' + esc(c) : '') + '</span>'; }).join(' ') || esc(rows[0] && rows[0].ad || '')) +
-        (S.prop === 'all' || p.properties.length > 1 ? ' ' + p.properties.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '') + '</div></div>' +
-        '<div class="ml-team"><div>' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-dim">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
-        (function () { var rem = textsOf(p, 'remarks'), fu = textsOf(p, 'followups');
-          return (rem.length ? '<div class="ml-note" title="' + esc(rem.join(' · ')) + '"><span class="ml-tn-l">Remarks</span> ' + esc(rem.join(' · ')) + '</div>' : '') +
-            (fu.length ? '<div class="ml-note ml-dim" title="' + esc(fu.join(' · ')) + '"><span class="ml-tn-l">Follow-up</span> ' + esc(fu[fu.length - 1]) + (fu.length > 1 ? ' <span class="ml-dim">(+' + (fu.length - 1) + ')</span>' : '') + '</div>' : '') +
-            (!rem.length && !fu.length ? '<div class="ml-dim ml-note">' + (waitingFlag(p) || '—') + '</div>' : ''); })() + '</div>' +
-        '<div class="ml-act">' + actionBadge(p) + (p.crm ? '<div class="ml-dim">' + esc(p.crm.stage || '') + (p.crm.agent ? ' · ' + esc(agentLabel(p.crm.agent)) : '') + '</div>' : '') +
-        (p.issues.length ? '<div class="ml-issue"><i class="fa-solid fa-triangle-exclamation"></i> ' + esc(p.issues.join(' · ')) + '</div>' : '') + '</div>' +
+        '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
+        '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
+        '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
+          (note ? '<div class="ml-note" title="' + esc(note.label + ': ' + note.text) + '"><span class="ml-tn-l">' + esc(note.label) + '</span> ' + esc(note.text) + '</div>' : '<div class="ml-note ml-dim">No notes yet</div>') + '</div>' +
+        '<div class="ml-act">' + (status.trim() ? '<div class="ml-badges">' + status + '</div>' : '') +
+          (p.crm ? '<div class="ml-dim">CRM: ' + esc(p.crm.stage || '') + (p.crm.agent ? ' · ' + esc(agentLabel(p.crm.agent)) : '') + '</div>' : '') +
+          (p.issues.length ? '<div class="ml-issue"><i class="fa-solid fa-triangle-exclamation"></i> ' + esc(p.issues.join(' · ')) + '</div>' : '') + '</div>' +
       '</button>' +
-      '<div class="ml-quick">' + (p.phoneOk ? '<a class="ml-qb" href="tel:+' + esc(p.phoneKey) + '" title="Call"><i class="fa-solid fa-phone"></i></a>' : '') +
-        (wa ? '<a class="ml-qb wa" href="' + esc(wa) + '" target="_blank" rel="noopener" title="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>' : '') + '</div>' +
+      '<div class="ml-quick">' + (p.phoneOk ? '<a class="ml-qb" href="tel:+' + esc(p.phoneKey) + '" title="Call" aria-label="Call"><i class="fa-solid fa-phone"></i></a>' : '') +
+        (wa ? '<a class="ml-qb wa" href="' + esc(wa) + '" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>' : '') + '</div>' +
       '</div>' + (open ? detailHtml(p) : '') + '</div>';
   }
-  function enquiryLine(e, prev) {
+  function enquiryLine(e, prev, ctx) {
     var gap = prev && prev.at && e.at ? gapText(e.at - prev.at) : '';
     var link = e.where.spreadsheetId ? MM().sheetUrl(e.where.spreadsheetId, e.where.gid) : '';
-    return '<div class="ml-enq">' +
+    return '<div class="ml-enq' + (ctx && ctx.isWork ? ' work' : '') + '">' +
       '<div class="ml-enq-t"><b>' + esc(MM().fmtWhen(e.at)) + '</b>' + (gap ? ' <span class="ml-gap">' + esc(gap) + ' later</span>' : '') + '</div>' +
       '<div class="ml-enq-d">' + (link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ' · row ' + e.row + '</a>' : esc(e.where.tab)) +
       (e.where.tag ? ' <span class="ml-tag">' + esc(e.where.tag) + '</span>' : '') +
@@ -460,7 +474,9 @@
       (e.form ? ' · form “' + esc(e.form) + '”' : '') + '</div>' +
       (e.answers.length ? '<div class="ml-ans">' + e.answers.map(function (x) { return '<span>' + esc(x.label) + ' <b>' + esc(x.value) + '</b></span>'; }).join('') + '</div>' : '') +
       (e.alsoIn && e.alsoIn.length ? '<div class="ml-dim">Also copied in ' + e.alsoIn.map(function (a) { return esc(a.tab); }).join(', ') + '</div>' : '') +
-      (e.metaId ? '<button class="ml-link ml-editrow" onclick="MetaLeads.editRow(' + js(rowKey(e)) + ')">' + (S.edit === rowKey(e) ? 'Close' : 'Edit this row') + '</button>' : '') +
+      (ctx ? rowTeamHtml(e, ctx) : '') +
+      (e.metaId ? '<div class="ml-enq-btns"><button class="ml-link ml-editrow" onclick="MetaLeads.editRow(' + js(rowKey(e)) + ')">' + (S.edit === rowKey(e) ? 'Close' : 'Edit this row') + '</button>' +
+        (ctx && ctx.canPick && !ctx.isWork ? '<button class="ml-link" onclick="MetaLeads.workRow(' + js(ctx.key) + ',' + js(rowKey(e)) + ')">Work on this row</button>' : '') + '</div>' : '') +
       '</div>';
   }
 
@@ -513,11 +529,11 @@
       return '<label>' + esc(x.label) + (x.index === lastNote ? ' <span class="ml-latest">latest</span>' : '') + '</label>' +
         '<textarea class="ml-in ml-note-in" rows="' + Math.min(4, Math.max(1, Math.ceil(v.length / 60))) + '" data-col="' + x.index + '" data-header="' + esc(x.header || '') + '" data-from="' + esc(x.value) + '" oninput="MetaLeads.draft(' + js(rk) + ',\'c' + x.index + '\',this.value)">' + esc(v) + '</textarea>';
     }).join('');
-    return '<div class="ml-work"><div class="ml-h">Work this lead <span class="ml-dim">— written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
+    return '<div class="ml-work"><div class="ml-h"><b>Work this lead</b> <span class="ml-dim">Written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
       '<div class="ml-wgrid">' + pickRow +
         '<label>Assigned to</label><select class="ml-f" id="mlwA">' + agentOptions(aNow) + '</select>' +
         '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
-        (notes.length ? '<div class="ml-wsub">Notes in the sheet <span class="ml-dim">— edit any of them</span></div>' + notesHtml : '') +
+        (notes.length ? '<div class="ml-wsub">Notes <span class="ml-dim">— tap one to edit it</span></div>' + notesHtml : '') +
         '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
           '<div class="ml-goes">Goes into <b>' + esc(nextNoteLabel(e).replace(' (a new column)', '')) + '</b>' + (/a new column/.test(nextNoteLabel(e)) ? ' — a new column, added to the sheet' : '') + '</div>' +
           '<button type="button" class="ml-link ml-qtoggle" onclick="MetaLeads.quickOpen(this)">Quick phrases <i class="fa-solid fa-chevron-down"></i></button>' +
@@ -579,6 +595,16 @@
     var k = e.where.spreadsheetId + ':' + e.where.gid;
     (groups[k] = groups[k] || { sid: e.where.spreadsheetId, gid: e.where.gid, edits: [] }).edits.push(Object.assign({ metaId: e.metaId }, edit));
   }
+  // What one row says in the sheet (assigned, rating, notes) — the row in the form says so instead.
+  function rowTeamHtml(e, ctx) {
+    if (ctx.isWork) return '<div class="ml-enq-team"><span class="ml-inform"><i class="fa-solid fa-pen"></i> In the form — notes and rating are edited there</span></div>';
+    var t = e.team, notes = t.remarks.concat(t.followups, t.notes);
+    var hit = t.assigned ? MM().matchAgent(t.assigned, roster()) : null;
+    var who = t.assigned ? (hit ? agentLabel(hit) : t.assigned + ' ?') : '';
+    if (!who && !t.rating && !notes.length) return '<div class="ml-enq-team ml-dim">Nothing written in this row yet</div>';
+    return '<div class="ml-enq-team">' + (who || t.rating ? '<div>' + (who ? '<span class="ml-ewho" title="' + esc(hit ? 'Written “' + t.assigned + '” — ' + hit : 'Not on the team list') + '"><i class="fa-regular fa-user"></i> ' + esc(who) + '</span>' : '') + ' ' + ratingChip(t.rating) + '</div>' : '') +
+      notes.map(function (n) { return '<div class="ml-enq-n"><span class="ml-tn-l">' + esc(n.label) + '</span> ' + esc(n.text) + '</div>'; }).join('') + '</div>';
+  }
   function gapText(ms) {
     var h = ms / 3600000;
     if (h < 1) return Math.max(1, Math.round(ms / 60000)) + ' min';
@@ -586,16 +612,11 @@
     return Math.round(h / 24) + ' days';
   }
   function detailHtml(p) {
-    var rows = p.enquiries;
-    var crm = p.crm;
-    var notes = p.team.notes.map(function (n) { return '<div class="ml-tn"><span class="ml-tn-l">' + esc(n.label) + '</span> ' + esc(n.text) + ' <span class="ml-dim">— ' + esc(String(n.where).trim()) + '</span></div>'; }).join('');
+    var rows = p.enquiries, crm = p.crm, w = workRow(p);
+    var canPick = rows.filter(function (e) { return e.metaId; }).length > 1;
     return '<div class="ml-detail">' +
-      '<div class="ml-col"><div class="ml-h">Enquiries (' + rows.length + ')</div>' + rows.map(function (e, i) { return enquiryLine(e, rows[i - 1]) + rowEditHtml(e); }).join('') + '</div>' +
-      '<div class="ml-col">' + workHtml(p) + '<div class="ml-h">Written in the sheet</div>' +
-        '<div class="ml-kv"><span>Assigned to</span><b>' + esc(p.team.assignedRaw || '—') + (p.team.assignedRaw ? (p.team.agent ? ' <span class="ml-dim">→ ' + esc(p.team.agent) + '</span>' : ' <span class="ml-bad">not on the team list</span>') : '') + '</b></div>' +
-        '<div class="ml-kv"><span>Rating</span><b>' + (p.team.rating ? ratingChip(p.team.rating) + ' <span class="ml-dim">(' + esc(p.team.ratingRaw) + ')</span>' : esc(p.team.ratingRaw || '—')) + '</b></div>' +
-        (notes || '<div class="ml-dim">Nothing written yet.</div>') +
-        '<div class="ml-h" style="margin-top:14px">In the CRM</div>' +
+      '<div class="ml-col ml-col-work">' + workHtml(p) +
+        '<div class="ml-h">In the CRM</div>' +
         '<div class="ml-would">' + wouldDo(p) + '</div>' +
         (crm ? '<div class="ml-crm">' +
           '<div class="ml-kv"><span>Lead</span><b>' + esc(crm.name || '—') + '</b></div>' +
@@ -604,13 +625,16 @@
           '<div class="ml-kv"><span>Properties</span><b>' + (crm.propertyCodes.length ? crm.propertyCodes.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '—') + '</b></div>' +
           (crm.propertyInterest ? '<div class="ml-kv"><span>Looking for</span><b>' + esc(crm.propertyInterest) + '</b></div>' : '') +
           (crm.budget ? '<div class="ml-kv"><span>Budget</span><b>' + esc(crm.budget) + '</b></div>' : '') +
-          '<div class="ml-kv"><span>In the CRM since</span><b>' + esc(crm.createdAt ? MM().fmtWhen(crm.createdAt) : '—') + '</b></div>' +
+          '<div class="ml-kv"><span>Since</span><b>' + esc(crm.createdAt ? MM().fmtWhen(crm.createdAt) : '—') + '</b></div>' +
           (crm.followUpAt ? '<div class="ml-kv"><span>Follow-up</span><b>' + esc(MM().fmtWhen(crm.followUpAt)) + '</b></div>' : '') +
           (crm.lostReason ? '<div class="ml-kv"><span>Lost reason</span><b>' + esc(crm.lostReason) + '</b></div>' : '') +
-          (crm.summary ? '<div class="ml-sum"><i class="fa-solid fa-wand-magic-sparkles"></i> ' + esc(crm.summary) + '</div>' : '<div class="ml-dim">No AI summary yet.</div>') +
-          '<button class="ml-btn" onclick="MetaLeads.openLead(' + js(crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open in the CRM</button></div>'
+          (crm.summary ? '<div class="ml-sum"><i class="fa-solid fa-wand-magic-sparkles"></i> ' + esc(crm.summary) + '</div>' : '') +
+          '<button class="ml-btn sm" onclick="MetaLeads.openLead(' + js(crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open in the CRM</button></div>'
           : '<div class="ml-dim">Not a CRM lead yet.</div>') +
-      '</div></div>';
+      '</div>' +
+      '<div class="ml-col ml-col-hist"><div class="ml-h">Enquiries (' + rows.length + ')' + (canPick ? ' <span class="ml-dim">— each with what its row says</span>' : '') + '</div>' +
+        rows.map(function (e, i) { return enquiryLine(e, rows[i - 1], { key: p.key, isWork: e === w, canPick: canPick && !!e.metaId }) + rowEditHtml(e); }).join('') + '</div>' +
+    '</div>';
   }
 
   // ─── Duplicates ────────────────────────────────────────────────────────
@@ -927,6 +951,7 @@
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
+    fOpen: function () { S.fOpen = !S.fOpen; render(); },
     layout: function (l) { S.layout = l; S.shown = PAGE; saveF(); render(); },
     tsort: function (k) { S.tsort = S.tsort.key === k ? { key: k, dir: -S.tsort.dir } : { key: k, dir: k === 'at' || k === 'rating' ? -1 : 1 }; saveF(); render(); },
     tf: function (k, v) { S.tf[k] = v; S.shown = PAGE; render(); },
