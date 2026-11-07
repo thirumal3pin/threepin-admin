@@ -216,6 +216,15 @@ function parseQueuePropertyId(titleCell) {
   return String(titleCell || '').trim().split(/\s+/)[0] || '';
 }
 
+// The title half of the same cell ("KOY0003 - 4BHK Premium Apartment in
+// Koyambedu" -> "4BHK Premium Apartment in Koyambedu"), with whatever dash
+// or colon separates it from the ID. "NGMA004 -" gives '' - no title.
+export function parseQueueTitle(titleCell) {
+  const s = String(titleCell || '').trim();
+  const id = s.split(/\s+/)[0] || '';
+  return s.slice(id.length).replace(/^[\s\-\u2013\u2014:|]+/, '').trim();
+}
+
 export async function readQueueFill(token){
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${QUEUE_SHEET_ID}/values/${encodeURIComponent(QUEUE_RANGE)}`,
@@ -241,6 +250,7 @@ export async function readQueueFill(token){
     // Later rows win — the sheet is append-ordered by submission time, so a
     // re-submitted property's newer photos/details replace the older entry.
     fill.set(id, {
+      name: parseQueueTitle(r[cols.idTitle]),
       photosLink: cols.photosLink === -1 ? '' : String(r[cols.photosLink] || '').trim(),
       detailsText: cols.detailsText === -1 ? '' : String(r[cols.detailsText] || '').trim()
     });
@@ -484,8 +494,10 @@ export async function loadPendingProtections(db){
 
 // Works out what a sync would do, without writing anything. Both callers use
 // this so the dry run and the real run can never disagree. `queueFill` (from
-// readQueueFill) supplies photosLink/detailsText for properties whose sheet
-// row and Firestore doc both lack them — fill blanks, never overwrite.
+// readQueueFill) supplies name/photosLink/detailsText for properties whose sheet
+// row and Firestore doc both lack them — fill blanks, never overwrite. (name:
+// a row added with Property_Name_Project blank would otherwise show as
+// "KOY0003 — " with nothing after the dash.)
 // `protections` (from loadPendingProtections) keeps un-reconciled dashboard
 // edits from being overwritten.
 export function planSync(rows, existing, onlyId, queueFill, protections){
@@ -510,7 +522,7 @@ export function planSync(rows, existing, onlyId, queueFill, protections){
     const before = existing.get(prop.id);
     if(queueFill && queueFill.has(prop.id)){
       const q = queueFill.get(prop.id);
-      for(const k of ['photosLink','detailsText']){
+      for(const k of ['name','photosLink','detailsText']){
         // Three-way blank check: the queue value only lands when the
         // inventory row didn't supply one AND the live document doesn't
         // already have one — so it can never displace pipeline-written data.

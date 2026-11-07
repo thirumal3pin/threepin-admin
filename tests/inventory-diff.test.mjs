@@ -1,5 +1,5 @@
 // The Inventory sheet sync's preview: what changed, field by field.   node tests/inventory-diff.test.mjs
-import { diffProperty, detailLost, keepNoteText, planSync, commitWrites, keepFromChoice, findLostDetail, writeRecoveredNotes, TENANT_ID } from '../api/_inventory-shared.js';
+import { diffProperty, detailLost, keepNoteText, planSync, parseQueueTitle, commitWrites, keepFromChoice, findLostDetail, writeRecoveredNotes, TENANT_ID } from '../api/_inventory-shared.js';
 
 // A small in-memory Firestore: collections, documents, sub-collections, where('==') and get().
 function fakeFirestore(seed){
@@ -111,6 +111,26 @@ eq('The note: the date, each old value and what the sheet now says',
     (await findLostDetail(db)).map(f => [f.id, f.items.map(i => i.field)]), [['NGMC0001', ['parking']]]);
   await writeRecoveredNotes(db, [], [{ id: 'NGMC0001', field: 'parking', from: 'made up' }]);
   eq('A "just an update" for an old value that is not there records nothing', (db.store.get('syncBackups/keepDecisions_' + TENANT_ID) || {}).declined.length, 1);
+}
+
+// A row added with Property_Name_Project blank takes its name from the Queue title — blanks only.
+{
+  eq('Queue title after the ID', parseQueueTitle('KOY0003 - 4BHK Premium Apartment in Koyambedu'), '4BHK Premium Apartment in Koyambedu');
+  eq('Queue title with no space after the dash', parseQueueTitle('TNAG0002 -2BHK Apartment for Sale'), '2BHK Apartment for Sale');
+  eq('Queue cell with an ID and a bare dash has no title', parseQueueTitle('NGMA004 -'), '');
+  eq('Queue cell with just the ID has no title', parseQueueTitle('ADB0001'), '');
+  const headers = ['Property_ID', 'Property_Name_Project', 'Location_Area'];
+  const rows = [headers, ['KOY0003', '', 'Koyambedu, Chennai'], ['VIRA0001', '', 'Virugambakkam'], ['SALV0001', 'Villa - Saligramam', 'Saligramam']];
+  const queue = new Map([
+    ['KOY0003', { name: '4BHK Premium Apartment in Koyambedu', photosLink: '', detailsText: '' }],
+    ['VIRA0001', { name: '4 BHK Apartment for Sale', photosLink: '', detailsText: '' }],
+    ['SALV0001', { name: 'From the queue', photosLink: '', detailsText: '' }]]);
+  const existing = new Map([['VIRA0001', { id: 'VIRA0001', name: 'Named in the dashboard', tenantId: TENANT_ID }]]);
+  const plan = planSync(rows, existing, null, queue, null);
+  const nameOf = id => (plan.writes.find(w => w.id === id) || {}).name;
+  eq('Blank sheet name, new property: the Queue title is the name', nameOf('KOY0003'), '4BHK Premium Apartment in Koyambedu');
+  eq('Blank sheet name, dashboard already has one: kept', nameOf('VIRA0001'), undefined);
+  eq('Sheet has a name: the sheet wins over the Queue', nameOf('SALV0001'), 'Villa - Saligramam');
 }
 
 console.log(failed ? `\n${failed} failure(s)` : '\nAll good.');
