@@ -93,12 +93,28 @@ export const CRM_LEADS = [
 // A Google Sheets API stand-in over SHEETS: the metadata call and values:batchGet, as Google answers.
 // Sheets listed in `locked` answer 403, as a sheet not shared with the service account does.
 export function fakeSheetsFetch(locked = new Set()) {
-  const byId = Object.fromEntries(Object.values(SHEETS).map(s => [s.id, s]));
+  // Its own copy, so writes land here and not in the fixtures other tests read.
+  const data = JSON.parse(JSON.stringify(SHEETS));
+  const byId = Object.fromEntries(Object.values(data).map(s => [s.id, s]));
   const calls = [];
   const res = (status, body) => ({ ok: status < 300, status, json: async () => body });
-  const fetch = async (url) => {
+  const fetch = async (url, opts = {}) => {
     const u = new URL(url);
-    calls.push(u.pathname + u.search);
+    calls.push((opts.method === 'POST' ? 'POST ' : '') + u.pathname + u.search);
+    const wm = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values:batchUpdate$/);
+    if (wm) {
+      if (locked.has(wm[1])) return res(403, { error: { message: 'no' } });
+      const sh = byId[wm[1]];
+      for (const d of JSON.parse(opts.body).data) {
+        const mm = d.range.match(/^'((?:[^']|'')+)'!([A-Z]+)(\d+)$/);
+        const tab = sh.tabs.find(t => t.title === mm[1].replace(/''/g, "'"));
+        const col = mm[2].split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1, row = Number(mm[3]) - 1;
+        while (tab.values.length <= row) tab.values.push([]);
+        while (tab.values[row].length <= col) tab.values[row].push('');
+        tab.values[row][col] = d.values[0][0];
+      }
+      return res(200, { totalUpdatedCells: JSON.parse(opts.body).data.length });
+    }
     if (u.pathname === '/drive/v3/files') return res(200, { files: [...Object.values(SHEETS).map(sh => ({ id: sh.id, name: sh.title, modifiedTime: '2026-11-07T05:00:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] })),
       { id: 'INVENTORYsheetXXXXXXXXXXXXXXXXXXXXXXXXXXXX', name: '3PIN_Inventory_Master', modifiedTime: '2026-11-07T04:00:00Z', owners: [{ emailAddress: '3pinrentals@gmail.com' }] }] });
     const one = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values\/A1:AZ1$/);
@@ -123,5 +139,5 @@ export function fakeSheetsFetch(locked = new Set()) {
       return { range: r, values: rows.map(x => x.slice(0, cols)) };
     }) });
   };
-  return { fetch, calls };
+  return { fetch, calls, data };
 }

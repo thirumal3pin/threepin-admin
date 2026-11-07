@@ -280,8 +280,12 @@ export function readTab(tab) {
   return { cols, issues: columnIssues(cols), enquiries };
 }
 
-/** Anything the team has written on an enquiry — the "contacted" signal. */
-export const teamWrote = e => !!(e.team.assigned || e.team.ratingRaw || e.team.remarks.length || e.team.followups.length || e.team.visit || e.team.notes.length);
+/**
+ * The "contacted" signal: something only a conversation produces — a remark, a follow-up, a note,
+ * a visit date or a rating. Being assigned to an agent is NOT contact (a lead bulk-assigned this
+ * morning and never called must still show as not contacted).
+ */
+export const teamWrote = e => !!(e.team.ratingRaw || e.team.remarks.length || e.team.followups.length || e.team.visit || e.team.notes.length);
 
 // ── The plan ─────────────────────────────────────────────────────────────
 
@@ -459,6 +463,7 @@ export function duplicatesOf(plan, code) {
 
 // ── Analysis ─────────────────────────────────────────────────────────────
 
+const groupBy = (list, f) => { const m = new Map(); for (const x of list) { const k = f(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x); } return [...m.entries()]; };
 const tally = (list, f) => {
   const m = new Map();
   for (const x of list) { const k = f(x); if (k == null || k === '') continue; m.set(k, (m.get(k) || 0) + 1); }
@@ -504,6 +509,20 @@ export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
     ratings,
     questions: [...questions.entries()].map(([label, vals]) => ({ label, answers: tally(vals, v => v) })),
     problems: ppl.filter(p => p.issues.length).length,
+    // The admin's view of the team: per agent, how many they hold and how far they got.
+    agents: groupBy(ppl, p => p.team.agent || p.team.assignedRaw || '').map(([agent, list]) => ({
+      agent, people: list.length,
+      contacted: list.filter(p => p.team.contacted).length,
+      untouched: list.filter(p => !p.team.contacted).length,
+      hot: list.filter(p => p.team.rating === 3).length, warm: list.filter(p => p.team.rating === 2).length, cold: list.filter(p => p.team.rating === 1).length,
+      priority: list.filter(p => isPriorityFor(p, code)).length
+    })).sort((a, b) => (a.agent ? 0 : 1) - (b.agent ? 0 : 1) || b.people - a.people),
+    // Which ad brings the better leads: per ad, the people it brought, how many are hot, how many reached.
+    adQuality: groupBy(enq, e => e.ad || '(no ad name)').map(([ad, rows]) => {
+      const who = [...new Set(rows.map(e => ppl.find(p => p.enquiries.includes(e))).filter(Boolean))];
+      return { ad, enquiries: rows.length, people: who.length, hot: who.filter(p => p.team.rating === 3).length,
+        warmOrHot: who.filter(p => p.team.rating >= 2).length, contacted: who.filter(p => p.team.contacted).length, cold: who.filter(p => p.team.rating === 1).length };
+    }).sort((a, b) => b.enquiries - a.enquiries),
     // Each sheet's tab, side by side (for the property, or all).
     byTab: plan.tabs.filter(t => !code || t.propertyCode === code).map(t => {
       const rows = plan.people.flatMap(p => p.enquiries.filter(e => inTab(e, t.id)).map(e => ({ e, p })));
@@ -521,4 +540,85 @@ export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
       };
     })
   };
+}
+
+// ── Writing back to the sheet ────────────────────────────────────────────
+
+const DEFAULT_HEADER = { assigned: 'Assigned to', rating: 'Rating', remarks: 'Remarks', visit: 'Visit date', note: 'Notes' };
+export const MAX_COLS = 52;   // A…AZ, as far as a tab is read
+
+/**
+ * Which cells an edit writes, decided against the tab as it is NOW (values: its rows as read just
+ * before writing). Never guesses a row: each edit names its lead by Meta's lead id, found again in
+ * the id column (so a sorted or filtered sheet is still written in the right row).
+ *   edits: [{ metaId, field: 'assigned'|'rating'|'remarks'|'followup'|'note'|'visit', col?, next?,
+ *             value, from? }] or { field: 'header', header } to add a column
+ *   field 'followup' with next:true → the first EMPTY follow-up cell of that row, or a new
+ *   "Follow up N" column. A missing Assigned to / Rating / Remarks column is added.
+ *   from: what the person saw in the cell — if the sheet now says something else, the edit is
+ *   refused (a conflict), never written over.
+ * → { updates: [{ range, value }], applied: [{ metaId, row, col, header, value }], conflicts: [...],
+ *     added: [{ col, header }], errors: [...] }
+ */
+export function planSheetWrite({ values, overrides, edits }) {
+  const V = Array.isArray(values) ? values : [];
+  const headers = (V[0] || []).map(h => String(h == null ? '' : h));
+  const rows = V.slice(1);
+  const cols = classifyColumns(headers, rows, overrides);
+  let width = Math.max(headers.length, ...rows.map(r => (Array.isArray(r) ? r.length : 0)), 0);
+  // Trailing empty header cells with no data are free for a new column.
+  while (width > 0 && !String(headers[width - 1] || '').trim() && !rows.some(r => String((r || [])[width - 1] == null ? '' : r[width - 1]).trim())) width--;
+  const idCol = (cols.find(c => c.role === 'meta' && c.field === 'id') || {}).index;
+  const out = { updates: [], applied: [], conflicts: [], added: [], errors: [] };
+  const written = new Map();   // "r:c" → value written in this batch
+  const cell = (ri, c) => { const k = ri + ':' + c; if (written.has(k)) return written.get(k); return String(((rows[ri] || [])[c]) == null ? '' : rows[ri][c]).trim(); };
+  const addCol = (header) => {
+    if (width >= MAX_COLS) { out.errors.push(`No room for a new column "${header}" (the tab is read up to AZ)`); return null; }
+    const c = width++;
+    headers[c] = header;
+    cols.push({ index: c, header, role: teamRoleOf(header) || 'note', label: header });
+    out.added.push({ col: c, header });
+    out.updates.push({ range: colLetter(c) + '1', value: header });
+    return c;
+  };
+  const byRole = role => cols.filter(c => c.role === role).sort((a, b) => a.index - b.index);
+  for (const e of (Array.isArray(edits) ? edits : []).slice(0, 1000)) {
+    if (!e) continue;
+    if (e.field === 'header') {
+      const h = String(e.header || '').trim().slice(0, 60);
+      if (!h) continue;
+      if (headers.some(x => x.trim().toLowerCase() === h.toLowerCase())) { out.errors.push(`There is already a column "${h}"`); continue; }
+      addCol(h);
+      continue;
+    }
+    const metaId = String(e.metaId || '').trim();
+    if (idCol == null) { out.errors.push('This tab has no "id" column — rows cannot be found safely'); break; }
+    const ri = metaId ? rows.findIndex(r => String(((r || [])[idCol]) == null ? '' : r[idCol]).trim() === metaId) : -1;
+    if (ri < 0) { out.conflicts.push({ metaId, reason: 'This lead is no longer in the sheet' }); continue; }
+    let c = null;
+    if (e.col != null && Number.isInteger(Number(e.col))) {
+      c = Number(e.col);
+      const known = cols.find(x => x.index === c);
+      if (known && known.role === 'meta') { out.errors.push(`Column ${colLetter(c)} is Meta's own and is not written`); continue; }
+    } else if (e.field === 'followup' && e.next) {
+      const f = byRole('followup');
+      const empty = f.find(x => !cell(ri, x.index));
+      c = empty ? empty.index : addCol(`Follow up ${f.length + 1}`);
+    } else if (DEFAULT_HEADER[e.field] || e.field === 'followup') {
+      const f = byRole(e.field);
+      c = f.length ? f[0].index : addCol(DEFAULT_HEADER[e.field] || 'Follow up 1');
+    }
+    if (c == null) continue;
+    const now = cell(ri, c);
+    if (e.from !== undefined && now !== String(e.from == null ? '' : e.from).trim()) {
+      out.conflicts.push({ metaId, row: ri + 2, col: c, header: headers[c] || '', was: String(e.from || ''), now, reason: 'Changed in the sheet since it was read' });
+      continue;
+    }
+    const value = String(e.value == null ? '' : e.value).slice(0, 5000);
+    if (value === now) continue;
+    written.set(ri + ':' + c, value);
+    out.updates.push({ range: colLetter(c) + (ri + 2), value });
+    out.applied.push({ metaId, row: ri + 2, col: c, header: (headers[c] || '').trim(), value });
+  }
+  return out;
 }

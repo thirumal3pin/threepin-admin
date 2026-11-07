@@ -28,11 +28,25 @@ const REAL = { KDB: '17kaZCqDhOszTBwBkj8qEGHHsy7E1TBRjAYAWOO2aMk0', KDO: '19SD6z
 const LOCKED = '1LOCKEDnotSharedWithTheAppDDDDDDDDDDDDDDDDD';
 
 function sheetsFetch() {
-  const byId = { [REAL.KDB]: SHEETS.KDB, [REAL.KDO]: SHEETS.KDO, [REAL.KOY]: SHEETS.KOY };
+  const data = JSON.parse(JSON.stringify(SHEETS));
+  const byId = { [REAL.KDB]: data.KDB, [REAL.KDO]: data.KDO, [REAL.KOY]: data.KOY };
   const calls = [];
   const res = (status, body) => ({ ok: status < 300, status, json: async () => body });
-  const fetch = async url => {
-    const u = new URL(url); calls.push(u.pathname + u.search);
+  const fetch = async (url, opts = {}) => {
+    const u = new URL(url); calls.push((opts.method === 'POST' ? 'POST ' : '') + u.pathname + u.search);
+    const wm = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values:batchUpdate$/);
+    if (wm) {
+      const sh = byId[wm[1]];
+      for (const d of JSON.parse(opts.body).data) {
+        const mm = d.range.match(/^'((?:[^']|'')+)'!([A-Z]+)(\d+)$/);
+        const tab = sh.tabs.find(t => t.title === mm[1]);
+        const col = mm[2].split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1, row = Number(mm[3]) - 1;
+        while (tab.values.length <= row) tab.values.push([]);
+        while (tab.values[row].length <= col) tab.values[row].push('');
+        tab.values[row][col] = d.values[0][0];
+      }
+      return res(200, {});
+    }
     if (u.pathname === '/drive/v3/files') return res(200, { files: [
       { id: REAL.KOY, name: 'Koyambedu - Leads', modifiedTime: '2026-11-07T06:57:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
       { id: REAL.KDO, name: 'Kodabakkam office', modifiedTime: '2026-11-07T05:11:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
@@ -52,7 +66,7 @@ function sheetsFetch() {
       return { values: rows.map(x => x.slice(0, mm[2] === 'A' && mm[4] === 'B' ? 2 : 52)) };
     }) });
   };
-  return { fetch, calls };
+  return { fetch, calls, data };
 }
 
 const INV = [
@@ -140,7 +154,7 @@ try {
   let { page, ctx } = await openPage(browser);
   await waitText(page, '#metaLeadsView', /Lead sheets by property/);
   ok('The rail has Meta Ads Leads with its four screens', await page.evaluate(() => ['meta-leads', 'ml-dupes', 'ml-analysis', 'ml-setup'].every(id => document.body.innerHTML.includes(`'${id}'`) || document.body.innerHTML.includes(`"${id}"`))));
-  ok('Test mode is said on the page', /Test mode/.test(await text(page, '.ml-test')));
+  ok('The page says edits go to the sheet and nothing to the CRM', /written to the Google Sheet/.test(await text(page, '.ml-test')) && /Nothing is added to the CRM/.test(await text(page, '.ml-test')));
   await waitText(page, '.ml-avail', /Meta ad lead sheets the app can open/);
   ok('Nothing mapped: the Add panel is open, listing the Meta ad lead sheets the app can open (3), others folded (1)',
     /Meta ad lead sheets the app can open 3/.test(await text(page, '.ml-avail .ml-h')) && (await page.$$('.ml-avail > .ml-av')).length === 3 && /Other sheets shared with the app \(1\)/.test(await text(page, '.ml-other summary')));
@@ -242,15 +256,12 @@ try {
   await page.waitForTimeout(300);
   const tileText = () => page.$$eval('.ml-tile', els => els.map(e => e.querySelector('.ml-tile-n').textContent.trim() + ' ' + e.querySelector('.ml-tile-l').textContent.trim()));
   const tiles = await tileText();
-  ok('All properties: 15 enquiries, 12 people', tiles.includes('15 Enquiries (rows)') && tiles.includes('12 People'), tiles);
-  ok('Duplicates (same property) 2, more than one property 1', tiles.includes('2 With duplicate rows (same property)') && tiles.includes('1 Enquired for more than one property'), tiles);
-  ok('Already in the CRM 4, would be added new 8', tiles.includes('4 Already in the CRM') && tiles.includes('8 Would be added as new leads'), tiles);
-  ok('Would reopen 1, revisited — priority 4', tiles.includes('1 Closed in the CRM, would reopen') && tiles.includes('4 Revisited — priority for the agent'), tiles);
-  ok('Problems 3 (imported, flagged)', tiles.includes('3 Problems (imported, flagged)'), tiles);
+  ok('All properties: 12 people (15 enquiries), 7 not assigned', tiles.includes('12 People (15 enquiries)') && tiles.includes('7 Not assigned'), tiles);
+  ok('Revisited — priority 4, already in the CRM 4, would be new CRM leads 8', tiles.includes('4 Revisited — priority') && tiles.includes('4 Already in the CRM') && tiles.includes('8 Would be new CRM leads'), tiles);
   await shot(page, '4-leads-all');
   await clickText(page, '.ml-chip', 'KDBMC001');
   const kt = await tileText();
-  ok('KDBMC001: 11 enquiries, 9 people', kt.includes('11 Enquiries (rows)') && kt.includes('9 People'), kt);
+  ok('KDBMC001: 9 people (11 enquiries)', kt.includes('9 People (11 enquiries)'), kt);
   // Arjun: three enquiries, a duplicate for KDBMC001, also Koyambedu.
   await clickText(page, '.ml-prow', 'Arjun');
   const det = await text(page, '.ml-person.open .ml-detail');
@@ -319,7 +330,7 @@ try {
   const an = await text(page, '#metaLeadsView');
   ok('Analysis: per day, per ad, per sheet/tab, platform, rating, assigned, CRM stage, each form question',
     ['Enquiries per day', 'By ad', 'Video 1', 'By sheet and tab', 'By platform', 'Instagram', 'Rating', 'Assigned to', 'Swami', 'Site Visit', 'Form: Expected area'].every(w => an.includes(w)), an.slice(0, 300));
-  const tt = await page.$$eval('.ml-tt-r:not(.ml-tt-h)', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  const tt = await page.$$eval('.ml-tt-r:not(.ml-tt-h):not(.ml-team-r):not(.ml-ad-r)', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
   ok('Analysis by sheet and tab: three KDBMC001 tabs, with the tag', tt.length === 3 && /office space - Kodambakkam › Sheet3 Copy-copy form/.test(tt[1]), tt);
   await page.locator('.ml-tt-r', { hasText: 'Sheet3' }).click();
   await page.waitForTimeout(300);
@@ -343,22 +354,88 @@ try {
   await page.waitForTimeout(200);
   ok('Leaving for the Board: the address is the CRM\'s again', new URL(page.url()).pathname === '/crm.html');
 
-  // ── 9. Nothing written ──
+  // ── 9. Reading wrote nothing ──
   ok('The CRM saved nothing (no lead, no note)', (await page.evaluate(() => window.__saves)) === 0);
   ok('Only the setup was written to the database', JSON.stringify([...db._store.keys()].sort()) === JSON.stringify([`metaLeadConfigs/${T}`, `taskConfigs/${T}`]), [...db._store.keys()]);
   ok('Google was only read (no cell written)', sheets.calls.every(c => !/:batchUpdate|:append|:clear/.test(c)));
+  await ctx.close();
+
+  // ── 9b. The admin: the unassigned leads, assigned in bulk; the team report ──
+  ({ page, ctx } = await openPage(browser, { at: '/ads' }));
+  await clickText(page, '.ml-head .ml-btn', 'Read the sheets');
+  await page.waitForFunction(() => document.querySelectorAll('.ml-person').length > 0, null, { timeout: 8000 });
+  await clickText(page, '.ml-chip', 'KDBMC001');
+  await page.locator('.ml-tile', { hasText: 'Not assigned' }).click();
+  await page.waitForTimeout(250);
+  let names = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()).sort());
+  ok('Admin: "Not assigned" (KDBMC001) — 4 people', JSON.stringify(names) === JSON.stringify(['Dr. Lakshmi Prasad', 'Fresh Lead', 'Saravana', 'Vijaya Rani']), names);
+  await page.check('.ml-selall input');
+  await page.waitForTimeout(200);
+  ok('Select all → the bulk bar', /4 selected/.test(await text(page, '.ml-bulk')));
+  await shot(page, '11-admin-bulk');
+  await page.selectOption('.ml-bulk select >> nth=0', 'thirumal@threepin.in');
+  await page.waitForFunction(() => !/Writing to the sheet/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const s1 = sheets.data.KDB.tabs[0].values, s3 = sheets.data.KDB.tabs[1].values;
+  ok('Written: Sheet1 had no Assigned to column — added (W), Thirumal in rows 2, 5, 6', s1[0][22] === 'Assigned to' && s1[1][22] === 'Thirumal' && s1[4][22] === 'Thirumal' && s1[5][22] === 'Thirumal' && !(s1[2][22] || s1[3][22]), JSON.stringify(s1.map(r => r[22])));
+  ok('Written: Sheet3\'s own Assigned to column (T) for Saravana, row 5', s3[4][19] === 'Thirumal');
+  ok('The screen follows at once: nobody left unassigned', /Nobody matches/.test(await text(page, '#metaLeadsView')) && /^0/.test((await page.locator('.ml-tile', { hasText: 'Not assigned' }).textContent()).trim()));
+  // The team report.
+  await page.evaluate(() => MetaLeads.go('ml-analysis'));
+  await page.waitForTimeout(300);
+  const team = await page.$$eval('.ml-team-r:not(.ml-tt-h)', els => els.map(e => [...e.children].map(c => c.textContent.trim()).join('|')));
+  ok('Team report: Thirumal now holds 6, Swami 2; nobody unassigned', /^Thirumal\|6\|/.test(team[0]) && team.some(t => /^Swami\|2\|/.test(t)) && !team.some(t => /^Not assigned/.test(t)), team);
+  ok('Lead quality by ad is there', /Lead quality by ad/.test(await text(page, '#metaLeadsView')) && (await page.$$('.ml-ad-r:not(.ml-tt-h)')).length === 2);
+  await shot(page, '12-admin-reports');
+  await page.locator('.ml-team-r', { hasText: 'Swami' }).click();
+  await page.waitForTimeout(300);
+  names = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()).sort());
+  ok('Click an agent in the report → their leads', JSON.stringify(names) === JSON.stringify(['Arjun', 'Parinita']), names);
+  // Someone edits the sheet meanwhile: the admin's change to that cell is refused, theirs kept.
+  sheets.data.KDB.tabs[0].values[1][19] = 'Changed by someone in the sheet';
+  await page.evaluate(() => MetaLeads.clearF());
+  await page.waitForTimeout(200);
+  await clickText(page, '.ml-prow', 'Lakshmi');
+  await page.fill('#mlwM', 'My new remark');
+  await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  ok('A cell changed in the sheet meanwhile: not overwritten', sheets.data.KDB.tabs[0].values[1][19] === 'Changed by someone in the sheet');
   await ctx.close();
 
   // ── 10. A team member who is not a manager — opening the /ads-setup page directly ──
   ({ page, ctx } = await openPage(browser, { email: 'swami@threepin.in', at: '/ads-setup' }));
   await waitText(page, '#metaLeadsView', /Only a manager can change the mapping/);
   ok('Not a manager: Setup is read-only (no Add sheet, no pickers, no remove) — but sees the mapping', !(await page.$('.ml-map-h .ml-btn')) && !(await page.$('.ml-trow select')) && !(await page.$('.ml-icon')) && (await page.$$('.ml-trow')).length === 4);
-  await clickText(page, '.ml-btn', 'Read the sheets');
-  await page.waitForFunction(() => document.querySelectorAll('.ml-tile').length > 0 || /People/.test(document.body.textContent), null, { timeout: 8000 }).catch(() => {});
+  await clickText(page, '.ml-head .ml-btn', 'Read the sheets');
+  await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 }).catch(() => {});
   await page.evaluate(() => MetaLeads.go('meta-leads'));
   await page.waitForTimeout(300);
   ok('…but can read the sheets and see the leads', (await page.$$('.ml-person')).length === 12);
+  // ── 10b. The agent: my leads, a follow-up after the call ──
+  await page.locator('.ml-tile', { hasText: 'Assigned to me' }).click();
+  await page.waitForTimeout(250);
+  names = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()).sort());
+  ok('Agent (Swami): "Assigned to me" — Arjun and Parinita', JSON.stringify(names) === JSON.stringify(['Arjun', 'Parinita']), names);
+  ok('Each has Call and WhatsApp, the message naming the agent and the property', await page.$$eval('.ml-person .ml-qb.wa', els => els.every(a => /wa\.me\/91\d{10}\?text=Hi%20.*Swami.*3%20PIN%20Realty/.test(a.href))) && (await page.$$('.ml-person a[href^="tel:+91"]')).length === 2);
+  await clickText(page, '.ml-prow', 'Parinita');
+  await clickText(page, '.ml-qc', 'Site visit fixed');
+  ok('Quick phrase fills the follow-up', await page.$eval('#mlwF', e => e.value) === 'Site visit fixed');
+  await page.click('.ml-rb.r3');
+  await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const pr = sheets.data.KDB.tabs[1].values[2];   // Parinita, Sheet3 row 3: Remarks (V) then a header-less column (W) already full
+  ok('Agent: Hot written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '3' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
+  ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /Hot/.test(await text(page, '.ml-person.open .ml-prow')));
+  await shot(page, '13-agent-work');
+  // Edit a row cell by cell.
+  await page.locator('.ml-person.open .ml-editrow').first().click();
+  await page.waitForTimeout(200);
+  ok('Edit this row: every team column of that row', (await page.$$('.ml-rowedit textarea')).length >= 4);
   await ctx.close();
+  const edits = [...db._store.entries()].filter(([k]) => k.startsWith('metaLeadEdits/')).map(([, v]) => v.by);
+  ok('Every write is logged with who made it', edits.includes('admin@threepin.in') && edits.includes('swami@threepin.in'), edits);
+  ok('Still no CRM lead touched; only the connected sheets written', sheets.calls.filter(c => /^POST/.test(c)).every(c => /(17kaZCqDhOszTBwBkj8qEGHHsy7E1TBRjAYAWOO2aMk0|19SD6zrkLD84KHCMQ6ZAVA3D2OHJqFExkEThXIfA1BcY|19N-RVhJUQ-HNeEvZK0nG_5aSWW78gpA8mHfbObXpbfk)\/values:batchUpdate/.test(c)));
 
   // ── 11. Phone, dark ──
   ({ page, ctx } = await openPage(browser, { viewport: { width: 390, height: 844 }, scheme: 'dark', at: '/ads' }));

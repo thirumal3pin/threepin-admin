@@ -2,8 +2,9 @@
 // META ADS LEADS — the server half (POST /api/meta-leads, routed through api/sync-inventory.js
 // because the plan allows 12 functions and all 12 are taken; see vercel.json).
 //
-// Reads the Google Sheets Meta writes its ad leads into, as the app's service account. TEST MODE:
-// nothing here writes a lead, a note or a cell — it reads, and it keeps the setup. What the rows
+// Reads the Google Sheets Meta writes its ad leads into, as the app's service account, and writes
+// the TEAM's columns of them back (assigned to, rating, remarks, follow-ups) when someone edits a
+// lead here. No CRM lead is created or changed (that sync is not switched on yet). What the rows
 // mean (and what a sync would do with them) is crm-assets/metaLeadsModel.js, shared with the page,
 // which has the CRM's leads in memory already — so matching against them costs no reads here.
 //
@@ -17,6 +18,8 @@
 //   save     the setup                                                                  [managers]
 //   available  the sheets shared with the app, Meta ad lead sheets marked                 [managers]
 //   read     every connected tab's rows, for the page to plan from                     [the team]
+//   write    the team's columns of a connected tab (assigned, rating, remarks, follow-ups) [the team]
+//            — a new column                                                             [managers]
 //
 // Firestore cost per call: config 2 reads; inspect 1; save 2 + 1 write; read 1 + 1 write.
 // ═══════════════════════════════════════════════════════════════════════
@@ -24,9 +27,11 @@
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { getSheetsToken, TENANT_ID } from './_inventory-shared.js';
 import * as TM from '../shared-assets/task-model.js';
-import { parseSheetLink, classifyColumns, columnIssues, ROLES } from '../crm-assets/metaLeadsModel.js';
+import { parseSheetLink, classifyColumns, columnIssues, ROLES, planSheetWrite } from '../crm-assets/metaLeadsModel.js';
 
 const COLLECTION = 'metaLeadConfigs';
+const EDITS = 'metaLeadEdits';
+const WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets/';
 const MAX_SOURCES = 60, MAX_TABS = 40, MAX_ROWS = 5000;
 const READ_RANGE = `A1:AZ${MAX_ROWS}`;
@@ -48,10 +53,14 @@ export function makeDeps(overrides = {}) {
 }
 
 // A Google answer → data, or an Error that says what to do about it.
-async function google(deps, tokenP, url, what, shareWith) {
+async function google(deps, tokenP, url, what, shareWith, body) {
   const token = await tokenP;
   let res;
-  try { res = await deps.fetch(url, { headers: { Authorization: `Bearer ${token}` } }); }
+  try {
+    res = await deps.fetch(url, body
+      ? { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : { headers: { Authorization: `Bearer ${token}` } });
+  }
   catch { throw Object.assign(new Error(`Could not reach Google Sheets for ${what}`), { code: 'network' }); }
   const data = await res.json().catch(() => ({}));
   if (res.ok) return data;
@@ -158,6 +167,39 @@ export async function metaLeadsAction(user, body, deps) {
       }) }, 200];
     } catch (e) {
       return [{ ok: false, error: e.message, code: e.code || 'error' }, 502];
+    }
+  }
+
+  // The team's columns, written from the admin: assigned to, rating, remarks, follow-ups, notes —
+  // and, for a manager, a new column. Only a connected tab; each edit finds its row again by the
+  // Meta lead id and is refused if the cell changed since it was read. Logged in metaLeadEdits.
+  if (action === 'write') {
+    const sid = String(body.spreadsheetId || ''), gid = Number(body.gid);
+    const edits = Array.isArray(body.edits) ? body.edits.slice(0, 1000) : [];
+    if (!edits.length) return [{ ok: false, error: 'Nothing to write' }, 400];
+    const [cfg, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
+    const src = (cfg.sources || []).find(x => x.id === sid);
+    const tab = src && (src.tabs || []).find(t => t.gid === gid);
+    if (!src || !tab) return [{ ok: false, error: 'That tab is not connected in Setup' }, 404];
+    if (edits.some(e => e && e.field === 'header') && !manager) return [{ ok: false, error: 'Only a manager can add a column' }, 403];
+    const wtok = deps.token(sa, WRITE_SCOPE);
+    try {
+      const meta = await sheetMeta(deps, wtok, sid, shareWith);
+      const now = meta.tabs.find(t => t.gid === gid);
+      if (!now) return [{ ok: false, error: 'That tab is no longer in the sheet' }, 404];
+      const [values] = await batchGet(deps, wtok, sid, [`${quoteTab(now.title)}!${READ_RANGE}`], shareWith);
+      const plan = planSheetWrite({ values: values || [], overrides: tab.overrides || {}, edits });
+      if (plan.updates.length) {
+        await google(deps, wtok, `${SHEETS}${sid}/values:batchUpdate`, 'this sheet', shareWith, {
+          valueInputOption: 'RAW',
+          data: plan.updates.map(u => ({ range: `${quoteTab(now.title)}!${u.range}`, values: [[u.value]] }))
+        });
+        await db.collection(EDITS).add({ tenantId: T, by: me, at: deps.now(), spreadsheetId: sid, gid, tab: now.title,
+          applied: plan.applied.slice(0, 300), added: plan.added });
+      }
+      return [{ ok: true, applied: plan.applied, added: plan.added, conflicts: plan.conflicts, errors: plan.errors }, 200];
+    } catch (e) {
+      return [{ ok: false, error: e.code === 'share' ? `The app cannot edit this sheet — share it with ${shareWith} as Editor (not Viewer)` : e.message, code: e.code || 'error' }, e.code === 'share' ? 403 : 502];
     }
   }
 

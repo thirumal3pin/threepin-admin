@@ -126,6 +126,9 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
     [['office space - Kodambakkam › Sheet1', 5, 5, 2, 'Video 1'], ['office space - Kodambakkam › Sheet3', 4, 4, 1, 'Video 2'], ['Kodabakkam office › Sheet1', 2, 2, 1, 'Video 1']]);
   const one = M.analyse(plan, 'KDBMC001', NOW, 30, a.byTab[1].key);
   eq('One tab\'s own analysis', [one.enquiries, one.people, one.byAd], [4, 4, [{ label: 'Video 2', n: 3 }, { label: 'Video 1', n: 1 }]]);
+  eq('Agents: who holds how many, contacted, untouched, hot', a.agents.map(x => [x.agent, x.people, x.contacted, x.untouched, x.hot, x.warm]),
+    [['swami@threepin.in', 2, 2, 0, 1, 1], ['thirumal@threepin.in', 2, 2, 0, 0, 1], ['Ramesh', 1, 1, 0, 0, 0], ['', 4, 2, 2, 0, 0]]);
+  eq('Ad quality: per ad, people, hot, contacted', a.adQuality.map(x => [x.ad, x.enquiries, x.people, x.hot, x.contacted]), [['Video 1', 6, 5, 0, 3], ['Video 2', 5, 4, 1, 4]]);
   eq('By agent', a.byAgent, [{ label: 'Not assigned', n: 4 }, { label: 'swami@threepin.in', n: 2 }, { label: 'thirumal@threepin.in', n: 2 }, { label: 'Ramesh', n: 1 }]);
 }
 
@@ -194,6 +197,60 @@ async function server(locked) {
   eq('Read one sheet: only its tabs', r.tabs.map(t => t.sheetTitle), ['Koyambedu - Leads']);
   const lr = (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data().lastRead;
   eq('…its last read updated, the other sheet\'s kept, in setup order', lr.sheets.map(x => x.id), [SHEETS.KDB.id, SHEETS.KOY.id]);
+}
+// Contacted = a conversation happened. Assigned only is not contact.
+{
+  const base = { team: { assigned: '', ratingRaw: '', remarks: [], followups: [], visit: '', notes: [] } };
+  eq('Assigned only is not "contacted"; a remark, follow-up or rating is',
+    [M.teamWrote({ team: { ...base.team, assigned: 'Swami' } }), M.teamWrote({ team: { ...base.team, remarks: [{ text: 'RNR' }] } }), M.teamWrote({ team: { ...base.team, ratingRaw: '2' } })], [false, true, true]);
+}
+// ── Writing back: which cell each edit lands in ──
+{
+  const V = SHEETS.KDB.tabs[0].values;   // Sheet1: Lead Rating (S), Remarks (T), Follow up 1 (U), Follow up 2 (V); no Assigned to
+  const w = M.planSheetWrite({ values: V, edits: [
+    { metaId: 'l:1003', field: 'assigned', value: 'Swami' },                                   // no column yet → added at W
+    { metaId: 'l:1002', field: 'assigned', value: 'Thirumal' },                                // the same new column
+    { metaId: 'l:1003', field: 'rating', value: '3', from: '3' },                              // unchanged → nothing written
+    { metaId: 'l:1002', field: 'remarks', value: 'Wants 1000 sqft, ground floor', from: 'Looking near Anna Nagar, 60-70/sqft' },
+    { metaId: 'l:1002', field: 'followup', next: true, value: 'Called, visiting Sat' },        // Follow up 1 empty → U
+    { metaId: 'l:1003', field: 'followup', next: true, value: 'Visited, liked it' },           // both full → Follow up 3 at X
+    { metaId: 'l:1001', field: 'remarks', value: 'x', from: 'something else' },                // changed in the sheet → conflict
+    { metaId: 'l:9999', field: 'remarks', value: 'x' }                                         // not in the sheet
+  ] });
+  eq('New columns added at the end: Assigned to, Follow up 3', w.added, [{ col: 22, header: 'Assigned to' }, { col: 23, header: 'Follow up 3' }]);
+  eq('Cells written, by Meta lead id', w.updates, [
+    { range: 'W1', value: 'Assigned to' }, { range: 'W4', value: 'Swami' }, { range: 'W3', value: 'Thirumal' },
+    { range: 'T3', value: 'Wants 1000 sqft, ground floor' }, { range: 'U3', value: 'Called, visiting Sat' },
+    { range: 'X1', value: 'Follow up 3' }, { range: 'X4', value: 'Visited, liked it' }]);
+  eq('Refused: a cell changed since it was read, and a lead no longer there', w.conflicts.map(c => [c.metaId, c.reason]), [['l:1001', 'Changed in the sheet since it was read'], ['l:9999', 'This lead is no longer in the sheet']]);
+  // The sheet sorted differently: rows are found by id, not by position.
+  const sorted = [V[0], ...V.slice(1).reverse()];
+  eq('A sorted sheet: still the right row', M.planSheetWrite({ values: sorted, edits: [{ metaId: 'l:1003', field: 'remarks', value: 'y' }] }).updates, [{ range: 'T4', value: 'y' }]);
+  eq('Meta\'s own columns are never written', M.planSheetWrite({ values: V, edits: [{ metaId: 'l:1003', col: 14, value: '999' }] }).errors, ['Column O is Meta\'s own and is not written']);
+  eq('A column added by name; a name already there refused', [M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'Budget (confirmed)' }] }).updates, M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'remarks' }] }).errors],
+    [[{ range: 'W1', value: 'Budget (confirmed)' }], ['There is already a column "remarks"']]);
+}
+// ── The server writes it ──
+{
+  const { db, sheets, act } = await server();
+  await act('admin@threepin.in', { action: 'save', sources: SOURCES });
+  let [r, s] = await act('agent@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [
+    { metaId: 'l:3003', field: 'assigned', value: 'Thirumal', from: 'Ramesh' },
+    { metaId: 'l:3003', field: 'followup', next: true, value: 'Call back Monday' }] });
+  eq('Write (a team member): assigned changed, a follow-up column added to Sheet3', [s, r.applied.map(a => [a.row, a.header, a.value]), r.added], [200, [[4, 'Assigned to', 'Thirumal'], [4, 'Follow up 1', 'Call back Monday']], [{ col: 23, header: 'Follow up 1' }]]);
+  const tab = sheets.data.KDB.tabs[1].values;
+  eq('…and it is in the sheet', [tab[0][23], tab[3][19], tab[3][23]], ['Follow up 1', 'Thirumal', 'Call back Monday']);
+  ok('…written with RAW values (a "=" stays text)', sheets.calls.some(c => /^POST .*values:batchUpdate/.test(c)));
+  const log = [...db._store.entries()].filter(([k]) => k.startsWith('metaLeadEdits/')).map(([, v]) => v);
+  eq('…and logged: who, which tab, what', [log.length, log[0].by, log[0].tab, log[0].applied.length], [1, 'agent@threepin.in', 'Sheet3', 2]);
+  [r, s] = await act('agent@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ field: 'header', header: 'Budget' }] });
+  eq('Adding a column: managers only', s, 403);
+  [r, s] = await act('admin@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ field: 'header', header: 'Budget' }] });
+  eq('A manager adds a column', [s, r.added], [200, [{ col: 24, header: 'Budget' }]]);
+  [r, s] = await act('admin@threepin.in', { action: 'write', spreadsheetId: 'notconnected', gid: 0, edits: [{ metaId: 'x', field: 'remarks', value: 'x' }] });
+  eq('A sheet not connected is never written', s, 404);
+  [r, s] = await act('admin@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ metaId: 'l:3003', field: 'assigned', value: 'Swami', from: 'Ramesh' }] });
+  eq('Someone changed it meanwhile: refused, not overwritten', [r.applied.length, r.conflicts[0].now], [0, 'Thirumal']);
 }
 eq('cleanSources keeps only known roles', cleanSources([{ spreadsheetId: SHEETS.KOY.id, tabs: [{ gid: 0, overrides: { 18: 'rating', 19: 'meta', x: 'note', 20: 'bogus' } }] }], [], 'a', 1)[0].tabs[0].overrides, { 18: 'rating' });
 
