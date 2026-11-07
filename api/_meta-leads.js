@@ -15,6 +15,7 @@
 //   config   the setup, who may change it, and the address sheets must be shared with
 //   inspect  a sheet link → its tabs, columns (what each means), first rows, lead count  [managers]
 //   save     the setup                                                                  [managers]
+//   available  the sheets shared with the app, Meta ad lead sheets marked                 [managers]
 //   read     every connected tab's rows, for the page to plan from                     [the team]
 //
 // Firestore cost per call: config 2 reads; inspect 1; save 2 + 1 write; read 1 + 1 write.
@@ -41,7 +42,7 @@ export function makeDeps(overrides = {}) {
     db: overrides.db || getDb(),
     fetch: overrides.fetch || ((...a) => fetch(...a)),
     serviceAccount: overrides.serviceAccount,
-    token: overrides.token || (sa => getSheetsToken(sa)),
+    token: overrides.token || ((sa, scope) => getSheetsToken(sa, scope)),
     now: overrides.now || (() => Date.now())
   };
 }
@@ -127,10 +128,38 @@ export async function metaLeadsAction(user, body, deps) {
     return [{ ok: true, mode: 'test', sources: cfg.sources || [], lastRead: cfg.lastRead || null, updatedAt: cfg.updatedAt || null, updatedBy: cfg.updatedBy || null, manager, shareWith }, 200];
   }
 
-  if (action === 'inspect' || action === 'save') {
+  if (action === 'inspect' || action === 'save' || action === 'available') {
     if (!(await loadManager(db, T, me))) return [{ ok: false, error: 'Only a manager can change the Meta leads setup' }, 403];
   }
   if (!sa && action !== 'save') return [{ ok: false, error: 'The server is missing its Google service account' }, 500];
+
+  // Every Google Sheet shared with the app's account, newest first — and which of them are Meta ad
+  // lead exports (their first tab's header row has Meta's id / created_time / campaign columns).
+  if (action === 'available') {
+    const cfg = await loadConfig(db, T);
+    const mapped = new Set((cfg.sources || []).map(x => x.id));
+    try {
+      const driveTok = deps.token(sa, 'https://www.googleapis.com/auth/drive.metadata.readonly');
+      const q = encodeURIComponent("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false");
+      const d = await google(deps, driveTok, `https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&pageSize=60&fields=files(id,name,modifiedTime,owners(displayName,emailAddress))&supportsAllDrives=true&includeItemsFromAllDrives=true`, 'the shared sheets', shareWith);
+      const files = (d.files || []).slice(0, 60);
+      const tok = tokenOnce();
+      // The first row of each sheet's first tab, a few at a time.
+      const heads = [];
+      for (let i = 0; i < files.length; i += 8) {
+        heads.push(...await Promise.all(files.slice(i, i + 8).map(f =>
+          google(deps, tok(), `${SHEETS}${f.id}/values/A1:AZ1`, 'a sheet', shareWith).then(v => (v.values || [])[0] || []).catch(() => null))));
+      }
+      return [{ ok: true, shareWith, files: files.map((f, i) => {
+        const h = (heads[i] || []).map(x => String(x || '').trim().toLowerCase());
+        const isMeta = h.includes('id') && h.includes('created_time') && (h.includes('campaign_name') || h.includes('form_name'));
+        return { id: f.id, title: f.name, modifiedTime: f.modifiedTime ? Date.parse(f.modifiedTime) : null,
+          owner: ((f.owners || [])[0] || {}).emailAddress || '', isMeta, readable: heads[i] !== null, mapped: mapped.has(f.id) };
+      }) }, 200];
+    } catch (e) {
+      return [{ ok: false, error: e.message, code: e.code || 'error' }, 502];
+    }
+  }
 
   if (action === 'inspect') {
     const link = parseSheetLink(body.link);

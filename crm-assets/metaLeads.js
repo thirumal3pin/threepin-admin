@@ -392,6 +392,7 @@
     if (S.cfgError) return '<div class="ml-alert bad">' + esc(S.cfgError) + ' <button class="ml-btn" onclick="MetaLeads.reload()">Try again</button></div>';
     if (!S.cfg) return '<div class="ml-empty"><i class="fa-solid fa-rotate fa-spin"></i> Loading the setup…</div>';
     var mgr = !!S.cfg.manager, list = S.draft || [];
+    if (mgr && !list.length && !S.adding && !S.addClosed) { S.adding = true; S.add = { link: '', busy: false, error: null, share: false, result: null, tabs: {} }; setTimeout(function () { MetaLeads.available(); }, 0); }
     // Every tab, with its sheet, grouped by the property it is mapped to.
     var groups = {}, order = [];
     list.forEach(function (s, i) {
@@ -486,10 +487,30 @@
       '<div class="ml-h">Add a lead sheet</div>' +
       '<div class="ml-addline"><input class="ml-in ml-link-in" placeholder="Paste the Google Sheets link" value="' + esc(A.link) + '" oninput="MetaLeads.addLink(this.value)">' +
         '<button class="ml-btn" ' + (A.busy ? 'disabled' : '') + ' onclick="MetaLeads.check()">' + (A.busy ? '<i class="fa-solid fa-rotate fa-spin"></i> Checking…' : 'Check') + '</button></div>' + err +
+      (r ? '' : availableHtml()) +
       (r ? '<div class="ml-found"><div class="ml-found-h"><a href="' + esc(MM().sheetUrl(r.spreadsheetId)) + '" target="_blank" rel="noopener"><b>' + esc(String(r.title).trim()) + '</b> <i class="fa-solid fa-arrow-up-right-from-square"></i></a> <span class="ml-dim">— pick the property for each tab</span></div>' + tabs + '</div>' : '') +
       '<div class="ml-addbtns">' + (r ? '<button class="ml-btn primary" ' + (S.saving ? 'disabled' : '') + ' onclick="MetaLeads.saveAdd()">Save mapping</button> ' : '') + '<button class="ml-btn" onclick="MetaLeads.cancelAdd()">Cancel</button></div>' +
     '</div>';
   }
+  // The sheets the app can open (shared with its account): Meta ad lead sheets first, one click.
+  function availableHtml() {
+    var V = S.avail;
+    if (!V || V.loading) return '<div class="ml-avail"><div class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Finding the sheets shared with the app…</div></div>';
+    if (V.error) return '<div class="ml-avail"><div class="ml-alert bad">' + esc(V.error) + '</div></div>';
+    var item = function (f) {
+      return '<div class="ml-av' + (f.mapped ? ' mapped' : '') + '"><div><b>' + esc(String(f.title).trim()) + '</b>' +
+        '<div class="ml-dim">' + esc(f.owner || '') + (f.modifiedTime ? ' · edited ' + esc(timeAgoSafe(f.modifiedTime)) : '') + '</div></div>' +
+        (f.mapped ? '<span class="ml-badge ok">Mapped</span>' : '<button class="ml-btn sm" onclick="MetaLeads.choose(' + js(f.id) + ')">Choose</button>') + '</div>';
+    };
+    var meta = V.files.filter(function (f) { return f.isMeta; }), other = V.files.filter(function (f) { return !f.isMeta; });
+    return '<div class="ml-avail">' +
+      '<div class="ml-h">Meta ad lead sheets the app can open <span class="ml-dim">' + meta.length + '</span></div>' +
+      (meta.length ? meta.map(item).join('') : '<div class="ml-dim">None yet. Share the ad\'s lead sheet with the app (below), then press <button class="ml-link" onclick="MetaLeads.available(true)">Look again</button>.</div>') +
+      (other.length ? '<details class="ml-other"><summary>Other sheets shared with the app (' + other.length + ')</summary>' + other.map(item).join('') + '</details>' : '') +
+      '<div class="ml-dim ml-avail-f">Not in the list? It is not shared with the app yet — share it with <code>' + esc(S.cfg.shareWith) + '</code> as Editor, then <button class="ml-link" onclick="MetaLeads.available(true)">look again</button>, or paste its link above.</div>' +
+    '</div>';
+  }
+
   function colsHtml(pt, i, j, mgr) {
     var opts = function (c) {
       return Object.keys(MM().ROLES).filter(function (r) { return r !== 'meta'; }).map(function (r) { return '<option value="' + r + '"' + (c.role === r ? ' selected' : '') + '>' + esc(MM().ROLES[r]) + '</option>'; }).join('');
@@ -582,8 +603,15 @@
         loadConfig(true);
       }).catch(function (e) { toast(e.message); }).then(function () { S.readingOne = null; render(); });
     },
-    startAdd: function () { S.adding = true; S.add = { link: '', busy: false, error: null, share: false, result: null, tabs: {} }; render(); setTimeout(function () { var x = document.querySelector('#metaLeadsView .ml-link-in'); if (x) x.focus(); }, 30); },
-    cancelAdd: function () { S.adding = false; render(); },
+    startAdd: function () { S.adding = true; S.add = { link: '', busy: false, error: null, share: false, result: null, tabs: {} }; MetaLeads.available(); render(); },
+    available: function (force) {
+      if (S.avail && !S.avail.error && !force) { render(); return; }
+      S.avail = { loading: true, files: [] }; render();
+      api('available').then(function (d) { S.avail = { files: d.files || [] }; })
+        .catch(function (e) { S.avail = { error: e.message, files: [] }; }).then(render);
+    },
+    choose: function (id) { S.add.link = MM().sheetUrl(id); MetaLeads.check(); },
+    cancelAdd: function () { S.adding = false; S.addClosed = true; render(); },
     addLink: function (v) { S.add.link = v; },
     addTabOn: function (gid, on) { S.add.tabs[gid] = Object.assign({}, S.add.tabs[gid], { on: on }); render(); },
     addTabProp: function (gid, code) { S.add.tabs[gid] = Object.assign({}, S.add.tabs[gid], { code: code }); },
@@ -610,7 +638,11 @@
       var src = { spreadsheetId: r.spreadsheetId, title: r.title, propertyCode: '', on: true,
         tabs: on.map(function (t) { var x = A.tabs[t.gid]; return { gid: t.gid, title: t.title, on: true, overrides: {}, propertyCode: x.code, tag: (x.tag || '').trim() }; }) };
       var n = clone(S.draft || []); n.push(src);
-      persist(n, function () { S.adding = false; toast('Mapped: ' + String(r.title).trim() + '. Press Read on it to see its leads.'); });
+      persist(n, function () {
+        S.adding = false;
+        if (S.avail && S.avail.files) S.avail.files.forEach(function (f) { if (f.id === r.spreadsheetId) f.mapped = true; });
+        toast('Mapped: ' + String(r.title).trim() + '. Press Read on it to see its leads.');
+      });
     }
   };
 
@@ -667,10 +699,13 @@
     if (v && typeof toggleView === 'function') { S.fromPop = true; toggleView(v); S.fromPop = false; }
     else if (!v && el() && el().style.display !== 'none' && typeof toggleView === 'function') toggleView(typeof lastBrowseView === 'string' ? lastBrowseView : 'kanban');
   });
-  // Opened at /ads… : straight to that screen, once the page's own scripts have run.
+  // Opened at /ads… : handed to the CRM's own start-up as ?nav=<screen> (crm-assets/nav-boot.js
+  // opens it once the page is ready — opening it here, earlier, raced the sign-in).
   (function () {
     var v = viewOfPath(location.pathname);
-    if (v) setTimeout(function () { if (typeof toggleView === 'function') toggleView(v); }, 0);
+    if (v && !/[?&]nav=/.test(location.search)) {
+      try { history.replaceState(history.state, '', location.pathname + (location.search ? location.search + '&' : '?') + 'nav=' + v + location.hash); } catch (e) { /* no history API */ }
+    }
   })();
 
   window.renderMetaLeadsView = function (view) {

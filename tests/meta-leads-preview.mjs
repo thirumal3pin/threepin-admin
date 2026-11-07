@@ -33,6 +33,13 @@ function sheetsFetch() {
   const res = (status, body) => ({ ok: status < 300, status, json: async () => body });
   const fetch = async url => {
     const u = new URL(url); calls.push(u.pathname + u.search);
+    if (u.pathname === '/drive/v3/files') return res(200, { files: [
+      { id: REAL.KOY, name: 'Koyambedu - Leads', modifiedTime: '2026-11-07T06:57:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: REAL.KDO, name: 'Kodabakkam office', modifiedTime: '2026-11-07T05:11:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: REAL.KDB, name: 'office space - Kodambakkam ', modifiedTime: '2026-11-06T05:41:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: 'INVENTORYsheetXXXXXXXXXXXXXXXXXXXXXXXXXXXX', name: '3PIN_Inventory_Master', modifiedTime: '2026-11-07T04:00:00Z', owners: [{ emailAddress: '3pinrentals@gmail.com' }] }] });
+    const one = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values\/A1:AZ1$/);
+    if (one) { const sh = byId[one[1]]; return res(200, { values: [sh ? sh.tabs[0].values[0] : ['Property_ID', 'Property_Name_Project']] }); }
     const m = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
     if (m[1] === LOCKED) return res(403, { error: { message: 'The caller does not have permission' } });
     const sh = byId[m[1]];
@@ -134,13 +141,16 @@ try {
   await waitText(page, '#metaLeadsView', /Lead sheets by property/);
   ok('The rail has Meta Ads Leads with its four screens', await page.evaluate(() => ['meta-leads', 'ml-dupes', 'ml-analysis', 'ml-setup'].every(id => document.body.innerHTML.includes(`'${id}'`) || document.body.innerHTML.includes(`"${id}"`))));
   ok('Test mode is said on the page', /Test mode/.test(await text(page, '.ml-test')));
-  ok('Empty: "No sheet mapped yet", an Add sheet button, the share address in the footnote',
-    /No sheet mapped yet/.test(await text(page, '.ml-map')) && !!(await page.$('.ml-map-h .ml-btn')) && (await text(page, '.ml-foot')).includes(SA));
+  await waitText(page, '.ml-avail', /Meta ad lead sheets the app can open/);
+  ok('Nothing mapped: the Add panel is open, listing the Meta ad lead sheets the app can open (3), others folded (1)',
+    /Meta ad lead sheets the app can open 3/.test(await text(page, '.ml-avail .ml-h')) && (await page.$$('.ml-avail > .ml-av')).length === 3 && /Other sheets shared with the app \(1\)/.test(await text(page, '.ml-other summary')));
+  ok('The share address is in the footnote', (await text(page, '.ml-foot')).includes(SA));
   await shot(page, '1-setup-empty');
 
   // Add a sheet: paste → Check → each tab with its own picker, none picked → pick → Save mapping.
+  const openAdd = async () => { if (!(await page.$('.ml-addpanel'))) await clickText(page, '.ml-map-h .ml-btn', 'Add sheet'); };
   const addSheet = async (link, picks, tags = {}) => {
-    await clickText(page, '.ml-map-h .ml-btn', 'Add sheet');
+    await openAdd();
     await page.fill('.ml-addpanel .ml-link-in', link);
     await clickText(page, '.ml-addpanel .ml-btn', 'Check');
     await waitText(page, '.ml-addpanel', /pick the property for each tab/);
@@ -153,10 +163,8 @@ try {
     await clickText(page, '.ml-addpanel .ml-btn', 'Save mapping');
     await page.waitForFunction(() => !document.querySelector('.ml-addpanel'), null, { timeout: 8000 });
   };
-  // ── 2. The Koyambedu sheet: no property is picked for you ──
-  await clickText(page, '.ml-map-h .ml-btn', 'Add sheet');
-  await page.fill('.ml-addpanel .ml-link-in', `https://docs.google.com/spreadsheets/d/${REAL.KOY}/edit?gid=0#gid=0`);
-  await clickText(page, '.ml-addpanel .ml-btn', 'Check');
+  // ── 2. The Koyambedu sheet, chosen from the list: no property is picked for you ──
+  await page.locator('.ml-av', { hasText: 'Koyambedu - Leads' }).locator('.ml-btn', { hasText: 'Choose' }).click();
   await waitText(page, '.ml-addpanel', /pick the property for each tab/);
   ok('Checked: its tab, ticked, with an EMPTY property picker', (await page.$$('.ml-arow')).length === 1 && await page.$eval('.ml-arow input[type=checkbox]', e => e.checked) && await page.$eval('.ml-arow select.ml-psel', e => e.value) === '');
   await shot(page, '2-add-sheet');
@@ -179,7 +187,8 @@ try {
   await shot(page, '2b-setup-mapped');
 
   // ── 3. Mistakes, said plainly ──
-  await clickText(page, '.ml-map-h .ml-btn', 'Add sheet');
+  await openAdd();
+  ok('The list now marks the three sheets mapped', (await page.$$eval('.ml-av.mapped', els => els.length)) === 3);
   await page.fill('.ml-addpanel .ml-link-in', `https://docs.google.com/spreadsheets/d/${LOCKED}/edit#gid=0`);
   await clickText(page, '.ml-addpanel .ml-btn', 'Check');
   await waitText(page, '.ml-addpanel', /share it with/);

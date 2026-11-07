@@ -148,8 +148,14 @@ async function server(locked) {
   [r, s] = await act('admin@threepin.in', { action: 'inspect', link: `https://docs.google.com/spreadsheets/d/${SHEETS.KDB.id}/edit#gid=222` });
   eq('Inspect: title, tabs, counts, Meta or not', [s, r.title, r.gid, r.tabs.map(t => [t.title, t.count, t.looksMeta])], [200, 'office space - Kodambakkam ', 222, [['Sheet1', 5, true], ['Sheet3', 4, true]]]);
   eq('Inspect: Sheet3\'s columns and issue', [r.tabs[1].cols.find(c => c.index === 22).role, r.tabs[1].issues.length], ['note', 1]);
+  [r, s] = await act('agent@threepin.in', { action: 'available' });
+  eq('Available sheets: managers only', s, 403);
+  [r, s] = await act('admin@threepin.in', { action: 'available' });
+  eq('Available sheets: every sheet shared with the app, the Meta ad lead ones marked', [s, r.files.map(f => [f.title.trim(), f.isMeta, f.mapped])],
+    [200, [['office space - Kodambakkam', true, false], ['Kodabakkam office', true, false], ['Koyambedu - Leads', true, false], ['3PIN_Inventory_Master', false, false]]]);
   [r, s] = await act('admin@threepin.in', { action: 'save', sources: [...SOURCES, { spreadsheetId: 'not-a-sheet' }, { ...SOURCES[0] }] });
   eq('Save: bad and repeated sheets dropped, who and when kept', [s, r.sources.length, r.sources[0].addedBy, r.sources[2].propertyCode], [200, 3, 'admin@threepin.in', 'SHR0001']);
+  eq('…a mapped sheet is marked mapped', (await act('admin@threepin.in', { action: 'available' }))[0].files.filter(f => f.mapped).length, 3);
   [r, s] = await act('agent@threepin.in', { action: 'read' });
   eq('Read (any team member): every tab of every sheet', [s, r.tabs.map(t => [t.sheetTitle, t.title, t.values.length - 1, t.propertyCode]), r.errors], [200,
     [['office space - Kodambakkam ', 'Sheet1', 5, 'KDBMC001'], ['office space - Kodambakkam ', 'Sheet3', 4, 'KDBMC001'], ['Kodabakkam office', 'Sheet1', 2, 'KDBMC001'], ['Koyambedu - Leads', 'Sheet1', 4, 'SHR0001']], []]);
@@ -158,7 +164,7 @@ async function server(locked) {
   // Test mode writes nothing else: no lead, no note — only the setup doc and the taskConfigs seed.
   const paths = [...db._store.keys()].sort();
   eq('Test mode: nothing but the setup is written', paths, ['metaLeadConfigs/t_3pin', 'taskConfigs/t_3pin']);
-  ok('Reads went to Google, not to cells being written', sheets.calls.every(c => !/:batchUpdate|:append|values\//.test(c) || /values:batchGet/.test(c)));
+  ok('Reads went to Google, not to cells being written', sheets.calls.every(c => !/:batchUpdate|:append|:clear/.test(c)));
 }
 {
   const { act } = await server(new Set([SHEETS.KOY.id]));

@@ -99,6 +99,14 @@ export function fakeSheetsFetch(locked = new Set()) {
   const fetch = async (url) => {
     const u = new URL(url);
     calls.push(u.pathname + u.search);
+    if (u.pathname === '/drive/v3/files') return res(200, { files: [...Object.values(SHEETS).map(sh => ({ id: sh.id, name: sh.title, modifiedTime: '2026-11-07T05:00:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] })),
+      { id: 'INVENTORYsheetXXXXXXXXXXXXXXXXXXXXXXXXXXXX', name: '3PIN_Inventory_Master', modifiedTime: '2026-11-07T04:00:00Z', owners: [{ emailAddress: '3pinrentals@gmail.com' }] }] });
+    const one = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values\/A1:AZ1$/);
+    if (one) {
+      if (locked.has(one[1])) return res(403, { error: { message: 'no' } });
+      const sh = byId[one[1]];
+      return res(200, { values: [sh ? sh.tabs[0].values[0] : ['Property_ID', 'Property_Name_Project']] });
+    }
     const m = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
     if (!m) return res(404, { error: { message: 'no route' } });
     if (locked.has(m[1])) return res(403, { error: { code: 403, message: 'The caller does not have permission' } });

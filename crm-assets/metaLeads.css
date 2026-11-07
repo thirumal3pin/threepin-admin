@@ -239,3 +239,13 @@ button.ml-tt-r:hover,.ml-tt-r.on{background:var(--bg2);}
   .ml-tt-r>span:first-child{grid-column:1 / -1;}
   .ml-tt-h{display:none;}
 }
+
+/* The sheets the app can open */
+.ml-avail{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:10px 12px;margin-top:4px;}
+.ml-av{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);font-size:13px;}
+.ml-avail .ml-h + .ml-av{border-top:0;}
+.ml-av.mapped{opacity:.65;}
+.ml-other{margin-top:8px;font-size:13px;}
+.ml-other summary{cursor:pointer;color:var(--ink2);padding:4px 0;}
+.ml-avail-f{margin-top:10px;line-height:1.6;}
+.ml-avail-f code{font-family:var(--mono, monospace);font-size:11.5px;background:var(--bg2);border:1px solid var(--border);padding:1px 5px;border-radius:5px;word-break:break-all;}
