@@ -20,7 +20,7 @@ eq('A mistyped 13-digit number is kept but not valid', [M.phoneKey('p:+918957352
 eq('Display phone', M.displayPhone('p:+919585509459'), '+91 95855 09459');
 eq('Meta time is read in its own offset', M.fmtWhen(M.parseTime('2026-10-15T01:37:51-05:00')), '15 Oct 2026, 12:07 pm');
 eq('A typed day-first date', M.dayKey(M.parseTime('27-8-2026')), '2026-08-27');
-eq('Ratings as typed', ['3', '2 ', '1', 'hot', 'Warm', 'cold', '', 'abc'].map(M.parseRating), [3, 2, 1, 3, 2, 1, null, null]);
+eq('Ratings 1 to 5, as typed', ['5', '4 ', '3', '2', '1', '4/5', '3.5', 'hot', 'Warm', 'cold', '', 'abc', '7'].map(M.parseRating), [5, 4, 3, 2, 1, 4, 4, 5, 3, 1, null, null, null]);
 eq('Agent from a first name', [M.matchAgent('Swami', ROSTER), M.matchAgent('Thirumal ', ROSTER), M.matchAgent('Ramesh', ROSTER), M.matchAgent('', ROSTER)], ['swami@threepin.in', 'thirumal@threepin.in', null, null]);
 
 // ── Columns ──
@@ -119,16 +119,16 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
   eq('KDBMC001 analysis: totals', [a.enquiries, a.people, a.repeats, a.inCrm, a.contacted, a.assigned, a.problems], [11, 9, 2, 3, 7, 5, 2]);
   eq('By ad', a.byAd, [{ label: 'Video 1', n: 6 }, { label: 'Video 2', n: 5 }]);
   eq('By platform', a.byPlatform, [{ label: 'Instagram', n: 8 }, { label: 'Facebook', n: 3 }]);
-  eq('Ratings (latest per person)', a.ratings, { 3: 1, 2: 2, 1: 0, none: 6 });
+  eq('Ratings 1–5 (latest per person)', a.ratings, { 1: 0, 2: 2, 3: 1, 4: 0, 5: 0, none: 6 });
   eq('Form answers tallied', a.questions.find(q => /area/.test(q.label)).answers[0], { label: '1,000–2,000 sq. ft.', n: 4 });
   eq('Series: one bar per day since the first enquiry, newest last', [a.series.length, a.series[a.series.length - 1].day, a.series.reduce((s, x) => s + x.n, 0)], [24, '2026-11-07', 11]);
   eq('Per tab, side by side', a.byTab.map(t => [t.sheetTitle.trim() + ' › ' + t.title, t.enquiries, t.people, t.duplicates, t.topAd]),
     [['office space - Kodambakkam › Sheet1', 5, 5, 2, 'Video 1'], ['office space - Kodambakkam › Sheet3', 4, 4, 1, 'Video 2'], ['Kodabakkam office › Sheet1', 2, 2, 1, 'Video 1']]);
   const one = M.analyse(plan, 'KDBMC001', NOW, 30, a.byTab[1].key);
   eq('One tab\'s own analysis', [one.enquiries, one.people, one.byAd], [4, 4, [{ label: 'Video 2', n: 3 }, { label: 'Video 1', n: 1 }]]);
-  eq('Agents: who holds how many, contacted, untouched, hot', a.agents.map(x => [x.agent, x.people, x.contacted, x.untouched, x.hot, x.warm]),
-    [['swami@threepin.in', 2, 2, 0, 1, 1], ['thirumal@threepin.in', 2, 2, 0, 0, 1], ['Ramesh', 1, 1, 0, 0, 0], ['', 4, 2, 2, 0, 0]]);
-  eq('Ad quality: per ad, people, hot, contacted', a.adQuality.map(x => [x.ad, x.enquiries, x.people, x.hot, x.contacted]), [['Video 1', 6, 5, 0, 3], ['Video 2', 5, 4, 1, 4]]);
+  eq('Agents: who holds how many, contacted, untouched, rated 4–5, rated 3, rated at all', a.agents.map(x => [x.agent, x.people, x.contacted, x.untouched, x.top, x.mid, x.rated]),
+    [['swami@threepin.in', 2, 2, 0, 0, 1, 2], ['thirumal@threepin.in', 2, 2, 0, 0, 0, 1], ['Ramesh', 1, 1, 0, 0, 0, 0], ['', 4, 2, 2, 0, 0, 0]]);
+  eq('Ad quality: per ad, people, rated 4–5, rated 3+, contacted, average rating', a.adQuality.map(x => [x.ad, x.enquiries, x.people, x.top, x.threePlus, x.contacted, x.avg]), [['Video 1', 6, 5, 0, 0, 3, 2], ['Video 2', 5, 4, 0, 1, 4, 2.5]]);
   eq('By agent', a.byAgent, [{ label: 'Not assigned', n: 4 }, { label: 'swami@threepin.in', n: 2 }, { label: 'thirumal@threepin.in', n: 2 }, { label: 'Ramesh', n: 1 }]);
 }
 

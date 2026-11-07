@@ -172,7 +172,7 @@
 
   // ─── Leads ─────────────────────────────────────────────────────────────
   var FILTERS = [['all', 'All'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
-  var SORTS = [['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Hot first'], ['name', 'Name A–Z']];
+  var SORTS = [['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z']];
   var DAY_MS = 86400000;
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
   var SLA_MS = 24 * 3600000;
@@ -204,7 +204,8 @@
     if (F.agent === '_none' && p.team.assignedRaw) return false;
     if (F.agent && F.agent[0] !== '_' && p.team.agent !== F.agent && p.team.assignedRaw !== F.agent) return false;
     if (F.rating === 'none' && p.team.rating) return false;
-    if (F.rating && F.rating !== 'none' && String(p.team.rating) !== F.rating) return false;
+    if (F.rating === '4+' && !(p.team.rating >= 4)) return false;
+    if (F.rating && F.rating !== 'none' && F.rating !== '4+' && String(p.team.rating) !== F.rating) return false;
     var rows = rowsFor(p, S.prop);
     if (F.ad && !rows.some(function (e) { return (e.ad || '') === F.ad; })) return false;
     if (F.tab && !rows.some(function (e) { return e.where.spreadsheetId + ':' + e.where.gid === F.tab; })) return false;
@@ -237,7 +238,7 @@
       t(mine, 'Assigned to me', '', "MetaLeads.setF('agent','_mine')") +
       t(a.people - a.assigned, 'Not assigned', a.people - a.assigned ? 'warn' : '', "MetaLeads.setF('agent','_none')") +
       t(late, 'Not contacted for over a day', late ? 'bad' : '', "MetaLeads.lateFirst()") +
-      t(a.ratings[3], 'Hot', '', "MetaLeads.setF('rating','3')") +
+      t(a.ratings[5] + a.ratings[4], 'Rated 4–5', '', "MetaLeads.setF('rating','4+')") +
       t(a.priority, 'Revisited — priority', a.priority ? 'warn' : '', "MetaLeads.filter('priority')") +
       t(a.inCrm, 'Already in the CRM', '', "MetaLeads.filter('crm')") +
       t(create, 'Would be new CRM leads', 'brand', "MetaLeads.filter('create')") + '</div>';
@@ -255,7 +256,7 @@
     var any = F.agent || F.rating || F.ad || F.tab || F.days || S.q || S.filter !== 'all';
     return '<div class="ml-tools">' +
       selectHtml('agent', F.agent, agentOpts) +
-      selectHtml('rating', F.rating, [['', 'Any rating'], ['3', 'Hot'], ['2', 'Warm'], ['1', 'Cold'], ['none', 'Not rated']]) +
+      selectHtml('rating', F.rating, [['', 'Any rating'], ['4+', 'Rated 4 and above'], ['5', 'Rating 5'], ['4', 'Rating 4'], ['3', 'Rating 3'], ['2', 'Rating 2'], ['1', 'Rating 1'], ['none', 'Not rated']]) +
       selectHtml('ad', F.ad, [['', 'Every ad']].concat(Object.keys(ads).sort().map(function (x) { return [x, x]; }))) +
       selectHtml('tab', F.tab, [['', 'Every sheet tab']].concat(Object.keys(tabs).map(function (k) { return [k, tabs[k]]; }))) +
       selectHtml('days', F.days, [['', 'Any date'], ['1', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days']]) +
@@ -273,7 +274,7 @@
     var opts = '<option value="">Assign to…</option>' + roster().map(function (e) { return '<option value="' + esc(e) + '">' + esc(agentLabel(e)) + '</option>'; }).join('') + '<option value="_none">— Not assigned —</option>';
     return '<div class="ml-bulk on">' + head +
       '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkAssign(this.value)">' + opts + '</select>' +
-      '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkRate(this.value)"><option value="">Set rating…</option><option value="3">Hot</option><option value="2">Warm</option><option value="1">Cold</option></select>' +
+      '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkRate(this.value)"><option value="">Set rating…</option><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>' +
       '<button class="ml-link" onclick="MetaLeads.selNone()">Clear selection</button>' +
       (S.writing ? '<span class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Writing to the sheet…</span>' : '<span class="ml-dim">Written to each lead’s row in its sheet' + (S.prop === 'all' ? '' : ' (' + esc(S.prop) + ' rows)') + '.</span>') +
     '</div>';
@@ -296,7 +297,7 @@
     { key: 'at', label: 'Enquired', get: function (p) { return MM().fmtWhen(lastAtFor(p)); }, sort: function (p) { return lastAtFor(p); }, nofilter: true },
     { key: 'ad', label: 'Ad', get: function (p) { return Array.from(new Set(rowsFor(p, S.prop).map(function (e) { return e.ad; }).filter(Boolean))).join(', '); } },
     { key: 'agent', label: 'Assigned to', get: function (p) { return p.team.agent ? agentLabel(p.team.agent) : (p.team.assignedRaw || ''); }, pick: true },
-    { key: 'rating', label: 'Rating', get: function (p) { return p.team.rating ? MM().RATING_LABEL[p.team.rating] : ''; }, sort: function (p) { return p.team.rating || 0; }, pick: ['Hot', 'Warm', 'Cold', '—'] },
+    { key: 'rating', label: 'Rating', get: function (p) { return p.team.rating ? String(p.team.rating) : ''; }, sort: function (p) { return p.team.rating || 0; }, pick: ['5', '4', '3', '2', '1', '—'] },
     { key: 'remarks', label: 'Remarks (in the sheet)', get: function (p) { return textsOf(p, 'remarks').join(' · '); }, wide: true },
     { key: 'fu', label: 'Follow-ups', get: function (p) { return textsOf(p, 'followups').join(' · '); }, wide: true },
     { key: 'done', label: 'Contacted', get: function (p) { return p.team.contacted ? 'Yes' : 'Not yet'; }, pick: ['Yes', 'Not yet'] },
@@ -406,7 +407,7 @@
     if (p.action === 'revisit') return 'A sync would add the new enquiry to this lead.' + dup;
     return 'Already a lead for ' + codes + ' — the ad row is where it came from. Nothing new to add.';
   }
-  function ratingChip(r) { return r ? '<span class="ml-rate r' + r + '">' + esc(MM().RATING_LABEL[r]) + '</span>' : ''; }
+  function ratingChip(r) { return r ? '<span class="ml-rate r' + r + '" title="Lead rating ' + r + ' of 5">★ ' + r + '</span>' : ''; }
   function waLink(p) {
     var k = p.phoneKey;
     if (!k || !p.phoneOk) return '';
@@ -496,7 +497,7 @@
     return '<div class="ml-work"><div class="ml-h">Work this lead <span class="ml-dim">— written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
       '<div class="ml-wgrid">' + pickRow +
         '<label>Assigned to</label><select class="ml-f" id="mlwA">' + agentOptions(aNow) + '</select>' +
-        '<label>Rating</label><div class="ml-rates">' + [3, 2, 1].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" onclick="MetaLeads.pickRate(this,' + n + ')">' + MM().RATING_LABEL[n] + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
+        '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
         '<label>' + esc(mCol ? mCol.label : 'Remarks') + '</label><textarea class="ml-in" id="mlwM" rows="2" placeholder="What did they say?" oninput="MetaLeads.draft(' + k + ',\'M\',this.value)">' + esc(S.drafts[p.key + ':M'] != null ? S.drafts[p.key + ':M'] : mNow) + '</textarea>' +
         '<label>Add a follow-up</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="e.g. Busy, call back at 6 pm — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
           '<div class="ml-qchips">' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
@@ -631,7 +632,7 @@
     var series = '<div class="ml-series">' + a.series.map(function (x) {
       return '<div class="ml-s" title="' + esc(x.label + ': ' + x.n) + '"><div class="ml-s-b" style="height:' + Math.round(100 * x.n / max) + '%"></div><div class="ml-s-l">' + (x.n ? x.n : '') + '</div></div>';
     }).join('') + '</div><div class="ml-s-axis"><span>' + esc(a.series.length ? a.series[0].label : '') + '</span><span>' + esc(a.series.length ? a.series[a.series.length - 1].label : '') + '</span></div>';
-    var rate = [{ label: 'Hot (3)', n: a.ratings[3] }, { label: 'Warm (2)', n: a.ratings[2] }, { label: 'Cold (1)', n: a.ratings[1] }, { label: 'Not rated', n: a.ratings.none }];
+    var rate = [5, 4, 3, 2, 1].map(function (n) { return { label: 'Rating ' + n, n: a.ratings[n] }; }).concat([{ label: 'Not rated', n: a.ratings.none }]);
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
     var card = function (h, inner) { return '<div class="ml-card"><div class="ml-h">' + h + '</div>' + inner + '</div>'; };
     var pctOf = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
@@ -673,22 +674,22 @@
     if (!a.agents.length) return '';
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
     return '<div class="ml-card"><div class="ml-h">Team — who holds which leads <span class="ml-dim">(click to see their leads)</span></div><div class="ml-tt">' +
-      '<div class="ml-tt-r ml-tt-h ml-team-r"><span>Agent</span><span>Leads</span><span>Contacted</span><span>Not contacted</span><span>Hot</span><span>Warm</span><span>Priority</span></div>' +
+      '<div class="ml-tt-r ml-tt-h ml-team-r"><span>Agent</span><span>Leads</span><span>Contacted</span><span>Not contacted</span><span>Rated 4–5</span><span>Rated 3</span><span>Priority</span></div>' +
       a.agents.map(function (x) {
         var label = x.agent ? (x.agent.indexOf('@') > 0 ? agentLabel(x.agent) : x.agent + ' (not on the team list)') : 'Not assigned';
         var f = x.agent ? x.agent : '_none';
         return '<button class="ml-tt-r ml-team-r" onclick="MetaLeads.agentLeads(' + js(f) + ')"><span><b>' + esc(label) + '</b></span><span>' + x.people + '</span><span>' + x.contacted + ' <span class="ml-dim">' + pct(x.contacted, x.people) + '</span></span>' +
-          '<span' + (x.untouched ? ' class="ml-bad"' : '') + '>' + x.untouched + '</span><span>' + x.hot + '</span><span>' + x.warm + '</span><span>' + x.priority + '</span></button>';
+          '<span' + (x.untouched ? ' class="ml-bad"' : '') + '>' + x.untouched + '</span><span>' + x.top + '</span><span>' + x.mid + '</span><span>' + x.priority + '</span></button>';
       }).join('') + '</div></div>';
   }
   function adTable(a) {
     if (!a.adQuality.length) return '';
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
     return '<div class="ml-card"><div class="ml-h">Lead quality by ad <span class="ml-dim">(ratings from the sheet)</span></div><div class="ml-tt">' +
-      '<div class="ml-tt-r ml-tt-h ml-ad-r"><span>Ad</span><span>Enquiries</span><span>People</span><span>Contacted</span><span>Hot</span><span>Warm or hot</span><span>Cold</span></div>' +
+      '<div class="ml-tt-r ml-tt-h ml-ad-r"><span>Ad</span><span>Enquiries</span><span>People</span><span>Contacted</span><span>Rated 4–5</span><span>Rated 3+</span><span>Average rating</span></div>' +
       a.adQuality.map(function (x) {
         return '<button class="ml-tt-r ml-ad-r" onclick="MetaLeads.adLeads(' + js(x.ad) + ')"><span><b>' + esc(x.ad) + '</b></span><span>' + x.enquiries + '</span><span>' + x.people + '</span><span>' + pct(x.contacted, x.people) + '</span>' +
-          '<span>' + x.hot + '</span><span>' + pct(x.warmOrHot, x.people) + '</span><span>' + x.cold + '</span></button>';
+          '<span>' + x.top + '</span><span>' + pct(x.threePlus, x.people) + '</span><span>' + (x.avg != null ? '★ ' + x.avg + ' <span class="ml-dim">(' + x.rated + ' rated)</span>' : '—') + '</span></button>';
       }).join('') + '</div></div>';
   }
 
@@ -986,7 +987,7 @@
         var rows = rowsFor(p, S.prop);
         return [p.name, p.phoneOk ? p.phoneKey.slice(2) : (p.phone || ''), p.email, p.properties.join(' '), MM().fmtWhen(firstAtFor(p)), MM().fmtWhen(lastAtFor(p)), rows.length,
           Array.from(new Set(rows.map(function (e) { return e.ad; }))).join(' / '), p.team.agent ? agentLabel(p.team.agent) : p.team.assignedRaw,
-          p.team.rating ? MM().RATING_LABEL[p.team.rating] : '', p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '', p.team.contacted ? 'yes' : 'no', p.crm ? p.crm.stage : ''].map(q).join(',');
+          p.team.rating ? String(p.team.rating) : '', p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '', p.team.contacted ? 'yes' : 'no', p.crm ? p.crm.stage : ''].map(q).join(',');
       }));
       var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
       var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'meta-ads-leads-' + (S.prop === 'all' ? 'all' : S.prop) + '.csv';

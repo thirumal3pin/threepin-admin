@@ -200,18 +200,28 @@ export function dayKey(t) {
 }
 export const fmtDay = key => { const [y, m, d] = key.split('-').map(Number); return `${d} ${MONTHS[m - 1]}`; };
 
-/** A rating as the team writes it — "3", "2 ", "hot", "warm" — → 1 (cold) … 3 (hot), or null. */
+/**
+ * The lead rating as the team writes it in the ad sheets: 1 to 5 (5 = the best lead, 1 = the
+ * weakest). "4", "4 ", "4/5", "3.5" are read as numbers; a word someone typed instead is placed on
+ * the same scale (hot 5, warm 3, cold 1). → 1…5, or null.
+ */
 export function parseRating(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   if (!s) return null;
-  const n = Number(s.match(/^\d+(\.\d+)?/) ? s.match(/^\d+(\.\d+)?/)[0] : NaN);
-  if (Number.isFinite(n) && n >= 1 && n <= 5) return Math.min(3, Math.round(n));
-  if (/hot|high|very/.test(s)) return 3;
-  if (/warm|medium|mid/.test(s)) return 2;
-  if (/cold|low|not/.test(s)) return 1;
+  const m = s.match(/^\d+(\.\d+)?/);
+  const n = m ? Number(m[0]) : NaN;
+  if (Number.isFinite(n) && n >= 1 && n <= 5) return Math.round(n);
+  if (/hot|very high/.test(s)) return 5;
+  if (/high/.test(s)) return 4;
+  if (/warm|medium|mid/.test(s)) return 3;
+  if (/low/.test(s)) return 2;
+  if (/cold|not/.test(s)) return 1;
   return null;
 }
-export const RATING_LABEL = { 1: 'Cold', 2: 'Warm', 3: 'Hot' };
+export const RATINGS = [5, 4, 3, 2, 1];
+export const RATING_LABEL = { 1: '1', 2: '2', 3: '3', 4: '4', 5: '5' };
+/** The rating band a report counts as strong: 4 and 5. */
+export const isTopRated = r => r >= 4;
 
 /**
  * The team member a typed name means: "Swami" → swami@threepin.in. Matched on the part of the
@@ -497,7 +507,7 @@ export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
     if (!questions.has(a.label)) questions.set(a.label, []);
     questions.get(a.label).push(a.value);
   }
-  const ratings = { 3: 0, 2: 0, 1: 0, none: 0 };
+  const ratings = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0, none: 0 };
   for (const p of ppl) ratings[p.team.rating || 'none']++;
   return {
     enquiries: enq.length, people: ppl.length,
@@ -523,14 +533,18 @@ export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
       agent, people: list.length,
       contacted: list.filter(p => p.team.contacted).length,
       untouched: list.filter(p => !p.team.contacted).length,
-      hot: list.filter(p => p.team.rating === 3).length, warm: list.filter(p => p.team.rating === 2).length, cold: list.filter(p => p.team.rating === 1).length,
+      top: list.filter(p => p.team.rating >= 4).length, mid: list.filter(p => p.team.rating === 3).length, low: list.filter(p => p.team.rating && p.team.rating <= 2).length,
+      rated: list.filter(p => p.team.rating).length,
       priority: list.filter(p => isPriorityFor(p, code)).length
     })).sort((a, b) => (a.agent ? 0 : 1) - (b.agent ? 0 : 1) || b.people - a.people),
     // Which ad brings the better leads: per ad, the people it brought, how many are hot, how many reached.
     adQuality: groupBy(enq, e => e.ad || '(no ad name)').map(([ad, rows]) => {
       const who = [...new Set(rows.map(e => ppl.find(p => p.enquiries.includes(e))).filter(Boolean))];
-      return { ad, enquiries: rows.length, people: who.length, hot: who.filter(p => p.team.rating === 3).length,
-        warmOrHot: who.filter(p => p.team.rating >= 2).length, contacted: who.filter(p => p.team.contacted).length, cold: who.filter(p => p.team.rating === 1).length };
+      const rated = who.filter(p => p.team.rating);
+      return { ad, enquiries: rows.length, people: who.length, top: who.filter(p => p.team.rating >= 4).length,
+        threePlus: who.filter(p => p.team.rating >= 3).length, low: who.filter(p => p.team.rating && p.team.rating <= 2).length,
+        contacted: who.filter(p => p.team.contacted).length, rated: rated.length,
+        avg: rated.length ? Math.round(10 * rated.reduce((n, p) => n + p.team.rating, 0) / rated.length) / 10 : null };
     }).sort((a, b) => b.enquiries - a.enquiries),
     // Each sheet's tab, side by side (for the property, or all).
     byTab: plan.tabs.filter(t => !code || t.propertyCode === code).map(t => {

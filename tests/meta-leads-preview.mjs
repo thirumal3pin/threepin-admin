@@ -398,19 +398,20 @@ try {
   ok('…and the follow-ups', /Visiting today 12PM \(16\/10\) · callback wednesday/.test(await cellOf('Arjun', 8)));
   await clickText(page, '.ml-th', 'Rating');
   const firstRating = await page.$eval('.ml-table tr.ml-tr', r => r.children[7].textContent.trim());
-  ok('Sort by Rating: Hot first', firstRating === 'Hot', firstRating);
+  ok('Sort by Rating: the highest first (★ 3)', firstRating === '★ 3', firstRating);
   await clickText(page, '.ml-th', 'Rating');
   const ratings = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[7].textContent.trim()));
-  ok('Click again: the other way, unrated still last', ratings.indexOf('Warm') < ratings.indexOf('Hot') && ratings[ratings.length - 1] === '—', ratings);
+  ok('Click again: the other way (★ 2 before ★ 3), unrated still last', ratings.indexOf('★ 2') < ratings.indexOf('★ 3') && ratings[ratings.length - 1] === '—', ratings);
   await page.fill('.ml-tfilt th:nth-child(9) input', 'gym');
   await page.waitForTimeout(450);
   let tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
   ok('Filter the Remarks column: "gym" → Arjun, Vijaya Rani', JSON.stringify(tnames) === JSON.stringify(['Arjun', 'Vijaya Rani']), tnames);
   await page.evaluate(() => MetaLeads.tfClear());
-  await page.selectOption('.ml-tfilt th:nth-child(8) select', 'Warm');
+  await page.selectOption('.ml-tfilt th:nth-child(8) select', '2');
   await page.waitForTimeout(250);
   tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
-  ok('Filter Rating: Warm', JSON.stringify(tnames) === JSON.stringify(['Parinita', 'Queen']), tnames);
+  ok('Filter Rating: 2', JSON.stringify(tnames) === JSON.stringify(['Parinita', 'Queen']), tnames);
+  ok('The Rating filter offers 5, 4, 3, 2, 1 and blank', JSON.stringify(await page.$$eval('.ml-tfilt th:nth-child(8) option', o => o.map(x => x.textContent))) === JSON.stringify(['All', '5', '4', '3', '2', '1', '—']));
   await page.locator('.ml-table tr.ml-tr', { hasText: 'Queen' }).locator('td').nth(1).click();
   await page.waitForTimeout(250);
   ok('A row clicked: the lead opens in a side panel, work form first, nothing cut off', !!(await page.$('.ml-drawer .ml-work')) &&
@@ -468,13 +469,14 @@ try {
   await clickText(page, '.ml-prow', 'Parinita');
   await clickText(page, '.ml-qc', 'Site visit fixed');
   ok('Quick phrase fills the follow-up', await page.$eval('#mlwF', e => e.value) === 'Site visit fixed');
-  await page.click('.ml-rb.r3');
+  ok('The work form offers ratings 1 to 5', JSON.stringify(await page.$$eval('.ml-work .ml-rb', b => b.map(x => x.textContent))) === JSON.stringify(['1', '2', '3', '4', '5']));
+  await page.click('.ml-rb.r4');
   await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
   await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
   await page.waitForTimeout(300);
   const pr = sheets.data.KDB.tabs[1].values[2];   // Parinita, Sheet3 row 3: Remarks (V) then a header-less column (W) already full
-  ok('Agent: Hot written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '3' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
-  ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /Hot/.test(await text(page, '.ml-person.open .ml-prow')));
+  ok('Agent: rating 4 written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '4' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
+  ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /★ 4/.test(await text(page, '.ml-person.open .ml-prow')));
   await shot(page, '13-agent-work');
   // A person with rows for two properties: pick which row the form writes; Enter saves.
   await page.evaluate(() => MetaLeads.clearF());
