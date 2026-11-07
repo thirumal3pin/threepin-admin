@@ -174,6 +174,9 @@ try {
       const p = tag + '-' + scheme;
       const ov = async n => { const o = await overflow(page); if (o > 1) console.log('  OVERFLOW ' + p + ' ' + n + ': ' + o + 'px', JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1 && getComputedStyle(e).position !== 'fixed').map(e => (e.id || e.className || e.tagName) + ':' + Math.round(e.getBoundingClientRect().right)).slice(0, 6)))); };
       await lshot(page, p + '-1-list'); await ov('list');
+      await page.evaluate(() => MetaLeads.setF('agent', '_none')); await page.waitForTimeout(250);
+      await page.screenshot({ path: join(OUT, 'look-' + p + '-1b-unassigned.png') }); await ov('unassigned');
+      await page.evaluate(() => MetaLeads.setF('agent', '')); await page.waitForTimeout(250);
       await clickText(page, '.ml-prow', 'Arjun');
       await lshot(page, p + '-2-open'); await ov('open');
       await page.evaluate(() => { MetaLeads.toggle(null); });

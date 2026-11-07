@@ -464,6 +464,33 @@ try {
   await page.waitForTimeout(200);
   ok('…and sees everyone with Clear filters', (await page.$$('.ml-person')).length === 12);
   // ── 10b. The agent: my leads, a follow-up after the call ──
+  // The switch: My leads / Unassigned / All, and Take.
+  ok('The switch: My leads 2 · Unassigned · All 12', /My leads 2/.test(await text(page, '.ml-sw')) && /All 12/.test(await text(page, '.ml-sw')), await text(page, '.ml-sw'));
+  await page.locator('.ml-sw button', { hasText: 'Unassigned' }).click();
+  await page.waitForTimeout(250);
+  const freeN = Number((await text(page, '.ml-sw button.on .ml-n'))), freeNfromSwitch = freeN;
+  const ut = await tileText();
+  ok('Unassigned: the counts are of the unassigned leads only', ut[0] === freeNfromSwitch + ' Not assigned (' + ut[0].match(/\((\d+) enquiries\)/)[1] + ' enquiries)' && !ut.some(x => /Assigned to me/.test(x)), ut);
+  ok('Unassigned: only leads nobody has, each with Take', (await page.$$('.ml-person')).length === freeN && (await page.$$('.ml-person .ml-take')).length === freeN && freeN > 0, freeN);
+  const taken = await page.$eval('.ml-person .ml-name', e => e.childNodes[0].textContent.trim());
+  await page.locator('.ml-person .ml-take').first().click();
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  ok('Take: ' + taken + ' leaves Unassigned and is in My leads (3)', !(await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()))).includes(taken) && /My leads 3/.test(await text(page, '.ml-sw')), await text(page, '.ml-sw'));
+  const allRows = Object.values(sheets.data).flatMap(sh => sh.tabs.flatMap(tb => tb.values));
+  ok('…written as "Swami" in the sheet\'s Assigned to', allRows.some(r => r.includes(taken) || r.some(c => String(c).includes(taken))) && allRows.filter(r => r.some(c => String(c).includes(taken))).every(r => r.includes('Swami')));
+  // Undo for the checks below: put the lead back.
+  await page.locator('.ml-sw button', { hasText: 'My leads' }).click();
+  await page.waitForTimeout(250);
+  const mt = await tileText();
+  ok('My leads: the counts are of my 3 leads only — no unassigned among them', /^3 Assigned to me \(\d+ enquiries\)$/.test(mt[0]) && !mt.some(x => /Not assigned/.test(x)) && mt.length === 8, mt);
+  await clickText(page, '.ml-prow', taken);
+  await page.selectOption('.ml-person.open #mlwA', '');
+  await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  await page.locator('.ml-sw button', { hasText: 'All' }).click();
+  await page.waitForTimeout(200);
   await page.locator('.ml-tile', { hasText: 'Assigned to me' }).click();
   await page.waitForTimeout(250);
   names = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()).sort());

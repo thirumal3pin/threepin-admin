@@ -233,6 +233,24 @@
     var mine = peopleFor(S.prop).filter(function (x) { return x.team.agent === me(); }).length;
     var late = peopleFor(S.prop).filter(function (x) { return !x.team.contacted && firstAtFor(x) && Date.now() - firstAtFor(x) > SLA_MS; }).length;
     var t = function (n, label, cls, onclick) { return '<button class="ml-tile ' + (cls || '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '><div class="ml-tile-n">' + n + '</div><div class="ml-tile-l">' + label + '</div></button>'; };
+    // My leads / Unassigned: the counts are of those leads only (an unassigned lead is never in "mine").
+    if (S.f.agent === '_mine' || S.f.agent === '_none') {
+      var c = code === 'all' ? '' : code;
+      var ppl = peopleFor(S.prop).filter(function (x) { return S.f.agent === '_mine' ? x.team.agent === me() : !x.team.assignedRaw; });
+      var enq = ppl.reduce(function (n, x) { return n + rowsFor(x, S.prop).length; }, 0);
+      var notYet = ppl.filter(function (x) { return !x.team.contacted; }).length;
+      var lateN = ppl.filter(function (x) { return !x.team.contacted && firstAtFor(x) && Date.now() - firstAtFor(x) > SLA_MS; }).length;
+      var pri = ppl.filter(function (x) { return MM().isPriorityFor(x, c); }).length;
+      return '<div class="ml-tiles">' +
+        t(ppl.length, (S.f.agent === '_mine' ? 'Assigned to me' : 'Not assigned') + ' (' + enq + ' enquiries)', '', "MetaLeads.filter('all')") +
+        t(lateN, 'Not contacted for over a day', lateN ? 'bad' : '', "MetaLeads.lateFirst()") +
+        t(notYet, 'Not contacted yet', notYet ? 'warn' : '', "MetaLeads.filter('uncontacted')") +
+        t(ppl.length - notYet, 'Contacted', '', '') +
+        t(ppl.filter(function (x) { return x.team.rating >= 4; }).length, 'Rated 4–5', '', "MetaLeads.setF('rating','4+')") +
+        t(pri, 'Revisited — priority', pri ? 'warn' : '', "MetaLeads.filter('priority')") +
+        t(ppl.filter(function (x) { return x.crm; }).length, 'Already in the CRM', '', "MetaLeads.filter('crm')") +
+        t(ppl.filter(function (x) { return x.action === 'create'; }).length, 'Would be new CRM leads', '', "MetaLeads.filter('create')") + '</div>';
+    }
     return '<div class="ml-tiles">' +
       t(a.people, 'People (' + a.enquiries + ' enquiries)', '', "MetaLeads.filter('all')") +
       t(mine, 'Assigned to me', '', "MetaLeads.setF('agent','_mine')") +
@@ -241,7 +259,21 @@
       t(a.ratings[5] + a.ratings[4], 'Rated 4–5', '', "MetaLeads.setF('rating','4+')") +
       t(a.priority, 'Revisited — priority', a.priority ? 'warn' : '', "MetaLeads.filter('priority')") +
       t(a.inCrm, 'Already in the CRM', '', "MetaLeads.filter('crm')") +
-      t(create, 'Would be new CRM leads', 'brand', "MetaLeads.filter('create')") + '</div>';
+      t(create, 'Would be new CRM leads', '', "MetaLeads.filter('create')") + '</div>';
+  }
+  // My leads / Unassigned (to take) / All — the first thing an agent picks.
+  function canTake() { var m = me(); return !!m && roster().indexOf(m) >= 0; }
+  function mineSwitch() {
+    var scope = peopleFor(S.prop), F = S.f;
+    var mine = scope.filter(function (x) { return x.team.agent === me(); }).length;
+    var none = scope.filter(function (x) { return !x.team.assignedRaw; }).length;
+    var b = function (v, label, n, hint) {
+      return '<button class="' + (F.agent === v ? 'on' : '') + '" title="' + esc(hint) + '" onclick="MetaLeads.setF(\'agent\',' + js(v) + ')">' + label + ' <span class="ml-n">' + n + '</span></button>';
+    };
+    return '<div class="ml-sw" role="group" aria-label="Whose leads">' +
+      b('_mine', '<i class="fa-regular fa-user"></i> My leads', mine, 'Leads assigned to you') +
+      b('_none', '<i class="fa-regular fa-hand"></i> Unassigned', none, 'Nobody has these yet — take one') +
+      b('', 'All', scope.length, 'Everyone') + '</div>';
   }
   function selectHtml(key, value, options) {
     return '<select class="ml-f' + (key === 'sort' ? ' ml-sort' : ' fsel' + (value ? ' set' : '')) + '" aria-label="' + esc(key) + '" onchange="MetaLeads.setF(' + js(key) + ',this.value)">' + options.map(function (o) {
@@ -254,7 +286,8 @@
     scope.forEach(function (p) { rowsFor(p, S.prop).forEach(function (e) { if (e.ad) ads[e.ad] = 1; tabs[e.where.spreadsheetId + ':' + e.where.gid] = String(e.where.sheetTitle).trim() + ' › ' + e.where.tab; }); });
     var agentOpts = [['', 'Every agent'], ['_mine', 'Assigned to me'], ['_none', 'Not assigned']].concat(roster().map(function (e) { return [e, agentLabel(e)]; }));
     var any = F.agent || F.rating || F.ad || F.tab || F.days || S.q || S.filter !== 'all';
-    var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return F[k]; }).length;
+    // The switch (My leads / Unassigned) is not counted as a filter here — it is on screen already.
+    var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return F[k] && !(k === 'agent' && (F[k] === '_mine' || F[k] === '_none')); }).length;
     return '<div class="ml-tools' + (S.fOpen ? ' open' : '') + '">' +
       '<button class="ml-btn sm ml-fbtn" onclick="MetaLeads.fOpen()"><i class="fa-solid fa-sliders"></i> Filters' + (nSet ? ' <span class="ml-fn">' + nSet + '</span>' : '') + '</button>' +
       selectHtml('agent', F.agent, agentOpts) +
@@ -277,6 +310,7 @@
     return '<div class="ml-bulk on">' + head +
       '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkAssign(this.value)">' + opts + '</select>' +
       '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkRate(this.value)"><option value="">Set rating…</option><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>' +
+      (canTake() ? '<button class="ml-btn sm" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.bulkAssign(' + js(me()) + ')">Assign to me</button>' : '') +
       '<button class="ml-link" onclick="MetaLeads.selNone()">Clear selection</button>' +
       (S.writing ? '<span class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Writing to the sheet…</span>' : '<span class="ml-dim">Written to each lead’s row in its sheet' + (S.prop === 'all' ? '' : ' (' + esc(S.prop) + ' rows)') + '.</span>') +
     '</div>';
@@ -381,7 +415,7 @@
     var chips = FILTERS.map(function (f) { return '<button class="ml-chip sm' + (S.filter === f[0] ? ' on' : '') + '" onclick="MetaLeads.filter(' + js(f[0]) + ')">' + f[1] + '</button>'; }).join('');
     var rows = list.slice(0, S.shown).map(personHtml).join('');
     var sw = '<div class="ml-layout"><button class="' + (S.layout !== 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'list\')"><i class="fa-solid fa-list"></i> List</button><button class="' + (S.layout === 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'table\')"><i class="fa-solid fa-table"></i> Table</button></div>';
-    return propChips(true) + tiles(a, S.prop) +
+    return propChips(true) + mineSwitch() + tiles(a, S.prop) +
       '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)"><div class="ml-chips ml-scroll">' + chips + '</div></div>' +
       '<div class="ml-tools-w">' + sw + toolbar() + '</div>' +
       (S.layout === 'table' ? tableHtml(list) :
@@ -459,7 +493,7 @@
           (p.crm ? '<div class="ml-dim">CRM: ' + esc(p.crm.stage || '') + (p.crm.agent ? ' · ' + esc(agentLabel(p.crm.agent)) : '') + '</div>' : '') +
           (p.issues.length ? '<div class="ml-issue"><i class="fa-solid fa-triangle-exclamation"></i> ' + esc(p.issues.join(' · ')) + '</div>' : '') + '</div>' +
       '</button>' +
-      '<div class="ml-quick">' + (p.phoneOk ? '<a class="ml-qb" href="tel:+' + esc(p.phoneKey) + '" title="Call" aria-label="Call"><i class="fa-solid fa-phone"></i></a>' : '') +
+      '<div class="ml-quick">' + (!p.team.assignedRaw && canTake() && rows.some(function (e) { return e.metaId; }) ? '<button class="ml-take" title="Assign this lead to me — written in the sheet" onclick="MetaLeads.take(' + js(p.key) + ')"' + (S.writing ? ' disabled' : '') + '>Take</button>' : '') + (p.phoneOk ? '<a class="ml-qb" href="tel:+' + esc(p.phoneKey) + '" title="Call" aria-label="Call"><i class="fa-solid fa-phone"></i></a>' : '') +
         (wa ? '<a class="ml-qb wa" href="' + esc(wa) + '" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>' : '') + '</div>' +
       '</div>' + (open ? detailHtml(p) : '') + '</div>';
   }
@@ -977,6 +1011,19 @@
       var groups = {};
       list.forEach(function (p) { rowsFor(p, S.prop).forEach(function (e) { if (!e.metaId) return; var c = firstCol(e, 'assigned'); addEdit(groups, e, { field: 'assigned', value: name, from: c ? cellOf(e, c.index) : '' }); }); });
       writeEdits(groups).then(function (r) { if (!r.errors.length && !r.conflicts.length) S.sel = {}; render(); });
+    },
+    // Take an unassigned lead: my name in Assigned to on each of its rows (only cells still empty).
+    take: function (key) {
+      var p = S.plan.people.find(function (x) { return x.key === key; });
+      if (!p || !canTake()) return;
+      var name = agentLabel(me()), groups = {};
+      rowsFor(p, S.prop).forEach(function (e) {
+        if (!e.metaId) return;
+        var c = firstCol(e, 'assigned'), now = c ? cellOf(e, c.index) : '';
+        if (!now) addEdit(groups, e, { field: 'assigned', value: name, from: '' });
+      });
+      if (!Object.keys(groups).length) { toast('Already assigned'); return; }
+      writeEdits(groups).then(function (r) { if (!r.errors.length && !r.conflicts.length) toast((p.name || 'The lead') + ' is yours — in My leads'); });
     },
     bulkRate: function (n) {
       var list = S.plan.people.filter(function (p) { return S.sel[p.key]; });
