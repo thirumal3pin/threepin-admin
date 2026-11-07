@@ -467,7 +467,11 @@ try {
   ok('Agent (Swami): "Assigned to me" — Arjun and Parinita', JSON.stringify(names) === JSON.stringify(['Arjun', 'Parinita']), names);
   ok('Each has Call and WhatsApp, the message naming the agent and the property', await page.$$eval('.ml-person .ml-qb.wa', els => els.every(a => /wa\.me\/91\d{10}\?text=Hi%20.*Swami.*3%20PIN%20Realty/.test(a.href))) && (await page.$$('.ml-person a[href^="tel:+91"]')).length === 2);
   await clickText(page, '.ml-prow', 'Parinita');
+  ok('The preset phrases are hidden until asked for', !(await page.isVisible('.ml-work .ml-qc')));
+  await page.click('.ml-work .ml-qtoggle');
+  ok('…"Quick phrases" shows them', await page.isVisible('.ml-work .ml-qc'));
   await clickText(page, '.ml-qc', 'Site visit fixed');
+  ok('…and picking one hides them again', !(await page.isVisible('.ml-work .ml-qc')));
   ok('Quick phrase fills the follow-up', await page.$eval('#mlwF', e => e.value) === 'Site visit fixed');
   ok('The work form offers ratings 1 to 5', JSON.stringify(await page.$$eval('.ml-work .ml-rb', b => b.map(x => x.textContent))) === JSON.stringify(['1', '2', '3', '4', '5']));
   await page.click('.ml-rb.r4');

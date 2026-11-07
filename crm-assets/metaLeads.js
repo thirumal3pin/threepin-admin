@@ -520,7 +520,8 @@
         (notes.length ? '<div class="ml-wsub">Notes in the sheet <span class="ml-dim">— edit any of them</span></div>' + notesHtml : '') +
         '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
           '<div class="ml-goes">Goes into <b>' + esc(nextNoteLabel(e).replace(' (a new column)', '')) + '</b>' + (/a new column/.test(nextNoteLabel(e)) ? ' — a new column, added to the sheet' : '') + '</div>' +
-          '<div class="ml-qchips">' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
+          '<button type="button" class="ml-link ml-qtoggle" onclick="MetaLeads.quickOpen(this)">Quick phrases <i class="fa-solid fa-chevron-down"></i></button>' +
+          '<div class="ml-qchips" hidden>' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
           '<label class="ml-dim"><input type="checkbox" id="mlwD" ' + (S.stamp ? 'checked' : '') + ' onchange="MetaLeads.stamp(this.checked)"> add today’s date (' + esc(today()) + ')</label></div>' +
       '</div>' +
       '<div class="ml-wbtns"><button class="ml-btn primary" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.saveWork(' + k + ')">' + (S.writing ? '<i class="fa-solid fa-rotate fa-spin"></i> Writing…' : 'Save to the sheet') + '</button>' +
@@ -963,7 +964,12 @@
       hid.value = on ? '' : String(n);
       box.querySelectorAll('.ml-rb').forEach(function (b) { b.classList.toggle('on', !on && b === btn); });
     },
-    quickText: function (q) { var f = document.getElementById('mlwF'); if (f) { f.value = f.value ? f.value + ', ' + q : q; f.dispatchEvent(new Event('input')); f.focus(); } },
+    quickText: function (q) {
+      var f = document.getElementById('mlwF'); if (f) { f.value = f.value ? f.value + ', ' + q : q; f.dispatchEvent(new Event('input')); f.focus(); }
+      var box = document.querySelector('#metaLeadsView .ml-work .ml-qchips'); if (box) box.hidden = true;   // picked: out of the way again
+    },
+    // The preset phrases stay hidden until asked for (no re-render, so typing is never lost).
+    quickOpen: function (btn) { var box = btn.parentNode.querySelector('.ml-qchips'); if (box) box.hidden = !box.hidden; },
     draft: function (key, f, v) { S.drafts[key + ':' + f] = v; },
     stamp: function (on) { S.stamp = on; },
     saveWork: function (key) {
