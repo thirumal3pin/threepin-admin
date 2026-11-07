@@ -21,6 +21,8 @@
 //   write    the team's columns of a connected tab (assigned, rating, remarks, follow-ups) [the team]
 //            — a new column                                                             [managers]
 //
+// Adding a column outright (field 'header') is for managers; a write that needs Rating / Assigned to /
+// Follow up N where the tab has none adds that one column for anyone working the lead.
 // Firestore cost per call: config 2 reads; inspect 1; save 2 + 1 write; read 1 + 1 write.
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -181,6 +183,7 @@ export async function metaLeadsAction(user, body, deps) {
     const src = (cfg.sources || []).find(x => x.id === sid);
     const tab = src && (src.tabs || []).find(t => t.gid === gid);
     if (!src || !tab) return [{ ok: false, error: 'That tab is not connected in Setup' }, 404];
+    if (src.on === false || tab.on === false) return [{ ok: false, error: 'That sheet or tab is switched off in Setup' }, 409];
     if (edits.some(e => e && e.field === 'header') && !manager) return [{ ok: false, error: 'Only a manager can add a column' }, 403];
     const wtok = deps.token(sa, WRITE_SCOPE);
     try {
@@ -194,8 +197,10 @@ export async function metaLeadsAction(user, body, deps) {
           valueInputOption: 'RAW',
           data: plan.updates.map(u => ({ range: `${quoteTab(now.title)}!${u.range}`, values: [[u.value]] }))
         });
-        await db.collection(EDITS).add({ tenantId: T, by: me, at: deps.now(), spreadsheetId: sid, gid, tab: now.title,
-          applied: plan.applied.slice(0, 300), added: plan.added });
+        try {
+          await db.collection(EDITS).add({ tenantId: T, by: me, at: deps.now(), spreadsheetId: sid, gid, tab: now.title,
+            applied: plan.applied.slice(0, 300), added: plan.added });
+        } catch (e) { console.error('meta-leads: edit log not kept', e && e.message); }
       }
       return [{ ok: true, applied: plan.applied, added: plan.added, conflicts: plan.conflicts, errors: plan.errors }, 200];
     } catch (e) {
@@ -251,6 +256,7 @@ export async function metaLeadsAction(user, body, deps) {
         for (const f of found.filter(f => !f.now)) errors.push({ sourceId: s.id, title: `${s.title} › ${f.t.title}`, error: 'This tab is no longer in the sheet' });
         const live = found.filter(f => f.now);
         const values = await batchGet(deps, tok(), s.spreadsheetId, live.map(f => `${quoteTab(f.now.title)}!${READ_RANGE}`), shareWith);
+        live.forEach((f, i) => { if ((values[i] || []).length >= MAX_ROWS) errors.push({ sourceId: s.id, title: `${meta.title || s.title} › ${f.now.title}`, error: `Only the first ${MAX_ROWS - 1} rows are read — split this tab` }); });
         live.forEach((f, i) => tabs.push({
           sourceId: s.id, spreadsheetId: s.spreadsheetId, sheetTitle: meta.title || s.title, title: f.now.title, gid: f.t.gid,
           propertyCode: f.t.propertyCode || s.propertyCode, tag: f.t.tag || '', remark: f.t.remark || '', overrides: f.t.overrides || {}, values: values[i] || []

@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true,
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -84,18 +84,38 @@
     S.cfgLoading = true; S.cfgError = null;
     api('config').then(function (d) {
       S.cfg = d; S.draft = JSON.parse(JSON.stringify(d.sources || []));
+      setTimeout(autoRead, 0);
     }).catch(function (e) { S.cfgError = e.message; })
       .then(function () { S.cfgLoading = false; render(); });
   }
-  function readSheets() {
+  // Each sheet in its own call, three at a time — each answer stays small and quick however many
+  // sheets are connected. → one combined answer, as a single read would have given.
+  async function readEach(ids) {
+    var out = { ok: true, tabs: [], errors: [], at: Date.now() }, i = 0;
+    async function worker() {
+      while (i < ids.length) {
+        var id = ids[i++];
+        try { var d = await api('read', { sourceId: id }); out.tabs = out.tabs.concat(d.tabs || []); out.errors = out.errors.concat(d.errors || []); out.at = d.at || out.at; }
+        catch (e) { out.errors.push({ sourceId: id, title: (((S.cfg && S.cfg.sources) || []).find(function (x) { return x.id === id; }) || {}).title || id, error: e.message }); }
+      }
+    }
+    await Promise.all([worker(), worker(), worker()]);
+    var order = ids;
+    out.tabs.sort(function (a, b) { return order.indexOf(a.sourceId) - order.indexOf(b.sourceId); });
+    return out;
+  }
+  function readSheets(quiet) {
     if (S.reading) return;
+    var ids = ((S.cfg && S.cfg.sources) || []).filter(function (x) { return x.on !== false; }).map(function (x) { return x.id; });
     S.reading = true; S.readError = null; render();
-    api('read').then(function (d) {
+    (ids.length ? readEach(ids) : api('read')).then(function (d) {
       S.read = d; S.open = null; S.shown = PAGE;
       replan();
       if (S.cfg) S.cfg.lastRead = { at: d.at, by: (window.crmAuth && window.crmAuth.email) || '', sheets: [] };
       loadConfig(true);
-      toast(d.errors && d.errors.length ? 'Read, with ' + d.errors.length + ' sheet problem' + (d.errors.length > 1 ? 's' : '') : 'Sheets read — nothing was added to the CRM');
+      if (d.errors && d.errors.length) toast('Read, with ' + d.errors.length + ' sheet problem' + (d.errors.length > 1 ? 's' : ''));
+      else if (!quiet) toast('Sheets read');
+      agentDefault();
     }).catch(function (e) { S.readError = e.message; })
       .then(function () { S.reading = false; render(); });
   }
@@ -127,7 +147,7 @@
     return '<div class="ml-head"><div><h2 class="ml-title"><i class="fa-brands fa-meta"></i> Meta Ads Leads</h2>' +
       '<div class="ml-sub">Leads from the Google Sheets your Meta ads fill, matched to properties and the CRM</div></div>' +
       '<div class="ml-head-r"><span class="ml-last">' + esc(last) + '</span>' +
-      '<button class="ml-btn primary" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading the sheets…' : 'Read the sheets') + '</button></div></div>' +
+      '<button class="ml-btn primary" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading the sheets…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</button></div></div>' +
       '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> Changes you make here (assigned to, rating, remarks, follow-ups) are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet — the CRM column shows what a sync would do.</div>' +
       '<div class="ml-tabs">' + tabs + '</div>' +
       (S.readError ? '<div class="ml-alert bad">' + esc(S.readError) + '</div>' : '') +
@@ -156,6 +176,14 @@
   var DAY_MS = 86400000;
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
   var SLA_MS = 24 * 3600000;
+  var FKEY = 'ml.filters';
+  function saveF() { try { localStorage.setItem(FKEY, JSON.stringify({ f: S.f, by: me() })); } catch (e) { /* no storage */ } }
+  (function loadF() { try { var x = JSON.parse(localStorage.getItem(FKEY) || 'null'); if (x && x.f) { S.f = Object.assign(S.f, x.f); S.fRestored = true; } } catch (e) { /* none */ } })();
+  function agentDefault() {
+    if (S.agentDefaulted || S.fRestored || !S.plan || !S.cfg || S.cfg.manager) return;
+    S.agentDefaulted = true;
+    if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; S.f.sort = 'untouched'; }
+  }
   function me() { return (typeof currentUserEmail !== 'undefined' && currentUserEmail) ? String(currentUserEmail).toLowerCase() : ''; }
   function peopleFor(code) {
     return S.plan.people.filter(function (p) { return code === 'all' || p.properties.indexOf(code) >= 0; });
@@ -240,7 +268,7 @@
   function bulkBar(list) {
     var keys = Object.keys(S.sel).filter(function (k) { return S.sel[k]; });
     var all = list.length && list.every(function (p) { return S.sel[p.key]; });
-    var head = '<label class="ml-selall"><input type="checkbox" ' + (all ? 'checked' : '') + ' onchange="MetaLeads.selAll(this.checked)"> ' + (keys.length ? keys.length + ' selected' : 'Select all shown') + '</label>';
+    var head = '<label class="ml-selall"><input type="checkbox" ' + (all ? 'checked' : '') + ' onchange="MetaLeads.selAll(this.checked)"> ' + (keys.length ? keys.length + ' selected' : 'Select all ' + list.length) + '</label>';
     if (!keys.length) return '<div class="ml-bulk">' + head + '</div>';
     var opts = '<option value="">Assign to…</option>' + roster().map(function (e) { return '<option value="' + esc(e) + '">' + esc(agentLabel(e)) + '</option>'; }).join('') + '<option value="_none">— Not assigned —</option>';
     return '<div class="ml-bulk on">' + head +
@@ -265,12 +293,12 @@
   }
   function actionBadge(p) {
     var b;
-    if (p.action === 'create') b = '<span class="ml-badge brand" title="A sync would add this person as a new lead">Would add as new lead</span>';
+    if (p.action === 'create') b = '';
     else if (p.action === 'attach') b = '<span class="ml-badge" title="Already a CRM lead; a sync would add ' + esc(p.missingCodes.join(', ')) + ' to their properties">In CRM · would add ' + esc(p.missingCodes.join(', ')) + '</span>';
     else if (p.action === 'reopen') b = '<span class="ml-badge bad" title="Their CRM lead is ' + esc(p.crm.stage) + '; a sync would reopen it, marked duplicate">Would reopen (was ' + esc(p.crm.stage) + ')</span>';
     else if (p.action === 'revisit') b = '<span class="ml-badge warn" title="Already a CRM lead for this property and enquired again through the ad">In CRM · enquired again</span>';
     else b = '<span class="ml-badge ok" title="Already a CRM lead for this property, nothing new">In CRM · already linked</span>';
-    if (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop)) b += ' <span class="ml-badge pri" title="Revisited (duplicate ad lead) — the agent should update this lead first"><i class="fa-solid fa-bolt"></i> Revisited · priority</span>';
+    if (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop)) b += (b ? ' ' : '') + '<span class="ml-badge pri" title="Revisited (duplicate ad lead) — the agent should update this lead first"><i class="fa-solid fa-bolt"></i> Revisited · priority</span>';
     return b;
   }
   // What a sync would do with this person, in words.
@@ -352,19 +380,27 @@
       (current && !cur ? '<option value="_keep" selected>' + esc(current) + ' (as written)</option>' : '');
   }
   // The quick form: the latest row for the property in view — assign, rate, a remark, a follow-up.
+  function workRow(p) {
+    var rows = rowsFor(p, S.prop).filter(function (e) { return e.metaId; });
+    var want = S.workRow[p.key];
+    return rows.find(function (e) { return rowKey(e) === want; }) || rows[rows.length - 1] || null;
+  }
   function workHtml(p) {
     var rows = rowsFor(p, S.prop).filter(function (e) { return e.metaId; });
-    var e = rows[rows.length - 1];
+    var e = workRow(p);
     if (!e) return '';
+    var pickRow = rows.length > 1 ? '<label>Write to</label><select class="ml-f" onchange="MetaLeads.workRow(' + js(p.key) + ',this.value)">' + rows.slice().reverse().map(function (x) {
+      return '<option value="' + esc(rowKey(x)) + '"' + (x === e ? ' selected' : '') + '>' + esc(x.propertyCode + ' · ' + String(x.where.sheetTitle).trim() + ' › ' + x.where.tab + ' · ' + MM().fmtWhen(x.at).split(',')[0]) + '</option>';
+    }).join('') + '</select>' : '';
     var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating'), mCol = firstCol(e, 'remarks');
     var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '', mNow = mCol ? cellOf(e, mCol.index) : '';
     var k = js(p.key), rated = MM().parseRating(rNow);
     return '<div class="ml-work"><div class="ml-h">Work this lead <span class="ml-dim">— written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
-      '<div class="ml-wgrid">' +
+      '<div class="ml-wgrid">' + pickRow +
         '<label>Assigned to</label><select class="ml-f" id="mlwA">' + agentOptions(aNow) + '</select>' +
         '<label>Rating</label><div class="ml-rates">' + [3, 2, 1].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" onclick="MetaLeads.pickRate(this,' + n + ')">' + MM().RATING_LABEL[n] + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
-        '<label>' + esc(mCol ? mCol.label : 'Remarks') + '</label><textarea class="ml-in" id="mlwM" rows="2" placeholder="What did they say?">' + esc(mNow) + '</textarea>' +
-        '<label>Add a follow-up</label><div><input class="ml-in" id="mlwF" placeholder="e.g. Busy, call back at 6 pm">' +
+        '<label>' + esc(mCol ? mCol.label : 'Remarks') + '</label><textarea class="ml-in" id="mlwM" rows="2" placeholder="What did they say?" oninput="MetaLeads.draft(' + k + ',\'M\',this.value)">' + esc(S.drafts[p.key + ':M'] != null ? S.drafts[p.key + ':M'] : mNow) + '</textarea>' +
+        '<label>Add a follow-up</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="e.g. Busy, call back at 6 pm — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
           '<div class="ml-qchips">' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
           '<label class="ml-dim"><input type="checkbox" id="mlwD" ' + (S.stamp ? 'checked' : '') + ' onchange="MetaLeads.stamp(this.checked)"> add today’s date (' + esc(today()) + ')</label></div>' +
       '</div>' +
@@ -380,7 +416,7 @@
     return '<div class="ml-rowedit">' + (cols.length ? cols.map(function (c) {
       var v = cellOf(e, c.index);
       return '<label>' + esc(c.header || ('Column ' + MM().colLetter(c.index))) + ' <span class="ml-dim">' + MM().colLetter(c.index) + ' · ' + esc(MM().ROLES[c.role]) + '</span></label>' +
-        '<textarea class="ml-in" rows="1" data-col="' + c.index + '" data-from="' + esc(v) + '">' + esc(v) + '</textarea>';
+        '<textarea class="ml-in" rows="1" data-col="' + c.index + '" data-header="' + esc(c.header || '') + '" data-from="' + esc(v) + '">' + esc(v) + '</textarea>';
     }).join('') : '<div class="ml-dim">This row has no team columns yet — use Work this lead, which adds them.</div>') +
       '<div class="ml-wbtns"><button class="ml-btn primary sm" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.saveRow(' + k + ')">Save row to the sheet</button> <button class="ml-btn sm" onclick="MetaLeads.editRow(null)">Cancel</button></div></div>';
   }
@@ -391,20 +427,31 @@
     try {
       for (var key in groups) {
         var g = groups[key];
-        var d = await api('write', { spreadsheetId: g.sid, gid: g.gid, edits: g.edits });
-        var t = readTab(g.sid, g.gid);
-        if (t) {
-          (d.added || []).forEach(function (a) { while (t.values[0].length <= a.col) t.values[0].push(''); t.values[0][a.col] = a.header; });
-          (d.applied || []).forEach(function (a) { var r = t.values[a.row - 1] || (t.values[a.row - 1] = []); while (r.length <= a.col) r.push(''); r[a.col] = a.value; });
-        }
-        total += (d.applied || []).length;
-        conflicts = conflicts.concat(d.conflicts || []); errs = errs.concat(d.errors || []);
+        try {
+          var d = await api('write', { spreadsheetId: g.sid, gid: g.gid, edits: g.edits });
+          var t = readTab(g.sid, g.gid);
+          if (t) {
+            (d.added || []).forEach(function (a) { while (t.values[0].length <= a.col) t.values[0].push(''); t.values[0][a.col] = a.header; });
+            var idc = (t.values[0] || []).findIndex(function (h) { return String(h).trim().toLowerCase() === 'id'; });
+            (d.applied || []).forEach(function (a) {
+              var ri = idc < 0 ? -1 : t.values.findIndex(function (r, i) { return i > 0 && String((r || [])[idc] || '').trim() === a.metaId; });
+              if (ri < 0) return;   // not in this copy any more: the next read shows it
+              var r = t.values[ri]; while (r.length <= a.col) r.push(''); r[a.col] = a.value;
+            });
+          }
+          total += (d.applied || []).length;
+          conflicts = conflicts.concat(d.conflicts || []); errs = errs.concat(d.errors || []);
+          if ((d.applied || []).length) g.done = true;
+        } catch (e) { errs.push(e.message); }   // one tab failing does not stop the others
       }
     } catch (e) { errs.push(e.message); }
     S.writing = false;
     replan(); render();
-    if (errs.length) toast(errs[0]);
-    else if (conflicts.length) toast(conflicts.length + ' change' + (conflicts.length > 1 ? 's were' : ' was') + ' not written — the sheet changed since it was read. Press Read the sheets, then try again.');
+    if (errs.length) toast(errs.length > 1 ? errs[0] + ' (and ' + (errs.length - 1) + ' more)' : errs[0]);
+    else if (conflicts.length) {
+      toast(conflicts.length + ' change' + (conflicts.length > 1 ? 's were' : ' was') + ' not written — someone changed the sheet. It has been read again: check and save again.');
+      Object.keys(groups).forEach(function (k) { var sid = groups[k].sid; var src = (S.cfg.sources || []).find(function (x) { return x.spreadsheetId === sid; }); if (src) MetaLeads.readOne(src.id); });
+    }
     else toast(total ? 'Written to the sheet (' + total + ' cell' + (total > 1 ? 's' : '') + ')' : 'Nothing changed');
     return { total: total, conflicts: conflicts, errors: errs };
   }
@@ -518,7 +565,6 @@
         card('By ad', bars(a.byAd, a.enquiries)) +
         card('By platform', bars(a.byPlatform, a.enquiries)) +
         card('Rating (latest in the sheet)', bars(rate, a.people)) +
-        card('Assigned to (in the sheet)', bars(a.byAgent.map(function (x) { return { label: x.label.indexOf('@') > 0 ? agentLabel(x.label) : x.label, n: x.n }; }), a.people)) +
         card('Already in the CRM — their stage', a.byStage.length ? bars(a.byStage, a.inCrm) : '<div class="ml-dim">None of them is a CRM lead yet.</div>') +
         a.questions.map(function (q) { return card('Form: ' + esc(q.label), bars(q.answers)); }).join('') +
       '</div>';
@@ -742,7 +788,7 @@
   // ─── actions ───────────────────────────────────────────────────────────
   window.MetaLeads = {
     go: function (v) { if (typeof toggleView === 'function') toggleView(v); },
-    read: readSheets,
+    read: function () { readSheets(false); },
     reload: function () { loadConfig(true); },
     prop: function (c) { S.prop = c; S.open = null; S.shown = PAGE; S.tab = null; render(); },
     tab: function (k) { S.tab = S.tab === k ? null : k; render(); },
@@ -761,8 +807,8 @@
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
-    setF: function (k, v) { S.f[k] = v; S.shown = PAGE; if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
-    clearF: function () { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; S.filter = 'all'; S.q = ''; render(); },
+    setF: function (k, v) { S.f[k] = v; S.shown = PAGE; saveF(); if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
+    clearF: function () { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; S.filter = 'all'; S.q = ''; saveF(); render(); },
     lateFirst: function () { S.filter = 'uncontacted'; S.f.sort = 'untouched'; render(); },
     sel: function (k, on) { S.sel[k] = on; render(); },
     selAll: function (on) { currentList().forEach(function (p) { S.sel[p.key] = on; }); render(); },
@@ -786,22 +832,29 @@
       hid.value = on ? '' : String(n);
       box.querySelectorAll('.ml-rb').forEach(function (b) { b.classList.toggle('on', !on && b === btn); });
     },
-    quickText: function (q) { var f = document.getElementById('mlwF'); if (f) { f.value = f.value ? f.value + ', ' + q : q; f.focus(); } },
+    quickText: function (q) { var f = document.getElementById('mlwF'); if (f) { f.value = f.value ? f.value + ', ' + q : q; f.dispatchEvent(new Event('input')); f.focus(); } },
+    draft: function (key, f, v) { S.drafts[key + ':' + f] = v; },
     stamp: function (on) { S.stamp = on; },
     saveWork: function (key) {
       var p = S.plan.people.find(function (x) { return x.key === key; });
-      var rows = rowsFor(p, S.prop).filter(function (e) { return e.metaId; }), e = rows[rows.length - 1];
+      var e = workRow(p);
       var A = document.getElementById('mlwA').value, R = document.getElementById('mlwR').value, M = document.getElementById('mlwM').value.trim(), F = document.getElementById('mlwF').value.trim();
       var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating'), mCol = firstCol(e, 'remarks');
       var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '', mNow = mCol ? cellOf(e, mCol.index) : '';
       var groups = {};
       if (A !== '_keep') { var name = A ? agentLabel(A) : ''; if (name !== aNow && !(A && MM().matchAgent(aNow, roster()) === A)) addEdit(groups, e, { field: 'assigned', value: name, from: aNow }); }
       if (R && MM().parseRating(rNow) !== Number(R)) addEdit(groups, e, { field: 'rating', value: R, from: rNow });
-      if (M !== mNow) addEdit(groups, e, mCol ? { col: mCol.index, value: M, from: mNow } : { field: 'remarks', value: M, from: '' });
+      if (M !== mNow) addEdit(groups, e, mCol ? { col: mCol.index, header: mCol.header, value: M, from: mNow } : { field: 'remarks', value: M, from: '' });
       if (F) addEdit(groups, e, { field: 'followup', next: true, value: S.stamp ? F + ' (' + today() + ')' : F });
       if (!Object.keys(groups).length) { toast('Nothing changed'); return; }
-      writeEdits(groups);
+      writeEdits(groups).then(function (r) {
+        // Saved: the drafts go. Refused: the remark shows the sheet's new text (to be merged by the
+        // person), the typed follow-up stays to be saved again.
+        if (!r.errors.length) { delete S.drafts[key + ':M']; if (!r.conflicts.length) delete S.drafts[key + ':F']; }
+        render();
+      });
     },
+    workRow: function (pk, rk) { S.workRow[pk] = rk; render(); },
     editRow: function (k) { S.edit = S.edit === k ? null : k; render(); },
     saveRow: function (k) {
       var e = null;
@@ -810,18 +863,18 @@
       var groups = {};
       document.querySelectorAll('#metaLeadsView .ml-rowedit textarea').forEach(function (t) {
         var from = t.getAttribute('data-from'), v = t.value.trim();
-        if (v !== from) addEdit(groups, e, { col: Number(t.getAttribute('data-col')), value: v, from: from });
+        if (v !== from) addEdit(groups, e, { col: Number(t.getAttribute('data-col')), header: t.getAttribute('data-header') || '', value: v, from: from });
       });
       if (!Object.keys(groups).length) { toast('Nothing changed'); return; }
       writeEdits(groups).then(function (r) { if (!r.errors.length && !r.conflicts.length) { S.edit = null; render(); } });
     },
     csv: function () {
       var list = currentList();
-      var q = function (v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+      var q = function (v) { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
       var head = ['Name', 'Phone', 'Email', 'Properties', 'First enquiry', 'Last enquiry', 'Enquiries', 'Ads', 'Assigned to', 'Rating', 'Latest note', 'Contacted', 'In the CRM (stage)'];
       var lines = [head.join(',')].concat(list.map(function (p) {
         var rows = rowsFor(p, S.prop);
-        return [p.name, p.phone ? MM().displayPhone(p.phone) : '', p.email, p.properties.join(' '), MM().fmtWhen(firstAtFor(p)), MM().fmtWhen(lastAtFor(p)), rows.length,
+        return [p.name, p.phoneOk ? p.phoneKey.slice(2) : (p.phone || ''), p.email, p.properties.join(' '), MM().fmtWhen(firstAtFor(p)), MM().fmtWhen(lastAtFor(p)), rows.length,
           Array.from(new Set(rows.map(function (e) { return e.ad; }))).join(' / '), p.team.agent ? agentLabel(p.team.agent) : p.team.assignedRaw,
           p.team.rating ? MM().RATING_LABEL[p.team.rating] : '', p.team.notes.length ? p.team.notes[p.team.notes.length - 1].text : '', p.team.contacted ? 'yes' : 'no', p.crm ? p.crm.stage : ''].map(q).join(',');
       }));
@@ -851,7 +904,7 @@
     },
     role: function (i, j, idx, role) { var n = clone(S.draft); var t = n[i].tabs[j]; t.overrides = t.overrides || {}; t.overrides[idx] = role; persist(n, function () { toast('Saved — read the sheet again to apply'); }); },
     readOne: function (id) {
-      if (S.readingOne) return;
+      if (S.readingOne) { S.readQueue = (S.readQueue || []).concat(S.readQueue && S.readQueue.indexOf(id) >= 0 ? [] : [id]); return; }
       S.readingOne = id; render();
       api('read', { sourceId: id }).then(function (d) {
         // The sheet's tabs replace its earlier ones; the other sheets' stay as read.
@@ -861,7 +914,10 @@
         replan();
         toast(d.errors && d.errors.length ? d.errors[0].error : 'Read — ' + (d.tabs || []).reduce(function (n, t) { return n + Math.max((t.values || []).length - 1, 0); }, 0) + ' rows. Nothing was added to the CRM.');
         loadConfig(true);
-      }).catch(function (e) { toast(e.message); }).then(function () { S.readingOne = null; render(); });
+      }).catch(function (e) { toast(e.message); }).then(function () {
+        S.readingOne = null; render();
+        var next = (S.readQueue || []).shift(); if (next) MetaLeads.readOne(next);
+      });
     },
     startAdd: function () { S.adding = true; S.add = { link: '', busy: false, error: null, share: false, result: null, tabs: {} }; MetaLeads.available(); render(); },
     available: function (force) {
@@ -911,6 +967,9 @@
   setInterval(function () {
     if (!S.read || !el() || el().style.display === 'none') return;
     var now = crmLeads();
+    // Never under someone's fingers: while a field here has the focus, the redraw waits.
+    var a = document.activeElement;
+    if (a && el().contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
     if (now !== lastLeads) { lastLeads = now; if (Date.now() - S.planAt > 2000) { replan(); render(); } }
   }, 2000);
 
@@ -968,8 +1027,16 @@
     }
   })();
 
+  var STALE_MS = 10 * 60000;
+  // Reading is just reading (no lead, no cell changes): the leads are read when the screen opens, and
+  // again when the last read is over 10 minutes old — nobody has to remember to press Read.
+  function autoRead() {
+    if (S.reading || S.readError || !S.cfg || !(S.cfg.sources || []).some(function (x) { return x.on !== false; })) return;
+    if (!S.read || Date.now() - (S.read.at || 0) > STALE_MS) readSheets(true);
+  }
   window.renderMetaLeadsView = function (view) {
     S.view = view || 'meta-leads';
+    if (S.cfg) autoRead();
     if (!S.fromPop) syncPath(S.view);
     document.title = { 'meta-leads': 'Meta Ads Leads', 'ml-dupes': 'Duplicates · Meta Ads Leads', 'ml-analysis': 'Analysis · Meta Ads Leads', 'ml-setup': 'Setup · Meta Ads Leads' }[S.view] + ' — 3 PIN Realty';
     loadConfig();

@@ -218,15 +218,21 @@ export const RATING_LABEL = { 1: 'Cold', 2: 'Warm', 3: 'Hot' };
  * email before "@", or its first word ("thirumal.r@…" for "Thirumal"). null when it is no one.
  */
 export function matchAgent(raw, roster) {
-  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9 ]/g, '');
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
   if (!s) return null;
   const list = (roster || []).map(e => String(e).toLowerCase());
   const handle = e => e.split('@')[0];
   const words = e => handle(e).split(/[._-]+/);
-  return list.find(e => handle(e) === s.replace(/ /g, ''))
-    || list.find(e => words(e)[0] === s.split(' ')[0])
-    || list.find(e => s.length >= 4 && handle(e).startsWith(s.split(' ')[0]))
-    || null;
+  if (list.includes(String(raw).trim().toLowerCase())) return String(raw).trim().toLowerCase();
+  // The whole name: "raj m" ↔ raj.m@…, "swami" ↔ swami@…
+  const whole = list.filter(e => words(e).join(' ') === s || handle(e) === s.replace(/ /g, ''));
+  if (whole.length === 1) return whole[0];
+  // Only the first name: only when exactly one teammate has it ("Raj" with raj.k@ and raj.m@ is no one).
+  const first = s.split(' ')[0];
+  const byFirst = list.filter(e => words(e)[0] === first);
+  if (byFirst.length === 1 && s.split(' ').length === 1) return byFirst[0];
+  const byStart = list.filter(e => first.length >= 4 && handle(e).startsWith(first));
+  return byStart.length === 1 && s.split(' ').length === 1 ? byStart[0] : null;
 }
 
 // ── Reading a tab ────────────────────────────────────────────────────────
@@ -285,7 +291,8 @@ export function readTab(tab) {
  * a visit date or a rating. Being assigned to an agent is NOT contact (a lead bulk-assigned this
  * morning and never called must still show as not contacted).
  */
-export const teamWrote = e => !!(e.team.ratingRaw || e.team.remarks.length || e.team.followups.length || e.team.visit || e.team.notes.length);
+const wroteOn = t => !!(t && (t.ratingRaw || t.remarks.length || t.followups.length || t.visit || t.notes.length));
+export const teamWrote = e => wroteOn(e.team) || (e.alsoIn || []).some(a => wroteOn(a.team));
 
 // ── The plan ─────────────────────────────────────────────────────────────
 
@@ -329,7 +336,9 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
     for (const e of r.enquiries) {
       if (e.metaId && seen.has(e.metaId)) {
         const kept = seen.get(e.metaId);
-        kept.alsoIn = (kept.alsoIn || []).concat([{ ...e.where, row: e.row, team: e.team }]);
+        kept.alsoIn = (kept.alsoIn || []).concat([{ ...e.where, row: e.row, team: e.team, sameTab: kept.where.spreadsheetId === e.where.spreadsheetId && kept.where.gid === e.where.gid }]);
+        for (const f of ['assigned', 'ratingRaw', 'visit']) if (!kept.team[f] && e.team[f]) kept.team[f] = e.team[f];
+        if (!kept.team.rating && e.team.rating) kept.team.rating = e.team.rating;
         copies++;
         continue;
       }
@@ -435,7 +444,7 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
 
   const issues = [];
   for (const t of tabOut) for (const i of t.issues) issues.push({ where: `${t.sheetTitle} › ${t.title}`, text: i });
-  for (const t of tabOut) if (t.copies) issues.push({ where: `${t.sheetTitle} › ${t.title}`, text: `${t.copies} row${t.copies > 1 ? 's are' : ' is'} a copy of a lead already read from another tab — counted once` });
+  for (const t of tabOut) if (t.copies) issues.push({ where: `${t.sheetTitle} › ${t.title}`, text: `${t.copies} row${t.copies > 1 ? 's repeat' : ' repeats'} a Meta lead id already read (copied tab, or the same row twice) — counted once` });
   return { tabs: tabOut, properties: props, people, issues, enquiries: all.length };
 }
 
@@ -596,14 +605,26 @@ export function planSheetWrite({ values, overrides, edits }) {
     const ri = metaId ? rows.findIndex(r => String(((r || [])[idCol]) == null ? '' : r[idCol]).trim() === metaId) : -1;
     if (ri < 0) { out.conflicts.push({ metaId, reason: 'This lead is no longer in the sheet' }); continue; }
     let c = null;
-    if (e.col != null && Number.isInteger(Number(e.col))) {
+    if (e.col != null && e.col !== '') {
       c = Number(e.col);
       const known = cols.find(x => x.index === c);
-      if (known && known.role === 'meta') { out.errors.push(`Column ${colLetter(c)} is Meta's own and is not written`); continue; }
+      // Only the team's own columns, inside what was read — never Meta's data or its form answers.
+      if (!Number.isInteger(c) || c < 0 || c >= width || !known) { out.errors.push(`Column ${Number.isInteger(c) && c >= 0 ? colLetter(c) : e.col} is outside the sheet as read`); continue; }
+      if (!TEAM_ROLES.includes(known.role)) { out.errors.push(`Column ${colLetter(c)} (${known.header || 'no header'}) is ${known.role === 'meta' ? 'Meta\'s own' : 'a form answer'} and is not written`); continue; }
+      // The column must still be the one the person saw — a column inserted since the read moves it.
+      if (e.header !== undefined && String(e.header).trim().toLowerCase() !== String(headers[c] || '').trim().toLowerCase()) {
+        out.conflicts.push({ metaId, col: c, header: headers[c] || '', reason: 'The sheet\'s columns changed since it was read' });
+        continue;
+      }
     } else if (e.field === 'followup' && e.next) {
       const f = byRole('followup');
       const empty = f.find(x => !cell(ri, x.index));
-      c = empty ? empty.index : addCol(`Follow up ${f.length + 1}`);
+      let n = f.length + 1;
+      while (headers.some(x => x.trim().toLowerCase() === `follow up ${n}`)) n++;
+      c = empty ? empty.index : addCol(`Follow up ${n}`);
+    } else if (e.field === 'note') {
+      out.errors.push('Notes are written into a named column');
+      continue;
     } else if (DEFAULT_HEADER[e.field] || e.field === 'followup') {
       const f = byRole(e.field);
       c = f.length ? f[0].index : addCol(DEFAULT_HEADER[e.field] || 'Follow up 1');

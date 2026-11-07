@@ -110,7 +110,7 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
 {
   const copy = { ...tabsFor([SOURCES[2]])[0], title: 'Copy of Sheet1', gid: 9, values: SHEETS.KOY.tabs[0].values.slice(0, 2) };
   const p2 = M.buildPlan({ tabs: [...tabsFor([SOURCES[2]]), copy], crmLeads: [], roster: ROSTER });
-  eq('A copied row is one enquiry', [p2.enquiries, p2.people.find(p => p.name === 'Sandeep').enquiries[0].alsoIn.length, p2.issues.some(i => /a copy of a lead/.test(i.text))], [4, 1, true]);
+  eq('A copied row is one enquiry', [p2.enquiries, p2.people.find(p => p.name === 'Sandeep').enquiries[0].alsoIn.length, p2.issues.some(i => /already read/.test(i.text))], [4, 1, true]);
 }
 
 // ── Analysis ──
@@ -198,6 +198,26 @@ async function server(locked) {
   const lr = (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data().lastRead;
   eq('…its last read updated, the other sheet\'s kept, in setup order', lr.sheets.map(x => x.id), [SHEETS.KDB.id, SHEETS.KOY.id]);
 }
+// ── The independent review's findings, pinned ──
+{
+  const V = SHEETS.KDB.tabs[1].values;   // Sheet3: answers M, N; Assigned to T; Rating U; Remarks V; a header-less note W
+  const w = edits => M.planSheetWrite({ values: V, edits });
+  eq('A form answer is never written', w([{ metaId: 'l:3001', col: 12, value: 'HACK' }]).errors, ['Column M (expected_area_(in_sq._ft.)) is a form answer and is not written']);
+  eq('Nothing outside the columns read', [w([{ metaId: 'l:3001', col: 60, value: 'x' }]).errors.length, w([{ metaId: 'l:3001', col: -1, value: 'x' }]).errors.length, w([{ metaId: 'l:3001', col: 'abc', value: 'x' }]).errors.length], [1, 1, 1]);
+  eq('A team column by index, with the header seen: written', w([{ metaId: 'l:3001', col: 21, header: 'Remarks', value: 'ok', from: 'Purpose: gym 50/sqft' }]).updates, [{ range: 'V2', value: 'ok' }]);
+  eq('…a column inserted since the read (header now different): refused', w([{ metaId: 'l:3001', col: 21, header: 'Site visit', value: 'ok' }]).conflicts.map(c => c.reason), ['The sheet\'s columns changed since it was read']);
+  eq('The header-less note column is the team\'s: writable', w([{ metaId: 'l:3002', col: 22, header: '', value: 'called', from: 'busy followup' }]).updates, [{ range: 'W3', value: 'called' }]);
+  const gap = [['id', 'created_time', 'Follow up 1', 'Follow up 3'], ['l:1', '2026-11-01T10:00:00-05:00', 'a', 'b']];
+  eq('A new follow-up never repeats a name already there', M.planSheetWrite({ values: gap, edits: [{ metaId: 'l:1', field: 'followup', next: true, value: 'c' }] }).added, [{ col: 4, header: 'Follow up 4' }]);
+  eq('Agents: a full name or email, or a first name only one teammate has',
+    [M.matchAgent('Raj M', ['raj.k@x.in', 'raj.m@x.in']), M.matchAgent('Raj', ['raj.k@x.in', 'raj.m@x.in']), M.matchAgent('raj.k@x.in', ['raj.k@x.in', 'raj.m@x.in']), M.matchAgent('Swami', ROSTER), M.matchAgent('rameez', ROSTER)],
+    ['raj.m@x.in', null, 'raj.k@x.in', 'swami@threepin.in', 'rameez@threepin.in']);
+  // A remark written only in a copied tab is contact; its rating counts too.
+  const t1 = { spreadsheetId: 'S', sheetTitle: 'S', title: 'A', gid: 1, propertyCode: 'P', values: [['id', 'created_time', 'full_name', 'phone_number', 'Rating', 'Remarks'], ['l:9', '2026-11-01T10:00:00-05:00', 'Ann', 'p:+919800011111', '', '']] };
+  const t2 = { ...t1, title: 'Copy of A', gid: 2, values: [t1.values[0], ['l:9', '2026-11-01T10:00:00-05:00', 'Ann', 'p:+919800011111', '3', 'Called, wants visit']] };
+  const pc = M.buildPlan({ tabs: [t1, t2], crmLeads: [], roster: [] }).people[0];
+  eq('Contact or rating written only in a copied tab counts', [pc.team.contacted, pc.team.rating], [true, 3]);
+}
 // Contacted = a conversation happened. Assigned only is not contact.
 {
   const base = { team: { assigned: '', ratingRaw: '', remarks: [], followups: [], visit: '', notes: [] } };
@@ -226,7 +246,7 @@ async function server(locked) {
   // The sheet sorted differently: rows are found by id, not by position.
   const sorted = [V[0], ...V.slice(1).reverse()];
   eq('A sorted sheet: still the right row', M.planSheetWrite({ values: sorted, edits: [{ metaId: 'l:1003', field: 'remarks', value: 'y' }] }).updates, [{ range: 'T4', value: 'y' }]);
-  eq('Meta\'s own columns are never written', M.planSheetWrite({ values: V, edits: [{ metaId: 'l:1003', col: 14, value: '999' }] }).errors, ['Column O is Meta\'s own and is not written']);
+  eq('Meta\'s own columns are never written', M.planSheetWrite({ values: V, edits: [{ metaId: 'l:1003', col: 14, value: '999' }] }).errors, ['Column O (phone_number) is Meta\'s own and is not written']);
   eq('A column added by name; a name already there refused', [M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'Budget (confirmed)' }] }).updates, M.planSheetWrite({ values: V, edits: [{ field: 'header', header: 'remarks' }] }).errors],
     [[{ range: 'W1', value: 'Budget (confirmed)' }], ['There is already a column "remarks"']]);
 }
@@ -251,6 +271,18 @@ async function server(locked) {
   eq('A sheet not connected is never written', s, 404);
   [r, s] = await act('admin@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ metaId: 'l:3003', field: 'assigned', value: 'Swami', from: 'Ramesh' }] });
   eq('Someone changed it meanwhile: refused, not overwritten', [r.applied.length, r.conflicts[0].now], [0, 'Thirumal']);
+  // A tab switched off is not written; a lost edit log does not turn a written sheet into a failure.
+  const cfgNow = (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data();
+  const off = JSON.parse(JSON.stringify(cfgNow.sources)); off[0].tabs[1].on = false;
+  await act('admin@threepin.in', { action: 'save', sources: off });
+  [r, s] = await act('admin@threepin.in', { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ metaId: 'l:3003', field: 'remarks', value: 'x' }] });
+  eq('A tab switched off: not written', s, 409);
+  await act('admin@threepin.in', { action: 'save', sources: cfgNow.sources });
+  const realAdd = db.collection('metaLeadEdits').add;
+  const brokenDb = { ...db, collection: n => n === 'metaLeadEdits' ? { add: async () => { throw new Error('RESOURCE_EXHAUSTED'); } } : db.collection(n) };
+  const [r2, s2] = await metaLeadsAction({ tenantId: 't_3pin', email: 'admin@threepin.in' }, { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ metaId: 'l:3004', field: 'remarks', value: 'Called' }] },
+    { db: brokenDb, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW });
+  eq('The edit log failing: the sheet was written and the answer says so', [s2, r2.applied.length, sheets.data.KDB.tabs[1].values[4][21]], [200, 1, 'Called']);
 }
 eq('cleanSources keeps only known roles', cleanSources([{ spreadsheetId: SHEETS.KOY.id, tabs: [{ gid: 0, overrides: { 18: 'rating', 19: 'meta', x: 'note', 20: 'bogus' } }] }], [], 'a', 1)[0].tabs[0].overrides, { 18: 'rating' });
 

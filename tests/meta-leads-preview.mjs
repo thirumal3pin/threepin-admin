@@ -145,6 +145,13 @@ const text = (page, sel) => page.evaluate(s => { const e = document.querySelecto
 const shot = (page, name) => page.screenshot({ path: join(OUT, 'meta-leads-' + name + '.png'), fullPage: true });
 const clickText = async (page, sel, t) => { await page.locator(sel, { hasText: t }).first().click(); await page.waitForTimeout(250); };
 const waitText = (page, sel, re, timeout = 8000) => page.waitForFunction(([s, r]) => { const e = document.querySelector(s); return e && new RegExp(r).test(e.textContent); }, [sel, re.source], { timeout });
+// The read button: "Read the sheets" before the first read, "Refresh" after; the screen also reads on its own.
+const readAll = async page => {
+  await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-btn.primary'); return b && !b.disabled; }, null, { timeout: 8000 });
+  await page.click('.ml-head .ml-btn.primary');
+  await page.waitForTimeout(150);
+  await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+};
 const overflow = page => page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth));
 
 const browser = await chromium.launch({ channel: 'chrome' });
@@ -240,7 +247,7 @@ try {
   ok('Tag and remark saved on the tab, and shown', t3.tag === 'Copy-copy form' && t3.remark === 'Asks area and budget per sq ft' && /Copy-copy form.*Asks area/.test(await text(page, '.ml-trow .ml-tabnote')));
 
   // ── 5. Read every sheet ──
-  await clickText(page, '.ml-head .ml-btn', 'Read the sheets');
+  await readAll(page);
   await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
   await page.evaluate(() => MetaLeads.go('ml-setup'));
   await page.waitForTimeout(600);
@@ -329,7 +336,7 @@ try {
   await clickText(page, '.ml-chip', 'KDBMC001');
   const an = await text(page, '#metaLeadsView');
   ok('Analysis: per day, per ad, per sheet/tab, platform, rating, assigned, CRM stage, each form question',
-    ['Enquiries per day', 'By ad', 'Video 1', 'By sheet and tab', 'By platform', 'Instagram', 'Rating', 'Assigned to', 'Swami', 'Site Visit', 'Form: Expected area'].every(w => an.includes(w)), an.slice(0, 300));
+    ['Enquiries per day', 'By ad', 'Video 1', 'By sheet and tab', 'By platform', 'Instagram', 'Rating', 'Team — who holds which leads', 'Swami', 'Lead quality by ad', 'Site Visit', 'Form: Expected area'].every(w => an.includes(w)), an.slice(0, 300));
   const tt = await page.$$eval('.ml-tt-r:not(.ml-tt-h):not(.ml-team-r):not(.ml-ad-r)', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
   ok('Analysis by sheet and tab: three KDBMC001 tabs, with the tag', tt.length === 3 && /office space - Kodambakkam › Sheet3 Copy-copy form/.test(tt[1]), tt);
   await page.locator('.ml-tt-r', { hasText: 'Sheet3' }).click();
@@ -362,7 +369,7 @@ try {
 
   // ── 9b. The admin: the unassigned leads, assigned in bulk; the team report ──
   ({ page, ctx } = await openPage(browser, { at: '/ads' }));
-  await clickText(page, '.ml-head .ml-btn', 'Read the sheets');
+  await readAll(page);
   await page.waitForFunction(() => document.querySelectorAll('.ml-person').length > 0, null, { timeout: 8000 });
   await clickText(page, '.ml-chip', 'KDBMC001');
   await page.locator('.ml-tile', { hasText: 'Not assigned' }).click();
@@ -400,17 +407,22 @@ try {
   await clickText(page, '.ml-work .ml-btn', 'Save to the sheet');
   await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
   ok('A cell changed in the sheet meanwhile: not overwritten', sheets.data.KDB.tabs[0].values[1][19] === 'Changed by someone in the sheet');
+  await page.waitForFunction(() => !document.querySelector('.ml-sheet-act .fa-spin') && /Changed by someone/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 }).catch(() => {});
+  ok('…the sheet is read again at once: the form now shows their text', /Changed by someone in the sheet/.test(await page.$eval('#mlwM', e => e.value).catch(() => '')) || /Changed by someone in the sheet/.test(await text(page, '.ml-person.open')));
   await ctx.close();
 
   // ── 10. A team member who is not a manager — opening the /ads-setup page directly ──
   ({ page, ctx } = await openPage(browser, { email: 'swami@threepin.in', at: '/ads-setup' }));
   await waitText(page, '#metaLeadsView', /Only a manager can change the mapping/);
   ok('Not a manager: Setup is read-only (no Add sheet, no pickers, no remove) — but sees the mapping', !(await page.$('.ml-map-h .ml-btn')) && !(await page.$('.ml-trow select')) && !(await page.$('.ml-icon')) && (await page.$$('.ml-trow')).length === 4);
-  await clickText(page, '.ml-head .ml-btn', 'Read the sheets');
+  await readAll(page);
   await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 }).catch(() => {});
   await page.evaluate(() => MetaLeads.go('meta-leads'));
   await page.waitForTimeout(300);
-  ok('…but can read the sheets and see the leads', (await page.$$('.ml-person')).length === 12);
+  ok('…the leads are read on their own, and an agent starts on HIS leads, not-contacted first', (await page.$$('.ml-person')).length === 2 && await page.$eval('.ml-tools select', e => e.value) === '_mine' && await page.$$eval('.ml-tools select', els => els[els.length - 1].value) === 'untouched');
+  await page.evaluate(() => MetaLeads.clearF());
+  await page.waitForTimeout(200);
+  ok('…and sees everyone with Clear filters', (await page.$$('.ml-person')).length === 12);
   // ── 10b. The agent: my leads, a follow-up after the call ──
   await page.locator('.ml-tile', { hasText: 'Assigned to me' }).click();
   await page.waitForTimeout(250);
@@ -428,6 +440,21 @@ try {
   ok('Agent: Hot written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '3' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
   ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /Hot/.test(await text(page, '.ml-person.open .ml-prow')));
   await shot(page, '13-agent-work');
+  // A person with rows for two properties: pick which row the form writes; Enter saves.
+  await page.evaluate(() => MetaLeads.clearF());
+  await page.waitForTimeout(200);
+  await clickText(page, '.ml-prow', 'Arjun');
+  const rowsOffered = await page.$$eval('.ml-work .ml-wgrid > select:first-of-type option', els => els.map(e => e.textContent));
+  ok('Arjun: "Write to" offers his three rows (two KDBMC001, one SHR0001), newest first', rowsOffered.length === 3 && /^SHR0001/.test(rowsOffered[0]), rowsOffered);
+  await page.selectOption('.ml-work .ml-wgrid > select:first-of-type', { index: 2 });
+  await page.waitForTimeout(200);
+  ok('…the form says where it writes', /office space - Kodambakkam › Sheet1, row 4/.test(await text(page, '.ml-work .ml-h')));
+  await page.fill('#mlwF', 'Visited again, wants 2 floors');
+  await page.press('#mlwF', 'Enter');
+  await page.waitForFunction(() => !/Writing…/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const a1 = sheets.data.KDB.tabs[0].values;
+  ok('Enter saved it: Sheet1 row 4, both follow-ups full → a new "Follow up 3" column', a1[0][23] === 'Follow up 3' && /^Visited again, wants 2 floors \(/.test(a1[3][23]), JSON.stringify([a1[0][23], a1[3][23]]));
   // Edit a row cell by cell.
   await page.locator('.ml-person.open .ml-editrow').first().click();
   await page.waitForTimeout(200);
@@ -440,10 +467,13 @@ try {
   // ── 11. Phone, dark ──
   ({ page, ctx } = await openPage(browser, { viewport: { width: 390, height: 844 }, scheme: 'dark', at: '/ads' }));
   ok('/ads opens the Leads screen', /Meta Ads Leads/.test(await text(page, '#metaLeadsView')) && await page.evaluate(() => document.getElementById('metaLeadsView').style.display !== 'none'));
-  await clickText(page, '.ml-btn', 'Read the sheets');
+  await readAll(page);
   await page.waitForFunction(() => document.querySelectorAll('.ml-person').length > 0, null, { timeout: 8000 });
   await clickText(page, '.ml-prow', 'Arjun');
   ok('Phone: no sideways scroll', (await overflow(page)) <= 1, await overflow(page));
+  const cut = await page.evaluate(() => [...document.querySelectorAll('.ml-person.open *')].filter(e => e.getBoundingClientRect().width && e.getBoundingClientRect().right > innerWidth + 1).map(e => e.className || e.tagName).slice(0, 5));
+  ok('Phone: nothing in the lead\'s panel runs past the screen edge', cut.length === 0, cut);
+  ok('Phone: the work form comes before the enquiry history', await page.evaluate(() => { const w = document.querySelector('.ml-person.open .ml-work'), q = document.querySelector('.ml-person.open .ml-enq'); return w && q && w.getBoundingClientRect().top < q.getBoundingClientRect().top; }));
   await shot(page, '9-phone-dark');
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
   await page.waitForTimeout(300);

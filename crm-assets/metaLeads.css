@@ -285,8 +285,20 @@ button.ml-tt-r:hover,.ml-tt-r.on{background:var(--bg2);}
 .ml-team-r{grid-template-columns:minmax(0,2fr) repeat(6,minmax(0,.8fr)) !important;}
 .ml-ad-r{grid-template-columns:minmax(0,2fr) repeat(6,minmax(0,.8fr)) !important;}
 @media (max-width: 760px){
+  /* On a phone the agent acts first: the work form above the enquiry history. */
+  .ml-detail .ml-col:last-child{order:-1;}
   .ml-wgrid{grid-template-columns:1fr;}
   .ml-wgrid>label{padding-top:0;}
   .ml-f{max-width:none;flex:1 1 45%;}
   .ml-team-r,.ml-ad-r{grid-template-columns:1fr 1fr 1fr !important;}
+}
+
+/* Nothing in a lead's panel may be wider than the screen: grid columns shrink, long text wraps. */
+.ml-detail{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);}
+.ml-detail>.ml-col,.ml-wgrid>*,.ml-work,.ml-crm,.ml-enq{min-width:0;}
+.ml-enq-d,.ml-tn,.ml-kv>b,.ml-would,.ml-sum{overflow-wrap:anywhere;}
+.ml-work .ml-in,.ml-work .ml-f{width:100%;box-sizing:border-box;max-width:100%;}
+@media (max-width: 760px){
+  .ml-detail{grid-template-columns:minmax(0,1fr);padding:4px 10px 14px;}
+  .ml-prow{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
 }
