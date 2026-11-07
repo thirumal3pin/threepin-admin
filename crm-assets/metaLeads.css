@@ -185,3 +185,57 @@ button.ml-tile[onclick]:hover{border-color:var(--ink3);}
   .ml-maprow .ml-arrow{display:none;}
   .ml-c-act{justify-content:flex-start;}
 }
+
+/* Setup v3: by property → sheets → tabs */
+.ml-map-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+.ml-pgroup{border:1px solid var(--border);border-radius:var(--r3);margin-top:10px;overflow:visible;background:var(--card);}
+.ml-pg-h{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:11px 14px;border:0;background:var(--bg2);font:inherit;font-size:14px;color:var(--ink);cursor:pointer;border-radius:var(--r3);}
+.ml-pgroup.open .ml-pg-h{border-radius:var(--r3) var(--r3) 0 0;border-bottom:1px solid var(--border);}
+.ml-pg-h i{font-size:11px;color:var(--ink3);width:12px;}
+.ml-tmap-th,.ml-trow{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1.1fr) minmax(0,1.2fr) 80px 90px;gap:12px;align-items:start;padding:10px 14px;}
+.ml-tmap-th{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);padding-top:8px;padding-bottom:6px;}
+.ml-trow{border-top:1px solid var(--border);}
+.ml-trow.off{opacity:.55;}
+.ml-trow-x{grid-column:1 / -1;}
+.ml-sheetlink{color:var(--ink);text-decoration:none;}
+.ml-sheetlink i{font-size:10.5px;color:var(--ink3);}
+.ml-url{font-family:var(--mono, monospace);font-size:11px;color:var(--ink3);margin:2px 0 6px;word-break:break-all;}
+.ml-sheet-act{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;}
+.ml-same{font-size:12px;}
+.ml-c-tab label{font-size:13px;}
+.ml-c-leads{font-size:14px;padding-top:9px;}
+.ml-c-prop{padding-top:0;position:relative;}
+.ml-c-act{justify-content:flex-end;padding-top:9px;}
+.ml-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:#ede9fe;color:#5b21b6;vertical-align:1px;}
+[data-theme="dark"] .ml-tag{background:#4c1d95;color:#ddd6fe;}
+.ml-tabnote{font-size:12.5px;color:var(--ink2);margin-top:4px;}
+.ml-noteedit{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+.ml-noteedit .ml-btn{align-self:flex-start;}
+.ml-addpanel{border:1px dashed var(--brand-line, var(--brand));background:var(--brand-soft);border-radius:var(--r3);padding:14px;margin:10px 0 4px;}
+.ml-addpanel .ml-addline{display:flex;gap:8px;padding:0;border:0;background:none;margin:0 0 8px;}
+.ml-addpanel .ml-link-in{flex:1;}
+.ml-found{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);padding:10px 12px;margin-top:8px;}
+.ml-found-h{margin-bottom:6px;}
+.ml-found-h a{color:var(--ink);text-decoration:none;}
+.ml-arow{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,.9fr) auto minmax(0,1.4fr) minmax(0,.8fr);gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border);font-size:13px;}
+.ml-arow:first-of-type{border-top:0;}
+.ml-arow.off .ml-pick,.ml-arow.off .ml-addtag{opacity:.45;}
+.ml-arow .ml-arrow{padding-top:0;}
+.ml-addbtns{margin-top:10px;display:flex;gap:8px;}
+.ml-tabsel{font-size:13px;margin:0 0 10px;padding:8px 12px;border-radius:var(--r2);background:var(--brand-soft);}
+.ml-tt{display:flex;flex-direction:column;}
+.ml-tt-r{display:grid;grid-template-columns:minmax(0,2.4fr) repeat(6,minmax(0,.7fr)) minmax(0,1fr);gap:8px;align-items:start;text-align:left;padding:9px 6px;border:0;border-top:1px solid var(--border);background:none;font:inherit;font-size:13px;color:var(--ink);}
+button.ml-tt-r{cursor:pointer;}
+button.ml-tt-r:hover,.ml-tt-r.on{background:var(--bg2);}
+.ml-tt-r.on{box-shadow:inset 3px 0 0 var(--brand);}
+.ml-tt-h{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--ink3);border-top:0;}
+@media (max-width: 760px){
+  .ml-tmap-th{display:none;}
+  .ml-trow{grid-template-columns:1fr;gap:6px;}
+  .ml-c-leads,.ml-c-act{padding-top:0;justify-content:flex-start;}
+  .ml-arow{grid-template-columns:1fr;}
+  .ml-arow .ml-arrow{display:none;}
+  .ml-tt-r{grid-template-columns:1fr 1fr 1fr;}
+  .ml-tt-r>span:first-child{grid-column:1 / -1;}
+  .ml-tt-h{display:none;}
+}

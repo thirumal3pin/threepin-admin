@@ -122,6 +122,10 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
   eq('Ratings (latest per person)', a.ratings, { 3: 1, 2: 2, 1: 0, none: 6 });
   eq('Form answers tallied', a.questions.find(q => /area/.test(q.label)).answers[0], { label: '1,000–2,000 sq. ft.', n: 4 });
   eq('Series: one bar per day since the first enquiry, newest last', [a.series.length, a.series[a.series.length - 1].day, a.series.reduce((s, x) => s + x.n, 0)], [24, '2026-11-07', 11]);
+  eq('Per tab, side by side', a.byTab.map(t => [t.sheetTitle.trim() + ' › ' + t.title, t.enquiries, t.people, t.duplicates, t.topAd]),
+    [['office space - Kodambakkam › Sheet1', 5, 5, 2, 'Video 1'], ['office space - Kodambakkam › Sheet3', 4, 4, 1, 'Video 2'], ['Kodabakkam office › Sheet1', 2, 2, 1, 'Video 1']]);
+  const one = M.analyse(plan, 'KDBMC001', NOW, 30, a.byTab[1].key);
+  eq('One tab\'s own analysis', [one.enquiries, one.people, one.byAd], [4, 4, [{ label: 'Video 2', n: 3 }, { label: 'Video 1', n: 1 }]]);
   eq('By agent', a.byAgent, [{ label: 'Not assigned', n: 4 }, { label: 'swami@threepin.in', n: 2 }, { label: 'thirumal@threepin.in', n: 2 }, { label: 'Ramesh', n: 1 }]);
 }
 
@@ -164,6 +168,26 @@ async function server(locked) {
   ok('…naming the service account', /firebase-adminsdk-fbsvc@pin-realty\.iam\.gserviceaccount\.com/.test(r.errors[0].error));
   const [i, s] = await act('admin@threepin.in', { action: 'inspect', link: SHEETS.KOY.id });
   eq('Inspect a sheet not shared', [s, i.code], [403, 'share']);
+}
+{
+  // Two tabs of one sheet for two properties; reading one sheet keeps the others' last read.
+  const { db, act } = await server();
+  await act('admin@threepin.in', { action: 'save', sources: [
+    { spreadsheetId: SHEETS.KDB.id, title: SHEETS.KDB.title, propertyCode: '', tabs: [{ gid: 0, title: 'Sheet1', propertyCode: 'kdbmc001' }, { gid: 222, title: 'Sheet3', propertyCode: 'ANR005' }] },
+    { spreadsheetId: SHEETS.KOY.id, title: SHEETS.KOY.title, tabs: [{ gid: 0, title: 'Sheet1', propertyCode: 'SHR0001' }] }] });
+  let [r] = await act('admin@threepin.in', { action: 'read' });
+  eq('Each tab read for its own property', r.tabs.map(t => [t.title, t.propertyCode]), [['Sheet1', 'KDBMC001'], ['Sheet3', 'ANR005'], ['Sheet1', 'SHR0001']]);
+  await act('admin@threepin.in', { action: 'save', sources: [{ spreadsheetId: SHEETS.KOY.id, title: 'K', tabs: [{ gid: 0, title: 'Sheet1', propertyCode: 'SHR0001', tag: '  Creative test  ', remark: 'Budget 1-5 Cr form' }] }] });
+  [r] = await act('admin@threepin.in', { action: 'read' });
+  eq('A tab\'s tag and remark are kept and read back', [r.tabs[0].tag, r.tabs[0].remark], ['Creative test', 'Budget 1-5 Cr form']);
+  await act('admin@threepin.in', { action: 'save', sources: [
+    { spreadsheetId: SHEETS.KDB.id, title: SHEETS.KDB.title, propertyCode: '', tabs: [{ gid: 0, title: 'Sheet1', propertyCode: 'kdbmc001' }, { gid: 222, title: 'Sheet3', propertyCode: 'ANR005' }] },
+    { spreadsheetId: SHEETS.KOY.id, title: SHEETS.KOY.title, tabs: [{ gid: 0, title: 'Sheet1', propertyCode: 'SHR0001' }] }] });
+  [r] = await act('admin@threepin.in', { action: 'read' });
+  [r] = await act('admin@threepin.in', { action: 'read', sourceId: SHEETS.KOY.id });
+  eq('Read one sheet: only its tabs', r.tabs.map(t => t.sheetTitle), ['Koyambedu - Leads']);
+  const lr = (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data().lastRead;
+  eq('…its last read updated, the other sheet\'s kept, in setup order', lr.sheets.map(x => x.id), [SHEETS.KDB.id, SHEETS.KOY.id]);
 }
 eq('cleanSources keeps only known roles', cleanSources([{ spreadsheetId: SHEETS.KOY.id, tabs: [{ gid: 0, overrides: { 18: 'rating', 19: 'meta', x: 'note', 20: 'bogus' } }] }], [], 'a', 1)[0].tabs[0].overrides, { 18: 'rating' });
 

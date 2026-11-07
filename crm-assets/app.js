@@ -2160,6 +2160,11 @@ function toggleView(view){
   });
   if(isCampaignView(view)){ if(window.renderCampaignsView) window.renderCampaignsView(view); }
   else if(isMetaLeadsView(view)){ if(window.renderMetaLeadsView) window.renderMetaLeadsView(view); }
+  // Leaving Meta Ads Leads (its own addresses, /ads…): the address is the CRM's again.
+  if(!isMetaLeadsView(view) && window.metaLeadsPathView && window.metaLeadsPathView(location.pathname)){
+    try{ history.pushState(null, '', '/crm.html'); }catch(e){}
+    document.title = 'CRM — 3 PIN Realty';
+  }
   else if(view==='dashboard'){ if(window.renderDashboardView) window.renderDashboardView(); }
   else if(view==='today'){ try{ loadMyEvents(false); }catch(e){} if(window.renderTodayView) window.renderTodayView(); }
   else if(view==='calendar'){ if(window.renderCalendarView) window.renderCalendarView(); }

@@ -10,7 +10,12 @@
     { "source": "/api/generate-lead-summary", "destination": "/api/lead-summary?op=generate" },
     { "source": "/api/backfill-lead-summaries", "destination": "/api/lead-summary?op=backfill" },
     { "source": "/api/easy", "destination": "/api/bot-test-message?op=easy" },
-    { "source": "/api/meta-leads", "destination": "/api/sync-inventory?op=meta-leads" }
+    { "source": "/api/meta-leads", "destination": "/api/sync-inventory?op=meta-leads" },
+    { "source": "/ads", "destination": "/crm.html" },
+    { "source": "/ads.html", "destination": "/crm.html" },
+    { "source": "/ads-duplicates", "destination": "/crm.html" },
+    { "source": "/ads-analysis", "destination": "/crm.html" },
+    { "source": "/ads-setup", "destination": "/crm.html" }
   ],
   "headers": [
     {

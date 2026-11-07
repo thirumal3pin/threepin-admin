@@ -29,13 +29,6 @@
   // The sheets found in the Drive on 7 Nov 2026 and the properties they were said to belong to —
   // offered in Setup while nothing is connected, so the first setup is one click (each is still
   // checked against Google, and nothing is kept until Save).
-  // First live setup (7 Nov 2026): only the Koyambedu sheet. The Kodambakkam sheets (KDBMC001:
-  // 17kaZCqDhOszTBwBkj8qEGHHsy7E1TBRjAYAWOO2aMk0 and 19SD6zrkLD84KHCMQ6ZAVA3D2OHJqFExkEThXIfA1BcY)
-  // are connected later with "Connect a sheet".
-  var SUGGESTED = [
-    { link: '19N-RVhJUQ-HNeEvZK0nG_5aSWW78gpA8mHfbObXpbfk', title: 'Koyambedu - Leads', propertyCode: 'SHR0001' }
-  ];
-
   var S = {
     view: 'meta-leads',
     cfg: null, cfgError: null, cfgLoading: false,
@@ -43,8 +36,8 @@
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
     draft: null, saving: false,
-    add: { link: '', code: '', busy: false, error: null, share: false, prefilled: false },
-    colsFor: null, detailsFor: null,
+    add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
+    adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
     busy: {}
   };
 
@@ -246,6 +239,7 @@
     return '<div class="ml-enq">' +
       '<div class="ml-enq-t"><b>' + esc(MM().fmtWhen(e.at)) + '</b>' + (gap ? ' <span class="ml-gap">' + esc(gap) + ' later</span>' : '') + '</div>' +
       '<div class="ml-enq-d">' + (link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ' · row ' + e.row + '</a>' : esc(e.where.tab)) +
+      (e.where.tag ? ' <span class="ml-tag">' + esc(e.where.tag) + '</span>' : '') +
       ' · <span class="ml-code">' + esc(e.propertyCode) + '</span> · ' + esc(e.ad || '—') + ' · ' + esc({ ig: 'Instagram', fb: 'Facebook' }[e.platform] || e.platform || '') +
       (e.form ? ' · form “' + esc(e.form) + '”' : '') + '</div>' +
       (e.answers.length ? '<div class="ml-ans">' + e.answers.map(function (x) { return '<span>' + esc(x.label) + ' <b>' + esc(x.value) + '</b></span>'; }).join('') + '</div>' : '') +
@@ -317,7 +311,11 @@
   function analysisHtml() {
     if (!S.plan) return needRead();
     var code = S.prop === 'all' ? '' : S.prop;
-    var a = MM().analyse(S.plan, code);
+    var whole = MM().analyse(S.plan, code);
+    // One tab picked: everything below is that tab's alone.
+    var tabSel = S.tab && whole.byTab.find(function (t) { return t.key === S.tab; });
+    if (S.tab && !tabSel) S.tab = null;
+    var a = tabSel ? MM().analyse(S.plan, code, Date.now(), 30, S.tab) : whole;
     var max = Math.max.apply(null, a.series.map(function (x) { return x.n; }).concat([1]));
     var series = '<div class="ml-series">' + a.series.map(function (x) {
       return '<div class="ml-s" title="' + esc(x.label + ': ' + x.n) + '"><div class="ml-s-b" style="height:' + Math.round(100 * x.n / max) + '%"></div><div class="ml-s-l">' + (x.n ? x.n : '') + '</div></div>';
@@ -325,7 +323,20 @@
     var rate = [{ label: 'Hot (3)', n: a.ratings[3] }, { label: 'Warm (2)', n: a.ratings[2] }, { label: 'Cold (1)', n: a.ratings[1] }, { label: 'Not rated', n: a.ratings.none }];
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
     var card = function (h, inner) { return '<div class="ml-card"><div class="ml-h">' + h + '</div>' + inner + '</div>'; };
+    var pctOf = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
+    var tabTable = whole.byTab.length ? '<div class="ml-card"><div class="ml-h">By sheet and tab <span class="ml-dim">— click a tab for its own analysis</span></div>' +
+      '<div class="ml-tt"><div class="ml-tt-r ml-tt-h"><span>Sheet › tab</span><span>Enquiries</span><span>People</span><span>Last 7 days</span><span>Written</span><span>Duplicates</span><span>In CRM</span><span>Top ad</span></div>' +
+      whole.byTab.map(function (t) {
+        return '<button class="ml-tt-r' + (S.tab === t.key ? ' on' : '') + '" onclick="MetaLeads.tab(' + js(t.key) + ')">' +
+          '<span><b>' + esc(String(t.sheetTitle).trim()) + ' › ' + esc(t.title) + '</b>' + (t.tag ? ' <span class="ml-tag">' + esc(t.tag) + '</span>' : '') +
+            (!code ? ' <span class="ml-code">' + esc(t.propertyCode) + '</span>' : '') +
+            (t.remark ? '<div class="ml-dim">' + esc(t.remark) + '</div>' : '') +
+            '<div class="ml-dim">' + esc(t.firstAt ? MM().fmtWhen(t.firstAt).split(',')[0] + ' – ' + MM().fmtWhen(t.lastAt).split(',')[0] : 'no rows') + '</div></span>' +
+          '<span>' + t.enquiries + '</span><span>' + t.people + '</span><span>' + t.last7 + '</span><span>' + pctOf(t.contacted, t.people) + '</span><span>' + t.duplicates + '</span><span>' + t.inCrm + '</span><span>' + esc(t.topAd || '—') + '</span></button>';
+      }).join('') + '</div></div>' : '';
     return propChips(true) +
+      (tabSel ? '<div class="ml-tabsel"><i class="fa-solid fa-filter"></i> Only <b>' + esc(String(tabSel.sheetTitle).trim() + ' › ' + tabSel.title) + '</b>' + (tabSel.tag ? ' <span class="ml-tag">' + esc(tabSel.tag) + '</span>' : '') +
+        ' <button class="ml-link" onclick="MetaLeads.tab(null)">Show the whole ' + (code ? 'property' : 'list') + ' ✕</button></div>' : '') +
       '<div class="ml-tiles">' +
         '<div class="ml-tile"><div class="ml-tile-n">' + a.enquiries + '</div><div class="ml-tile-l">Enquiries</div></div>' +
         '<div class="ml-tile"><div class="ml-tile-n">' + a.people + '</div><div class="ml-tile-l">People</div></div>' +
@@ -335,10 +346,10 @@
         '<div class="ml-tile"><div class="ml-tile-n">' + a.repeats + '</div><div class="ml-tile-l">With duplicate rows</div></div>' +
         '<div class="ml-tile"><div class="ml-tile-n">' + a.inCrm + '</div><div class="ml-tile-l">Already in the CRM</div></div>' +
       '</div>' +
+      tabTable +
       card('Enquiries per day' + (a.series.length ? ' <span class="ml-dim">(' + a.series.length + ' days, India time)</span>' : ''), a.series.length ? series : '<div class="ml-dim">No dates.</div>') +
       '<div class="ml-grid">' +
         card('By ad', bars(a.byAd, a.enquiries)) +
-        card('By sheet and tab', bars(a.byForm, a.enquiries)) +
         card('By platform', bars(a.byPlatform, a.enquiries)) +
         card('Rating (latest in the sheet)', bars(rate, a.people)) +
         card('Assigned to (in the sheet)', bars(a.byAgent.map(function (x) { return { label: x.label.indexOf('@') > 0 ? agentLabel(x.label) : x.label, n: x.n }; }), a.people)) +
@@ -348,91 +359,136 @@
   }
 
   // ─── Setup ─────────────────────────────────────────────────────────────
-  // One line per sheet: the sheet's link → the property its leads are for. Every change is saved at
-  // once (no separate Save); the tabs and what each column means are under "Details".
+  // Grouped by property: each property opens to its sheets and tabs — the sheet's link, each tab →
+  // its property (picked, never guessed), its leads at the last read, its tag and remark. A sheet is
+  // read only when someone presses Read. Every change is saved at once.
   function invByCode(code) {
     var c = String(code || '').toUpperCase();
     return inv().find(function (x) { return String(x.propertyCode || x.id || '').toUpperCase() === c; }) || null;
   }
-  function propertySelect(cls, code, attrs) {
+  function propertySelect(code, attrs) {
     var list = inv().slice().sort(function (x, y) { return String(x.propertyCode || x.id).localeCompare(String(y.propertyCode || y.id)); });
     var has = !code || list.some(function (x) { return String(x.propertyCode || x.id).toUpperCase() === String(code).toUpperCase(); });
     var opts = '<option value="">Pick the property…</option>' +
       (has ? '' : '<option value="' + esc(code) + '" selected>' + esc(code) + '</option>') +
       list.map(function (x) {
         var c = String(x.propertyCode || x.id);
-        return '<option value="' + esc(c) + '"' + (String(code).toUpperCase() === c.toUpperCase() ? ' selected' : '') + '>' + esc(c + (x.name ? ' — ' + x.name : '')) + '</option>';
+        return '<option value="' + esc(c) + '"' + (String(code || '').toUpperCase() === c.toUpperCase() ? ' selected' : '') + '>' + esc(c + (x.name ? ' — ' + x.name : '')) + '</option>';
       }).join('');
-    return '<select class="ml-psel ' + cls + '" ' + attrs + '>' + opts + '</select>';
+    return '<select class="ml-psel" ' + attrs + '>' + opts + '</select>';
   }
-  function sourceStatus(s) {
-    if (s.on === false) return '<span class="ml-badge">Off</span>';
-    var lr = S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === s.id; });
-    if (!lr) return '<span class="ml-dim">Not read yet</span>';
-    if (!lr.ok) return '<span class="ml-badge bad" title="' + esc(lr.error) + '">' + (/share it/.test(lr.error || '') ? 'Not shared with the app' : 'Cannot read') + '</span>';
-    var n = (lr.rows || []).reduce(function (t, r) { return t + (r.rows || 0); }, 0);
-    return '<span class="ml-badge ok">' + n + ' lead' + (n === 1 ? '' : 's') + '</span>';
+  function tabCode(s, t) { return String(t.propertyCode || s.propertyCode || '').toUpperCase(); }
+  function lastReadOf(sourceId) { return S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === sourceId; }) || null; }
+  function tabLeads(s, t) {
+    var lr = lastReadOf(s.id);
+    if (!lr) return null;
+    if (!lr.ok) return { error: lr.error };
+    var r = (lr.rows || []).find(function (x) { return x.gid === t.gid; });
+    return r ? { n: r.rows } : null;
   }
+  function shortUrl(id) { return 'docs.google.com/spreadsheets/d/' + id.slice(0, 10) + '…'; }
+
   function setupHtml() {
     if (S.cfgError) return '<div class="ml-alert bad">' + esc(S.cfgError) + ' <button class="ml-btn" onclick="MetaLeads.reload()">Try again</button></div>';
     if (!S.cfg) return '<div class="ml-empty"><i class="fa-solid fa-rotate fa-spin"></i> Loading the setup…</div>';
     var mgr = !!S.cfg.manager, list = S.draft || [];
-    // The first time, the Koyambedu sheet is filled in, ready to connect.
-    if (mgr && !list.length && !S.add.prefilled && SUGGESTED.length) { S.add.prefilled = true; S.add.link = MM().sheetUrl(SUGGESTED[0].link); S.add.code = SUGGESTED[0].propertyCode; }
-    var rows = list.map(function (s, i) { return sourceRow(s, i, mgr); }).join('');
-    var lr = S.cfg.lastRead;
+    // Every tab, with its sheet, grouped by the property it is mapped to.
+    var groups = {}, order = [];
+    list.forEach(function (s, i) {
+      (s.tabs || []).forEach(function (t, j) {
+        var c = tabCode(s, t) || '';
+        if (!groups[c]) { groups[c] = []; order.push(c); }
+        groups[c].push({ s: s, i: i, t: t, j: j });
+      });
+    });
+    order.sort(function (x, y) { return (x ? 0 : 1) - (y ? 0 : 1) || x.localeCompare(y); });
+    var body = order.map(function (c) { return groupHtml(c, groups[c], mgr); }).join('');
     return '<div class="ml-card ml-map">' +
-        '<div class="ml-map-h"><div><div class="ml-h2">Lead sheets → properties</div><div class="ml-dim">Paste the Google Sheet an ad fills, pick the property it is for. Each sheet’s leads count for that property.</div></div></div>' +
-        (mgr ? addRow() : '<div class="ml-alert">Only a manager can change this list. You can read the sheets and work the leads.</div>') +
-        (list.length ? '<div class="ml-maplist"><div class="ml-mapth"><span>Lead sheet</span><span></span><span>Property</span><span>Leads</span><span></span></div>' + rows + '</div>'
-          : '<div class="ml-empty sm">No sheet connected yet.</div>') +
+        '<div class="ml-map-h"><div><div class="ml-h2">Lead sheets by property</div>' +
+          '<div class="ml-dim">Each tab of a lead sheet is mapped to a property. Nothing is read until you press Read.</div></div>' +
+          (mgr && !S.adding ? '<button class="ml-btn primary" onclick="MetaLeads.startAdd()"><i class="fa-solid fa-plus"></i> Add sheet</button>' : '') + '</div>' +
+        (mgr ? '' : '<div class="ml-alert">Only a manager can change the mapping. You can read the sheets and work the leads.</div>') +
+        (S.adding ? addPanel() : '') +
+        (order.length ? body : (S.adding ? '' : '<div class="ml-empty sm">No sheet mapped yet.' + (mgr ? ' Press <b>Add sheet</b>.' : '') + '</div>')) +
       '</div>' +
-      '<div class="ml-foot"><i class="fa-solid fa-circle-info"></i> A sheet must be shared with <code>' + esc(S.cfg.shareWith) + '</code> as Editor <button class="ml-link" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')">Copy</button>' +
-        (lr ? ' · Last read ' + esc(MM().fmtWhen(lr.at)) + (lr.by ? ' by ' + esc(lr.by) : '') : '') + '</div>';
+      '<div class="ml-foot"><i class="fa-solid fa-circle-info"></i> A sheet must be shared with <code>' + esc(S.cfg.shareWith) + '</code> as Editor <button class="ml-link" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')">Copy</button></div>';
   }
-  function addRow() {
-    var A = S.add;
-    var err = A.error ? '<div class="ml-alert bad">' + esc(A.error) +
-      (A.share ? '<div class="ml-sa"><code>' + esc(S.cfg.shareWith) + '</code> <button class="ml-btn sm" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')"><i class="fa-regular fa-copy"></i> Copy</button></div><div class="ml-dim">In the sheet: Share → paste this address → Editor → Send. Then press Connect again.</div>' : '') + '</div>' : '';
-    return '<div class="ml-addline">' +
-        '<input class="ml-in ml-link-in" placeholder="Paste the Google Sheets link" value="' + esc(A.link) + '" oninput="MetaLeads.addLink(this.value)">' +
-        '<span class="ml-arrow"><i class="fa-solid fa-arrow-right"></i></span>' +
-        '<div class="ml-pick">' + propertySelect('ml-add-prop', A.code, 'onchange="MetaLeads.addCode(this.value)"') + '</div>' +
-        '<button class="ml-btn primary" ' + (A.busy ? 'disabled' : '') + ' onclick="MetaLeads.addSheet()">' + (A.busy ? '<i class="fa-solid fa-rotate fa-spin"></i> Checking…' : '<i class="fa-solid fa-plus"></i> Connect') + '</button>' +
-      '</div>' + err;
+  function groupHtml(code, items, mgr) {
+    var closed = S.pgClosed[code || '_'];
+    var sheets = {}; items.forEach(function (x) { sheets[x.s.id] = 1; });
+    var leads = items.reduce(function (n, x) { var l = tabLeads(x.s, x.t); return n + (l && l.n ? l.n : 0); }, 0);
+    var name = code ? propName(code) : '';
+    var head = '<button class="ml-pg-h" onclick="MetaLeads.pg(' + js(code || '_') + ')"><i class="fa-solid fa-chevron-' + (closed ? 'right' : 'down') + '"></i> ' +
+      (code ? '<span class="ml-code">' + esc(code) + '</span> <b>' + esc(name || '') + '</b>' : '<b class="ml-bad">Not mapped to a property</b>') +
+      '<span class="ml-dim"> · ' + Object.keys(sheets).length + ' sheet' + (Object.keys(sheets).length === 1 ? '' : 's') + ' · ' + items.length + ' tab' + (items.length === 1 ? '' : 's') + (leads ? ' · ' + leads + ' leads at the last read' : '') + '</span></button>';
+    if (closed) return '<div class="ml-pgroup">' + head + '</div>';
+    var lastSheet = null;
+    var rows = items.map(function (x) {
+      var first = lastSheet !== x.s.id; lastSheet = x.s.id;
+      return tabRowHtml(x, first, mgr);
+    }).join('');
+    return '<div class="ml-pgroup open">' + head +
+      '<div class="ml-tmap"><div class="ml-tmap-th"><span>Sheet</span><span>Tab</span><span>Property</span><span>Leads</span><span></span></div>' + rows + '</div></div>';
   }
-  function sourceRow(s, i, mgr) {
-    var open = S.detailsFor === s.id;
-    var tabsOn = (s.tabs || []).filter(function (t) { return t.on !== false; }).length;
-    return '<div class="ml-maprow' + (s.on === false ? ' off' : '') + (open ? ' open' : '') + '">' +
-        '<div class="ml-c-sheet"><a href="' + esc(MM().sheetUrl(s.spreadsheetId)) + '" target="_blank" rel="noopener">' + esc(String(s.title || s.spreadsheetId).trim()) + ' <i class="fa-solid fa-arrow-up-right-from-square"></i></a>' +
-          '<div class="ml-dim">' + tabsOn + ' of ' + (s.tabs || []).length + ' tab' + ((s.tabs || []).length === 1 ? '' : 's') + '</div></div>' +
-        '<span class="ml-arrow"><i class="fa-solid fa-arrow-right"></i></span>' +
-        '<div class="ml-c-prop">' + (mgr ? propertySelect('ml-row-prop', s.propertyCode, 'onchange="MetaLeads.setProp(' + i + ',this.value)"')
-          : '<span class="ml-code">' + esc(s.propertyCode) + '</span> ' + esc(propName(s.propertyCode) || s.propertyName)) + '</div>' +
-        '<div class="ml-c-status">' + sourceStatus(s) + '</div>' +
-        '<div class="ml-c-act">' +
-          (mgr ? '<label class="ml-sw" title="Read this sheet or not"><input type="checkbox" ' + (s.on !== false ? 'checked' : '') + ' onchange="MetaLeads.srcOn(' + i + ',this.checked)"> On</label>' : '') +
-          '<button class="ml-link" onclick="MetaLeads.details(' + js(s.id) + ')">' + (open ? 'Hide' : 'Details') + '</button>' +
-          (mgr ? '<button class="ml-icon" title="Disconnect this sheet" onclick="MetaLeads.remove(' + i + ')"><i class="fa-regular fa-trash-can"></i></button>' : '') +
-        '</div>' +
-        (open ? detailsHtml(s, i, mgr) : '') +
+  function tabRowHtml(x, first, mgr) {
+    var s = x.s, t = x.t, key = s.id + ':' + t.gid;
+    var l = tabLeads(s, t);
+    var lr = lastReadOf(s.id);
+    var editing = S.noteFor === key;
+    var leads = s.on === false ? '<span class="ml-badge">Sheet off</span>' : t.on === false ? '<span class="ml-badge">Tab off</span>'
+      : l && l.error ? '<span class="ml-badge bad" title="' + esc(l.error) + '">' + (/share it/.test(l.error) ? 'Not shared' : 'Cannot read') + '</span>'
+      : l ? '<b>' + l.n + '</b>' : '<span class="ml-dim">—</span>';
+    var sheetCell = first
+      ? '<a href="' + esc(MM().sheetUrl(s.spreadsheetId, t.gid)) + '" target="_blank" rel="noopener" class="ml-sheetlink"><b>' + esc(String(s.title || '').trim()) + '</b> <i class="fa-solid fa-arrow-up-right-from-square"></i></a>' +
+        '<div class="ml-url">' + esc(shortUrl(s.spreadsheetId)) + '</div>' +
+        '<div class="ml-sheet-act">' +
+          '<button class="ml-btn sm" ' + (S.readingOne === s.id || s.on === false ? 'disabled' : '') + ' onclick="MetaLeads.readOne(' + js(s.id) + ')"><i class="fa-solid fa-rotate' + (S.readingOne === s.id ? ' fa-spin' : '') + '"></i> Read</button>' +
+          (lr && lr.ok ? '<span class="ml-dim"> ' + esc(timeAgoSafe(S.cfg.lastRead.at)) + '</span>' : '') +
+          (mgr ? ' <label class="ml-sw" title="Read this sheet or not"><input type="checkbox" ' + (s.on !== false ? 'checked' : '') + ' onchange="MetaLeads.srcOn(' + x.i + ',this.checked)"> On</label>' +
+            '<button class="ml-icon" title="Disconnect this sheet" onclick="MetaLeads.remove(' + x.i + ')"><i class="fa-regular fa-trash-can"></i></button>' : '') +
+        '</div>'
+      : '<span class="ml-dim ml-same">same sheet</span>';
+    var note = (t.tag || t.remark) && !editing ? '<div class="ml-tabnote">' + (t.tag ? '<span class="ml-tag">' + esc(t.tag) + '</span> ' : '') + esc(t.remark || '') + '</div>' : '';
+    var noteEdit = editing ? '<div class="ml-noteedit"><input class="ml-in ml-tag-in" maxlength="40" placeholder="Tag (e.g. Above 2 Cr form)" value="' + esc(t.tag || '') + '">' +
+      '<input class="ml-in ml-remark-in" maxlength="500" placeholder="Remark for this tab" value="' + esc(t.remark || '') + '">' +
+      '<button class="ml-btn sm primary" onclick="MetaLeads.saveNote(' + x.i + ',' + x.j + ')">Save</button> <button class="ml-btn sm" onclick="MetaLeads.note(null)">Cancel</button></div>' : '';
+    return '<div class="ml-trow' + (s.on === false || t.on === false ? ' off' : '') + '">' +
+        '<div class="ml-c-sheet">' + sheetCell + '</div>' +
+        '<div class="ml-c-tab">' + (mgr ? '<label title="Read this tab or not"><input type="checkbox" ' + (t.on !== false ? 'checked' : '') + ' onchange="MetaLeads.tabOn(' + x.i + ',' + x.j + ',this.checked)"> ' : '<label>') + '<b>' + esc(t.title) + '</b></label>' +
+          (mgr ? ' <button class="ml-link" onclick="MetaLeads.note(' + js(key) + ')">' + (t.tag || t.remark ? 'Edit tag' : '+ Tag / remark') + '</button>' : '') +
+          note + noteEdit + '</div>' +
+        '<div class="ml-c-prop">' + (mgr ? propertySelect(tabCode(s, t), 'onchange="MetaLeads.setTabProp(' + x.i + ',' + x.j + ',this.value)"')
+          : '<span class="ml-code">' + esc(tabCode(s, t)) + '</span> ' + esc(propName(tabCode(s, t)))) + '</div>' +
+        '<div class="ml-c-leads">' + leads + '</div>' +
+        '<div class="ml-c-act"><button class="ml-link" onclick="MetaLeads.cols(' + js(key) + ')">' + (S.colsFor === key ? 'Hide columns' : 'Columns') + '</button></div>' +
+        (S.colsFor === key ? '<div class="ml-trow-x">' + colsFor(s, t, x.i, x.j, mgr) + '</div>' : '') +
       '</div>';
   }
-  function detailsHtml(s, i, mgr) {
-    var lr = S.cfg.lastRead && (S.cfg.lastRead.sheets || []).find(function (x) { return x.id === s.id; });
-    var planTabs = S.plan ? S.plan.tabs.filter(function (t) { return t.spreadsheetId === s.spreadsheetId; }) : [];
-    var tabs = (s.tabs || []).map(function (t, j) {
-      var r = lr && (lr.rows || []).find(function (x) { return x.gid === t.gid; });
-      var pt = planTabs.find(function (x) { return x.gid === t.gid; });
-      var open = S.colsFor === s.id + ':' + t.gid;
-      return '<div class="ml-tabrow"><label><input type="checkbox" ' + (t.on !== false ? 'checked' : '') + (mgr ? '' : ' disabled') + ' onchange="MetaLeads.tabOn(' + i + ',' + j + ',this.checked)"> <b>' + esc(t.title) + '</b></label>' +
-        '<span class="ml-dim">' + (r ? r.rows + ' rows at the last read' : '') + '</span>' +
-        (pt ? ' <button class="ml-link" onclick="MetaLeads.cols(' + js(s.id + ':' + t.gid) + ')">' + (open ? 'Hide columns' : 'Columns') + (pt.issues.length ? ' <span class="ml-bad">· ' + pt.issues.length + ' to check</span>' : '') + '</button>' : '') +
-        (open && pt ? colsHtml(pt, i, j, mgr) : '') + '</div>';
-    }).join('');
-    return '<div class="ml-details">' + (lr && !lr.ok ? '<div class="ml-alert bad">' + esc(lr.error) + '</div>' : '') +
-      '<div class="ml-dim">Tabs read from this sheet' + (S.plan ? '' : ' — read the sheets to see each tab’s columns') + ':</div>' + tabs + '</div>';
+  function colsFor(s, t, i, j, mgr) {
+    var pt = S.plan && S.plan.tabs.find(function (x) { return x.spreadsheetId === s.spreadsheetId && x.gid === t.gid; });
+    return pt ? colsHtml(pt, i, j, mgr) : '<div class="ml-dim">Read this sheet to see what each column holds.</div>';
+  }
+  function addPanel() {
+    var A = S.add, r = A.result;
+    var err = A.error ? '<div class="ml-alert bad">' + esc(A.error) +
+      (A.share ? '<div class="ml-sa"><code>' + esc(S.cfg.shareWith) + '</code> <button class="ml-btn sm" onclick="MetaLeads.copy(' + js(S.cfg.shareWith) + ')"><i class="fa-regular fa-copy"></i> Copy</button></div><div class="ml-dim">In the sheet: Share → paste this address → Editor → Send. Then press Check again.</div>' : '') + '</div>' : '';
+    var tabs = r ? r.tabs.map(function (t) {
+      var T2 = A.tabs[t.gid] || {};
+      return '<div class="ml-arow' + (T2.on ? '' : ' off') + '">' +
+        '<label><input type="checkbox" ' + (T2.on ? 'checked' : '') + ' onchange="MetaLeads.addTabOn(' + t.gid + ',this.checked)"> <b>' + esc(t.title) + '</b></label>' +
+        '<span class="ml-dim">' + t.count + ' rows · ' + (t.looksMeta ? 'Meta leads' : '<span class="ml-bad">not a Meta export</span>') + '</span>' +
+        '<span class="ml-arrow"><i class="fa-solid fa-arrow-right"></i></span>' +
+        '<div class="ml-pick">' + propertySelect(T2.code || '', 'onchange="MetaLeads.addTabProp(' + t.gid + ',this.value)"') + '</div>' +
+        '<input class="ml-in ml-addtag" maxlength="40" placeholder="Tag (optional)" value="' + esc(T2.tag || '') + '" oninput="MetaLeads.addTabTag(' + t.gid + ',this.value)">' +
+      '</div>';
+    }).join('') : '';
+    return '<div class="ml-addpanel">' +
+      '<div class="ml-h">Add a lead sheet</div>' +
+      '<div class="ml-addline"><input class="ml-in ml-link-in" placeholder="Paste the Google Sheets link" value="' + esc(A.link) + '" oninput="MetaLeads.addLink(this.value)">' +
+        '<button class="ml-btn" ' + (A.busy ? 'disabled' : '') + ' onclick="MetaLeads.check()">' + (A.busy ? '<i class="fa-solid fa-rotate fa-spin"></i> Checking…' : 'Check') + '</button></div>' + err +
+      (r ? '<div class="ml-found"><div class="ml-found-h"><a href="' + esc(MM().sheetUrl(r.spreadsheetId)) + '" target="_blank" rel="noopener"><b>' + esc(String(r.title).trim()) + '</b> <i class="fa-solid fa-arrow-up-right-from-square"></i></a> <span class="ml-dim">— pick the property for each tab</span></div>' + tabs + '</div>' : '') +
+      '<div class="ml-addbtns">' + (r ? '<button class="ml-btn primary" ' + (S.saving ? 'disabled' : '') + ' onclick="MetaLeads.saveAdd()">Save mapping</button> ' : '') + '<button class="ml-btn" onclick="MetaLeads.cancelAdd()">Cancel</button></div>' +
+    '</div>';
   }
   function colsHtml(pt, i, j, mgr) {
     var opts = function (c) {
@@ -477,7 +533,8 @@
     go: function (v) { if (typeof toggleView === 'function') toggleView(v); },
     read: readSheets,
     reload: function () { loadConfig(true); },
-    prop: function (c) { S.prop = c; S.open = null; S.shown = PAGE; render(); },
+    prop: function (c) { S.prop = c; S.open = null; S.shown = PAGE; S.tab = null; render(); },
+    tab: function (k) { S.tab = S.tab === k ? null : k; render(); },
     filter: function (f) { S.filter = f; S.shown = PAGE; if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
     search: function (q) {
       S.q = q; S.shown = PAGE;
@@ -492,40 +549,68 @@
     openLead: function (id) { if (typeof openDetail === 'function') openDetail(id); },
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     cols: function (k) { S.colsFor = S.colsFor === k ? null : k; render(); },
-    details: function (id) { S.detailsFor = S.detailsFor === id ? null : id; render(); },
-    tabOn: function (i, j, on) { var n = clone(S.draft); n[i].tabs[j].on = on; persist(n, function () { toast('Saved'); }); },
-    srcOn: function (i, on) { var n = clone(S.draft); n[i].on = on; persist(n, function () { toast(on ? 'On — read with the others' : 'Off — not read'); }); },
+    pg: function (c) { S.pgClosed[c] = !S.pgClosed[c]; render(); },
+    note: function (k) { S.noteFor = k; render(); if (k) setTimeout(function () { var x = document.querySelector('#metaLeadsView .ml-tag-in'); if (x) x.focus(); }, 30); },
+    saveNote: function (i, j) {
+      var tag = (document.querySelector('#metaLeadsView .ml-tag-in') || {}).value || '', remark = (document.querySelector('#metaLeadsView .ml-remark-in') || {}).value || '';
+      var n = clone(S.draft); n[i].tabs[j].tag = tag.trim(); n[i].tabs[j].remark = remark.trim();
+      persist(n, function () { S.noteFor = null; toast('Saved'); });
+    },
+    tabOn: function (i, j, on) { var n = clone(S.draft); n[i].tabs[j].on = on; persist(n, function () { toast(on ? 'Tab on' : 'Tab off — not read'); }); },
+    srcOn: function (i, on) { var n = clone(S.draft); n[i].on = on; persist(n, function () { toast(on ? 'Sheet on' : 'Sheet off — not read'); }); },
     remove: function (i) {
       var t = String(S.draft[i].title).trim();
-      if (!confirm('Disconnect “' + t + '”? Its leads stay in the sheet; it is just not read any more.')) return;
+      if (!confirm('Disconnect “' + t + '” and all its tabs? Its leads stay in the sheet; it is just not read any more.')) return;
       var n = clone(S.draft); n.splice(i, 1); persist(n, function () { toast('Disconnected'); });
     },
-    setProp: function (i, code) {
+    setTabProp: function (i, j, code) {
       if (!code) return;
-      var n = clone(S.draft); n[i].propertyCode = code; n[i].propertyName = propName(code);
-      persist(n, function () { toast('Now counted for ' + code + ' — read the sheets again to see it'); });
+      var n = clone(S.draft); n[i].tabs[j].propertyCode = code;
+      persist(n, function () { toast(n[i].tabs[j].title + ' → ' + code + '. Read the sheet to see it.'); });
     },
-    role: function (i, j, idx, role) { var n = clone(S.draft); var t = n[i].tabs[j]; t.overrides = t.overrides || {}; t.overrides[idx] = role; persist(n, function () { toast('Saved — read the sheets again to apply'); }); },
-    addLink: function (v) { S.add.link = v; S.add.prefilled = true; },
-    addCode: function (v) { S.add.code = v; S.add.prefilled = true; },
-    addSheet: function () {
+    role: function (i, j, idx, role) { var n = clone(S.draft); var t = n[i].tabs[j]; t.overrides = t.overrides || {}; t.overrides[idx] = role; persist(n, function () { toast('Saved — read the sheet again to apply'); }); },
+    readOne: function (id) {
+      if (S.readingOne) return;
+      S.readingOne = id; render();
+      api('read', { sourceId: id }).then(function (d) {
+        // The sheet's tabs replace its earlier ones; the other sheets' stay as read.
+        var keep = S.read ? (S.read.tabs || []).filter(function (t) { return t.sourceId !== id; }) : [];
+        var errs = S.read ? (S.read.errors || []).filter(function (e) { return e.sourceId !== id; }) : [];
+        S.read = { ok: true, at: d.at, tabs: keep.concat(d.tabs || []), errors: errs.concat(d.errors || []) };
+        replan();
+        toast(d.errors && d.errors.length ? d.errors[0].error : 'Read — ' + (d.tabs || []).reduce(function (n, t) { return n + Math.max((t.values || []).length - 1, 0); }, 0) + ' rows. Nothing was added to the CRM.');
+        loadConfig(true);
+      }).catch(function (e) { toast(e.message); }).then(function () { S.readingOne = null; render(); });
+    },
+    startAdd: function () { S.adding = true; S.add = { link: '', busy: false, error: null, share: false, result: null, tabs: {} }; render(); setTimeout(function () { var x = document.querySelector('#metaLeadsView .ml-link-in'); if (x) x.focus(); }, 30); },
+    cancelAdd: function () { S.adding = false; render(); },
+    addLink: function (v) { S.add.link = v; },
+    addTabOn: function (gid, on) { S.add.tabs[gid] = Object.assign({}, S.add.tabs[gid], { on: on }); render(); },
+    addTabProp: function (gid, code) { S.add.tabs[gid] = Object.assign({}, S.add.tabs[gid], { code: code }); },
+    addTabTag: function (gid, v) { S.add.tabs[gid] = Object.assign({}, S.add.tabs[gid], { tag: v }); },
+    check: function () {
       var A = S.add, link = MM().parseSheetLink(A.link);
-      A.error = null; A.share = false;
+      A.error = null; A.share = false; A.result = null;
       if (!link) { A.error = 'Paste the link of a Google Sheet (docs.google.com/spreadsheets/…)'; render(); return; }
-      if (!A.code) { A.error = 'Pick the property these leads are for'; render(); return; }
-      if ((S.draft || []).some(function (s) { return s.spreadsheetId === link.spreadsheetId; })) { A.error = 'That sheet is already connected'; render(); return; }
+      if ((S.draft || []).some(function (s) { return s.spreadsheetId === link.spreadsheetId; })) { A.error = 'That sheet is already mapped — change its tabs below'; render(); return; }
       A.busy = true; render();
       inspectLink(A.link).then(function (r) {
-        var src = fromInspect(r, A.code);
-        if (!src.tabs.length) throw new Error('No tab in “' + r.title + '” looks like Meta’s lead export (an "id" and a "created_time" column)');
-        var n = clone(S.draft || []); n.push(src);
-        persist(n, function () {
-          toast('Connected: ' + String(r.title).trim() + ' → ' + A.code + '. Press Read the sheets.');
-          S.add = { link: '', code: '', busy: false, error: null, share: false, prefilled: true };
-        });
-      }).catch(function (e) {
-        A.error = e.message; A.share = !!(e.data && e.data.code === 'share');
-      }).then(function () { A.busy = false; render(); });
+        A.result = r; A.tabs = {};
+        // Meta's own tabs ticked; no property picked for any — that is the person's choice.
+        r.tabs.forEach(function (t) { A.tabs[t.gid] = { on: t.looksMeta, code: '', tag: '' }; });
+      }).catch(function (e) { A.error = e.message; A.share = !!(e.data && e.data.code === 'share'); })
+        .then(function () { A.busy = false; render(); });
+    },
+    saveAdd: function () {
+      var A = S.add, r = A.result;
+      var on = r.tabs.filter(function (t) { return (A.tabs[t.gid] || {}).on; });
+      if (!on.length) { toast('Tick at least one tab'); return; }
+      var missing = on.filter(function (t) { return !(A.tabs[t.gid] || {}).code; });
+      if (missing.length) { toast('Pick the property for ' + missing.map(function (t) { return t.title; }).join(', ')); return; }
+      var src = { spreadsheetId: r.spreadsheetId, title: r.title, propertyCode: '', on: true,
+        tabs: on.map(function (t) { var x = A.tabs[t.gid]; return { gid: t.gid, title: t.title, on: true, overrides: {}, propertyCode: x.code, tag: (x.tag || '').trim() }; }) };
+      var n = clone(S.draft || []); n.push(src);
+      persist(n, function () { S.adding = false; toast('Mapped: ' + String(r.title).trim() + '. Press Read on it to see its leads.'); });
     }
   };
 
@@ -554,8 +639,44 @@
     });
   }
 
+  // ─── pages ─────────────────────────────────────────────────────────────
+  // Each screen has its own address: /ads, /ads-duplicates, /ads-analysis, /ads-setup (vercel.json
+  // serves crm.html for them). Flat on purpose: crm.html's files are linked relative to the root.
+  var PATHS = { 'meta-leads': '/ads', 'ml-dupes': '/ads-duplicates', 'ml-analysis': '/ads-analysis', 'ml-setup': '/ads-setup' };
+  function viewOfPath(path) {
+    var p = String(path || '').replace(/\/+$/, '');
+    if (p === '/ads.html') return 'meta-leads';
+    for (var v in PATHS) if (PATHS[v] === p) return v;
+    return null;
+  }
+  window.metaLeadsPathView = viewOfPath;
+  function syncPath(view) {
+    var want = PATHS[view];
+    if (!want || location.pathname === want) return;
+    try {
+      // Each screen is a page in the history, so Back goes to the one before. A ?nav= link (from
+      // another console) only renames the address it arrived on.
+      var url = want + location.hash;
+      if (/[?&]nav=/.test(location.search)) history.replaceState({ ml: view }, '', url);
+      else history.pushState({ ml: view }, '', url);
+    } catch (e) { /* no history API */ }
+  }
+  // Back / Forward between the screens (or back out of them).
+  window.addEventListener('popstate', function () {
+    var v = viewOfPath(location.pathname);
+    if (v && typeof toggleView === 'function') { S.fromPop = true; toggleView(v); S.fromPop = false; }
+    else if (!v && el() && el().style.display !== 'none' && typeof toggleView === 'function') toggleView(typeof lastBrowseView === 'string' ? lastBrowseView : 'kanban');
+  });
+  // Opened at /ads… : straight to that screen, once the page's own scripts have run.
+  (function () {
+    var v = viewOfPath(location.pathname);
+    if (v) setTimeout(function () { if (typeof toggleView === 'function') toggleView(v); }, 0);
+  })();
+
   window.renderMetaLeadsView = function (view) {
     S.view = view || 'meta-leads';
+    if (!S.fromPop) syncPath(S.view);
+    document.title = { 'meta-leads': 'Meta Ads Leads', 'ml-dupes': 'Duplicates · Meta Ads Leads', 'ml-analysis': 'Analysis · Meta Ads Leads', 'ml-setup': 'Setup · Meta Ads Leads' }[S.view] + ' — 3 PIN Realty';
     loadConfig();
     whenInventory();
     render();

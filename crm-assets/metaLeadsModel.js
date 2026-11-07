@@ -245,7 +245,7 @@ export function readTab(tab) {
   const cols = classifyColumns(headers, rows, tab.overrides);
   const metaCol = f => cols.find(c => c.role === 'meta' && c.field === f);
   const cell = (r, c) => (c ? String(r[c.index] == null ? '' : r[c.index]).trim() : '');
-  const where = { sourceId: tab.sourceId || '', spreadsheetId: tab.spreadsheetId || '', sheetTitle: tab.sheetTitle || '', tab: tab.title || '', gid: tab.gid == null ? null : tab.gid };
+  const where = { sourceId: tab.sourceId || '', spreadsheetId: tab.spreadsheetId || '', sheetTitle: tab.sheetTitle || '', tab: tab.title || '', gid: tab.gid == null ? null : tab.gid, tag: tab.tag || '' };
   const enquiries = [];
   rows.forEach((r, i) => {
     if (!Array.isArray(r) || !r.some(v => String(v == null ? '' : v).trim())) return;
@@ -284,6 +284,10 @@ export function readTab(tab) {
 export const teamWrote = e => !!(e.team.assigned || e.team.ratingRaw || e.team.remarks.length || e.team.followups.length || e.team.visit || e.team.notes.length);
 
 // ── The plan ─────────────────────────────────────────────────────────────
+
+/** A tab's key: "<spreadsheetId>:<gid>" (an enquiry's: from its where). */
+export const tabKey = t => `${t.spreadsheetId}:${t.gid}`;
+const inTab = (e, key) => `${e.where.spreadsheetId}:${e.where.gid}` === key;
 
 /** The key a person is known by: their phone, else their email, else the Meta lead id. */
 export function personKey(e) {
@@ -328,8 +332,8 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
       if (e.metaId) seen.set(e.metaId, e);
       all.push(e);
     }
-    tabOut.push({ id: `${t.spreadsheetId}:${t.gid}`, spreadsheetId: t.spreadsheetId, gid: t.gid, sheetTitle: t.sheetTitle, title: t.title,
-      propertyCode: t.propertyCode, cols: r.cols, issues: r.issues, count: r.enquiries.length, copies });
+    tabOut.push({ id: tabKey(t), spreadsheetId: t.spreadsheetId, gid: t.gid, sheetTitle: t.sheetTitle, title: t.title,
+      propertyCode: t.propertyCode, tag: t.tag || '', remark: t.remark || '', cols: r.cols, issues: r.issues, count: r.enquiries.length, copies });
   }
 
   // People: every enquiry of the same phone (or email) is one person, across tabs and properties.
@@ -461,10 +465,14 @@ const tally = (list, f) => {
   return [...m.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n || String(a.label).localeCompare(String(b.label)));
 };
 
-/** Counts for one property (or all when code is empty). now: for the "last N days" series. */
-export function analyse(plan, code, now = Date.now(), days = 30) {
-  const ppl = code ? plan.people.filter(p => p.properties.includes(code)) : plan.people;
-  const enq = ppl.flatMap(p => (code ? p.enquiries.filter(e => e.propertyCode === code) : p.enquiries));
+/**
+ * Counts for one property (or all when code is empty), or for one tab of it (tab = its key).
+ * now: for the "last N days" series.
+ */
+export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
+  let ppl = code ? plan.people.filter(p => p.properties.includes(code)) : plan.people;
+  let enq = ppl.flatMap(p => (code ? p.enquiries.filter(e => e.propertyCode === code) : p.enquiries));
+  if (tab) { ppl = ppl.filter(p => p.enquiries.some(e => inTab(e, tab))); enq = enq.filter(e => inTab(e, tab)); }
   const series = [];
   const byDay = new Map(tally(enq.filter(e => e.at), e => dayKey(e.at)).map(x => [x.label, x.n]));
   const firstAt = Math.min(...enq.map(e => e.at || Infinity));
@@ -495,6 +503,22 @@ export function analyse(plan, code, now = Date.now(), days = 30) {
     byStage: tally(ppl.filter(p => p.crm), p => p.crm.stage || '—'),
     ratings,
     questions: [...questions.entries()].map(([label, vals]) => ({ label, answers: tally(vals, v => v) })),
-    problems: ppl.filter(p => p.issues.length).length
+    problems: ppl.filter(p => p.issues.length).length,
+    // Each sheet's tab, side by side (for the property, or all).
+    byTab: plan.tabs.filter(t => !code || t.propertyCode === code).map(t => {
+      const rows = plan.people.flatMap(p => p.enquiries.filter(e => inTab(e, t.id)).map(e => ({ e, p })));
+      const who = [...new Set(rows.map(x => x.p))];
+      const at = rows.map(x => x.e.at).filter(Boolean);
+      return {
+        key: t.id, spreadsheetId: t.spreadsheetId, gid: t.gid, sheetTitle: t.sheetTitle, title: t.title, tag: t.tag, remark: t.remark, propertyCode: t.propertyCode,
+        enquiries: rows.length, people: who.length,
+        last7: at.filter(x => x > now - 7 * DAY).length,
+        contacted: who.filter(p => p.enquiries.some(e => inTab(e, t.id) && teamWrote(e))).length,
+        duplicates: who.filter(p => p.dupCodes.includes(t.propertyCode)).length,
+        inCrm: who.filter(p => p.crm).length,
+        topAd: (tally(rows.map(x => x.e), e => e.ad)[0] || {}).label || '',
+        firstAt: at.length ? Math.min(...at) : null, lastAt: at.length ? Math.max(...at) : null
+      };
+    })
   };
 }
