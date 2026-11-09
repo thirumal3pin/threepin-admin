@@ -343,6 +343,9 @@ async function server(locked) {
   ok('…the team\'s notes and rating in each row', /Remarks: sent details - probably visit on monday/.test(cf) && /rating 3\/5/.test(cf) && /assigned to Thirumal/.test(cf));
   ok('…a phone number written in a note never leaves the CRM', !/98841 84215/.test(cf) && /\[phone\]/.test(cf));
   ok('…not a CRM lead: said so', /CRM: not a CRM lead yet/.test(cf));
+  ok('…a rate per sq. ft. worked out into the monthly rent (1,000–2,000 sq. ft. × ₹70–₹100)', /Works out to: about ₹70,000–₹2 lakh a month/.test(cf));
+  ok('…the form\'s and the ad\'s names are labels, not where the lead wants to be', /never a place or a wish of the lead/.test(cf));
+  eq('rentFromRate: an open-ended area, a single rate, nothing to multiply', [B.rentFromRate([['Expected area', '4,000+ sq. ft.'], ['Expected budget per sq. ft.', '₹70–₹100']]), B.rentFromRate([['Expected area (in sq. ft.)', '2,000–4,000 sq. ft.'], ['Expected budget per sq. ft.', '₹70']]), B.rentFromRate([['Budget', '50L']])], ['₹2.8 lakh or more', '₹1.4 lakh–₹2.8 lakh', null]);
   [r] = await act({ action: 'brief', person: { ...person, sig: 's2' } });
   eq('Asked again with nothing new: the stored answer, no AI call', [r.cached, calls.length, r.brief.sig], [true, 1, 's2']);
   const more = JSON.parse(JSON.stringify(person)); more.rows[1].notes.push(['Follow up 1', 'Visited, wants 2 floors (9 Nov)']);

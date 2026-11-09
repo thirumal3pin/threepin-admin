@@ -80,6 +80,8 @@ export function buildMetaCaseFile({ person, lead, state, notes, stages, now }) {
   L.push('- A date written inside a note — "(24/10)", "(7 Nov)", "Nov9", "9th" — is day/month, this year unless it says otherwise, and dates the note. Resolve "Monday", "tomorrow" or "next week" only against a date written in the same note or the note before it; with no such date, next_due is null.');
   L.push('- "RNR", "not answering", "no answer", "busy", "switched off" mean the call did not get through: the lead has not reached a new milestone — the team calls again.');
   L.push('- A rating is the team\'s own 1–5 score of the lead (5 = best, 1 = weakest), not something the lead said.');
+  L.push('- The ad\'s name and the form\'s name ("T nagar", "Video 1 – Copy") are the ad team\'s own labels, often copied from another ad — never a place or a wish of the lead. The lead wants the property they enquired about; put an area in what they want only if THEY named it.');
+  L.push('- "Expected budget per sq. ft." is a rent RATE, not their budget. Where a "Works out to" line is given, that is their monthly budget (per_month).');
   L.push('- Someone filling the form again for the same property (a repeat enquiry) is renewed interest.');
   L.push('');
   L.push('LEAD');
@@ -92,6 +94,8 @@ export function buildMetaCaseFile({ person, lead, state, notes, stages, now }) {
     L.push(`${i + 1}. [${r.at ? fmtIstLong(r.at) : 'date unknown'}] ${r.code || ''}${r.ad ? ' · ad: ' + r.ad : ''}${r.form ? ' · form: "' + r.form + '"' : ''}${r.where ? ' · sheet: ' + r.where : ''}${r.tag ? ' (' + r.tag + ')' : ''}`);
     if (r.tabNote) L.push(`   About this sheet tab: ${r.tabNote}`);
     if (r.answers.length) L.push(`   Form answers: ${r.answers.map(a => a[0] + ': ' + a[1]).join('; ')}`);
+    const rent = rentFromRate(r.answers);
+    if (rent) L.push(`   Works out to: about ${rent} a month in rent (the area they want × their rate per sq. ft.)`);
     const team = [r.assigned ? 'assigned to ' + r.assigned : '', r.rating ? 'rating ' + r.rating + '/5' : ''].filter(Boolean).join(' · ');
     if (team) L.push(`   Team: ${team}`);
     if (r.notes.length) r.notes.forEach(n => L.push(`   ${n[0] || 'Note'}: ${n[1]}`));
@@ -106,6 +110,23 @@ export function buildMetaCaseFile({ person, lead, state, notes, stages, now }) {
     L.push('CONVERSATION: none recorded — judge from the ad form answers and the sheet notes.');
   }
   return L.join('\n');
+}
+
+// A form that asks for an area and a rate per sq. ft. gives the monthly rent only once multiplied
+// (2,000–4,000 sq. ft. × ₹70–₹100 = ₹1.4–4 lakh) — done here, not left to the model's arithmetic.
+// Without it the brief read "₹70–₹100 / month" (9 Nov 2026).
+const nums = s => (String(s || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/g) || []).map(Number).filter(n => n > 0);
+const inr = n => n >= 1e7 ? '₹' + +(n / 1e7).toFixed(2) + ' Cr' : n >= 1e5 ? '₹' + +(n / 1e5).toFixed(2) + ' lakh' : '₹' + Math.round(n).toLocaleString('en-IN');
+export function rentFromRate(answers) {
+  const find = re => (answers || []).find(a => re.test(a[0]));
+  const rate = find(/per\s*sq/i), area = find(/area|sq\.?\s*ft|size/i);
+  if (!rate || !area || rate === area) return null;
+  const r = nums(rate[1]), a = nums(area[1]);
+  if (!r.length || !a.length) return null;
+  const lo = Math.min(...a) * Math.min(...r), hi = Math.max(...a) * Math.max(...r);
+  const open = /\+|above|more/i.test(area[1]) && a.length === 1;
+  if (open) return inr(lo) + ' or more';   // "4,000+ sq. ft.": no upper end
+  return lo === hi ? inr(lo) : inr(lo) + '–' + inr(hi);
 }
 
 const keyOf = (caseFile, model) => sha(JSON.stringify([PROMPT_KEY, model, caseFile.split('\n').filter(l => !/^Now: /.test(l)).join('\n')])).slice(0, 24);
