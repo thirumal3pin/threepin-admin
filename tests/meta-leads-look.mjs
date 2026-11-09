@@ -189,6 +189,13 @@ try {
       await page.evaluate(() => MetaLeads.setF('agent', '')); await page.waitForTimeout(250);
       await clickText(page, '.ml-prow', 'Arjun');
       await lshot(page, p + '-2-open'); await ov('open');
+      if (vw < 500) {
+        await page.screenshot({ path: join(OUT, 'look-' + p + '-2a-overview.png') });
+        await page.evaluate(() => MetaLeads.dtab('update')); await page.waitForTimeout(200);
+        await page.screenshot({ path: join(OUT, 'look-' + p + '-2b-update.png') });
+        await page.evaluate(() => MetaLeads.dtab('history')); await page.waitForTimeout(200);
+        await page.screenshot({ path: join(OUT, 'look-' + p + '-2c-history.png') });
+      }
       await page.evaluate(() => { MetaLeads.toggle(null); });
       await page.evaluate(() => MetaLeads.layout && MetaLeads.layout('table'));
       await page.waitForTimeout(250);

@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, changed: {}, mods: {}, modCfg: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, dtab: 'overview', selMode: false, changed: {}, mods: {}, modCfg: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -114,6 +114,48 @@
     out.tabs.sort(function (a, b) { return order.indexOf(a.sourceId) - order.indexOf(b.sourceId); });
     return out;
   }
+  // ─── Phone ─────────────────────────────────────────────────────────────
+  // On a phone the screen works like a mobile CRM: compact rows, a lead opens as its own full
+  // screen (Back closes it) with Call / WhatsApp / Take and tabs Overview · Update · Enquiries.
+  function isPhone() { return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches); }
+  var wasPhone = null;
+  window.addEventListener('resize', function () { var now = isPhone(); if (wasPhone !== null && now !== wasPhone && el() && el().style.display !== 'none') softRender(); wasPhone = now; });
+  function initials(name) { var w = String(name || '?').replace(/^(dr|mr|mrs|ms)\.?\s+/i, '').trim().split(/\s+/); return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase(); }
+  function avatar(p) {
+    var h = 0, s = String(p.key || p.name || ''); for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return '<span class="ml-avt c' + (Math.abs(h) % 6) + '" aria-hidden="true">' + esc(initials(p.name)) + '</span>';
+  }
+  function relShort(t) {
+    if (!t) return '';
+    var m = Math.round((Date.now() - t) / 60000);
+    if (m < 60) return Math.max(1, m) + 'm';
+    if (m < 24 * 60) return Math.round(m / 60) + 'h';
+    if (m < 7 * 24 * 60) return Math.round(m / 1440) + 'd';
+    return shortWhen(t).split(',')[0];
+  }
+  // The lead, opened: a side panel on a computer; its own screen on a phone.
+  function drawerHtml(p) {
+    if (!p) return '';
+    var k = js(p.key), wa = waLink(p), phone = isPhone();
+    var take = !p.team.assignedRaw && canTake() && p.enquiries.some(function (e) { return e.metaId; });
+    var acts = '<div class="ml-dacts">' +
+      (p.phoneOk ? '<a class="ml-dact" href="tel:+' + esc(p.phoneKey) + '"><i class="fa-solid fa-phone"></i><span>Call</span></a>' : '') +
+      (wa ? '<a class="ml-dact wa" href="' + esc(wa) + '" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i><span>WhatsApp</span></a>' : '') +
+      (take ? '<button class="ml-dact take" onclick="MetaLeads.take(' + k + ')"' + (S.writing ? ' disabled' : '') + '><i class="fa-regular fa-hand"></i><span>Take</span></button>' : '') +
+      (p.crm ? '<button class="ml-dact" onclick="MetaLeads.openLead(' + js(p.crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i><span>In CRM</span></button>' : '') + '</div>';
+    var tabs = '<div class="ml-dtabs" role="tablist">' + [['overview', 'Overview'], ['update', 'Update'], ['history', 'Enquiries ' + p.enquiries.length]].map(function (t) {
+      return '<button role="tab" aria-selected="' + (S.dtab === t[0]) + '" class="' + (S.dtab === t[0] ? 'on' : '') + '" onclick="MetaLeads.dtab(\'' + t[0] + '\')">' + esc(t[1]) + '</button>';
+    }).join('') + '</div>';
+    var who = p.team.agent ? agentLabel(p.team.agent) : p.team.assignedRaw;
+    return '<div class="ml-drawer-bg" onclick="MetaLeads.closeLead()"></div><aside class="ml-drawer' + (phone ? ' full' : '') + '" role="dialog" aria-label="' + esc(p.name || 'Lead') + '">' +
+      '<div class="ml-drawer-h">' + (phone ? '<button class="ml-back" onclick="MetaLeads.closeLead()" aria-label="Back to the leads"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
+        '<div class="ml-dh-who">' + (phone ? avatar(p) : '') + '<div class="ml-dh-t"><div class="ml-name">' + esc(p.name || '(no name)') + '</div>' +
+        '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + esc(p.properties.join(', ')) + (phone && who ? ' · ' + esc(who) : '') + '</div></div></div>' +
+        (phone ? '' : '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.closeLead()">✕</button>') + '</div>' +
+      (phone ? acts + tabs : '') +
+      '<div class="ml-person open">' + detailHtml(p) + '</div></aside>';
+  }
+
   // Each person's rows as read (their enquiries and the team's cells): to tell what a refresh changed.
   function rowSigs() {
     var out = {};
@@ -329,7 +371,7 @@
     return '<div class="ml-head"><div class="ml-head-l"><h2 class="ml-title"><i class="fa-brands fa-meta"></i> Meta Ads Leads</h2>' +
       '<div class="ml-sub">From the Google Sheets your Meta ads fill</div></div>' +
       '<div class="ml-head-r">' + (S.bTotal && S.bDone < S.bTotal ? '<span class="ml-last"><i class="fa-solid fa-wand-magic-sparkles"></i> AI reading leads ' + S.bDone + ' / ' + S.bTotal + '</span>' : '') + '<span class="ml-last">' + esc(last) + '</span>' +
-      '<button class="ml-btn ml-read' + (S.read ? '' : ' primary') + '" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + (S.reading ? 'Reading…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</button></div></div>' +
+      '<button class="ml-btn ml-read' + (S.read ? '' : ' primary') + '" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + '<span class="ml-hide-s">' + (S.reading ? 'Reading…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</span></button></div></div>' +
       '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> <span>Edits here are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet.</span></div>' +
       '<div class="ml-tabs">' + tabs + '</div>' +
       (S.readError ? '<div class="ml-alert bad">' + esc(S.readError) + '</div>' : '') +
@@ -503,7 +545,8 @@
     var keys = Object.keys(S.sel).filter(function (k) { return S.sel[k]; });
     var all = list.length && list.every(function (p) { return S.sel[p.key]; });
     var head = '<label class="ml-selall"><input type="checkbox" ' + (all ? 'checked' : '') + ' onchange="MetaLeads.selAll(this.checked)"> ' + (keys.length ? keys.length + ' selected' : 'Select all ' + list.length) + '</label>';
-    if (!keys.length) return '<div class="ml-bulk">' + head + '</div>';
+    var sm = '<button class="ml-link ml-selbtn" onclick="MetaLeads.selMode()">' + (S.selMode ? 'Done' : 'Select') + '</button>';
+    if (!keys.length) return '<div class="ml-bulk">' + head + sm + '</div>';
     var opts = '<option value="">Assign to…</option>' + roster().map(function (e) { return '<option value="' + esc(e) + '">' + esc(agentLabel(e)) + '</option>'; }).join('') + '<option value="_none">— Not assigned —</option>';
     return '<div class="ml-bulk on">' + head +
       '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkAssign(this.value)">' + opts + '</select>' +
@@ -592,10 +635,7 @@
     }).join('');
     // The lead opened from the table: a side panel, the table still in view behind it.
     var openP = S.open && rows.find(function (x) { return x.key === S.open; });
-    var drawer = openP ? '<div class="ml-drawer-bg" onclick="MetaLeads.toggle(' + js(openP.key) + ')"></div><aside class="ml-drawer" role="dialog" aria-label="' + esc(openP.name || 'Lead') + '">' +
-      '<div class="ml-drawer-h"><div><div class="ml-name">' + esc(openP.name || '(no name)') + '</div><div class="ml-dim">' + esc(openP.phone ? MM().displayPhone(openP.phone) : 'no phone') + ' · ' + esc(openP.properties.join(', ')) + '</div></div>' +
-      '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.toggle(' + js(openP.key) + ')">✕</button></div>' +
-      '<div class="ml-person open">' + detailHtml(openP) + '</div></aside>' : '';
+    var drawer = drawerHtml(openP);
     return '<div class="ml-count">' + rows.length + ' of ' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') +
         (Object.keys(S.tf).some(function (k) { return S.tf[k]; }) ? ' · <button class="ml-link" onclick="MetaLeads.tfClear()">Clear column filters</button>' : '') + '</div>' +
       bulkBar(rows) +
@@ -604,20 +644,25 @@
   }
   // Esc closes the side panel.
   document.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape' && S.layout === 'table' && S.open && el() && el().style.display !== 'none' && document.querySelector('#metaLeadsView .ml-drawer')) { S.open = null; render(); }
+    if (ev.key === 'Escape' && (S.layout === 'table' || isPhone()) && S.open && el() && el().style.display !== 'none' && document.querySelector('#metaLeadsView .ml-drawer')) { S.open = null; render(); }
   });
   function leadsHtml() {
     if (!S.plan) return needRead();
     var a = MM().analyse(S.plan, S.prop === 'all' ? '' : S.prop);
     var list = currentList();
     var chips = FILTERS.map(function (f) { return '<button class="ml-chip sm' + (S.filter === f[0] ? ' on' : '') + '" onclick="MetaLeads.filter(' + js(f[0]) + ')">' + f[1] + '</button>'; }).join('');
+    var phone = isPhone();
     var rows = list.slice(0, S.shown).map(personHtml).join('');
+    var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return S.f[k] && !(k === 'agent' && (S.f[k] === '_mine' || S.f[k] === '_none')); }).length;
+    var openP = phone && S.open ? list.concat(S.plan.people).find(function (x) { return x.key === S.open; }) : null;
     var sw = '<div class="ml-layout"><button class="' + (S.layout !== 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'list\')"><i class="fa-solid fa-list"></i> List</button><button class="' + (S.layout === 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'table\')"><i class="fa-solid fa-table"></i> Table</button></div>';
     return propChips(true) + mineSwitch() + tiles(a, S.prop) +
-      '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)"><div class="ml-chips ml-scroll">' + chips + '</div></div>' +
-      '<div class="ml-tools-w">' + sw + toolbar() + '</div>' +
-      (S.layout === 'table' ? tableHtml(list) :
-        (list.length ? bulkBar(list) + '<div class="ml-list">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') +
+      '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)">' +
+        '<button class="ml-btn ml-fbtn2' + (S.fOpen ? ' on' : '') + '" onclick="MetaLeads.fOpen()" aria-expanded="' + !!S.fOpen + '"><i class="fa-solid fa-sliders"></i> Filters' + (nSet ? ' <span class="ml-fn">' + nSet + '</span>' : '') + '</button>' +
+        '<div class="ml-chips ml-scroll">' + chips + '</div></div>' +
+      '<div class="ml-tools-w' + (S.fOpen ? ' open' : '') + '">' + sw + toolbar() + '</div>' +
+      (S.layout === 'table' && !phone ? tableHtml(list) :
+        (list.length ? bulkBar(list) + '<div class="ml-list' + (S.selMode ? ' selmode' : '') + '">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') + (phone ? drawerHtml(openP) : '') +
         (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : ''));
   }
   function actionBadge(p) {
@@ -681,20 +726,22 @@
     return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + '">' +
       '<div class="ml-prow-w">' +
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
-      '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' +
+      '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' + avatar(p) +
         '<div class="ml-who"><div class="ml-name">' + esc(p.name || '(no name)') + (p.crm && p.crm.name && p.crm.name !== p.name ? ' <span class="ml-aka">CRM: ' + esc(p.crm.name) + '</span>' : '') + '</div>' +
         '<div class="ml-phone' + (p.phoneOk ? '' : ' bad') + '">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + '</div></div>' +
-        '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
+        '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div><div class="ml-when-r">' + esc(relShort(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
         '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
         '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
           (note ? '<div class="ml-note" title="' + esc(note.label + ': ' + note.text) + '"><span class="ml-tn-l">' + esc(note.label) + '</span> ' + esc(note.text) + '</div>' : '<div class="ml-note ml-dim">No notes yet</div>') + '</div>' +
-        '<div class="ml-act">' + (status.trim() ? '<div class="ml-badges">' + status + '</div>' : '') +
+        // On a phone: one line — the AI's next step when there is one, else the latest note.
+        '<div class="ml-mline">' + (function () { var n = nextOf(p); return n && n.action ? '<i class="fa-solid fa-arrow-right"></i> ' + esc(n.action) : note ? esc(note.text) : '<span class="ml-dim">No notes yet</span>'; })() + '</div>' +
+        '<div class="ml-act">' + '<div class="ml-badges">' + '<span class="ml-badge ml-magent">' + (who ? esc(who) : 'Not assigned') + (p.team.rating ? ' ★ ' + p.team.rating : '') + '</span> ' + status + '</div>' +
           (p.crm ? '<div class="ml-dim">CRM: ' + esc(p.crm.stage || '') + (p.crm.agent ? ' · ' + esc(agentLabel(p.crm.agent)) : '') + '</div>' : '') +
           (p.issues.length ? '<div class="ml-issue"><i class="fa-solid fa-triangle-exclamation"></i> ' + esc(p.issues.join(' · ')) + '</div>' : '') + '</div>' +
       '</button>' +
       '<div class="ml-quick">' + (!p.team.assignedRaw && canTake() && rows.some(function (e) { return e.metaId; }) ? '<button class="ml-take" title="Assign this lead to me — written in the sheet" onclick="MetaLeads.take(' + js(p.key) + ')"' + (S.writing ? ' disabled' : '') + '>Take</button>' : '') + (p.phoneOk ? '<a class="ml-qb" href="tel:+' + esc(p.phoneKey) + '" title="Call" aria-label="Call"><i class="fa-solid fa-phone"></i></a>' : '') +
         (wa ? '<a class="ml-qb wa" href="' + esc(wa) + '" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>' : '') + '</div>' +
-      '</div>' + (open ? detailHtml(p) : '') + '</div>';
+      '</div>' + (open && !isPhone() ? detailHtml(p) : '') + '</div>';
   }
   function enquiryLine(e, prev, ctx) {
     var gap = prev && prev.at && e.at ? gapText(e.at - prev.at) : '';
@@ -848,9 +895,9 @@
   function detailHtml(p) {
     var rows = p.enquiries, crm = p.crm, w = workRow(p);
     var canPick = rows.filter(function (e) { return e.metaId; }).length > 1;
-    return '<div class="ml-detail">' +
-      '<div class="ml-col ml-col-work">' + briefHtml(p) + workHtml(p) +
-        '<div class="ml-h">In the CRM</div>' +
+    return '<div class="ml-detail" data-tab="' + esc(S.dtab) + '">' +
+      '<div class="ml-col ml-col-work"><div class="ml-sec-ov">' + briefHtml(p) + '</div><div class="ml-sec-up">' + workHtml(p) + '</div>' +
+        '<div class="ml-sec-ov ml-sec-crm"><div class="ml-h">In the CRM</div>' +
         '<div class="ml-would">' + wouldDo(p) + '</div>' +
         (crm ? '<div class="ml-crm">' +
           '<div class="ml-kv"><span>Lead</span><b>' + esc(crm.name || '—') + '</b></div>' +
@@ -864,9 +911,9 @@
           (crm.lostReason ? '<div class="ml-kv"><span>Lost reason</span><b>' + esc(crm.lostReason) + '</b></div>' : '') +
           (crm.summary ? '<div class="ml-sum"><i class="fa-solid fa-wand-magic-sparkles"></i> ' + esc(crm.summary) + '</div>' : '') +
           '<button class="ml-btn sm" onclick="MetaLeads.openLead(' + js(crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open in the CRM</button></div>'
-          : '<div class="ml-dim">Not a CRM lead yet.</div>') +
+          : '<div class="ml-dim">Not a CRM lead yet.</div>') + '</div>' +
       '</div>' +
-      '<div class="ml-col ml-col-hist"><div class="ml-h">Enquiries (' + rows.length + ')' + (canPick ? ' <span class="ml-dim">— each with what its row says</span>' : '') + '</div>' +
+      '<div class="ml-col ml-col-hist ml-sec-hi"><div class="ml-h">Enquiries (' + rows.length + ')' + (canPick ? ' <span class="ml-dim">— each with what its row says</span>' : '') + '</div>' +
         rows.map(function (e, i) { return enquiryLine(e, rows[i - 1], { key: p.key, isWork: e === w, canPick: canPick && !!e.metaId }) + rowEditHtml(e); }).join('') + '</div>' +
     '</div>';
   }
@@ -1180,7 +1227,11 @@
       }, 180);
     },
     more: function () { S.shown += PAGE; render(); },
-    toggle: function (k, force) { S.open = force ? k : (S.open === k ? null : k); if (S.open && S.plan) maybeAutoBrief(S.plan.people.find(function (x) { return x.key === S.open; })); if (force) {
+    toggle: function (k, force) {
+      var was = S.open;
+      S.open = force ? k : (S.open === k ? null : k);
+      if (S.open && S.open !== was) S.dtab = 'overview';
+      if (S.open && !was && isPhone()) { try { history.pushState(Object.assign({}, history.state || {}, { mlLead: S.open }), '', location.href); } catch (e) { /* no history */ } } if (S.open && S.plan) maybeAutoBrief(S.plan.people.find(function (x) { return x.key === S.open; })); if (force) {
         S.filter = 'all'; S.q = ''; S.tf = {};
         var p = S.plan && S.plan.people.find(function (x) { return x.key === k; });
         if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all';
@@ -1201,6 +1252,12 @@
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
     brief: function (key) { if (S.brun[key]) return; S.bq = S.bq.filter(function (k) { return k !== key; }); S.bq.unshift(key); S.bTotal = S.bDone + S.bq.length + Object.keys(S.brun).length; pumpBriefs(key); render(); },
+    dtab: function (t) { S.dtab = t; render(); var d = document.querySelector('#metaLeadsView .ml-drawer.full'); if (d) d.scrollTop = 0; },
+    closeLead: function () {
+      if (isPhone() && history.state && history.state.mlLead) { history.back(); return; }
+      S.open = null; render();
+    },
+    selMode: function () { S.selMode = !S.selMode; if (!S.selMode) S.sel = {}; render(); },
     fOpen: function () { S.fOpen = !S.fOpen; render(); },
     layout: function (l) { S.layout = l; S.shown = PAGE; saveF(); render(); },
     tsort: function (k) { S.tsort = S.tsort.key === k ? { key: k, dir: -S.tsort.dir } : { key: k, dir: k === 'at' || k === 'rating' ? -1 : 1 }; saveF(); render(); },
@@ -1447,6 +1504,7 @@
   }
   // Back / Forward between the screens (or back out of them).
   window.addEventListener('popstate', function () {
+    if (S.open && el() && el().style.display !== 'none' && !(history.state && history.state.mlLead) && isPhone()) { S.open = null; render(); return; }
     var v = viewOfPath(location.pathname);
     if (v && typeof toggleView === 'function') { S.fromPop = true; toggleView(v); S.fromPop = false; }
     else if (!v && el() && el().style.display !== 'none' && typeof toggleView === 'function') toggleView(typeof lastBrowseView === 'string' ? lastBrowseView : 'kanban');
