@@ -110,7 +110,7 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
   // queued and is read tomorrow, exactly as a rate limit would leave it. Gemini is not capped.
   const onClaude = !/^gemini-/.test(model);
   const day = istDay(now);
-  const used = onClaude && aiStateSnap.exists && aiStateSnap.data().claudeDay === day ? (aiStateSnap.data().claudeRuns || 0) : 0;
+  const used = onClaude && aiStateSnap.exists && aiStateSnap.data().claudeDay === day ? (aiStateSnap.data().claudeReads || 0) : 0;
   if (onClaude && used >= CLAUDE_DAILY_CAP) return { leadId, ok: false, error: 'daily Claude cap reached', retry: true, retryAfterMs: 30 * 60000 };
 
   const caseFile = buildCaseFile({ lead, state, notes, stages, now });
@@ -142,7 +142,9 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
     // The busiest minute seen, as a share of the full limit — what the monitoring reads.
     const share = Math.max(use.requests / CLAUDE_LIMITS.requests, use.inputTokens / CLAUDE_LIMITS.inputTokens, use.outputTokens / CLAUDE_LIMITS.outputTokens);
     const peak = st.claudePeak && st.claudePeak.share >= share ? st.claudePeak : { share, at: now, ...use };
-    await aiStateRef(db, tenantId).set({ claudeDay: day, claudeRuns: used + 1, claudeMin: minute, claudeMinUse: use, claudePeak: peak }, { merge: true });
+    // Only a read Claude answered counts toward the day's cap (9 Nov 2026): an expired key had
+    // filled it with refused calls. `claudeReads` replaces `claudeRuns`, which counted every try.
+    await aiStateRef(db, tenantId).set({ claudeDay: day, claudeReads: used + (answer.usage ? 1 : 0), claudeMin: minute, claudeMinUse: use, claudePeak: peak }, { merge: true });
   }
 
   const rid = runId(now);

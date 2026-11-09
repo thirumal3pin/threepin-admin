@@ -352,6 +352,7 @@ async function server(locked) {
   more.rows[1].notes.push(['Follow up 2', 'RNR']);
   [r] = await act({ action: 'brief', person: more });
   eq('The AI failing: the error is kept, and so is the last good brief', [r.ok, r.brief.err, r.brief.v.stage], [false, 'rate limited', 'visit_pending']);
+  eq('…and a read the AI never answered (no usage) does not use up the day\'s cap', (await db.collection('metaLeadBriefs').doc('t_3pin').get()).data().reads, 2);
   [r] = await act({ action: 'briefs' });
   eq('briefs: every stored brief by person', [Object.keys(r.briefs), r.briefs['p:919884184215'].err], [['p:919884184215'], 'rate limited']);
   // Already a CRM lead: its record, notes and chat are read too — another tenant's lead never.
@@ -371,7 +372,7 @@ async function server(locked) {
   eq('Nothing to read: refused', s, 400);
   eq('Briefs run on Claude Haiku 4.5, the CRM\'s Claude', B.BRIEF_MODEL, 'claude-haiku-4-5');
   // The day's cap: past it, nothing is read and the page is told so.
-  await db.collection('metaLeadBriefs').doc('t_3pin').set({ day: new Date(NOW + 5.5 * 3600000).toISOString().slice(0, 10), runs: B.BRIEF_DAILY_CAP }, { merge: true });
+  await db.collection('metaLeadBriefs').doc('t_3pin').set({ day: new Date(NOW + 5.5 * 3600000).toISOString().slice(0, 10), reads: B.BRIEF_DAILY_CAP }, { merge: true });
   const before = calls.length;
   const capped = JSON.parse(JSON.stringify(more)); capped.rows[0].notes.push(['Follow up 1', 'one more']);
   [r] = await act({ action: 'brief', person: capped });

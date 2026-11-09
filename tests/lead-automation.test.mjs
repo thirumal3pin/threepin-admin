@@ -660,15 +660,19 @@ section('Runs on Firestore: apply, audit, debounce');
   {
     const istDay = t => new Date(t + 5.5 * 3600000).toISOString().slice(0, 10);
     const st = db._get(`aiState/${T}`) || {};
-    check('Each Claude read is counted for the day', st.claudeDay === istDay(NOW + HOUR) && st.claudeRuns >= 1, JSON.stringify(st));
-    db._store.set(`aiState/${T}`, { ...st, claudeDay: istDay(NOW + HOUR), claudeRuns: CLAUDE_DAILY_CAP });
+    check('Each Claude read is counted for the day', st.claudeDay === istDay(NOW + HOUR) && st.claudeReads >= 1, JSON.stringify(st));
+    const deny = { beta: { messages: { create: async () => { const e = new Error('401 invalid x-api-key'); e.status = 401; throw e; } } }, messages: { create: async () => { const e = new Error('401 invalid x-api-key'); e.status = 401; throw e; } } };
+    const before = (db._get(`aiState/${T}`) || {}).claudeReads;
+    const denied = await runLeadAutomation(db, T, 'L1', { client: deny, model: 'claude-haiku-4-5', now: NOW + HOUR, force: true });
+    check('A refused call (bad key) is not counted toward the day\'s cap', !denied.ok && (db._get(`aiState/${T}`) || {}).claudeReads === before, JSON.stringify(db._get(`aiState/${T}`)));
+    db._store.set(`aiState/${T}`, { ...st, claudeDay: istDay(NOW + HOUR), claudeReads: CLAUDE_DAILY_CAP });
     const calls = [];
     const counting = { beta: { messages: { create: async p => { calls.push(p); return fakeClient(good).messages.create(p); } } }, messages: { create: async p => { calls.push(p); return fakeClient(good).messages.create(p); } } };
     const capped = await runLeadAutomation(db, T, 'L1', { client: counting, model: 'claude-haiku-4-5', now: NOW + HOUR, force: true });
     check('Over the daily cap: no Claude call, and the lead stays queued for later', !capped.ok && capped.retry && calls.length === 0 && capped.error === 'daily Claude cap reached', JSON.stringify(capped));
     const gem = await runLeadAutomation(db, T, 'L1', { model: 'gemini-3.5-flash-lite', now: NOW + HOUR, force: true, gemini: { apiKey: 'k', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(good) }] } }] }) }) } });
     check('...but Gemini is not capped', gem.ok, JSON.stringify(gem));
-    db._store.set(`aiState/${T}`, { ...st, claudeDay: '2000-01-01', claudeRuns: CLAUDE_DAILY_CAP });
+    db._store.set(`aiState/${T}`, { ...st, claudeDay: '2000-01-01', claudeReads: CLAUDE_DAILY_CAP });
     // Never more than half the account's per-minute limits.
     const minute = Math.floor((NOW + 2 * HOUR) / 60000);
     const busy = (use) => { db._store.set(`aiState/${T}`, { claudeMin: minute, claudeMinUse: use }); calls.length = 0; return runLeadAutomation(db, T, 'L1', { client: counting, model: 'claude-haiku-4-5', now: NOW + 2 * HOUR, force: true }); };

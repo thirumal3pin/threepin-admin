@@ -157,8 +157,11 @@ export async function briefAction(user, body, deps) {
   }
 
   // The day's cap: over it, the brief waits for tomorrow (the page stops asking for the rest).
-  const day = istDay(now), runs = doc.day === day ? (doc.runs || 0) : 0;
-  if (runs >= BRIEF_DAILY_CAP) return [{ ok: false, capped: true, error: `Today's ${BRIEF_DAILY_CAP} AI reads are used — the rest are read tomorrow`, brief: prev || null }, 200];
+  // Only reads Claude actually answered count (9 Nov 2026): an expired key used to fill the day's
+  // cap with refused calls that cost nothing, and then no brief could be read at all. Counted in
+  // `reads` — the older `runs` counted every attempt and is left behind.
+  const day = istDay(now), reads = doc.day === day ? (doc.reads || 0) : 0;
+  if (reads >= BRIEF_DAILY_CAP) return [{ ok: false, capped: true, error: `Today's ${BRIEF_DAILY_CAP} AI reads are used — the rest are read tomorrow`, brief: prev || null }, 200];
 
   let answer;
   try { answer = await deps.classify({ client: deps.claude ? deps.claude() : briefClaude(), model, caseFile, now }); }
@@ -167,7 +170,8 @@ export async function briefAction(user, body, deps) {
   const entry = answer.ok
     ? { k: person.k, sig: person.sig, key, at: now, model: answer.model || model, v: answer.verdict, src, err: null }
     : { k: person.k, sig: person.sig, key: prev && prev.key || '', at: prev && prev.at || 0, model, v: prev && prev.v || null, src, err: String(answer.error || 'failed').slice(0, 200), errAt: now };
-  await briefRef(db, T).set({ b: { [id]: entry }, day, runs: runs + 1 }, { merge: true });
+  const charged = !!(answer.ok || answer.usage);
+  await briefRef(db, T).set({ b: { [id]: entry }, day, reads: reads + (charged ? 1 : 0) }, { merge: true });
   return [{ ok: answer.ok, brief: entry, ...(answer.ok ? {} : { error: entry.err }) }, 200];
 }
 
