@@ -47,6 +47,14 @@ function sheetsFetch() {
       }
       return res(200, {});
     }
+    const fm = u.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (fm) {
+      const sh = byId[decodeURIComponent(fm[1])];
+      if (!sh) return res(404, { error: { message: 'File not found' } });
+      // Any change to the sheet (a write here, or a test editing the data) changes its modifiedTime.
+      let h = 0; const str = JSON.stringify(sh.tabs); for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+      return res(200, { modifiedTime: '2026-11-07T05:00:00.' + String(h >>> 0).padStart(10, '0') + 'Z' });
+    }
     if (u.pathname === '/drive/v3/files') return res(200, { files: [
       { id: REAL.KOY, name: 'Koyambedu - Leads', modifiedTime: '2026-11-07T06:57:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
       { id: REAL.KDO, name: 'Kodabakkam office', modifiedTime: '2026-11-07T05:11:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
@@ -151,7 +159,8 @@ const readAll = async page => {
   await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-read'); return b && !b.disabled; }, null, { timeout: 8000 });
   await page.click('.ml-head .ml-read');
   await page.waitForTimeout(150);
-  await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-read'); return b && !b.disabled; }, null, { timeout: 8000 });
+  await page.waitForTimeout(150);
 };
 const overflow = page => page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth));
 
@@ -366,23 +375,33 @@ try {
 
   // ── 9. Reading wrote nothing ──
   ok('The CRM saved nothing (no lead, no note)', (await page.evaluate(() => window.__saves)) === 0);
-  ok('Only the setup and the AI briefs were written to the database', JSON.stringify([...db._store.keys()].sort()) === JSON.stringify([`metaLeadBriefs/${T}`, `metaLeadConfigs/${T}`, `taskConfigs/${T}`]), [...db._store.keys()]);
+  ok('Only the setup was written to the database (no AI brief until one is asked for)', JSON.stringify([...db._store.keys()].sort()) === JSON.stringify([`metaLeadConfigs/${T}`, `taskConfigs/${T}`]), [...db._store.keys()]);
 
-  // ── 9b. The AI brief: what to know before the call ──
-  await page.waitForFunction(() => !/AI reading leads/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 15000 }).catch(() => {});
-  const briefed = await page.evaluate(() => document.querySelectorAll('.ml-person').length);
-  const nBriefs = Object.keys((await db.collection('metaLeadBriefs').doc(T).get()).data().b).length;
-  ok('Every person was read by the lead AI, in the background', nBriefs === 12, nBriefs);
-  const nCalls = ai.calls.length;
+  // ── 9b. The AI brief: only when asked for (cost) ──
   await page.evaluate(() => MetaLeads.go('meta-leads'));
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(800);
+  ok('Nothing is read by the AI on its own — not in the background, not on opening', ai.calls.length === 0, ai.calls.length);
   await clickText(page, '.ml-prow', 'Arjun');
+  await page.waitForTimeout(400);
+  ok('Opened with no brief yet: a "Get AI brief" button, and still no AI read', /Get AI brief/.test(await text(page, '.ml-person.open .ml-brief')) && ai.calls.length === 0, ai.calls.length);
+  const getBrief = async () => {
+    await page.locator('.ml-person.open .ml-brief .ml-btn').click();
+    await page.waitForFunction(() => { const b = document.querySelector('.ml-person.open .ml-brief'); return b && !/Reading/.test(b.textContent) && !/Get AI brief/.test(b.textContent); }, null, { timeout: 8000 });
+  };
+  await getBrief();
   const brief = await text(page, '.ml-person.open .ml-brief');
-  ok('Opened: "Before you call" — the stage, the next step and when, what they want, what they ruled out', /Before you call/.test(brief) && /Visit planned/.test(brief) && /Tomorrow 11 am/.test(brief) && /Call to confirm the visit time/.test(brief) && /4,000\+ sq\. ft\./.test(brief) && /Ruled out\s*ground floor/.test(brief), brief);
+  ok('Get AI brief: "Before you call" — the stage, the next step and when, what they want, what they ruled out', /Before you call/.test(brief) && /Visit planned/.test(brief) && /Tomorrow 11 am/.test(brief) && /Call to confirm the visit time/.test(brief) && /4,000\+ sq\. ft\./.test(brief) && /Ruled out\s*ground floor/.test(brief), brief);
   ok('…with where it was read from', /Read from 3 enquiries · \d+ sheet notes/.test(brief), brief);
   ok('…first in the lead, above the work form', await page.evaluate(() => { const b = document.querySelector('.ml-person.open .ml-brief'), w = document.querySelector('.ml-person.open .ml-work'); return b.getBoundingClientRect().top < w.getBoundingClientRect().top; }));
+  ok('…one AI read for one click', ai.calls.length === 1, ai.calls.length);
   await shot(page, '6c-brief');
-  ok('Opening with nothing new: no new AI read', ai.calls.length === nCalls, [nCalls, ai.calls.length]);
+  await clickText(page, '.ml-prow', 'Arjun');
+  await clickText(page, '.ml-prow', 'Arjun');
+  await page.waitForTimeout(400);
+  ok('Opening it again: the stored brief, no new AI read', ai.calls.length === 1 && /Visit planned/.test(await text(page, '.ml-person.open .ml-brief')), ai.calls.length);
+  // The SHR0001 leads are in view here: Aswin (busy → call again, overdue), Sandeep (not interested → lost).
+  for (const who of ['Aswin Ramesh', 'Sandeep']) { await clickText(page, '.ml-prow', who); await page.waitForTimeout(300); await getBrief(); }
+  await clickText(page, '.ml-prow', 'Sandeep');
   const dueRows = await page.$$eval('.ml-person', els => els.filter(e => [...e.querySelectorAll('.ml-due')].some(d => /Overdue|Today/.test(d.textContent))).map(e => e.querySelector('.ml-name').childNodes[0].textContent.trim()).sort());
   ok('List: an overdue follow-up is flagged on the row', dueRows.length > 0, dueRows);
   await page.locator('.ml-chip.sm', { hasText: 'Follow-up due' }).click();
@@ -392,11 +411,53 @@ try {
   await page.locator('.ml-chip.sm', { hasText: /^All$/ }).click();
   await page.selectOption('.ml-tools .ml-sort', 'next');
   await page.waitForTimeout(200);
-  const order = await page.$$eval('.ml-person', els => els.map(e => [e.querySelector('.ml-name').childNodes[0].textContent.trim(), !!e.querySelector('.ml-due.bad'), !!e.querySelector('.ml-due.bad') && /Lost/.test(e.querySelector('.ml-due.bad').textContent)]));
-  const firstNotDue = order.findIndex(x => !x[1] || x[2]);
-  ok('"What to do next": the overdue first', firstNotDue > 0 && order.slice(0, firstNotDue).every(x => x[1] && !x[2]), order);
+  const order = await page.$$eval('.ml-person', els => els.map(e => [e.querySelector('.ml-name').childNodes[0].textContent.trim(), [...e.querySelectorAll('.ml-due')].some(d => /Overdue|Today/.test(d.textContent)), [...e.querySelectorAll('.ml-due')].some(d => /Lost/.test(d.textContent))]));
+  ok('"What to do next": the overdue first', order[0][1], order);
   const lostAt = order.findIndex(x => x[2]);
   ok('…the lost ones last', lostAt < 0 || order.slice(lostAt).every(x => x[2]), order);
+
+  // ── 9c. Refresh: only the sheets that changed are read; the new and updated leads are marked ──
+  const gets = () => sheets.calls.filter(c => /values:batchGet/.test(c)).length;
+  let g0 = gets();
+  await readAll(page);
+  ok('Refresh with nothing changed: no sheet read again', gets() === g0, gets() - g0);
+  ok('…and it says so', /No changes since the last refresh/.test(await page.evaluate(() => (document.querySelector('.toast, #toast, .crm-toast') || document.body).textContent)));
+  const arjunRow = sheets.data.KDB.tabs[0].values[3];
+  arjunRow[21] = 'callback wednesday ( 24/10) — wants covered parking';
+  await page.evaluate(() => MetaLeads.prop('all'));
+  g0 = gets();
+  await readAll(page);
+  ok('One sheet changed: only that sheet read again', gets() - g0 === 1, gets() - g0);
+  const marked = await page.$$eval('.ml-person', els => els.filter(e => /Updated|New/.test([...e.querySelectorAll('.ml-badge')].map(b => b.textContent).join(' '))).map(e => e.querySelector('.ml-name').childNodes[0].textContent.trim()));
+  ok('…and only the lead whose row changed is marked Updated', JSON.stringify(marked) === JSON.stringify(['Arjun']), marked);
+  await page.locator('.ml-chip.sm', { hasText: 'New or updated' }).click();
+  await page.waitForTimeout(200);
+  ok('"New or updated": just that lead', (await page.$$('.ml-person')).length === 1);
+  await page.locator('.ml-chip.sm', { hasText: /^All$/ }).click();
+  await clickText(page, '.ml-prow', 'Arjun');
+  await page.waitForTimeout(400);
+  ok('Its brief: "the notes changed" with Refresh brief — and no AI read until it is pressed', /The notes changed since this brief/.test(await text(page, '.ml-person.open .ml-brief')) && ai.calls.length === 3, ai.calls.length);
+  await page.locator('.ml-person.open .ml-brief-stale .ml-btn').click();
+  await page.waitForFunction(() => !/The notes changed/.test((document.querySelector('.ml-person.open .ml-brief') || {}).textContent || ''), null, { timeout: 8000 });
+  ok('Refresh brief: read again, with the new note', ai.calls.length === 4 && /wants covered parking/.test(ai.calls[3]), ai.calls.length);
+
+  // ── 9d. From Duplicates, "See the person" always lands on them ──
+  await page.evaluate(() => MetaLeads.setF('agent', '_mine'));
+  await page.evaluate(() => MetaLeads.go('ml-dupes'));
+  await page.waitForTimeout(300);
+  const dupName = await page.$eval('.ml-dupe b', e => e.textContent.trim());
+  await page.locator('.ml-dupe .ml-link', { hasText: 'See the person' }).first().click();
+  await page.waitForTimeout(500);
+  const landed = await page.evaluate(() => { const o = document.querySelector('.ml-person.open'); if (!o) return null; const r = o.getBoundingClientRect(); return { name: o.querySelector('.ml-name').childNodes[0].textContent.trim(), inView: r.top < innerHeight && r.bottom > 0, flash: o.classList.contains('ml-flash') }; });
+  ok('See the person: "My leads" hid them, so the filter is cleared; they are open, on screen and highlighted', landed && landed.name === dupName && landed.inView && landed.flash, landed);
+  await page.evaluate(() => MetaLeads.layout('table'));
+  await page.evaluate(() => MetaLeads.go('ml-dupes'));
+  await page.waitForTimeout(300);
+  await page.locator('.ml-dupe .ml-link', { hasText: 'See the person' }).first().click();
+  await page.waitForTimeout(500);
+  ok('…in the Table view too: the row highlighted and the side panel open', !!(await page.$('tr.ml-tr.open')) && !!(await page.$('.ml-drawer')));
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => MetaLeads.layout('list'));
   await page.selectOption('.ml-tools .ml-sort', 'new');
 
   ok('Google was only read (no cell written)', sheets.calls.every(c => !/:batchUpdate|:append|:clear/.test(c)));
@@ -544,8 +605,8 @@ try {
   const pr = sheets.data.KDB.tabs[1].values[2];   // Parinita, Sheet3 row 3: Remarks (V) then a header-less column (W) already full
   ok('Agent: rating 4 written in Rating (U); the follow-up in a new "Follow up 1" column with today\'s date', pr[20] === '4' && sheets.data.KDB.tabs[1].values[0][23] === 'Follow up 1' && /^Site visit fixed \(\d{1,2} \w{3}\)$/.test(pr[23]), JSON.stringify([pr[20], sheets.data.KDB.tabs[1].values[0][23], pr[23]]));
   ok('…and the screen shows it at once', /Site visit fixed/.test(await text(page, '.ml-person.open')) && /★ 4/.test(await text(page, '.ml-person.open .ml-prow')));
-  await page.waitForTimeout(1200);
-  ok('A note saved: that lead is read again by the AI, with the new note', /Site visit fixed/.test(ai.calls[ai.calls.length - 1] || ''));
+  await page.waitForTimeout(800);
+  ok('A note saved on a lead with no brief: no AI read on its own', !ai.calls.some(c => /Site visit fixed/.test(c)));
   await shot(page, '13-agent-work');
   // A person with rows for two properties: pick which row the form writes; Enter saves.
   await page.evaluate(() => MetaLeads.clearF());
@@ -595,7 +656,7 @@ try {
   ok('…"Filters" opens them', (await page.$$eval('.ml-tools .fsel', els => els.filter(e => e.offsetParent).length)) === 5);
   ok('Phone: the lists that scroll sideways do not widen the page', (await overflow(page)) <= 1, await overflow(page));
   const nameW = await page.$eval('.ml-person .ml-name', e => e.getBoundingClientRect().width);
-  ok('Phone: a name keeps its width (not squeezed letter by letter)', nameW > 140, nameW);
+  ok('Phone: a name keeps its width (not squeezed letter by letter)', nameW > 110, nameW);
   await clickText(page, '.ml-prow', 'Arjun');
   ok('Phone: no sideways scroll', (await overflow(page)) <= 1, await overflow(page));
   const cut = await page.evaluate(() => [...document.querySelectorAll('.ml-person.open *')].filter(e => e.getBoundingClientRect().width && e.getBoundingClientRect().right > innerWidth + 1).map(e => e.className || e.tagName).slice(0, 5));

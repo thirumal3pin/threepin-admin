@@ -29,8 +29,9 @@ import { buildCaseFile, classifyLead, redact, fmtIstLong, LEAD_AI_CLAUDE_MODEL, 
 export const BRIEFS = 'metaLeadBriefs';
 export const BRIEF_VERSION = 1;
 export const BRIEF_MODEL = LEAD_AI_CLAUDE_MODEL;   // Claude Haiku 4.5, as the CRM's lead reading on Claude
-// Reads a day (IST). ~5,000 tokens in and ~200 out — about $0.006 a read, so 300 is under $2 a day.
-export const BRIEF_DAILY_CAP = Number(process.env.META_BRIEF_DAILY_CAP) || 300;
+// Reads a day (IST). ~5,000 tokens in and ~200 out — about $0.006 a read, so 50 is at most ~$0.30 a
+// day. Briefs are read only when a lead is opened (or "Read again"), never in the background.
+export const BRIEF_DAILY_CAP = Number(process.env.META_BRIEF_DAILY_CAP) || 50;
 const istDay = t => new Date(t + 5.5 * 3600000).toISOString().slice(0, 10);
 let _claude;
 export function briefClaude() {

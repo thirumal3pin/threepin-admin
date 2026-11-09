@@ -298,6 +298,26 @@ async function server(locked) {
     { db: brokenDb, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW });
   eq('The edit log failing: the sheet was written and the answer says so', [s2, r2.applied.length, sheets.data.KDB.tabs[1].values[4][21]], [200, 1, 'Called']);
 }
+// ── Refresh: a sheet not modified since the last read is not read again ──
+{
+  const db = createFakeDb();
+  await db.collection('taskConfigs').doc('t_3pin').set({ managers: ['admin@threepin.in'] });
+  const sheets = fakeSheetsFetch();
+  const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW };
+  const act = body => metaLeadsAction({ tenantId: 't_3pin', email: 'admin@threepin.in' }, body, deps);
+  await act({ action: 'save', sources: SOURCES });
+  const id = SOURCES[0].spreadsheetId;
+  let [r] = await act({ action: 'read', sourceId: id });
+  const mod = r.mods[id];
+  ok('A read says when each sheet last changed', !!mod && r.tabs.length === 2);
+  const n0 = sheets.calls.filter(c => /batchGet/.test(c)).length;
+  [r] = await act({ action: 'read', sourceId: id, since: { [id]: mod } });
+  eq('Not changed since: not read again (no rows, marked unchanged)', [r.tabs.length, r.unchanged, sheets.calls.filter(c => /batchGet/.test(c)).length - n0], [0, [id], 0]);
+  sheets.data.KDB.tabs[0].values[2][19] = 'Called, visiting Friday';
+  [r] = await act({ action: 'read', sourceId: id, since: { [id]: mod } });
+  ok('Changed since: read again, with a new modifiedTime', r.tabs.length === 2 && r.unchanged.length === 0 && r.mods[id] !== mod);
+}
+
 // ── The AI brief: what the agent needs before the call ──
 {
   const B = await import('../api/_meta-leads-brief.js');

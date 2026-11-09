@@ -115,6 +115,14 @@ export function fakeSheetsFetch(locked = new Set()) {
       }
       return res(200, { totalUpdatedCells: JSON.parse(opts.body).data.length });
     }
+    const fm = u.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (fm) {
+      const sh = byId[decodeURIComponent(fm[1])];
+      if (!sh) return res(404, { error: { message: 'File not found' } });
+      // Any change to the sheet (a write here, or a test editing the data) changes its modifiedTime.
+      let h = 0; const str = JSON.stringify(sh.tabs); for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+      return res(200, { modifiedTime: '2026-11-07T05:00:00.' + String(h >>> 0).padStart(10, '0') + 'Z' });
+    }
     if (u.pathname === '/drive/v3/files') return res(200, { files: [...Object.values(SHEETS).map(sh => ({ id: sh.id, name: sh.title, modifiedTime: '2026-11-07T05:00:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] })),
       { id: 'INVENTORYsheetXXXXXXXXXXXXXXXXXXXXXXXXXXXX', name: '3PIN_Inventory_Master', modifiedTime: '2026-11-07T04:00:00Z', owners: [{ emailAddress: '3pinrentals@gmail.com' }] }] });
     const one = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values\/A1:AZ1$/);

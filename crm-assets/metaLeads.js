@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, changed: {}, mods: {}, modCfg: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -91,29 +91,62 @@
   // Each sheet in its own call, three at a time — each answer stays small and quick however many
   // sheets are connected. → one combined answer, as a single read would have given.
   async function readEach(ids) {
-    var out = { ok: true, tabs: [], errors: [], at: Date.now() }, i = 0;
+    var out = { ok: true, tabs: [], errors: [], at: Date.now(), mods: {}, unchanged: [] }, i = 0;
     async function worker() {
       while (i < ids.length) {
         var id = ids[i++];
-        try { var d = await api('read', { sourceId: id }); out.tabs = out.tabs.concat(d.tabs || []); out.errors = out.errors.concat(d.errors || []); out.at = d.at || out.at; }
+        try {
+          // Skipped only when neither the sheet nor its mapping changed since its rows were read.
+          var have = S.read && (S.read.tabs || []).some(function (t) { return t.sourceId === id; });
+          var since = have && S.mods[id] && S.modCfg[id] === cfgSig(id) ? {} : null; if (since) since[id] = S.mods[id];
+          var d = await api('read', { sourceId: id, since: since });
+          out.tabs = out.tabs.concat(d.tabs || []); out.errors = out.errors.concat(d.errors || []); out.at = d.at || out.at;
+          Object.keys(d.mods || {}).forEach(function (k) { out.mods[k] = d.mods[k]; S.modCfg[k] = cfgSig(k); });
+          (d.unchanged || []).forEach(function (k) { out.unchanged.push(k); });
+        }
         catch (e) { out.errors.push({ sourceId: id, title: (((S.cfg && S.cfg.sources) || []).find(function (x) { return x.id === id; }) || {}).title || id, error: e.message }); }
       }
     }
     await Promise.all([worker(), worker(), worker()]);
+    // Not changed since the last read: the rows already here stand.
+    if (S.read && out.unchanged.length) out.tabs = out.tabs.concat((S.read.tabs || []).filter(function (t) { return out.unchanged.indexOf(t.sourceId) >= 0; }));
     var order = ids;
     out.tabs.sort(function (a, b) { return order.indexOf(a.sourceId) - order.indexOf(b.sourceId); });
     return out;
   }
+  // Each person's rows as read (their enquiries and the team's cells): to tell what a refresh changed.
+  function rowSigs() {
+    var out = {};
+    (S.plan ? S.plan.people : []).forEach(function (p) {
+      out[p.key] = hashStr(JSON.stringify(p.enquiries.map(function (e) { var t = e.team; return [e.metaId || e.row, e.propertyCode, t.assigned, t.ratingRaw, t.remarks, t.followups, t.notes]; })));
+    });
+    return out;
+  }
+  // A sheet's mapping as set up (tabs on, properties, columns): read again when it changes.
+  function cfgSig(id) { var src = ((S.cfg && S.cfg.sources) || []).find(function (x) { return x.id === id; }); return src ? JSON.stringify([src.on, src.propertyCode, src.tabs]) : ''; }
   function readSheets(quiet) {
     if (S.reading) return;
     var ids = ((S.cfg && S.cfg.sources) || []).filter(function (x) { return x.on !== false; }).map(function (x) { return x.id; });
     S.reading = true; S.readError = null; render();
+    var before = S.plan ? rowSigs() : null;
     (ids.length ? readEach(ids) : api('read')).then(function (d) {
-      S.read = d; S.open = null; S.shown = PAGE;
+      S.read = d; S.shown = PAGE;
+      Object.keys(d.mods || {}).forEach(function (k) { S.mods[k] = d.mods[k]; });
       replan();
+      if (S.open && !S.plan.people.some(function (x) { return x.key === S.open; })) S.open = null;
+      // What came in or changed since the last refresh — marked until the next one.
+      var news = 0, upd = 0;
+      if (before) {
+        S.changed = {};
+        var after = rowSigs();
+        Object.keys(after).forEach(function (k) { if (!before[k]) { S.changed[k] = 'new'; news++; } else if (before[k] !== after[k]) { S.changed[k] = 'updated'; upd++; } });
+      }
+      var same = (d.unchanged || []).length;
       if (S.cfg) S.cfg.lastRead = { at: d.at, by: (window.crmAuth && window.crmAuth.email) || '', sheets: [] };
       loadConfig(true);
       if (d.errors && d.errors.length) toast('Read, with ' + d.errors.length + ' sheet problem' + (d.errors.length > 1 ? 's' : ''));
+      else if (before && (news || upd)) toast((news ? news + ' new lead' + (news > 1 ? 's' : '') : '') + (news && upd ? ', ' : '') + (upd ? upd + ' updated' : '') + (same ? ' · ' + same + ' sheet' + (same > 1 ? 's' : '') + ' unchanged, not read again' : ''));
+      else if (before && !quiet) toast('No changes since the last refresh' + (same ? ' — ' + same + ' sheet' + (same > 1 ? 's' : '') + ' not read again' : ''));
       else if (!quiet) toast('Sheets read');
       agentDefault();
       loadBriefs();
@@ -150,17 +183,20 @@
     return false;
   }
   function loadBriefs() {
-    api('briefs').then(function (d) { S.briefs = d.briefs || {}; queueBriefs(); softRender(); }).catch(function () { queueBriefs(); });
+    api('briefs').then(function (d) { S.briefs = d.briefs || {}; softRender(); }).catch(function () { /* the list works without */ });
   }
-  // Every stale brief, mine first, then the unassigned, then the rest; two at a time.
+  // Cost (the owner's rule, 7 Nov 2026): a brief is read when someone asks for it (Get AI brief /
+  // Refresh brief), or on its own only for a lead that already has one, has changed since, and
+  // whose brief is at least a day old — never every lead, never in the background.
+  function maybeAutoBrief(p) {
+    var b = p && S.briefs[p.key];
+    if (b && b.v && !b.err && briefStale(p, b) && Date.now() - (b.at || 0) >= DAY_MS) queueBriefs(p.key);
+  }
   function queueBriefs(first) {
-    if (!S.plan || (S.bCapped && !first)) return;
-    var rank = function (p) { return p.team.agent === me() ? 0 : !p.team.assignedRaw ? 1 : 2; };
-    var want = S.plan.people.filter(function (p) { return !S.brun[p.key] && S.bq.indexOf(p.key) < 0 && briefStale(p, S.briefs[p.key]); })
-      .sort(function (a, b) { return rank(a) - rank(b) || lastAtFor(b) - lastAtFor(a); }).map(function (p) { return p.key; });
-    if (first && S.bq.indexOf(first) < 0 && !S.brun[first]) want.unshift(first);
-    else if (first) { S.bq = [first].concat(S.bq.filter(function (k) { return k !== first; })); }
-    if (!want.length && !S.bq.length) return;
+    if (!S.plan || !first) return;
+    var fp = S.plan.people.find(function (x) { return x.key === first; });
+    if (!fp || S.brun[first] || S.bq.indexOf(first) >= 0 || !briefStale(fp, S.briefs[first])) return;
+    var want = [first];
     if (!S.bq.length && !Object.keys(S.brun).length) { S.bDone = 0; S.bTotal = 0; }
     S.bq = S.bq.concat(want.filter(function (k) { return S.bq.indexOf(k) < 0; }));
     S.bTotal = S.bDone + S.bq.length + Object.keys(S.brun).length;
@@ -171,7 +207,7 @@
       var p = S.plan && S.plan.people.find(function (x) { return x.key === key; });
       if (!p) return;
       S.brun[key] = 1;
-      api('brief', { person: briefInput(p), force: force === key }).then(function (d) {
+      api('brief', { person: briefInput(p) }).then(function (d) {
         if (d.brief) S.briefs[key] = d.brief;
         if (d.capped) { S.bq = []; S.bCapped = d.error; toast(d.error); }
       })
@@ -242,10 +278,13 @@
     var head = '<div class="ml-brief-h"><span class="ml-brief-t"><i class="fa-solid fa-wand-magic-sparkles"></i> Before you call</span>' +
       (v ? '<span class="ml-stage s-' + esc(v.stage) + '">' + esc(STAGE_NAME[v.stage] || v.stage) + '</span>' + (v.urgency === 'high' ? '<span class="ml-badge bad">Urgent</span>' : '') : '') +
       '<span class="ml-brief-r">' + (busy ? '<span class="ml-dim"><i class="fa-solid fa-rotate fa-spin"></i> Reading…</span>' : (b && b.at ? '<span class="ml-dim">AI · ' + esc(timeAgoSafe(b.at)) + '</span>' : '')) +
-      (busy ? '' : ' <button class="ml-icon ml-brief-re" title="Read again" onclick="MetaLeads.brief(' + k + ')"><i class="fa-solid fa-rotate-right"></i><span class="ml-sr">Read again</span></button>') + '</span></div>';
+      '</span></div>';
     if (!v) {
-      return '<div class="ml-brief empty">' + head + '<div class="ml-dim">' + (busy ? 'Reading the enquiries, the sheet’s notes' + (p.crm ? ', and the CRM notes and chat' : '') + '…' : (b && b.err ? 'Could not read: ' + esc(b.err) : 'Not read yet.') + ' <button class="ml-link" onclick="MetaLeads.brief(' + k + ')">Read now</button>') + '</div></div>';
+      return '<div class="ml-brief empty">' + head + (busy ? '<div class="ml-dim">Reading the enquiries, the sheet’s notes' + (p.crm ? ', and the CRM notes and chat' : '') + '…</div>' :
+        '<div class="ml-brief-get"><div class="ml-dim">' + (b && b.err ? 'Could not read: ' + esc(b.err) : 'The stage, when to call and what to say, what they want — read by the AI from the form, the sheet’s notes' + (p.crm ? ' and the CRM' : '') + '.') + '</div>' +
+        '<button class="ml-btn sm" onclick="MetaLeads.brief(' + k + ')"><i class="fa-solid fa-wand-magic-sparkles"></i> Get AI brief</button></div>') + '</div>';
     }
+    var stale = !busy && briefStale(p, b);
     var n = nextOf(p) || {};
     var nextLine = '';
     if (n.state === 'lost') nextLine = '<div class="ml-next lost"><b>' + esc(n.text) + '</b>' + (v.evidence ? '<div>' + esc(v.evidence) + '</div>' : '') + '</div>';
@@ -256,6 +295,7 @@
     var from = [src.rows ? src.rows + ' enquir' + (src.rows > 1 ? 'ies' : 'y') : '', src.notes ? src.notes + ' sheet note' + (src.notes > 1 ? 's' : '') : 'no sheet notes',
       src.crm ? 'CRM: ' + src.crmNotes + ' note' + (src.crmNotes === 1 ? '' : 's') + (src.chat ? ', ' + src.chat + ' chat messages' : '') : ''].filter(Boolean).join(' · ');
     return '<div class="ml-brief">' + head +
+      (stale ? '<div class="ml-brief-stale"><span><i class="fa-solid fa-circle-exclamation"></i> The notes changed since this brief.</span><button class="ml-btn sm" onclick="MetaLeads.brief(' + k + ')"><i class="fa-solid fa-rotate-right"></i> Refresh brief</button></div>' : '') +
       (v.line ? '<div class="ml-brief-line">' + esc(v.line) + '</div>' : '') + nextLine + visit + wantChips(v.want) +
       (v.evidence && n.state !== 'lost' ? '<div class="ml-evid">“' + esc(v.evidence) + '”</div>' : '') +
       '<div class="ml-brief-f">Read from ' + esc(from) + '. The AI can be wrong — check the notes.' + (b.err ? ' <span class="ml-bad">Last refresh failed: ' + esc(b.err) + '</span>' : '') + '</div></div>';
@@ -313,7 +353,7 @@
   }
 
   // ─── Leads ─────────────────────────────────────────────────────────────
-  var FILTERS = [['all', 'All'], ['due', 'Follow-up due'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
+  var FILTERS = [['all', 'All'], ['changed', 'New or updated'], ['due', 'Follow-up due'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
   var SORTS = [['next', 'What to do next'], ['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z']];
   var DAY_MS = 86400000;
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
@@ -342,6 +382,7 @@
     if (f === 'priority' && !MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop)) return false;
     if (f === 'uncontacted' && p.team.contacted) return false;
     if (f === 'due' && !isDue(p)) return false;
+    if (f === 'changed' && !S.changed[p.key]) return false;
     if (f === 'problems' && !p.issues.length) return false;
     if (F.agent === '_mine' && p.team.agent !== me()) return false;
     if (F.agent === '_none' && p.team.assignedRaw) return false;
@@ -635,7 +676,8 @@
     var dups = p.dupCodes.filter(function (c) { return S.prop === 'all' || c === S.prop; }).map(function (c) { return '<span class="ml-badge warn" title="More than one row for ' + esc(c) + '">Duplicate ×' + p.enquiries.filter(function (e) { return e.propertyCode === c; }).length + (S.prop === 'all' ? ' ' + esc(c) : '') + '</span>'; }).join(' ');
     var codes = S.prop === 'all' || p.properties.length > 1 ? p.properties.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '';
     var ad = rows.length ? rows[rows.length - 1].ad : '';
-    var status = dueChip(p) + ' ' + waitingFlag(p) + ' ' + actionBadge(p);
+    var ch = S.changed[p.key];
+    var status = (ch ? '<span class="ml-badge ' + (ch === 'new' ? 'info' : 'chg') + '" title="Since the last refresh">' + (ch === 'new' ? 'New' : 'Updated') + '</span> ' : '') + dueChip(p) + ' ' + waitingFlag(p) + ' ' + actionBadge(p);
     return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + '">' +
       '<div class="ml-prow-w">' +
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
@@ -773,7 +815,8 @@
       }
     } catch (e) { errs.push(e.message); }
     S.writing = false;
-    replan(); render(); queueBriefs();
+    replan(); render();
+    var op = S.open && S.plan && S.plan.people.find(function (x) { return x.key === S.open; }); if (op) maybeAutoBrief(op);
     if (errs.length) toast(errs.length > 1 ? errs[0] + ' (and ' + (errs.length - 1) + ' more)' : errs[0]);
     else if (conflicts.length) {
       toast(conflicts.length + ' change' + (conflicts.length > 1 ? 's were' : ' was') + ' not written — someone changed the sheet. It has been read again: check and save again.');
@@ -1137,7 +1180,22 @@
       }, 180);
     },
     more: function () { S.shown += PAGE; render(); },
-    toggle: function (k, force) { S.open = force ? k : (S.open === k ? null : k); if (S.open && S.plan) { var op = S.plan.people.find(function (x) { return x.key === S.open; }); if (op && briefStale(op, S.briefs[op.key])) queueBriefs(op.key); } if (force) { S.filter = 'all'; S.q = ''; var p = S.plan && S.plan.people.find(function (x) { return x.key === k; }); if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all'; var i = S.plan ? S.plan.people.filter(function (x) { return S.prop === 'all' || x.properties.indexOf(S.prop) >= 0; }).findIndex(function (x) { return x.key === k; }) : -1; if (i >= S.shown) S.shown = i + 1; } render(); if (force) setTimeout(function () { var o = document.querySelector('#metaLeadsView .ml-person.open'); if (o) o.scrollIntoView({ block: 'start' }); }, 30); },
+    toggle: function (k, force) { S.open = force ? k : (S.open === k ? null : k); if (S.open && S.plan) maybeAutoBrief(S.plan.people.find(function (x) { return x.key === S.open; })); if (force) {
+        S.filter = 'all'; S.q = ''; S.tf = {};
+        var p = S.plan && S.plan.people.find(function (x) { return x.key === k; });
+        if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all';
+        // A filter that hides them (My leads, a rating, an ad…) is cleared, and said so.
+        if (p && !passes(p)) { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; saveF(); toast('Filters cleared to show ' + (p.name || 'this lead')); }
+        S.shown = Math.max(S.shown, peopleFor(S.prop).length);
+      }
+      render();
+      if (force) setTimeout(function () {
+        var o = document.querySelector('#metaLeadsView .ml-person.open') || document.querySelector('#metaLeadsView tr.ml-tr.open');
+        if (!o) return;
+        o.scrollIntoView({ block: 'center' });
+        o.classList.add('ml-flash'); setTimeout(function () { o.classList.remove('ml-flash'); }, 2600);
+      }, 40);
+    },
     openLead: function (id) { if (typeof openDetail === 'function') openDetail(id); },
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
     agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
@@ -1285,7 +1343,8 @@
         var keep = S.read ? (S.read.tabs || []).filter(function (t) { return t.sourceId !== id; }) : [];
         var errs = S.read ? (S.read.errors || []).filter(function (e) { return e.sourceId !== id; }) : [];
         S.read = { ok: true, at: d.at, tabs: keep.concat(d.tabs || []), errors: errs.concat(d.errors || []) };
-        replan(); queueBriefs();
+        Object.keys(d.mods || {}).forEach(function (k) { S.mods[k] = d.mods[k]; S.modCfg[k] = cfgSig(k); });
+        replan();
         toast(d.errors && d.errors.length ? d.errors[0].error : 'Read — ' + (d.tabs || []).reduce(function (n, t) { return n + Math.max((t.values || []).length - 1, 0); }, 0) + ' rows. Nothing was added to the CRM.');
         loadConfig(true);
       }).catch(function (e) { toast(e.message); }).then(function () {

@@ -18,6 +18,8 @@
 //   save     the setup                                                                  [managers]
 //   available  the sheets shared with the app, Meta ad lead sheets marked                 [managers]
 //   read     every connected tab's rows, for the page to plan from                     [the team]
+//            — with since: { sourceId: modifiedTime }, a sheet Google Drive says has not
+//              changed since is skipped (unchanged: [ids]); mods: each sheet's modifiedTime
 //   brief    the AI's reading of one person: stage, next step and when, requirement, objections
 //   briefs   every stored brief                                                         [the team]
 //   write    the team's columns of a connected tab (assigned, rating, remarks, follow-ups) [the team]
@@ -253,11 +255,26 @@ export async function metaLeadsAction(user, body, deps) {
     const sources = (cfg.sources || []).filter(s => s.on !== false);
     const only = body.sourceId ? String(body.sourceId) : null;
     const tok = tokenOnce();
-    const tabs = [], errors = [], sheets = [];
+    let driveP = null;
+    const driveTok = () => (driveP = driveP || deps.token(sa, 'https://www.googleapis.com/auth/drive.metadata.readonly'));
+    const since = body.since && typeof body.since === 'object' ? body.since : {};
+    const tabs = [], errors = [], sheets = [], unchanged = [], mods = {};
+    const prevLine = id => ((cfg.lastRead && cfg.lastRead.sheets) || []).find(x => x.id === id);
     for (const s of sources) {
       if (only && s.id !== only) continue;
       const want = (s.tabs || []).filter(t => t.on !== false);
       if (!want.length) continue;
+      // When the sheet last changed (one small Drive call). Not changed since the page's last read:
+      // not read again — the page keeps the rows it has. Drive not answering: read as before.
+      try {
+        const d = await google(deps, driveTok(), `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(s.spreadsheetId)}?fields=modifiedTime&supportsAllDrives=true`, 'this sheet', shareWith);
+        if (d && d.modifiedTime) mods[s.id] = d.modifiedTime;
+      } catch (e) { /* read it */ }
+      if (mods[s.id] && since[s.id] && since[s.id] === mods[s.id]) {
+        unchanged.push(s.id);
+        sheets.push({ ...(prevLine(s.id) || { id: s.id, title: s.title, ok: true }), unchanged: true });
+        continue;
+      }
       try {
         // Tabs are kept by their id (gid): a renamed tab is still found under its new name.
         const meta = await sheetMeta(deps, tok(), s.spreadsheetId, shareWith);
@@ -282,7 +299,7 @@ export async function metaLeadsAction(user, body, deps) {
     const order = (cfg.sources || []).map(x => x.id);
     const merged = [...prevSheets, ...sheets].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     await db.collection(COLLECTION).doc(T).set({ lastRead: { at, by: me, sheets: merged } }, { merge: true });
-    return [{ ok: true, mode: 'test', at, tabs, errors, shareWith }, 200];
+    return [{ ok: true, mode: 'test', at, tabs, errors, shareWith, mods, unchanged }, 200];
   }
 
   return [{ ok: false, error: 'Unknown action' }, 400];

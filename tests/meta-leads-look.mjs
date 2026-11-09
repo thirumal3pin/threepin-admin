@@ -47,6 +47,14 @@ function sheetsFetch() {
       }
       return res(200, {});
     }
+    const fm = u.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (fm) {
+      const sh = byId[decodeURIComponent(fm[1])];
+      if (!sh) return res(404, { error: { message: 'File not found' } });
+      // Any change to the sheet (a write here, or a test editing the data) changes its modifiedTime.
+      let h = 0; const str = JSON.stringify(sh.tabs); for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+      return res(200, { modifiedTime: '2026-11-07T05:00:00.' + String(h >>> 0).padStart(10, '0') + 'Z' });
+    }
     if (u.pathname === '/drive/v3/files') return res(200, { files: [
       { id: REAL.KOY, name: 'Koyambedu - Leads', modifiedTime: '2026-11-07T06:57:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
       { id: REAL.KDO, name: 'Kodabakkam office', modifiedTime: '2026-11-07T05:11:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
@@ -151,7 +159,8 @@ const readAll = async page => {
   await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-btn.primary'); return b && !b.disabled; }, null, { timeout: 8000 });
   await page.click('.ml-head .ml-btn.primary');
   await page.waitForTimeout(150);
-  await page.waitForFunction(() => !/Reading the sheets/.test(document.querySelector('#metaLeadsView').textContent), null, { timeout: 8000 });
+  await page.waitForFunction(() => { const b = document.querySelector('.ml-head .ml-read'); return b && !b.disabled; }, null, { timeout: 8000 });
+  await page.waitForTimeout(150);
 };
 const overflow = page => page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth));
 
