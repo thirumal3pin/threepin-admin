@@ -258,7 +258,13 @@ async function liveRefresh(loud){
     const res = await fetch('/api/tailortalk?action=refresh', { method:'POST', headers:{ 'Authorization':'Bearer '+idToken } });
     const data = await res.json().catch(()=>({}));
     if(res.ok && data.ok){
-      if(data.moved) showToast(`🤖 ${data.moved} lead${data.moved===1?'':'s'} moved by the AI`);
+      // The AI could not read the leads that were due: said once every half hour, not hidden.
+      let lastIssue = 0;
+      try{ lastIssue = Number(localStorage.getItem('crm.aiIssueAt')) || 0; }catch(e){}
+      if(data.aiIssue && (loud || Date.now() - lastIssue > 30*60000)){
+        try{ localStorage.setItem('crm.aiIssueAt', String(Date.now())); }catch(e){}
+        showToast(`⚠️ Lead AI is not reading leads: ${data.aiIssue}`);
+      } else if(data.moved) showToast(`🤖 ${data.moved} lead${data.moved===1?'':'s'} moved by the AI`);
       else if(loud) showToast(data.aiRan ? `🤖 Read ${data.aiRan} lead${data.aiRan===1?'':'s'} — no moves needed` : '✓ Up to date');
     } else if(loud){
       showToast(data.error ? `Refresh failed: ${data.error}` : 'Refresh failed');
@@ -3665,7 +3671,9 @@ async function recheckLead(id){
     const idToken = await window.crmAuth.getIdToken();
     const res = await fetch('/api/tailortalk?action=ai-lead', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken }, body: JSON.stringify({ leadId: id }) });
     const data = await res.json().catch(()=>({}));
+    noteAiReadIssue(id, res, data);
     if(!res.ok || data.ok === false) showToast(data.error ? `Re-check failed: ${data.error}` : (data.skipped ? `Skipped: ${data.skipped}` : 'Re-check failed'));
+    else if(data.skipped) showToast(`🤖 Not read: ${data.skipped}`);
     else showToast(data.moved ? `🤖 Moved to ${(window.crmPipeline.stageDef(data.moved.to)||{}).name}` : data.suggested ? '🤖 AI has a suggestion' : '🤖 Checked — no change');
   } catch(e){
     showToast('Re-check failed — check your connection');
@@ -3687,7 +3695,7 @@ async function recheckLead(id){
 // Every note asks for a read now. Deliberately NOT forced: the evidence key in
 // _lead-ai.js already covers the notes, so a note that says something new costs
 // one read and a note that repeats what is known costs nothing.
-async function nudgeAiAfterNote(leadId){
+async function nudgeAiAfterNote(leadId, from = ' from your note'){
   const l = leads.find(x => x.id === leadId);
   if(!l || isBusinessLead(l) || recheckingIds.has(leadId)) return;
   recheckingIds.add(leadId);
@@ -3699,10 +3707,11 @@ async function nudgeAiAfterNote(leadId){
     // Quiet by design: they asked to save a note, not to run the AI. Only a real
     // change to the lead is worth interrupting the work they were doing.
     if(res.ok && data.ok !== false){
-      if(data.moved) showToast(`🤖 Moved to ${(window.crmPipeline.stageDef(data.moved.to)||{}).name} from your note`);
-      else if(data.siteVisit) showToast('🤖 Site visit updated from your note');
-      else if(data.followUp) showToast('🤖 Follow-up updated from your note');
+      if(data.moved) showToast(`🤖 Moved to ${(window.crmPipeline.stageDef(data.moved.to)||{}).name}${from}`);
+      else if(data.siteVisit) showToast(`🤖 Site visit updated${from}`);
+      else if(data.followUp) showToast(`🤖 Follow-up updated${from}`);
     }
+    noteAiReadIssue(leadId, res, data);
   } catch(e){
     // The note is saved either way. A read that did not happen is not worth an
     // error box over what they were actually doing.
@@ -3711,6 +3720,31 @@ async function nudgeAiAfterNote(leadId){
     const cur = leads.find(x => x.id === leadId);
     if(cur && currentDetailId === leadId) renderStandSection(cur);
   }
+}
+// ═══════ A LEAD NOBODY HAS READ YET IS READ WHEN IT IS OPENED ═══════
+//
+// The AI reads a lead when something NEW arrives on it (a message, a note, Re-check). A lead whose
+// chat came in before automation was switched on — or while the AI was blocked — had nothing new
+// after that, so it sat at "Not read by the AI yet" for good, still in New though the lead had
+// asked for a site visit (9 Nov 2026). Opening such a lead now asks for its first read: once per
+// lead, only while automation is on, never for a lead the AI already read.
+//
+// Why a read did not happen (rate limit, daily cap, a closed lead…) is not always saved on the
+// lead, so it is kept here for the card's footer instead of being lost.
+const aiReadIssue = new Map();   // leadId → reason the last read from this page did not happen
+const aiFirstReadAsked = new Set();
+function noteAiReadIssue(id, res, data){
+  if(!res.ok || (data && data.ok === false)) aiReadIssue.set(id, (data && (data.error || data.skipped)) || 'the read did not go through');
+  else if(data && data.skipped && data.skipped !== 'nothing new since the last read') aiReadIssue.set(id, 'skipped: ' + data.skipped);
+  else aiReadIssue.delete(id);
+}
+function firstAiReadOnOpen(l){
+  if(!l || !leadAutomation.enabled || aiFirstReadAsked.has(l.id) || recheckingIds.has(l.id)) return;
+  const ai = l.ai || {};
+  if(ai.at || ai.error || isBusinessLead(l)) return;
+  if(!(isTtLead(l) || (l.noteCount || 0) > 0)) return;
+  aiFirstReadAsked.add(l.id);
+  nudgeAiAfterNote(l.id, ' — first AI read');
 }
 function markHandledUi(id, what){
   const l = leads.find(x=>x.id===id);
@@ -4352,7 +4386,13 @@ function renderStandSection(l){
 
   const checking = recheckingIds.has(l.id);
   const canRead = isTtLead(l) || (l.noteCount || 0) > 0;
-  const read = ai.at ? `AI read this lead ${timeAgo(ai.at)}${ai.confidence ? ' · ' + ai.confidence + ' confidence' : ''}${ai.error ? ' · last read failed: ' + escapeHtml(ai.error) : ''}` : (canRead ? 'Not read by the AI yet' : 'No chat or notes for the AI to read');
+  // A failed read is always shown — also when the AI has never read the lead successfully, which
+  // used to say "Not read by the AI yet" and hide why (9 Nov 2026).
+  const failed = ai.error ? `<b style="color:var(--danger,#c0392b)">⚠️ AI read failed${ai.errorAt ? ' ' + timeAgo(ai.errorAt) : ''}: ${escapeHtml(ai.error)}</b>` : '';
+  const issue = !failed && aiReadIssue.has(l.id) ? `<b style="color:var(--danger,#c0392b)">⚠️ AI could not read it: ${escapeHtml(aiReadIssue.get(l.id))}</b>` : '';
+  const aiWhy = failed || issue;
+  const read = ai.at ? `AI read this lead ${timeAgo(ai.at)}${ai.confidence ? ' · ' + ai.confidence + ' confidence' : ''}${aiWhy ? ' · ' + aiWhy : ''}`
+    : (aiWhy || (checking ? 'The AI is reading this lead…' : canRead ? (leadAutomation.enabled ? 'Not read by the AI yet' : 'Not read by the AI yet — lead automation is off (⋮ menu)') : 'No chat or notes for the AI to read'));
   parts.push(`<div class="st-foot"><span>${read}</span>${canRead ? `<button type="button" class="tt-btn quiet" ${checking?'disabled':''} onclick="recheckLead('${l.id}')">${checking ? 'Reading…' : 'Re-check'}</button>` : ''}</div>`);
   el.innerHTML = parts.join('');
 }
@@ -5323,6 +5363,7 @@ function openDetail(id){
   // again if that is where we came from — the two consoles are one workflow.
   document.getElementById('dpSub').innerHTML = escapeHtml(sub) + trackBackHtml(l);
   renderAiSummary(l);
+  firstAiReadOnOpen(l);
 
   toggleDpMore(false);   // a lead opens with its rarer actions folded again
   const callBtn = document.getElementById('dpCallBtn');

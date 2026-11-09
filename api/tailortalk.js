@@ -292,6 +292,10 @@ async function refreshPost(request) {
       const drained = await drainQueue(db, tenantId, { client: leadClaude(), model: auto.model, budgetMs: Math.max(0, 42000 - (Date.now() - started)), trigger: 'refresh' });
       out.aiDue = drained.due; out.aiRan = drained.ran; out.rateLimited = !!drained.rateLimited;
       out.moved = drained.results.filter(r => r.moved).length;
+      // Why reads are not happening, for the page to say so — a rate limit, the day's cap or a
+      // failing key used to stop every move without a word (9 Nov 2026).
+      const failed = drained.results.find(r => r && r.ok === false && r.error);
+      out.aiIssue = failed ? failed.error : (drained.rateLimited ? 'the AI is rate limited — reads resume shortly' : null);
     }
     return json(out);
   } catch (e) {
