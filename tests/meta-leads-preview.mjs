@@ -460,6 +460,33 @@ try {
   await page.evaluate(() => MetaLeads.layout('list'));
   await page.selectOption('.ml-tools .ml-sort', 'new');
 
+  // ── 9e. Dates: on / from / until / between, and the new sorts ──
+  await page.evaluate(() => { MetaLeads.clearF(); MetaLeads.setF('agent', ''); });
+  await page.waitForTimeout(200);
+  const pnames = () => page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()));
+  const everyone = (await pnames()).length;
+  await page.selectOption('.ml-tools select[aria-label="days"]', 'on');
+  ok('Dates: "On a date…" asks for the day', await page.isVisible('.ml-tools .ml-date'));
+  await page.fill('.ml-tools .ml-date', '2026-10-15'); await page.dispatchEvent('.ml-tools .ml-date', 'change'); await page.waitForTimeout(200);
+  const on15 = await pnames();
+  ok('On 15 Oct: Arjun (enquired that day), and fewer than everyone', on15.includes('Arjun') && on15.length < everyone, on15);
+  await page.selectOption('.ml-tools select[aria-label="days"]', 'until'); await page.waitForTimeout(150);
+  await page.fill('.ml-tools .ml-date', '2026-10-14'); await page.dispatchEvent('.ml-tools .ml-date', 'change'); await page.waitForTimeout(200);
+  ok('Until 14 Oct: not Arjun (his enquiries are 15 and 20 Oct)', !(await pnames()).includes('Arjun'));
+  await page.selectOption('.ml-tools select[aria-label="days"]', 'range'); await page.waitForTimeout(150);
+  ok('Between two dates: From and To', (await page.$$('.ml-tools .ml-date')).length === 2);
+  await page.evaluate(() => { MetaLeads.setF('d1', '2026-10-20'); MetaLeads.setF('d2', '2026-10-19'); });
+  await page.waitForTimeout(200);
+  ok('…given backwards, still the two days (Arjun, 20 Oct)', (await pnames()).includes('Arjun'));
+  await page.selectOption('.ml-tools select[aria-label="days"]', ''); await page.waitForTimeout(150);
+  ok('Any date: everyone again, no date box', (await pnames()).length === everyone && !(await page.$('.ml-tools .ml-date')));
+  await page.selectOption('.ml-tools .ml-sort', 'name_desc'); await page.waitForTimeout(150);
+  const zd = await pnames();
+  ok('Sort Name Z–A', JSON.stringify(zd) === JSON.stringify(zd.slice().sort((a, b) => b.localeCompare(a))), zd);
+  for (const k of ['fu', 'fu_desc', 'prop', 'prop_desc']) { await page.selectOption('.ml-tools .ml-sort', k); await page.waitForTimeout(100); }
+  ok('Sorts by follow-up date and by property keep everyone', (await pnames()).length === everyone);
+  await page.selectOption('.ml-tools .ml-sort', 'new');
+
   ok('Google was only read (no cell written)', sheets.calls.every(c => !/:batchUpdate|:append|:clear/.test(c)));
   await ctx.close();
 
@@ -653,7 +680,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.ml-person').length > 0, null, { timeout: 8000 });
   ok('Phone: search and "Filters" on one row; the five filters folded away', !(await page.isVisible('.ml-tools .fsel')) && await page.isVisible('.ml-bar .ml-fbtn2') && await page.evaluate(() => Math.abs(document.querySelector('.ml-search').getBoundingClientRect().top - document.querySelector('.ml-fbtn2').getBoundingClientRect().top) < 4));
   await page.click('.ml-bar .ml-fbtn2'); await page.waitForTimeout(150);
-  ok('…"Filters" opens them', (await page.$$eval('.ml-tools .fsel', els => els.filter(e => e.offsetParent).length)) === 5);
+  ok('…"Filters" opens them (who, rating, ad, tab, which date, when)', (await page.$$eval('.ml-tools .fsel', els => els.filter(e => e.offsetParent).length)) === 6);
   ok('Phone: the lists that scroll sideways do not widen the page', (await overflow(page)) <= 1, await overflow(page));
   const nameW = await page.$eval('.ml-person .ml-name', e => e.getBoundingClientRect().width);
   ok('Phone: a name keeps its width (not squeezed letter by letter)', nameW > 110, nameW);

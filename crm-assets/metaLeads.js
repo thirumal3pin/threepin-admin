@@ -35,7 +35,7 @@
     read: null, readError: null, reading: false,
     plan: null, planAt: 0,
     prop: 'all', filter: 'all', q: '', open: null, shown: PAGE,
-    f: { agent: '', rating: '', ad: '', tab: '', days: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, dtab: 'overview', selMode: false, changed: {}, mods: {}, modCfg: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
+    f: { agent: '', rating: '', ad: '', tab: '', days: '', d1: '', d2: '', dateOf: '', sort: 'new' }, sel: {}, edit: null, writing: false, stamp: true, workRow: {}, drafts: {}, dtab: 'overview', selMode: false, changed: {}, mods: {}, modCfg: {}, briefs: {}, bq: [], brun: {}, bDone: 0, bTotal: 0, layout: 'list', tsort: { key: '', dir: 1 }, tf: {},
     draft: null, saving: false,
     add: { link: '', busy: false, error: null, share: false, result: null, tabs: {} },
     adding: false, colsFor: null, noteFor: null, pgClosed: {}, readingOne: null,
@@ -396,7 +396,50 @@
 
   // ─── Leads ─────────────────────────────────────────────────────────────
   var FILTERS = [['all', 'All'], ['changed', 'New or updated'], ['due', 'Follow-up due'], ['priority', 'Priority for the agent'], ['uncontacted', 'Not contacted yet'], ['create', 'New to the CRM'], ['crm', 'Already in the CRM'], ['repeat', 'Duplicates'], ['multi', 'More than one property'], ['problems', 'Problems']];
-  var SORTS = [['next', 'What to do next'], ['new', 'Newest enquiry first'], ['old', 'Oldest enquiry first'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z']];
+  var SORTS = [['next', 'What to do next'], ['new', 'Enquiry date: newest first'], ['old', 'Enquiry date: oldest first'], ['fu', 'Follow-up date: soonest first'], ['fu_desc', 'Follow-up date: latest first'], ['prop', 'Property A–Z'], ['prop_desc', 'Property Z–A'], ['untouched', 'Not contacted first (oldest waiting)'], ['hot', 'Highest rating first'], ['name', 'Name A–Z'], ['name_desc', 'Name Z–A']];
+  function blankF(sort) { return { agent: '', rating: '', ad: '', tab: '', days: '', d1: '', d2: '', dateOf: '', sort: sort || 'new' }; }
+  // ─── Dates: a quick range, or on / from / until / between chosen days (India time) ───
+  // Applies to the enquiry date (any of the person's rows for the property shown) or to the
+  // follow-up date (the brief's next step). Asked for by the owner, 9 Nov 2026.
+  var DATE_OPTS = [['', 'Any date'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['1', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['on', 'On a date…'], ['from', 'From a date…'], ['until', 'Until a date…'], ['range', 'Between two dates…']];
+  var IST = 5.5 * 3600000;
+  function istYmd(t) { return new Date(t + IST).toISOString().slice(0, 10); }
+  function dayStart(ymd) { var t = Date.parse(ymd + 'T00:00:00+05:30'); return isNaN(t) ? null : t; }
+  function dateWindow(F) {
+    var d = F.days, now = Date.now(), today = dayStart(istYmd(now));
+    if (!d) return null;
+    if (d === 'today') return [today, today + DAY_MS];
+    if (d === 'yesterday') return [today - DAY_MS, today];
+    if (d === 'month' || d === 'lastmonth') {
+      var y = +istYmd(now).slice(0, 4), m = +istYmd(now).slice(5, 7) - (d === 'lastmonth' ? 1 : 0);
+      if (m < 1) { m = 12; y--; }
+      var start = dayStart(y + '-' + ('0' + m).slice(-2) + '-01'), ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+      return [start, dayStart(ny + '-' + ('0' + nm).slice(-2) + '-01')];
+    }
+    if (/^\d+$/.test(d)) return [now - Number(d) * DAY_MS, Infinity];
+    var a = F.d1 ? dayStart(F.d1) : null, b = F.d2 ? dayStart(F.d2) : null;
+    if (d === 'on') return a == null ? null : [a, a + DAY_MS];
+    if (d === 'from') return a == null ? null : [a, Infinity];
+    if (d === 'until') return a == null ? null : [-Infinity, a + DAY_MS];
+    if (d === 'range') {
+      if (a == null && b == null) return null;
+      if (a != null && b != null && b < a) { var x = a; a = b; b = x; }
+      return [a == null ? -Infinity : a, b == null ? Infinity : b + DAY_MS];
+    }
+    return null;
+  }
+  function inWindow(t, w) { return !!t && t >= w[0] && t < w[1]; }
+  function fuAt(p) { var n = nextOf(p); return n && n.at ? n.at : 0; }
+  function firstProp(p) { return (S.prop !== 'all' ? S.prop : p.properties.slice().sort()[0]) || '\uffff'; }
+  function dateControls(F) {
+    var inp = function (k, v, label) { return '<label class="ml-dlab"><span>' + label + '</span><input type="date" class="ml-f ml-date" value="' + esc(v || '') + '" onchange="MetaLeads.setF(' + js(k) + ',this.value)"></label>'; };
+    var ctl = selectHtml('dateOf', F.dateOf, [['', 'Enquiry date'], ['fu', 'Follow-up date']]) + selectHtml('days', F.days, DATE_OPTS);
+    if (F.days === 'on') ctl += inp('d1', F.d1, 'On');
+    else if (F.days === 'from') ctl += inp('d1', F.d1, 'From');
+    else if (F.days === 'until') ctl += inp('d1', F.d1, 'Until');
+    else if (F.days === 'range') ctl += inp('d1', F.d1, 'From') + inp('d2', F.d2, 'To');
+    return '<span class="ml-dates">' + ctl + '</span>';
+  }
   var DAY_MS = 86400000;
   // A lead nobody has written on for this long is flagged — a Meta lead goes cold within a day.
   var SLA_MS = 24 * 3600000;
@@ -435,7 +478,8 @@
     var rows = rowsFor(p, S.prop);
     if (F.ad && !rows.some(function (e) { return (e.ad || '') === F.ad; })) return false;
     if (F.tab && !rows.some(function (e) { return e.where.spreadsheetId + ':' + e.where.gid === F.tab; })) return false;
-    if (F.days && !rows.some(function (e) { return e.at && e.at > Date.now() - Number(F.days) * DAY_MS; })) return false;
+    var w = dateWindow(F);
+    if (w && (F.dateOf === 'fu' ? !inWindow(fuAt(p), w) : !rows.some(function (e) { return inWindow(e.at, w); }))) return false;
     var q = S.q.trim().toLowerCase();
     if (q) {
       var bv = S.briefs[p.key] && S.briefs[p.key].v;
@@ -463,6 +507,16 @@
     else if (by === 'untouched') out.sort(function (a, b) { return (a.team.contacted ? 1 : 0) - (b.team.contacted ? 1 : 0) || firstAtFor(a) - firstAtFor(b); });
     else if (by === 'hot') out.sort(function (a, b) { return (b.team.rating || 0) - (a.team.rating || 0) || lastAtFor(b) - lastAtFor(a); });
     else if (by === 'name') out.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    else if (by === 'name_desc') out.sort(function (a, b) { return String(b.name).localeCompare(String(a.name)); });
+    else if (by === 'fu' || by === 'fu_desc') {
+      // No follow-up date: always at the end, newest enquiry first among them.
+      var dir = by === 'fu' ? 1 : -1;
+      out.sort(function (a, b) { var x = fuAt(a), y = fuAt(b); return (!x) - (!y) || (x && y ? (x - y) * dir : lastAtFor(b) - lastAtFor(a)); });
+    }
+    else if (by === 'prop' || by === 'prop_desc') {
+      var pd = by === 'prop' ? 1 : -1;
+      out.sort(function (a, b) { return firstProp(a).localeCompare(firstProp(b)) * pd || lastAtFor(b) - lastAtFor(a); });
+    }
     else out.sort(function (a, b) { return lastAtFor(b) - lastAtFor(a); });
     return out;
   }
@@ -534,7 +588,7 @@
       selectHtml('rating', F.rating, [['', 'Any rating'], ['4+', 'Rated 4 and above'], ['5', 'Rating 5'], ['4', 'Rating 4'], ['3', 'Rating 3'], ['2', 'Rating 2'], ['1', 'Rating 1'], ['none', 'Not rated']]) +
       selectHtml('ad', F.ad, [['', 'Every ad']].concat(Object.keys(ads).sort().map(function (x) { return [x, x]; }))) +
       selectHtml('tab', F.tab, [['', 'Every sheet tab']].concat(Object.keys(tabs).map(function (k) { return [k, tabs[k]]; }))) +
-      selectHtml('days', F.days, [['', 'Any date'], ['1', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days']]) +
+      dateControls(F) +
       '<span class="ml-tools-sep"></span>' +
       selectHtml('sort', F.sort, SORTS) +
       (any ? '<button class="ml-link" onclick="MetaLeads.clearF()">Clear filters</button>' : '') +
@@ -1236,7 +1290,7 @@
         var p = S.plan && S.plan.people.find(function (x) { return x.key === k; });
         if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all';
         // A filter that hides them (My leads, a rating, an ad…) is cleared, and said so.
-        if (p && !passes(p)) { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; saveF(); toast('Filters cleared to show ' + (p.name || 'this lead')); }
+        if (p && !passes(p)) { S.f = blankF(S.f.sort); saveF(); toast('Filters cleared to show ' + (p.name || 'this lead')); }
         S.shown = Math.max(S.shown, peopleFor(S.prop).length);
       }
       render();
@@ -1249,8 +1303,8 @@
     },
     openLead: function (id) { if (typeof openDetail === 'function') openDetail(id); },
     copy: function (t) { try { navigator.clipboard.writeText(t); toast('Copied'); } catch (e) { toast(t); } },
-    agentLeads: function (agent) { S.f = { agent: agent, rating: '', ad: '', tab: '', days: '', sort: 'untouched' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
-    adLeads: function (ad) { S.f = { agent: '', rating: '', ad: ad, tab: '', days: '', sort: 'new' }; S.filter = 'all'; MetaLeads.go('meta-leads'); },
+    agentLeads: function (agent) { S.f = Object.assign(blankF('untouched'), { agent: agent }); S.filter = 'all'; MetaLeads.go('meta-leads'); },
+    adLeads: function (ad) { S.f = Object.assign(blankF('new'), { ad: ad }); S.filter = 'all'; MetaLeads.go('meta-leads'); },
     brief: function (key) { if (S.brun[key]) return; S.bq = S.bq.filter(function (k) { return k !== key; }); S.bq.unshift(key); S.bTotal = S.bDone + S.bq.length + Object.keys(S.brun).length; pumpBriefs(key); render(); },
     dtab: function (t) { S.dtab = t; render(); var d = document.querySelector('#metaLeadsView .ml-drawer.full'); if (d) d.scrollTop = 0; },
     closeLead: function () {
@@ -1272,7 +1326,7 @@
     },
     tfClear: function () { S.tf = {}; render(); },
     setF: function (k, v) { S.f[k] = v; S.shown = PAGE; saveF(); if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
-    clearF: function () { S.f = { agent: '', rating: '', ad: '', tab: '', days: '', sort: S.f.sort }; S.filter = 'all'; S.q = ''; saveF(); render(); },
+    clearF: function () { S.f = blankF(S.f.sort); S.filter = 'all'; S.q = ''; saveF(); render(); },
     lateFirst: function () { S.filter = 'uncontacted'; S.f.sort = 'untouched'; render(); },
     sel: function (k, on) { S.sel[k] = on; render(); },
     selAll: function (on) { currentList().forEach(function (p) { S.sel[p.key] = on; }); render(); },

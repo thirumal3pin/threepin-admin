@@ -187,6 +187,10 @@ try {
       await page.evaluate(() => MetaLeads.setF('agent', '_none')); await page.waitForTimeout(250);
       await page.screenshot({ path: join(OUT, 'look-' + p + '-1b-unassigned.png') }); await ov('unassigned');
       await page.evaluate(() => MetaLeads.setF('agent', '')); await page.waitForTimeout(250);
+      // Dates: between two days (the Filters panel open on a phone).
+      await page.evaluate(() => { MetaLeads.setF('days', 'range'); MetaLeads.setF('d1', '2026-10-01'); MetaLeads.setF('d2', '2026-10-31'); if (innerWidth <= 760) MetaLeads.fOpen(); }); await page.waitForTimeout(250);
+      await page.screenshot({ path: join(OUT, 'look-' + p + '-1c-dates.png') }); await ov('dates');
+      await page.evaluate(() => { MetaLeads.setF('days', ''); if (innerWidth <= 760) MetaLeads.fOpen(); }); await page.waitForTimeout(250);
       await clickText(page, '.ml-prow', 'Arjun');
       await lshot(page, p + '-2-open'); await ov('open');
       if (vw < 500) {
