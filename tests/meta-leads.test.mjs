@@ -132,6 +132,34 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
   eq('By agent', a.byAgent, [{ label: 'Not assigned', n: 4 }, { label: 'swami@threepin.in', n: 2 }, { label: 'thirumal@threepin.in', n: 2 }, { label: 'Ramesh', n: 1 }]);
 }
 
+// ── Analysis over time: periods, compared like-for-like; buckets; one agent ──
+{
+  const at = v => Date.parse(v + '+05:30');   // NOW is Saturday 7 Nov 2026, 12 noon India time
+  const W = (k, d1, d2) => { const w = M.periodWindow(k, NOW, d1, d2, at('2026-10-15T00:00:00')); return [w.lo, w.hi, w.prevLo, w.prevHi]; };
+  eq('This week: from Monday, against the same days of last week cut at the same hour', W('week'), [at('2026-11-02T00:00:00'), NOW, at('2026-10-26T00:00:00'), at('2026-10-31T12:00:00')]);
+  eq('Last 7 days: today and the 6 days before, against the 7 before that', W('7'), [at('2026-11-01T00:00:00'), NOW, at('2026-10-25T00:00:00'), at('2026-10-31T12:00:00')]);
+  eq('Today against yesterday by this time', W('today'), [at('2026-11-07T00:00:00'), NOW, at('2026-11-06T00:00:00'), at('2026-11-06T12:00:00')]);
+  eq('This month against the same days of last month', W('month'), [at('2026-11-01T00:00:00'), NOW, at('2026-10-01T00:00:00'), at('2026-10-07T12:00:00')]);
+  eq('Last month against the month before', W('lastmonth'), [at('2026-10-01T00:00:00'), at('2026-11-01T00:00:00'), at('2026-09-01T00:00:00'), at('2026-10-01T00:00:00')]);
+  eq('Between two dates, given backwards: both days in, against as many days before', W('range', '2026-10-20', '2026-10-15'), [at('2026-10-15T00:00:00'), at('2026-10-21T00:00:00'), at('2026-10-09T00:00:00'), at('2026-10-15T00:00:00')]);
+  eq('All time: from the first enquiry, nothing to compare with', W('all'), [at('2026-10-15T00:00:00'), NOW, null, null]);
+  eq('View by: days to a month, weeks to four months, then months', [M.autoGrain({ days: 7 }), M.autoGrain({ days: 31 }), M.autoGrain({ days: 90 }), M.autoGrain({ days: 200 })], ['day', 'day', 'week', 'month']);
+  const days = M.timeBuckets(at('2026-11-02T00:00:00'), NOW, 'day');
+  eq('Days: Monday to today, today marked partial', [days.length, days[0].label, days[5].label, days[5].partial, days[0].partial], [6, 'Mon 2 Nov', 'Sat 7 Nov', true, false]);
+  const weeks = M.timeBuckets(at('2026-10-15T00:00:00'), NOW, 'week');
+  eq('Weeks: Monday to Sunday, the cut ones marked', weeks.map(b => [b.label, b.partial]), [['12–18 Oct', true], ['19–25 Oct', false], ['26 Oct – 1 Nov', false], ['2–8 Nov', true]]);
+  eq('Months', M.timeBuckets(at('2026-10-15T00:00:00'), NOW, 'month').map(b => b.label), ['Oct 2026', 'Nov 2026']);
+  eq('One agent / not assigned (KDBMC001)', [M.slicePlan(plan, { agent: 'swami@threepin.in', code: 'KDBMC001' }).people.length, M.slicePlan(plan, { agent: '_none', code: 'KDBMC001' }).people.length], [2, 4]);
+  const cut = M.slicePlan(plan, { lo: at('2026-11-01T00:00:00'), hi: NOW, code: 'KDBMC001' });
+  const inWin = plan.people.flatMap(p => p.enquiries).filter(e => e.propertyCode === 'KDBMC001' && e.at >= at('2026-11-01T00:00:00') && e.at < NOW).length;
+  eq('A period keeps only its enquiries, and the people behind them', [M.analyse(cut, 'KDBMC001', NOW).enquiries, cut.people.every(p => p.enquiries.length > 0)], [inWin, true]);
+  const tr = M.trend(cut, days);
+  eq('Per day, the period\'s enquiries add up', tr.reduce((n, b) => n + b.enquiries, 0), inWin);
+  const all = M.slicePlan(plan, { code: 'KDBMC001' });
+  const hm = M.heatmap(all);
+  eq('When they come in: 7 weekdays × 24 hours, every dated enquiry once', [hm.length, hm[0].length, hm.flat().reduce((n, v) => n + v, 0)], [7, 24, all.people.flatMap(p => p.enquiries).filter(e => e.at).length]);
+}
+
 // ── The server ──
 const managers = { managers: ['admin@threepin.in'] };
 async function server(locked) {

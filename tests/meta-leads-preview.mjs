@@ -343,11 +343,13 @@ try {
   // ── 8. Analysis ──
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
   await page.waitForTimeout(300);
+  ok('Analysis: one row of filters — agent, period, view by', JSON.stringify(await page.$$eval('.ml-an-ctl select', s => s.map(x => x.dataset.an))) === JSON.stringify(['agent', 'period', 'grain']));
+  await page.evaluate(() => { MetaLeads.an('period', 'all'); MetaLeads.an('grain', 'day'); });   // the fixtures' dates are fixed; today moves
   await clickText(page, '.ml-chip', 'KDBMC001');
   const an = await text(page, '#metaLeadsView');
   ok('Analysis: per day, per ad, per sheet/tab, platform, rating, assigned, CRM stage, each form question',
     ['Enquiries per day', 'By ad', 'Video 1', 'By sheet and tab', 'By platform', 'Instagram', 'Rating', 'Team — who holds which leads', 'Swami', 'Lead quality by ad', 'Site Visit', 'Form: Expected area'].every(w => an.includes(w)), an.slice(0, 300));
-  const tt = await page.$$eval('.ml-tt-r:not(.ml-tt-h):not(.ml-team-r):not(.ml-ad-r)', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  const tt = await page.$$eval('.ml-tt-r:not(.ml-tt-h):not(.ml-team-r):not(.ml-ad-r):not(.ml-pt-r)', els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
   ok('Analysis by sheet and tab: three KDBMC001 tabs, with the tag', tt.length === 3 && /office space - Kodambakkam › Sheet3 Copy-copy form/.test(tt[1]), tt);
   await page.locator('.ml-tt-r', { hasText: 'Sheet3' }).click();
   await page.waitForTimeout(300);
@@ -357,6 +359,29 @@ try {
   await shot(page, '8-analysis');
   await clickText(page, '.ml-chip', 'SHR0001');
   ok('SHR0001 analysis: its own questions', /Form: What is your budget\?/.test(await text(page, '#metaLeadsView')) && /3 cr to 5 cr/.test(await text(page, '#metaLeadsView')));
+  // ── 8c. Over time: a period against the one before it, day on day, week on week, one agent ──
+  await clickText(page, '.ml-chip', 'KDBMC001');
+  await page.evaluate(() => { MetaLeads.an('d1', '2026-10-19'); MetaLeads.an('d2', '2026-10-25'); MetaLeads.an('period', 'range'); MetaLeads.an('grain', 'day'); });
+  await page.waitForTimeout(250);
+  ok('19–25 Oct: 7 day bars, and 12–18 Oct as a line', (await page.$$('.ml-tc')).length === 7 && !!(await page.$('.ml-tc-prev polyline')) && /compared with 12 Oct 2026 – 18 Oct 2026/.test(await text(page, '.ml-an-win')));
+  const k1 = await page.$eval('.ml-ktile', e => e.innerText.replace(/\s+/g, ' '));
+  ok('Enquiries 4, ▼ -20% against 5 the week before (KDBMC001)', /Enquiries 4\b/.test(k1) && /▼ -20% vs 5/.test(k1), k1);
+  const pt = await page.$$eval('.ml-pt-r:not(.ml-tt-h)', r => r.map(x => x.children[0].innerText.trim()));
+  ok('Day on day: newest first, one row a day', /Day on day/.test(await text(page, '#metaLeadsView')) && pt.length === 7 && pt[0] === 'Sun 25 Oct' && pt[6] === 'Mon 19 Oct', pt);
+  ok('Tue 20 Oct: 3, ▲ +3 against Monday', /▲ \+3/.test(await page.locator('.ml-pt-r', { hasText: 'Tue 20 Oct' }).innerText()));
+  ok('When they come in, and from enquiry to CRM', !!(await page.$('.ml-hm i.l5')) && (await page.$$('.ml-fun-r')).length === 6);
+  await page.hover('.ml-tc:nth-child(2)');
+  ok('Hover a bar: its numbers, and the day before\'s', /3 enquiries · Tue 20 Oct/.test(await page.$eval('.ml-tip', e => e.textContent)) && /Before: /.test(await page.$eval('.ml-tip', e => e.textContent)));
+  await page.selectOption('.ml-an-ctl select[data-an="grain"]', 'week');
+  await page.waitForTimeout(250);
+  ok('View by week: Week on week', /Week on week/.test(await text(page, '#metaLeadsView')) && (await page.$$('.ml-tc')).length === 1);
+  await page.selectOption('.ml-an-ctl select[data-an="agent"]', 'swami@threepin.in');
+  await page.waitForTimeout(250);
+  const sw = await page.$$eval('.ml-team-r:not(.ml-tt-h)', r => r.map(x => x.children[0].innerText.trim()));
+  ok('One agent: only Swami\'s leads, everywhere', sw.length === 1 && /Swami/.test(sw[0]), sw);
+  await shot(page, '8c-analysis-time');
+  await page.evaluate(() => { MetaLeads.an('agent', ''); MetaLeads.an('period', 'all'); MetaLeads.an('grain', 'auto'); });
+  await clickText(page, '.ml-chip', 'SHR0001');
   ok('No sideways scroll (laptop)', (await overflow(page)) <= 1, await overflow(page));
 
   // ── Pages: each screen has its address; Back and Forward move between them ──
@@ -571,7 +596,7 @@ try {
   // The team report.
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
   await page.waitForTimeout(300);
-  const team = await page.$$eval('.ml-team-r:not(.ml-tt-h)', els => els.map(e => [...e.children].map(c => c.textContent.trim()).join('|')));
+  const team = await page.$$eval('.ml-team-r:not(.ml-tt-h)', els => els.map(e => [...e.children].map(c => c.innerText.trim()).join('|')));
   ok('Team report: Thirumal now holds 6, Swami 2; nobody unassigned', /^Thirumal\|6\|/.test(team[0]) && team.some(t => /^Swami\|2\|/.test(t)) && !team.some(t => /^Not assigned/.test(t)), team);
   ok('Lead quality by ad is there', /Lead quality by ad/.test(await text(page, '#metaLeadsView')) && (await page.$$('.ml-ad-r:not(.ml-tt-h)')).length === 2);
   await shot(page, '12-admin-reports');

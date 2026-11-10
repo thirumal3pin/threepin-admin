@@ -209,8 +209,9 @@ try {
       const rc = await page.$('.ml-table tbody tr:has-text("Saravana")');
       if (rc) { await rc.click(); await page.waitForTimeout(250); await page.screenshot({ path: join(OUT, 'look-' + p + '-4b-drawer-crm.png') }); await page.keyboard.press('Escape'); }
       await page.evaluate(() => MetaLeads.layout && MetaLeads.layout('list'));
-      await page.evaluate(() => MetaLeads.go('ml-analysis')); await page.waitForTimeout(300);
+      await page.evaluate(() => { MetaLeads.an('d1', '2026-10-19'); MetaLeads.an('d2', '2026-11-08'); MetaLeads.an('period', 'range'); MetaLeads.go('ml-analysis'); }); await page.waitForTimeout(300);
       await lshot(page, p + '-5-analysis'); await ov('analysis');
+      await page.evaluate(() => scrollTo(0, 0)); await page.screenshot({ path: join(OUT, 'look-' + p + '-5a-analysis-top.png') });
       await page.evaluate(() => MetaLeads.go('ml-dupes')); await page.waitForTimeout(300);
       await lshot(page, p + '-6-dupes'); await ov('dupes');
       await page.evaluate(() => MetaLeads.go('ml-setup')); await page.waitForTimeout(500);

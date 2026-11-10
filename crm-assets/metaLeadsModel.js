@@ -566,6 +566,110 @@ export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
   };
 }
 
+// ── Analysis over time: a period, compared like-for-like with the one before it ──
+// All in India time. A to-date period (today, this week, this month, last N days) is compared with
+// the same stretch before it, cut at the same point — this week so far against the same days of
+// last week — so a half-finished period is never measured against a whole one.
+const IST_MS = 5.5 * 3600000;
+const istDayStart = t => { const p = istParts(t); return Date.UTC(p.y, p.m, p.d) - IST_MS; };
+const istWeekday = t => (new Date(t + IST_MS).getUTCDay() + 6) % 7;   // Monday 0 … Sunday 6
+const istWeekStart = t => istDayStart(t) - istWeekday(t) * DAY;
+const istMonthStart = (t, add = 0) => { const p = istParts(t); return Date.UTC(p.y, p.m + add, 1) - IST_MS; };
+const ymdStart = v => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) - IST_MS : null; };
+export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+export const PERIODS = [
+  ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'], ['lastweek', 'Last week'],
+  ['7', 'Last 7 days'], ['14', 'Last 14 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'],
+  ['month', 'This month'], ['lastmonth', 'Last month'], ['all', 'All time'], ['range', 'Between two dates…']
+];
+
+/**
+ * The period's window [lo, hi) and the one it is compared with [prevLo, prevHi).
+ * key: one of PERIODS; d1/d2: 'YYYY-MM-DD' for 'range'; first: the earliest enquiry (for 'all').
+ * → { lo, hi, prevLo, prevHi, days, toDate } — prevLo null when there is nothing to compare with.
+ */
+export function periodWindow(key, now = Date.now(), d1 = '', d2 = '', first = null) {
+  const today = istDayStart(now);
+  const shift = (lo, hi, plo) => ({ lo, hi, prevLo: plo, prevHi: plo + (hi - lo) });
+  let w;
+  if (key === 'today') w = shift(today, now, today - DAY);
+  else if (key === 'yesterday') w = shift(today - DAY, today, today - 2 * DAY);
+  else if (key === 'week') { const lo = istWeekStart(now); w = shift(lo, now, lo - 7 * DAY); }
+  else if (key === 'lastweek') { const hi = istWeekStart(now); w = shift(hi - 7 * DAY, hi, hi - 14 * DAY); }
+  else if (key === 'month') { const lo = istMonthStart(now), plo = istMonthStart(now, -1); w = { lo, hi: now, prevLo: plo, prevHi: Math.min(plo + (now - lo), lo) }; }
+  else if (key === 'lastmonth') { const lo = istMonthStart(now, -1), hi = istMonthStart(now); w = { lo, hi, prevLo: istMonthStart(now, -2), prevHi: lo }; }
+  else if (/^\d+$/.test(key)) { const n = +key, lo = today - (n - 1) * DAY; w = shift(lo, now, lo - n * DAY); }
+  else if (key === 'range') {
+    let a = ymdStart(d1), b = ymdStart(d2);
+    if (a == null && b == null) return periodWindow('all', now, '', '', first);
+    if (a == null) a = b; if (b == null) b = a;
+    if (a > b) [a, b] = [b, a];
+    const hi = b + DAY; w = shift(a, hi, a - (hi - a));
+  } else w = { lo: first != null ? istDayStart(first) : today, hi: now, prevLo: null, prevHi: null };
+  w.days = Math.max(1, Math.ceil((w.hi - w.lo) / DAY));
+  w.toDate = w.hi === now;
+  return w;
+}
+
+/** By day while a period is a month or less, by week up to four months, by month beyond. */
+export function autoGrain(w) { return w.days <= 31 ? 'day' : w.days <= 120 ? 'week' : 'month'; }
+
+/**
+ * The plan cut down to one agent ('' everyone, '_none' not assigned) and to the enquiries in
+ * [lo, hi) for the property (code '' = all). People with no enquiry left drop out.
+ */
+export function slicePlan(plan, { agent = '', lo = null, hi = null, code = '' } = {}) {
+  const people = [];
+  let undated = 0;
+  for (const p of plan.people) {
+    if (agent === '_none' ? p.team.assignedRaw : (agent && p.team.agent !== agent && p.team.assignedRaw !== agent)) continue;
+    const mine = code ? p.enquiries.filter(e => e.propertyCode === code) : p.enquiries;
+    if (lo == null) { if (mine.length) people.push(p); continue; }
+    undated += mine.filter(e => !e.at).length;
+    const enquiries = mine.filter(e => e.at && e.at >= lo && e.at < hi);
+    if (enquiries.length) people.push({ ...p, enquiries });
+  }
+  return { ...plan, people, undated };
+}
+
+/** The buckets (day, week from Monday, or month) covering [lo, hi). partial: cut by the window. */
+export function timeBuckets(lo, hi, grain = 'day') {
+  const out = [];
+  let t = grain === 'week' ? istWeekStart(lo) : grain === 'month' ? istMonthStart(lo) : istDayStart(lo);
+  for (let guard = 0; t < hi && guard < 800; guard++) {
+    const next = grain === 'week' ? t + 7 * DAY : grain === 'month' ? istMonthStart(t + 2 * DAY, 1) : t + DAY;
+    const p = istParts(t), e = istParts(next - 1);
+    const label = grain === 'week' ? (p.m === e.m ? `${p.d}–${e.d} ${MONTHS[p.m]}` : `${p.d} ${MONTHS[p.m]} – ${e.d} ${MONTHS[e.m]}`)
+      : grain === 'month' ? `${MONTHS[p.m]} ${p.y}` : `${WEEKDAYS[istWeekday(t)]} ${p.d} ${MONTHS[p.m]}`;
+    out.push({ lo: t, hi: next, label, short: grain === 'month' ? MONTHS[p.m] : `${p.d} ${MONTHS[p.m]}`, partial: t < lo || next > hi });
+    t = next;
+  }
+  return out;
+}
+
+/**
+ * Per bucket: enquiries, the people behind them, how many of those were contacted / rated 4–5,
+ * and the ad that brought the most. plan: a slicePlan.
+ */
+export function trend(plan, buckets) {
+  const rows = plan.people.flatMap(p => p.enquiries.filter(e => e.at).map(e => ({ e, p })));
+  return buckets.map(b => {
+    const r = rows.filter(x => x.e.at >= b.lo && x.e.at < b.hi);
+    const who = [...new Set(r.map(x => x.p))];
+    return { ...b, enquiries: r.length, people: who.length,
+      contacted: who.filter(p => p.team.contacted).length, hot: who.filter(p => p.team.rating >= 4).length,
+      topAd: (tally(r.map(x => x.e), e => e.ad || '(no ad name)')[0] || {}).label || '' };
+  });
+}
+
+/** When enquiries come in: counts by weekday (Mon 0) × hour, India time. */
+export function heatmap(plan) {
+  const grid = WEEKDAYS.map(() => new Array(24).fill(0));
+  for (const p of plan.people) for (const e of p.enquiries) if (e.at) grid[istWeekday(e.at)][istParts(e.at).h]++;
+  return grid;
+}
+
 // ── Writing back to the sheet ────────────────────────────────────────────
 
 const DEFAULT_HEADER = { assigned: 'Assigned to', rating: 'Rating', remarks: 'Remarks', visit: 'Visit date', note: 'Notes' };

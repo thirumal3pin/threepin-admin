@@ -1029,22 +1029,106 @@
       return '<div class="ml-b"><div class="ml-b-l" title="' + esc(x.label) + '">' + esc(x.label) + '</div><div class="ml-b-t"><div class="ml-b-f" style="width:' + Math.round(100 * x.n / top) + '%"></div></div><div class="ml-b-n">' + x.n + ' <span class="ml-dim">' + Math.round(100 * x.n / total) + '%</span></div></div>';
     }).join('') + '</div>';
   }
+  // ─── Analysis: one row of filters (agent, period, view by) scopes every number below ──
+  var AKEY = 'metaLeads.analysis';
+  S.an = (function () { var d = { agent: '', period: '30', d1: '', d2: '', grain: 'auto' }; try { return Object.assign(d, JSON.parse(localStorage.getItem(AKEY) || '{}')); } catch (e) { return d; } })();
+  function saveAn() { try { localStorage.setItem(AKEY, JSON.stringify(S.an)); } catch (e) { /* no storage */ } }
+  var WDAY_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function fmtN(n) { return Number(n || 0).toLocaleString('en-IN'); }
+  function fmtAvg(x) { return x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10); }
+  function dlabel(t) { return MM().fmtWhen(t).split(',')[0]; }
+  function enqWord(n) { return n === 1 ? 'enquiry' : 'enquiries'; }
+  function niceMax(m) { var st = Math.max(m, 1) / 2, p = Math.pow(10, Math.floor(Math.log10(st))), f = st / p; return Math.max(2, (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p * 2); }
+  // What the period is compared with, in words.
+  function prevWords(key, w) {
+    return { today: 'yesterday by this time', yesterday: 'the day before', week: 'the same days last week', lastweek: 'the week before', month: 'the same days last month', lastmonth: 'the month before' }[key] ||
+      ('the ' + w.days + ' days before');
+  }
+  // ▲ +12% vs 40 — green when up is good, red when it is bad; never colour alone (arrow + words).
+  function deltaHtml(cur, prev, o) {
+    o = o || {};
+    if (prev == null || cur == null) return '';
+    var d = cur - prev, txt;
+    if (o.pts) txt = (d > 0 ? '+' : '') + Math.round(d) + ' pts';
+    else if (prev === 0) txt = cur ? 'new' : 'same';
+    else txt = (d > 0 ? '+' : '') + Math.round(100 * d / prev) + '%';
+    var tone = !d || !o.good ? '' : ((d > 0) === (o.good > 0) ? ' good' : ' bad');
+    return '<div class="ml-delta' + tone + '"><b>' + (d > 0 ? '▲' : d < 0 ? '▼' : '–') + ' ' + esc(txt) + '</b> <span>vs ' + esc(o.prevTxt != null ? o.prevTxt : fmtN(prev)) + '</span></div>';
+  }
+  function anAgentOptions() {
+    var seen = {}, out = [['', 'Everyone']];
+    roster().forEach(function (e) { seen[e] = 1; out.push([e, agentLabel(e)]); });
+    S.plan.people.forEach(function (p) { var k = p.team.agent || p.team.assignedRaw; if (k && !seen[k]) { seen[k] = 1; out.push([k, p.team.agent ? agentLabel(k) : k + ' (not on the team list)']); } });
+    if (S.an.agent && !seen[S.an.agent] && S.an.agent !== '_none') out.push([S.an.agent, S.an.agent]);
+    return out.concat([['_none', 'Not assigned']]);
+  }
+  function anControls(w, grain, hasPrev) {
+    var A = S.an;
+    var sel = function (k, v, opts, label) {
+      return '<label class="ml-an-f"><span>' + label + '</span><select class="ml-f' + (k === 'agent' && v ? ' set' : '') + '" data-an="' + k + '" onchange="MetaLeads.an(' + js(k) + ',this.value)">' + opts.map(function (o) {
+        return '<option value="' + esc(o[0]) + '"' + (String(v) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+      }).join('') + '</select></label>';
+    };
+    var auto = { day: 'days', week: 'weeks', month: 'months' }[MM().autoGrain(w)];
+    var dates = A.period === 'range' ? ['d1', 'd2'].map(function (k, i) {
+      return '<label class="ml-an-f"><span>' + (i ? 'To' : 'From') + '</span><input type="date" class="ml-f ml-date" data-an="' + k + '" value="' + esc(A[k] || '') + '" onchange="MetaLeads.an(' + js(k) + ',this.value)"></label>';
+    }).join('') : '';
+    var span = dlabel(w.lo) + (w.days > 1 ? ' – ' + dlabel(w.hi - 1) : '') + (hasPrev ? ' · compared with ' + dlabel(w.prevLo) + (w.prevHi - w.prevLo > 86400000 ? ' – ' + dlabel(w.prevHi - 1) : '') : '');
+    return '<div class="ml-an-ctl">' + sel('agent', A.agent, anAgentOptions(), 'Agent') + sel('period', A.period, MM().PERIODS, 'Period') + dates +
+      sel('grain', A.grain, [['auto', 'Auto (' + auto + ')'], ['day', 'Days'], ['week', 'Weeks'], ['month', 'Months']], 'View by') +
+      '<div class="ml-an-win">' + esc(span) + '</div></div>';
+  }
+  // A plan with only one tab's enquiries (when a tab is picked in "By sheet and tab").
+  function onlyTab(pl, key) {
+    if (!key) return pl;
+    return Object.assign({}, pl, { people: pl.people.map(function (p) {
+      var en = p.enquiries.filter(function (e) { return e.where.spreadsheetId + ':' + e.where.gid === key; });
+      return en.length ? Object.assign({}, p, { enquiries: en }) : null;
+    }).filter(Boolean) });
+  }
   function analysisHtml() {
     if (!S.plan) return needRead();
-    var code = S.prop === 'all' ? '' : S.prop;
-    var whole = MM().analyse(S.plan, code);
+    var code = S.prop === 'all' ? '' : S.prop, A = S.an, now = Date.now();
+    var first = Infinity;
+    S.plan.people.forEach(function (p) { p.enquiries.forEach(function (e) { if (e.at && e.at < first) first = e.at; }); });
+    var w = MM().periodWindow(A.period, now, A.d1, A.d2, isFinite(first) ? first : null);
+    var grain = A.grain === 'auto' ? MM().autoGrain(w) : A.grain;
+    var allTime = A.period === 'all' || (A.period === 'range' && !A.d1 && !A.d2);
+    var cur = MM().slicePlan(S.plan, { agent: A.agent, lo: allTime ? null : w.lo, hi: allTime ? null : w.hi, code: code });
+    var prev = w.prevLo != null ? MM().slicePlan(S.plan, { agent: A.agent, lo: w.prevLo, hi: w.prevHi, code: code }) : null;
+    var whole = MM().analyse(cur, code, now);
     // One tab picked: everything below is that tab's alone.
     var tabSel = S.tab && whole.byTab.find(function (t) { return t.key === S.tab; });
     if (S.tab && !tabSel) S.tab = null;
-    var a = tabSel ? MM().analyse(S.plan, code, Date.now(), 30, S.tab) : whole;
-    var max = Math.max.apply(null, a.series.map(function (x) { return x.n; }).concat([1]));
-    var series = '<div class="ml-series">' + a.series.map(function (x) {
-      return '<div class="ml-s" title="' + esc(x.label + ': ' + x.n) + '"><div class="ml-s-b" style="height:' + Math.round(100 * x.n / max) + '%"></div><div class="ml-s-l">' + (x.n ? x.n : '') + '</div></div>';
-    }).join('') + '</div><div class="ml-s-axis"><span>' + esc(a.series.length ? a.series[0].label : '') + '</span><span>' + esc(a.series.length ? a.series[a.series.length - 1].label : '') + '</span></div>';
-    var rate = [5, 4, 3, 2, 1].map(function (n) { return { label: 'Rating ' + n, n: a.ratings[n] }; }).concat([{ label: 'Not rated', n: a.ratings.none }]);
-    var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
-    var card = function (h, inner) { return '<div class="ml-card"><div class="ml-h">' + h + '</div>' + inner + '</div>'; };
+    var tk = tabSel ? S.tab : '';
+    var a = tabSel ? MM().analyse(cur, code, now, 30, tk) : whole;
+    var pa = prev ? MM().analyse(prev, code, now, 30, tk) : null;
+    var cp = onlyTab(cur, tk), pp = prev ? onlyTab(prev, tk) : null;
+    var buckets = MM().timeBuckets(w.lo, w.hi, grain);
+    var tr = MM().trend(cp, buckets);
+    // The period before, bucket for bucket: the same buckets moved back by the gap between the two.
+    var off = prev ? w.lo - w.prevLo : 0;
+    var ptr = prev ? MM().trend(pp, buckets.map(function (b) { return { lo: b.lo - off, hi: b.hi - off, label: dlabel(b.lo - off) + (grain === 'day' ? '' : ' – ' + dlabel(b.hi - off - 1)) }; })) : null;
+    var pw = prev ? prevWords(A.period, w) : '';
+    var hot = function (x) { return x.ratings[5] + x.ratings[4]; };
+    var pc = function (n, d) { return d ? Math.round(100 * n / d) : null; };
+    var pcTxt = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
+    var tile = function (label, val, sub, delta, tip) { return '<div class="ml-tile ml-ktile"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="ml-tile-l">' + label + '</div><div class="ml-tile-n">' + val + '</div>' + (sub ? '<div class="ml-tile-s">' + sub + '</div>' : '') + delta + '</div>'; };
+    var dd = function (c, p, o) { return pa ? deltaHtml(c, p, o) : ''; };
+    var tiles = '<div class="ml-tiles ml-ktiles">' +
+      tile('Enquiries', fmtN(a.enquiries), fmtAvg(a.enquiries / w.days) + ' a day', dd(a.enquiries, pa && pa.enquiries, { good: 1 })) +
+      tile('People', fmtN(a.people), a.people !== a.enquiries ? 'some enquired more than once' : '', dd(a.people, pa && pa.people, { good: 1 })) +
+      tile('Contacted', pcTxt(a.contacted, a.people), a.contacted + ' of ' + a.people + ' have something written', dd(pc(a.contacted, a.people), pa && pc(pa.contacted, pa.people), { pts: true, good: 1, prevTxt: pa ? pcTxt(pa.contacted, pa.people) : '' }), 'Of the people who enquired in the period: a remark, follow-up or note in the sheet') +
+      tile('Assigned', pcTxt(a.assigned, a.people), a.assigned + ' of ' + a.people, dd(pc(a.assigned, a.people), pa && pc(pa.assigned, pa.people), { pts: true, good: 1, prevTxt: pa ? pcTxt(pa.assigned, pa.people) : '' })) +
+      tile('Rated 4–5', fmtN(hot(a)), pcTxt(hot(a), a.people) + ' of the people', dd(hot(a), pa && hot(pa), { good: 1 }), 'The latest rating in the sheet') +
+      tile('Not contacted', fmtN(a.people - a.contacted), 'nothing written yet', dd(a.people - a.contacted, pa && pa.people - pa.contacted, { good: -1 })) +
+      tile('Already in the CRM', fmtN(a.inCrm), '', dd(a.inCrm, pa && pa.inCrm, {})) +
+      '</div>' +
+      (pa ? '<div class="ml-an-note">▲▼ compare with ' + esc(pw) + ' (' + esc(dlabel(w.prevLo)) + (w.prevHi - w.prevLo > 86400000 ? ' – ' + esc(dlabel(w.prevHi - 1)) : '') + '). Contacted, rating and CRM are as the sheet says today, for the people who enquired in each period.</div>' : '') +
+      (cur.undated ? '<div class="ml-an-note">' + cur.undated + ' ' + enqWord(cur.undated) + ' with no date in the sheet are left out of the period.</div>' : '');
     var pctOf = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
+    var rate = [5, 4, 3, 2, 1].map(function (n) { return { label: 'Rating ' + n, n: a.ratings[n] }; }).concat([{ label: 'Not rated', n: a.ratings.none }]);
+    var card = function (h, inner) { return '<div class="ml-card"><div class="ml-h">' + h + '</div>' + inner + '</div>'; };
     var tabTable = whole.byTab.length ? '<div class="ml-card"><div class="ml-h">By sheet and tab <span class="ml-dim">— click a tab for its own analysis</span></div>' +
       '<div class="ml-tt"><div class="ml-tt-r ml-tt-h"><span>Sheet › tab</span><span>Enquiries</span><span>People</span><span>Last 7 days</span><span>Written</span><span>Duplicates</span><span>In CRM</span><span>Top ad</span></div>' +
       whole.byTab.map(function (t) {
@@ -1052,23 +1136,19 @@
           '<span><b>' + esc(String(t.sheetTitle).trim()) + ' › ' + esc(t.title) + '</b>' + (t.tag ? ' <span class="ml-tag">' + esc(t.tag) + '</span>' : '') +
             (!code ? ' <span class="ml-code">' + esc(t.propertyCode) + '</span>' : '') +
             (t.remark ? '<div class="ml-dim">' + esc(t.remark) + '</div>' : '') +
-            '<div class="ml-dim">' + esc(t.firstAt ? MM().fmtWhen(t.firstAt).split(',')[0] + ' – ' + MM().fmtWhen(t.lastAt).split(',')[0] : 'no rows') + '</div></span>' +
+            '<div class="ml-dim">' + esc(t.firstAt ? MM().fmtWhen(t.firstAt).split(',')[0] + ' – ' + MM().fmtWhen(t.lastAt).split(',')[0] : 'no rows in the period') + '</div></span>' +
           '<span>' + t.enquiries + '</span><span>' + t.people + '</span><span>' + t.last7 + '</span><span>' + pctOf(t.contacted, t.people) + '</span><span>' + t.duplicates + '</span><span>' + t.inCrm + '</span><span>' + esc(t.topAd || '—') + '</span></button>';
       }).join('') + '</div></div>' : '';
+    var gname = { day: 'day', week: 'week', month: 'month' }[grain];
     return propChips(true) +
+      anControls(w, grain, !!prev) +
       (tabSel ? '<div class="ml-tabsel"><i class="fa-solid fa-filter"></i> Only <b>' + esc(String(tabSel.sheetTitle).trim() + ' › ' + tabSel.title) + '</b>' + (tabSel.tag ? ' <span class="ml-tag">' + esc(tabSel.tag) + '</span>' : '') +
         ' <button class="ml-link" onclick="MetaLeads.tab(null)">Show the whole ' + (code ? 'property' : 'list') + ' ✕</button></div>' : '') +
-      '<div class="ml-tiles">' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + a.enquiries + '</div><div class="ml-tile-l">Enquiries</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + a.people + '</div><div class="ml-tile-l">People</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + a.last7 + '</div><div class="ml-tile-l">Enquiries, last 7 days</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + pct(a.contacted, a.people) + '</div><div class="ml-tile-l">Have something written (' + a.contacted + ')</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + pct(a.assigned, a.people) + '</div><div class="ml-tile-l">Assigned (' + a.assigned + ')</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + a.repeats + '</div><div class="ml-tile-l">With duplicate rows</div></div>' +
-        '<div class="ml-tile"><div class="ml-tile-n">' + a.inCrm + '</div><div class="ml-tile-l">Already in the CRM</div></div>' +
-      '</div>' +
-      tabTable + teamTable(a) + adTable(a) +
-      card('Enquiries per day' + (a.series.length ? ' <span class="ml-dim">(' + a.series.length + ' days, India time)</span>' : ''), a.series.length ? series : '<div class="ml-dim">No dates.</div>') +
+      tiles +
+      card('Enquiries per ' + gname + (ptr ? ' <span class="ml-dim">— this period, and ' + esc(pw) + '</span>' : ''), a.enquiries || (ptr && pa && pa.enquiries) ? trendChart(tr, ptr, pw) : '<div class="ml-dim">No enquiries in this period.</div>') +
+      (a.enquiries ? periodTable(tr, grain) : '') +
+      '<div class="ml-grid ml-grid2">' + (a.enquiries ? heatHtml(MM().heatmap(cp)) : '') + (a.people ? funnelHtml(a) : '') + '</div>' +
+      teamTable(a, pa) + adTable(a, pa) + tabTable +
       '<div class="ml-grid">' +
         card('By ad', bars(a.byAd, a.enquiries)) +
         card('By platform', bars(a.byPlatform, a.enquiries)) +
@@ -1077,28 +1157,125 @@
         a.questions.map(function (q) { return card('Form: ' + esc(q.label), bars(q.answers)); }).join('') +
       '</div>';
   }
+  // Bars for this period, a line for the one before it (same buckets, moved back). Hover: the numbers.
+  function trendChart(tr, ptr, pw) {
+    var n = tr.length, vals = tr.map(function (b) { return b.enquiries; }), pv = ptr ? ptr.map(function (b) { return b.enquiries; }) : [];
+    var max = niceMax(Math.max.apply(null, vals.concat(pv, [1])));
+    var peak = Math.max.apply(null, vals), peakI = vals.indexOf(peak);
+    var every = Math.max(1, Math.ceil(n / (isPhone() ? 4 : 9)));
+    var cols = tr.map(function (b, i) {
+      var h = 100 * b.enquiries / max;
+      var tip = b.enquiries + ' ' + enqWord(b.enquiries) + ' · ' + b.label + (b.partial ? ' (so far)' : '') +
+        (b.enquiries ? '\n' + b.people + ' people · ' + b.contacted + ' contacted · ' + b.hot + ' rated 4–5' : '') +
+        (ptr ? '\nBefore: ' + pv[i] + ' (' + ptr[i].label + ')' : '');
+      var lab = b.enquiries && (i === peakI || i === n - 1) ? '<span class="ml-tc-v" style="bottom:calc(' + h.toFixed(1) + '% + 3px)">' + b.enquiries + '</span>' : '';
+      return '<div class="ml-tc' + (b.partial ? ' part' : '') + '" tabindex="0" data-tip="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '"><div class="ml-tc-b" style="height:' + h.toFixed(1) + '%"></div>' + lab + '</div>';
+    }).join('');
+    var line = ptr ? '<svg class="ml-tc-prev" viewBox="0 0 ' + n + ' 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="' +
+      pv.map(function (v, i) { return (i + 0.5) + ',' + (100 - 100 * v / max).toFixed(2); }).join(' ') + '"/></svg>' : '';
+    var grid = [max, max / 2, 0].map(function (v) { return '<div class="ml-tg" style="bottom:' + (100 * v / max) + '%"><span>' + fmtN(Math.round(v)) + '</span></div>'; }).join('');
+    var xs = tr.map(function (b, i) { return '<span>' + (i % every === 0 ? esc(b.short) : '') + '</span>'; }).join('');
+    return (ptr ? '<div class="ml-legend"><span><i class="ml-sw bar"></i>This period</span><span><i class="ml-sw line"></i>' + esc(pw.charAt(0).toUpperCase() + pw.slice(1)) + '</span></div>' : '') +
+      '<div class="ml-tchart"><div class="ml-tplot">' + grid + '<div class="ml-tcols">' + cols + '</div>' + line + '</div><div class="ml-tx">' + xs + '</div></div>';
+  }
+  // Day on day / week on week / month on month: newest first, each against the one before.
+  function periodTable(tr, grain) {
+    var max = Math.max.apply(null, tr.map(function (b) { return b.enquiries; }).concat([1]));
+    var name = { day: 'Day on day', week: 'Week on week', month: 'Month on month' }[grain];
+    var unit = { day: 'Day', week: 'Week', month: 'Month' }[grain];
+    var k = function (t) { return '<i class="ml-k">' + t + '</i>'; };
+    var rows = tr.map(function (b, i) {
+      var pb = tr[i - 1], d = pb ? b.enquiries - pb.enquiries : null;
+      var ch = d == null ? '<span class="ml-dim">—</span>'
+        : '<span class="ml-chg' + (b.partial || !d ? '' : d > 0 ? ' good' : ' bad') + '">' + (d > 0 ? '▲ +' : d < 0 ? '▼ ' : '– ') + (d || 0) + (pb.enquiries ? ' <small>(' + (d > 0 ? '+' : '') + Math.round(100 * d / pb.enquiries) + '%)</small>' : d ? ' <small>(new)</small>' : '') + '</span>';
+      return '<div class="ml-tt-r ml-pt-r' + (b.enquiries ? '' : ' zero') + '"><span><b>' + esc(b.label) + '</b>' + (b.partial ? ' <span class="ml-dim">so far</span>' : '') + (b.enquiries ? '' : '<span class="ml-pt-none"> · no enquiries</span>') + '</span>' +
+        '<span class="ml-pt-n">' + k('Enquiries') + '<b>' + b.enquiries + '</b><span class="ml-pt-bar"><i style="width:' + Math.round(100 * b.enquiries / max) + '%"></i></span></span>' +
+        '<span>' + k('Change') + ch + '</span><span>' + k('People') + b.people + '</span><span>' + k('Contacted') + (b.people ? b.contacted + ' <span class="ml-dim">' + Math.round(100 * b.contacted / b.people) + '%</span>' : '—') + '</span>' +
+        '<span>' + k('Rated 4–5') + b.hot + '</span><span class="ml-pt-ad">' + k('Top ad') + esc(b.topAd || '—') + '</span></div>';
+    }).reverse().join('');
+    return '<div class="ml-card"><div class="ml-h">' + name + ' <span class="ml-dim">— newest first; change is against the ' + unit.toLowerCase() + ' before</span></div><div class="ml-tt ml-pt">' +
+      '<div class="ml-tt-r ml-tt-h ml-pt-r"><span>' + unit + '</span><span>Enquiries</span><span>Change</span><span>People</span><span>Contacted</span><span>Rated 4–5</span><span>Top ad</span></div>' + rows + '</div></div>';
+  }
+  // When enquiries come in: weekday × hour, India time — when to have someone free to call.
+  function heatHtml(grid) {
+    var max = 0, tot = 0, days = grid.map(function (r) { return r.reduce(function (x, v) { return x + v; }, 0); });
+    grid.forEach(function (r) { r.forEach(function (v) { if (v > max) max = v; tot += v; }); });
+    if (!tot) return '';
+    var hr = function (h) { return (h % 12 || 12) + (h < 12 ? ' am' : ' pm'); };
+    var lvl = function (v) { return v ? Math.max(1, Math.ceil(5 * v / max)) : 0; };
+    var bestD = days.indexOf(Math.max.apply(null, days)), win = -1, winN = -1;
+    for (var h = 0; h < 24; h++) { var s3 = 0; for (var j = 0; j < 3; j++) grid.forEach(function (r) { s3 += r[(h + j) % 24]; }); if (s3 > winN) { winN = s3; win = h; } }
+    var rows = grid.map(function (r, d) {
+      return '<div class="ml-hm-r"><span class="ml-hm-d">' + MM().WEEKDAYS[d] + '</span>' + r.map(function (v, h) {
+        return '<i class="l' + lvl(v) + '" data-tip="' + esc(v + ' ' + enqWord(v) + ' · ' + WDAY_FULL[d] + ', ' + hr(h) + '–' + hr((h + 1) % 24)) + '"></i>';
+      }).join('') + '<span class="ml-hm-t">' + days[d] + '</span></div>';
+    }).join('');
+    var axis = '<div class="ml-hm-r ml-hm-x"><span class="ml-hm-d"></span>' + grid[0].map(function (v, h) { return '<span>' + (h % 6 === 0 ? hr(h).replace(' ', '') : '') + '</span>'; }).join('') + '<span class="ml-hm-t"></span></div>';
+    return '<div class="ml-card"><div class="ml-h">When enquiries come in <span class="ml-dim">— India time</span></div>' +
+      '<div class="ml-an-say">Busiest day: <b>' + WDAY_FULL[bestD] + '</b> (' + days[bestD] + ') · busiest 3 hours: <b>' + hr(win) + '–' + hr((win + 3) % 24) + '</b> (' + Math.round(100 * winN / tot) + '% of enquiries)</div>' +
+      '<div class="ml-hm">' + rows + axis + '</div>' +
+      '<div class="ml-hm-key"><span>Fewer</span><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><i class="l5"></i><span>More</span></div></div>';
+  }
+  // From enquiry to CRM: how many of the people got each step, as a share of everyone who enquired.
+  function funnelHtml(a) {
+    var steps = [['Enquired', a.people], ['Assigned to someone', a.assigned], ['Contacted', a.contacted],
+      ['Rated 3 or more', a.ratings[5] + a.ratings[4] + a.ratings[3]], ['Rated 4–5', a.ratings[5] + a.ratings[4]], ['In the CRM', a.inCrm]];
+    return '<div class="ml-card"><div class="ml-h">From enquiry to CRM <span class="ml-dim">— share of the ' + a.people + ' people</span></div><div class="ml-fun">' +
+      steps.map(function (s, i) {
+        var pcv = a.people ? Math.round(100 * s[1] / a.people) : 0;
+        var step = i && i < 5 && steps[i - 1][1] ? Math.round(100 * s[1] / steps[i - 1][1]) + '% of the step before' : '';
+        return '<div class="ml-fun-r" data-tip="' + esc(s[1] + ' people · ' + pcv + '% of everyone who enquired' + (step ? '\n' + step : '')) + '"><div class="ml-fun-l">' + esc(s[0]) + '</div>' +
+          '<div class="ml-fun-t"><i style="width:' + Math.max(pcv, s[1] ? 1 : 0) + '%"></i></div><div class="ml-fun-n"><b>' + s[1] + '</b> <span class="ml-dim">' + pcv + '%</span></div></div>';
+      }).join('') + '</div></div>';
+  }
+  // One tooltip for every chart: a mark's data-tip, on hover and on keyboard focus.
+  (function tipLayer() {
+    var tip = null;
+    function show(el, x, y) {
+      if (!tip) { tip = document.createElement('div'); tip.className = 'ml-tip'; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip); }
+      tip.textContent = el.getAttribute('data-tip'); tip.style.display = 'block';
+      var r = tip.getBoundingClientRect(), left = Math.min(window.innerWidth - r.width - 8, Math.max(8, x - r.width / 2)), top = y - r.height - 12;
+      tip.style.left = left + 'px'; tip.style.top = (top < 8 ? y + 18 : top) + 'px';
+    }
+    function hide() { if (tip) tip.style.display = 'none'; }
+    function find(t) { return t && t.closest ? t.closest('#metaLeadsView [data-tip]') : null; }
+    document.addEventListener('pointermove', function (ev) { var el = find(ev.target); if (el) show(el, ev.clientX, ev.clientY); else hide(); }, { passive: true });
+    document.addEventListener('focusin', function (ev) { var el = find(ev.target); if (el) { var r = el.getBoundingClientRect(); show(el, r.left + r.width / 2, r.top); } else hide(); });
+    document.addEventListener('scroll', hide, true);
+  })();
 
   // The admin's reports: who holds which leads and how far they got; which ad brings better leads.
-  function teamTable(a) {
+  function chgCell(c, p) {
+    if (p == null) return '';
+    var d = c - p;
+    return '<span><i class="ml-k">vs before</i><span class="ml-chg' + (d > 0 ? ' good' : d < 0 ? ' bad' : '') + '" title="Before: ' + p + '">' + (d > 0 ? '▲ +' : d < 0 ? '▼ ' : '– ') + d + '</span></span>';
+  }
+  function teamTable(a, pa) {
     if (!a.agents.length) return '';
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
-    return '<div class="ml-card"><div class="ml-h">Team — who holds which leads <span class="ml-dim">(click to see their leads)</span></div><div class="ml-tt">' +
-      '<div class="ml-tt-r ml-tt-h ml-team-r"><span>Agent</span><span>Leads</span><span>Contacted</span><span>Not contacted</span><span>Rated 4–5</span><span>Rated 3</span><span>Priority</span></div>' +
+    var before = {}; if (pa) pa.agents.forEach(function (x) { before[x.agent] = x.people; });
+    var k = function (t) { return '<i class="ml-k">' + t + '</i>'; };
+    return '<div class="ml-card"><div class="ml-h">Team — who holds which leads <span class="ml-dim">(people who enquired in the period; click to see their leads)</span></div><div class="ml-tt">' +
+      '<div class="ml-tt-r ml-tt-h ml-team-r' + (pa ? ' c8' : '') + '"><span>Agent</span><span>Leads</span>' + (pa ? '<span>vs before</span>' : '') + '<span>Contacted</span><span>Not contacted</span><span>Rated 4–5</span><span>Rated 3</span><span>Priority</span></div>' +
       a.agents.map(function (x) {
         var label = x.agent ? (x.agent.indexOf('@') > 0 ? agentLabel(x.agent) : x.agent + ' (not on the team list)') : 'Not assigned';
         var f = x.agent ? x.agent : '_none';
-        return '<button class="ml-tt-r ml-team-r" onclick="MetaLeads.agentLeads(' + js(f) + ')"><span><b>' + esc(label) + '</b></span><span>' + x.people + '</span><span>' + x.contacted + ' <span class="ml-dim">' + pct(x.contacted, x.people) + '</span></span>' +
-          '<span' + (x.untouched ? ' class="ml-bad"' : '') + '>' + x.untouched + '</span><span>' + x.top + '</span><span>' + x.mid + '</span><span>' + x.priority + '</span></button>';
+        return '<button class="ml-tt-r ml-team-r' + (pa ? ' c8' : '') + '" onclick="MetaLeads.agentLeads(' + js(f) + ')"><span><b>' + esc(label) + '</b></span><span>' + k('Leads') + x.people + '</span>' + (pa ? chgCell(x.people, before[x.agent] || 0) : '') +
+          '<span>' + k('Contacted') + x.contacted + ' <span class="ml-dim">' + pct(x.contacted, x.people) + '</span></span>' +
+          '<span' + (x.untouched ? ' class="ml-bad"' : '') + '>' + k('Not contacted') + x.untouched + '</span><span>' + k('Rated 4–5') + x.top + '</span><span>' + k('Rated 3') + x.mid + '</span><span>' + k('Priority') + x.priority + '</span></button>';
       }).join('') + '</div></div>';
   }
-  function adTable(a) {
+  function adTable(a, pa) {
     if (!a.adQuality.length) return '';
     var pct = function (n, d) { return d ? Math.round(100 * n / d) + '%' : '—'; };
+    var before = {}; if (pa) pa.adQuality.forEach(function (x) { before[x.ad] = x.enquiries; });
+    var k = function (t) { return '<i class="ml-k">' + t + '</i>'; };
     return '<div class="ml-card"><div class="ml-h">Lead quality by ad <span class="ml-dim">(ratings from the sheet)</span></div><div class="ml-tt">' +
-      '<div class="ml-tt-r ml-tt-h ml-ad-r"><span>Ad</span><span>Enquiries</span><span>People</span><span>Contacted</span><span>Rated 4–5</span><span>Rated 3+</span><span>Average rating</span></div>' +
+      '<div class="ml-tt-r ml-tt-h ml-ad-r' + (pa ? ' c8' : '') + '"><span>Ad</span><span>Enquiries</span>' + (pa ? '<span>vs before</span>' : '') + '<span>People</span><span>Contacted</span><span>Rated 4–5</span><span>Rated 3+</span><span>Average rating</span></div>' +
       a.adQuality.map(function (x) {
-        return '<button class="ml-tt-r ml-ad-r" onclick="MetaLeads.adLeads(' + js(x.ad) + ')"><span><b>' + esc(x.ad) + '</b></span><span>' + x.enquiries + '</span><span>' + x.people + '</span><span>' + pct(x.contacted, x.people) + '</span>' +
-          '<span>' + x.top + '</span><span>' + pct(x.threePlus, x.people) + '</span><span>' + (x.avg != null ? '★ ' + x.avg + ' <span class="ml-dim">(' + x.rated + ' rated)</span>' : '—') + '</span></button>';
+        return '<button class="ml-tt-r ml-ad-r' + (pa ? ' c8' : '') + '" onclick="MetaLeads.adLeads(' + js(x.ad) + ')"><span><b>' + esc(x.ad) + '</b></span><span>' + k('Enquiries') + x.enquiries + '</span>' + (pa ? chgCell(x.enquiries, before[x.ad] || 0) : '') +
+          '<span>' + k('People') + x.people + '</span><span>' + k('Contacted') + pct(x.contacted, x.people) + '</span>' +
+          '<span>' + k('Rated 4–5') + x.top + '</span><span>' + k('Rated 3+') + pct(x.threePlus, x.people) + '</span><span>' + k('Average') + (x.avg != null ? '★ ' + x.avg + ' <span class="ml-dim">(' + x.rated + ' rated)</span>' : '—') + '</span></button>';
       }).join('') + '</div></div>';
   }
 
@@ -1300,6 +1477,7 @@
     reload: function () { loadConfig(true); },
     prop: function (c) { S.prop = c; S.open = null; S.shown = PAGE; S.tab = null; render(); },
     tab: function (k) { S.tab = S.tab === k ? null : k; render(); },
+    an: function (k, v) { S.an[k] = v; saveAn(); render(); },
     filter: function (f) { S.filter = f; S.shown = PAGE; if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
     search: function (q) {
       S.q = q; S.shown = PAGE;
