@@ -375,8 +375,11 @@ try {
   await page.selectOption('.ml-an-ctl select[data-an="grain"]', 'week');
   await page.waitForTimeout(250);
   ok('View by week: Week on week', /Week on week/.test(await text(page, '#metaLeadsView')) && (await page.$$('.ml-tc')).length === 1);
-  await page.selectOption('.ml-an-ctl select[data-an="agent"]', 'swami@threepin.in');
+  const agk = await page.$$eval('.ml-agk .ml-agk-h b', b => b.map(x => x.textContent));
+  ok('Leads by agent: a card each (who had leads that week), and Not assigned', agk.includes('Swami') && agk.includes('Not assigned') && !agk.includes('Thirumal'), agk);
+  await page.locator('.ml-agk', { hasText: 'Swami' }).click();
   await page.waitForTimeout(250);
+  ok('A card clicked: the analysis for that agent (cards gone, the filter set)', (await page.$eval('.ml-an-ctl select[data-an="agent"]', s => s.value)) === 'swami@threepin.in' && !(await page.$('.ml-agk')));
   const sw = await page.$$eval('.ml-team-r:not(.ml-tt-h)', r => r.map(x => x.children[0].innerText.trim()));
   ok('One agent: only Swami\'s leads, everywhere', sw.length === 1 && /Swami/.test(sw[0]), sw);
   await shot(page, '8c-analysis-time');
@@ -629,6 +632,13 @@ try {
   await page.evaluate(() => MetaLeads.clearF());
   await page.waitForTimeout(200);
   ok('…and sees everyone with Clear filters', (await page.$$('.ml-person')).length === 12);
+  // Analysis for someone who is not a manager: their own leads only — no agent to pick, no one else's numbers.
+  await page.evaluate(() => { MetaLeads.an('period', 'all'); MetaLeads.an('agent', ''); MetaLeads.go('ml-analysis'); });
+  await page.waitForTimeout(300);
+  const mine = await page.$$eval('.ml-team-r:not(.ml-tt-h)', r => r.map(x => x.children[0].innerText.trim()));
+  ok('Not a manager — Analysis: only their own leads (no agent filter, no one else\'s cards or rows)', !(await page.$('.ml-an-ctl select[data-an="agent"]')) && /Your leads/.test(await text(page, '.ml-an-ctl')) && !(await page.$('.ml-agk')) && mine.length === 1 && /Swami/.test(mine[0]) && /People 2\b/.test(await page.$$eval('.ml-ktile', t => t.map(x => x.innerText.replace(/\s+/g, ' ')).join(' | '))), mine);
+  await page.evaluate(() => MetaLeads.go('meta-leads'));
+  await page.waitForTimeout(300);
   // ── 10b. The agent: my leads, a follow-up after the call ──
   // The switch: My leads / Unassigned / All, and Take.
   ok('The switch: My leads 2 · Unassigned · All 12', /My leads 2/.test(await text(page, '.ml-sw')) && /All 12/.test(await text(page, '.ml-sw')), await text(page, '.ml-sw'));

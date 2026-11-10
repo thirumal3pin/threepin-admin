@@ -1055,6 +1055,8 @@
     var tone = !d || !o.good ? '' : ((d > 0) === (o.good > 0) ? ' good' : ' bad');
     return '<div class="ml-delta' + tone + '"><b>' + (d > 0 ? '▲' : d < 0 ? '▼' : '–') + ' ' + esc(txt) + '</b> <span>vs ' + esc(o.prevTxt != null ? o.prevTxt : fmtN(prev)) + '</span></div>';
   }
+  function isManager() { return !!(S.cfg && S.cfg.manager); }
+  function anAgent() { return isManager() ? S.an.agent : (me() || '_nobody'); }
   function anAgentOptions() {
     var seen = {}, out = [['', 'Everyone']];
     roster().forEach(function (e) { seen[e] = 1; out.push([e, agentLabel(e)]); });
@@ -1074,7 +1076,9 @@
       return '<label class="ml-an-f"><span>' + (i ? 'To' : 'From') + '</span><input type="date" class="ml-f ml-date" data-an="' + k + '" value="' + esc(A[k] || '') + '" onchange="MetaLeads.an(' + js(k) + ',this.value)"></label>';
     }).join('') : '';
     var span = dlabel(w.lo) + (w.days > 1 ? ' – ' + dlabel(w.hi - 1) : '') + (hasPrev ? ' · compared with ' + dlabel(w.prevLo) + (w.prevHi - w.prevLo > 86400000 ? ' – ' + dlabel(w.prevHi - 1) : '') : '');
-    return '<div class="ml-an-ctl">' + sel('agent', A.agent, anAgentOptions(), 'Agent') + sel('period', A.period, MM().PERIODS, 'Period') + dates +
+    var who = isManager() ? sel('agent', A.agent, anAgentOptions(), 'Agent')
+      : '<div class="ml-an-f ml-an-me"><span>Agent</span><b>Your leads' + (me() ? ' · ' + esc(agentLabel(me())) : '') + '</b></div>';
+    return '<div class="ml-an-ctl">' + who + sel('period', A.period, MM().PERIODS, 'Period') + dates +
       sel('grain', A.grain, [['auto', 'Auto (' + auto + ')'], ['day', 'Days'], ['week', 'Weeks'], ['month', 'Months']], 'View by') +
       '<div class="ml-an-win">' + esc(span) + '</div></div>';
   }
@@ -1094,8 +1098,9 @@
     var w = MM().periodWindow(A.period, now, A.d1, A.d2, isFinite(first) ? first : null);
     var grain = A.grain === 'auto' ? MM().autoGrain(w) : A.grain;
     var allTime = A.period === 'all' || (A.period === 'range' && !A.d1 && !A.d2);
-    var cur = MM().slicePlan(S.plan, { agent: A.agent, lo: allTime ? null : w.lo, hi: allTime ? null : w.hi, code: code });
-    var prev = w.prevLo != null ? MM().slicePlan(S.plan, { agent: A.agent, lo: w.prevLo, hi: w.prevHi, code: code }) : null;
+    var agentF = anAgent();
+    var cur = MM().slicePlan(S.plan, { agent: agentF, lo: allTime ? null : w.lo, hi: allTime ? null : w.hi, code: code });
+    var prev = w.prevLo != null ? MM().slicePlan(S.plan, { agent: agentF, lo: w.prevLo, hi: w.prevHi, code: code }) : null;
     var whole = MM().analyse(cur, code, now);
     // One tab picked: everything below is that tab's alone.
     var tabSel = S.tab && whole.byTab.find(function (t) { return t.key === S.tab; });
@@ -1145,6 +1150,7 @@
       (tabSel ? '<div class="ml-tabsel"><i class="fa-solid fa-filter"></i> Only <b>' + esc(String(tabSel.sheetTitle).trim() + ' › ' + tabSel.title) + '</b>' + (tabSel.tag ? ' <span class="ml-tag">' + esc(tabSel.tag) + '</span>' : '') +
         ' <button class="ml-link" onclick="MetaLeads.tab(null)">Show the whole ' + (code ? 'property' : 'list') + ' ✕</button></div>' : '') +
       tiles +
+      (agentF ? '' : agentKpis(a, pa, cp, buckets)) +
       card('Enquiries per ' + gname + (ptr ? ' <span class="ml-dim">— this period, and ' + esc(pw) + '</span>' : ''), a.enquiries || (ptr && pa && pa.enquiries) ? trendChart(tr, ptr, pw) : '<div class="ml-dim">No enquiries in this period.</div>') +
       (a.enquiries ? periodTable(tr, grain) : '') +
       '<div class="ml-grid ml-grid2">' + (a.enquiries ? heatHtml(MM().heatmap(cp)) : '') + (a.people ? funnelHtml(a) : '') + '</div>' +
@@ -1156,6 +1162,32 @@
         card('Already in the CRM — their stage', a.byStage.length ? bars(a.byStage, a.inCrm) : '<div class="ml-dim">None of them is a CRM lead yet.</div>') +
         a.questions.map(function (q) { return card('Form: ' + esc(q.label), bars(q.answers)); }).join('') +
       '</div>';
+  }
+  // Each agent at a glance: leads assigned in the period (against the period before), their share,
+  // how far they got, and their leads over the period as a small line. Click: the analysis for them.
+  function agentKpis(a, pa, cp, buckets) {
+    if (!a.agents.length) return '';
+    var before = {}; if (pa) pa.agents.forEach(function (x) { before[x.agent] = x.people; });
+    var spark = buckets.length >= 3;
+    var cards = a.agents.map(function (x) {
+      var key = x.agent || '_none';
+      var name = x.agent ? (x.agent.indexOf('@') > 0 ? agentLabel(x.agent) : x.agent + ' ?') : 'Not assigned';
+      var line = '';
+      if (spark) {
+        var v = MM().trend(MM().slicePlan(cp, { agent: key }), buckets).map(function (b) { return b.people; });
+        var top = Math.max.apply(null, v.concat([1]));
+        line = '<svg class="ml-agk-sp" viewBox="0 0 ' + Math.max(1, v.length - 1) + ' 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="' +
+          v.map(function (n, i) { return i + ',' + (28 - 26 * n / top).toFixed(1); }).join(' ') + '"/></svg>';
+      }
+      var pcv = x.people ? Math.round(100 * x.contacted / x.people) : 0;
+      return '<button class="ml-agk' + (x.agent ? '' : ' none') + '" onclick="MetaLeads.an(\'agent\',' + js(key) + ')" title="See the analysis for ' + esc(name) + '">' +
+        '<div class="ml-agk-h"><b>' + esc(name) + '</b><span>' + (a.people ? Math.round(100 * x.people / a.people) : 0) + '% of leads</span></div>' +
+        '<div class="ml-agk-n">' + x.people + ' <span>' + (x.agent ? 'assigned' : 'waiting for an agent') + '</span></div>' +
+        (pa ? deltaHtml(x.people, before[x.agent] || 0, { good: x.agent ? 0 : -1 }) : '') +
+        '<div class="ml-agk-m"><span><b>' + pcv + '%</b> contacted</span><span><b' + (x.untouched ? ' class="ml-bad"' : '') + '>' + x.untouched + '</b> not contacted</span><span><b>' + x.top + '</b> rated 4–5</span></div>' +
+        line + '</button>';
+    }).join('');
+    return '<div class="ml-card"><div class="ml-h">Leads by agent <span class="ml-dim">— people who enquired in the period; click one for their own analysis</span></div><div class="ml-agks">' + cards + '</div></div>';
   }
   // Bars for this period, a line for the one before it (same buckets, moved back). Hover: the numbers.
   function trendChart(tr, ptr, pw) {
