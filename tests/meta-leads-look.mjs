@@ -206,6 +206,8 @@ try {
       await lshot(page, p + '-3-table'); await ov('table');
       const r = await page.$('.ml-table tbody tr');
       if (r) { await r.click(); await page.waitForTimeout(250); await page.screenshot({ path: join(OUT, 'look-' + p + '-4-drawer.png') }); await page.keyboard.press('Escape'); }
+      const rc = await page.$('.ml-table tbody tr:has-text("Saravana")');
+      if (rc) { await rc.click(); await page.waitForTimeout(250); await page.screenshot({ path: join(OUT, 'look-' + p + '-4b-drawer-crm.png') }); await page.keyboard.press('Escape'); }
       await page.evaluate(() => MetaLeads.layout && MetaLeads.layout('list'));
       await page.evaluate(() => MetaLeads.go('ml-analysis')); await page.waitForTimeout(300);
       await lshot(page, p + '-5-analysis'); await ov('analysis');

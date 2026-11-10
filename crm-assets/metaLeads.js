@@ -133,6 +133,17 @@
     if (m < 7 * 24 * 60) return Math.round(m / 1440) + 'd';
     return shortWhen(t).split(',')[0];
   }
+  // The CRM lead, in a new tab (crm.html opens ?lead= straight away).
+  function crmUrl(id) { return '/crm.html?lead=' + encodeURIComponent(id); }
+  function crmLink(p, cls, inner) { return '<a class="' + cls + '" href="' + esc(crmUrl(p.crm.id)) + '" target="_blank" rel="noopener" title="Open this lead in the CRM, in a new tab">' + inner + '</a>'; }
+  // Their form answers, newest enquiry first; a question asked again shows its newest answer.
+  function formAnswers(p) {
+    var seen = {}, out = [];
+    rowsFor(p, S.prop).slice().reverse().forEach(function (e) {
+      (e.answers || []).forEach(function (a) { var k = String(a.label).toLowerCase(); if (a.value && !seen[k]) { seen[k] = 1; out.push(a); } });
+    });
+    return out;
+  }
   // The lead, opened: a side panel on a computer; its own screen on a phone.
   function drawerHtml(p) {
     if (!p) return '';
@@ -142,7 +153,7 @@
       (p.phoneOk ? '<a class="ml-dact" href="tel:+' + esc(p.phoneKey) + '"><i class="fa-solid fa-phone"></i><span>Call</span></a>' : '') +
       (wa ? '<a class="ml-dact wa" href="' + esc(wa) + '" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i><span>WhatsApp</span></a>' : '') +
       (take ? '<button class="ml-dact take" onclick="MetaLeads.take(' + k + ')"' + (S.writing ? ' disabled' : '') + '><i class="fa-regular fa-hand"></i><span>Take</span></button>' : '') +
-      (p.crm ? '<button class="ml-dact" onclick="MetaLeads.openLead(' + js(p.crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i><span>In CRM</span></button>' : '') + '</div>';
+      (p.crm ? crmLink(p, 'ml-dact', '<i class="fa-solid fa-arrow-up-right-from-square"></i><span>In CRM</span>') : '') + '</div>';
     var tabs = '<div class="ml-dtabs" role="tablist">' + [['overview', 'Overview'], ['update', 'Update'], ['history', 'Enquiries ' + p.enquiries.length]].map(function (t) {
       return '<button role="tab" aria-selected="' + (S.dtab === t[0]) + '" class="' + (S.dtab === t[0] ? 'on' : '') + '" onclick="MetaLeads.dtab(\'' + t[0] + '\')">' + esc(t[1]) + '</button>';
     }).join('') + '</div>';
@@ -151,7 +162,8 @@
       '<div class="ml-drawer-h">' + (phone ? '<button class="ml-back" onclick="MetaLeads.closeLead()" aria-label="Back to the leads"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
         '<div class="ml-dh-who">' + (phone ? avatar(p) : '') + '<div class="ml-dh-t"><div class="ml-name">' + esc(p.name || '(no name)') + '</div>' +
         '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + esc(p.properties.join(', ')) + (phone && who ? ' · ' + esc(who) : '') + '</div></div></div>' +
-        (phone ? '' : '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.closeLead()">✕</button>') + '</div>' +
+        (phone ? '' : '<div class="ml-dh-r">' + (p.crm ? crmLink(p, 'ml-btn sm ml-crmopen', '<i class="fa-solid fa-arrow-up-right-from-square"></i> Open in CRM' + (p.crm.stage ? ' · ' + esc(p.crm.stage) : '')) : '') +
+          '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.closeLead()">✕</button></div>') + '</div>' +
       (phone ? acts + tabs : '') +
       '<div class="ml-person open">' + detailHtml(p) + '</div></aside>';
   }
@@ -634,10 +646,22 @@
     { key: 'done', label: 'Contacted', get: function (p) { return p.team.contacted ? 'Yes' : 'Not yet'; }, pick: ['Yes', 'Not yet'] },
     { key: 'crm', label: 'CRM', get: function (p) { return p.crm ? (p.crm.stage || 'In CRM') : ''; } }
   ];
-  function tableRows(list) {
+  var MAX_DETAILS = 6;
+  function detailCol(i) {
+    return { key: 'd' + (i + 1), label: 'Details ' + (i + 1), det: true, get: function (p) { var a = formAnswers(p)[i]; return a ? a.label + ': ' + a.value : ''; } };
+  }
+  // The table's columns: Details 1…n after Property, as many as the people shown have answers.
+  function tcols(list) {
+    var n = Math.min(MAX_DETAILS, list.reduce(function (m, p) { return Math.max(m, formAnswers(p).length); }, 0));
+    var at = TCOLS.findIndex(function (c) { return c.key === 'prop'; }) + 1, d = [];
+    for (var i = 0; i < n; i++) d.push(detailCol(i));
+    return TCOLS.slice(0, at).concat(d, TCOLS.slice(at));
+  }
+  function tableRows(list, cols) {
     var tf = S.tf;
+    cols = cols || tcols(list);
     var out = list.filter(function (p) {
-      return TCOLS.every(function (c) {
+      return cols.every(function (c) {
         var want = String(tf[c.key] || '').trim().toLowerCase();
         if (!want) return true;
         var v = String(c.get(p) || '').toLowerCase();
@@ -645,7 +669,7 @@
         return c.pick ? v === want : v.indexOf(want) >= 0;
       });
     });
-    var col = TCOLS.find(function (c) { return c.key === S.tsort.key; });
+    var col = cols.find(function (c) { return c.key === S.tsort.key; });
     if (col) {
       var val = col.sort || function (p) { return String(col.get(p) || '').toLowerCase(); };
       out.sort(function (a, b) {
@@ -659,32 +683,36 @@
     return out;
   }
   function tableHtml(list) {
-    var rows = tableRows(list);
-    var head = '<tr><th class="ml-tsel"></th>' + TCOLS.map(function (c) {
+    var COLS = tcols(list);
+    var rows = tableRows(list, COLS);
+    var head = '<tr><th class="ml-tsel"></th>' + COLS.map(function (c) {
       var on = S.tsort.key === c.key;
-      return '<th class="' + (c.wide ? 'wide' : '') + '"><button class="ml-th' + (on ? ' on' : '') + '" onclick="MetaLeads.tsort(' + js(c.key) + ')">' + esc(c.label) + (on ? (S.tsort.dir > 0 ? ' ▲' : ' ▼') : '') + '</button></th>';
+      return '<th class="' + (c.wide ? 'wide' : c.det ? 'det' : '') + '"><button class="ml-th' + (on ? ' on' : '') + '" onclick="MetaLeads.tsort(' + js(c.key) + ')">' + esc(c.label) + (on ? (S.tsort.dir > 0 ? ' ▲' : ' ▼') : '') + '</button></th>';
     }).join('') + '</tr>';
-    var agents = Array.from(new Set(list.map(function (p) { return TCOLS[5].get(p); }).filter(Boolean))).sort();
-    var filt = '<tr class="ml-tfilt"><th></th>' + TCOLS.map(function (c) {
+    var agentCol = TCOLS.find(function (c) { return c.key === 'agent'; });
+    var agents = Array.from(new Set(list.map(function (p) { return agentCol.get(p); }).filter(Boolean))).sort();
+    var filt = '<tr class="ml-tfilt"><th></th>' + COLS.map(function (c) {
       if (c.nofilter) return '<th></th>';
       var v = S.tf[c.key] || '';
       if (c.pick) {
         var opts = (c.pick === true ? agents.concat(['—']) : c.pick);
-        return '<th><select onchange="MetaLeads.tf(' + js(c.key) + ',this.value)"><option value="">All</option>' + opts.map(function (o) { return '<option' + (v === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select></th>';
+        return '<th><select data-k="' + esc(c.key) + '" onchange="MetaLeads.tf(' + js(c.key) + ',this.value)"><option value="">All</option>' + opts.map(function (o) { return '<option' + (v === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select></th>';
       }
-      return '<th><input type="search" placeholder="Filter" value="' + esc(v) + '" oninput="MetaLeads.tfType(' + js(c.key) + ',this.value)"></th>';
+      return '<th><input type="search" placeholder="Filter" data-k="' + esc(c.key) + '" value="' + esc(v) + '" oninput="MetaLeads.tfType(' + js(c.key) + ',this.value)"></th>';
     }).join('') + '</tr>';
     var body = rows.slice(0, S.shown).map(function (p) {
       var open = S.open === p.key;
       return '<tr class="ml-tr' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + (p.team.contacted ? '' : ' fresh') + '">' +
         '<td class="ml-tsel"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></td>' +
-        TCOLS.map(function (c) {
+        COLS.map(function (c) {
           var v = c.get(p);
-          var cell = c.key === 'rating' && p.team.rating ? ratingChip(p.team.rating)
+          var cut = c.det && v ? v.indexOf(': ') : -1;
+          var cell = c.det ? (v ? '<span class="ml-dq">' + esc(v.slice(0, cut)) + ':</span> <b>' + esc(v.slice(cut + 2)) + '</b>' : '<span class="ml-dim">—</span>')
+            : c.key === 'rating' && p.team.rating ? ratingChip(p.team.rating)
             : c.key === 'name' ? '<b>' + esc(v || '(no name)') + '</b>' + (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop) ? ' <span class="ml-badge pri" title="Revisited — priority">⚡</span>' : '')
             : c.key === 'done' && !p.team.contacted ? waitingFlag(p) || '<span class="ml-dim">Not yet</span>'
             : esc(v || '—');
-          return '<td class="' + (c.wide ? 'wide' : '') + '" onclick="MetaLeads.toggle(' + js(p.key) + ')" title="' + esc(c.wide ? v : '') + '">' + (c.wide ? '<div class="ml-clamp">' + cell + '</div>' : cell) + '</td>';
+          return '<td class="' + (c.wide ? 'wide' : c.det ? 'det' : '') + '" onclick="MetaLeads.toggle(' + js(p.key) + ')" title="' + esc(c.wide || c.det ? v : '') + '">' + (c.wide ? '<div class="ml-clamp">' + cell + '</div>' : cell) + '</td>';
         }).join('') + '</tr>';
     }).join('');
     // The lead opened from the table: a side panel, the table still in view behind it.
@@ -693,7 +721,7 @@
     return '<div class="ml-count">' + rows.length + ' of ' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') +
         (Object.keys(S.tf).some(function (k) { return S.tf[k]; }) ? ' · <button class="ml-link" onclick="MetaLeads.tfClear()">Clear column filters</button>' : '') + '</div>' +
       bulkBar(rows) +
-      '<div class="ml-tablewrap"><table class="ml-table"><thead>' + head + filt + '</thead><tbody>' + (body || '<tr><td colspan="' + (TCOLS.length + 1) + '" class="ml-dim" style="padding:18px;text-align:center">Nobody matches.</td></tr>') + '</tbody></table></div>' +
+      '<div class="ml-tablewrap"><table class="ml-table"><thead>' + head + filt + '</thead><tbody>' + (body || '<tr><td colspan="' + (COLS.length + 1) + '" class="ml-dim" style="padding:18px;text-align:center">Nobody matches.</td></tr>') + '</tbody></table></div>' +
       (rows.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (rows.length - S.shown) + ' left)</button>' : '') + drawer;
   }
   // Esc closes the side panel.
@@ -782,7 +810,8 @@
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
       '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' + avatar(p) +
         '<div class="ml-who"><div class="ml-name">' + esc(p.name || '(no name)') + (p.crm && p.crm.name && p.crm.name !== p.name ? ' <span class="ml-aka">CRM: ' + esc(p.crm.name) + '</span>' : '') + '</div>' +
-        '<div class="ml-phone' + (p.phoneOk ? '' : ' bad') + '">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + '</div></div>' +
+        '<div class="ml-phone' + (p.phoneOk ? '' : ' bad') + '">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + '</div>' +
+        (function () { var fa = formAnswers(p); return fa.length ? '<div class="ml-fans" title="' + esc(fa.map(function (a) { return a.label + ': ' + a.value; }).join('\n')) + '">' + fa.map(function (a) { return '<span>' + esc(a.label) + ': <b>' + esc(a.value) + '</b></span>'; }).join(' · ') + '</div>' : ''; })() + '</div>' +
         '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div><div class="ml-when-r">' + esc(relShort(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
         '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
         '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
@@ -964,7 +993,7 @@
           (crm.followUpAt ? '<div class="ml-kv"><span>Follow-up</span><b>' + esc(MM().fmtWhen(crm.followUpAt)) + '</b></div>' : '') +
           (crm.lostReason ? '<div class="ml-kv"><span>Lost reason</span><b>' + esc(crm.lostReason) + '</b></div>' : '') +
           (crm.summary ? '<div class="ml-sum"><i class="fa-solid fa-wand-magic-sparkles"></i> ' + esc(crm.summary) + '</div>' : '') +
-          '<button class="ml-btn sm" onclick="MetaLeads.openLead(' + js(crm.id) + ')"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open in the CRM</button></div>'
+          crmLink(p, 'ml-btn sm', '<i class="fa-solid fa-arrow-up-right-from-square"></i> Open in the CRM') + '</div>'
           : '<div class="ml-dim">Not a CRM lead yet.</div>') + '</div>' +
       '</div>' +
       '<div class="ml-col ml-col-hist ml-sec-hi"><div class="ml-h">Enquiries (' + rows.length + ')' + (canPick ? ' <span class="ml-dim">— each with what its row says</span>' : '') + '</div>' +
@@ -1320,7 +1349,7 @@
       S.tf[k] = v; S.shown = PAGE;
       clearTimeout(S.tft); S.tft = setTimeout(function () {
         render();
-        var box = document.querySelector('#metaLeadsView .ml-tfilt th:nth-child(' + (TCOLS.findIndex(function (c) { return c.key === k; }) + 2) + ') input');
+        var box = document.querySelector('#metaLeadsView .ml-tfilt input[data-k="' + k + '"]');
         if (box) { box.focus(); try { box.setSelectionRange(v.length, v.length); } catch (e) {} }
       }, 220);
     },

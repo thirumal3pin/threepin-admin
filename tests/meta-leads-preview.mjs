@@ -295,10 +295,8 @@ try {
   ok('Saravana: the CRM summary — lead, stage, agent, properties, AI summary', /Saravanan O V/.test(sd) && /Site Visit/.test(sd) && /Swami/.test(sd) && /ANR005/.test(sd) && /fitness studio/.test(sd), sd.slice(0, 400));
   ok('Saravana: "In CRM · would add KDBMC001"', /In CRM · would add KDBMC001/.test(await text(page, '.ml-person.open .ml-prow')));
   await shot(page, '6-person-in-crm');
-  await clickText(page, '.ml-person.open .ml-btn', 'Open in the CRM');
-  await page.waitForTimeout(400);
-  ok('"Open in the CRM" opens the lead', await page.evaluate(() => document.getElementById('dp') && document.getElementById('dp').classList.contains('open')));
-  await page.evaluate(() => typeof closeDetail === 'function' && closeDetail());
+  const openCrm = await page.locator('.ml-person.open a.ml-btn', { hasText: 'Open in the CRM' }).evaluate(a => ({ href: a.getAttribute('href'), t: a.target })).catch(() => null);
+  ok('"Open in the CRM" opens that CRM lead in a new tab', openCrm && /^\/crm\.html\?lead=./.test(openCrm.href) && openCrm.t === '_blank', openCrm);
   // Priority for the agent: Arjun, Queen, Parinita (KDBMC001).
   await page.locator('.ml-chip.sm', { hasText: 'Priority for the agent' }).click();
   await page.waitForTimeout(250);
@@ -515,26 +513,28 @@ try {
   await clickText(page, '.ml-layout button', 'Table');
   await page.waitForTimeout(250);
   const theads = await page.$$eval('.ml-table thead tr:first-child .ml-th', els => els.map(e => e.textContent.trim()));
-  ok('Table: Name, Phone, Property, Enquired, Ad, Assigned to, Rating, Remarks (in the sheet), Follow-ups, Contacted, CRM', JSON.stringify(theads) === JSON.stringify(['Name', 'Phone', 'Property', 'Enquired', 'Ad', 'Assigned to', 'Rating', 'Remarks (in the sheet)', 'Follow-ups', 'Contacted', 'CRM']), theads);
+  ok('Table: Name, Phone, Property, Enquired, Ad, Assigned to, Rating, Remarks (in the sheet), Follow-ups, Contacted, CRM', JSON.stringify(theads.filter(h => !/^Details \d/.test(h))) === JSON.stringify(['Name', 'Phone', 'Property', 'Enquired', 'Ad', 'Assigned to', 'Rating', 'Remarks (in the sheet)', 'Follow-ups', 'Contacted', 'CRM']), theads);
+  const colIx = label => theads.indexOf(label);
   const cellOf = async (name, col) => page.evaluate(([n, c]) => { const r = [...document.querySelectorAll('.ml-table tr.ml-tr')].find(tr => tr.children[1].textContent.includes(n)); return r ? r.children[c + 1].textContent.trim() : null; }, [name, col]);
-  ok('The remarks already in the sheet are shown (Arjun: both sheets\' remarks)', /Sent exact location — gym, 2\.5 km from branch · Purpose: gym 50\/sqft/.test(await cellOf('Arjun', 7)), await cellOf('Arjun', 7));
-  ok('…and the follow-ups', /Visiting today 12PM \(16\/10\) · callback wednesday/.test(await cellOf('Arjun', 8)));
+  ok('The remarks already in the sheet are shown (Arjun: both sheets\' remarks)', /Sent exact location — gym, 2\.5 km from branch · Purpose: gym 50\/sqft/.test(await cellOf('Arjun', colIx('Remarks (in the sheet)'))), await cellOf('Arjun', colIx('Remarks (in the sheet)')));
+  ok('…and the follow-ups', /Visiting today 12PM \(16\/10\) · callback wednesday/.test(await cellOf('Arjun', colIx('Follow-ups'))));
   await clickText(page, '.ml-th', 'Rating');
-  const firstRating = await page.$eval('.ml-table tr.ml-tr', r => r.children[7].textContent.trim());
+  const rIx = colIx('Rating') + 1;
+  const firstRating = await page.$eval('.ml-table tr.ml-tr', (r, i) => r.children[i].textContent.trim(), rIx);
   ok('Sort by Rating: the highest first (★ 3)', firstRating === '★ 3', firstRating);
   await clickText(page, '.ml-th', 'Rating');
-  const ratings = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[7].textContent.trim()));
+  const ratings = await page.$$eval('.ml-table tr.ml-tr', (rs, i) => rs.map(r => r.children[i].textContent.trim()), rIx);
   ok('Click again: the other way (★ 2 before ★ 3), unrated still last', ratings.indexOf('★ 2') < ratings.indexOf('★ 3') && ratings[ratings.length - 1] === '—', ratings);
-  await page.fill('.ml-tfilt th:nth-child(9) input', 'gym');
+  await page.fill('.ml-tfilt input[data-k="remarks"]', 'gym');
   await page.waitForTimeout(450);
   let tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
   ok('Filter the Remarks column: "gym" → Arjun, Vijaya Rani', JSON.stringify(tnames) === JSON.stringify(['Arjun', 'Vijaya Rani']), tnames);
   await page.evaluate(() => MetaLeads.tfClear());
-  await page.selectOption('.ml-tfilt th:nth-child(8) select', '2');
+  await page.selectOption('.ml-tfilt select[data-k="rating"]', '2');
   await page.waitForTimeout(250);
   tnames = await page.$$eval('.ml-table tr.ml-tr', rs => rs.map(r => r.children[1].textContent.replace('⚡', '').trim()).sort());
   ok('Filter Rating: 2', JSON.stringify(tnames) === JSON.stringify(['Parinita', 'Queen']), tnames);
-  ok('The Rating filter offers 5, 4, 3, 2, 1 and blank', JSON.stringify(await page.$$eval('.ml-tfilt th:nth-child(8) option', o => o.map(x => x.textContent))) === JSON.stringify(['All', '5', '4', '3', '2', '1', '—']));
+  ok('The Rating filter offers 5, 4, 3, 2, 1 and blank', JSON.stringify(await page.$$eval('.ml-tfilt select[data-k="rating"] option', o => o.map(x => x.textContent))) === JSON.stringify(['All', '5', '4', '3', '2', '1', '—']));
   await page.locator('.ml-table tr.ml-tr', { hasText: 'Queen' }).locator('td').nth(1).click();
   await page.waitForTimeout(250);
   ok('A row clicked: the lead opens in a side panel, work form first, nothing cut off', !!(await page.$('.ml-drawer .ml-work')) &&
@@ -542,10 +542,30 @@ try {
   await shot(page, '11b-table');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
+  // Their form answers as Details 1, 2… — "Question: answer", whatever each sheet's form asked.
+  await page.evaluate(() => MetaLeads.tfClear());
+  await page.waitForTimeout(200);
+  const dheads = await page.$$eval('.ml-table thead tr:first-child th', t => t.map(x => x.textContent.trim()));
+  ok('Table: Details 1, 2… columns right after Property', dheads.indexOf('Details 1') === dheads.indexOf('Property') + 1, dheads);
+  const dcells = await page.$$eval('.ml-table td.det', t => t.map(x => x.textContent.trim()).filter(x => x !== '—'));
+  ok('…each cell "Question: answer"', dcells.length > 0 && dcells.every(x => /^[^:]+: .+/.test(x)), dcells.slice(0, 4));
+  const dq = (dcells[0] || '').split(':')[0];
+  await page.fill('.ml-tfilt input[data-k="d1"]', dq.slice(0, 5)); await page.waitForTimeout(400);
+  ok('…and a Details column can be filtered', (await page.$$('.ml-table tr.ml-tr')).length > 0 && (await page.$eval('.ml-tfilt input[data-k="d1"]', e => document.activeElement === e)));
+  await page.evaluate(() => MetaLeads.tfClear());
+  await page.waitForTimeout(200);
+  // In the CRM: open that lead in a new tab, from the side panel's top.
+  await page.locator('.ml-table tr.ml-tr', { hasText: 'Parinita' }).locator('td').nth(1).click();
+  await page.waitForTimeout(250);
+  const crmA = await page.$eval('.ml-drawer .ml-drawer-h a.ml-crmopen', a => ({ href: a.getAttribute('href'), t: a.target, txt: a.textContent.trim() })).catch(() => null);
+  ok('In the CRM: "Open in CRM" at the top of the side panel, in a new tab', crmA && /^\/crm\.html\?lead=./.test(crmA.href) && crmA.t === '_blank' && /Open in CRM/.test(crmA.txt), crmA);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
   ok('Esc closes the side panel', !(await page.$('.ml-drawer')));
   await page.evaluate(() => MetaLeads.tfClear());
   await clickText(page, '.ml-layout button', 'List');
   await page.waitForTimeout(250);
+  ok('List: their form answers under the phone number', await page.$$eval('.ml-person .ml-fans', f => f.length > 0 && f.every(x => /: /.test(x.textContent))));
   const arjunNote = (await page.locator('.ml-person', { hasText: 'Arjun' }).first().locator('.ml-team .ml-note').textContent()).replace(/\s+/g, ' ').trim();
   ok('List view: each row shows its latest note with the column it is in', /^Remarks Purpose: gym 50\/sqft$/.test(arjunNote), arjunNote);
   // The team report.
