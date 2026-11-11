@@ -226,6 +226,26 @@ async function server(locked) {
   const lr = (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data().lastRead;
   eq('…its last read updated, the other sheet\'s kept, in setup order', lr.sheets.map(x => x.id), [SHEETS.KDB.id, SHEETS.KOY.id]);
 }
+// ── A tab added to a sheet after it was connected ──
+{
+  const { db, act } = await server();
+  // Connected when the sheet had only Sheet1; Sheet3 was added in Google later.
+  await act('admin@threepin.in', { action: 'save', sources: [{ ...SOURCES[0], tabs: [{ gid: 0, title: 'Sheet1' }] }] });
+  let [r] = await act('agent@threepin.in', { action: 'read' });
+  const tabsNow = async () => (await db.collection('metaLeadConfigs').doc('t_3pin').get()).data().sources[0].tabs;
+  eq('Read: the new tab is found and said', r.newTabs.map(t => [t.title, t.gid]), [['Sheet3', 222]]);
+  eq('…not read until it is turned on', r.tabs.map(t => t.title), ['Sheet1']);
+  eq('…listed in Setup, off, marked new', (await tabsNow()).map(t => [t.gid, t.on, !!t.fresh]), [[0, true, false], [222, false, true]]);
+  [r] = await act('agent@threepin.in', { action: 'read' });
+  eq('Read again: not added twice, not said again', [(await tabsNow()).length, r.newTabs.length], [2, 0]);
+  const src = (await act('admin@threepin.in', { action: 'config' }))[0].sources[0];
+  src.tabs[1].on = true;
+  [r] = await act('admin@threepin.in', { action: 'save', sources: [src] });
+  eq('Turned on in Setup: no longer marked new', [r.sources[0].tabs[1].on, 'fresh' in r.sources[0].tabs[1]], [true, false]);
+  [r] = await act('agent@threepin.in', { action: 'read' });
+  eq('…and read with the others', r.tabs.map(t => [t.title, t.values.length - 1]), [['Sheet1', 5], ['Sheet3', 4]]);
+}
+
 // ── The independent review's findings, pinned ──
 {
   const V = SHEETS.KDB.tabs[1].values;   // Sheet3: answers M, N; Assigned to T; Rating U; Remarks V; a header-less note W

@@ -78,6 +78,12 @@
   }
   function agentLabel(email) { return email ? ((window.crmMentions && window.crmMentions.displayName(email)) || email) : ''; }
 
+  // A tab someone added to a connected sheet: now listed in Setup, off — say so, once.
+  function tellNewTabs(list) {
+    if (!list || !list.length) return;
+    var names = list.map(function (t) { return String(t.sheetTitle || '').trim() + ' › ' + t.title; }).join(', ');
+    setTimeout(function () { toast('New tab found: ' + names + ' — ' + (S.cfg && S.cfg.manager ? 'tick it in Setup to read its leads' : 'a manager can turn it on in Setup')); }, 1800);
+  }
   // ─── loading ───────────────────────────────────────────────────────────
   function loadConfig(force) {
     if (S.cfgLoading || (S.cfg && !force)) return;
@@ -91,7 +97,7 @@
   // Each sheet in its own call, three at a time — each answer stays small and quick however many
   // sheets are connected. → one combined answer, as a single read would have given.
   async function readEach(ids) {
-    var out = { ok: true, tabs: [], errors: [], at: Date.now(), mods: {}, unchanged: [] }, i = 0;
+    var out = { ok: true, tabs: [], errors: [], at: Date.now(), mods: {}, unchanged: [], newTabs: [] }, i = 0;
     async function worker() {
       while (i < ids.length) {
         var id = ids[i++];
@@ -103,6 +109,7 @@
           out.tabs = out.tabs.concat(d.tabs || []); out.errors = out.errors.concat(d.errors || []); out.at = d.at || out.at;
           Object.keys(d.mods || {}).forEach(function (k) { out.mods[k] = d.mods[k]; S.modCfg[k] = cfgSig(k); });
           (d.unchanged || []).forEach(function (k) { out.unchanged.push(k); });
+          out.newTabs = out.newTabs.concat(d.newTabs || []);
         }
         catch (e) { out.errors.push({ sourceId: id, title: (((S.cfg && S.cfg.sources) || []).find(function (x) { return x.id === id; }) || {}).title || id, error: e.message }); }
       }
@@ -197,6 +204,7 @@
       }
       var same = (d.unchanged || []).length;
       if (S.cfg) S.cfg.lastRead = { at: d.at, by: (window.crmAuth && window.crmAuth.email) || '', sheets: [] };
+      tellNewTabs(d.newTabs);
       loadConfig(true);
       if (d.errors && d.errors.length) toast('Read, with ' + d.errors.length + ' sheet problem' + (d.errors.length > 1 ? 's' : ''));
       else if (before && (news || upd)) toast((news ? news + ' new lead' + (news > 1 ? 's' : '') : '') + (news && upd ? ', ' : '') + (upd ? upd + ' updated' : '') + (same ? ' · ' + same + ' sheet' + (same > 1 ? 's' : '') + ' unchanged, not read again' : ''));
@@ -1408,7 +1416,7 @@
       '<button class="ml-btn sm primary" onclick="MetaLeads.saveNote(' + x.i + ',' + x.j + ')">Save</button> <button class="ml-btn sm" onclick="MetaLeads.note(null)">Cancel</button></div>' : '';
     return '<div class="ml-trow' + (s.on === false || t.on === false ? ' off' : '') + '">' +
         '<div class="ml-c-sheet">' + sheetCell + '</div>' +
-        '<div class="ml-c-tab">' + (mgr ? '<label title="Read this tab or not"><input type="checkbox" ' + (t.on !== false ? 'checked' : '') + ' onchange="MetaLeads.tabOn(' + x.i + ',' + x.j + ',this.checked)"> ' : '<label>') + '<b>' + esc(t.title) + '</b></label>' +
+        '<div class="ml-c-tab">' + (mgr ? '<label title="Read this tab or not"><input type="checkbox" ' + (t.on !== false ? 'checked' : '') + ' onchange="MetaLeads.tabOn(' + x.i + ',' + x.j + ',this.checked)"> ' : '<label>') + '<b>' + esc(t.title) + '</b></label>' + (t.fresh ? ' <span class="ml-badge info" title="Added to the sheet after it was connected — not read until it is ticked">New in the sheet</span>' : '') +
           (mgr ? ' <button class="ml-link" onclick="MetaLeads.note(' + js(key) + ')">' + (t.tag || t.remark ? 'Edit tag' : '+ Tag / remark') + '</button>' : '') +
           note + noteEdit + '</div>' +
         '<div class="ml-c-prop">' + (mgr ? propertySelect(tabCode(s, t), 'onchange="MetaLeads.setTabProp(' + x.i + ',' + x.j + ',this.value)"')
@@ -1696,6 +1704,7 @@
         Object.keys(d.mods || {}).forEach(function (k) { S.mods[k] = d.mods[k]; S.modCfg[k] = cfgSig(k); });
         replan();
         toast(d.errors && d.errors.length ? d.errors[0].error : 'Read — ' + (d.tabs || []).reduce(function (n, t) { return n + Math.max((t.values || []).length - 1, 0); }, 0) + ' rows. Nothing was added to the CRM.');
+        tellNewTabs(d.newTabs);
         loadConfig(true);
       }).catch(function (e) { toast(e.message); }).then(function () {
         S.readingOne = null; render();

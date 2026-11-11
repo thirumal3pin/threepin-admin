@@ -119,7 +119,9 @@ export function cleanSources(list, prev, by, now) {
         const code = String(t.propertyCode || '').trim().toUpperCase().slice(0, 40);
         const tag = String(t.tag || '').trim().slice(0, 40), remark = String(t.remark || '').trim().slice(0, 500);
         return { gid: Number(t.gid), title: String(t.title || '').slice(0, 120), on: t.on !== false, overrides,
-          ...(code ? { propertyCode: code } : {}), ...(tag ? { tag } : {}), ...(remark ? { remark } : {}) };
+          ...(code ? { propertyCode: code } : {}), ...(tag ? { tag } : {}), ...(remark ? { remark } : {}),
+          // A tab added to the sheet after it was connected: listed off, marked new, until someone turns it on.
+          ...(t.fresh && t.on === false ? { fresh: true } : {}) };
       });
     out.push({
       id: link.spreadsheetId, spreadsheetId: link.spreadsheetId,
@@ -258,7 +260,7 @@ export async function metaLeadsAction(user, body, deps) {
     let driveP = null;
     const driveTok = () => (driveP = driveP || deps.token(sa, 'https://www.googleapis.com/auth/drive.metadata.readonly'));
     const since = body.since && typeof body.since === 'object' ? body.since : {};
-    const tabs = [], errors = [], sheets = [], unchanged = [], mods = {};
+    const tabs = [], errors = [], sheets = [], unchanged = [], mods = {}, discovered = [];
     const prevLine = id => ((cfg.lastRead && cfg.lastRead.sheets) || []).find(x => x.id === id);
     for (const s of sources) {
       if (only && s.id !== only) continue;
@@ -278,6 +280,10 @@ export async function metaLeadsAction(user, body, deps) {
       try {
         // Tabs are kept by their id (gid): a renamed tab is still found under its new name.
         const meta = await sheetMeta(deps, tok(), s.spreadsheetId, shareWith);
+        // Tabs added to the sheet since it was connected: listed in Setup (off) so they can be turned on.
+        const known = new Set((s.tabs || []).map(t => Number(t.gid)));
+        const fresh = meta.tabs.filter(x => !known.has(x.gid)).slice(0, Math.max(0, MAX_TABS - (s.tabs || []).length));
+        if (fresh.length) discovered.push({ id: s.id, title: meta.title || s.title, fresh });
         const found = want.map(t => ({ t, now: meta.tabs.find(x => x.gid === t.gid) }));
         for (const f of found.filter(f => !f.now)) errors.push({ sourceId: s.id, title: `${s.title} › ${f.t.title}`, error: 'This tab is no longer in the sheet' });
         const live = found.filter(f => f.now);
@@ -293,13 +299,25 @@ export async function metaLeadsAction(user, body, deps) {
         sheets.push({ id: s.id, title: s.title, ok: false, error: e.message });
       }
     }
+    if (discovered.length) {
+      // Added to the setup as read just now (not the copy loaded before the read): nothing else is touched.
+      const curCfg = await loadConfig(db, T);
+      const next = (curCfg.sources || []).map(x => {
+        const d = discovered.find(y => y.id === x.id);
+        if (!d) return x;
+        const have = new Set((x.tabs || []).map(t => Number(t.gid)));
+        return { ...x, tabs: [...(x.tabs || []), ...d.fresh.filter(t => !have.has(t.gid)).map(t => ({ gid: t.gid, title: String(t.title || '').slice(0, 120), on: false, overrides: {}, fresh: true }))] };
+      });
+      await db.collection(COLLECTION).doc(T).set({ sources: next }, { merge: true });
+    }
+    const newTabs = discovered.flatMap(d => d.fresh.map(t => ({ sourceId: d.id, sheetTitle: d.title, title: t.title, gid: t.gid })));
     const at = deps.now();
     // One sheet read on its own updates its line of the last read and keeps the others'.
     const prevSheets = only && cfg.lastRead && Array.isArray(cfg.lastRead.sheets) ? cfg.lastRead.sheets.filter(x => x.id !== only) : [];
     const order = (cfg.sources || []).map(x => x.id);
     const merged = [...prevSheets, ...sheets].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     await db.collection(COLLECTION).doc(T).set({ lastRead: { at, by: me, sheets: merged } }, { merge: true });
-    return [{ ok: true, mode: 'test', at, tabs, errors, shareWith, mods, unchanged }, 200];
+    return [{ ok: true, mode: 'test', at, tabs, errors, shareWith, mods, unchanged, newTabs }, 200];
   }
 
   return [{ ok: false, error: 'Unknown action' }, 400];
