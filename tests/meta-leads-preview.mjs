@@ -587,6 +587,9 @@ try {
   await page.waitForTimeout(250);
   const crmA = await page.$eval('.ml-drawer .ml-drawer-h a.ml-crmopen', a => ({ href: a.getAttribute('href'), t: a.target, txt: a.textContent.trim() })).catch(() => null);
   ok('In the CRM: "Open in CRM" at the top of the side panel, in a new tab', crmA && /^\/crm\.html\?lead=./.test(crmA.href) && crmA.t === '_blank' && /Open in CRM/.test(crmA.txt), crmA);
+  const pl = await page.$eval('.ml-drawer .ml-drawer-h a.ml-plink', a => ({ href: a.getAttribute('href'), t: a.target })).catch(() => null);
+  ok('The property code opens the property page in a new tab (header, table, each enquiry)', pl && pl.href === '/dashboard.html?property=KDBMC001' && pl.t === '_blank' &&
+    !!(await page.$('.ml-table td a.ml-plink[href="/dashboard.html?property=KDBMC001"]')) && !!(await page.$('.ml-drawer .ml-enq a.ml-plink')), pl);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
   ok('Esc closes the side panel', !(await page.$('.ml-drawer')));

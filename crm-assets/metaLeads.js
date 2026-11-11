@@ -140,6 +140,11 @@
     if (m < 7 * 24 * 60) return Math.round(m / 1440) + 'd';
     return shortWhen(t).split(',')[0];
   }
+  // The property's page (Properties, its full record), in a new tab — this page stays as it is.
+  function propLink(code) {
+    if (!code) return '';
+    return '<a class="ml-code ml-plink" href="/dashboard.html?property=' + encodeURIComponent(code) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ' + esc(code) + ' on the Properties page, in a new tab">' + esc(code) + ' <i class="fa-solid fa-arrow-up-right-from-square"></i></a>';
+  }
   // The CRM lead, in a new tab (crm.html opens ?lead= straight away).
   function crmUrl(id) { return '/crm.html?lead=' + encodeURIComponent(id); }
   function crmLink(p, cls, inner) { return '<a class="' + cls + '" href="' + esc(crmUrl(p.crm.id)) + '" target="_blank" rel="noopener" title="Open this lead in the CRM, in a new tab">' + inner + '</a>'; }
@@ -168,7 +173,7 @@
     return '<div class="ml-drawer-bg" onclick="MetaLeads.closeLead()"></div><aside class="ml-drawer' + (phone ? ' full' : '') + '" role="dialog" aria-label="' + esc(p.name || 'Lead') + '">' +
       '<div class="ml-drawer-h">' + (phone ? '<button class="ml-back" onclick="MetaLeads.closeLead()" aria-label="Back to the leads"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
         '<div class="ml-dh-who">' + (phone ? avatar(p) : '') + '<div class="ml-dh-t"><div class="ml-name">' + esc(p.name || '(no name)') + '</div>' +
-        '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + esc(p.properties.join(', ')) + (phone && who ? ' · ' + esc(who) : '') + '</div></div></div>' +
+        '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + p.properties.map(propLink).join(' ') + (phone && who ? ' · ' + esc(who) : '') + '</div></div></div>' +
         (phone ? '' : '<div class="ml-dh-r">' + (p.crm ? crmLink(p, 'ml-btn sm ml-crmopen', '<i class="fa-solid fa-arrow-up-right-from-square"></i> Open in CRM' + (p.crm.stage ? ' · ' + esc(p.crm.stage) : '')) : '') +
           '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.closeLead()">✕</button></div>') + '</div>' +
       (phone ? acts + tabs : '') +
@@ -719,6 +724,7 @@
             : c.key === 'rating' && p.team.rating ? ratingChip(p.team.rating)
             : c.key === 'name' ? '<b>' + esc(v || '(no name)') + '</b>' + (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop) ? ' <span class="ml-badge pri" title="Revisited — priority">⚡</span>' : '')
             : c.key === 'done' && !p.team.contacted ? waitingFlag(p) || '<span class="ml-dim">Not yet</span>'
+            : c.key === 'prop' ? p.properties.map(propLink).join(' ') || '—'
             : esc(v || '—');
           return '<td class="' + (c.wide ? 'wide' : c.det ? 'det' : '') + '" onclick="MetaLeads.toggle(' + js(p.key) + ')" title="' + esc(c.wide || c.det ? v : '') + '">' + (c.wide ? '<div class="ml-clamp">' + cell + '</div>' : cell) + '</td>';
         }).join('') + '</tr>';
@@ -841,7 +847,7 @@
       '<div class="ml-enq-t"><b>' + esc(MM().fmtWhen(e.at)) + '</b>' + (gap ? ' <span class="ml-gap">' + esc(gap) + ' later</span>' : '') + '</div>' +
       '<div class="ml-enq-d">' + (link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ' · row ' + e.row + '</a>' : esc(e.where.tab)) +
       (e.where.tag ? ' <span class="ml-tag">' + esc(e.where.tag) + '</span>' : '') +
-      ' · <span class="ml-code">' + esc(e.propertyCode) + '</span> · ' + esc(e.ad || '—') + ' · ' + esc({ ig: 'Instagram', fb: 'Facebook' }[e.platform] || e.platform || '') +
+      ' · ' + propLink(e.propertyCode) + ' · ' + esc(e.ad || '—') + ' · ' + esc({ ig: 'Instagram', fb: 'Facebook' }[e.platform] || e.platform || '') +
       (e.form ? ' · form “' + esc(e.form) + '”' : '') + '</div>' +
       (e.answers.length ? '<div class="ml-ans">' + e.answers.map(function (x) { return '<span>' + esc(x.label) + ' <b>' + esc(x.value) + '</b></span>'; }).join('') + '</div>' : '') +
       (e.alsoIn && e.alsoIn.length ? '<div class="ml-dim">Also copied in ' + e.alsoIn.map(function (a) { return esc(a.tab); }).join(', ') + '</div>' : '') +
@@ -994,7 +1000,7 @@
           '<div class="ml-kv"><span>Lead</span><b>' + esc(crm.name || '—') + '</b></div>' +
           '<div class="ml-kv"><span>Stage</span><b>' + esc(crm.stage || '—') + '</b></div>' +
           '<div class="ml-kv"><span>Agent</span><b>' + esc(agentLabel(crm.agent) || '—') + '</b></div>' +
-          '<div class="ml-kv"><span>Properties</span><b>' + (crm.propertyCodes.length ? crm.propertyCodes.map(function (c) { return '<span class="ml-code">' + esc(c) + '</span>'; }).join(' ') : '—') + '</b></div>' +
+          '<div class="ml-kv"><span>Properties</span><b>' + (crm.propertyCodes.length ? crm.propertyCodes.map(propLink).join(' ') : '—') + '</b></div>' +
           (crm.propertyInterest ? '<div class="ml-kv"><span>Looking for</span><b>' + esc(crm.propertyInterest) + '</b></div>' : '') +
           (crm.budget ? '<div class="ml-kv"><span>Budget</span><b>' + esc(crm.budget) + '</b></div>' : '') +
           '<div class="ml-kv"><span>Since</span><b>' + esc(crm.createdAt ? MM().fmtWhen(crm.createdAt) : '—') + '</b></div>' +

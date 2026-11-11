@@ -680,3 +680,9 @@ tr.ml-flash td{animation:ml-flash 2.6s ease-out;}
 .ml-agk-sp polyline{fill:none;stroke:var(--ml-viz);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;}
 @media (max-width: 760px){ .ml-agks{grid-template-columns:minmax(0,1fr) minmax(0,1fr);} .ml-agk{padding:10px 12px;} .ml-agk-m{flex-direction:column;} }
 .ml-an-me b{font-size:14px;color:var(--ink);font-weight:600;padding:8px 0;}
+
+/* A property code that opens its page in a new tab */
+a.ml-plink{text-decoration:none;color:var(--ink2);white-space:nowrap;}
+a.ml-plink i{font-size:9px;opacity:.6;margin-left:2px;}
+a.ml-plink:hover{color:var(--brand-ink,var(--brand));background:var(--brand-soft,var(--ml-soft));}
+a.ml-plink:hover i{opacity:1;}
