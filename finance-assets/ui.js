@@ -186,8 +186,11 @@ export function downloadJson(filename, data) {
 // nothing is created until the form is saved, so an abandoned form leaves no orphan records.
 
 export function picker(container, {
-  value, placeholder, search, allowNew, newLabel = 'Add', onChange, describe,
+  value, placeholder, search, allowNew, newLabel = 'Add', onChange, describe, rowHtml,
 }) {
+  // rowHtml(r): a result row's inner HTML (the caller escapes it); describe(r) stays the plain
+  // text of the chosen chip. A result { __head: 'Title' } is a section heading, not a choice.
+  let seq = 0;
   const render = () => {
     if (value) {
       container.innerHTML = `
@@ -208,9 +211,12 @@ export function picker(container, {
 
     const run = async () => {
       const q = input.value.trim();
+      const my = ++seq;
       const results = await search(q);
-      const rows = results.map((r, i) =>
-        `<button type="button" data-i="${i}">${esc(describe ? describe(r) : r.name)}</button>`).join('');
+      if (my !== seq) return;   // a newer search has answered already
+      const rows = results.map((r, i) => r.__head
+        ? `<div class="picker-head">${esc(r.__head)}</div>`
+        : `<button type="button" data-i="${i}">${rowHtml ? rowHtml(r) : esc(describe ? describe(r) : r.name)}</button>`).join('');
       const addRow = (allowNew && q)
         ? `<button type="button" class="add" data-new>+ ${esc(newLabel)} "${esc(q)}"</button>` : '';
       list.innerHTML = rows + addRow;

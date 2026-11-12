@@ -45,11 +45,12 @@ import {
   ACCOUNTS, getState, setState, blank, defaultSettings,
   validate, normalise, reversalLines, fyOf, today, ym, num,
   monthEndEntries, billOutstanding, invoiceOutstanding, docStatus,
-  issueNumber, duplicateNumbers, isUndone,
+  issueNumber, duplicateNumbers, isUndone, matchParty,
 } from './finance-core.js';
 import { validateEvent } from './finance-events.js';
 import { EV, PARTY_FIELDS } from './finance-events.js';
 import * as CACHE from './finance-cache.js';
+import { leadViews } from '../shared-assets/lead-views-client.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0',
@@ -845,7 +846,7 @@ export async function save(evKey, values, opts = {}) {
     // transaction. Another device therefore learns about the entry and the bill it settled in
     // one atomic step — never the bill without the entry.
     for (const p of newParties) {
-      tx.set(p.ref, p.record);
+      if (p.link) tx.set(p.ref, p.record, { merge: true }); else tx.set(p.ref, p.record);
       logChange(tx, 'parties', p.ref.id);
     }
 
@@ -958,8 +959,16 @@ export async function save(evKey, values, opts = {}) {
 function resolveParty(value, newParties) {
   if (!value) return null;
   if (typeof value === 'string') return value;
-  const existing = findPartyByName(value.name);
-  if (existing) return existing;
+  const hit = matchParty(getState().parties, value);
+  if (hit) {
+    // A CRM lead that turned out to be a client already (same phone): that party now remembers
+    // the lead too — written with the entry, in the same transaction.
+    if (value.crmRef && !hit.crmRef) {
+      newParties.push({ ref: ref('parties', hit.id), record: { crmRef: value.crmRef }, link: true });
+      hit.crmRef = value.crmRef;
+    }
+    return hit.id;
+  }
   const pref = doc(col('parties'));
   const record = {
     name: String(value.name || '').trim(),
@@ -987,6 +996,7 @@ function clearPendingParties(newParties, committed) {
   for (const p of newParties) {
     const hit = s.parties.find(x => x.id === p.ref.id);
     if (!hit) continue;
+    if (p.link) { if (!committed) delete hit.crmRef; continue; }
     if (committed) delete hit.__pending;
     else s.parties.splice(s.parties.indexOf(hit), 1);
   }
@@ -1239,7 +1249,7 @@ export async function issueInvoice(values) {
     const settings = snap.exists() ? snap.data() : defaultSettings();
     const issued = issueNumber(settings, 'invoice', getState().invoices, docData.date);
     for (const p of newParties) {
-      tx.set(p.ref, p.record);
+      if (p.link) tx.set(p.ref, p.record, { merge: true }); else tx.set(p.ref, p.record);
       logChange(tx, 'parties', p.ref.id);
     }
     tx.set(iref, {
@@ -1570,6 +1580,7 @@ export async function mergeParties(keepId, dropId) {
 // tenantId field (not a subcollection), so it is queried the same way dashboard.html does.
 let propertyCache = null;
 export async function searchProperties(term) {
+  if (!propertyCache && typeof window !== 'undefined' && window.__financePreview) propertyCache = window.__previewProperties || [];
   if (!propertyCache) {
     const snap = await getDocs(query(collection(db, 'properties'), where('tenantId', '==', currentTenantId)));
     propertyCache = snap.docs.map(d => ({
@@ -1579,6 +1590,8 @@ export async function searchProperties(term) {
       location: d.data().location || '',
       startingPrice: d.data().startingPrice || '',
       status: d.data().status || '',
+      contactName: d.data().contactName || '',
+      contactNumber: d.data().contactNumber || '',
     }));
   }
   const q = String(term || '').trim().toLowerCase();
@@ -1586,6 +1599,42 @@ export async function searchProperties(term) {
   return propertyCache
     .filter(p => (p.propertyCode + ' ' + p.name + ' ' + p.location).toLowerCase().includes(q))
     .slice(0, 20);
+}
+
+// The CRM's leads, for picking a deal's seller or buyer. Read once a session (from the lead views:
+// about one read per 20 leads), only when someone searches the picker — never on page open.
+let crmLeadCache = null;
+export async function crmLeads() {
+  if (typeof window !== 'undefined' && window.__financePreview) return window.__previewCrmLeads || [];
+  if (!currentTenantId) return [];
+  if (!crmLeadCache) {
+    crmLeadCache = leadViews(db).readAll(currentTenantId)
+      .then(list => list.map(l => ({
+        id: l.id, name: l.name || '', phone: l.phone || '', email: l.email || '',
+        enquiryType: l.enquiryType || '', propertyInterest: l.propertyInterest || '',
+        propertyCodes: Array.isArray(l.propertyCodes) ? l.propertyCodes : [],
+        ttHold: l.ttHold ? { enquiryType: l.ttHold.enquiryType || '' } : null,
+        ai: l.ai ? { intent: l.ai.intent || '', confidence: l.ai.confidence || '' } : null,
+      })))
+      .catch(e => { console.warn('CRM leads could not be read for the picker:', e); crmLeadCache = null; return []; });
+  }
+  return crmLeadCache;
+}
+
+// The Property & Media board's cards for a property (its owner's name, phone and CRM lead), for
+// offering a deal's seller. Asked only when a property is linked to a deal: a read per card.
+const listingCache = new Map();
+export async function listingsFor(prop) {
+  const code = String(prop?.propertyCode || '').trim();
+  if (!code) return [];
+  if (typeof window !== 'undefined' && window.__financePreview) return (window.__previewListings || []).filter(c => c.propertyCode === code);
+  if (!currentTenantId) return [];
+  if (!listingCache.has(code)) {
+    listingCache.set(code, getDocs(query(collection(db, 'listings'), where('tenantId', '==', currentTenantId), where('propertyCode', '==', code)))
+      .then(snap => snap.docs.map(x => ({ id: x.id, propertyCode: code, sellerName: x.data().sellerName || '', sellerPhone: x.data().sellerPhone || '', leadId: x.data().leadId || '' })))
+      .catch(e => { console.warn('Property & Media cards could not be read:', e); listingCache.delete(code); return []; }));
+  }
+  return listingCache.get(code);
 }
 
 // ═══════ ONE-TIME SEED ═══════

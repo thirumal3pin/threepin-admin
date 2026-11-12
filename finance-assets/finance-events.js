@@ -380,36 +380,112 @@ export const EV = {};
 
 // ═══════ DEALS ═══════
 
+// ═══════ BROKERAGE: AN AMOUNT OR A % OF THE SALE ═══════
+//
+// Each side's brokerage can be typed as an amount or as a % of the sale price; whichever is typed,
+// the other follows. Which one was typed is remembered (sellerBy / buyerBy: 'pct' | 'amt'): a %
+// deal follows the sale price when it changes — at registration too — and a fixed amount stays
+// put (its % is only shown). GST is a yes/no with a rate, and the form shows the total with GST.
+// The amounts are kept BEFORE GST — that is what the invoice bills, adding the GST on top.
+const SIDES = [['seller', 'sellerPct', 'expSeller', 'sellerBy'], ['buyer', 'buyerPct', 'expBuyer', 'buyerBy']];
+const byPct = (v, pk, bk) => v[bk] ? v[bk] === 'pct' : num(v[pk]) > 0;
+const pctOf = (amt, sale) => num(sale) > 0 && num(amt) > 0 ? Math.round(num(amt) / num(sale) * 10000) / 100 : '';
+export function brokerageSync(k, v) {
+  const sale = num(v.salePrice);
+  for (const [, pk, ek, bk] of SIDES) {
+    if (k === pk) {
+      v[bk] = String(v[pk] ?? '').trim() === '' ? 'amt' : 'pct';
+      if (v[bk] === 'pct' && sale > 0) v[ek] = Math.round(sale * num(v[pk]) / 100);
+    } else if (k === ek) {
+      v[bk] = 'amt';
+      v[pk] = pctOf(v[ek], sale);
+    } else if (k === 'salePrice') {
+      if (byPct(v, pk, bk)) { if (sale > 0) v[ek] = Math.round(sale * num(v[pk]) / 100); }
+      else v[pk] = pctOf(v[ek], sale);
+    }
+  }
+  const base = num(v.expSeller) + num(v.expBuyer);
+  const gst = v.gst === 'yes' ? r2(base * num(v.gstRate) / 100) : 0;
+  v.gstOnFee = gst;
+  v.totalWithGst = r2(base + gst);
+}
+// What a deal's brokerage comes to, from the deal as stored.
+export function dealBrokerage(d) {
+  const base = num(d?.expSeller) + num(d?.expBuyer);
+  const rate = d?.gst?.on ? num(d.gst.rate) : 0;
+  const gst = r2(base * rate / 100);
+  return { base, rate, gst, total: r2(base + gst) };
+}
+const inr0 = n => fmt(num(n));
+const pctTxt = p => String(p ?? '').trim() !== '' && num(p) > 0 ? `${+num(p).toFixed(2)}% of the sale` : '';
+
+// One side of a new deal, as the deal keeps it. At save time the party is already an id (a new
+// one is in the cache by then), so its phone and its CRM lead are taken from the party — reading
+// them off the picked value alone used to lose the phone of every deal saved for real.
+function dealSide(x) {
+  if (!x) return null;
+  const p = typeof x === 'string' ? S().parties.find(q => q.id === x) : x;
+  const crmRef = (p && p.crmRef) || null;
+  return { partyId: pidOf(x), name: pnameOf(x), phone: String((p && p.phone) || ''), ...(crmRef ? { crmRef } : {}) };
+}
+
 EV.newdeal = {
   title: 'Add a deal', group: 'Deals', dir: 'setup',
-  when: 'Sets a deal up so income and costs can be mapped to it. The expected brokerage is an <b>estimate</b> for your pipeline — <b>nothing here counts as income</b>. Mark the deal registered when the sale deed is signed; invoice each side when its fee is due — normally that same day. Income is recorded by the invoice. A deal can be added without linking a property.',
-  fields: () => [
+  when: 'Sets a deal up so income and costs can be mapped to it. Link the property and its seller is offered from the CRM and the Property &amp; Media board; the buyer from your clients or the CRM. The brokerage is an <b>estimate</b> for your pipeline — an amount, or a % of the sale price — and <b>nothing here counts as income</b>. Mark the deal registered when the sale deed is signed (the closed price is asked then); invoice each side when its fee is due. A deal can be added without linking a property.',
+  fields: v => [
     F('date', 'Date', 'date', { def: today() }),
-    F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK' }),
-    F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name' }),
+    F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK. Linking a property fills it in if it is empty.' }),
+    F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name — its sellers, and the people who enquired about it, are then offered below' }),
     F('propertyState', 'State the property is in', 'select', {
       opts: STATES.map(x => [x, x]), def: S().settings.state || 'Tamil Nadu',
       hint: 'Decides CGST+SGST or IGST on the invoice. The tax follows the property, not where the client lives.',
     }),
-    F('seller', 'Seller', 'party', { partyType: 'client' }),
-    F('buyer', 'Buyer', 'party', { partyType: 'client', hint: 'Leave blank until you have one' }),
-    F('expSeller', 'Expected brokerage from seller', 'number', { def: 0 }),
-    F('expBuyer', 'Expected brokerage from buyer', 'number', { def: 0 }),
+    F('seller', 'Seller', 'party', { partyType: 'client', crm: 'seller', hint: 'Search your clients or the CRM\'s leads by name or phone — or add a new name' }),
+    F('buyer', 'Buyer', 'party', { partyType: 'client', crm: 'buyer', hint: 'From your clients or the CRM\'s leads, or a new name. Leave blank until you have one' }),
+    F('salePrice', 'Sale price (₹)', 'number', {
+      hint: x => 'The agreed price — the closed price is asked again when the deal registers.'
+        + (x.property?.startingPrice ? ` Listed at ${esc(String(x.property.startingPrice))}.` : ''),
+    }),
+    F('sellerPct', 'Seller brokerage — % of sale', 'number', { hint: 'Type a % or the amount below — the other fills in' }),
+    F('expSeller', 'Seller brokerage — amount before GST (₹)', 'number', { def: 0 }),
+    F('buyerPct', 'Buyer brokerage — % of sale', 'number'),
+    F('expBuyer', 'Buyer brokerage — amount before GST (₹)', 'number', { def: 0 }),
+    F('gst', 'GST on the brokerage', 'select', { opts: [['yes', 'Yes — add GST'], ['no', 'No GST']], def: 'yes' }),
+    F('gstRate', 'GST %', 'number', { def: 18, show: x => x.gst === 'yes' }),
+    F('totalWithGst', 'Total brokerage with GST (₹)', 'number', { readonly: true, hint: 'Seller + buyer brokerage, plus GST when it applies. Worked out for you.' }),
     F('expMonth', 'Expected to close in', 'month', { hint: 'Optional — puts the brokerage into that month\'s projection.' }),
   ],
+  onchange: (k, v) => {
+    if (k === 'property' && v.property && !String(v.nickname || '').trim()) {
+      v.nickname = [v.property.propertyCode, v.property.name].filter(Boolean).join(' — ');
+    }
+    brokerageSync(k, v);
+  },
   check: v => [
     ...dateChecks(v),
     ...(String(v.nickname || '').trim() ? [] : [err('nickname', 'Give the deal a nickname you will recognise')]),
     ...(pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add a seller or a buyer — at least one')]),
+    ...(num(v.salePrice) < 0 ? [err('salePrice', 'The sale price cannot be negative')] : []),
     ...(num(v.expSeller) < 0 || num(v.expBuyer) < 0 ? [err('expSeller', 'Expected brokerage cannot be negative')] : []),
+    ...SIDES.flatMap(([, pk]) => num(v[pk]) < 0 || num(v[pk]) > 100 ? [err(pk, 'A % between 0 and 100')] : []),
+    ...SIDES.flatMap(([, pk]) => num(v[pk]) > 0 && !(num(v.salePrice) > 0) ? [err(pk, 'Enter the sale price for a % to work out — or type the amount instead')] : []),
+    ...SIDES.flatMap(([, pk]) => num(v[pk]) > 5 && num(v[pk]) <= 100 ? [warn(pk, 'More than 5% of the sale — check the % is right')] : []),
+    ...(v.gst === 'yes' && (num(v.gstRate) <= 0 || num(v.gstRate) > 28) ? [err('gstRate', 'GST on brokerage is normally 18%')] : []),
   ],
   build: v => {
     if (!String(v.nickname || '').trim()) return need('Give the deal a nickname.');
     const expected = num(v.expSeller) + num(v.expBuyer);
+    const gstOn = v.gst === 'yes';
+    const rate = gstOn ? num(v.gstRate) : 0;
+    const gst = r2(expected * rate / 100);
+    const side = (who, amt, pct) => num(amt) > 0 ? `${who} <b>${inr0(amt)}</b>${pctTxt(pct) ? ' (' + pctTxt(pct) + ')' : ''}` : '';
+    const sides = [side('seller', v.expSeller, v.sellerPct), side('buyer', v.expBuyer, v.buyerPct)].filter(Boolean);
     return {
       desc: '', lines: [],
       effects: [
-        `Deal "<b>${esc(v.nickname)}</b>" opens in the pipeline with expected brokerage <b>${fmt(expected)}</b>.`,
+        `Deal "<b>${esc(v.nickname)}</b>" opens in the pipeline with expected brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`,
+        ...(num(v.salePrice) > 0 ? [`Sale price ${inr0(v.salePrice)}.`] : []),
+        ...(expected > 0 ? [gstOn ? `With ${rate}% GST (${fmt(gst)}) that is <b>${fmt(expected + gst)}</b> to bill in all — the invoices add the GST.` : 'No GST on the brokerage.'] : []),
         'Nothing hits the books yet — no money has moved and nothing is owed.',
       ],
       docs: [{
@@ -420,9 +496,14 @@ EV.newdeal = {
           propertyCode: v.property?.propertyCode || '',
           propertyName: v.property?.name || '',
           propertyState: String(v.propertyState || S().settings.state || 'Tamil Nadu').trim(),
-          seller: v.seller ? { partyId: pidOf(v.seller), name: pnameOf(v.seller), phone: v.seller?.phone || '' } : null,
-          buyer: v.buyer ? { partyId: pidOf(v.buyer), name: pnameOf(v.buyer), phone: v.buyer?.phone || '' } : null,
+          seller: dealSide(v.seller),
+          buyer: dealSide(v.buyer),
           others: [],
+          salePrice: num(v.salePrice) || null,
+          // A % is kept only where the fee IS a % of the sale (typed as one); a fixed amount's % was just shown.
+          sellerPct: byPct(v, 'sellerPct', 'sellerBy') ? num(v.sellerPct) || null : null,
+          buyerPct: byPct(v, 'buyerPct', 'buyerBy') ? num(v.buyerPct) || null : null,
+          gst: { on: gstOn, rate: gstOn ? num(v.gstRate) : 0 },
           expSeller: num(v.expSeller), expBuyer: num(v.expBuyer), expMonth: v.expMonth || null,
           status: 'open',
           opened: v.date || today(),
@@ -443,8 +524,12 @@ EV.register = {
   fields: () => [
     F('date', 'Registration date', 'date', { def: today() }),
     F('deal', 'Deal', 'deal', { opts: S().deals.filter(d => d.status === 'open').map(d => [d.id, dealLabel(d)]) }),
+    F('salePrice', 'Closed sale price (₹)', 'number', {
+      hint: x => { const d = deal(x.deal); return d && (d.sellerPct || d.buyerPct) ? 'The brokerage given as a % of the sale is worked out again from this price.' : 'The price the deed registered at.'; },
+    }),
     F('note', 'Document number', 'text', { hint: 'Optional — the registered deed number, for your own reference.' }),
   ],
+  onchange: (k, v) => { if (k === 'deal') { const d = deal(v.deal); v.salePrice = d?.salePrice || ''; } },
   check: v => [
     ...dateChecks(v),
     ...(deal(v.deal) ? [] : [err('deal', 'Pick the deal that registered')]),
@@ -455,6 +540,15 @@ EV.register = {
     if (!d) return need('Pick the deal that registered.');
     if (d.status !== 'open') return need('This deal is already ' + d.status + '.');
     const unbilled = ['seller', 'buyer'].filter(side => d[side]?.partyId && !S().invoices.some(i => i.dealId === d.id && i.partyId === d[side].partyId && liveInvoice(i)));
+    // The closed price, and any brokerage given as a % of it, worked out again.
+    const sale = num(v.salePrice);
+    const priced = {};
+    if (sale > 0) {
+      priced.salePrice = sale;
+      if (num(d.sellerPct) > 0) priced.expSeller = Math.round(sale * num(d.sellerPct) / 100);
+      if (num(d.buyerPct) > 0) priced.expBuyer = Math.round(sale * num(d.buyerPct) / 100);
+    }
+    const moved = ['expSeller', 'expBuyer'].filter(k => k in priced && num(priced[k]) !== num(d[k]));
     return {
       desc: '', lines: [],
       effects: [
@@ -462,8 +556,10 @@ EV.register = {
         unbilled.length
           ? `Still to invoice: ${unbilled.map(side => `the ${side} (${esc(pname(d[side].partyId))})`).join(' and ')} — raise each when its fee is due; income is counted then.`
           : 'Both sides are already invoiced.',
+        ...(sale > 0 ? [`Closed at <b>${fmt(sale)}</b>${num(d.salePrice) > 0 && num(d.salePrice) !== sale ? ` (was ${fmt(d.salePrice)})` : ''}.`] : []),
+        ...moved.map(k => `Expected ${k === 'expSeller' ? 'seller' : 'buyer'} brokerage now <b>${fmt(priced[k])}</b> (${+num(k === 'expSeller' ? d.sellerPct : d.buyerPct).toFixed(2)}% of the sale; was ${fmt(d[k])}).`),
       ],
-      updates: [{ coll: 'deals', id: d.id, data: { status: 'registered', registeredOn: v.date || today(), ...(String(v.note || '').trim() ? { deedNo: String(v.note).trim() } : {}) } }],
+      updates: [{ coll: 'deals', id: d.id, data: { status: 'registered', registeredOn: v.date || today(), ...priced, ...(String(v.note || '').trim() ? { deedNo: String(v.note).trim() } : {}) } }],
     };
   },
 };
@@ -617,6 +713,7 @@ EV.invoice = {
       const d = deal(v.deal);
       if (d) {
         v.amt = v.from === 'buyer' ? d.expBuyer : d.expSeller;
+        if (d.gst) { v.gst = d.gst.on ? 'yes' : 'no'; if (d.gst.on && num(d.gst.rate) > 0) v.gstRate = num(d.gst.rate); }
         const p = sideParty(d, v.from);
         v.adv = p ? bal('2100', { party: p, deal: v.deal }) : 0;
       }

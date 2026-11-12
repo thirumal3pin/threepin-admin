@@ -295,6 +295,103 @@ export const setState = next => { S = next; return S; };
 // ═══════ LOOKUPS ═══════
 
 export const party = id => S.parties.find(p => p.id === id) || null;
+
+// ═══════ PARTIES FROM THE CRM ═══════
+//
+// A deal's seller or buyer can be picked straight from the CRM's leads. The lead becomes a
+// party once (it carries the lead's id as crmRef), and every later pick of the same lead — or
+// of the same phone number — lands on that party again instead of making a second one. A lead
+// is never matched on its name alone: two different Rameshes must not become one client.
+export const phone10 = s => String(s || '').replace(/\D/g, '').slice(-10);
+
+// The party a picked value already is, or null for a new one. A value from the CRM matches by
+// its lead, then by phone — never by name. Anything else by its phone when it carries one (a
+// property's owner), then by name (as it always has).
+export function matchParty(parties, value) {
+  if (!value || typeof value === 'string') return null;
+  const live = (parties || []).filter(p => !p.__pending);
+  const ph = phone10(value.phone);
+  const byPhone = ph.length === 10 ? live.find(p => phone10(p.phone) === ph) : null;
+  if (value.crmRef) return live.find(p => p.crmRef === value.crmRef) || byPhone || null;
+  if (byPhone) return byPhone;
+  const n = String(value.name || '').trim().toLowerCase();
+  return live.find(p => String(p.name || '').trim().toLowerCase() === n) || null;
+}
+
+// The people a linked property already knows about, for a deal's seller or buyer:
+//   seller — the owner on its Property & Media card, its CRM seller leads, and the contact on the
+//            property itself;
+//   buyer  — the CRM leads who enquired about it (anyone not a seller).
+// Each as a picker value with a reason ("why"). Someone who is already a client comes back as
+// that client; the same phone is offered once.
+export function propertyPeople({ prop, leads = [], listings = [], parties = [], side, max = 6 }) {
+  if (!prop) return [];
+  const keys = new Set([prop.id, prop.propertyCode].filter(Boolean).map(x => String(x).trim().toLowerCase()));
+  const onProp = l => (l.propertyCodes || []).some(c => keys.has(String(c).trim().toLowerCase()));
+  const byId = new Map(leads.map(l => [l.id, l]));
+  const out = [], seen = new Set();
+  const add = (value, why) => {
+    const ph = phone10(value.phone);
+    const key = value.crmRef || (ph.length === 10 ? ph : String(value.name || '').trim().toLowerCase());
+    if (!key || seen.has(key) || (ph.length === 10 && seen.has(ph))) return;
+    seen.add(key); if (ph.length === 10) seen.add(ph);
+    const party = matchParty(parties, value);
+    out.push(party ? { party, why } : { value, why });
+  };
+  if (side === 'seller') {
+    for (const c of listings) {
+      const l = c.leadId ? byId.get(c.leadId) : null;
+      const name = String((l && l.name) || c.sellerName || '').trim(), phone = String(c.sellerPhone || (l && l.phone) || '').trim();
+      if (name || phone) add({ __new: true, type: 'client', name: name || phone, phone, ...(c.leadId ? { crmRef: c.leadId } : {}) }, 'Owner on the Property & Media board');
+    }
+    for (const l of leads.filter(l => onProp(l) && isSellerLead(l))) add(leadAsParty(l), 'Seller lead in the CRM');
+    const cn = String(prop.contactName || '').trim(), cp = String(prop.contactNumber || '').trim();
+    if (cn || cp) add({ __new: true, type: 'client', name: cn || cp, phone: cp }, 'Contact on the property');
+  } else {
+    for (const l of leads.filter(l => onProp(l) && !isSellerLead(l))) add(leadAsParty(l), 'Enquired about this property');
+  }
+  return out.slice(0, max);
+}
+
+// The seller lead rule the CRM uses (crm-assets/app.js isSellerLead): the enquiry type, or a
+// confident AI read — never over a type someone set by hand.
+export function isSellerLead(l) {
+  if (String(l?.enquiryType || '').trim().toLowerCase() === 'seller listing') return true;
+  if (l?.ttHold && l.ttHold.enquiryType) return false;
+  return !!(l?.ai && (l.ai.intent === 'sell' || l.ai.intent === 'rent_out') && l.ai.confidence === 'high');
+}
+
+// What the picker offers for a search: the finance parties that match, then the CRM leads that
+// match and are not a party yet. For the seller field, seller leads come first; for the buyer,
+// everyone else does. Searched by name, phone (any part of the digits) or what they asked about.
+export function partyAndLeadHits(parties, leads, q, side, max = 12) {
+  const t = String(q || '').trim().toLowerCase();
+  const d = t.replace(/\D/g, '');
+  const hitP = p => !t || String(p.name || '').toLowerCase().includes(t) || (d.length >= 4 && String(p.phone || '').replace(/\D/g, '').includes(d));
+  const ps = (parties || []).filter(p => !p.__pending && hitP(p)).slice(0, max);
+  const linked = new Set((parties || []).map(p => p.crmRef).filter(Boolean));
+  const linkedPh = new Set((parties || []).map(p => phone10(p.phone)).filter(x => x.length === 10));
+  if (!t) return { parties: ps, leads: [] };   // the CRM is searched, not listed
+  const hitL = l => String(l.name || '').toLowerCase().includes(t)
+    || (d.length >= 4 && String(l.phone || '').replace(/\D/g, '').includes(d))
+    || (t.length >= 3 && [l.propertyInterest, ...(l.propertyCodes || [])].join(' ').toLowerCase().includes(t));
+  const want = side === 'seller';
+  const ls = (leads || [])
+    .filter(l => l && l.id && String(l.name || l.phone || '').trim() && !linked.has(l.id) && !(phone10(l.phone).length === 10 && linkedPh.has(phone10(l.phone))) && hitL(l))
+    .sort((a, b) => (want ? isSellerLead(b) - isSellerLead(a) : isSellerLead(a) - isSellerLead(b))
+      || (String(a.name || '').toLowerCase().startsWith(t) ? 0 : 1) - (String(b.name || '').toLowerCase().startsWith(t) ? 0 : 1))
+    .slice(0, max);
+  return { parties: ps, leads: ls };
+}
+
+// A CRM lead as the picker's value: a new client party that remembers its lead.
+export function leadAsParty(l) {
+  return {
+    __new: true, type: 'client', crmRef: l.id,
+    name: String(l.name || '').trim() || String(l.phone || '').trim() || 'CRM lead',
+    phone: String(l.phone || '').trim(), email: String(l.email || '').trim(),
+  };
+}
 export const pname = id => (party(id) || {}).name || '—';
 export const deal = id => S.deals.find(d => d.id === id) || null;
 export const dname = id => {

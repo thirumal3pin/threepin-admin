@@ -15,8 +15,8 @@
 //
 //   node tests/finance-dealcycle.test.mjs
 
-import { getState, bal, invoiceOutstanding } from '../finance-assets/finance-core.js';
-import { EV, fieldsFor } from '../finance-assets/finance-events.js';
+import { getState, bal, invoiceOutstanding, partyAndLeadHits, leadAsParty, matchParty, propertyPeople } from '../finance-assets/finance-core.js';
+import { EV, fieldsFor, brokerageSync, dealBrokerage } from '../finance-assets/finance-events.js';
 import { invoiceModel } from '../finance-assets/finance-invoice.js';
 import { fresh, save, check, eq, section, report, party, refuses } from './_harness.mjs';
 
@@ -251,5 +251,130 @@ eq('Nobody still owes anything', bal('1100', { deal: dealId() }), 0);
 eq('The cash box holds what it should: 30,000 in, 4,000 out, 10,000 refunded', bal('1010'), 16000);
 eq('The bank holds the capital plus the seller payment', bal('1000'), 340000);
 balanced('And the whole story balances');
+
+// ═══════ A DEAL'S SELLER OR BUYER, PICKED FROM THE CRM ═══════
+
+section('A seller or buyer can be a CRM lead — it becomes a client that remembers the lead');
+
+const LEADS = [
+  { id: 'L1', name: 'Akash Kumar', phone: '+91 98400 12345', enquiryType: 'Property enquiry', propertyInterest: 'ANR003' },
+  { id: 'L2', name: 'Akshaya Raman', phone: '98400 55555', enquiryType: 'Seller listing', propertyInterest: '3BHK Adyar' },
+  { id: 'L3', name: 'Ramesh', phone: '98400 77777', enquiryType: 'Property enquiry' },
+];
+const s1 = s => JSON.stringify(s);
+fresh({ booksStartDate: '2026-09-01' });
+save('newdeal', { date: '2026-09-05', nickname: 'Old client deal', buyer: { __new: true, name: 'Ramesh', type: 'client' }, expBuyer: 10000 });
+
+let hits = partyAndLeadHits(getState().parties, LEADS, 'ak', 'seller');
+eq('Typing "ak": both Akash and Akshaya from the CRM', hits.leads.length, 2);
+check('...for the seller, the seller lead comes first', hits.leads[0].id === 'L2', s1(hits.leads.map(l => l.id)));
+hits = partyAndLeadHits(getState().parties, LEADS, 'ak', 'buyer');
+check('...for the buyer, the buyer lead comes first', hits.leads[0].id === 'L1', s1(hits.leads.map(l => l.id)));
+check('Found by phone digits too', partyAndLeadHits(getState().parties, LEADS, '12345', 'buyer').leads.map(l => l.id).join() === 'L1');
+check('Found by the property they asked about', partyAndLeadHits(getState().parties, LEADS, 'anr003', 'buyer').leads.map(l => l.id).join() === 'L1');
+check('Nothing typed: no CRM list (it is searched, not listed)', partyAndLeadHits(getState().parties, LEADS, '', 'buyer').leads.length === 0);
+const rh = partyAndLeadHits(getState().parties, LEADS, 'ramesh', 'buyer');
+check('A CRM "Ramesh" is still offered next to the client "Ramesh" — a different person', rh.parties.length === 1 && rh.leads.map(l => l.id).join() === 'L3');
+
+save('newdeal', { date: '2026-09-06', nickname: 'Akash — ANR003', buyer: leadAsParty(LEADS[0]), seller: leadAsParty(LEADS[1]), expBuyer: 50000, expSeller: 50000 });
+const dl = getState().deals.at(-1);
+const akash = getState().parties.find(p => p.crmRef === 'L1');
+check('The buyer is now a client, with the lead\'s name and phone', akash && akash.name === 'Akash Kumar' && akash.phone === '+91 98400 12345' && akash.type === 'client', s1(akash));
+check('The deal keeps each side\'s CRM lead and phone', dl.buyer.crmRef === 'L1' && dl.seller.crmRef === 'L2' && dl.buyer.phone === '+91 98400 12345', s1([dl.buyer, dl.seller]));
+check('...and a side typed by hand has no CRM lead', !('crmRef' in getState().deals[0].buyer), s1(getState().deals[0].buyer));
+
+const before = getState().parties.length;
+save('newdeal', { date: '2026-09-07', nickname: 'Akash again', buyer: leadAsParty(LEADS[0]), expBuyer: 1 });
+eq('The same lead picked again: the same client, not a second one', getState().parties.length, before);
+check('...the second deal points at the same party', getState().deals.at(-1).buyer.partyId === akash.id);
+check('Once a client, the lead is not offered twice in the picker', !partyAndLeadHits(getState().parties, LEADS, 'akash', 'buyer').leads.length);
+
+save('newdeal', { date: '2026-09-08', nickname: 'Ramesh from CRM', buyer: leadAsParty(LEADS[2]), expBuyer: 1 });
+const rameshes = getState().parties.filter(p => p.name === 'Ramesh');
+eq('A CRM lead never merges into a client just because the name matches', rameshes.length, 2);
+
+fresh({ booksStartDate: '2026-09-01' });
+save('newdeal', { date: '2026-09-05', nickname: 'Phone client', buyer: { __new: true, name: 'Mr Akash', type: 'client', phone: '9840012345' }, expBuyer: 1 });
+const pc = getState().parties[0];
+check('A lead whose phone is already a client\'s: matched to that client', matchParty(getState().parties, leadAsParty(LEADS[0]))?.id === pc.id);
+save('newdeal', { date: '2026-09-06', nickname: 'Same person', buyer: leadAsParty(LEADS[0]), expBuyer: 1 });
+check('...no new party, and the client now remembers the lead', getState().parties.length === 1 && pc.crmRef === 'L1' && getState().deals.at(-1).buyer.crmRef === 'L1', s1(getState().parties));
+
+// ═══════ CAPTURING A DEAL: SALE PRICE, BROKERAGE AS % OR AMOUNT, GST ═══════
+
+section('Brokerage is an amount or a % of the sale — each fills the other — and GST is optional');
+
+{
+  const v = { salePrice: 18000000, gst: 'yes', gstRate: 18 };
+  v.sellerPct = 1; brokerageSync('sellerPct', v);
+  eq('1% of 1.8 Cr is 1,80,000', v.expSeller, 180000);
+  v.expBuyer = 90000; brokerageSync('expBuyer', v);
+  eq('An amount of 90,000 is 0.5% of the sale', v.buyerPct, 0.5);
+  eq('Total with 18% GST: 2,70,000 + 48,600', v.totalWithGst, 318600);
+  v.salePrice = 20000000; brokerageSync('salePrice', v);
+  check('A new sale price moves the % fee, not the fixed amount (whose % is shown again)', v.expSeller === 200000 && v.expBuyer === 90000 && v.buyerPct === 0.45, JSON.stringify(v));
+  v.gst = 'no'; brokerageSync('gst', v);
+  eq('No GST: the total is the brokerage', v.totalWithGst, 290000);
+  const w = { expSeller: 50000 }; brokerageSync('expSeller', w);
+  check('An amount with no sale price yet: no % is made up', w.sellerPct === '' && w.totalWithGst === 50000, JSON.stringify(w));
+}
+
+fresh({ booksStartDate: '2026-09-01' });
+save('newdeal', {
+  date: '2026-09-05', nickname: 'Akash — ANR003', property: { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK' },
+  seller: { __new: true, name: 'Meenakshi', type: 'client', phone: '98400 66666', crmRef: 'L4' }, buyer: { __new: true, name: 'Akash', type: 'client' },
+  salePrice: 18000000, sellerPct: 1, expBuyer: 100000, gst: 'yes', gstRate: 18,
+});
+let D = getState().deals[0];
+check('The deal keeps the sale price, each side\'s % and the GST choice', D.salePrice === 18000000 && D.sellerPct === 1 && D.buyerPct === null && D.gst.on === true && D.gst.rate === 18, JSON.stringify(D));
+const br = dealBrokerage(D);
+check('…brokerage 2,80,000 + GST 50,400 = 3,30,400', br.base === 280000 && br.gst === 50400 && br.total === 330400, JSON.stringify(br));
+eq('Nothing posts for a new deal', getState().txns.length, 0);
+check('A fixed amount keeps no % (it was only shown) — so the closed price will not move it', D.buyerPct === null && D.expSeller === 180000);
+check('Saved without GST: kept as off', (save('newdeal', { date: '2026-09-05', nickname: 'No GST deal', buyer: { __new: true, name: 'X', type: 'client' }, expBuyer: 1000, gst: 'no' }), getState().deals.at(-1).gst.on === false));
+refuses('A % above 100 is refused', () => save('newdeal', { date: '2026-09-05', nickname: 'Bad', buyer: { __new: true, name: 'Y', type: 'client' }, salePrice: 100, buyerPct: 120, expBuyer: 120 }));
+refuses('A % with no sale price is refused (type the amount instead)', () => save('newdeal', { date: '2026-09-05', nickname: 'Bad2', buyer: { __new: true, name: 'Z', type: 'client' }, buyerPct: 1 }));
+
+section('Registered: the closed sale price is captured, and a %-based fee follows it');
+
+{
+  const v = {}; EV.register.onchange('deal', Object.assign(v, { deal: D.id }));
+  eq('Marking it registered starts from the deal\'s sale price', v.salePrice, 18000000);
+}
+save('register', { date: '2026-10-01', deal: D.id, salePrice: 19000000 });
+D = getState().deals[0];
+check('Closed at 1.9 Cr: the price is kept', D.status === 'registered' && D.salePrice === 19000000, JSON.stringify(D));
+eq('…the seller\'s 1% is now 1,90,000', D.expSeller, 190000);
+eq('…the buyer\'s fixed amount does not move', D.expBuyer, 100000);
+
+section('The invoice starts from the deal\'s GST choice');
+{
+  const v = { deal: D.id, from: 'seller' }; EV.invoice.onchange('from', v);
+  check('Seller invoice: the expected amount, GST on at the deal\'s rate', v.amt === 190000 && v.gst === 'yes' && v.gstRate === 18 && v.gstAmt === 34200, JSON.stringify(v));
+  const nd = getState().deals.find(d => d.nickname === 'No GST deal');
+  const w = { deal: nd.id, from: 'buyer', gst: 'yes' }; EV.invoice.onchange('from', w);
+  check('A deal without GST: the invoice starts with GST off', w.gst === 'no' && w.gstAmt === 0, JSON.stringify(w));
+}
+
+section('A linked property offers its sellers, and the people who enquired about it as buyers');
+{
+  const prop = { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK', contactName: 'Swaminathan', contactNumber: '98848 83370' };
+  const leads = [
+    { id: 'L4', name: 'Meenakshi Sundaram', phone: '98400 66666', enquiryType: 'Seller listing', propertyCodes: ['prop_anr'] },
+    { id: 'L5', name: 'Divya', phone: '98400 88888', enquiryType: 'Property enquiry', propertyCodes: ['ANR003'] },
+    { id: 'L6', name: 'Elsewhere', phone: '98400 99999', enquiryType: 'Property enquiry', propertyCodes: ['ADY010'] },
+  ];
+  const listings = [{ propertyCode: 'ANR003', sellerName: 'Meenakshi S', sellerPhone: '9840066666', leadId: 'L4' }];
+  const sellers = propertyPeople({ prop, leads, listings, parties: [], side: 'seller' });
+  check('Sellers: the board\'s owner (named as in the CRM, carrying her lead) — once, though she is also a seller lead', sellers.length === 2 && sellers[0].value.name === 'Meenakshi Sundaram' && sellers[0].value.crmRef === 'L4' && /Property & Media/.test(sellers[0].why), JSON.stringify(sellers));
+  check('…and the contact on the property', sellers[1].value.name === 'Swaminathan' && sellers[1].value.phone === '98848 83370' && !sellers[1].value.crmRef);
+  const buyers = propertyPeople({ prop, leads, listings, parties: [], side: 'buyer' });
+  check('Buyers: only who enquired about this property, matched by its code or its id', buyers.length === 1 && buyers[0].value.crmRef === 'L5', JSON.stringify(buyers));
+  const parties = getState().parties;   // Meenakshi is a client now (L4, 98400 66666)
+  const again = propertyPeople({ prop, leads, listings, parties, side: 'seller' });
+  check('Someone already a client comes back as that client', again[0].party && again[0].party.crmRef === 'L4', JSON.stringify(again[0]));
+  check('No property, nobody offered', propertyPeople({ prop: null, leads, listings, side: 'seller' }).length === 0);
+  check('A property\'s contact with a phone matches a client by that phone, not a namesake', matchParty([{ id: 'a', name: 'Swaminathan', phone: '90000 00000' }, { id: 'b', name: 'S. Swami', phone: '9884883370' }], sellers[1].value)?.id === 'b');
+}
 
 report();

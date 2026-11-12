@@ -64,6 +64,20 @@ const post = (k, v) => { try { return save(k, v); } catch (e) { window.__seedErr
 // app.js pulls in finance-sync.js, whose Firebase auth listener fires with no user and resets
 // the state to blank. The books are therefore built AFTER that has happened, not before.
 window.__financePreview = true;   // no Firebase behind this page: draw the books, not the loading screen
+// What the deal form reads from the rest of the admin (finance-sync.js): the dashboard's
+// properties, the CRM's leads and the Property & Media board's cards.
+window.__previewProperties = [
+  { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK', location: 'Anna Nagar', startingPrice: '1.85 Cr', status: 'Available', contactName: 'Swaminathan', contactNumber: '98848 83370' },
+  { id: 'prop_ady', propertyCode: 'ADY010', name: 'Adyar villa', location: 'Adyar', startingPrice: '4.2 Cr', status: 'Available', contactName: '', contactNumber: '' },
+];
+window.__previewCrmLeads = [
+  { id: 'tt_t_preview_1', name: 'Akash Kumar', phone: '+91 98400 12345', enquiryType: 'Property enquiry', propertyInterest: 'Anna Nagar 3BHK', propertyCodes: ['ANR003'] },
+  { id: 'lead_p2', name: 'Akshaya Raman', phone: '98400 55555', enquiryType: 'Seller listing', propertyInterest: '3BHK in Adyar, asking 2.1 Cr' },
+  { id: 'lead_p3', name: 'Karthik S', phone: '98400 11111', enquiryType: 'Property enquiry' },
+  { id: 'lead_p4', name: 'Meenakshi Sundaram', phone: '98400 66666', enquiryType: 'Seller listing', propertyCodes: ['prop_anr'] },
+  { id: 'lead_p5', name: 'Divya', phone: '98400 88888', enquiryType: 'Property enquiry', propertyCodes: ['prop_anr'] },
+];
+window.__previewListings = [{ id: 'lst1', propertyCode: 'ANR003', sellerName: 'Meenakshi S', sellerPhone: '9840066666', leadId: 'lead_p4' }];
 const bootParam = new URLSearchParams(location.search).get('boot');
 if (bootParam) window.__financeBoot = JSON.parse(bootParam);   // ?boot={"phase":"bootstrapping","done":4,"total":12}
 await import('../finance-assets/app.js');
@@ -79,6 +93,7 @@ post('asset', { date: '2026-06-15', vendor: { __new: true, name: 'Croma', type: 
 post('newdeal', { date: '2026-06-03', nickname: 'Karthik — Nungambakkam 2BHK', buyer: { __new: true, name: 'Karthik', phone: '98400 11111' }, seller: { __new: true, name: 'Mrs. Meenakshi' }, expBuyer: 100000, expSeller: 100000 });
 post('newdeal', { date: '2026-06-10', nickname: 'Lakshmi — Velachery villa', seller: { __new: true, name: 'Lakshmi', phone: '98400 22222' }, expSeller: 250000 });
 post('newdeal', { date: '2026-07-01', nickname: 'Suresh — Adyar flat', buyer: { __new: true, name: 'Suresh' }, expBuyer: 80000 });
+post('newdeal', { date: '2026-09-04', nickname: 'Akash — ANR003', property: { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK' }, buyer: { __new: true, type: 'client', crmRef: 'tt_t_preview_1', name: 'Akash Kumar', phone: '+91 98400 12345' }, salePrice: 18000000, buyerPct: 1, gst: 'yes', gstRate: 18 });
 post('newdeal', { date: '2026-08-15', nickname: 'Anand — OMR plot', buyer: { __new: true, name: 'Anand' }, seller: { __new: true, name: 'Ravi Builders' }, expBuyer: 120000, expSeller: 60000 });
 const D1 = byName(getState().deals, 'Karthik — Nungambakkam 2BHK')?.id;
 const D2 = byName(getState().deals, 'Lakshmi — Velachery villa')?.id;

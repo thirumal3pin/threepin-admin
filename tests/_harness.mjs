@@ -12,7 +12,7 @@ import {
   today,
   ym,
   getState, setState, blank, defaultSettings, normalise, validate, reversalLines,
-  fyOf, num, fmt, monthEndEntries, docStatus, issueNumber,
+  fyOf, num, fmt, monthEndEntries, docStatus, issueNumber, matchParty,
 } from '../finance-assets/finance-core.js';
 import { EV, PARTY_FIELDS, validateEvent } from '../finance-assets/finance-events.js';
 
@@ -81,10 +81,11 @@ function resolveParty(value) {
   if (!value) return null;
   if (typeof value === 'string') return value;
   const s = getState();
-  const hit = s.parties.find(p => p.name.trim().toLowerCase() === String(value.name).trim().toLowerCase());
-  if (hit) return hit.id;
+  // The page's own rule (finance-core.js matchParty): a CRM lead by its lead, then its phone.
+  const hit = matchParty(s.parties, value);
+  if (hit) { if (value.crmRef && !hit.crmRef) hit.crmRef = value.crmRef; return hit.id; }
   const id = nid('P');
-  s.parties.push({ id, name: String(value.name).trim(), type: value.type || 'other', phone: '', state: value.state || '' });
+  s.parties.push({ id, name: String(value.name).trim(), type: value.type || 'other', phone: value.phone || '', state: value.state || '', ...(value.crmRef ? { crmRef: value.crmRef } : {}) });
   return id;
 }
 

@@ -14,7 +14,7 @@ import {
   pl, cashPosition, serviceRunRate, dname, pname, complianceCalendar, upcomingCash,
   bal, openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance,
   setDisplayCurrency, displayCurrency, setScope, scopeMode, scopeLabel, scopedTxns, scoped, methodLabel, movesMoney, moneyMoved,
-  settlementOf, explain, INCOME_ACCS, EXPENSE_ACCS,
+  settlementOf, explain, INCOME_ACCS, EXPENSE_ACCS, partyAndLeadHits, isSellerLead, leadAsParty, propertyPeople,
 } from './finance-core.js';
 import { EV, CHOOSER, fieldsFor, validateEvent, dirOf } from './finance-events.js';
 import * as SY from './finance-sync.js';
@@ -828,8 +828,8 @@ const CORE = {
   transfer: ['kind', 'amt', 'date'],
   statutory: ['kind', 'amt', 'date'],
   otherinc: ['party', 'desc', 'amt', 'via', 'date'],
-  newdeal: ['nickname', 'seller', 'buyer', 'expSeller', 'expBuyer', 'date'],
-  register: ['deal', 'date', 'note'],
+  newdeal: ['nickname', 'property', 'seller', 'buyer', 'salePrice', 'sellerPct', 'expSeller', 'buyerPct', 'expBuyer', 'gst', 'gstRate', 'totalWithGst', 'date'],
+  register: ['deal', 'salePrice', 'date', 'note'],
   settle: ['deal', 'from', 'apply', 'refund', 'keep', 'date'],
   funding: ['kind', 'who', 'amt', 'date'],
   director: ['desc', 'amt', 'acc', 'date'],
@@ -860,7 +860,7 @@ function renderField(f) {
   const label = `<label for="${id}">${esc(f.label)}</label>`;
   const errSlot = `<div class="ferr" id="err_${f.k}" hidden></div>`;
   if (f.type === 'party' || f.type === 'property' || f.type === 'deal') {
-    return `<div class="field" data-field="${f.k}">${label}<div id="pick_${f.k}"></div>${hintHtml}${errSlot}</div>`;
+    return `<div class="field" data-field="${f.k}">${label}<div id="pick_${f.k}"></div>${f.crm ? `<div class="pk-sugg" id="sugg_${f.k}" hidden></div>` : ''}${hintHtml}${errSlot}</div>`;
   }
   if (f.type === 'alloc') {
     return `<div class="field" data-field="${f.k}">${label}<div id="alloc_${f.k}"></div>${hintHtml}${errSlot}</div>`;
@@ -884,6 +884,12 @@ function renderField(f) {
       ${hintHtml}${errSlot}</div>`;
   }
   const type = f.type === 'number' ? 'number' : f.type;
+  // A worked-out figure (a total): shown like a field, never typed into.
+  if (f.readonly) {
+    return `<div class="field ro" data-field="${f.k}">${label}
+      <input type="text" id="${id}" data-k="${f.k}" data-ro="1" value="${esc(fmtIN(val))}" readonly tabindex="-1" aria-readonly="true">
+      ${hintHtml}${errSlot}</div>`;
+  }
   return `<div class="field" data-field="${f.k}">${label}
     <input type="${type}" id="${id}" data-k="${f.k}" value="${esc(val)}"
       ${f.type === 'number' ? 'inputmode="decimal" step="0.01" min="0"' : ''} ${f.required ? 'required' : ''}>
@@ -948,6 +954,7 @@ function buildForm() {
   const visibleKeys = () => fieldsFor(evKey, vals).map(f => f.k).join('|');
   let shown = visibleKeys();
   form.querySelectorAll('input[data-k]').forEach(el => {
+    if (el.dataset.ro) return;
     // The amount shows Indian grouping when it is not being edited, and never stores it.
     if (el.dataset.money) {
       el.addEventListener('focus', () => { el.value = rawIN(el.value); });
@@ -1088,14 +1095,91 @@ function syncInputs(except) {
     if (el === except) return;
     const want = vals[el.dataset.k];
     if (want === undefined || want === null) return;
-    const shown = el.dataset.money && document.activeElement !== el ? fmtIN(want) : String(want);
+    const shown = (el.dataset.money && document.activeElement !== el) || el.dataset.ro ? fmtIN(want) : String(want);
     if (String(el.value) !== shown) el.value = shown;
   });
+}
+
+// A deal's seller or buyer: your clients, and — once something is typed — the CRM's leads too.
+// A lead picked here becomes a client party that remembers the lead (finance-core.js
+// matchParty: the same lead or phone later lands on the same party).
+function crmPartyRow(r) {
+  if (r.__lead) {
+    const l = r.__lead;
+    // A lead's property list can hold a property's internal id; only a readable code is shown.
+    const codes = (l.propertyCodes || []).filter(c => /^[A-Z]{2,6}\d{2,6}$/i.test(String(c)));
+    const what = [l.enquiryType, l.propertyInterest || codes.join(', ')].filter(Boolean).join(' · ');
+    return `<span class="pk-l"><b>${esc(l.name || l.phone)}</b>${l.phone && l.name ? ' · ' + esc(l.phone) : ''} ${tag(isSellerLead(l) ? 'Seller lead' : 'CRM lead', 'auto')}</span>`
+      + (what ? `<span class="pk-s">${esc(what.slice(0, 90))}</span>` : '');
+  }
+  return `<span class="pk-l">${esc(r.name)}${r.phone ? ' · ' + esc(r.phone) : ''}${r.crmRef ? ' ' + tag('In the CRM', '') : ''}</span>`;
+}
+async function mountPropertySuggestions(f) {
+  const el = document.getElementById('sugg_' + f.k);
+  if (!el) return;
+  const prop = vals.property;
+  if (!prop || vals[f.k]) { el.hidden = true; el.innerHTML = ''; return; }
+  const [leads, listings] = await Promise.all([SY.crmLeads(), f.crm === 'seller' ? SY.listingsFor(prop) : []]);
+  if (vals.property !== prop || vals[f.k]) return;   // changed while it was being read
+  const people = propertyPeople({ prop, leads, listings, parties: getState().parties, side: f.crm })
+    .filter(x => !(x.party && Object.values(vals).includes(x.party.id)));
+  if (!people.length) {
+    el.hidden = false;
+    el.innerHTML = `<span class="pk-sugg-h">${f.crm === 'seller' ? 'No seller on record for' : 'Nobody in the CRM has enquired about'} ${esc(prop.propertyCode || prop.name)} yet</span>`;
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = `<span class="pk-sugg-h">${f.crm === 'seller' ? 'Sellers of' : 'Enquired about'} ${esc(prop.propertyCode || prop.name)}</span>`
+    + people.map((x, i) => {
+      const who = x.party || x.value;
+      return `<button type="button" class="pk-sugg-b" data-sg="${i}" title="${esc(x.why)}"><b>${esc(who.name)}</b>${who.phone ? `<small>${esc(who.phone)}</small>` : ''}<span>${esc(x.party ? 'Your client · ' + x.why : x.why)}</span></button>`;
+    }).join('');
+  el.querySelectorAll('[data-sg]').forEach(b => {
+    b.onclick = () => {
+      const x = people[+b.dataset.sg];
+      vals[f.k] = x.party ? x.party.id : x.value;
+      touched.add(f.k);
+      EV[evKey].onchange?.(f.k, vals);
+      buildForm();
+    };
+  });
+}
+
+function mountCrmPartyPicker(f) {
+  const box = document.getElementById('pick_' + f.k);
+  const cur = vals[f.k];
+  picker(box, {
+    value: cur && typeof cur === 'string' ? getState().parties.find(p => p.id === cur) : cur,
+    placeholder: 'Search a name or phone — your clients and the CRM',
+    allowNew: true,
+    newLabel: 'Add',
+    describe: p => p.__lead ? `${p.__lead.name || p.__lead.phone}${p.__lead.phone && p.__lead.name ? ' · ' + p.__lead.phone : ''} · from the CRM`
+      : p.__new ? `${p.name}${p.phone ? ' · ' + p.phone : ''}${p.crmRef ? ' · from the CRM' : ' (new)'}`
+        : `${p.name}${p.phone ? ' · ' + p.phone : ''}`,
+    rowHtml: crmPartyRow,
+    search: async q => {
+      const leads = q ? await SY.crmLeads() : [];
+      const hits = partyAndLeadHits(getState().parties, leads, q, f.crm);
+      return [
+        ...(hits.parties.length && hits.leads.length ? [{ __head: 'Your clients' }] : []), ...hits.parties,
+        ...(hits.leads.length ? [{ __head: 'From the CRM' }] : []), ...hits.leads.map(l => ({ __lead: l })),
+      ];
+    },
+    onChange: v => {
+      vals[f.k] = !v ? null : v.__lead ? leadAsParty(v.__lead)
+        : v.__new ? (v.crmRef || v.phone ? v : { __new: true, name: v.name, type: f.partyType || 'other' }) : v.id;
+      EV[evKey].onchange?.(f.k, vals);
+      mountPropertySuggestions(f);
+      updatePreview();
+    },
+  });
+  mountPropertySuggestions(f);
 }
 
 function mountPartyPicker(f) {
   const box = document.getElementById('pick_' + f.k);
   if (!box) return;
+  if (f.crm) return mountCrmPartyPicker(f);
   picker(box, {
     value: vals[f.k] && typeof vals[f.k] === 'string'
       ? getState().parties.find(p => p.id === vals[f.k]) : vals[f.k],
@@ -1125,7 +1209,11 @@ function mountPropertyPicker(f) {
     allowNew: false,
     describe: p => `${p.propertyCode ? p.propertyCode + ' — ' : ''}${p.name}${p.location ? ' · ' + p.location : ''}`,
     search: q => SY.searchProperties(q),
-    onChange: v => { vals[f.k] = v; updatePreview(); },
+    onChange: v => {
+      vals[f.k] = v;
+      if (EV[evKey].onchange) { EV[evKey].onchange(f.k, vals); }
+      if (fieldsFor(evKey, vals).some(x => x.crm)) buildForm(); else updatePreview();
+    },
   });
 }
 
