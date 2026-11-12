@@ -68,6 +68,7 @@ window.__financePreview = true;   // no Firebase behind this page: draw the book
 // properties, the CRM's leads and the Property & Media board's cards.
 window.__previewProperties = [
   { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK', location: 'Anna Nagar', startingPrice: '1.85 Cr', status: 'Available', contactName: 'Swaminathan', contactNumber: '98848 83370' },
+  { id: 'prop_koy', propertyCode: 'KOY0003', name: 'Kinglife 2BHK', location: 'Koyambedu', startingPrice: '1.2 Cr', status: 'Available', contactName: '', contactNumber: '' },
   { id: 'prop_ady', propertyCode: 'ADY010', name: 'Adyar villa', location: 'Adyar', startingPrice: '4.2 Cr', status: 'Available', contactName: '', contactNumber: '' },
 ];
 window.__previewCrmLeads = [
@@ -84,6 +85,13 @@ await import('../finance-assets/app.js');
 await new Promise(r => setTimeout(r, 900));
 
 fresh({ booksStartDate: '2026-06-01', state: 'Tamil Nadu' });
+// Builders and their projects (the Builders tab): Shriram's Kinglife holds KOY0003.
+getState().parties.push(
+  { id: 'b_shriram', name: 'Shriram Properties', type: 'client', builder: true, commissionPct: 2, gstin: '33AAACS1234A1Z5', state: 'Tamil Nadu', address: 'Shriram House, T. Nagar, Chennai 600017',
+    projects: [{ id: 'pj_kinglife', name: 'Kinglife', location: 'Koyambedu', pct: 2.5, codes: ['KOY0003'] }] },
+  { id: 'b_purva', name: 'Purvankara', type: 'client', builder: true, commissionPct: 3, gstin: '', state: 'Tamil Nadu',
+    projects: [{ id: 'pj_somerset', name: 'Somerset', location: 'Kelambakkam', codes: [] }, { id: 'pj_windermere', name: 'Windermere', location: 'Pallikaranai', codes: [] }] },
+);
 
 post('funding', { date: '2026-06-01', kind: '3000', who: 'Thirumal', amt: 600000 });
 post('bankloan', { date: '2026-06-05', lender: { __new: true, name: 'Bajaj Finance', type: 'lender' }, purpose: 'Working capital', amt: 300000, rate: 14, n: 24, fee: 0 });
@@ -95,6 +103,9 @@ post('newdeal', { date: '2026-06-10', nickname: 'Lakshmi — Velachery villa', s
 post('newdeal', { date: '2026-07-01', nickname: 'Suresh — Adyar flat', buyer: { __new: true, name: 'Suresh' }, expBuyer: 80000 });
 post('newdeal', { date: '2026-09-04', nickname: 'Akash — ANR003', property: { id: 'prop_anr', propertyCode: 'ANR003', name: 'Anna Nagar 3BHK' }, buyer: { __new: true, type: 'client', crmRef: 'tt_t_preview_1', name: 'Akash Kumar', phone: '+91 98400 12345' }, salePrice: 18000000, buyerPct: 1, gst: 'yes', gstRate: 18 });
 post('newdeal', { date: '2026-08-15', nickname: 'Anand — OMR plot', buyer: { __new: true, name: 'Anand' }, seller: { __new: true, name: 'Ravi Builders' }, expBuyer: 120000, expSeller: 60000 });
+post('newdeal', { date: '2026-08-02', sellerKind: 'builder', builder: 'b_purva', project: 'pj_somerset', unit: 'B-402', buyer: { __new: true, name: 'Venkat', type: 'client' }, salePrice: 9500000, stage: 'closed' });
+post('newdeal', { date: '2026-08-25', sellerKind: 'builder', builder: 'b_purva', project: 'pj_windermere', unit: 'T2-804', buyer: { __new: true, name: 'Divya R', type: 'client' }, salePrice: 9000000, stage: 'invoice' });
+post('newdeal', { date: '2026-09-07', sellerKind: 'builder', builder: 'b_shriram', project: 'pj_kinglife', unit: 'A-1203', buyer: { __new: true, name: 'Nisha', type: 'client' }, salePrice: 12000000 });
 const D1 = byName(getState().deals, 'Karthik — Nungambakkam 2BHK')?.id;
 const D2 = byName(getState().deals, 'Lakshmi — Velachery villa')?.id;
 const D4 = byName(getState().deals, 'Anand — OMR plot')?.id;

@@ -27,6 +27,7 @@ import {
   expectedFor, currentPlan, addDays, lastDayOfMonth,
   PAY_METHODS, RECURRING_KINDS, recurringAcc, recurringKindLabel, regenerateSchedule, pettyRoom,
   awaitingBill, docStatus, monthPicture, liveInvoice, invoiceTotals,
+  builderList, projectForCode, projectOf, projectPct, isBuilderDeal, dealInvoiceDesc,
 } from './finance-core.js';
 
 // ═══════ FIELD + PARTY HELPERS ═══════
@@ -429,42 +430,116 @@ function dealSide(x) {
   return { partyId: pidOf(x), name: pnameOf(x), phone: String((p && p.phone) || ''), ...(crmRef ? { crmRef } : {}) };
 }
 
+// A builder deal: the builder picked, its project, and the commission that project pays.
+const builderOf = v => v.sellerKind === 'builder' ? S().parties.find(p => p.id === v.builder && p.builder) || null : null;
+// The commission % follows the builder and project until a % is typed by hand.
+function builderPct(v) {
+  const b = builderOf(v);
+  if (!b) return;
+  if (String(v.sellerPct ?? '').trim() !== '' && !v.__pctAuto) return;
+  const pct = projectPct(b, projectOf(b, v.project));
+  v.sellerPct = pct || '';
+  v.__pctAuto = true;
+  brokerageSync('sellerPct', v);
+}
+// The nickname fills itself — "Buyer — Project unit" for a builder deal, "CODE — name" for a
+// linked property — until it is typed over.
+function autoNick(v) {
+  const b = builderOf(v);
+  const pj = b && projectOf(b, v.project);
+  const buyer = v.buyer ? pnameOf(v.buyer) : '';
+  const nick = b
+    ? [buyer && buyer !== '—' ? buyer : '', [pj?.name || b.name, v.unit].filter(Boolean).join(' ')].filter(Boolean).join(' — ')
+    : v.property ? [v.property.propertyCode, v.property.name].filter(Boolean).join(' — ') : '';
+  const cur = String(v.nickname || '').trim();
+  if (nick && (!cur || cur === v.__autoNick)) { v.nickname = nick; v.__autoNick = nick; }
+}
+
 EV.newdeal = {
   title: 'Add a deal', group: 'Deals', dir: 'setup',
   when: 'Sets a deal up so income and costs can be mapped to it. Link the property and its seller is offered from the CRM and the Property &amp; Media board; the buyer from your clients or the CRM. The brokerage is an <b>estimate</b> for your pipeline — an amount, or a % of the sale price — and <b>nothing here counts as income</b>. Mark the deal registered when the sale deed is signed (the closed price is asked then); invoice each side when its fee is due. A deal can be added without linking a property.',
-  fields: v => [
-    F('date', 'Date', 'date', { def: today() }),
-    F('nickname', 'Deal nickname', 'text', { required: true, hint: 'e.g. Rajan — Nungambakkam 2BHK. Linking a property fills it in if it is empty.' }),
-    F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name — its sellers, and the people who enquired about it, are then offered below' }),
-    F('propertyState', 'State the property is in', 'select', {
-      opts: STATES.map(x => [x, x]), def: S().settings.state || 'Tamil Nadu',
-      hint: 'Decides CGST+SGST or IGST on the invoice. The tax follows the property, not where the client lives.',
-    }),
-    F('seller', 'Seller', 'party', { partyType: 'client', crm: 'seller', hint: 'Search your clients or the CRM\'s leads by name or phone — or add a new name' }),
-    F('buyer', 'Buyer', 'party', { partyType: 'client', crm: 'buyer', hint: 'From your clients or the CRM\'s leads, or a new name. Leave blank until you have one' }),
-    F('salePrice', 'Sale price (₹)', 'number', {
-      hint: x => 'The agreed price — the closed price is asked again when the deal registers.'
-        + (x.property?.startingPrice ? ` Listed at ${esc(String(x.property.startingPrice))}.` : ''),
-    }),
-    F('sellerPct', 'Seller brokerage — % of sale', 'number', { hint: 'Type a % or the amount below — the other fills in' }),
-    F('expSeller', 'Seller brokerage — amount before GST (₹)', 'number', { def: 0 }),
-    F('buyerPct', 'Buyer brokerage — % of sale', 'number'),
-    F('expBuyer', 'Buyer brokerage — amount before GST (₹)', 'number', { def: 0 }),
-    F('gst', 'GST on the brokerage', 'select', { opts: [['yes', 'Yes — add GST'], ['no', 'No GST']], def: 'yes' }),
-    F('gstRate', 'GST %', 'number', { def: 18, show: x => x.gst === 'yes' }),
-    F('totalWithGst', 'Total brokerage with GST (₹)', 'number', { readonly: true, hint: 'Seller + buyer brokerage, plus GST when it applies. Worked out for you.' }),
-    F('expMonth', 'Expected to close in', 'month', { hint: 'Optional — puts the brokerage into that month\'s projection.' }),
-  ],
+  fields: v => {
+    const builders = builderList(S().parties);
+    const isB = v.sellerKind === 'builder';
+    const b = builderOf(v);
+    const who = isB ? 'builder' : 'seller';
+    return [
+      F('date', v.stage && v.stage !== 'open' ? 'Booking / closing date' : 'Date', 'date', { def: today() }),
+      F('nickname', 'Deal nickname', 'text', { required: true, hint: isB ? 'Fills in as "Buyer — Project unit" — type over it if you like.' : 'e.g. Rajan — Nungambakkam 2BHK. Linking a property fills it in if it is empty.' }),
+      F('property', 'Link a property (optional)', 'property', { hint: 'Search your dashboard by code or name. A property tagged to a builder\'s project fills in the builder and project; otherwise its sellers, and the people who enquired about it, are offered below' }),
+      F('propertyState', 'State the property is in', 'select', {
+        opts: STATES.map(x => [x, x]), def: S().settings.state || 'Tamil Nadu',
+        hint: 'Decides CGST+SGST or IGST on the invoice. The tax follows the property, not where the client lives.',
+      }),
+      F('sellerKind', 'Who is selling', 'select', {
+        opts: [['owner', 'An owner — resale'], ['builder', 'A builder — a booking in their project']], def: 'owner',
+        hint: isB && !builders.length ? 'No builders yet — add them and their projects on Deals → Builders.' : '',
+      }),
+      ...(isB ? [
+        F('builder', 'Builder', 'select', {
+          opts: builders.map(x => [x.id, x.name]), blank: builders.length ? 'Pick the builder' : undefined,
+          hint: b && !String(b.gstin || '').trim() ? 'No GSTIN on file for this builder — add its billing details on Deals → Builders, so the invoice prints them.' : '',
+        }),
+        F('project', 'Project', 'select', {
+          opts: [...(b?.projects || []).map(p => [p.id, p.name + (p.location ? ' · ' + p.location : '')]), ['', 'Not in the list']],
+          show: () => !!b, def: b?.projects?.[0]?.id || '',
+        }),
+        F('unit', 'Unit / flat no.', 'text', { show: () => !!b, hint: 'As on the booking form — it prints on the builder\'s invoice.' }),
+      ] : [
+        F('seller', 'Seller', 'party', { partyType: 'client', crm: 'seller', hint: 'Search your clients or the CRM\'s leads by name or phone — or add a new name' }),
+      ]),
+      F('buyer', isB ? 'Buyer (who booked)' : 'Buyer', 'party', { partyType: 'client', crm: 'buyer', hint: isB ? 'The customer who booked — from your clients or the CRM\'s leads, or a new name' : 'From your clients or the CRM\'s leads, or a new name. Leave blank until you have one' }),
+      F('salePrice', isB ? 'Agreement value (₹)' : 'Sale price (₹)', 'number', {
+        hint: x => (isB ? 'The booking\'s agreement value — the builder\'s commission is a % of it.' : 'The agreed price — the closed price is asked again when the deal registers.')
+          + (x.property?.startingPrice ? ` Listed at ${esc(String(x.property.startingPrice))}.` : ''),
+      }),
+      F('sellerPct', isB ? 'Builder commission — % of agreement value' : 'Seller brokerage — % of sale', 'number', { hint: isB ? 'From the project (or the builder\'s default) — change it if this booking differs' : 'Type a % or the amount below — the other fills in' }),
+      F('expSeller', isB ? 'Builder commission — amount before GST (₹)' : 'Seller brokerage — amount before GST (₹)', 'number', { def: 0 }),
+      F('buyerPct', 'Buyer brokerage — % of sale', 'number', isB ? { tier: 'detail', hint: 'Optional — only if the buyer pays you too' } : {}),
+      F('expBuyer', 'Buyer brokerage — amount before GST (₹)', 'number', { def: 0, ...(isB ? { tier: 'detail' } : {}) }),
+      F('gst', 'GST on the brokerage', 'select', { opts: [['yes', 'Yes — add GST'], ['no', 'No GST']], def: 'yes' }),
+      F('gstRate', 'GST %', 'number', { def: 18, show: x => x.gst === 'yes' }),
+      F('totalWithGst', 'Total brokerage with GST (₹)', 'number', { readonly: true, hint: 'Seller + buyer brokerage, plus GST when it applies. Worked out for you.' }),
+      F('stage', 'Where it stands', 'select', {
+        opts: [['open', 'In progress — not closed yet'], ['closed', 'Closed — booked / registered'], ['invoice', `Closed — and raise the ${who}'s invoice now`]], def: 'open',
+        hint: x => x.stage === 'invoice' ? `The ${who}'s invoice is raised with the deal, numbered, for the ${who} brokerage above plus GST. The buyer is not invoiced — do that from the deal later if they pay you too.`
+          : x.stage === 'closed' ? 'Saved as registered — the deal shows under "To invoice" until its invoice goes out.' : '',
+      }),
+      F('dueDate', 'Payment due by', 'date', { show: x => x.stage === 'invoice', hint: 'Leave blank for 30 days' }),
+      F('tds', `TDS % the ${who} deducts`, 'number', { def: 0, show: x => x.stage === 'invoice' && tdsOn() }),
+      F('expMonth', 'Expected to close in', 'month', { show: x => !x.stage || x.stage === 'open', hint: 'Optional — puts the brokerage into that month\'s projection.' }),
+    ];
+  },
   onchange: (k, v) => {
-    if (k === 'property' && v.property && !String(v.nickname || '').trim()) {
-      v.nickname = [v.property.propertyCode, v.property.name].filter(Boolean).join(' — ');
+    if (k === 'property' && v.property) {
+      // A property code a builder's project lists makes this that builder's deal.
+      const hit = projectForCode(v.property.propertyCode);
+      if (hit) { v.sellerKind = 'builder'; v.builder = hit.builder.id; v.project = hit.project.id; v.seller = null; builderPct(v); }
     }
+    if (k === 'sellerKind' && v.sellerKind === 'builder' && !v.builder) {
+      const bl = builderList(S().parties);
+      if (bl.length === 1) v.builder = bl[0].id;
+    }
+    if (k === 'sellerKind' || k === 'builder') {
+      const b = builderOf(v);
+      if (b && !projectOf(b, v.project)) v.project = b.projects?.[0]?.id || '';
+      builderPct(v);
+    }
+    if (k === 'project') builderPct(v);
+    if (k === 'sellerPct') v.__pctAuto = false;
+    if (['property', 'sellerKind', 'builder', 'project', 'unit', 'buyer'].includes(k)) autoNick(v);
     brokerageSync(k, v);
   },
   check: v => [
     ...dateChecks(v),
     ...(String(v.nickname || '').trim() ? [] : [err('nickname', 'Give the deal a nickname you will recognise')]),
-    ...(pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add a seller or a buyer — at least one')]),
+    ...(v.sellerKind === 'builder'
+      ? (builderOf(v) ? [] : [err('builder', 'Pick the builder')])
+      : (pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add a seller or a buyer — at least one')])),
+    ...(v.stage === 'invoice' && !(num(v.expSeller) > 0) ? [err('expSeller', `Enter the ${v.sellerKind === 'builder' ? 'builder\'s commission' : 'seller\'s brokerage'} to invoice`)] : []),
+    ...(v.stage === 'invoice' && v.sellerKind !== 'builder' && !pidOf(v.seller) ? [err('seller', 'Add the seller to invoice')] : []),
+    ...(v.stage === 'invoice' && builderOf(v) && !String(builderOf(v).gstin || '').trim() ? [warn('builder', 'This builder has no GSTIN on file — the invoice will print without it. Add it on Deals → Builders.')] : []),
+    ...(v.stage === 'invoice' && tdsOn() && num(v.tds) > 10 ? [err('tds', 'TDS on brokerage is normally 2% (194H) — check the rate')] : []),
     ...(num(v.salePrice) < 0 ? [err('salePrice', 'The sale price cannot be negative')] : []),
     ...(num(v.expSeller) < 0 || num(v.expBuyer) < 0 ? [err('expSeller', 'Expected brokerage cannot be negative')] : []),
     ...SIDES.flatMap(([, pk]) => num(v[pk]) < 0 || num(v[pk]) > 100 ? [err(pk, 'A % between 0 and 100')] : []),
@@ -478,37 +553,63 @@ EV.newdeal = {
     const gstOn = v.gst === 'yes';
     const rate = gstOn ? num(v.gstRate) : 0;
     const gst = r2(expected * rate / 100);
+    const b = builderOf(v);
+    const isB = v.sellerKind === 'builder';
+    if (isB && !b) return need('Pick the builder.');
+    const pj = b && projectOf(b, v.project);
+    const stage = v.stage || 'open';
     const side = (who, amt, pct) => num(amt) > 0 ? `${who} <b>${inr0(amt)}</b>${pctTxt(pct) ? ' (' + pctTxt(pct) + ')' : ''}` : '';
-    const sides = [side('seller', v.expSeller, v.sellerPct), side('buyer', v.expBuyer, v.buyerPct)].filter(Boolean);
+    const sides = [side(isB ? 'builder' : 'seller', v.expSeller, v.sellerPct), side('buyer', v.expBuyer, v.buyerPct)].filter(Boolean);
+    const data = {
+      nickname: String(v.nickname).trim(),
+      propertyRef: v.property?.id || null,
+      propertyCode: v.property?.propertyCode || '',
+      propertyName: v.property?.name || '',
+      propertyState: String(v.propertyState || S().settings.state || 'Tamil Nadu').trim(),
+      seller: dealSide(isB ? b.id : v.seller),
+      buyer: dealSide(v.buyer),
+      others: [],
+      ...(isB ? { sellerKind: 'builder', projectId: pj?.id || null, projectName: pj?.name || '', unit: String(v.unit || '').trim() } : {}),
+      salePrice: num(v.salePrice) || null,
+      // A % is kept only where the fee IS a % of the sale (typed as one); a fixed amount's % was just shown.
+      sellerPct: byPct(v, 'sellerPct', 'sellerBy') ? num(v.sellerPct) || null : null,
+      buyerPct: byPct(v, 'buyerPct', 'buyerBy') ? num(v.buyerPct) || null : null,
+      gst: { on: gstOn, rate: gstOn ? num(v.gstRate) : 0 },
+      expSeller: num(v.expSeller), expBuyer: num(v.expBuyer), expMonth: stage === 'open' ? v.expMonth || null : null,
+      status: stage === 'open' ? 'open' : 'registered',
+      ...(stage === 'open' ? {} : { registeredOn: v.date || today() }),
+      opened: v.date || today(),
+    };
+    const head = [
+      stage === 'open'
+        ? `Deal "<b>${esc(v.nickname)}</b>" opens in the pipeline with expected brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`
+        : `Deal "<b>${esc(v.nickname)}</b>" recorded as <b>closed</b> on ${esc(v.date || today())}, brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`,
+      ...(b ? [`Builder deal: ${esc(b.name)}${pj ? ' · ' + esc(pj.name) : ''}${data.unit ? ' · unit ' + esc(data.unit) : ''} — counted on the Builders tab.`] : []),
+      ...(num(v.salePrice) > 0 ? [`${isB ? 'Agreement value' : 'Sale price'} ${inr0(v.salePrice)}.`] : []),
+      ...(expected > 0 ? [gstOn ? `With ${rate}% GST (${fmt(gst)}) that is <b>${fmt(expected + gst)}</b> to bill in all — the invoices add the GST.` : 'No GST on the brokerage.'] : []),
+    ];
+    if (stage !== 'invoice') {
+      return {
+        desc: '', lines: [],
+        effects: [...head, stage === 'open'
+          ? 'Nothing hits the books yet — no money has moved and nothing is owed.'
+          : `Nothing posts yet — it waits under "To invoice" until the ${isB ? 'builder' : 'seller'}'s invoice is raised; income is counted then.`],
+        docs: [{ coll: 'deals', data }],
+      };
+    }
+    // Closed and invoiced in one go: the deal, and the builder's (or seller's) invoice on it.
+    // The invoice points at the deal by '$deal', which the save swaps for the new deal's id.
+    const pid = data.seller.partyId;
+    const amt = num(v.expSeller);
+    const inv = brokerageInvoice({ ...data, id: '$deal' }, pid, 'seller', {
+      date: v.date || today(), amt, gst: gstOn ? 'yes' : 'no', gstRate: rate, gstAmt: r2(amt * rate / 100),
+      tds: v.tds, adv: 0, recv: 'later', dueDate: v.dueDate,
+    });
     return {
-      desc: '', lines: [],
-      effects: [
-        `Deal "<b>${esc(v.nickname)}</b>" opens in the pipeline with expected brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`,
-        ...(num(v.salePrice) > 0 ? [`Sale price ${inr0(v.salePrice)}.`] : []),
-        ...(expected > 0 ? [gstOn ? `With ${rate}% GST (${fmt(gst)}) that is <b>${fmt(expected + gst)}</b> to bill in all — the invoices add the GST.` : 'No GST on the brokerage.'] : []),
-        'Nothing hits the books yet — no money has moved and nothing is owed.',
-      ],
-      docs: [{
-        coll: 'deals',
-        data: {
-          nickname: String(v.nickname).trim(),
-          propertyRef: v.property?.id || null,
-          propertyCode: v.property?.propertyCode || '',
-          propertyName: v.property?.name || '',
-          propertyState: String(v.propertyState || S().settings.state || 'Tamil Nadu').trim(),
-          seller: dealSide(v.seller),
-          buyer: dealSide(v.buyer),
-          others: [],
-          salePrice: num(v.salePrice) || null,
-          // A % is kept only where the fee IS a % of the sale (typed as one); a fixed amount's % was just shown.
-          sellerPct: byPct(v, 'sellerPct', 'sellerBy') ? num(v.sellerPct) || null : null,
-          buyerPct: byPct(v, 'buyerPct', 'buyerBy') ? num(v.buyerPct) || null : null,
-          gst: { on: gstOn, rate: gstOn ? num(v.gstRate) : 0 },
-          expSeller: num(v.expSeller), expBuyer: num(v.expBuyer), expMonth: v.expMonth || null,
-          status: 'open',
-          opened: v.date || today(),
-        },
-      }],
+      desc: inv.desc, lines: inv.lines,
+      effects: [...head, ...inv.effects],
+      invoice: inv.invoice,
+      docs: [{ coll: 'deals', _key: 'deal', data }],
     };
   },
 };
@@ -743,9 +844,16 @@ EV.invoice = {
     if (!d) return need('Pick a deal.');
     const pid = sideParty(d, v.from);
     if (!pid) return need('No ' + (v.from || 'party') + ' on this deal yet.');
-    const base = num(v.amt);
-    if (!base) return need('Enter the brokerage amount.');
+    if (!num(v.amt)) return need('Enter the brokerage amount.');
+    return brokerageInvoice(d, pid, v.from, v);
+  },
+};
 
+// One side's brokerage invoice on a deal — the lines, what it does, and the invoice document.
+// d can be a deal still being created (id '$deal'): nothing is held or owed on it yet.
+function brokerageInvoice(d, pid, from, v) {
+  {
+    const base = num(v.amt);
     const gst = gstOf(v);
     const rate = v.gst === 'yes' ? num(v.gstRate) : 0;
     const total = base + gst;
@@ -754,7 +862,7 @@ EV.invoice = {
     const adv = Math.min(num(v.adv), held, r2(total - tds));
     const rem = r2(total - tds - adv);
     const recov = bal('1100', { party: pid, deal: d.id });
-    const acc = v.from === 'buyer' ? '4010' : '4000';
+    const acc = from === 'buyer' ? '4010' : '4000';
 
     const lines = [{ acc, cr: base, deal: d.id, party: pid }];
     if (gst) lines.push(...outputTaxLines(gst, isIntra(d.propertyState), { deal: d.id }));
@@ -790,6 +898,8 @@ EV.invoice = {
     // payment received on the spot, so its status is right from the first second.
     const paidNow = adv + tds + (into ? rem : 0);
 
+    // A builder's invoice says what it is for: project, unit, buyer, agreement value and %.
+    const what = dealInvoiceDesc(d, from);
     return {
       desc: `Brokerage — ${dealLabel(d)} (${pname(pid)})`,
       lines, effects: eff,
@@ -799,10 +909,11 @@ EV.invoice = {
         total, paid: r2(Math.min(paidNow, total)), dueDate: into ? null : (v.dueDate || addDays(v.date || today(), 30)),
         book: bookOfRecv(v.recv),
         date: v.date || today(),
+        ...(what ? { desc: what } : {}),
       },
     };
-  },
-};
+  }
+}
 
 // ═══════ A FEE THAT IS NOT THE BROKERAGE ═══════
 //

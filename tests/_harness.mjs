@@ -169,12 +169,20 @@ export function save(evKey, values, opts = {}) {
 
   const postDate = out.postDate || v.date;
   let txnId = null, no = null;
+  // Document ids first, as finance-sync.js reserves them before the transaction: a line or the
+  // invoice can name a document made by this same save ('$deal').
+  const keyIds = {};
+  const docRefs = docs.map(d => {
+    const id = nid(d.coll[0].toUpperCase());
+    if (d._key) keyIds['$' + d._key] = id;
+    return { ...d, id };
+  });
   if (lines.length) {
     validate({ ...out, date: postDate, lines });
     txnId = nid('TX');
     no = ++txnNo;
     s.txns.push({
-      id: txnId, no, date: postDate, event: evKey, desc: out.desc, lines,
+      id: txnId, no, date: postDate, event: evKey, desc: out.desc, lines: link(lines, keyIds),
       totals: {
         dr: r2(lines.reduce((a, l) => a + num(l.dr), 0)),
         cr: r2(lines.reduce((a, l) => a + num(l.cr), 0)),
@@ -186,12 +194,6 @@ export function save(evKey, values, opts = {}) {
     });
   }
 
-  const keyIds = {};
-  const docRefs = docs.map(d => {
-    const id = nid(d.coll[0].toUpperCase());
-    if (d._key) keyIds['$' + d._key] = id;
-    return { ...d, id };
-  });
   for (const d of docRefs) {
     const data = { ...link(d.data, keyIds), id: d.id, createdBy: 'test', createdAt: Date.now() };
     if (d._linkTxn && txnId) data.txnId = txnId;
@@ -231,7 +233,7 @@ export function save(evKey, values, opts = {}) {
     const invoiceNo = issued.no;
     const invPaid = num(out.invoice.paid);
     s.invoices.push({
-      ...out.invoice, id: nid('I'), txnId, invoiceNo,
+      ...link(out.invoice, keyIds), id: nid('I'), txnId, invoiceNo,
       paid: invPaid, status: docStatus(num(out.invoice.total) - invPaid, out.invoice.total), allocations: [],
       createdBy: 'test', createdAt: Date.now(),
     });

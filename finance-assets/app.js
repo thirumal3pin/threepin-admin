@@ -828,7 +828,7 @@ const CORE = {
   transfer: ['kind', 'amt', 'date'],
   statutory: ['kind', 'amt', 'date'],
   otherinc: ['party', 'desc', 'amt', 'via', 'date'],
-  newdeal: ['nickname', 'property', 'seller', 'buyer', 'salePrice', 'sellerPct', 'expSeller', 'buyerPct', 'expBuyer', 'gst', 'gstRate', 'totalWithGst', 'date'],
+  newdeal: ['nickname', 'property', 'sellerKind', 'builder', 'project', 'unit', 'seller', 'buyer', 'salePrice', 'sellerPct', 'expSeller', 'buyerPct', 'expBuyer', 'gst', 'gstRate', 'totalWithGst', 'stage', 'dueDate', 'tds', 'date'],
   register: ['deal', 'salePrice', 'date', 'note'],
   settle: ['deal', 'from', 'apply', 'refund', 'keep', 'date'],
   funding: ['kind', 'who', 'amt', 'date'],
@@ -1169,6 +1169,7 @@ function mountCrmPartyPicker(f) {
       vals[f.k] = !v ? null : v.__lead ? leadAsParty(v.__lead)
         : v.__new ? (v.crmRef || v.phone ? v : { __new: true, name: v.name, type: f.partyType || 'other' }) : v.id;
       EV[evKey].onchange?.(f.k, vals);
+      syncInputs(null);   // the nickname can follow the buyer
       mountPropertySuggestions(f);
       updatePreview();
     },

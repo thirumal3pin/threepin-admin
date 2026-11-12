@@ -35,7 +35,7 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   await p.waitForSelector('#pick_seller input');
   const order = await p.$$eval('#evForm > .field', els => els.map(e => e.dataset.field));
   ok('The form, in order: nickname, property, seller, buyer, sale price, brokerage %/amount each side, GST, total',
-    order.slice(0, 12).join() === 'nickname,property,seller,buyer,salePrice,sellerPct,expSeller,buyerPct,expBuyer,gst,gstRate,totalWithGst', order);
+    order.slice(0, 13).join() === 'nickname,property,sellerKind,seller,buyer,salePrice,sellerPct,expSeller,buyerPct,expBuyer,gst,gstRate,totalWithGst', order);
 
   // ── The CRM in the seller picker ──
   await p.fill('#pick_seller input', 'ak');

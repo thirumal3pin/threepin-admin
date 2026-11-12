@@ -855,8 +855,10 @@ export async function save(evKey, values, opts = {}) {
       const tref = doc(col('txns'));
       txnId = tref.id;
       no = nos[0];
+      // A line can name a document made by this same save ('$deal' — a deal closed and
+      // invoiced in one go); it gets the reserved id like any other link.
       tx.set(tref, stamp({
-        ...out, lines, date: postDate, event: evKey,
+        ...out, lines: link(lines), date: postDate, event: evKey,
         meta: stripForMeta(v),
         attachments: opts.attachments || [],
         allocations: allocations.map(a => ({ coll: a.coll, id: a.id, amt: a.amt })),
@@ -910,7 +912,7 @@ export async function save(evKey, values, opts = {}) {
       invoiceId = iref.id;
       const invPaid = num(out.invoice.paid);
       tx.set(iref, {
-        ...out.invoice, txnId, invoiceNo,
+        ...link(out.invoice), txnId, invoiceNo,
         paid: invPaid, status: docStatus(num(out.invoice.total) - invPaid, out.invoice.total),
         allocations: [],
         createdBy: currentUser?.email || 'unknown', createdAt: Date.now(),

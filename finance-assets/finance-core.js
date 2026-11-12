@@ -392,6 +392,90 @@ export function leadAsParty(l) {
     phone: String(l.phone || '').trim(), email: String(l.email || '').trim(),
   };
 }
+// ═══════ BUILDERS AND THEIR PROJECTS ═══════
+//
+// As a channel partner, a brokerage closes bookings in builders' projects — Purvankara's
+// Somerset and Windermere, Shriram's Kinglife. A builder is an ordinary client record (its
+// GSTIN, billing address and state print on its invoices like any client's) marked builder:true,
+// carrying a default commission % and its projects: [{id, name, location, codes, pct}], where
+// codes are the dashboard's property codes that belong to the project (KOY0003 → Kinglife).
+// A deal whose seller is a builder is a builder deal: the builder pays the brokerage and its
+// invoice is the one that has to go out — the buyer's side is optional.
+export const isBuilder = p => !!(p && p.builder);
+export const builderList = (parties = S.parties) => (parties || [])
+  .filter(p => p && p.builder && !p.__pending)
+  .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+export const codeKey = c => String(c || '').trim().toUpperCase();
+// The builder and project a property code belongs to — null when no project lists it.
+export function projectForCode(code, parties = S.parties) {
+  const k = codeKey(code);
+  if (!k) return null;
+  for (const b of builderList(parties)) {
+    for (const pj of b.projects || []) if ((pj.codes || []).map(codeKey).includes(k)) return { builder: b, project: pj };
+  }
+  return null;
+}
+export const projectOf = (builder, projectId) => (builder?.projects || []).find(p => p.id === projectId) || null;
+// The commission a project pays: its own %, else the builder's default.
+export const projectPct = (builder, project) => num(project?.pct) || num(builder?.commissionPct) || 0;
+export function isBuilderDeal(d, parties = S.parties) {
+  const pid = d?.seller?.partyId;
+  return !!pid && (d.sellerKind === 'builder' || isBuilder((parties || []).find(p => p.id === pid)));
+}
+// What the builder's invoice says it is for: the project, the unit, the buyer and the price.
+// "Rs." not "₹" — the invoice PDF's font has no rupee sign.
+export function dealInvoiceDesc(d, side, parties = S.parties) {
+  if (side !== 'seller' || !isBuilderDeal(d, parties)) return '';
+  const rs = n => 'Rs. ' + Math.round(num(n)).toLocaleString('en-IN');
+  const where = [d.projectName, d.unit && 'Unit ' + d.unit].filter(Boolean).join(', ') || d.propertyName || d.nickname || '';
+  return [
+    'Brokerage on booking' + (where ? ' — ' + where : ''),
+    d.buyer?.name ? 'Buyer: ' + d.buyer.name : '',
+    num(d.salePrice) > 0 ? 'Agreement value ' + rs(d.salePrice) + (num(d.sellerPct) > 0 ? ' @ ' + +num(d.sellerPct).toFixed(2) + '%' : '') : '',
+  ].filter(Boolean).join(' · ');
+}
+// Every builder with its projects and what each has done: deals open and closed, the sale
+// value, the brokerage expected and invoiced, what the builder still owes, and — the point of it —
+// the closed deals not yet invoiced. A builder's invoices that sit on no deal are listed too:
+// they are income, but no project gets the credit until they are put on a deal.
+export function builderBook(s = S) {
+  const live = (s.invoices || []).filter(liveInvoice);
+  return builderList(s.parties).map(b => {
+    const deals = (s.deals || []).filter(d => d.seller?.partyId === b.id);
+    const inv = live.filter(i => i.partyId === b.id);
+    const row = (project, ds) => {
+      const r = { project, deals: ds, open: 0, closed: 0, cancelled: 0, sale: 0, expected: 0, invoiced: 0, owed: 0, toInvoice: [] };
+      for (const d of ds) {
+        if (d.status === 'cancelled') { r.cancelled++; continue; }
+        if (d.status === 'open') r.open++; else r.closed++;
+        r.sale += num(d.salePrice);
+        r.expected += num(d.expSeller);
+        const di = inv.filter(i => i.dealId === d.id);
+        r.invoiced += di.reduce((a, i) => a + num(i.base), 0);
+        r.owed += Math.max(0, bal('1100', { party: b.id, deal: d.id }));
+        if (d.status !== 'open' && !di.length) r.toInvoice.push(d);
+      }
+      return r;
+    };
+    const known = new Set((b.projects || []).map(p => p.id));
+    const projects = (b.projects || []).map(pj => row(pj, deals.filter(d => d.projectId === pj.id)));
+    const loose = deals.filter(d => !known.has(d.projectId));
+    if (loose.length) projects.push(row(null, loose));
+    const dealIds = new Set(deals.map(d => d.id));
+    const unlinked = inv.filter(i => !i.dealId || !dealIds.has(i.dealId));
+    const sum = k => projects.reduce((a, r) => a + (Array.isArray(r[k]) ? r[k].length : num(r[k])), 0);
+    return {
+      builder: b, projects, unlinked,
+      totals: {
+        deals: deals.filter(d => d.status !== 'cancelled').length,
+        open: sum('open'), closed: sum('closed'), sale: sum('sale'), expected: sum('expected'),
+        invoiced: sum('invoiced') + unlinked.reduce((a, i) => a + num(i.base), 0),
+        owed: Math.max(0, bal('1100', { party: b.id })),
+        toInvoice: projects.flatMap(r => r.toInvoice),
+      },
+    };
+  });
+}
 export const pname = id => (party(id) || {}).name || '—';
 export const deal = id => S.deals.find(d => d.id === id) || null;
 export const dname = id => {
@@ -407,7 +491,7 @@ export function partySides(dealId) {
   const d = deal(dealId);
   if (!d) return [];
   const out = [];
-  if (d.seller?.partyId) out.push(['seller', 'Seller — ' + (d.seller.name || pname(d.seller.partyId))]);
+  if (d.seller?.partyId) out.push(['seller', (isBuilderDeal(d) ? 'Builder — ' : 'Seller — ') + (d.seller.name || pname(d.seller.partyId))]);
   if (d.buyer?.partyId) out.push(['buyer', 'Buyer — ' + (d.buyer.name || pname(d.buyer.partyId))]);
   (d.others || []).forEach((o, i) => {
     if (o.partyId) out.push(['other:' + i, (o.role || 'Other') + ' — ' + (o.name || pname(o.partyId))]);
