@@ -18,6 +18,7 @@
 // Save is disabled until check() is empty and the journal balances.
 
 import {
+  codeKey,
   A, EXP, PAY_VIA, TDS_SECTIONS, num, today, ym, addMonths, mlabel, fmt, esc,
   getState, deal, pname, partySides, sideParty, bal, partyBalances,
   schedule, prepaidLeft, splitGst, fyOf,
@@ -431,7 +432,15 @@ function dealSide(x) {
 }
 
 // A builder deal: the builder picked, its project, and the commission that project pays.
-const builderOf = v => v.sellerKind === 'builder' ? S().parties.find(p => p.id === v.builder && p.builder) || null : null;
+// The builder can be one on record, any client (made a builder when the deal saves), or a name
+// just added in the picker — like adding a vendor; its GST and billing details can follow later.
+const builderOf = v => {
+  if (v.sellerKind !== 'builder' || !v.builder) return null;
+  if (typeof v.builder === 'object') return v.builder.__new ? { name: String(v.builder.name || '').trim(), projects: [], __new: true } : null;
+  return S().parties.find(p => p.id === v.builder) || null;
+};
+// The project the form names: one of the builder's, or the new one being typed in.
+const projectNamed = (b, v) => v.project === '__new' ? (String(v.newProject || '').trim() ? { name: String(v.newProject).trim(), __new: true } : null) : projectOf(b, v.project);
 // The commission % follows the builder and project until a % is typed by hand.
 function builderPct(v) {
   const b = builderOf(v);
@@ -446,7 +455,7 @@ function builderPct(v) {
 // linked property — until it is typed over.
 function autoNick(v) {
   const b = builderOf(v);
-  const pj = b && projectOf(b, v.project);
+  const pj = b && projectNamed(b, v);
   const buyer = v.buyer ? pnameOf(v.buyer) : '';
   const nick = b
     ? [buyer && buyer !== '—' ? buyer : '', [pj?.name || b.name, v.unit].filter(Boolean).join(' ')].filter(Boolean).join(' — ')
@@ -473,17 +482,27 @@ EV.newdeal = {
       }),
       F('sellerKind', 'Who is selling', 'select', {
         opts: [['owner', 'An owner — resale'], ['builder', 'A builder — a booking in their project']], def: 'owner',
-        hint: isB && !builders.length ? 'No builders yet — add them and their projects on Deals → Builders.' : '',
       }),
       ...(isB ? [
-        F('builder', 'Builder', 'select', {
-          opts: builders.map(x => [x.id, x.name]), blank: builders.length ? 'Pick the builder' : undefined,
-          hint: b && !String(b.gstin || '').trim() ? 'No GSTIN on file for this builder — add its billing details on Deals → Builders, so the invoice prints them.' : '',
+        F('builder', 'Builder', 'party', {
+          partyType: 'client', builders: true,
+          hint: !b ? (builders.length ? 'Search your builders — or type a new name and add it, like a vendor' : 'Type the builder\'s name and add it — its GST and billing details can be filled in now or later')
+            : b.__new ? 'New builder — its GSTIN and billing address can go under "More details" now, or on Deals → Builders later.'
+            : !String(b.gstin || '').trim() ? 'No GSTIN on file yet — add it under "More details" now, or on Deals → Builders later.' : '',
         }),
         F('project', 'Project', 'select', {
-          opts: [...(b?.projects || []).map(p => [p.id, p.name + (p.location ? ' · ' + p.location : '')]), ['', 'Not in the list']],
-          show: () => !!b, def: b?.projects?.[0]?.id || '',
+          opts: [...(b?.projects || []).map(p => [p.id, p.name + (p.location ? ' · ' + p.location : '')]), ['__new', '+ A new project'], ['', 'No project']],
+          show: () => !!b, def: b?.projects?.[0]?.id || '__new',
         }),
+        F('newProject', 'New project name', 'text', {
+          show: x => !!b && x.project === '__new',
+          hint: 'Added to the builder\'s projects — its % and property codes can be set later on Deals → Builders.',
+        }),
+        // The builder's billing details, while they are still missing — optional, now or later.
+        ...(b && !String(b.gstin || '').trim() ? [
+          F('bGstin', `${b.name || 'Builder'}'s GSTIN (optional)`, 'text', { tier: 'detail', hint: 'Prints on the builder\'s invoice. Leave blank to add it later on Deals → Builders.' }),
+          F('bAddress', `${b.name || 'Builder'}'s billing address (optional)`, 'text', { tier: 'detail' }),
+        ] : []),
         F('unit', 'Unit / flat no.', 'text', { show: () => !!b, hint: 'As on the booking form — it prints on the builder\'s invoice.' }),
       ] : [
         F('seller', 'Seller', 'party', { partyType: 'client', crm: 'seller', hint: 'Search your clients or the CRM\'s leads by name or phone — or add a new name' }),
@@ -516,29 +535,33 @@ EV.newdeal = {
       const hit = projectForCode(v.property.propertyCode);
       if (hit) { v.sellerKind = 'builder'; v.builder = hit.builder.id; v.project = hit.project.id; v.seller = null; builderPct(v); }
     }
+    // Only the side in use is kept: a builder typed in and then dropped is never created.
+    if (k === 'sellerKind') { if (v.sellerKind === 'builder') v.seller = null; else v.builder = null; }
     if (k === 'sellerKind' && v.sellerKind === 'builder' && !v.builder) {
       const bl = builderList(S().parties);
       if (bl.length === 1) v.builder = bl[0].id;
     }
     if (k === 'sellerKind' || k === 'builder') {
       const b = builderOf(v);
-      if (b && !projectOf(b, v.project)) v.project = b.projects?.[0]?.id || '';
+      // A project of this builder stays (a preset from the Builders tab names both); otherwise its first, or a new one.
+      if (b && !projectOf(b, v.project) && (k === 'builder' || (v.project !== '__new' && v.project !== ''))) v.project = b.projects?.[0]?.id || '__new';
       builderPct(v);
     }
     if (k === 'project') builderPct(v);
     if (k === 'sellerPct') v.__pctAuto = false;
-    if (['property', 'sellerKind', 'builder', 'project', 'unit', 'buyer'].includes(k)) autoNick(v);
+    if (['property', 'sellerKind', 'builder', 'project', 'newProject', 'unit', 'buyer'].includes(k)) autoNick(v);
     brokerageSync(k, v);
   },
   check: v => [
     ...dateChecks(v),
     ...(String(v.nickname || '').trim() ? [] : [err('nickname', 'Give the deal a nickname you will recognise')]),
     ...(v.sellerKind === 'builder'
-      ? (builderOf(v) ? [] : [err('builder', 'Pick the builder')])
+      ? (builderOf(v)?.name ? [] : [err('builder', 'Pick the builder — or type its name and add it')])
       : (pidOf(v.seller) || pidOf(v.buyer) ? [] : [err('seller', 'Add a seller or a buyer — at least one')])),
     ...(v.stage === 'invoice' && !(num(v.expSeller) > 0) ? [err('expSeller', `Enter the ${v.sellerKind === 'builder' ? 'builder\'s commission' : 'seller\'s brokerage'} to invoice`)] : []),
     ...(v.stage === 'invoice' && v.sellerKind !== 'builder' && !pidOf(v.seller) ? [err('seller', 'Add the seller to invoice')] : []),
-    ...(v.stage === 'invoice' && builderOf(v) && !String(builderOf(v).gstin || '').trim() ? [warn('builder', 'This builder has no GSTIN on file — the invoice will print without it. Add it on Deals → Builders.')] : []),
+    ...(v.stage === 'invoice' && builderOf(v) && !String(builderOf(v).gstin || v.bGstin || '').trim() ? [warn('builder', 'This builder has no GSTIN on file — the invoice will print without it. Add it under "More details", or on Deals → Builders.')] : []),
+    ...(String(v.bGstin || '').trim() && !/^\d{2}[A-Z0-9]{13}$/i.test(String(v.bGstin).trim()) ? [err('bGstin', 'A GSTIN is 15 characters, starting with the state code — check it')] : []),
     ...(v.stage === 'invoice' && tdsOn() && num(v.tds) > 10 ? [err('tds', 'TDS on brokerage is normally 2% (194H) — check the rate')] : []),
     ...(num(v.salePrice) < 0 ? [err('salePrice', 'The sale price cannot be negative')] : []),
     ...(num(v.expSeller) < 0 || num(v.expBuyer) < 0 ? [err('expSeller', 'Expected brokerage cannot be negative')] : []),
@@ -555,9 +578,36 @@ EV.newdeal = {
     const gst = r2(expected * rate / 100);
     const b = builderOf(v);
     const isB = v.sellerKind === 'builder';
-    if (isB && !b) return need('Pick the builder.');
-    const pj = b && projectOf(b, v.project);
+    if (isB && !b?.name) return need('Pick the builder, or add it.');
     const stage = v.stage || 'open';
+    // What the builder's record gains with this deal: the builder flag (a client picked as the
+    // builder), a project typed in, the GSTIN and address while they were missing. On a saved
+    // form the builder is an id by now — a name just added was created a moment ago.
+    const bid = typeof v.builder === 'string' ? v.builder : null;
+    const patchB = {};
+    let pj = b ? projectOf(b, v.project) : null;
+    if (b) {
+      if (!b.builder) patchB.builder = true;
+      const named = projectNamed(b, v);
+      if (named?.__new) {
+        const same = (b.projects || []).find(p => p.name.trim().toLowerCase() === named.name.toLowerCase());
+        if (same) pj = same;
+        else {
+          const code = codeKey(v.property?.propertyCode);
+          pj = { id: 'pj_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: named.name, location: '', pct: null, codes: code && !projectForCode(code) ? [code] : [] };
+          patchB.projects = [...(b.projects || []), pj];
+        }
+      }
+      if (String(v.bGstin || '').trim() && !String(b.gstin || '').trim()) patchB.gstin = String(v.bGstin).trim().toUpperCase();
+      if (String(v.bAddress || '').trim() && !String(b.address || '').trim()) patchB.address = String(v.bAddress).trim();
+    }
+    const updates = bid && Object.keys(patchB).length ? [{ coll: 'parties', id: bid, data: patchB }] : [];
+    const added = [
+      ...(b && (b.__new || b.__pending) ? [`<b>${esc(b.name)}</b> added as a builder${patchB.gstin ? ' with its GSTIN' : ' — its GST and billing details can be filled in any time on Deals → Builders'}.`] : []),
+      ...(b && !b.__new && !b.__pending && patchB.builder ? [`${esc(b.name)} is now one of your builders.`] : []),
+      ...(patchB.projects ? [`New project <b>${esc(pj.name)}</b> added to ${esc(b.name)}${pj.codes.length ? ' with ' + esc(pj.codes[0]) : ''}.`] : []),
+      ...(b && !b.__new && !b.__pending && (patchB.gstin || patchB.address) ? [`${esc(b.name)}'s ${[patchB.gstin && 'GSTIN', patchB.address && 'billing address'].filter(Boolean).join(' and ')} saved.`] : []),
+    ];
     const side = (who, amt, pct) => num(amt) > 0 ? `${who} <b>${inr0(amt)}</b>${pctTxt(pct) ? ' (' + pctTxt(pct) + ')' : ''}` : '';
     const sides = [side(isB ? 'builder' : 'seller', v.expSeller, v.sellerPct), side('buyer', v.expBuyer, v.buyerPct)].filter(Boolean);
     const data = {
@@ -566,7 +616,7 @@ EV.newdeal = {
       propertyCode: v.property?.propertyCode || '',
       propertyName: v.property?.name || '',
       propertyState: String(v.propertyState || S().settings.state || 'Tamil Nadu').trim(),
-      seller: dealSide(isB ? b.id : v.seller),
+      seller: dealSide(isB ? v.builder : v.seller),
       buyer: dealSide(v.buyer),
       others: [],
       ...(isB ? { sellerKind: 'builder', projectId: pj?.id || null, projectName: pj?.name || '', unit: String(v.unit || '').trim() } : {}),
@@ -585,6 +635,7 @@ EV.newdeal = {
         ? `Deal "<b>${esc(v.nickname)}</b>" opens in the pipeline with expected brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`
         : `Deal "<b>${esc(v.nickname)}</b>" recorded as <b>closed</b> on ${esc(v.date || today())}, brokerage <b>${fmt(expected)}</b>${sides.length ? ' — ' + sides.join(' + ') : ''}.`,
       ...(b ? [`Builder deal: ${esc(b.name)}${pj ? ' · ' + esc(pj.name) : ''}${data.unit ? ' · unit ' + esc(data.unit) : ''} — counted on the Builders tab.`] : []),
+      ...added,
       ...(num(v.salePrice) > 0 ? [`${isB ? 'Agreement value' : 'Sale price'} ${inr0(v.salePrice)}.`] : []),
       ...(expected > 0 ? [gstOn ? `With ${rate}% GST (${fmt(gst)}) that is <b>${fmt(expected + gst)}</b> to bill in all — the invoices add the GST.` : 'No GST on the brokerage.'] : []),
     ];
@@ -594,7 +645,7 @@ EV.newdeal = {
         effects: [...head, stage === 'open'
           ? 'Nothing hits the books yet — no money has moved and nothing is owed.'
           : `Nothing posts yet — it waits under "To invoice" until the ${isB ? 'builder' : 'seller'}'s invoice is raised; income is counted then.`],
-        docs: [{ coll: 'deals', data }],
+        docs: [{ coll: 'deals', data }], updates,
       };
     }
     // Closed and invoiced in one go: the deal, and the builder's (or seller's) invoice on it.
@@ -609,7 +660,7 @@ EV.newdeal = {
       desc: inv.desc, lines: inv.lines,
       effects: [...head, ...inv.effects],
       invoice: inv.invoice,
-      docs: [{ coll: 'deals', _key: 'deal', data }],
+      docs: [{ coll: 'deals', _key: 'deal', data }], updates,
     };
   },
 };
@@ -3440,7 +3491,7 @@ export const CHOOSER = [
 // Which field keys on each event hold a party, so finance-sync.js knows what to
 // materialise before it calls build() for real.
 export const PARTY_FIELDS = {
-  newdeal: ['seller', 'buyer'],
+  newdeal: ['seller', 'buyer', 'builder'],
   raiseinv: ['party'],
   otherinc: ['party'],
   dealcost: ['vendor'],

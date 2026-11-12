@@ -828,7 +828,7 @@ const CORE = {
   transfer: ['kind', 'amt', 'date'],
   statutory: ['kind', 'amt', 'date'],
   otherinc: ['party', 'desc', 'amt', 'via', 'date'],
-  newdeal: ['nickname', 'property', 'sellerKind', 'builder', 'project', 'unit', 'seller', 'buyer', 'salePrice', 'sellerPct', 'expSeller', 'buyerPct', 'expBuyer', 'gst', 'gstRate', 'totalWithGst', 'stage', 'dueDate', 'tds', 'date'],
+  newdeal: ['nickname', 'property', 'sellerKind', 'builder', 'project', 'newProject', 'unit', 'seller', 'buyer', 'salePrice', 'sellerPct', 'expSeller', 'buyerPct', 'expBuyer', 'gst', 'gstRate', 'totalWithGst', 'stage', 'dueDate', 'tds', 'date'],
   register: ['deal', 'salePrice', 'date', 'note'],
   settle: ['deal', 'from', 'apply', 'refund', 'keep', 'date'],
   funding: ['kind', 'who', 'amt', 'date'],
@@ -1181,6 +1181,7 @@ function mountPartyPicker(f) {
   const box = document.getElementById('pick_' + f.k);
   if (!box) return;
   if (f.crm) return mountCrmPartyPicker(f);
+  if (f.builders) return mountBuilderPicker(f, box);
   picker(box, {
     value: vals[f.k] && typeof vals[f.k] === 'string'
       ? getState().parties.find(p => p.id === vals[f.k]) : vals[f.k],
@@ -1197,6 +1198,33 @@ function mountPartyPicker(f) {
       // A party can change which fields show (an allocation table appears once a vendor is
       // known), so the form is rebuilt; the picker takes its value back from vals.
       if (fieldsFor(evKey, vals).some(x => x.type === 'alloc')) buildForm(); else updatePreview();
+    },
+  });
+}
+
+// A deal's builder: your builders, then your other clients (picking one makes it a builder when
+// the deal saves) — or a new name, added on the spot like a vendor.
+function mountBuilderPicker(f, box) {
+  picker(box, {
+    value: vals[f.k] && typeof vals[f.k] === 'string' ? getState().parties.find(p => p.id === vals[f.k]) : vals[f.k],
+    placeholder: 'Search your builders — or add a new one',
+    allowNew: true,
+    newLabel: 'Add builder',
+    describe: p => p.__new ? `${p.name} (new builder)` : p.name,
+    search: async q => {
+      const t = String(q || '').trim().toLowerCase();
+      const hit = p => !p.__pending && (!t || String(p.name || '').toLowerCase().includes(t));
+      const bs = getState().parties.filter(p => p.builder && hit(p));
+      const cs = t ? getState().parties.filter(p => !p.builder && (p.type === 'client' || !p.type) && hit(p)) : [];
+      return [
+        ...(bs.length && cs.length ? [{ __head: 'Your builders' }] : []), ...bs.slice(0, 10),
+        ...(cs.length ? [{ __head: 'Your clients' }] : []), ...cs.slice(0, 6),
+      ];
+    },
+    onChange: v => {
+      vals[f.k] = v && v.__new ? { __new: true, name: v.name, type: 'client', builder: true } : (v ? v.id : null);
+      EV[evKey].onchange?.(f.k, vals);
+      buildForm();   // the builder decides the project list and the commission
     },
   });
 }

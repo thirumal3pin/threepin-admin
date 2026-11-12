@@ -116,4 +116,40 @@ const pur2 = builderBook(S).find(x => x.builder.id === 'B_PUR');
 check('An invoice to the builder on no deal: listed, and in the builder\'s invoiced total', pur2.unlinked.length === 1 && pur2.totals.invoiced === 270000 + 40000, JSON.stringify(pur2.totals));
 check('A builder with no deals yet still shows, with its projects', builderBook(S).length === 2);
 
+section('A builder added from the deal form, like a vendor — details now or later');
+{
+  // A new name, a new project typed in, no GSTIN yet.
+  save('newdeal', {
+    date: '2026-10-08', sellerKind: 'builder', builder: { __new: true, name: 'Casagrand', type: 'client', builder: true },
+    newProject: 'Utopia', unit: '7B', buyer: 'C_RAJ', salePrice: 8000000, sellerPct: 2, stage: 'closed',
+  });
+  const cg = S.parties.find(p => p.name === 'Casagrand');
+  const d = S.deals.at(-1);
+  check('Casagrand is created as a builder, with Utopia as its project', cg?.builder === true && cg.projects.length === 1 && cg.projects[0].name === 'Utopia' && !cg.gstin, JSON.stringify(cg));
+  check('…and the deal is on Casagrand — Utopia, 1,60,000', d.seller.partyId === cg.id && d.projectId === cg.projects[0].id && d.projectName === 'Utopia' && d.expSeller === 160000, JSON.stringify(d));
+  check('…shown on the Builders tab, to invoice', builderBook(S).find(x => x.builder.id === cg.id)?.totals.toInvoice.length === 1);
+
+  // Next deal: the same builder, another new project, its GSTIN given this time.
+  save('newdeal', {
+    date: '2026-10-09', sellerKind: 'builder', builder: cg.id, project: '__new', newProject: 'Aldea',
+    property: { id: 'p_x', propertyCode: 'OMR0100', name: 'Aldea 3BHK' }, buyer: 'C_RAJ', expSeller: 90000, bGstin: '33aabcc1234d1z5', bAddress: 'Anna Salai, Chennai',
+  });
+  check('A second project is added — the linked property\'s code tagged to it', cg.projects.length === 2 && cg.projects[1].name === 'Aldea' && cg.projects[1].codes[0] === 'OMR0100', JSON.stringify(cg.projects));
+  check('…and the GSTIN and address are saved on the builder', cg.gstin === '33AABCC1234D1Z5' && cg.address === 'Anna Salai, Chennai');
+  check('…so the code now finds its project', projectForCode('OMR0100')?.project.name === 'Aldea');
+  save('newdeal', { date: '2026-10-10', sellerKind: 'builder', builder: cg.id, project: '__new', newProject: 'utopia', buyer: 'C_RAJ', expSeller: 1000, bGstin: '33ZZZZZ9999Z9Z9' });
+  check('A project typed again by name is the same project; a GSTIN on file is not overwritten', cg.projects.length === 2 && S.deals.at(-1).projectId === cg.projects[0].id && cg.gstin === '33AABCC1234D1Z5');
+
+  // A client already on the books, picked as the builder, becomes one.
+  save('newdeal', { date: '2026-10-11', sellerKind: 'builder', builder: 'C_RAJ', project: '', expSeller: 5000, buyer: { __new: true, name: 'Someone', type: 'client' } });
+  check('A client picked as the builder is made a builder', S.parties.find(p => p.id === 'C_RAJ').builder === true);
+
+  const v = { sellerKind: 'builder', builder: { __new: true, name: 'Dropped', type: 'client', builder: true } };
+  v.sellerKind = 'owner'; EV.newdeal.onchange('sellerKind', v);
+  check('Switching back to an owner drops a builder that was only typed in', v.builder === null);
+  check('A new builder: GSTIN and address offered under More details', ['bGstin', 'bAddress'].every(k => fieldsFor('newdeal', { sellerKind: 'builder', builder: { __new: true, name: 'X' } }).find(f => f.k === k)?.tier === 'detail'));
+  check('…and a builder with a GSTIN is not asked again', !keys({ sellerKind: 'builder', builder: 'B_SHR' }).includes('bGstin'));
+  refuses('A mistyped GSTIN is refused', () => save('newdeal', { date: '2026-10-12', sellerKind: 'builder', builder: { __new: true, name: 'Typo Homes', type: 'client', builder: true }, expSeller: 1000, bGstin: '33ABC' }), 'gstin');
+}
+
 report();

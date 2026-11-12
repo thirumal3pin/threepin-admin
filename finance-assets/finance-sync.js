@@ -980,6 +980,7 @@ function resolveParty(value, newParties) {
     gstin: value.gstin || '',
     state: value.state || '',
     crmRef: value.crmRef || null,
+    ...(value.builder ? { builder: true, projects: [] } : {}),
     createdAt: Date.now(),
   };
   newParties.push({ ref: pref, record });

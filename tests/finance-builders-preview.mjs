@@ -75,8 +75,8 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   await p.fill('#pick_property input', 'KOY');
   await p.waitForSelector('#pick_property .picker-results button');
   await p.click('#pick_property .picker-results button:has-text("KOY0003")');
-  await p.waitForSelector('#f_builder');
-  ok('Linking KOY0003: a builder deal — Shriram, Kinglife, 2.5% — and no owner picker', (await val('#f_sellerKind')) === 'builder' && (await val('#f_builder')) === 'b_shriram' && (await val('#f_project')) === 'pj_kinglife' && (await val('#f_sellerPct')) === '2.5' && !(await p.$('#pick_seller')));
+  await p.waitForSelector('#pick_builder');
+  ok('Linking KOY0003: a builder deal — Shriram, Kinglife, 2.5% — and no owner picker', (await val('#f_sellerKind')) === 'builder' && /Shriram Properties/.test(await p.innerText('#pick_builder')) && (await val('#f_project')) === 'pj_kinglife' && (await val('#f_sellerPct')) === '2.5' && !(await p.$('#pick_seller')));
   await type('#f_unit', 'C-905');
   await type('#f_salePrice', 12000000);
   ok('Agreement value 1.2 Cr → commission 3,00,000', (await val('#f_expSeller')) === '300000', await val('#f_expSeller'));
@@ -89,6 +89,30 @@ for (const [name, width] of [['desk', 1280], ['phone', 390]]) {
   const fx = norm(await p.innerText('#pvEffects').catch(() => ''));
   ok('Closed and invoiced now: the preview shows the deal closed and the builder\'s income and GST', /recorded as closed/.test(fx) && /Builder deal: Shriram Properties · Kinglife · unit C-905/.test(fx) && /₹3,00,000/.test(fx) && /GST/.test(fx), fx.slice(0, 500));
   await p.screenshot({ path: `tests/out/look-builder-deal-form-${name}.png`, fullPage: true });
+
+  // ── A builder not on record yet: added from the form, like a vendor ──
+  await p.evaluate(() => window.fin.pick());
+  await p.waitForTimeout(150);
+  await p.evaluate(() => window.fin.record('newdeal'));
+  await p.waitForSelector('#f_sellerKind');
+  await p.selectOption('#f_sellerKind', 'builder');
+  await p.waitForSelector('#pick_builder input');
+  await p.fill('#pick_builder input', 'Casagrand');
+  await p.waitForSelector('#pick_builder .picker-results button:has-text("Add builder")', { timeout: 5000 }).catch(() => {});
+  const brows = await p.$$eval('#pick_builder .picker-results > *', els => els.map(e => e.innerText.replace(/\s+/g, ' ').trim()));
+  ok('The builder picker offers "+ Add builder" for a new name', brows.some(r => /Add builder "Casagrand"/.test(r)), brows);
+  await p.click('#pick_builder .picker-results button:has-text("Add builder")');
+  await p.waitForSelector('#f_newProject');
+  ok('A new builder: "+ A new project" chosen, its name asked', (await val('#f_project')) === '__new');
+  await type('#f_newProject', 'Utopia');
+  await type('#f_unit', '7B');
+  ok('…the nickname follows the new project', (await val('#f_nickname')) === 'Utopia 7B', await val('#f_nickname'));
+  ok('…its GSTIN and billing address are offered under More details', !!(await p.$('#moreDetails #f_bGstin')) && !!(await p.$('#moreDetails #f_bAddress')));
+  await type('#f_expSeller', 150000);
+  await p.waitForTimeout(300);
+  const nfx = norm(await p.innerText('#pvEffects').catch(() => ''));
+  ok('The preview says Casagrand is added as a builder, details any time', /Casagrand added as a builder/.test(nfx) && /Utopia/.test(nfx), nfx.slice(0, 500));
+  if (name === 'desk') await p.screenshot({ path: 'tests/out/look-builder-new-inline.png', fullPage: true });
 
   // ── A builder deal's panel ──
   await p.evaluate(() => window.fin.go('deals'));

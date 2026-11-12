@@ -85,7 +85,7 @@ function resolveParty(value) {
   const hit = matchParty(s.parties, value);
   if (hit) { if (value.crmRef && !hit.crmRef) hit.crmRef = value.crmRef; return hit.id; }
   const id = nid('P');
-  s.parties.push({ id, name: String(value.name).trim(), type: value.type || 'other', phone: value.phone || '', state: value.state || '', ...(value.crmRef ? { crmRef: value.crmRef } : {}) });
+  s.parties.push({ id, name: String(value.name).trim(), type: value.type || 'other', phone: value.phone || '', state: value.state || '', ...(value.crmRef ? { crmRef: value.crmRef } : {}), ...(value.builder ? { builder: true, projects: [] } : {}) });
   return id;
 }
 
