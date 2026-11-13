@@ -18,6 +18,22 @@ eq('Meta phone p:+91…', M.phoneKey('p:+919585509459'), '919585509459');
 eq('Meta phone with no country code', M.phoneKey('p:9787866502'), '919787866502');
 eq('A mistyped 13-digit number is kept but not valid', [M.phoneKey('p:+9189573526441'), M.isValidMobile(M.phoneKey('p:+9189573526441'))], ['9189573526441', false]);
 eq('Display phone', M.displayPhone('p:+919585509459'), '+91 95855 09459');
+
+// ── Searching leads by name or number ──
+{
+  const f = ['Akash Kumar', 'p:+919585509459', 'akash@x.in', 'Called, wants 3BHK', 'KOY0003'];
+  const pk = M.phoneKey('p:+919585509459');
+  ok('Search: part of the name', M.matchesSearch(f, pk, 'akash'));
+  ok('Search: the name in any order, any case', M.matchesSearch(f, pk, 'KUMAR akash'));
+  ok('Search: the 10-digit number', M.matchesSearch(f, pk, '9585509459'));
+  ok('Search: the number typed with +91 and spaces', M.matchesSearch(f, pk, '+91 95855 09459'));
+  ok('Search: with a leading 0', M.matchesSearch(f, pk, '09585509459'));
+  ok('Search: the last few digits', M.matchesSearch(f, pk, '09459'));
+  ok('Search: a note or a property code', M.matchesSearch(f, pk, 'wants 3bhk') && M.matchesSearch(f, pk, 'koy0003'));
+  ok('Search: a different number does not match', !M.matchesSearch(f, pk, '98400 12345'));
+  ok('Search: a different name does not match', !M.matchesSearch(f, pk, 'divya'));
+  ok('Search: nothing typed matches everyone', M.matchesSearch(f, pk, '  '));
+}
 eq('Meta time is read in its own offset', M.fmtWhen(M.parseTime('2026-10-15T01:37:51-05:00')), '15 Oct 2026, 12:07 pm');
 eq('A typed day-first date', M.dayKey(M.parseTime('27-8-2026')), '2026-08-27');
 eq('Ratings 1 to 5, as typed', ['5', '4 ', '3', '2', '1', '4/5', '3.5', 'hot', 'Warm', 'cold', '', 'abc', '7'].map(M.parseRating), [5, 4, 3, 2, 1, 4, 4, 5, 3, 1, null, null, null]);

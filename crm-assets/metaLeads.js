@@ -399,6 +399,7 @@
       '<button class="ml-btn ml-read' + (S.read ? '' : ' primary') + '" ' + (S.reading ? 'disabled' : '') + ' onclick="MetaLeads.read()"><i class="fa-solid fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> ' + '<span class="ml-hide-s">' + (S.reading ? 'Reading…' : (S.read ? 'Refresh' : 'Read the sheets')) + '</span></button></div></div>' +
       '<div class="ml-test"><i class="fa-solid fa-circle-info"></i> <span>Edits here are <b>written to the Google Sheet</b>. Nothing is added to the CRM yet.</span></div>' +
       '<div class="ml-tabs">' + tabs + '</div>' +
+      (S.plan && S.view !== 'meta-leads' ? '<div class="ml-bar ml-hbar"><input class="ml-search ml-hsearch" type="search" placeholder="Search leads by name or phone number…" oninput="MetaLeads.searchFrom(this.value)"></div>' : '') +
       (S.readError ? '<div class="ml-alert bad">' + esc(S.readError) + '</div>' : '') +
       (S.read && S.read.errors && S.read.errors.length ? '<div class="ml-alert bad">' + S.read.errors.map(function (e) { return '<div><b>' + esc(e.title) + '</b> — ' + esc(e.error) + '</div>'; }).join('') + '</div>' : '');
   }
@@ -505,14 +506,17 @@
     if (F.tab && !rows.some(function (e) { return e.where.spreadsheetId + ':' + e.where.gid === F.tab; })) return false;
     var w = dateWindow(F);
     if (w && (F.dateOf === 'fu' ? !inWindow(fuAt(p), w) : !rows.some(function (e) { return inWindow(e.at, w); }))) return false;
-    var q = S.q.trim().toLowerCase();
-    if (q) {
-      var bv = S.briefs[p.key] && S.briefs[p.key].v;
-      var hay = [p.name, p.phone, p.email, p.team.assignedRaw, p.crm && p.crm.name, bv && bv.line, bv && bv.next && bv.next.action].concat(p.team.notes.map(function (n) { return n.text; })).join(' ').toLowerCase();
-      if (hay.indexOf(q) < 0 && String(p.phoneKey).indexOf(q.replace(/\D/g, '') || '§') < 0) return false;
-    }
     return true;
   }
+  // The search box looks through EVERY lead — whatever property, filter or "My leads" is chosen —
+  // by name or number (any part of it, typed any way), notes, email, agent or property code.
+  function matchQ(p) {
+    var bv = S.briefs[p.key] && S.briefs[p.key].v;
+    var fields = [p.name, p.phone, p.email, p.team.assignedRaw, p.crm && p.crm.name, bv && bv.line, bv && bv.next && bv.next.action]
+      .concat(p.team.notes.map(function (n) { return n.text; }), p.properties || []);
+    return MM().matchesSearch(fields, p.phoneKey, S.q);
+  }
+  function searching() { return !!String(S.q || '').trim(); }
   function sorted(list) {
     var by = S.f.sort, out = list.slice();
     if (by === 'next') {
@@ -545,7 +549,7 @@
     else out.sort(function (a, b) { return lastAtFor(b) - lastAtFor(a); });
     return out;
   }
-  function currentList() { return sorted(peopleFor(S.prop).filter(passes)); }
+  function currentList() { return searching() ? sorted(S.plan.people.filter(matchQ)) : sorted(peopleFor(S.prop).filter(passes)); }
   function tiles(a, code) {
     var p = code === 'all' ? null : S.plan.properties.find(function (x) { return x.code === code; });
     var create = p ? p.create : S.plan.people.filter(function (x) { return x.action === 'create'; }).length;
@@ -753,10 +757,11 @@
     var openP = phone && S.open ? list.concat(S.plan.people).find(function (x) { return x.key === S.open; }) : null;
     var sw = '<div class="ml-layout"><button class="' + (S.layout !== 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'list\')"><i class="fa-solid fa-list"></i> List</button><button class="' + (S.layout === 'table' ? 'on' : '') + '" onclick="MetaLeads.layout(\'table\')"><i class="fa-solid fa-table"></i> Table</button></div>';
     return propChips(true) + mineSwitch() + tiles(a, S.prop) +
-      '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search name, phone, note…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)">' +
+      '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search leads by name or phone number…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)">' +
         '<button class="ml-btn ml-fbtn2' + (S.fOpen ? ' on' : '') + '" onclick="MetaLeads.fOpen()" aria-expanded="' + !!S.fOpen + '"><i class="fa-solid fa-sliders"></i> Filters' + (nSet ? ' <span class="ml-fn">' + nSet + '</span>' : '') + '</button>' +
         '<div class="ml-chips ml-scroll">' + chips + '</div></div>' +
       '<div class="ml-tools-w' + (S.fOpen ? ' open' : '') + '">' + sw + toolbar() + '</div>' +
+      (searching() ? '<div class="ml-qnote"><i class="fa-solid fa-magnifying-glass"></i> <span><b>' + list.length + '</b> of all ' + S.plan.people.length + ' leads match “' + esc(S.q.trim()) + '” — searched across every property, with the filters set aside.</span> <button class="ml-link" onclick="MetaLeads.search(\'\', true)">Clear search</button></div>' : '') +
       (S.layout === 'table' && !phone ? tableHtml(list) :
         (list.length ? bulkBar(list) + '<div class="ml-list' + (S.selMode ? ' selmode' : '') + '">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') + (phone ? drawerHtml(openP) : '') +
         (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : ''));
@@ -1521,17 +1526,27 @@
     go: function (v) { if (typeof toggleView === 'function') toggleView(v); },
     read: function () { readSheets(false); },
     reload: function () { loadConfig(true); },
-    prop: function (c) { S.prop = c; S.open = null; S.shown = PAGE; S.tab = null; render(); },
+    prop: function (c) { S.prop = c; S.qProp = null; if (searching()) S.q = ''; S.open = null; S.shown = PAGE; S.tab = null; render(); },
     tab: function (k) { S.tab = S.tab === k ? null : k; render(); },
     an: function (k, v) { S.an[k] = v; saveAn(); render(); },
     filter: function (f) { S.filter = f; S.shown = PAGE; if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
-    search: function (q) {
+    search: function (q, now) {
+      var was = searching();
       S.q = q; S.shown = PAGE;
+      if (!was && searching()) { S.qProp = S.prop; S.prop = 'all'; }
+      if (was && !searching() && S.qProp) { S.prop = S.qProp; S.qProp = null; }
+      if (now) { clearTimeout(S.qt); render(); return; }
       clearTimeout(S.qt); S.qt = setTimeout(function () {
         var box = document.querySelector('#metaLeadsView .ml-search'); var pos = box && box.selectionStart;
         render();
         var b2 = document.querySelector('#metaLeadsView .ml-search'); if (b2) { b2.focus(); try { b2.setSelectionRange(pos, pos); } catch (e) {} }
       }, 180);
+    },
+    // Typed on another tab (Duplicates, Analysis, Setup): opens Leads with the search, cursor kept.
+    searchFrom: function (q) {
+      MetaLeads.search(q, true);
+      if (S.view !== 'meta-leads') MetaLeads.go('meta-leads');
+      setTimeout(function () { var b = document.querySelector('#metaLeadsView .ml-search'); if (b) { b.focus(); try { b.setSelectionRange(b.value.length, b.value.length); } catch (e) {} } }, 60);
     },
     more: function () { S.shown += PAGE; render(); },
     toggle: function (k, force) {
@@ -1539,7 +1554,7 @@
       S.open = force ? k : (S.open === k ? null : k);
       if (S.open && S.open !== was) S.dtab = 'overview';
       if (S.open && !was && isPhone()) { try { history.pushState(Object.assign({}, history.state || {}, { mlLead: S.open }), '', location.href); } catch (e) { /* no history */ } } if (S.open && S.plan) maybeAutoBrief(S.plan.people.find(function (x) { return x.key === S.open; })); if (force) {
-        S.filter = 'all'; S.q = ''; S.tf = {};
+        S.filter = 'all'; S.q = ''; S.qProp = null; S.tf = {};
         var p = S.plan && S.plan.people.find(function (x) { return x.key === k; });
         if (p && S.prop !== 'all' && p.properties.indexOf(S.prop) < 0) S.prop = 'all';
         // A filter that hides them (My leads, a rating, an ad…) is cleared, and said so.
@@ -1579,7 +1594,7 @@
     },
     tfClear: function () { S.tf = {}; render(); },
     setF: function (k, v) { S.f[k] = v; S.shown = PAGE; saveF(); if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
-    clearF: function () { S.f = blankF(S.f.sort); S.filter = 'all'; S.q = ''; saveF(); render(); },
+    clearF: function () { S.f = blankF(S.f.sort); S.filter = 'all'; if (S.qProp) { S.prop = S.qProp; S.qProp = null; } S.q = ''; saveF(); render(); },
     lateFirst: function () { S.filter = 'uncontacted'; S.f.sort = 'untouched'; render(); },
     sel: function (k, on) { S.sel[k] = on; render(); },
     selAll: function (on) { currentList().forEach(function (p) { S.sel[p.key] = on; }); render(); },

@@ -160,6 +160,24 @@ export function phoneKey(raw) {
   if (digits.length === 11 && digits.startsWith('0')) return '91' + digits.slice(1);
   return digits;
 }
+/**
+ * Does a lead match what was typed in the search box? A number — any 4 or more of its digits,
+ * typed any way (+91, a leading 0, spaces, dashes) — is looked for in the phone. Words are each
+ * looked for in the name, phone, notes and the rest, in any order ("kumar akash").
+ */
+export function matchesSearch(fields, phone, q) {
+  const t = String(q || '').trim().toLowerCase();
+  if (!t) return true;
+  const hay = (fields || []).filter(Boolean).join(' ').toLowerCase();
+  const digits = t.replace(/\D/g, '');
+  const numberOnly = digits.length >= 4 && !/[a-z]/i.test(t.replace(/^p:/, ''));
+  if (numberOnly) {
+    const pk = String(phone || '');
+    const d = digits.replace(/^0+/, '');
+    return (!!d && pk.includes(d)) || pk.includes(phoneKey(t)) || hay.replace(/\D/g, '').includes(d || digits);
+  }
+  return t.split(/\s+/).every(w => hay.includes(w));
+}
 /** A normal Indian mobile once canonical: 91 + 10 digits starting 6–9. */
 export const isValidMobile = key => /^91[6-9]\d{9}$/.test(String(key || ''));
 /** "+91 95855 09459" for display; anything unusual as Meta gave it. */

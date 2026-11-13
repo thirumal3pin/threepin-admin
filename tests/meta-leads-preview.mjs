@@ -319,6 +319,21 @@ try {
   ok('Search finds a word in a note', JSON.stringify(found.sort()) === JSON.stringify(['Arjun', 'Vijaya Rani']), found);
   await page.fill('.ml-bar .ml-search', '');
   await page.waitForTimeout(300);
+  ok('Clearing a search goes back to the property chosen before it (KDBMC001)', /KDBMC001/.test(await page.$eval('.ml-props .ml-chip.on', e => e.textContent)));
+  // A lead from another property, by number typed any way — the property and filters are set aside.
+  const chosen = await page.$eval('.ml-props .ml-chip.on', e => e.textContent.trim());
+  await page.fill('.ml-bar .ml-search', '+91 96000 00012');
+  await page.waitForTimeout(400);
+  const byNo = await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()));
+  ok('Search by number finds Aswin Ramesh, on another property (SHR0001)', JSON.stringify(byNo) === JSON.stringify(['Aswin Ramesh']), byNo);
+  ok('…and says it searched every lead', /1<\/b> of all \d+ leads match/.test(await page.innerHTML('.ml-qnote')));
+  await shot(page, '6c-search-number');
+  await page.fill('.ml-bar .ml-search', 'ramesh aswin');
+  await page.waitForTimeout(400);
+  ok('Search by name, words in any order', JSON.stringify(await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()))) === JSON.stringify(['Aswin Ramesh']));
+  await page.click('.ml-qnote .ml-link');
+  await page.waitForTimeout(300);
+  ok('Clear search: back to the property that was chosen', (await page.$eval('.ml-props .ml-chip.on', e => e.textContent.trim())) === chosen && !(await page.$('.ml-qnote')));
 
   // ── 7. Duplicates ──
   await page.evaluate(() => MetaLeads.go('ml-dupes'));
@@ -339,6 +354,15 @@ try {
   await shot(page, '7b-reopen');
   await page.evaluate(() => MetaLeads.go('ml-dupes'));
   await page.waitForTimeout(250);
+
+  // Searching from another tab (here Duplicates) opens Leads with the search.
+  await page.evaluate(() => MetaLeads.go('ml-dupes'));
+  await page.waitForTimeout(300);
+  await page.fill('.ml-hsearch', 'aswin');
+  await page.waitForTimeout(500);
+  ok('Search box on the other tabs too: typing opens Leads with the result', !!(await page.$('.ml-qnote')) && JSON.stringify(await page.$$eval('.ml-person .ml-name', els => els.map(e => e.childNodes[0].textContent.trim()))) === JSON.stringify(['Aswin Ramesh']) && (await page.$eval('.ml-bar .ml-search', e => e.value)) === 'aswin');
+  await page.click('.ml-qnote .ml-link');
+  await page.waitForTimeout(300);
 
   // ── 8. Analysis ──
   await page.evaluate(() => MetaLeads.go('ml-analysis'));
