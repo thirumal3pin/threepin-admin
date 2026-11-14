@@ -4878,7 +4878,9 @@ function computeFollowUpAt(dateStr, timeStr){
 // save, and the duplicate-merge path — validates identically.
 function readLeadForm(){
   const errBox = document.getElementById('lmErr');
-  const showErr = (msg) => { errBox.textContent = msg; errBox.classList.add('show'); };
+  // The message is shown where the eye is: on a phone the form is taller than the screen, so the
+  // box is scrolled into view (the Save button otherwise seemed to do nothing).
+  const showErr = (msg) => { errBox.textContent = msg; errBox.classList.add('show'); errBox.setAttribute('role', 'alert'); try { errBox.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* old browser */ } };
   errBox.classList.remove('show');
 
   const form = {
@@ -5345,6 +5347,7 @@ function stashNoteDraft(){
   if(inp.value.trim()) noteDrafts.set(currentDetailId, inp.value); else noteDrafts.delete(currentDetailId);
 }
 function openDetail(id){
+  setTimeout(() => markReadOnlyLead(leads.find(x => x.id === id)), 0);
   const l = leads.find(x=>x.id===id);
   if(!l) return;
   if(currentDetailId !== id){
@@ -7385,8 +7388,30 @@ async function messageAboutLead(leadId){
 // board again, and said plainly — without saying whose it is.
 window.agentLeadRefused = function(leadId, message, body){
   const i = leads.findIndex(l => l.id === leadId);
-  if(i >= 0) leads.splice(i, 1);
+  const gone = i >= 0 ? leads.splice(i, 1)[0] : null;
   if(typeof refreshAll === 'function') refreshAll();
   if(body && body.mine && body.leadId){ showToast('You already have this client — opening them'); setTimeout(() => openDetail(body.leadId), 400); return; }
-  alert(message || 'This lead was not added.');
+  // The form comes back as it was typed, with the reason in it — nothing typed is lost.
+  try {
+    openAddLeadModal();
+    const set = (id, v) => { const el = document.getElementById(id); if(el && v != null) el.value = v; };
+    if(gone){ set('lmName', gone.name); set('lmPhone', gone.phone); set('lmEmail', gone.email); set('lmBudget', gone.budget); set('lmInterest', gone.propertyInterest);
+      set('lmNotes', (gone.notes && gone.notes[0] && gone.notes[0].text) || ''); if(gone.channel) set('lmChannel', gone.channel); }
+    const err = document.getElementById('lmErr');
+    if(err){ err.textContent = (message || 'This lead was not added.') + ' (Message team on any lead, or ask an admin.)'; err.classList.add('show'); err.setAttribute('role', 'alert'); err.scrollIntoView({ block: 'center' }); }
+  } catch(e) { alert(message || 'This lead was not added.'); }
 };
+// A lead an agent can only read (another agent's client opened to them, or one given to someone):
+// said at the top of the lead, so nothing on it looks like it can be changed.
+function markReadOnlyLead(l){
+  const box = document.getElementById('dpAgents');
+  if(!box) return;
+  let n = document.getElementById('dpReadOnly');
+  const ro = !!(l && window.crmFirebase && window.crmFirebase.isReadOnly && window.crmFirebase.isReadOnly(l.id));
+  if(!ro){ if(n) n.remove(); document.getElementById('dp') && document.getElementById('dp').classList.remove('lead-ro'); return; }
+  if(!n){ n = document.createElement('div'); n.id = 'dpReadOnly'; n.setAttribute('role', 'note');
+    n.style.cssText = 'margin:8px 28px 0;padding:10px 12px;border-radius:10px;background:var(--bg2);border:1px solid var(--border);font-size:13px;color:var(--ink2)';
+    box.after(n); }
+  n.textContent = '🔒 Read only — this lead is ' + (l.assignedAgent ? 'with ' + agentName(l.assignedAgent) : 'with the team') + '. Use “Message team” to talk to them about it.';
+  document.getElementById('dp') && document.getElementById('dp').classList.add('lead-ro');
+}

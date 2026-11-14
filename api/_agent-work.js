@@ -164,12 +164,13 @@ export async function syncLeadAccess(db, tenantId, { properties, leads, grants, 
   return changed;
 }
 
-function matchesFor({ tenantId, email, view, properties, leads, cfg, requested }) {
+function matchesFor({ tenantId, email, view, properties, leads, cfg, requested, grants }) {
   const fields = cfg.matchingLeadFields || [];
   if (!fields.length || !PinMatch) return [];
   const mineIds = new Set(view.filter(p => p._access === 'own' || p._access === 'co').map(p => String(p.id)));
   if (!mineIds.size) return [];
-  const others = leads.filter(l => !AA.leadVisibleTo(l, email));
+  const granted = new Set((grants || []).filter(g => g.kind === 'lead' && lc(g.agentEmail) === email && AA.grantLive(g)).map(g => String(g.targetId)));
+  const others = leads.filter(l => !AA.leadVisibleTo(l, email) && !granted.has(String(l.id)));
   const out = [];
   const seen = new Set();
   properties.filter(p => mineIds.has(String(p.id))).forEach(p => {
@@ -206,15 +207,23 @@ async function writeView(db, tenantId, agent, ctx) {
   const reqs = await db.collection('accessRequests').where('tenantId', '==', tenantId).where('requesterEmail', '==', agent.email).get();
   const requested = new Map();
   const pendingProps = {};
+  const refusedProps = {};
   // Several requests for one lead (asked, cancelled, asked again): what shows is the most telling —
   // waiting before approved before not approved — and the newest within each.
   const RANK = { pending: 4, approved: 3, rejected: 2, expired: 1, cancelled: 0 };
   reqs.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(r => {
     if (r.kind === 'lead') { const was = requested.get(r.targetRef); if (!was || (RANK[r.status] || 0) >= (RANK[was] || 0)) requested.set(r.targetRef, r.status); }
     if (r.kind === 'property' && r.status === 'pending') pendingProps[r.targetId] = r.id;
+    if (r.kind === 'property' && (r.need || 'details') === 'details') {
+      if (r.status === 'rejected') refusedProps[r.targetId] = { note: r.note || '', by: r.decidedByName || '', at: r.decidedAt || 0 };
+      else if (r.status === 'pending' || r.status === 'approved') delete refusedProps[r.targetId];
+    }
   });
-  view.forEach(p => { if (pendingProps[p.id]) p._pending = pendingProps[p.id]; });
-  const matches = matchesFor({ tenantId, email: agent.email, view, properties: ctx.properties, leads: ctx.leads, cfg, requested });
+  view.forEach(p => {
+    if (pendingProps[p.id]) p._pending = pendingProps[p.id];
+    else if (p._access === 'summary' && refusedProps[p.id]) p._refused = refusedProps[p.id];
+  });
+  const matches = matchesFor({ tenantId, email: agent.email, view, properties: ctx.properties, leads: ctx.leads, cfg, requested, grants: ctx.grants });
   const mine = ctx.grants.filter(g => lc(g.agentEmail) === agent.email);
   const next = AA.nextExpiry(mine, now);
   const doc = {
@@ -281,6 +290,9 @@ async function view(db, user, body) {
     || (v.cfgAt || 0) !== ((cfg && cfg.updatedAt) || 0)
     || (body && body.force === true && now - (v.builtAt || 0) > FORCE_MS);
   if (!stale) return json({ ok: true, builtAt: v.builtAt, fresh: false });
+  // Asked for by hand (Refresh) on a copy that is not otherwise due: at most a few an hour.
+  const due = !v || now - (v.builtAt || 0) > STALE_MS || (v.expiresAt || 0) <= now || (v.cfgAt || 0) !== ((cfg && cfg.updatedAt) || 0);
+  if (!due && !(await throttle(db, user, 'view-force', 6, 3600000))) return json({ ok: true, builtAt: v.builtAt, fresh: false, throttled: true });
   const ctx = await loadContext(db, user.tenantId);
   ctx.cfg = cfg;
   await syncLeadAccess(db, user.tenantId, ctx);
@@ -321,6 +333,8 @@ async function accessTo(db, user, propertyId) {
 async function propertyNotes(db, user, body) {
   const a = await accessTo(db, user, body && body.id);
   if (a.error) return a.error;
+  if (user.role === 'agent' && !a.cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
+  if (user.role === 'agent' && !(await throttle(db, user, 'notes', 120, 3600000))) return json({ ok: false, error: 'Too many at once — try again in a while' }, 429);
   if (!a.access || (a.fields && !a.fields.includes('notes'))) return json({ ok: false, error: 'Notes are not part of your access to this property' }, 403);
   const s = await db.collection('properties').doc(a.p.id).collection('notes').limit(200).get();
   const hideNumbers = !!a.fields && !a.fields.includes('contact');
@@ -489,6 +503,7 @@ async function assign(db, user, body) {
   // Whoever lost the property loses it now (their copy is rebuilt at once); whoever gained it gets it
   // the next time they open a page — so assigning many properties in a row costs one rebuild each,
   // not one per click.
+  await refreshApprovers(db, user.tenantId, { propertyId: p.id }).catch(e => console.error('approvers after assign:', e.message));
   const was = [before.primary, ...before.co].filter(Boolean), is = [after.primary, ...after.co].filter(Boolean);
   const lost = was.filter(e => !is.includes(e)), gained = is.filter(e => !was.includes(e));
   if (lost.length) await rebuildAgents(db, user.tenantId, lost).catch(e => console.error('rebuild after assign:', e.message));
@@ -503,7 +518,7 @@ async function assign(db, user, body) {
 // (ai.suggestion / ai.dismissed / ai.lastMove) is allowed; the rest of ai is the server's.
 const LEAD_LOCKED = new Set(['tenantId', 'id', 'assignedAgent', 'secondaryAgent', 'agentsSetAt', 'agentsSetBy', 'agentAccess',
   'tt', 'ttState', 'calendarEventId', 'calendarEventOwner', 'phone', 'phoneKey', 'createdAt', 'createdBy', 'notes', 'history',
-  'aiSummary', 'aiSummaryAt', 'aiSummaryError', 'siteVisitReplies', 'listingId', 'waOptOut', 'waMarketingOptOut',
+  'aiSummary', 'aiSummaryAt', 'aiSummaryError', 'listingId', 'waOptOut', 'waMarketingOptOut',
   'campaignLog', 'campaignReply']);
 const SEG = /^[A-Za-z0-9_\-]{1,80}$/;
 // Text from an agent can never become markup on a colleague's screen: angle brackets are dropped
@@ -528,11 +543,25 @@ export function leadPatchFrom(body, me) {
     if (v !== null && typeof v === 'object' && JSON.stringify(v).length > 20000) { refused.push(seg.join('.')); continue; }
     // "Who did it" is always the person asking (followUpBy, siteVisitBy, stageChangedBy…): a visit
     // can never be booked into a colleague's calendar under their name.
-    const value = seg.length === 1 && /By$/.test(top) && v ? me : plainText(v === undefined ? null : v);
+    let value = seg.length === 1 && /By$/.test(top) && v ? me : plainText(v === undefined ? null : v);
+    // An @mention is always from the person writing it (never "Thirumal mentioned you").
+    if (top === 'mentions' && value && typeof value === 'object') {
+      if (seg.length === 1) value = Object.fromEntries(Object.entries(value).map(([k, x]) => [k, x && typeof x === 'object' ? { ...x, by: me } : x]));
+      else if (seg.length === 2) value = { ...value, by: me };
+    }
+    if (top === 'mentions' && seg.length === 3 && seg[2] === 'by') value = me;
     patch[seg.join('.')] = value;
   }
   if (Object.keys(patch).length) { patch.updatedAt = Date.now(); patch.updatedBy = me; }
   return { patch, refused };
+}
+
+// A running grant (an approved request) for this agent on a lead — read-only access, checked on the
+// grant itself (the rules do the same), so it ends the minute its timer does or it is taken back.
+async function liveLeadGrant(db, user, leadId) {
+  const me = lc(user.email);
+  const g = await db.collection('grants').doc(AA.grantId(user.tenantId, 'lead', leadId, me)).get();
+  return g.exists && lc(g.data().agentEmail) === me && AA.grantLive(g.data()) ? g.data() : null;
 }
 
 // The lead, if this person may see it — and, with { work: true }, may change it. A lead an agent
@@ -545,7 +574,8 @@ async function leadFor(db, user, id, { work = false } = {}) {
   if (!s.exists || s.data().tenantId !== user.tenantId) return missing;
   const lead = { ...s.data(), id: s.id };
   if (user.role === 'agent') {
-    if (!AA.leadVisibleTo(lead, user.email)) return missing;
+    const visible = AA.leadVisibleTo(lead, user.email) || !!(await liveLeadGrant(db, user, lead.id));
+    if (!visible) return missing;
     if (work && !AA.canWorkLead(lead, user.email)) return { error: json({ ok: false, readOnly: true, error: 'You can read this lead, but it is with another agent — ask them or an admin to change it' }, 403) };
   }
   return { ref, lead };
@@ -557,7 +587,11 @@ async function leadSave(db, user, body) {
   if (error) return error;
   const me = lc(user.email);
   const { patch, refused } = leadPatchFrom(body || {}, me);
-  if (!Object.keys(patch).length) return json({ ok: true, unchanged: true, refused });
+  // Which properties an enquiry is about decides which agents reach it: on a lead that is not their
+  // own (an unassigned enquiry on their property), an agent cannot change that.
+  const ownLead = lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me;
+  if (user.role === 'agent' && !ownLead) Object.keys(patch).filter(k => k.split('.')[0] === 'propertyCodes' || k.split('.')[0] === 'unlinkedPropertyIds').forEach(k => { delete patch[k]; refused.push(k); });
+  if (!Object.keys(patch).filter(k => k !== 'updatedAt' && k !== 'updatedBy').length) return json({ ok: true, unchanged: true, refused });
   await writeLead(db, user.tenantId, ref, patch, 'update');
   // A visit on someone else's property, marked done or called off from the lead: its agents hear.
   const after = { ...lead };
@@ -569,7 +603,8 @@ async function leadSave(db, user, body) {
 const NOTE_KEYS = ['id', 'text', 'createdAt', 'by', 'kind', 'pinned', 'editedAt', 'mentions'];
 const ID_RE = /^[A-Za-z0-9_\-]{1,60}$/;
 async function leadNote(db, user, body) {
-  const { error, ref } = await leadFor(db, user, body && body.id);
+  // Notes feed the lead's AI reading: only on a lead the agent works, never on one they only read.
+  const { error, ref } = await leadFor(db, user, body && body.id, { work: true });
   if (error) return error;
   const n = (body && body.note) || {};
   const note = {};
@@ -577,14 +612,15 @@ async function leadNote(db, user, body) {
   if (!note.id || !ID_RE.test(String(note.id))) return json({ ok: false, error: 'Bad note' }, 400);
   note.text = String(note.text || '').slice(0, 8000);
   note.by = lc(user.email);
-  note.createdAt = Number(note.createdAt) || Date.now();
   const existing = await ref.collection('notes').doc(note.id).get();
   if (existing.exists && lc(existing.data().by) !== note.by) return json({ ok: false, error: 'Only whoever wrote a note can change it' }, 403);
+  note.createdAt = existing.exists ? (existing.data().createdAt || Date.now()) : Date.now();
+  if (existing.exists) note.editedAt = Date.now();
   await ref.collection('notes').doc(note.id).set(note);
   return json({ ok: true });
 }
 async function leadNoteDelete(db, user, body) {
-  const { error, ref } = await leadFor(db, user, body && body.id);
+  const { error, ref } = await leadFor(db, user, body && body.id, { work: true });
   if (error) return error;
   const id = String((body && body.noteId) || '');
   if (!ID_RE.test(id)) return json({ ok: false, error: 'Bad note' }, 400);
@@ -654,10 +690,10 @@ async function leadAdd(db, user, body) {
 // ── Rate limits ──
 // The free plan's 50K reads a day are the whole team's: a script hammering an expensive action must
 // not take the site down for everyone. At most `limit` calls of one kind per person per window.
-// One read and one write per call; a failure to check lets the call through (never blocks work).
+// One read and one write per call; if it cannot check (a burst of calls at once), it refuses.
 export async function throttle(db, user, kind, limit, windowMs) {
   const ref = db.collection('agentThrottle').doc(`${user.tenantId}__${user.uid}`);
-  try {
+  for (let attempt = 0; attempt < 3; attempt++) try {
     return await db.runTransaction(async t => {
       const s = await t.get(ref);
       const now = Date.now();
@@ -667,7 +703,9 @@ export async function throttle(db, user, kind, limit, windowMs) {
       t.set(ref, { [kind]: list.slice(-limit) }, { merge: true });
       return true;
     });
-  } catch (e) { return true; }
+  } catch (e) { /* contention: try again */ }
+  // Could not check (many calls at once): refused, so a burst cannot slip past the limit.
+  return false;
 }
 
 // ── Requests, approvals and grants ──
@@ -749,6 +787,7 @@ async function request(db, user, body) {
   const admins = adminsOf(team);
   let title, approvers, targetId, targetRef = null, privateLead = null;
   if (kind === 'property') {
+    if (user.role === 'agent' && !cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
     const p = await getProperty(db, user.tenantId, body.targetId);
     const gs = p ? await db.collection('grants').doc(AA.grantId(user.tenantId, 'property', p.id, me)).get() : null;
     const grant = gs && gs.exists && lc(gs.data().agentEmail) === me ? gs.data() : null;
@@ -770,6 +809,7 @@ async function request(db, user, body) {
     if (!ls || !ls.exists || ls.data().tenantId !== user.tenantId) return json({ ok: false, error: 'That lead is no longer there' }, 404);
     const lead = { ...ls.data(), id: ls.id };
     if (AA.leadVisibleTo(lead, me)) return json({ ok: false, error: 'This lead is already yours' }, 400);
+    if (await liveLeadGrant(db, user, lead.id)) return json({ ok: false, error: 'You already have this lead’s details' }, 400);
     targetId = ref; targetRef = ref; privateLead = { leadId: lead.id, leadName: lead.name || '' };
     title = 'Lead: ' + (AA.requirementOf(lead) ? AA.scrubText(AA.requirementOf(lead), [lead.name]).slice(0, 60) : 'matching buyer');
     approvers = AA.approversFor({ kind, lead, approvers: cfg.approvals.approvers, admins, requester: me });
@@ -807,7 +847,7 @@ async function request(db, user, body) {
   return json({ ok: true, id: reqRef.id, threadId: thread.id });
 }
 
-const fmtWhen = t => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+const fmtWhen = t => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, m => m.toUpperCase());
 
 async function decide(db, user, body) {
   const me = lc(user.email);
@@ -862,6 +902,12 @@ async function decide(db, user, body) {
           const gs = await t.get(grantRef);
           const old = gs.exists && lc(gs.data().agentEmail) === r.requesterEmail ? gs.data() : null;
           const histLine = { at: now, by: me, what: need === 'time' ? 'extended' : need === 'number' ? 'number-shared' : 'granted', requestId: ref.id };
+          // More time or the owner's number only add to access that is still running: access that ran
+          // out or was taken back meanwhile is never brought back by them (the agent asks again).
+          if (need !== 'details' && !(old && AA.grantLive(old, now))) {
+            t.update(ref, { status: 'expired', decidedAt: now, decidedBy: me, history: FieldValue.arrayUnion({ at: now, by: me, what: 'expired', note: 'access had ended' }) });
+            throw Object.assign(new Error('Their access to this property has ended (or was taken back) — they need to ask for the details again'), { http: 409, commit: true });
+          }
           if (old && AA.grantLive(old) && need === 'time') {
             t.update(grantRef, { expiresAt: expiresAt == null ? null : expiresAt, history: FieldValue.arrayUnion(histLine) });
             patch.terms = { until: expiresAt == null ? null : expiresAt, contact: AA.contactLive(old), contactUntil: old.contactExpiresAt || null, extended: true };
@@ -884,7 +930,10 @@ async function decide(db, user, body) {
       return { r, patch, need };
     });
   } catch (e) {
-    if (e.http) return json({ ok: false, error: e.message, current: e.request ? e.request.status : undefined }, e.http);
+    if (e.http) {
+      if (e.commit) await ref.update({ status: 'expired', decidedAt: now, decidedBy: me, history: FieldValue.arrayUnion({ at: now, by: me, what: 'expired', note: 'access had ended' }) }).catch(() => {});
+      return json({ ok: false, error: e.message, current: e.request ? e.request.status : undefined }, e.http);
+    }
     throw e;
   }
   const { r, patch, need } = result;
@@ -933,12 +982,32 @@ async function grantChange(db, user, body, what) {
   const me = lc(user.email);
   const now = Date.now();
   const team = await teamOf(db, user.tenantId);
+  // Who may end, narrow or extend it: an admin; the property's primary agent (or the lead's agent);
+  // whoever approved it may end or narrow it too — an approval given in one tap can be taken back.
+  const isAdmin = user.role === 'admin' && user.email_verified === true;
+  if (!isAdmin) {
+    let owner = false;
+    if (g.kind === 'property') { const p = await getProperty(db, user.tenantId, g.targetId); owner = !!p && AA.primaryOf(p) === me; }
+    else { const ls = await db.collection('leads').doc(String(g.targetId)).get(); owner = ls.exists && lc(ls.data().assignedAgent) === me; }
+    const allowed = owner || (what !== 'extend' && lc(g.grantedBy) === me);
+    if (!allowed) return json({ ok: false, error: 'Only an admin, the property’s primary agent or whoever approved it can change this' }, 403);
+  }
   let line, reqPatch;
   if (what === 'revoke') {
     if (!g.active) return json({ ok: true, unchanged: true });
     const reason = plainText(String(body.reason || '')).trim().slice(0, 300);
     await ref.update({ active: false, revokedBy: me, revokedAt: now, revokeReason: reason || null, history: FieldValue.arrayUnion({ at: now, by: me, what: 'revoked', note: reason || null }) });
     line = `${nameIn(team, me)} took back access to ${g.title}${reason ? ': “' + reason + '”' : ''}`;
+    // Their waiting asks for more time or the number on it end with it.
+    const open = await db.collection('accessRequests').where('tenantId', '==', user.tenantId).where('requesterEmail', '==', lc(g.agentEmail))
+      .where('status', '==', 'pending').get().catch(() => null);
+    if (open) for (const d of open.docs) {
+      const r = d.data();
+      if (r.need === 'time' || r.need === 'number') {
+        const target = g.kind === 'lead' ? r.targetRef : r.targetId;
+        if (String(target) === String(g.kind === 'lead' ? g.targetRef : g.targetId)) await d.ref.update({ status: 'cancelled', decidedAt: now, decidedBy: me, history: FieldValue.arrayUnion({ at: now, by: me, what: 'cancelled', note: 'access taken back' }) });
+      }
+    }
     reqPatch = { grantState: 'revoked', grantChangedAt: now, grantChangedBy: me, grantChangedByName: nameIn(team, me) };
   } else if (what === 'hide') {
     if (!g.includeContact) return json({ ok: true, unchanged: true });
@@ -963,6 +1032,34 @@ async function grantChange(db, user, body, what) {
   }
   await rebuildAgents(db, user.tenantId, [g.agentEmail]).catch(e => console.error('rebuild after grant change:', e.message));
   return json({ ok: true });
+}
+
+// Waiting requests follow the property (or lead) as it is now: after a reassignment the new primary
+// agent can see and decide them, the old one stops seeing them. The request, its private part and its
+// conversation all get the new list.
+export async function refreshApprovers(db, tenantId, { propertyId = null } = {}) {
+  let q = db.collection('accessRequests').where('tenantId', '==', tenantId).where('status', '==', 'pending');
+  if (propertyId) q = q.where('targetId', '==', propertyId);
+  const pend = await q.get();
+  if (pend.empty) return 0;
+  const [team, cfgDoc] = await Promise.all([teamOf(db, tenantId), loadConfig(db, tenantId)]);
+  const admins = adminsOf(team);
+  let changed = 0;
+  for (const d of pend.docs) {
+    const r = { ...d.data(), _id: d.id };
+    const cur = await db.runTransaction(t => currentApprovers(db, t, r, cfgDoc, admins));
+    const next = [...cur.approvers].sort(), prev = [...(r.approvers || [])].sort();
+    if (JSON.stringify(next) === JSON.stringify(prev)) continue;
+    await d.ref.update({ approvers: next });
+    if (r.kind === 'lead') await db.collection('requestPrivate').doc(d.id).update({ approvers: next }).catch(() => {});
+    if (r.threadId) {
+      const names = {};
+      next.forEach(e => { names['names.' + AA.emailKey(e)] = nameIn(team, e); });
+      await db.collection('threads').doc(r.threadId).update({ members: [...new Set([r.requesterEmail, ...next])].sort(), ...names }).catch(() => {});
+    }
+    changed++;
+  }
+  return changed;
 }
 
 // The daily tidy-up (api/followup-digest.js's morning run calls it): access whose timer ran out is
@@ -991,6 +1088,8 @@ export async function sweepExpired(db, tenantId, { requestDays = 7 } = {}) {
     await systemLineFor(db, r.threadId, `Nobody decided in ${requestDays} days, so this request expired. ${r.requesterName} can ask again.`);
     changed++;
   }
+  // A lead handed to another agent in the CRM moves its waiting requests to them too.
+  changed += await refreshApprovers(db, tenantId).catch(() => 0);
   if (changed) await rebuildAgents(db, tenantId, null).catch(e => console.error('rebuild after sweep:', e.message));
   return changed;
 }
@@ -1043,8 +1142,16 @@ async function propertyByCode(db, tenantId, code) {
   if (!q.empty) return { ...q.docs[0].data(), id: q.docs[0].id };
   const byId = await getProperty(db, tenantId, c);
   if (byId) return byId;
-  const n = await db.collection('properties').where('tenantId', '==', tenantId).where('name', '==', c).limit(1).get();
-  return n.empty ? null : { ...n.docs[0].data(), id: n.docs[0].id };
+  const n = await db.collection('properties').where('tenantId', '==', tenantId).where('name', '==', c).limit(5).get();
+  if (n.empty) return null;
+  if (n.size === 1) return { ...n.docs[0].data(), id: n.docs[0].id };
+  // The same title on two listings (an old uncoded copy and the coded one): the one without a code is
+  // the one a visit saved under its title points at; never a guess between two that both have agents.
+  const rows = n.docs.map(d => ({ ...d.data(), id: d.id }));
+  const uncoded = rows.filter(p => !p.propertyCode);
+  if (uncoded.length === 1) return uncoded[0];
+  const withAgents = rows.filter(p => AA.agentsOf(p).length);
+  return withAgents.length === 1 ? withAgents[0] : null;
 }
 
 // ── Site visits on someone else's property (phase 5) ──
@@ -1104,9 +1211,12 @@ export async function visitAlert(db, user, before, after) {
 // their access gives them (no street for a summary, no owner's number without that tier) — the
 // invitation lands in their own calendar, so it must not tell them more than their screens do.
 export async function visitPropertyFor(db, user, code) {
-  if (user.role !== 'agent' || !code) return undefined;
+  if (user.role !== 'agent') return undefined;
+  // Always an object for an agent (empty when there is nothing to say): the booking then never looks
+  // a property up itself, unprojected.
+  if (!code) return {};
   const p = await propertyByCode(db, user.tenantId, code);
-  if (!p) return null;
+  if (!p) return {};
   const a = await accessTo(db, user, p.id);
   if (a.error || !a.access) return { name: p.name || '', propertyCode: p.propertyCode || p.id };
   if (!a.fields) return p;
@@ -1120,10 +1230,11 @@ const AGENT_ACTIONS = {
   request, decide, cancel, 'thread-open': threadOpen,
   // Staff and admins (each refuses agents itself): the dashboard's agents panel.
   assign, 'property-access': propertyAccess,
-};
-const ADMIN_WORK = {
+  // Admins, the property's primary agent, or whoever approved it (grantChange checks).
   revoke: (db, u, b) => grantChange(db, u, b, 'revoke'), 'hide-contact': (db, u, b) => grantChange(db, u, b, 'hide'),
   'grant-extend': (db, u, b) => grantChange(db, u, b, 'extend'),
+};
+const ADMIN_WORK = {
   'submission-decide': submissionDecide,
   rebuild: async (db, u, b) => json({ ok: true, rebuilt: await rebuildAgents(db, u.tenantId, b && b.email ? [b.email] : null) }),
 };
@@ -1155,12 +1266,15 @@ const CAMPAIGN_SEND = new Set(['create', 'send', 'cancel', 'optout', 'ai-audienc
 async function agentLeadIds(db, user) {
   const me = lc(user.email);
   const col = db.collection('leads');
+  const fields = ['assignedAgent', 'secondaryAgent', 'agentAccess', 'phone', 'name', 'tt'];
   const qs = await Promise.all([
-    col.where('tenantId', '==', user.tenantId).where('assignedAgent', '==', me).select('assignedAgent', 'secondaryAgent', 'agentAccess').get(),
-    col.where('tenantId', '==', user.tenantId).where('secondaryAgent', '==', me).select('assignedAgent', 'secondaryAgent', 'agentAccess').get(),
-    col.where('tenantId', '==', user.tenantId).where('agentAccess', 'array-contains', me).select('assignedAgent', 'secondaryAgent', 'agentAccess').get(),
+    col.where('tenantId', '==', user.tenantId).where('assignedAgent', '==', me).select(...fields).get(),
+    col.where('tenantId', '==', user.tenantId).where('secondaryAgent', '==', me).select(...fields).get(),
+    col.where('tenantId', '==', user.tenantId).where('agentAccess', 'array-contains', me).select(...fields).get(),
   ]);
-  return new Set(qs.flatMap(q => q.docs.filter(d => AA.canWorkLead(d.data(), me)).map(d => d.id)));
+  const out = new Map();
+  qs.forEach(q => q.docs.forEach(d => { if (AA.canWorkLead(d.data(), me)) out.set(d.id, d.data()); }));
+  return out;
 }
 export async function agentCampaignGate(db, user, body) {
   const op = String((body && body.op) || '');
@@ -1179,8 +1293,15 @@ export async function agentCampaignGate(db, user, body) {
     const list = Array.isArray(body.recipients) ? body.recipients : [];
     const bad = list.filter(r => !r || !mine.has(String(r.leadId || '')));
     if (bad.length) return { refuse: `Campaigns go to your own leads only — ${bad.length} of these are not yours` };
-    // To the number on the lead, always: a typed number or name never travels with an agent's send.
-    body.recipients = list.map(r => ({ leadId: String(r.leadId), ...(r.values && typeof r.values === 'object' ? { values: plainText(r.values) } : {}), ...(r.mediaUrl ? { mediaUrl: String(r.mediaUrl) } : {}) }));
+    // To the number on the lead, always — read here from the lead itself: a typed number or name
+    // never travels with an agent's send.
+    body.recipients = list.map(r => {
+      const l = mine.get(String(r.leadId)) || {};
+      return { leadId: String(r.leadId), contact: String(l.phone || (l.tt && l.tt.contact) || ''), name: plainText(String(l.name || '')),
+        ...(r.values && typeof r.values === 'object' ? { values: plainText(r.values) } : {}), ...(r.mediaUrl ? { mediaUrl: String(r.mediaUrl) } : {}) };
+    });
+    if (body.audience) body.audience = plainText(body.audience);
+    if (body.name) body.name = plainText(body.name);
   }
   if (op === 'optout') {
     if (!mine.has(String(body.leadId || ''))) return { refuse: 'Not your lead' };

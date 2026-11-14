@@ -154,6 +154,26 @@ test('agent reads only their own leads (assigned, secondary, or reached through 
   await assertFails(getDoc(doc(d, 'conversations/c1')));
 });
 
+test('a lead opened by an approved request: read-only, one at a time, and only while the grant runs', async () => {
+  const d = db('agent');
+  const g = `${T}__l__lead_2__rameez_threepin_in`;
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'grants/' + g), { tenantId: T, kind: 'lead', targetId: 'lead_2', agentEmail: 'rameez@threepin.in', active: true, expiresAt: Date.now() + 3600000 });
+  });
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_2')));
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_2/notes/n1')));
+  await assertFails(updateDoc(doc(d, 'leads/lead_2'), { stageId: 'won', tenantId: T }));
+  await assertFails(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T), where('assignedAgent', '==', 'swami@threepin.in'))));
+  await env.withSecurityRulesDisabled(async ctx => { await updateDoc(doc(ctx.firestore(), 'grants/' + g), { expiresAt: Date.now() - 1000 }); });
+  await assertFails(getDoc(doc(d, 'leads/lead_2')), 'its timer ran out: closed at once, no tidy-up needed');
+  await assertFails(getDoc(doc(d, 'leads/lead_2/notes/n1')));
+  await env.withSecurityRulesDisabled(async ctx => { await updateDoc(doc(ctx.firestore(), 'grants/' + g), { expiresAt: null, active: false }); });
+  await assertFails(getDoc(doc(d, 'leads/lead_2')), 'taken back');
+  // Someone else's grant on the same lead opens nothing for him.
+  await env.withSecurityRulesDisabled(async ctx => { await setDoc(doc(ctx.firestore(), `grants/${T}__l__lead_2__kavya_threepin_in`), { tenantId: T, kind: 'lead', targetId: 'lead_2', agentEmail: 'kavya@threepin.in', active: true, expiresAt: null }); });
+  await assertFails(getDoc(doc(d, 'leads/lead_2')));
+});
+
 test('an agent whose email is not confirmed reads no lead at all', async () => {
   const d = env.authenticatedContext('u_rameez', { tenantId: T, role: 'agent', email: 'rameez@threepin.in', email_verified: false }).firestore();
   await assertFails(getDoc(doc(d, 'leads/lead_1')));

@@ -146,6 +146,9 @@ service cloud.firestore {
       // An agent never writes a lead directly: their changes go through the server, which checks
       // each field and keeps the lead views in step.
       allow get, list: if agentOwnsLead(resource.data);
+      // A lead opened to an agent by an approved request: one document at a time, read-only, and only
+      // while the grant runs — checked on the grant itself, so a timer or a take-back ends it at once.
+      allow get: if resource != null && isAgent() && emailVerified() && resource.data.tenantId == tenantId() && leadGrantOpen(leadId);
     }
 
     // Lead views (shared-assets/lead-views.js): {tenant}__meta and {tenant}__v{n}_{i}, each lead as a
@@ -180,12 +183,12 @@ service cloud.firestore {
     match /leads/{leadId}/notes/{noteId} {
       allow read, write: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
-      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data) || (isAgent() && emailVerified() && leadGrantOpen(leadId));
     }
     match /leads/{leadId}/history/{eventId} {
       allow read, write: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
-      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data) || (isAgent() && emailVerified() && leadGrantOpen(leadId));
     }
     // TailorTalk's AI profile, bookings and conversation for a lead. Readable by the lead's
     // tenant; written only by api/tailortalk.js (Admin SDK), so the page can never overwrite
@@ -193,7 +196,7 @@ service cloud.firestore {
     match /leads/{leadId}/tailortalk/{docId} {
       allow read: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
-      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data) || (isAgent() && emailVerified() && leadGrantOpen(leadId));
       allow write: if false;
     }
     match /conversations/{convoId} {
@@ -439,6 +442,12 @@ service cloud.firestore {
     // The key a person's read mark is stored under: their email with every other character as _.
     function myThreadKey() {
       return myEmail().replace('[^a-z0-9]', '_');
+    }
+    // An approved request that opened lead {leadId} to me, still running (grants/{tenant}__l__{lead}__{me}).
+    function leadGrantOpen(leadId) {
+      let g = /databases/$(database)/documents/grants/$(tenantId() + '__l__' + leadId + '__' + myThreadKey());
+      return exists(g) && get(g).data.agentEmail == myEmail() && get(g).data.active == true
+        && (get(g).data.expiresAt == null || get(g).data.expiresAt > request.time.toMillis());
     }
     function nearNow(t) {
       return t is int && t > request.time.toMillis() - 300000 && t < request.time.toMillis() + 300000;

@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
-import { leadVisibleTo } from '../shared-assets/agent-access.js';
+import { canWorkLead } from '../shared-assets/agent-access.js';
 import { LEAD_SUMMARY_MODEL, LEAD_SUMMARY_MAX_TOKENS, buildLeadSummarySystemPrompt, buildLeadSummaryUserPrompt } from './_lead-summary-shared.js';
 import { writeLead } from './_lead-views.js';
 
@@ -44,7 +44,7 @@ export async function generatePost(request) {
   const leadRef = db.collection('leads').doc(leadId);
   const snap = await leadRef.get();
   if (!snap.exists || snap.data().tenantId !== user.tenantId
-      || (user.role === 'agent' && !leadVisibleTo(snap.data(), user.email))) {
+      || (user.role === 'agent' && !canWorkLead(snap.data(), user.email))) {
     return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
   const lead = snap.data();

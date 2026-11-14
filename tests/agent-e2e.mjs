@@ -191,7 +191,7 @@ try {
     await page.click('#requests [data-decide]');
     await page.waitForSelector('#dGo');
     await page.click('#dGo');
-    ok('approved: the buyer lead is now his to read', !!(await until(async () => ((await doc('leads', 'lead_2')).agentAccess || []).includes('rameez@threepin.in'))));
+    ok('approved: the buyer lead is opened to him by a grant (read-only, checked by the rules)', !!(await until(async () => { const g = await doc('grants', 't_3pinrealty__l__lead_2__rameez_threepin_in'); return g && g.active; })));
     noErrors(page, 'Team & access → Requests');
     await ctx.close();
   }
@@ -218,9 +218,10 @@ try {
     await page.evaluate(() => changeStage('lead_3', 'contacted'));
     ok('a stage change goes through the server', !!(await until(async () => (await doc('leads', 'lead_3')).stageId === 'contacted')));
     await page.evaluate(() => createLeadFromForm({ channel: 'phone', name: 'Duplicate Person', phone: '94444 44444', email: '', enquiryType: 'Property Enquiry', propertyInterest: '', budget: '', stageId: 'new', detailsSent: false, followUpAt: null, noteText: '' }));
-    await until(() => !!page.__lastDialog);
-    if (!page.__lastDialog) console.log('    (calls: ' + JSON.stringify(calls.filter(c => /lead-add/.test(c.body)).slice(-2)) + ')');
-    ok('a number already with the team is refused, without saying whose', page.__lastDialog && /already with the team/.test(page.__lastDialog) && !/Kavya/.test(page.__lastDialog), page.__lastDialog);
+    const errText = await until(() => page.evaluate(() => { const e = document.getElementById('lmErr'); return e && e.classList.contains('show') ? e.textContent : null; }));
+    ok('a number already with the team is refused, without saying whose — inside the form, typed details kept', errText && /already with the team/.test(errText) && !/Kavya/.test(errText)
+      && await page.evaluate(() => document.getElementById('lmName').value === 'Duplicate Person'), errText);
+    await page.evaluate(() => typeof closeLeadModal === 'function' && closeLeadModal());
     ok('…and taken off his board again', await until(() => page.evaluate(() => !leads.some(l => l.name === 'Duplicate Person'))));
     await page.evaluate(() => createLeadFromForm({ channel: 'phone', name: 'Fresh Buyer', phone: '9555555555', email: '', enquiryType: 'Property Enquiry', propertyInterest: '2 BHK', budget: '', stageId: 'new', detailsSent: false, followUpAt: null, noteText: 'Met at the site' }));
     const fresh = await until(async () => { const q = await db.collection('leads').where('name', '==', 'Fresh Buyer').get(); return q.size ? q.docs[0].data() : null; });
@@ -237,7 +238,7 @@ try {
     await page.goto(BASE + '/messages.html');
     await page.waitForSelector('#threads .thread', { timeout: 25000 });
     const titles = await page.$$eval('#threads .thread b', bs => bs.map(b => b.textContent));
-    ok('a thread per request', titles.some(t => /^Access: 3 BHK Apartment, Anna Nagar · for Arjun$/.test(t)), titles.join(' | '));
+    ok('a thread per request (titled by what it is about)', titles.some(t => /^3 BHK Apartment, Anna Nagar · for Arjun$/.test(t)), titles.join(' | '));
     await page.click('#threads .thread:has-text("Anna Nagar")');
     await page.waitForSelector('#msgs .sys');
     const sys = await page.textContent('#msgs');
@@ -316,7 +317,7 @@ try {
     const { ctx, page: sp } = await as('swami');
     await sp.goto(BASE + '/myday.html');
     await sp.waitForSelector('#s-visits .item', { timeout: 25000 });
-    ok('Swami’s My Day: “Collaboration visit” today', /Collaboration visit/.test(await sp.textContent('#s-visits')) && /Rameez booked a visit for Arjun/.test(await sp.textContent('#s-visits')));
+    ok('Swami’s My Day: “Collaboration visit” today', /Collaboration visit/.test(await sp.textContent('#s-visits')) && /Rameez \(agent\) booked a visit for their client Arjun/.test(await sp.textContent('#s-visits')));
     await shot(sp, '14-swami-collab-visit');
     // An admin takes the access back.
     await sp.goto(BASE + '/team.html?tab=requests');

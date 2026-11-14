@@ -316,8 +316,9 @@ async function aiLeadPost(request) {
   if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
   const db = getDb();
   if (user.role === 'agent') {
+    // A re-check re-reads the lead's notes and moves its stage: only on a lead the agent works.
     const ls = await db.collection('leads').doc(body.leadId).get();
-    if (!ls.exists || ls.data().tenantId !== user.tenantId || !leadVisibleTo(ls.data(), user.email)) return json({ ok: false, error: 'Not your lead' }, 403);
+    if (!ls.exists || ls.data().tenantId !== user.tenantId || !canWorkLead(ls.data(), user.email)) return json({ ok: false, error: 'Not your lead' }, 403);
   }
   const auto = await automationSettings(db, user.tenantId);
   try {
@@ -495,7 +496,7 @@ async function calendarPost(request) {
       Object.assign(lead, visitFromBody(body.visit, user));
       // An agent's invitation is written from the property as THEY may see it (no owner's number
       // unless it is theirs or was shared with them), never from what the page sends.
-      const property = agent ? await visitPropertyFor(db, user, lead.siteVisitProperty) : body.property;
+      const property = agent ? await visitPropertyFor(db, user, visitOf(lead).property) : body.property;
       // Booked on a colleague's property: its agents hear (client's first name only) — whether or not
       // Google Calendar answers.
       const alerted = visitAlert(db, user, before, lead).catch(e => console.error('visit alert failed:', e.message));
@@ -548,7 +549,7 @@ async function calendarPost(request) {
       // everyone on every click.
       if (!r.ok && (r.notInvited || (r.gone && [404, 410].includes(r.status)))) {
         const booked = await bookVisit({ db, user, ref, lead: { id: snap.id, ...lead }, heal: true,
-          property: agent ? await visitPropertyFor(db, user, lead.siteVisitProperty) : null });
+          property: agent ? await visitPropertyFor(db, user, visitOf(lead).property) : null });
         if (booked.ok && booked.eventId) {
           r = await respondToVisit({ agent: me, eventId: booked.eventId,
             response: body.response, reason: typeof body.reason === 'string' ? body.reason : '',

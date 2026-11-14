@@ -36,7 +36,7 @@ const view = async who => (await db.collection('agentViews').doc(`${T}__${U[who]
 const opens = async who => { await call(who, 'view'); return view(who); };
 
 async function clear() {
-  for (const c of ['properties', 'leads', 'grants', 'accessRequests', 'requestPrivate', 'agentViews', 'threads', 'visitAlerts', 'assignmentLog', 'propertySubmissions', 'agentConfigs']) {
+  for (const c of ['properties', 'leads', 'grants', 'accessRequests', 'requestPrivate', 'agentViews', 'threads', 'visitAlerts', 'assignmentLog', 'propertySubmissions', 'agentConfigs', 'agentThrottle', 'propertyChanges']) {
     const s = await db.collection(c).get();
     for (const d of s.docs) {
       for (const sub of ['messages', 'notes', 'history']) { const ss = await d.ref.collection(sub).get(); for (const x of ss.docs) await x.ref.delete(); }
@@ -236,10 +236,12 @@ test('matching leads: requirement and AI summary without name or number; the num
   assert.equal((await db.collection('requestPrivate').doc(r.id).get()).data().leadId, 'lead_2');
   assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).requested, 'pending');
   await call('swami', 'decide', { id: r.id, decision: 'approve' });
-  const l = (await db.collection('leads').doc('lead_2').get()).data();
-  assert.ok(l.agentAccess.includes('rameez@threepin.in'), 'approved: the lead is his to read');
+  const lg = (await db.collection('grants').doc(`${T}__l__lead_2__rameez_threepin_in`).get()).data();
+  assert.equal(lg.active, true, 'approved: a grant opens the lead to him (the rules check it)');
+  assert.ok(!((await db.collection('leads').doc('lead_2').get()).data().agentAccess || []).includes('rameez@threepin.in'), 'never written into agentAccess (that would outlive the grant)');
   assert.equal((await call('rameez', 'lead-save', { id: 'lead_2', pairs: [[['stageId'], 'closed_lost']] })).status, 403, '…to read, not to change: it is still Swami’s client');
-  assert.equal((await call('rameez', 'lead-note', { id: 'lead_2', note: { id: 'n9', text: 'Spoke to her about ADY002' } })).ok, true, 'a note is fine (Swami sees it)');
+  assert.equal((await call('rameez', 'lead-note', { id: 'lead_2', note: { id: 'n9', text: 'bought elsewhere' } })).status, 403, 'no notes either: they feed the lead’s AI reading');
+  assert.equal((await call('rameez', 'thread-open', { type: 'lead', linkedId: 'lead_2' })).ok, true, 'he can talk to its agent about it');
   assert.ok(!(await view('rameez')).matches.some(x => x.ref === m.ref), 'no longer a "matching" lead');
 });
 
@@ -380,15 +382,14 @@ test('the daily tidy-up ends expired access and old requests; an expired lead gr
   const m = v.matches.find(x => x.propertyId === 'ADY002');
   const lr = await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: 'fits' });
   await call('swami', 'decide', { id: lr.id, decision: 'approve', days: 1 });
-  assert.ok(((await db.collection('leads').doc('lead_2').get()).data().agentAccess || []).includes('rameez@threepin.in'));
   const g = (await db.collection('grants').where('kind', '==', 'lead').get()).docs[0];
+  assert.equal(g.data().active, true);
   await g.ref.update({ expiresAt: Date.now() - 1000 });
   const old = await call('kavya', 'request', { kind: 'property', targetId: 'ANR001', reason: 'old' });
   await db.collection('accessRequests').doc(old.id).update({ createdAt: Date.now() - 8 * 86400000 });
   const n = await W.sweepExpired(db, T);
   assert.ok(n >= 2, 'tidied ' + n);
-  assert.equal((await g.ref.get()).data().active, false);
-  assert.ok(!((await db.collection('leads').doc('lead_2').get()).data().agentAccess || []).includes('rameez@threepin.in'), 'the lead no longer opens for him');
+  assert.equal((await g.ref.get()).data().active, false, 'the grant is switched off (the rules already stopped at its time)');
   assert.equal((await db.collection('accessRequests').doc(old.id).get()).data().status, 'expired');
   assert.equal((await call('swami', 'decide', { id: old.id, decision: 'approve' })).status, 409, 'an expired request cannot be approved');
 });
@@ -401,7 +402,7 @@ test('campaigns for agents: no opt-out lists, only their own leads, to the lead�
   const body = { op: 'create', recipients: [{ leadId: 'lead_3', contact: '919999999999', name: 'Someone else' }] };
   const g2 = await W.agentCampaignGate(db, U.rameez, body);
   assert.equal(g2.refuse, undefined, JSON.stringify(g2));
-  assert.deepEqual(body.recipients, [{ leadId: 'lead_3' }], 'the typed number and name are dropped');
+  assert.deepEqual(body.recipients, [{ leadId: 'lead_3', contact: '9333333333', name: 'Own Client' }], 'the typed number and name are replaced by the lead’s own');
   assert.ok((await W.agentCampaignGate(db, U.rameez, { op: 'create', recipients: [{ leadId: 'lead_2' }] })).refuse, 'not his lead');
   assert.ok((await W.agentCampaignGate(db, U.rameez, { op: 'optout', leadId: 'lead_3', on: false })).refuse, 'turning messages back on is the team’s');
   assert.equal((await W.agentCampaignGate(db, U.rameez, { op: 'optout', leadId: 'lead_3', on: true })).refuse, undefined);
@@ -427,4 +428,69 @@ test('“asked” marks: the most telling request wins; after a no he can ask ag
   await call('swami', 'decide', { id: b.id, decision: 'reject', note: 'not now' });
   assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).requested, 'rejected');
   assert.equal((await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: '3' })).ok, true, 'asked again after a no');
+});
+
+
+test('round 2: codes only — a title that reads like a code captures nothing; short ids work; links on others’ enquiries locked', async () => {
+  await db.collection('properties').doc('17').set({ tenantId: T, id: '17', name: 'Old row flat', availability: 'Available' });
+  await db.collection('leads').doc('lead_17').set({ tenantId: T, id: 'lead_17', name: 'Old Link', phone: '9777700017', phoneKey: '919777700017', propertyCodes: ['17'] });
+  await db.collection('properties').doc('AGX1').set({ tenantId: T, id: 'AGX1', propertyCode: 'AGX1', name: 'A-D.Y-002', assignedAgent: 'kavya@threepin.in', availability: 'Available' });
+  await call('swami', 'assign', { propertyId: '17', primary: 'rameez@threepin.in' });
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  await opens('rameez');
+  assert.deepEqual((await db.collection('leads').doc('lead_17').get()).data().agentAccess, ['rameez@threepin.in'], 'an enquiry on old property "17" reaches its agent');
+  assert.ok(!((await db.collection('leads').doc('lead_1').get()).data().agentAccess || []).includes('kavya@threepin.in'), 'a property titled like ADY002’s code captures nothing');
+  const r = await call('rameez', 'lead-save', { id: 'lead_1', pairs: [[['propertyCodes'], []], [['stageId'], 'contacted']] });
+  assert.ok(r.refused.includes('propertyCodes'), 'which properties an unassigned enquiry is about is not his to change');
+  assert.equal((await db.collection('leads').doc('lead_1').get()).data().stageId, 'contacted', 'he still works it');
+});
+
+test('round 2: mentions are always from the writer; campaigns go to the lead’s own number', async () => {
+  await call('rameez', 'lead-save', { id: 'lead_3', data: { 'mentions.thirumal_threepin_in': { by: 'thirumal@threepin.in', text: 'call him', at: 1 } } });
+  assert.equal((await db.collection('leads').doc('lead_3').get()).data().mentions.thirumal_threepin_in.by, 'rameez@threepin.in');
+  const body = { op: 'create', recipients: [{ leadId: 'lead_3', contact: '919999999999', name: 'x' }] };
+  await W.agentCampaignGate(db, U.rameez, body);
+  assert.equal(body.recipients[0].contact, '9333333333', 'the number is the lead’s, read on the server');
+  assert.equal(body.recipients[0].name, 'Own Client');
+});
+
+test('round 2: more time or the number only on access still running; take back ends those asks; the primary agent can end what he gave', async () => {
+  await call('swami', 'assign', { propertyId: 'ANR001', primary: 'swami@threepin.in' });
+  const r = await call('rameez', 'request', { kind: 'property', targetId: 'ANR001' });
+  await call('swami', 'decide', { id: r.id, decision: 'approve', days: 1 });
+  const gid = `${T}__p__ANR001__rameez_threepin_in`;
+  const n = await call('rameez', 'request', { kind: 'property', targetId: 'ANR001', need: 'number', reason: 'x' });
+  await db.collection('grants').doc(gid).update({ expiresAt: Date.now() - 1000 });   // ran out meanwhile
+  const d = await call('swami', 'decide', { id: n.id, decision: 'approve', hours: 2 });
+  assert.equal(d.status, 409, 'not brought back by a number request');
+  assert.equal((await db.collection('accessRequests').doc(n.id).get()).data().status, 'expired');
+  assert.equal((await db.collection('grants').doc(gid).get()).data().expiresAt < Date.now(), true, 'the grant was not widened');
+  // A running grant, a waiting "more time", then an admin takes it back: the ask ends with it.
+  const r2 = await call('rameez', 'request', { kind: 'property', targetId: 'ANR001' });
+  await call('swami', 'decide', { id: r2.id, decision: 'approve', days: 3 });
+  const t = await call('rameez', 'request', { kind: 'property', targetId: 'ANR001', need: 'time', reason: 'x' });
+  await call('swami', 'revoke', { grantId: gid });
+  assert.equal((await db.collection('accessRequests').doc(t.id).get()).data().status, 'cancelled');
+  // The property's primary agent (not an admin) can end access; another agent cannot.
+  const r3 = await call('kavya', 'request', { kind: 'property', targetId: 'ANR001' });
+  await call('swami', 'decide', { id: r3.id, decision: 'approve' });
+  const kg = `${T}__p__ANR001__kavya_threepin_in`;
+  assert.equal((await call('rameez', 'revoke', { grantId: kg })).status, 403);
+  await call('swami', 'assign', { propertyId: 'ANR001', primary: 'rameez@threepin.in' });
+  assert.equal((await call('rameez', 'revoke', { grantId: kg })).ok, true, 'now its primary agent: he can end it');
+});
+
+test('round 2: after a reassignment, waiting requests go to the new primary agent', async () => {
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'kavya@threepin.in' });
+  const r = await call('rameez', 'request', { kind: 'property', targetId: 'ADY002', reason: 'x' });
+  assert.ok((await db.collection('accessRequests').doc(r.id).get()).data().approvers.includes('kavya@threepin.in'));
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rajesh@threepin.in' });
+  const req = (await db.collection('accessRequests').doc(r.id).get()).data();
+  assert.ok(req.approvers.includes('rajesh@threepin.in') && !req.approvers.includes('kavya@threepin.in'), JSON.stringify(req.approvers));
+  assert.ok((await db.collection('threads').doc(req.threadId).get()).data().members.includes('rajesh@threepin.in'), 'and he is in its conversation');
+});
+
+test('round 2: the rate limit holds under a burst', async () => {
+  const results = await Promise.all(Array.from({ length: 30 }, () => W.throttle(db, U.kavya, 'burst', 5, 3600000)));
+  assert.ok(results.filter(Boolean).length <= 5, 'at most 5 got through: ' + results.filter(Boolean).length);
 });

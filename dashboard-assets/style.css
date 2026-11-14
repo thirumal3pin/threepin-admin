@@ -1462,7 +1462,8 @@ a.nm-row{ text-decoration:none; }
 .dp-agent-by{font-size:11.5px;color:var(--ink3);}
 .dp-coagents{flex-wrap:wrap;}
 .dp-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg2,#F1F1F1);border:1px solid var(--border);border-radius:999px;padding:4px 4px 4px 10px;font-size:13px;font-weight:600;}
-.dp-chip button{border:0;background:transparent;color:var(--ink3);font-size:12px;min-width:28px;min-height:28px;border-radius:50%;cursor:pointer;}
+.dp-chip button{border:0;background:transparent;color:var(--ink3);font-size:13px;min-width:36px;min-height:36px;border-radius:50%;cursor:pointer;}
+@media (pointer:coarse){.dp-chip button{min-width:44px;min-height:44px;}}
 .dp-chip button:hover{background:var(--border);color:var(--ink);}
 .dp-add{min-width:140px;}
 .dp-access{flex-basis:100%;}

@@ -203,15 +203,27 @@ function agentChrome(){
   if (window.PinAccess) apply(window.PinAccess);
   document.addEventListener('pin-access', e => apply(e.detail));
 }
+// Which of an agent's leads they can only read (canWorkLead in shared-assets/agent-access.js, the
+// server's own test): not theirs and not an unassigned enquiry on their property — or opened to them
+// by an approved request.
+const readOnlyIds = new Set();
+function canWork(l, me){
+  if (!l) return false;
+  const a = String(l.assignedAgent || '').toLowerCase(), s = String(l.secondaryAgent || '').toLowerCase();
+  if (a === me || s === me) return true;
+  return !l.assignedAgent && Array.isArray(l.agentAccess) && l.agentAccess.map(x => String(x).toLowerCase()).includes(me);
+}
 function subscribeAsAgent(tenantId){
   agentChrome();
   const me = signedInEmail();
-  const parts = { a: [], b: [], c: [] };
+  const parts = { a: [], b: [], c: [], g: [] };
   const fromServer = { a: false, b: false, c: false };
   const push = () => {
     const by = new Map();
-    [...parts.a, ...parts.b, ...parts.c].forEach(l => by.set(l.id, l));
+    [...parts.a, ...parts.b, ...parts.c, ...parts.g].forEach(l => by.set(l.id, l));
     const list = [...by.values()];
+    readOnlyIds.clear();
+    list.forEach(l => { if (!canWork(l, me)) readOnlyIds.add(l.id); });
     savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
     if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer.a && fromServer.b && fromServer.c, null);
   };
@@ -222,6 +234,23 @@ function subscribeAsAgent(tenantId){
       push();
     }, err => console.error('Firestore agent leads (' + k + ') error:', err));
   });
+  // Leads opened to the agent by an approved request: one document each, while its grant runs (the
+  // rules check the grant on every read). Read-only.
+  const grantLeads = new Map();   // leadId → unsubscribe
+  onSnapshot(query(collection(db, 'grants'), where('tenantId', '==', tenantId), where('agentEmail', '==', me), where('kind', '==', 'lead'), where('active', '==', true)), snap => {
+    const now = Date.now();
+    const want = new Set(snap.docs.map(d => d.data()).filter(g => !g.expiresAt || g.expiresAt > now).map(g => String(g.targetId)));
+    for (const [id, un] of grantLeads) if (!want.has(id)) { un(); grantLeads.delete(id); parts.g = parts.g.filter(l => l.id !== id); }
+    want.forEach(id => {
+      if (grantLeads.has(id)) return;
+      grantLeads.set(id, onSnapshot(doc(db, 'leads', id), s => {
+        parts.g = parts.g.filter(l => l.id !== id);
+        if (s.exists()) parts.g.push({ ...s.data(), id: s.id });
+        push();
+      }, () => { parts.g = parts.g.filter(l => l.id !== id); push(); }));
+    });
+    push();
+  }, err => console.error('Firestore agent grants error:', err));
   onSnapshot(pipelineRef(tenantId), (snap) => {
     if (snap.exists() && window.applyPipelineSnapshot) window.applyPipelineSnapshot(snap.data().stages || []);
   }, (err) => console.error('Firestore pipeline sync error:', err));
@@ -237,6 +266,13 @@ function subscribeAsAgent(tenantId){
 // A save from an agent's page: the changed fields (or the whole new lead) to the server.
 function agentSaveLead(lead, data){
   const was = savedFor.get(lead) || savedAs.get(lead.id);
+  if ((was || delivered.has(lead.id)) && readOnlyIds.has(lead.id)) {
+    // Read only: the page's change is put back as the server has it, and said once.
+    if (was) { const base = JSON.parse(was); Object.keys(lead).forEach(k => { if (!(k in base) && k !== 'notes' && k !== 'history') delete lead[k]; }); Object.assign(lead, base); }
+    if (window.showToast) window.showToast('🔒 Read only — this lead is with another agent. Use “Message team” to talk to them.');
+    if (typeof window.refreshAll === 'function') window.refreshAll();
+    return Promise.resolve();
+  }
   if (was || delivered.has(lead.id)) {
     const base = was ? JSON.parse(was) : {};
     const pairs = diffPaths(writable(base), data).filter(([seg]) => seg[0] !== 'tenantId');
@@ -475,9 +511,9 @@ window.crmFirebase = {
   getLeadHistory: (leadId, since) => getDocs(since ? query(collection(db, 'leads', leadId, 'history'), where('at', '>', since)) : collection(db, 'leads', leadId, 'history'))
     .then(s => s.docs.map(d => d.data()))
     .catch(e => { console.error('Firestore get history error:', e); throw e; }),
-  saveNote: (leadId, note) => isAgentMode() ? agentApi('lead-note', { id: leadId, note }).catch(e => saveFailed('save note', e)) : setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
-  deleteNoteDoc: (leadId, noteId) => isAgentMode() ? agentApi('lead-note-delete', { id: leadId, noteId }).catch(e => saveFailed('delete note', e)) : deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
-  saveHistory: (leadId, event) => isAgentMode() ? agentApi('lead-history', { id: leadId, event }).catch(e => saveFailed('save history', e)) : setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
+  saveNote: (leadId, note) => isAgentMode() ? (readOnlyIds.has(leadId) ? Promise.resolve() : agentApi('lead-note', { id: leadId, note }).catch(e => saveFailed('save note', e))) : setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
+  deleteNoteDoc: (leadId, noteId) => isAgentMode() ? (readOnlyIds.has(leadId) ? Promise.resolve() : agentApi('lead-note-delete', { id: leadId, noteId }).catch(e => saveFailed('delete note', e))) : deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
+  saveHistory: (leadId, event) => isAgentMode() ? (readOnlyIds.has(leadId) ? Promise.resolve() : agentApi('lead-history', { id: leadId, event }).catch(e => saveFailed('save history', e))) : setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
 
   savePipeline: (stages) => isAgentMode() ? agentRefused() : setDoc(pipelineRef(currentTenantId), { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
   getBotConfig: async () => {
@@ -552,6 +588,7 @@ window.crmAuth = {
   getTenantId: () => currentTenantId,
   getRole: () => currentRole
 };
+window.crmFirebase.isReadOnly = id => isAgentMode() && readOnlyIds.has(id);
 
 onAuthStateChanged(auth, async (user) => {
   if(user){

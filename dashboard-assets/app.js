@@ -342,6 +342,7 @@ async function loadPropAccess(id){
 }
 async function changePropGrant(action, grantId){
   if(action === 'revoke' && !confirm('Take back this agent’s access to the property? They are told in Messages.')) return;
+  if(action === 'hide-contact' && !confirm('Stop sharing the owner’s number with this agent? They keep the other details.')) return;
   let extra = {};
   if(action === 'grant-extend'){
     const v = prompt('Extend the details from now for how many days? (1, 3 or 7 — leave empty for no limit)', '3');

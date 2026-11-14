@@ -158,29 +158,54 @@ export function toast(msg) {
 // first when something has been typed. Enter in a one-line field presses the main button. The last
 // row of buttons stays in view however long the sheet is.
 let sheetClose = null;
-export function openSheet(html, { onOpen, locked = false, label = '', wide = false } = {}) {
-  if (sheetClose) sheetClose(true);
+let sheetSeq = 0;
+// The phone's Back button closes the sheet (it does not leave the page): opening one adds a step to
+// the browser's history; closing it by ✕, the scrim or Escape takes that step back. url: the address
+// to show while it is open (a property's own link).
+export function openSheet(html, { onOpen, locked = false, label = '', wide = false, url = null } = {}) {
+  // One sheet opened from another (Request details from a property) takes over its history step
+  // rather than closing it and adding a new one (whose Back would then close the new sheet).
+  const replacing = !!sheetClose;
+  if (sheetClose) sheetClose(true, { keepHistory: true });
+  const token = ++sheetSeq;
   const scrim = document.createElement('div'); scrim.className = 'scrim';
   const sh = document.createElement('div'); sh.className = 'sheet' + (wide ? ' wide' : ''); sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true');
   if (label) sh.setAttribute('aria-label', label);
-  sh.innerHTML = '<div class="grip"></div>' + html;
+  sh.innerHTML = html;
   const behind = [...document.body.children].filter(el => el !== scrim && el !== sh && !el.hidden && el.tagName !== 'SCRIPT');
   behind.forEach(el => { el.inert = true; });
   document.body.append(scrim, sh);
   document.body.classList.add('sheet-open');
   const before = document.activeElement;
-  let typed = false;
+  try {
+    if (replacing && history.state && history.state.sheet) history.replaceState({ ...history.state, sheet: token }, '', url || location.href);
+    else history.pushState({ ...(history.state || {}), sheet: token }, '', url || location.href);
+  } catch (e) { /* old browser: Back leaves */ }
+  let typed = false, closed = false;
   sh.addEventListener('input', () => { typed = true; });
-  const close = (force) => {
-    if (!force && typed && sh.querySelector('textarea, input[type=text], input[type=search], input[type=tel], input[type=email]')
-      && [...sh.querySelectorAll('textarea, input[type=text], input[type=tel], input[type=email]')].some(i => i.value.trim()) && !sh.dataset.done
-      && !confirm('Discard what you typed?')) return;
-    scrim.remove(); sh.remove(); document.removeEventListener('keydown', onKey);
+  const dirty = () => typed && !sh.dataset.done && [...sh.querySelectorAll('textarea, input[type=text], input[type=tel], input[type=email]')].some(i => i.value.trim());
+  // Resolves once the browser's history has settled (so the next page step can be pushed safely).
+  const close = (force, { fromHistory = false, keepHistory = false } = {}) => new Promise(resolve => {
+    if (closed) return resolve();
+    if (!force && dirty() && !confirm('Discard what you typed?')) {
+      if (fromHistory) try { history.pushState({ ...(history.state || {}), sheet: token }, '', url || location.href); } catch (e) { /* fine */ }
+      return resolve();
+    }
+    closed = true;
+    scrim.remove(); sh.remove(); document.removeEventListener('keydown', onKey); window.removeEventListener('popstate', onPop);
     behind.forEach(el => { el.inert = false; });
     document.body.classList.remove('sheet-open');
     if (sheetClose === close) sheetClose = null;
-    if (before && before.focus) try { before.focus(); } catch (e) { /* gone */ }
-  };
+    if (before && before.focus) try { before.focus({ preventScroll: true }); } catch (e) { /* gone */ }
+    if (!fromHistory && !keepHistory && history.state && history.state.sheet === token) {
+      const done = () => { window.removeEventListener('popstate', done); resolve(); };
+      window.addEventListener('popstate', done);
+      history.back();
+      setTimeout(done, 400);
+    } else resolve();
+  });
+  const onPop = () => { if (!(history.state && history.state.sheet === token)) close(false, { fromHistory: true }); };
+  window.addEventListener('popstate', onPop);
   const onKey = e => {
     if (e.key === 'Escape' && !locked) { e.preventDefault(); close(); }
     if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.matches && e.target.matches('.sheet input[type=text], .sheet input[type=tel], .sheet input[type=email]')) {
@@ -196,10 +221,10 @@ export function openSheet(html, { onOpen, locked = false, label = '', wide = fal
   const first = sh.querySelector('textarea, input[type=text], input[type=tel], input[type=email]');
   if (first && window.matchMedia('(min-width: 640px)').matches) first.focus();
   else { const b = sh.querySelector('[data-close], button'); if (b) b.focus({ preventScroll: true }); }
-  if (onOpen) onOpen(sh, () => { sh.dataset.done = '1'; close(true); });
+  if (onOpen) onOpen(sh, () => { sh.dataset.done = '1'; return close(true); });
   return () => close(true);
 }
-export const closeSheet = () => { if (sheetClose) sheetClose(true); };
+export const closeSheet = () => (sheetClose ? sheetClose(true) : Promise.resolve());
 
 // A button that shows it is working and cannot be pressed twice.
 export async function busy(btn, run) {
@@ -236,6 +261,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
         ${canCoAgent ? `<label class="toggle"><span><b>Make them a co-agent</b><small>A lasting collaboration with no timer: they see this property as you do, including new enquiries on it that nobody has been given yet</small></span><input type="checkbox" id="dCo"></label>` : ''}
         <div id="dTimers">
           ${need === 'number' ? '' : `<div class="field"><label>${need === 'time' ? 'Details from now for' : isLead ? 'Lead details for' : 'Property details for'}</label>
+            ${defaults.isAdmin ? '' : '<p class="note" style="margin:0 0 6px">You can end it yourself later (My Day → History), and an admin can too.</p>'}
             <div class="pick" id="dDays">
               ${[['', 'No limit'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['custom', 'Pick a date']].map(([v, l]) => `<label><input type="radio" name="dDays" value="${v}"${v === days ? ' checked' : ''}> ${l}</label>`).join('')}
             </div>
@@ -262,8 +288,9 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
         sh.querySelectorAll('[data-d]').forEach(x => x.setAttribute('aria-selected', String(x === b)));
         q('#dApprove').hidden = mode !== 'approve';
         q('#dNoteL').textContent = mode === 'reject' ? 'Why (the agent sees this)' : 'Note (optional)';
+        q('#dNote').placeholder = mode === 'reject' ? 'e.g. The owner has given this to us exclusively for now' : 'Anything they should know';
         q('#dGo').textContent = mode === 'reject' ? 'Reject' : 'Approve';
-        q('#dGo').classList.toggle('danger', mode === 'reject');
+        q('#dGo').classList.toggle('reject', mode === 'reject');
       }));
       const syncCustom = () => {
         const d = sh.querySelector('input[name=dDays]:checked');

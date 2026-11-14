@@ -217,3 +217,13 @@
   @media (hover: hover) { .pcard:hover, .thread:hover, .row:hover { background: var(--bg2); } }
   /* Status tags readable in light mode (4.5:1). */
   .tag.green { color: light-dark(#166534, #7EE2A8); }
+
+  .btn.primary.reject { background: light-dark(#B42318, #D9483B); border-color: light-dark(#B42318, #D9483B); color: #fff; }
+  /* The close button and title stay at the top of a long sheet; no grip that does nothing. */
+  .sheet .grip { display: none; }
+  .sheet .detail-h { position: sticky; top: -8px; z-index: 2; background: var(--card); margin: -8px -16px 4px; padding: 10px 16px 6px; }
+  :root[data-theme="dark"] .sheet, .sheet { border-top: 1px solid var(--border2); }
+  /* Thumbs: 44px targets on touch screens. */
+  @media (pointer: coarse) { .btn.sm, .chip, .top .btn, .dp-mini { min-height: 44px; } .chip { padding: 0 16px; } }
+  /* A stat tile's section lands below the sticky header. */
+  [id^="s-"] { scroll-margin-top: 72px; }

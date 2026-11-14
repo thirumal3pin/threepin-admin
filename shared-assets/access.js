@@ -104,10 +104,9 @@ async function startInbox(a) {
     const badge = (k, n) => { if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge(k, n); };
     const quiet = () => {};
     const req = fs.collection(db, 'accessRequests');
-    if (a.role === 'agent' || a.role === 'admin') {
-      fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('approvers', 'array-contains', me), fs.where('status', '==', 'pending')),
-        s => badge('myday', s.docs.filter(d => d.data().requesterEmail !== me).length), quiet);
-    }
+    // Anyone can be asked (staff who are a property's primary agent too).
+    fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('approvers', 'array-contains', me), fs.where('status', '==', 'pending')),
+      s => badge('myday', s.docs.filter(d => d.data().requesterEmail !== me).length), quiet);
     let known = null;
     fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('requesterEmail', '==', me)), s => {
       const now = new Map(s.docs.map(d => [d.id, d.data()]));
@@ -118,7 +117,8 @@ async function startInbox(a) {
       });
       known = now;
     }, quiet);
-    fs.onSnapshot(fs.query(fs.collection(db, 'threads'), fs.where('tenantId', '==', T), fs.where('members', 'array-contains', me)),
+    // The newest conversations only (an index keeps it a read per conversation shown).
+    fs.onSnapshot(fs.query(fs.collection(db, 'threads'), fs.where('tenantId', '==', T), fs.where('members', 'array-contains', me), fs.orderBy('lastAt', 'desc'), fs.limit(40)),
       s => badge('messages', s.docs.filter(d => { const t = d.data(); return t.lastAt && t.lastBy !== me && t.lastAt > Number((t.reads || {})[key] || 0); }).length), quiet);
     if (a.role === 'admin') {
       let pend = 0, subs = 0;
@@ -175,8 +175,9 @@ function gate(a) {
     + 'font-weight:600;text-decoration:none;border:1px solid var(--border2,#D4D4D4);';
   const links = [];
   if (tabs.includes('myday')) links.push(['myday.html', 'Open My Day']);
-  if (tabs.some(t => PAGE_TABS.crm.includes(t))) links.push(['crm.html', 'Open the CRM']);
   if (tabs.includes('properties')) links.push(['listings.html', 'Open Properties']);
+  if (tabs.some(t => PAGE_TABS.crm.includes(t))) links.push(['crm.html', 'Open Leads']);
+  if (tabs.includes('messages')) links.push(['messages.html', 'Open Messages']);
   document.body.className = '';
   document.body.style.cssText = 'margin:0;background:var(--bg,#F8F8F8);color:var(--ink,#171717);font:15px/1.5 var(--sans,system-ui)';
   document.body.innerHTML =

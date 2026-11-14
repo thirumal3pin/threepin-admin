@@ -87,7 +87,8 @@
       note: 'Team chat, and a thread for every request',
     },
     {
-      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks',
+      // An agent's day is My Day (one "today" page, not two that disagree).
+      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks', notForAgents: true,
       note: 'Your visits and tasks for today',
     },
     {
@@ -425,7 +426,7 @@
     { id: 'myday', label: 'My Day', icon: 'fa-solid fa-house', page: 'myday', nav: 'myday', tab: 'myday', badge: 'myday' },
     { id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'myprops', nav: 'myprops', tab: 'properties' },
     { id: 'messages', label: 'Messages', icon: 'fa-regular fa-message', page: 'messages', nav: 'messages', tab: 'messages', badge: 'messages' },
-    { id: 'kanban', label: 'Leads', icon: 'fa-regular fa-comments', page: 'crm', nav: 'kanban', tab: 'crm' },
+    { id: 'kanban', label: 'Leads', icon: 'fa-solid fa-user-group', page: 'crm', nav: 'kanban', tab: 'crm' },
   ];
   function renderTabbar() {
     var bar = document.getElementById('pinTabbar');

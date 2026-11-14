@@ -9,7 +9,7 @@
 // own read mark; read ticks from the others' marks (a message is read once every other member's mark
 // has passed it).
 import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults } from '../shared-assets/agent-client.js';
-import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 const me = await whenSignedIn();
 const isAdmin = me.role === 'admin', isAgent = me.role === 'agent';
@@ -21,7 +21,7 @@ let people = [];
 let threads = [];
 let filter = 'all', q = '', everyone = false;
 let openId = null, msgUnsub = null, reqUnsub = null, msgs = [], openThread = null, openReq = null;
-let threadUnsub = null, docUnsub = null;
+let threadUnsub = null, docUnsub = null, wantTried = false, chatPushed = false;
 
 directory().then(p => { people = p; renderList(); if (openThread) renderChat(); });
 // Unread: the conversation's last line is newer than my read mark, and not mine. Worked out here from
@@ -31,13 +31,21 @@ const isUnread = t => !!t && !!t.lastAt && t.lastBy !== me.email && (t.members |
 function watchThreads() {
   if (threadUnsub) threadUnsub();
   const base = collection(db, 'threads');
-  const qq = everyone && isAdmin ? query(base, where('tenantId', '==', me.tenantId)) : query(base, where('tenantId', '==', me.tenantId), where('members', 'array-contains', me.email));
+  // The newest conversations (an index keeps this one read per conversation shown, however long the
+  // history grows).
+  const qq = everyone && isAdmin ? query(base, where('tenantId', '==', me.tenantId), orderBy('lastAt', 'desc'), limit(200))
+    : query(base, where('tenantId', '==', me.tenantId), where('members', 'array-contains', me.email), orderBy('lastAt', 'desc'), limit(150));
   threadUnsub = onSnapshot(qq, s => {
     threads = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     renderList();
     if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge('messages', threads.filter(isUnread).length);
     const want = new URLSearchParams(location.search).get('t');
-    if (want && !openId && threads.some(t => t.id === want)) openChat(want);
+    if (want && !openId && !wantTried) {
+      wantTried = true;
+      if (threads.some(t => t.id === want)) openChat(want);
+      else getDoc(doc(db, 'threads', want)).then(sn => { if (sn.exists()) openChat(want); else toast('That conversation is no longer there'); })
+        .catch(() => toast('That conversation is not one of yours'));
+    }
   }, err => { if (!isShutdown(err)) $('threads').innerHTML = `<div class="empty"><i class="fa-solid fa-triangle-exclamation"></i>${esc(err.message)}</div>`; });
 }
 watchThreads();
@@ -57,6 +65,8 @@ $('filters').addEventListener('click', e => {
 });
 $('q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); renderList(); });
 
+// "Access: 3 BHK, Anna Nagar · for Arjun" — the lock icon already says it is a request.
+const shortTitle = t => t.type === 'access_request' ? String(t.title || '').replace(/^(Access|More time|Owner’s number):\s*/, m => m.startsWith('Access') ? '' : m) : String(t.title || '');
 const ICON = { access_request: 'fa-solid fa-lock-open', property: 'fa-regular fa-building', lead: 'fa-regular fa-user', general: 'fa-regular fa-comments' };
 const short = t => {
   if (!t) return '';
@@ -68,14 +78,14 @@ const short = t => {
 function renderList() {
   let list = threads;
   if (filter !== 'all') list = list.filter(t => t.type === filter);
-  if (q) list = list.filter(t => String(t.title || '').toLowerCase().includes(q));
+  if (q) list = list.filter(t => [t.title, ...(t.members || []).map(e => nameOf(people, e))].join(' ').toLowerCase().includes(q));
   $('threads').innerHTML = list.length ? list.map(t => {
     const n = isUnread(t);
     const by = t.lastBy ? (t.lastBy === me.email ? 'You: ' : nameOf(people, t.lastBy).split(' ')[0] + ': ') : '';
     const others = (t.members || []).filter(e => e !== me.email).map(e => nameOf(people, e).split(' ')[0]).join(', ');
     return `<div class="thread${n ? ' unread' : ''}" role="button" tabindex="0" data-id="${esc(t.id)}">
       <div class="av"><i class="${ICON[t.type] || ICON.general}"></i></div>
-      <div class="bd"><b>${esc(t.title)}</b><small>${t.lastText ? esc(by + t.lastText) : esc(others)}</small></div>
+      <div class="bd"><b>${esc(shortTitle(t))}</b><small>${t.lastText ? esc(by + t.lastText) : esc(others)}</small></div>
       <div class="side"><span>${esc(short(t.lastAt))}</span>${n ? '<span class="ub" aria-label="Unread"></span>' : ''}</div></div>`;
   }).join('') : `<div class="empty"><i class="fa-regular fa-comments"></i>${q || filter !== 'all' ? 'No conversations here.' : 'No conversations yet. A request for details opens one; so does “Message” on a property or a lead, or New.'}</div>`;
   $('threads').querySelectorAll('.thread').forEach(el => {
@@ -107,7 +117,8 @@ function openChat(id, { push = false } = {}) {
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 900px)').matches) { e.preventDefault(); send(); } });
   $('compose').addEventListener('submit', e => { e.preventDefault(); send(); });
   const url = new URL(location.href); url.searchParams.set('t', id);
-  if (push && !wasOpen) history.pushState({ chat: id }, '', url); else history.replaceState({ chat: id }, '', url);
+  if (push && !wasOpen) { history.pushState({ chat: id }, '', url); chatPushed = true; }
+  else { history.replaceState({ ...(history.state || {}), chat: id }, '', url); if (!wasOpen) chatPushed = false; }
   if (window.matchMedia('(min-width: 900px)').matches) setTimeout(() => { const t = $('text'); if (t && !$('compose').hidden) t.focus(); }, 50);
   renderList();
   renderHeader();
@@ -140,9 +151,11 @@ function closeChat(silent, { fromHistory = false } = {}) {
   if (!silent) {
     $('chat').hidden = true; $('chat').innerHTML = ''; document.body.classList.remove('chat-open');
     if (!fromHistory) {
-      if (history.state && history.state.chat) { history.back(); }
+      // Back one step only when opening it added one (a tapped conversation); a chat opened from a
+      // link or a new one just leaves the address — never Messages itself.
+      if (chatPushed) { chatPushed = false; history.back(); }
       else { const url = new URL(location.href); url.searchParams.delete('t'); history.replaceState(null, '', url); }
-    }
+    } else chatPushed = false;
     renderList();
   }
 }
@@ -153,7 +166,8 @@ function renderHeader() {
   if (!t || !$('chatTitle')) return;
   const others = (t.members || []).filter(e => e !== me.email).map(e => nameOf(people, e));
   const link = t.type === 'property' && t.linkedId ? (isAgent ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(t.linkedId)
-    : t.type === 'lead' && t.linkedId ? 'crm.html?lead=' + encodeURIComponent(t.linkedId) : '';
+    : t.type === 'lead' && t.linkedId ? 'crm.html?lead=' + encodeURIComponent(t.linkedId)
+    : t.type === 'access_request' && t.linkedId ? 'myday.html?req=' + encodeURIComponent(t.linkedId) : '';
   $('chatTitle').outerHTML = `<${link ? `a href="${esc(link)}"` : 'div'} class="t" id="chatTitle"><b>${esc(t.title)}</b><small>${esc(others.join(', '))}${link ? ' · tap to open' : ''}</small></${link ? 'a' : 'div'}>`;
   const member = (t.members || []).includes(me.email);
   let note = document.getElementById('roNote');
@@ -163,20 +177,29 @@ function renderPinned() {
   const r = openReq, el = $('pinned');
   if (!el) return;
   if (!r) { el.innerHTML = ''; return; }
-  const can = r.status === 'pending' && r.requesterEmail !== me.email && (isAdmin || (r.approvers || []).includes(me.email));
-  const st = { pending: 'Waiting for a decision', approved: `Approved by ${r.decidedByName || nameOf(people, r.decidedBy)} · ${when(r.decidedAt)}`,
-    rejected: `Rejected by ${r.decidedByName || nameOf(people, r.decidedBy)} · ${when(r.decidedAt)}`, cancelled: 'Cancelled by ' + r.requesterName }[r.status] || r.status;
-  el.innerHTML = `<div class="pinned"><b><i class="fa-solid fa-thumbtack" style="color:var(--ink3)"></i> ${esc(r.requesterName)} asked for ${r.kind === 'lead' ? 'a matching buyer’s details' : esc(r.title)}</b>
-    <div><span class="tag ${r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : r.status === 'pending' ? 'wait' : ''}">${esc(st)}</span></div>
-    ${can || (r.status === 'pending' && r.requesterEmail === me.email) ? `<div class="acts">
+  const mineReq = r.requesterEmail === me.email;
+  const can = r.status === 'pending' && !mineReq && (isAdmin || (r.approvers || []).includes(me.email));
+  const byWho = e => (e === me.email ? 'you' : (r.decidedByName || nameOf(people, e)));
+  const st = { pending: mineReq ? 'Waiting for a decision' : 'Waiting for your decision', approved: `Approved by ${byWho(r.decidedBy)} · ${when(r.decidedAt)}`,
+    rejected: `Not approved by ${byWho(r.decidedBy)} · ${when(r.decidedAt)}`, cancelled: (mineReq ? 'You' : r.requesterName) + ' cancelled it', expired: 'Expired — nobody decided in time' }[r.status] || r.status;
+  const what = r.kind === 'lead' ? 'a matching buyer' + (r.title ? ' — ' + String(r.title).replace(/^Lead:\s*/, '') : '') : r.need === 'time' ? 'more time on ' + r.title : r.need === 'number' ? 'the owner’s number for ' + r.title : r.title;
+  const live = r.status === 'approved' && !r.grantState;
+  el.innerHTML = `<div class="pinned"><b><i class="fa-solid fa-thumbtack" style="color:var(--ink3)"></i> ${mineReq ? 'You' : esc(r.requesterName)} asked for ${esc(what)}</b>
+    <div><span class="tag ${r.status === 'approved' && !r.grantState ? 'green' : r.status === 'rejected' ? 'red' : r.status === 'pending' ? 'wait' : ''}">${esc(r.grantState === 'revoked' ? 'Access taken back' : r.grantState === 'expired' ? 'Access ended' : st)}</span></div>
+    <div class="acts">
       ${can ? '<button type="button" class="btn sm primary" id="pDecide">Approve or reject</button>' : ''}
-      ${r.status === 'pending' && r.requesterEmail === me.email ? '<button type="button" class="btn sm danger" id="pCancel">Cancel request</button>' : ''}</div>` : ''}</div>`;
-  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && isAdmin, defaults: await approvalDefaults(me) }));
-  // (A property's primary agent can also make the asker a co-agent — from My Day, which knows whose
-  // property it is.)
+      ${r.status === 'pending' && mineReq ? '<button type="button" class="btn sm danger" id="pCancel">Cancel request</button>' : ''}
+      ${live && mineReq && r.kind === 'property' ? `<a class="btn sm primary" href="listings.html?id=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
+      ${live && mineReq && r.kind === 'lead' ? '<button type="button" class="btn sm primary" id="pOpenLead">Open in Leads</button>' : ''}
+      ${live && mineReq && r.kind === 'property' && r.terms && r.terms.until && r.terms.until - Date.now() < 2 * 86400000 ? '<button type="button" class="btn sm" id="pMore">Ask for more time</button>' : ''}
+    </div></div>`;
+  if (!el.querySelector('.acts').children.length) el.querySelector('.acts').remove();
+  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && isAdmin, defaults: { ...(await approvalDefaults(me)), isAdmin } }));
   if ($('pCancel')) $('pCancel').addEventListener('click', e => { if (confirm('Cancel this request?')) busy(e.currentTarget, () => api('cancel', { id: r.id }).catch(x => toast('✗ ' + x.message))); });
+  if ($('pMore')) $('pMore').addEventListener('click', e => busy(e.currentTarget, () => api('request', { kind: 'property', targetId: r.targetId, need: 'time', reason: 'Asking for more time' }).then(() => toast('Asked for more time')).catch(x => toast('✗ ' + x.message))));
+  // The lead opened to them: its id is on their own grant (they can read it), never on the request.
+  if ($('pOpenLead')) $('pOpenLead').addEventListener('click', () => getDoc(doc(db, 'grants', r.grantId)).then(g => { if (g.exists()) location.href = 'crm.html?lead=' + encodeURIComponent(g.data().targetId); }).catch(() => toast('Could not open it — try again')));
 }
-
 function renderChat() {
   const box = $('msgs');
   if (!box) return;
@@ -209,7 +232,9 @@ function markRead() {
   if (mark >= latest) return;
   if (Date.now() - lastMark < 1500) { setTimeout(markRead, 1600); return; }
   lastMark = Date.now();
-  updateDoc(doc(db, 'threads', t.id), { ['reads.' + myKey]: Date.now() }).catch(e => console.error('read mark:', e));
+  // At least the last message's time (a sender whose clock runs ahead must not leave it unread
+  // forever), never more than the rules allow ahead of now.
+  updateDoc(doc(db, 'threads', t.id), { ['reads.' + myKey]: Math.min(Math.max(Date.now(), latest), Date.now() + 50000) }).catch(e => console.error('read mark:', e));
 }
 document.addEventListener('visibilitychange', markRead);
 
@@ -243,7 +268,7 @@ $('newBtn').addEventListener('click', async () => {
       const members = [...sh.querySelectorAll('#nPeople input:checked')].map(i => i.value);
       if (!title) { sh.querySelector('#nErr').textContent = 'Give it a title'; return; }
       if (!members.length) { sh.querySelector('#nErr').textContent = 'Pick at least one person'; return; }
-      try { const r = await api('thread-open', { type: 'general', title, members }); close(); openChat(r.id); }
+      try { const r = await api('thread-open', { type: 'general', title, members }); await close(); openChat(r.id, { push: true }); }
       catch (e) { sh.querySelector('#nErr').textContent = e.message; }
     }));
   } });

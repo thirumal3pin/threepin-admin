@@ -55,6 +55,9 @@
   .compose textarea { min-height: 44px; max-height: 140px; border-radius: 22px; padding: 11px 16px; resize: none; }
   .compose .send { flex: none; width: 46px; height: 46px; border-radius: 50%; border: 0; background: #25D366; color: #06240F; font-size: 18px; cursor: pointer; }
   .compose .send:disabled { opacity: .5; }
+  /* Typing with the keyboard up: the pinned card folds to one line, the messages keep the room. */
+  #chat:focus-within .pinned .acts, #chat:focus-within .pinned > div:not(.acts) { display: none; }
+  .bub.mine .meta { color: light-dark(#5C6E59, #B9D4C2); }
   .readonly-note { padding: 8px 12px; font-size: 12.5px; background: light-dark(#FFF7E0, rgba(255,190,40,.12)); color: light-dark(#6B4600, #FFD27A); border-bottom: 1px solid var(--border); }
   /* A laptop: the list on the left, the open conversation beside it (WhatsApp Web), not on top. */
   .split-empty { display: none; }

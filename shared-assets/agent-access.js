@@ -170,7 +170,10 @@ export function agentsByCodeOf(properties) {
   (properties || []).forEach(p => {
     const a = agentsOf(p);
     if (!a.length) return;
-    [codeOf(p), p.id, p.name].map(codeKey).filter(k => k.length >= 3).forEach(k => m.set(k, uniq([...(m.get(k) || []), ...a])));
+    // The code and the id (old rows have ids like "17") — never the title: anyone can type a title
+    // that reads like another listing's code, and enquiries must not follow it.
+    const keys = [codeKey(codeOf(p)), codeKey(p.id)].filter(Boolean);
+    uniq(keys).forEach(k => m.set(k, uniq([...(m.get(k) || []), ...a])));
   });
   return m;
 }
@@ -188,14 +191,14 @@ export function ownedByAnAgent(lead, agentEmails) {
   if (!agentEmails) return false;
   return [lc(lead && lead.assignedAgent), lc(lead && lead.secondaryAgent)].some(e => e && agentEmails.has(e));
 }
-// Everyone who reaches a lead through the agent layer (stored on the lead as agentAccess, which the
-// rules read): the agents of the properties an unowned (or staff-owned) lead enquired about, and
-// agents holding a running grant on it. The lead's own agents reach it through those fields.
-// agentEmails: the set of logins whose role is agent (the protection above needs it).
-export function leadAccessFor(lead, agentsByCode, leadGrants, now = Date.now(), agentEmails = null) {
+// Who reaches a lead through its properties (stored on the lead as agentAccess, which the rules and
+// the agent's CRM query read): the agents of the properties an unowned (or staff-owned) lead enquired
+// about. The lead's own agents reach it through their own fields. An approved request does NOT go
+// here: the rules check the grant itself (its timer, whether it was taken back), so it can end to the
+// minute and stays read-only. agentEmails: the logins whose role is agent (the protection above).
+export function leadAccessFor(lead, agentsByCode, _unused, _now, agentEmails = null) {
   const own = new Set([lc(lead && lead.assignedAgent), lc(lead && lead.secondaryAgent)]);
   const out = ownedByAnAgent(lead, agentEmails) ? [] : propertyAgentsOfLead(lead, agentsByCode);
-  (leadGrants || []).forEach(g => { if (g.kind === 'lead' && String(g.targetId) === String(lead.id) && grantLive(g, now)) out.push(lc(g.agentEmail)); });
   return uniq(out).filter(e => !own.has(e)).sort();
 }
 export function leadVisibleTo(lead, email) {
@@ -218,7 +221,8 @@ export function canWorkLead(lead, email) {
 // names and numbers taken out (and more only if the settings say so).
 // A phone number however it is written: ten digits with any spaces, dots or dashes between them, with
 // or without +91 / 0 ("98400 12345", "9840 012 345", "98-40-01-23-45", "044-2345 6789").
-export const PHONE_IN_TEXT = /(?<![\w])(?:\+?91[\s.-]*|0)?(?:\d[\s.-]?){9}\d(?![\w])/g;
+// Not a date and time ("15-11-2026 10:30"): a run touching a colon is left alone.
+export const PHONE_IN_TEXT = /(?<![\w:])(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?![\w:])/g;
 const EMAIL_IN_TEXT = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
 export function scrubText(text, names) {
   let s = String(text || '').replace(PHONE_IN_TEXT, '•••').replace(EMAIL_IN_TEXT, '•••');
@@ -227,7 +231,8 @@ export function scrubText(text, names) {
       s = s.replace(new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), 'the client');
     });
   });
-  return s.replace(/(the client\s+){2,}/gi, 'the client ').trim();
+  s = s.replace(/(the client\s+){2,}/gi, 'the client ').replace(/\s*\(\s*•••\s*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 export function requirementOf(lead) {
   const tt = (lead && lead.tt) || {};

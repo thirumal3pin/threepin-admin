@@ -37,7 +37,12 @@ const watcher = watchMyView(me, (v, err) => {
   $('app').hidden = false;
   render();
   // ?id= opens that property once — not again every time the copy refreshes.
-  if (wanted && !openedWanted) { const p = view.props.find(x => String(x.id) === wanted); if (p) { openedWanted = true; if (!document.querySelector('.sheet')) openProperty(p); } }
+  if (wanted && !openedWanted) {
+    openedWanted = true;
+    const p = view.props.find(x => String(x.id) === wanted);
+    if (p) { if (!document.querySelector('.sheet')) { history.replaceState(null, '', location.pathname); openProperty(p); } }
+    else toast('That property is not in your list — it may be sold, or not shared with you');
+  }
 });
 $('refreshBtn').addEventListener('click', e => busy(e.currentTarget, async () => { watcher.refresh(); toast('Checking for changes…'); }));
 
@@ -135,9 +140,13 @@ function kvHtml(p) {
 
 function openProperty(p) {
   if (!p) return;
-  try { const u = new URL(location.href); u.searchParams.set('id', p.id); history.replaceState(null, '', u); } catch (e) { /* old browser */ }
-  const clearId = () => { try { const u = new URL(location.href); if (u.searchParams.get('id') === String(p.id)) { u.searchParams.delete('id'); history.replaceState(null, '', u); } } catch (e) { /* fine */ } };
-  const watchClose = setInterval(() => { if (!document.querySelector('.sheet')) { clearInterval(watchClose); clearId(); } }, 400);
+  // The property's own link while it is open; Back closes it (agent-client's sheet adds the step).
+  let url = location.href;
+  try { const u = new URL(location.href); u.searchParams.set('id', p.id); url = u.toString(); } catch (e) { /* old browser */ }
+  // The owner's number goes the moment its timer ends, open sheet or not.
+  if (p._grant && p._grant.contactUntil && p._grant.contactUntil > Date.now()) {
+    setTimeout(() => { watcher.refresh(); const sh = document.querySelector('.sheet'); if (sh && sh.dataset.pid === String(p.id)) { toast('The owner’s number is no longer shared with you'); import('../shared-assets/agent-client.js').then(m => m.closeSheet()); } }, Math.min(p._grant.contactUntil - Date.now() + 1000, 2147000000));
+  }
   const locked = p._access === 'summary';
   const mine = isMine(p);
   const matches = (view.matches || []).filter(m => m.propertyId === String(p.id));
@@ -150,7 +159,8 @@ function openProperty(p) {
   openSheet(`
     <div class="detail-h"><h3>${esc(p.name || p._code)}</h3><button type="button" class="btn sm" data-close aria-label="Close">✕</button></div>
     <p class="sub">${esc(line(p))}${accessLine ? ' · ' + esc(accessLine) : ''}</p>
-    ${locked ? `<div class="lockline"><i class="fa-solid fa-lock"></i><span>Only this summary is open to you. Ask ${p._primaryName ? esc(p._primaryName) + ' (its agent) or an admin' : 'an admin'} for the details.</span></div>` : ''}
+    ${locked && p._refused ? `<div class="callout warn"><b>Not approved last time</b>${p._refused.by ? ' by ' + esc(p._refused.by) : ''}${p._refused.note ? ': “' + esc(p._refused.note) + '”' : ''}. You can ask again.</div>` : ''}
+    ${locked && !p._refused ? `<div class="lockline"><i class="fa-solid fa-lock"></i><span>${p._pending ? 'You asked for its details — waiting for ' + (p._primaryName ? esc(p._primaryName) + ' (its agent) or an admin' : 'an admin') + '.' : 'Only this summary is open to you. Ask ' + (p._primaryName ? esc(p._primaryName) + ' (its agent) or an admin' : 'an admin') + ' for the details.'}</span></div>` : ''}
     ${kvHtml(p)}
     ${!locked && (p.photosLink || p.brochureLink || p.detailsText) ? `<div class="bar" style="flex-wrap:wrap">
       ${isUrl(p.photosLink) ? `<a class="btn sm" href="${esc(p.photosLink)}" target="_blank" rel="noopener"><i class="fa-regular fa-images"></i> Photos</a>` : ''}
@@ -171,15 +181,16 @@ function openProperty(p) {
         ${m.phone ? `<p><a href="tel:${esc(m.phone)}">${esc(m.phone)}</a></p>` : ''}
         <div class="bar" style="margin:10px 0 0;flex-wrap:wrap">${m.requested === 'pending' ? '<span class="tag wait">Asked — waiting</span>'
           : `${m.requested === 'rejected' ? '<span class="tag red" style="align-self:center">Not approved last time</span>' : ''}<button type="button" class="btn sm" data-askref="${esc(m.ref)}"><i class="fa-solid fa-unlock"></i> ${m.requested === 'rejected' || m.requested === 'cancelled' || m.requested === 'expired' ? 'Ask again' : 'Ask for their number'}</button>`}</div></div>`).join('')}` : ''}
-    ${!locked && ((p._access !== 'granted' && (cfg ? (cfg.ownPropertyFields || []).includes('notes') : true)) || (p._access === 'granted' && cfg && (cfg.grantedPropertyFields || []).includes('notes'))) ? `<div class="sec-h">Notes</div>
+    ${!locked && ((p._access !== 'granted' && (cfg ? (cfg.ownPropertyFields || []).includes('notes') : true)) || (p._access === 'granted' && cfg && (cfg.grantedPropertyFields || []).includes('notes'))) ? `<div class="sec-h">${p._access === 'granted' ? 'Notes from its agents' : 'Notes'}</div>
       ${mine && can.editOwnProperties ? `<div class="field"><textarea id="pNote" placeholder="Add a note about this property" maxlength="2000"></textarea><div class="bar" style="margin:8px 0 0;justify-content:flex-end"><button type="button" class="btn sm primary" id="pNoteGo">Add note</button></div></div>` : ''}
       <ul class="notes" id="pNotes"><li><div class="sk-line"></div></li></ul>` : ''}
     <div class="bar" style="flex-wrap:wrap">
-      ${locked ? (p._pending ? `<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span><button type="button" class="btn danger" data-cancelreq="${esc(p._pending)}">Cancel request</button>` : `<button type="button" class="btn primary block" id="pAsk"><i class="fa-solid fa-unlock"></i> Request details</button>`) : ''}
+      ${locked ? (p._pending ? `<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span><button type="button" class="btn danger" data-cancelreq="${esc(p._pending)}">Cancel request</button>` : `<button type="button" class="btn primary block" id="pAsk"><i class="fa-solid fa-unlock"></i> ${p._refused ? 'Ask again' : 'Request details'}</button>`) : ''}
       ${p._access === 'granted' ? (p._pending ? '<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span>'
         : `${p._grant && p._grant.until ? '<button type="button" class="btn" data-need="time"><i class="fa-regular fa-hourglass-half"></i> Ask for more time</button>' : ''}${p._grant && p._grant.contactUntil ? '' : '<button type="button" class="btn" data-need="number"><i class="fa-solid fa-phone"></i> Ask for the owner’s number</button>'}`) : ''}
       <button type="button" class="btn${locked ? '' : ' block'}" id="pMsg"><i class="fa-regular fa-comments"></i> ${mine ? 'Message the team about it' : 'Message its agent'}</button>
-    </div>`, { label: p.name || 'Property', wide: true, onOpen: (sh, close) => {
+    </div>`, { label: p.name || 'Property', wide: true, url, onOpen: (sh, close) => {
+      sh.dataset.pid = String(p.id);
       const qq = s => sh.querySelector(s);
       if (qq('#pShare')) qq('#pShare').addEventListener('click', async () => { try { await navigator.clipboard.writeText(p.detailsText); toast('Copied — paste it in WhatsApp'); } catch (e) { toast('Could not copy'); } });
       if (qq('#pAvail')) qq('#pAvail').addEventListener('change', e => {
@@ -188,7 +199,13 @@ function openProperty(p) {
         if ((v === 'Sold' || v === 'Let out') && !confirm(`Mark “${p.name || p._code}” as ${v.toLowerCase()}? Other agents stop seeing it, and it goes on “Changes to apply” for the sheet.`)) {
           e.target.value = (['Available', 'On hold', 'Booked', 'Sold', 'Let out'].find(o => o.toLowerCase() === String(p.availability || '').toLowerCase())) || ''; return;
         }
-        api('property-availability', { id: p.id, availability: v }).then(() => { toast('Availability: ' + v + ' — added to “Changes to apply” for the sheet'); watcher.refresh(); }).catch(err => { toast('✗ ' + err.message); e.target.value = p.availability || ''; });
+        api('property-availability', { id: p.id, availability: v }).then(() => {
+          p.availability = v;
+          const row = [...sh.querySelectorAll('.kv dt')].find(dt => dt.textContent === 'Availability');
+          if (row && row.nextElementSibling) row.nextElementSibling.textContent = v;
+          toast('Availability is now ' + v + '. The office copies it to the inventory sheet.');
+          watcher.refresh();
+        }).catch(err => { toast('✗ ' + err.message); e.target.value = p.availability || ''; });
       });
       if (qq('#pNotes')) loadNotes(p, qq('#pNotes'));
       if (qq('#pNoteGo')) qq('#pNoteGo').addEventListener('click', () => busy(qq('#pNoteGo'), async () => {
@@ -293,10 +310,10 @@ $('addProp').addEventListener('click', () => {
     <p class="sub">An admin checks it before it joins the inventory, with you as its agent.</p>
     <div class="field"><label for="sName">Title</label><input type="text" id="sName" maxlength="200" placeholder="e.g. 3 BHK Apartment, Anna Nagar"></div>
     <div class="two">
-      <div class="field"><label for="sConfig">BHK</label><input type="text" id="sConfig" maxlength="40" placeholder="3 BHK"></div>
-      <div class="field"><label for="sPrice">Price</label><input type="text" id="sPrice" maxlength="60" placeholder="₹1.8 Cr"></div>
-      <div class="field"><label for="sType">Type</label><input type="text" id="sType" maxlength="60" placeholder="Apartment"></div>
-      <div class="field"><label for="sZone">Locality</label><input type="text" id="sZone" maxlength="80" placeholder="Anna Nagar"></div>
+      <div class="field"><label for="sConfig">BHK</label><input type="text" id="sConfig" maxlength="40" placeholder="e.g. 3 BHK"></div>
+      <div class="field"><label for="sPrice">Price</label><input type="text" id="sPrice" maxlength="60" placeholder="e.g. ₹1.8 Cr"></div>
+      <div class="field"><label for="sType">Type</label><input type="text" id="sType" maxlength="60" placeholder="e.g. Apartment"></div>
+      <div class="field"><label for="sZone">Locality</label><input type="text" id="sZone" maxlength="80" placeholder="e.g. Anna Nagar"></div>
     </div>
     <div class="field"><label for="sLoc">Address</label><input type="text" id="sLoc" maxlength="300"></div>
     <div class="two">

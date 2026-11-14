@@ -125,6 +125,9 @@ onAuthStateChanged(auth, async user => {
     return;
   }
   if (agent) agentTiles(); else teamTiles();
+  // The buyers' chat button (bottom right) must never sit on a tile: room is left under them.
+  const tilesNav = document.querySelector('nav.tiles');
+  if (tilesNav) tilesNav.style.paddingBottom = '96px';
   const name = nameOf(user);
   $('who-hi').textContent = name ? 'Welcome back, ' + name : 'Welcome back';
   $('who-email').textContent = user.email || '';
@@ -202,6 +205,6 @@ function agentTiles() {
   const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   nav.innerHTML = tile(1, 'myday.html', svg('<path d="M3.5 10.5 12 3.5l8.5 7M5.5 9v11h13V9"/>'), 'My Day', 'Approvals, site visits and follow-ups for today', true)
     + tile(2, 'listings.html', svg('<rect x="3.5" y="3.5" width="7" height="8" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.8"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.8"/><rect x="3.5" y="14.5" width="7" height="6" rx="1.8"/>'), 'Properties', 'Yours in full, the rest as a summary')
-    + tile(3, 'crm.html', svg('<circle cx="9" cy="8" r="3.4"/><path d="M2.5 20c.6-3.6 3.3-5.6 6.5-5.6s5.9 2 6.5 5.6"/>'), 'My leads', 'Your enquiries, follow-ups and visits')
+    + tile(3, 'crm.html', svg('<circle cx="9" cy="8" r="3.4"/><path d="M2.5 20c.6-3.6 3.3-5.6 6.5-5.6s5.9 2 6.5 5.6"/>'), 'Leads', 'Your enquiries, follow-ups and visits')
     + tile(4, 'messages.html', svg('<path d="M4 5h16v11H8l-4 4z"/>'), 'Messages', 'Talk to the team about a property or a lead');
 }

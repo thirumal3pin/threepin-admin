@@ -40,12 +40,12 @@
   </header>
   <main class="wrap" id="main">
     <div class="who-sel" id="whoSel" hidden><label for="who" class="note" style="margin:0">Day of</label><select id="who" aria-label="Whose day"></select></div>
+    <div class="hello" id="hello"></div>
     <div class="seg" role="tablist" id="tabs">
       <button type="button" role="tab" data-tab="today" aria-selected="true">Today</button>
       <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
     </div>
     <div id="tab-today">
-      <div class="hello" id="hello"></div>
       <div class="stats" id="stats"></div>
       <div id="sections"><div class="card"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div></div>
     </div>
@@ -53,10 +53,10 @@
       <div class="chips" id="histRange">
         <button type="button" class="chip" data-r="7" aria-pressed="true">7 days</button>
         <button type="button" class="chip" data-r="30" aria-pressed="false">30 days</button>
-        <button type="button" class="chip" data-r="0" aria-pressed="false">All</button>
+        <button type="button" class="chip" data-r="0" aria-pressed="false">All time</button>
       </div>
       <div class="chips" id="histKind">
-        <button type="button" class="chip" data-k="all" aria-pressed="true">All</button>
+        <button type="button" class="chip" data-k="all" aria-pressed="true">Everything</button>
         <button type="button" class="chip" data-k="given" aria-pressed="false">I decided</button>
         <button type="button" class="chip" data-k="mine" aria-pressed="false">I asked</button>
       </div>
