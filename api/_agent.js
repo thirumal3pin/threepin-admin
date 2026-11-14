@@ -178,6 +178,9 @@ async function setRole(user, body) {
   if (role === 'admin' && !target.emailVerified) await getAuth().updateUser(uid, { emailVerified: true });
   await setClaims(uid, { role: role === 'none' ? null : role });
   const db = getDb();
+  // An agent is always on the team lists: a site visit is booked in the diary of someone on them,
+  // and only people on them can be picked as a lead's or a property's agent.
+  if (role === 'agent' && target.email) await setTeamList(db, user.tenantId, target.email, true);
   await db.collection('users').doc(uid).set({
     tenantId: user.tenantId, email: target.email || '', access: role,
     accessSetBy: user.email || user.uid, accessSetAt: Date.now(),
@@ -249,7 +252,7 @@ async function attach(user, rec, { role, name, phone, teamList, action }) {
     accessSetBy: user.email || user.uid, accessSetAt: Date.now(),
     ...(had.exists ? {} : { createdAt: Date.now() }),
   }, { merge: true });
-  if (teamList) await setTeamList(db, user.tenantId, rec.email, true);
+  if (teamList || role === 'agent') await setTeamList(db, user.tenantId, rec.email, true);
   await log(db, user.tenantId, user, { action, uid: rec.uid, email: rec.email, to: role });
 }
 

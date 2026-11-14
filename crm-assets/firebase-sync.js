@@ -244,8 +244,17 @@ function agentSaveLead(lead, data){
     const now = JSON.stringify(applyPaths(base, pairs));
     savedFor.set(lead, now); savedAs.set(lead.id, now);
     return agentApi('lead-save', { id: lead.id, pairs }).then(r => {
-      if (r && r.refused && r.refused.length) console.warn('Not yours to change on this lead:', r.refused.join(', '));
-    }).catch(e => saveFailed('save lead', e));
+      // Fields an agent may not change (the number, who the lead belongs to): said, not swallowed.
+      if (r && r.refused && r.refused.length && window.showToast) {
+        window.showToast(r.refused.includes('phone') ? '⚠ A phone number is changed by an admin — the rest is saved' : '⚠ Some of this is not yours to change — the rest is saved');
+      }
+    }).catch(e => {
+      // Not saved: the page's copy is put back as the server has it, so the next save sends this
+      // change again instead of believing it went.
+      savedFor.set(lead, was || JSON.stringify(base)); savedAs.set(lead.id, was || JSON.stringify(base));
+      if (e && e.body && e.body.readOnly && window.showToast) { window.showToast('⚠ ' + e.message); return; }
+      saveFailed('save lead', e);
+    });
   }
   // A new lead: the server checks the number against the whole team first.
   return agentApi('lead-add', { lead: { ...data, id: lead.id } }).then(r => {

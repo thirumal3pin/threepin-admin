@@ -234,6 +234,9 @@ async function loadPropTeam(){
   if(propTeam.length || propTeamTried || !window.dashboardFirebase || !window.dashboardFirebase.getTeam) return;
   propTeamTried = true;
   try { propTeam = (await window.dashboardFirebase.getTeam()).sort(); } catch(e) { propTeam = []; }
+  // Every active login too: an agent must be assignable whether or not they are on the team list
+  // (the server checks the same: anyone with an active login).
+  try { const d = await agentApi('directory', {}); propTeam = [...new Set([...propTeam, ...(d.people || []).map(x => x.email)])].sort(); } catch(e) { /* the team list alone */ }
   renderAgentFilter();
   if(currentDetailId) renderPropAgents(properties.find(x => x.id === currentDetailId));
 }
@@ -309,12 +312,23 @@ function renderPropAccess(p, isAdmin){
   if(!live.length && !pend.length && !d.log.length) return '';
   const grantRow = g => `<li><b>${escapeHtml(g.agentName || agentNameOf(g.agentEmail))}</b> — details ${g.expiresAt ? 'until ' + fmt(g.expiresAt) : 'with no time limit'}${g.contactLive ? `; owner’s number ${g.contactExpiresAt ? 'until ' + fmt(g.contactExpiresAt) : 'shared'}` : ''}
     <span class="dp-agent-by">approved by ${escapeHtml(g.grantedByName || agentNameOf(g.grantedBy))}</span>
-    ${isAdmin ? `${g.contactLive ? `<button type="button" class="dp-mini" onclick="changePropGrant('hide-contact','${escapeHtml(g.id)}')">Hide number</button>` : ''}<button type="button" class="dp-mini danger" onclick="changePropGrant('revoke','${escapeHtml(g.id)}')">Take back</button>` : ''}</li>`;
+    ${isAdmin ? `<button type="button" class="dp-mini" onclick="changePropGrant('grant-extend','${escapeHtml(g.id)}')">Extend</button>${g.contactLive ? `<button type="button" class="dp-mini" onclick="changePropGrant('hide-contact','${escapeHtml(g.id)}')">Hide number</button>` : ''}<button type="button" class="dp-mini danger" onclick="changePropGrant('revoke','${escapeHtml(g.id)}')">Take back</button>` : ''}</li>`;
   return `<details class="dp-access-d"${live.length || pend.length ? ' open' : ''}><summary>Who else has access${live.length ? ` · ${live.length}` : ''}${pend.length ? ` · ${pend.length} waiting` : ''}</summary>
     ${live.length ? `<ul class="dp-access-l">${live.map(grantRow).join('')}</ul>` : '<p class="dp-agent-by">Nobody outside its agents.</p>'}
-    ${pend.length ? `<p class="dp-agent-l" style="margin-top:8px">Waiting for a decision</p><ul class="dp-access-l">${pend.map(r => `<li><b>${escapeHtml(r.requesterName)}</b> asked ${fmt(r.createdAt)}${r.reason ? ' — “' + escapeHtml(r.reason) + '”' : ''} <a class="dp-mini" href="myday.html?req=${encodeURIComponent(r.id)}">Decide</a></li>`).join('')}</ul>` : ''}
-    ${d.log.length ? `<p class="dp-agent-l" style="margin-top:8px">Agent history</p><ul class="dp-access-l">${d.log.slice(0, 8).map(x => `<li>${fmt(x.at)} — ${escapeHtml(agentNameOf(x.by))}: ${x.to && x.to.primary ? escapeHtml(agentNameOf(x.to.primary)) : 'unassigned'}${x.to && x.to.co && x.to.co.length ? ' + ' + x.to.co.map(e => escapeHtml(agentNameOf(e))).join(', ') : ''}${x.why ? ' <span class="dp-agent-by">(' + escapeHtml(x.why) + ')</span>' : ''}</li>`).join('')}</ul>` : ''}
+    ${pend.length ? `<p class="dp-agent-l" style="margin-top:8px">Waiting for a decision</p><ul class="dp-access-l">${pend.map(r => `<li><b>${escapeHtml(r.requesterName)}</b> asked ${fmt(r.createdAt)}${r.reason ? ' — “' + escapeHtml(r.reason) + '”' : ''}${isAdmin ? ` <a class="dp-mini" href="myday.html?req=${encodeURIComponent(r.id)}">Decide</a>` : ''}</li>`).join('')}</ul>` : ''}
+    ${d.log.length ? `<p class="dp-agent-l" style="margin-top:8px">Agent history</p><ul class="dp-access-l">${d.log.slice(0, 8).map(x => `<li>${fmt(x.at)} — ${escapeHtml(agentHistoryLine(x))}${x.why ? ' <span class="dp-agent-by">(' + escapeHtml(x.why) + ')</span>' : ''}</li>`).join('')}</ul>` : ''}
   </details>`;
+}
+// "Swami made Rameez the primary agent and added Kavya as a co-agent" — not "Swami: Rameez".
+function agentHistoryLine(x){
+  const by = agentNameOf(x.by) || 'Someone';
+  const from = x.from || { co: [] }, to = x.to || { co: [] };
+  const parts = [];
+  if((from.primary || null) !== (to.primary || null)) parts.push(to.primary ? `made ${agentNameOf(to.primary)} the primary agent` : 'removed the primary agent');
+  const added = (to.co || []).filter(e => !(from.co || []).includes(e)), gone = (from.co || []).filter(e => !(to.co || []).includes(e));
+  if(added.length) parts.push('added ' + added.map(agentNameOf).join(', ') + ' as co-agent' + (added.length > 1 ? 's' : ''));
+  if(gone.length) parts.push('took ' + gone.map(agentNameOf).join(', ') + ' off as co-agent' + (gone.length > 1 ? 's' : ''));
+  return by + ' ' + (parts.length ? parts.join(' and ') : 'changed the agents');
 }
 async function loadPropAccess(id){
   try {
@@ -328,7 +342,13 @@ async function loadPropAccess(id){
 }
 async function changePropGrant(action, grantId){
   if(action === 'revoke' && !confirm('Take back this agent’s access to the property? They are told in Messages.')) return;
-  try { await agentApi(action, { grantId }); showToast(action === 'revoke' ? 'Access taken back' : 'Owner’s number hidden'); }
+  let extra = {};
+  if(action === 'grant-extend'){
+    const v = prompt('Extend the details from now for how many days? (1, 3 or 7 — leave empty for no limit)', '3');
+    if(v === null) return;
+    if(String(v).trim()) { const n = Number(v); if(![1, 3, 7].includes(n)) { showToast('Pick 1, 3 or 7 days'); return; } extra = { days: n }; }
+  }
+  try { await agentApi(action, { grantId, ...extra }); showToast(action === 'revoke' ? 'Access taken back' : action === 'grant-extend' ? 'Access extended' : 'Owner’s number hidden'); }
   catch(e) { showToast('✗ ' + e.message); }
   propAccess.id = null;
   renderPropAgents(properties.find(x => x.id === currentDetailId));
@@ -338,6 +358,18 @@ async function assignPropertyAgents(primary, co){
   const p = properties.find(x => x.id === currentDetailId);
   if(!p) return;
   const before = { a: p.assignedAgent || null, co: coAgentsOfProp(p), s: p.secondaryAgent || null };
+  // Changing who works a property moves its enquiries too: said before it happens.
+  const curPrimary = String(p.assignedAgent || '').toLowerCase();
+  if(primary !== null && String(primary || '').toLowerCase() !== curPrimary){
+    const msg = !primary
+      ? `Remove ${agentNameOf(curPrimary)} as the primary agent${before.co.length ? ' (the co-agents ' + before.co.map(agentNameOf).join(', ') + ' go too)' : ''}? The property's enquiries stop reaching them.`
+      : curPrimary ? `Make ${agentNameOf(primary)} the primary agent instead of ${agentNameOf(curPrimary)}? The property's enquiries move with it.` : null;
+    if(msg && !confirm(msg)){ renderPropAgents(p); return; }
+  }
+  if(co !== null){
+    const gone = before.co.filter(e => !co.map(x => String(x).toLowerCase()).includes(e));
+    if(gone.length && !confirm(`Take ${gone.map(agentNameOf).join(', ')} off this property? They stop seeing it in full, and its enquiries.`)){ renderPropAgents(p); return; }
+  }
   const nextPrimary = primary === null ? String(p.assignedAgent || '').toLowerCase() : String(primary || '').toLowerCase();
   let nextCo = co === null ? before.co : co.map(e => String(e).toLowerCase());
   nextCo = [...new Set(nextCo)].filter(e => e && e !== nextPrimary);

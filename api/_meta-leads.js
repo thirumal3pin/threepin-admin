@@ -342,19 +342,21 @@ export async function metaLeadsAction(user, body, deps) {
 // What an agent may do here (the agent layer): read the leads of the ads for their own properties
 // (or every ad, when the admin set "Ads: all"), mark them up in the sheet, and ask for one person's
 // AI brief. Never the setup, never everyone's stored briefs.
-const AGENT_ACTIONS = new Set(['config', 'read', 'write', 'brief', 'briefs']);
+// (No AI brief for agents: it is built from the CRM lead's notes and conversation, whoever's it is.)
+const AGENT_ACTIONS = new Set(['config', 'read', 'write', 'briefs']);
 async function agentAdsCodes(db, user) {
   const snap = await db.collection('agentConfigs').doc(user.tenantId).get();
   const cfg = effectiveConfig(snap.exists ? snap.data() : null, user.email);
   if (!cfg.tabs.includes('ads')) return { refused: true };
   if (cfg.adsScope === 'all') return { codes: null };
   const me = String(user.email || '').toLowerCase();
-  const [a, b] = await Promise.all([
+  const [a, b, c] = await Promise.all([
     db.collection('properties').where('tenantId', '==', user.tenantId).where('assignedAgent', '==', me).get(),
     db.collection('properties').where('tenantId', '==', user.tenantId).where('secondaryAgents', 'array-contains', me).get(),
+    db.collection('properties').where('tenantId', '==', user.tenantId).where('secondaryAgent', '==', me).get(),
   ]);
   const codes = new Set();
-  [...a.docs, ...b.docs].forEach(d => { codes.add(String(d.data().propertyCode || d.id).toUpperCase()); codes.add(String(d.id).toUpperCase()); });
+  [...a.docs, ...b.docs, ...c.docs].forEach(d => { codes.add(String(d.data().propertyCode || d.id).toUpperCase()); codes.add(String(d.id).toUpperCase()); });
   return { codes };
 }
 
@@ -368,7 +370,7 @@ export async function metaLeadsPost(request) {
   let agentCodes;
   if (user.role === 'agent') {
     const action = String((body && body.action) || '');
-    if (!AGENT_ACTIONS.has(action)) return json({ ok: false, error: 'Not part of your access' }, 403);
+    if (!AGENT_ACTIONS.has(action)) return json({ ok: false, error: action === 'brief' ? 'AI briefs are for the team' : 'Not part of your access' }, 403);
     if (action === 'briefs') return json({ ok: true, briefs: {} });
     const scope = await agentAdsCodes(getDb(), user);
     if (scope.refused) return json({ ok: false, error: 'Meta Ads Leads is not part of your access' }, 403);

@@ -56,7 +56,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { waitUntil } from '@vercel/functions';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { visitAlert, visitPropertyFor, agentCampaignGate } from './_agent-work.js';
-import { leadVisibleTo } from '../shared-assets/agent-access.js';
+import { leadVisibleTo, canWorkLead } from '../shared-assets/agent-access.js';
 import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull, campaignRepliesAfter } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
@@ -472,8 +472,13 @@ async function calendarPost(request) {
   try { body = await request.json(); } catch { /* validated below */ }
   const db = getDb();
   const agent = user.role === 'agent';
-  if (agent && !['visit', 'replies', 'respond'].includes(body.op)) return json({ ok: false, error: 'Not part of your access' }, 403);
+  // Their own diary only: the day's view is narrowed to them, and answering / opening an invitation
+  // already acts as the person asking.
+  if (agent && !['visit', 'replies', 'respond', 'answer', 'event', 'day', undefined].includes(body.op)) return json({ ok: false, error: 'Not part of your access' }, 403);
+  if (agent && (body.op === 'day' || body.op === undefined)) body.people = [String(user.email || '').toLowerCase()];
   const notMine = lead => agent && !leadVisibleTo(lead, user.email);
+  // Booking a visit is working the lead: their own, or an enquiry nobody has been given yet.
+  const cannotWork = lead => agent && !canWorkLead(lead, user.email);
 
   try {
     if (body.op === 'visit') {
@@ -482,7 +487,7 @@ async function calendarPost(request) {
       const snap = await ref.get();
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = { id: snap.id, ...snap.data() };
-      if (lead.tenantId !== user.tenantId || notMine(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (lead.tenantId !== user.tenantId || cannotWork(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
       const before = { ...lead };
       // The page saves the visit and asks for the invitation at the same moment: the visit it just
       // saved comes with the request, so the invitation is never built from a copy the save has not
@@ -668,6 +673,9 @@ async function calendarPost(request) {
     const only = Array.isArray(body.people) && body.people.length
       ? new Set(body.people.map(e => String(e).toLowerCase())) : null;
     const asked = only ? team.filter(e => only.has(String(e).toLowerCase())) : team;
+    // An agent: their own diary or nothing — never the team's (not even when they are not on the
+    // team list, which would otherwise fall back to everybody).
+    if (agent) return json({ ok: true, team: asked, people: asked.length ? await teamCalendar(asked, from, to) : [] });
     // The whole team rides along, so the week and month pickers can offer
     // everybody even though only one person's calendar was read.
     return json({ ok: true, team, people: await teamCalendar(asked.length ? asked : team, from, to) });

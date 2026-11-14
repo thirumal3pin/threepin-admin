@@ -1,4 +1,5 @@
 import { getDb, getWhatsAppCreds, verifyCrmUser, sendEmail } from './_bot-shared.js';
+import { sweepExpired } from './_agent-work.js';
 import { computeAttention, SEVERITY_RANK } from '../crm-assets/leadAttention.js';
 import { openMentionsFor, displayName } from '../crm-assets/mentions.js';
 import { stageKindOf } from '../crm-assets/pipeline.js';
@@ -480,6 +481,10 @@ export async function GET(request) {
     try {
       const sSnap = await settingsRef.get();
       const s = sSnap.exists ? sSnap.data() : {};
+      // The agent layer's morning tidy-up (api/_agent-work.js sweepExpired): access past its timer
+      // switched off, requests nobody decided in a week expired. Its own try: it never stops a digest.
+      try { const n = await sweepExpired(db, tenantId); if (n) summary.push({ tenantId, agentAccessTidied: n }); }
+      catch (e) { console.error('followup-digest: agent access tidy-up for', tenantId, 'failed:', e); }
       // Tasks first, on their own day mark, so a follow-up digest already sent (or failing) never
       // stops anyone's "your tasks today".
       if (s.lastTaskDigestDate !== today) {

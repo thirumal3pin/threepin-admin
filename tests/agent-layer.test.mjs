@@ -16,7 +16,7 @@ ok('other properties: a richer summary with no street — title, BHK, budget, ty
   d.otherPropertyFields.join() === 'title,config,budget,type,locality,availability,primaryAgent', d.otherPropertyFields.join());
 ok('…and never the street, the owner, office notes or the sheet’s extra columns', !['address', 'contact', 'internal', 'sheet'].some(f => d.otherPropertyFields.includes(f)));
 ok('assigned properties (primary or co-agent): everything, owner included', d.ownPropertyFields.includes('contact') && d.ownPropertyFields.length === AC.PROPERTY_FIELDS.length);
-ok('approved requests: everything but the owner (the approver decides that)', !d.grantedPropertyFields.includes('contact') && d.grantedPropertyFields.length === AC.PROPERTY_FIELDS.length - 1);
+ok('approved requests: everything but the owner (the approver decides that), the office-only notes and the sheet’s extra columns', ['contact', 'internal', 'sheet'].every(f => !d.grantedPropertyFields.includes(f)) && d.grantedPropertyFields.length === AC.PROPERTY_FIELDS.length - 3);
 ok('matching leads: what they want and the AI summary, no phone', d.matchingLeadFields.join() === 'requirement,aiSummary');
 ok('ads and campaigns: their properties only', d.adsScope === 'own' && d.campaignsScope === 'own');
 ok('actions: add leads, edit own notes/availability, submit properties, export theirs, send campaigns — all on', AC.ACTIONS.every(a => d.actions[a.id] === true) && AC.ACTIONS.length === 5);
@@ -81,11 +81,15 @@ ok('a phone number typed into the title is masked', !/98400/.test(summaryCopy.na
 const full = AC.projectProperty(prop, AC.DEFAULTS.ownPropertyFields);
 ok('assigned copy carries the owner, the address and the numbers as typed', full.contactNumber === '9000000000' && full.location === '12, 6th Avenue' && /98765-43210/.test(full.detailsText));
 const granted = AC.projectProperty(prop, AC.DEFAULTS.grantedPropertyFields);
+// The sheet's extra columns are off for shared properties by default; an admin who switches them on
+// still never shows the owner's columns or a number in the rest.
+const grantedWithSheet = AC.projectProperty(prop, [...AC.DEFAULTS.grantedPropertyFields, 'sheet']);
+ok('shared by default: no sheet columns at all', !('sheetExtras' in granted));
 ok('approved copy: no owner, and numbers in the share text and notes masked (mobile with +91, landline)',
   !('contactNumber' in granted) && !/98765|2345 6789/.test(granted.detailsText) && !/9123456789/.test(granted.sheetNotes), granted.detailsText + ' | ' + granted.sheetNotes);
 ok('approved copy: contact-looking sheet columns dropped (owner, landlord, WhatsApp, Mob); numbers in the rest masked',
-  granted.sheetExtras && !['Owner_Builder_Contact', 'Landlord', 'WhatsApp', 'Mob'].some(k => k in granted.sheetExtras)
-  && granted.sheetExtras.Facing_Road === '40 ft' && !/9876501234/.test(granted.sheetExtras.Caretaker_note), JSON.stringify(granted.sheetExtras));
+  grantedWithSheet.sheetExtras && !['Owner_Builder_Contact', 'Landlord', 'WhatsApp', 'Mob'].some(k => k in grantedWithSheet.sheetExtras)
+  && grantedWithSheet.sheetExtras.Facing_Road === '40 ft' && !/9876501234/.test(grantedWithSheet.sheetExtras.Caretaker_note), JSON.stringify(grantedWithSheet.sheetExtras));
 ok('prices and sizes are not mistaken for phone numbers', AC.maskPhones('1.2 Cr · 1450 sq.ft · UDS 650 · plot 2400') === '1.2 Cr · 1450 sq.ft · UDS 650 · plot 2400');
 ok('a copy is a copy (changing it leaves the property alone)', (() => { full.geo.lat = 9; return prop.geo.lat === 1; })());
 ok('subcollections follow their groups', AC.propertySubs(['notes', 'internal']).join() === 'notes,internalNotes' && AC.propertySubs(['title']).length === 0);

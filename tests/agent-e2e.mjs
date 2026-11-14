@@ -2,27 +2,20 @@
 //
 // Chrome opens the real pages. Firebase is the real SDK, pointed at a LOCAL Firestore emulator
 // (so firestore.rules decide every read and write exactly as in production). /api/* is the real
-// server code (api/_agent.js, api/_agent-work.js, api/tailortalk.js) running here against the same
-// emulator. Only the sign-in is played: each person's token carries the claims the real one would.
-// Nothing touches the live database.
+// server code running here against the same emulator. Only the sign-in is played. The whole set-up
+// is tests/_agent-stack.mjs. Nothing touches the live database.
 //
 // People: Swami (admin), Rameez and Kavya (agents), Rajesh (full access, no role).
 // Phone first (390×844); a desktop and a dark pass for the screenshots in tests/out/agent-e2e/.
-//   JAVA_HOME=… node tests/agent-e2e.mjs
-import { chromium } from 'playwright';
-import http from 'node:http';
-import net from 'node:net';
-import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, extname } from 'node:path';
-import { homedir } from 'node:os';
+//   JAVA_HOME=… node tests/agent-e2e.mjs          (ports: E2E_EMU_PORT, E2E_WEB_PORT)
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startStack } from './_agent-stack.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = process.argv[2] || join(ROOT, 'tests/out/agent-e2e');
 mkdirSync(OUT, { recursive: true });
-const T = 't_3pinrealty';
-const EMU = 8282, WEB = 8383;
 const errors = [];
 const ok = (label, cond, detail) => {
   if (cond) console.log('  ok   ' + label);
@@ -30,164 +23,10 @@ const ok = (label, cond, detail) => {
 };
 const section = s => console.log('\n── ' + s);
 
-// ── 1. The Firestore emulator ──
-const JAR = join(homedir(), '.cache', 'firebase', 'emulators', 'cloud-firestore-emulator-v1.19.8.jar');
-if (!existsSync(JAR)) throw new Error('Run the rule tests once first (they download the emulator): cd tests/rules && npm test');
-const java = process.env.JAVA_HOME ? join(process.env.JAVA_HOME, 'bin', 'java') : 'java';
-const emu = spawn(java, ['-jar', JAR, '--host', '127.0.0.1', '--port', String(EMU)], { stdio: 'ignore' });
-const up = port => new Promise(res => { const s = net.connect(port, '127.0.0.1', () => { s.end(); res(true); }); s.on('error', () => res(false)); });
-for (let i = 0; !(await up(EMU)); i++) { if (i > 200) throw new Error('emulator did not start'); await new Promise(r => setTimeout(r, 300)); }
-process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:' + EMU;
-// The real rules, loaded into the emulator — without them it allows everything.
-{
-  const r = await fetch(`http://127.0.0.1:${EMU}/emulator/v1/projects/pin-realty:securityRules`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rules: { files: [{ name: 'firestore.rules', content: readFileSync(join(ROOT, 'firestore.rules'), 'utf8') }] } }) });
-  if (!r.ok) throw new Error('rules did not load: ' + r.status + ' ' + await r.text());
-}
-process.env.TAILORTALK_TENANT_ID = T;
-process.env.HOME_TENANT_ID = T;
-process.env.AGENT_REF_SECRET = 'e2e-secret';
-
-// ── 2. The server code, with sign-in played ──
-const { initializeApp } = await import('firebase-admin/app');
-const { getFirestore } = await import('firebase-admin/firestore');
-const { getAuth } = await import('firebase-admin/auth');
-initializeApp({ projectId: 'pin-realty' });
-const db = getFirestore();
-const PEOPLE = {
-  swami: { uid: 'u_swami', email: 'swami@threepin.in', name: 'Swami', role: 'admin' },
-  thirumal: { uid: 'u_thirumal', email: 'thirumal@threepin.in', name: 'Thirumal', role: 'admin' },
-  rameez: { uid: 'u_rameez', email: 'rameez@threepin.in', name: 'Rameez', role: 'agent' },
-  kavya: { uid: 'u_kavya', email: 'kavya@threepin.in', name: 'Kavya', role: 'agent' },
-  rajesh: { uid: 'u_rajesh', email: 'rajesh@threepin.in', name: 'Rajesh', role: 'none' },
-};
-const auth = getAuth();
-auth.verifyIdToken = async tok => {
-  const c = JSON.parse(Buffer.from(String(tok), 'base64url').toString());
-  return { uid: c.uid, sub: c.uid, email: c.email, email_verified: true, tenantId: c.tenantId, ...(c.role && c.role !== 'none' ? { role: c.role } : {}) };
-};
-const authUser = p => ({ uid: p.uid, email: p.email, disabled: false, emailVerified: true, displayName: p.name, providerData: [{ providerId: 'password' }],
-  customClaims: { tenantId: T, ...(p.role !== 'none' ? { role: p.role } : {}) }, metadata: { lastSignInTime: null, creationTime: null } });
-auth.listUsers = async () => ({ users: Object.values(PEOPLE).map(authUser), pageToken: undefined });
-auth.getUser = async uid => { const p = Object.values(PEOPLE).find(x => x.uid === uid); if (!p) throw Object.assign(new Error('no user'), { code: 'auth/user-not-found' }); return authUser(p); };
-
-const { agentPost } = await import('../api/_agent.js');
-const TT = await import('../api/tailortalk.js');
-const calls = [];
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' };
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  try {
-    if (url.pathname.startsWith('/api/')) {
-      const chunks = []; for await (const c of req) chunks.push(c);
-      const body = Buffer.concat(chunks);
-      const request = new Request('http://localhost' + req.url, { method: req.method, headers: req.headers, body: req.method === 'GET' ? undefined : body });
-      let r;
-      if (url.pathname === '/api/agent') r = await agentPost(request);
-      else if (url.pathname === '/api/tailortalk') r = await TT.POST(request);
-      else r = new Response(JSON.stringify({ ok: false, error: 'not in this test' }), { status: 404 });
-      calls.push({ path: url.pathname + url.search, body: body.toString().slice(0, 300), status: r.status });
-      res.writeHead(r.status, { 'Content-Type': 'application/json' });
-      res.end(Buffer.from(await r.arrayBuffer()));
-      return;
-    }
-    let p = decodeURIComponent(url.pathname);
-    if (p === '/') p = '/index.html';
-    const f = join(ROOT, p);
-    if (!f.startsWith(ROOT) || !existsSync(f)) { res.writeHead(404); res.end('nf'); return; }
-    res.writeHead(200, { 'Content-Type': TYPES[extname(f)] || 'application/octet-stream' });
-    res.end(readFileSync(f));
-  } catch (e) { console.error('server error', e); res.writeHead(500); res.end(String(e)); }
-});
-await new Promise(r => server.listen(WEB, '127.0.0.1', r));
-const BASE = `http://127.0.0.1:${WEB}`;
-
-// ── 3. Seed ──
+const S = await startStack();
+const { BASE, db, as, until, doc, calls, todayAt } = S;
 const now = Date.now(), DAY = 86400000;
-const todayAt = h => { const d = new Date(); d.setHours(h, 0, 0, 0); return d.getTime(); };
-async function seed() {
-  const P = (id, o) => db.collection('properties').doc(id).set({ tenantId: T, id, propertyCode: id, ...o });
-  await P('ANR001', { name: '3 BHK Apartment, Anna Nagar', config: '3 BHK', startingPrice: '₹1.8 Cr', type: 'Apartment', zone: 'Anna Nagar', location: '12, 6th Avenue, Anna Nagar',
-    contactName: 'Mr Owner', contactNumber: '9840012345', availability: 'Available', detailsText: '3 BHK in Anna Nagar — call 98400 12345', assignedAgent: 'swami@threepin.in', highlights: 'Corner unit, east facing' });
-  await P('ADY002', { name: '2 BHK Flat, Adyar', config: '2 BHK', startingPrice: '₹95 L', type: 'Apartment', zone: 'Adyar', location: '4, LB Road, Adyar',
-    contactName: 'Mrs Seller', contactNumber: '9840099999', availability: 'Available', facing: 'North' });
-  await P('VEL003', { name: '1 BHK, Velachery', config: '1 BHK', startingPrice: '₹48 L', type: 'Apartment', zone: 'Velachery', contactNumber: '9840077777', availability: 'Available', assignedAgent: 'kavya@threepin.in' });
-  await P('ECR004', { name: 'Sold Villa, ECR', config: '4 BHK', startingPrice: '₹4 Cr', zone: 'ECR', soldOut: true });
-  const L = (id, o) => db.collection('leads').doc(id).set({ tenantId: T, id, createdAt: now - 5 * DAY, updatedAt: now - DAY, stageId: 'new', ...o });
-  await L('lead_1', { name: 'Ramesh Kumar', phone: '9111111111', propertyCodes: ['ADY002'], propertyInterest: '2 BHK Adyar', createdAt: now - 3600000 });
-  await L('lead_2', { name: 'Divya Raman', phone: '9222222222', assignedAgent: 'swami@threepin.in', stageId: 'contacted', propertyInterest: '2 BHK apartment in Adyar', budget: '₹1 Cr',
-    aiSummary: 'Divya Raman (9222222222) wants a 2 BHK in Adyar near the beach, budget around 1 Cr.' });
-  await L('lead_3', { name: 'Arjun Mehta', phone: '9333333333', assignedAgent: 'rameez@threepin.in', followUpAt: todayAt(9), followUpNote: 'Send Anna Nagar options', propertyInterest: '3 BHK Anna Nagar' });
-  await L('lead_4', { name: 'Kavya Client', phone: '9444444444', assignedAgent: 'kavya@threepin.in', propertyCodes: ['VEL003'] });
-  await db.collection('pipelines').doc(T).set({ stages: [
-    { id: 'new', name: 'New', color: '#1D4ED8' }, { id: 'contacted', name: 'Contacted', color: '#B45309' }, { id: 'site_visit', name: 'Site Visit', color: '#6D28D9' },
-    { id: 'closed_won', name: 'Closed Won', color: '#15803D' }, { id: 'closed_lost', name: 'Closed Lost', color: '#B91C1C' }] });
-  await db.collection('settings').doc(T).set({ enquiryTypes: ['Property Enquiry', 'General'], team: Object.fromEntries(Object.values(PEOPLE).map(p => [p.uid, { email: p.email }])) });
-  await db.collection('leadsSeededFlags').doc(T).set({ done: true });
-  await db.collection('propertiesSeededFlags').doc(T).set({ done: true });
-  await db.collection('taskConfigs').doc(T).set({ tenantId: T, managers: ['swami@threepin.in'] });
-  for (const p of Object.values(PEOPLE)) await db.collection('users').doc(p.uid).set({ tenantId: T, email: p.email, name: p.name });
-}
-await seed();
-
-// ── 4. The browser: real Firebase, pointed at the emulator; sign-in played ──
-const REAL_FS = await (await fetch('https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js')).text();
-const FAKE_AUTH = `
-const who = () => window.__fakeUser || null;
-const b64 = s => btoa(unescape(encodeURIComponent(s))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
-const userObj = () => { const x = who(); if (!x) return null; const claims = { tenantId: '${T}', email: x.email, email_verified: true, ...(x.role !== 'none' ? { role: x.role } : {}) };
-  return { uid: x.uid, email: x.email, displayName: x.name, emailVerified: true, providerData: [],
-    getIdToken: async () => b64(JSON.stringify({ uid: x.uid, email: x.email, tenantId: '${T}', role: x.role })), getIdTokenResult: async () => ({ claims }) }; };
-const listeners = [];
-export const getAuth = () => ({ get currentUser() { return userObj(); } });
-export const onAuthStateChanged = (a, cb) => { listeners.push(cb); setTimeout(() => cb(userObj()), 0); return () => {}; };
-export const signOut = async () => { window.__fakeUser = null; listeners.forEach(cb => cb(null)); };
-export const signInWithEmailAndPassword = async () => ({ user: userObj() });
-export const signInWithPopup = async () => ({ user: userObj() });
-export class GoogleAuthProvider { setCustomParameters() {} }
-export const sendPasswordResetEmail = async () => {};
-export const createUserWithEmailAndPassword = async () => ({ user: userObj() });
-export const setPersistence = async () => {};
-export const browserLocalPersistence = {};
-export const updateProfile = async () => {};
-export const signInWithRedirect = async () => {};
-export const getRedirectResult = async () => null;
-`;
-const FS_WRAP = `
-import * as R from './__real-firestore.js';
-export * from './__real-firestore.js';
-const wired = new WeakSet();
-function wire(db) {
-  if (!wired.has(db)) {
-    wired.add(db);
-    const x = window.__fakeUser;
-    R.connectFirestoreEmulator(db, '127.0.0.1', ${EMU}, x ? { mockUserToken: { sub: x.uid, user_id: x.uid, email: x.email, email_verified: true, tenantId: '${T}', ...(x.role !== 'none' ? { role: x.role } : {}) } } : undefined);
-  }
-  return db;
-}
-export function getFirestore(...a) { return wire(R.getFirestore(...a)); }
-export function initializeFirestore(app, settings, id) { return wire(R.initializeFirestore(app, { ...(settings || {}), localCache: R.memoryLocalCache() }, id)); }
-export async function clearIndexedDbPersistence() {}
-`;
-const browser = await chromium.launch({ channel: 'chrome' });
-async function as(key, { viewport = { width: 390, height: 844 }, dark = false } = {}) {
-  const ctx = await browser.newContext({ viewport, colorScheme: dark ? 'dark' : 'light', deviceScaleFactor: 2 });
-  const p = PEOPLE[key];
-  await ctx.addInitScript(u => { window.__fakeUser = u; }, p);
-  await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js', r => r.fulfill({ contentType: 'text/javascript', body: FAKE_AUTH }));
-  await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js', r => r.fulfill({ contentType: 'text/javascript', body: FS_WRAP }));
-  await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/__real-firestore.js', r => r.fulfill({ contentType: 'text/javascript', body: REAL_FS }));
-  const page = await ctx.newPage();
-  page.__errors = [];
-  page.on('pageerror', e => { if (!/ViewTransition|Transition was aborted|already been terminated/.test(e.message)) page.__errors.push('pageerror: ' + e.message); });
-  page.on('console', m => { if (m.type() === 'error' && !/favicon|Failed to load resource|ERR_|net::|font|webmanifest|Permissions-Policy|shutting down|terminated/i.test(m.text())) page.__errors.push(m.text()); });
-  page.on('dialog', d => { page.__lastDialog = d.message(); d.accept(); });
-  return { ctx, page };
-}
 const shot = (page, name) => page.screenshot({ path: join(OUT, name + '.png'), fullPage: false });
-const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const v = await fn(); if (v) return v; } catch (e) { /* not yet */ } await new Promise(r => setTimeout(r, 200)); } return null; };
-const doc = async (c, id) => { const s = await db.collection(c).doc(id).get(); return s.exists ? s.data() : null; };
 const noErrors = (page, where) => ok(`${where}: no errors in the page`, !page.__errors.length, page.__errors.slice(0, 4).join(' | '));
 
 try {
@@ -210,6 +49,7 @@ try {
     ok('a co-agent is added (list + the old single field)', p && p.secondaryAgent === 'kavya@threepin.in', JSON.stringify(p && p.secondaryAgents));
     const log = await db.collection('assignmentLog').where('propertyId', '==', 'ADY002').get();
     ok('both changes are in the history', log.size === 2, log.size);
+    await S.api('rameez', 'view');   // the agent opens a page: a property just given to him arrives
     const l1 = await doc('leads', 'lead_1');
     ok('the enquiry on ADY002 now reaches both its agents', JSON.stringify(l1.agentAccess) === JSON.stringify(['kavya@threepin.in', 'rameez@threepin.in']), JSON.stringify(l1.agentAccess));
     await until(() => page.evaluate(() => document.querySelectorAll('.dp-chip').length === 1));
@@ -266,7 +106,7 @@ try {
     await shot(page, '05-rameez-request-sheet');
     await page.click('#aGo');
     const req = await until(async () => { const q = await db.collection('accessRequests').where('requesterEmail', '==', 'rameez@threepin.in').get(); return q.size ? { id: q.docs[0].id, ...q.docs[0].data() } : null; });
-    ok('the request is saved, for the primary agent and the admins', req && req.approvers.includes('swami@threepin.in') && req.approvers.includes('thirumal@threepin.in') && req.clientName === 'Arjun Mehta', JSON.stringify(req && req.approvers));
+    ok('the request is saved, for the primary agent and the admins, with the client’s first name only', req && req.approvers.includes('swami@threepin.in') && req.approvers.includes('thirumal@threepin.in') && req.clientName === 'Arjun' && !('clientLeadId' in req), JSON.stringify(req && { a: req.approvers, c: req.clientName }));
     await until(() => page.evaluate(() => /Asked/.test(document.querySelector('.pcard[data-id="ANR001"]').textContent)));
     ok('the card now says Asked', /Asked/.test(await page.textContent('.pcard[data-id="ANR001"]')));
     // His own property in full, with a matching buyer.
@@ -331,6 +171,7 @@ try {
     await shot(page, '08-swami-approve-sheet');
     await page.click('#dGo');
     const g = await until(async () => { const q = await db.collection('grants').where('agentEmail', '==', 'rameez@threepin.in').where('kind', '==', 'property').get(); return q.size ? q.docs[0].data() : null; });
+    ok('Rameez, on his Properties page, is told at once: “Approved by Swami”', !!(await until(() => rameez.page.evaluate(() => { const t = document.getElementById('pinInboxToast'); return t && !t.hidden && /Approved by Swami/.test(t.textContent); }))));
     ok('the grant: 3 days, owner’s number for 24 hours', g && g.expiresAt > now + 2.9 * DAY && g.includeContact && g.contactExpiresAt < now + 25 * 3600000, JSON.stringify(g && { e: g.expiresAt, c: g.contactExpiresAt }));
     // Thirumal pressing Approve a moment later: told it is already decided.
     const rid = (await db.collection('accessRequests').where('kind', '==', 'property').get()).docs[0].id;
@@ -396,7 +237,7 @@ try {
     await page.goto(BASE + '/messages.html');
     await page.waitForSelector('#threads .thread', { timeout: 25000 });
     const titles = await page.$$eval('#threads .thread b', bs => bs.map(b => b.textContent));
-    ok('a thread per request', titles.some(t => /^Access: 3 BHK Apartment, Anna Nagar · for Arjun Mehta/.test(t)), titles.join(' | '));
+    ok('a thread per request', titles.some(t => /^Access: 3 BHK Apartment, Anna Nagar · for Arjun$/.test(t)), titles.join(' | '));
     await page.click('#threads .thread:has-text("Anna Nagar")');
     await page.waitForSelector('#msgs .sys');
     const sys = await page.textContent('#msgs');
@@ -408,14 +249,14 @@ try {
     ok('a sent message turns from a clock to ticks once saved', !!(await until(() => page.evaluate(() => !!document.querySelector('.bub.mine .tick')))));
     await shot(page, '12-rameez-chat');
     const th = (await db.collection('threads').where('type', '==', 'access_request').get()).docs.find(d => /Anna Nagar/.test(d.data().title));
-    ok('his message is saved, unread for the others', th && (th.data().unread || {}).swami_threepin_in >= 1 && th.data().lastText === 'Thanks! Visiting Saturday 11 AM.', JSON.stringify(th && th.data().unread));
+    ok('his message is saved as the last line, by him', th && th.data().lastBy === 'rameez@threepin.in' && th.data().lastText === 'Thanks! Visiting Saturday 11 AM.', JSON.stringify(th && th.data()));
     const { ctx, page: sp } = await as('swami');
     await sp.goto(BASE + '/messages.html');
     await sp.waitForSelector('#threads .thread.unread', { timeout: 25000 });
     ok('Swami sees it unread', /Visiting Saturday/.test(await sp.textContent('#threads .thread.unread')));
     await sp.click('#threads .thread.unread');
     await sp.waitForSelector('.bub.them');
-    ok('Swami’s read mark is saved (blue ticks once every member has read)', !!(await until(async () => { const d = (await db.collection('threads').doc(th.id).get()).data(); return d.reads && d.reads.swami_threepin_in >= d.lastAt - 5000 && !d.unread.swami_threepin_in; })));
+    ok('Swami’s read mark is saved (blue ticks once every member has read)', !!(await until(async () => { const d = (await db.collection('threads').doc(th.id).get()).data(); return d.reads && d.reads.swami_threepin_in >= d.lastAt - 5000; })));
     await sp.fill('#text', 'Great, the owner knows.');
     await sp.click('#send');
     ok('Rameez gets the reply live', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('.bub.them')].some(b => /owner knows/.test(b.textContent))))));
@@ -442,6 +283,16 @@ try {
     ok('two of them: the tick turns blue once Swami has read it', blue, JSON.stringify((await db.collection('threads').doc(wk.id).get()).data()) + ' swami errors: ' + s2.__errors.join('|'));
     await c2.close();
     noErrors(page, 'Messages (agent)');
+  }
+
+  section('Badges on every page');
+  {
+    const page = rameez.page;
+    const t = (await db.collection('threads').where('title', '==', 'Weekend visits').get()).docs[0];
+    await t.ref.collection('messages').add({ kind: 'text', text: 'Yes, Sunday works', at: Date.now(), by: 'swami@threepin.in' });
+    await t.ref.update({ lastAt: Date.now(), lastText: 'Yes, Sunday works', lastBy: 'swami@threepin.in' });
+    await page.goto(BASE + '/crm.html');
+    ok('in the CRM, the Messages tab shows something new', !!(await until(() => page.evaluate(() => { const a = document.querySelector('#pinTabbar a[data-item="messages"] .tb-n'); return a && Number(a.textContent) >= 1; }))));
   }
 
   // ═══ A visit on a colleague's property ═══
@@ -533,9 +384,7 @@ try {
   console.error(e);
   errors.push('crashed: ' + e.message);
 } finally {
-  await browser.close();
-  server.close();
-  emu.kill();
+  await S.stop();
 }
 console.log(errors.length ? `\n${errors.length} failed:\n  · ` + errors.join('\n  · ') : '\nAll good.');
 process.exit(errors.length ? 1 : 0);

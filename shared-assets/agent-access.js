@@ -161,31 +161,42 @@ export function buildPropertyView({ properties, grants, cfg, email, now = Date.n
 }
 
 // ── Leads ──
-// The agents a lead belongs to through its properties: the agents of every property it enquired
-// about (propertyCodes), and of the property a visit is booked on.
-export function propertyAgentsOfLead(lead, agentsByCode) {
-  const codes = uniq([...(Array.isArray(lead && lead.propertyCodes) ? lead.propertyCodes : []), lead && lead.siteVisitProperty].map(c => String(c || '')));
-  const out = [];
-  codes.forEach(c => { (agentsByCode.get(c) || []).forEach(e => out.push(e)); });
-  return uniq(out);
-}
-// Everyone who reaches a lead through the agent layer (stored on the lead as agentAccess, which the
-// rules read): its properties' agents, and agents holding a running grant on it. The lead's own
-// agents (assignedAgent, secondaryAgent) reach it through those fields and are not repeated.
-export function leadAccessFor(lead, agentsByCode, leadGrants, now = Date.now()) {
-  const own = new Set([lc(lead && lead.assignedAgent), lc(lead && lead.secondaryAgent)]);
-  const out = propertyAgentsOfLead(lead, agentsByCode);
-  (leadGrants || []).forEach(g => { if (g.kind === 'lead' && String(g.targetId) === String(lead.id) && grantLive(g, now)) out.push(lc(g.agentEmail)); });
-  return uniq(out).filter(e => !own.has(e)).sort();
-}
+// How codes are compared: a lead may hold "TNAG0002", "tnag-0002" or the property's name (a visit
+// booked on a property with no code is saved under its name). Case, spaces and punctuation ignored.
+export const codeKey = c => String(c == null ? '' : c).toLowerCase().replace(/[^a-z0-9]/g, '');
+// Every way a lead can name a property: its code, its document id, its title.
 export function agentsByCodeOf(properties) {
   const m = new Map();
   (properties || []).forEach(p => {
     const a = agentsOf(p);
     if (!a.length) return;
-    [codeOf(p), String(p.id)].forEach(c => { if (c) m.set(c, uniq([...(m.get(c) || []), ...a])); });
+    [codeOf(p), p.id, p.name].map(codeKey).filter(k => k.length >= 3).forEach(k => m.set(k, uniq([...(m.get(k) || []), ...a])));
   });
   return m;
+}
+// The agents a lead reaches through the properties it ENQUIRED about (propertyCodes). Not a visit
+// booked on a property: a colleague's client visiting your listing stays theirs.
+export function propertyAgentsOfLead(lead, agentsByCode) {
+  const codes = uniq((Array.isArray(lead && lead.propertyCodes) ? lead.propertyCodes : []).map(codeKey));
+  const out = [];
+  codes.forEach(c => { (agentsByCode.get(c) || []).forEach(e => out.push(e)); });
+  return uniq(out);
+}
+// Is this lead another agent's client? Then it never reaches anyone else through a property — only
+// through an approved request (a grant), and then only to read.
+export function ownedByAnAgent(lead, agentEmails) {
+  if (!agentEmails) return false;
+  return [lc(lead && lead.assignedAgent), lc(lead && lead.secondaryAgent)].some(e => e && agentEmails.has(e));
+}
+// Everyone who reaches a lead through the agent layer (stored on the lead as agentAccess, which the
+// rules read): the agents of the properties an unowned (or staff-owned) lead enquired about, and
+// agents holding a running grant on it. The lead's own agents reach it through those fields.
+// agentEmails: the set of logins whose role is agent (the protection above needs it).
+export function leadAccessFor(lead, agentsByCode, leadGrants, now = Date.now(), agentEmails = null) {
+  const own = new Set([lc(lead && lead.assignedAgent), lc(lead && lead.secondaryAgent)]);
+  const out = ownedByAnAgent(lead, agentEmails) ? [] : propertyAgentsOfLead(lead, agentsByCode);
+  (leadGrants || []).forEach(g => { if (g.kind === 'lead' && String(g.targetId) === String(lead.id) && grantLive(g, now)) out.push(lc(g.agentEmail)); });
+  return uniq(out).filter(e => !own.has(e)).sort();
 }
 export function leadVisibleTo(lead, email) {
   const me = lc(email);
@@ -193,10 +204,21 @@ export function leadVisibleTo(lead, email) {
   return lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me
     || (Array.isArray(lead.agentAccess) && lead.agentAccess.map(lc).includes(me));
 }
+// May this agent WORK the lead (stage, notes, follow-ups, visits, campaigns) — not only read it?
+// Their own leads, and an enquiry on their property that nobody has been given yet. A lead they
+// reach through a grant, or one assigned to someone else, is theirs to read only.
+export function canWorkLead(lead, email) {
+  const me = lc(email);
+  if (!me || !lead) return false;
+  if (lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me) return true;
+  return !lead.assignedAgent && Array.isArray(lead.agentAccess) && lead.agentAccess.map(lc).includes(me);
+}
 
 // What a matching lead shows an agent who does not work it: the requirement and an AI summary with
 // names and numbers taken out (and more only if the settings say so).
-const PHONE_IN_TEXT = /(?:\+?91[\s.-]*|\b0)?(?:[6-9]\d{2}[\s.-]?\d{3}[\s.-]?\d{4}|[6-9]\d{4}[\s.-]?\d{5}|4\d[\s.-]?\d{4}[\s.-]?\d{4})\b/g;
+// A phone number however it is written: ten digits with any spaces, dots or dashes between them, with
+// or without +91 / 0 ("98400 12345", "9840 012 345", "98-40-01-23-45", "044-2345 6789").
+export const PHONE_IN_TEXT = /(?<![\w])(?:\+?91[\s.-]*|0)?(?:\d[\s.-]?){9}\d(?![\w])/g;
 const EMAIL_IN_TEXT = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
 export function scrubText(text, names) {
   let s = String(text || '').replace(PHONE_IN_TEXT, '•••').replace(EMAIL_IN_TEXT, '•••');

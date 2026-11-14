@@ -429,17 +429,33 @@ service cloud.firestore {
     }
 
     // Messages: team conversations. Only members (and admins) read a thread and its messages; the
-    // server opens threads (it checks who may be in one). A member updates only the thread's
-    // last-message line, unread counts and read marks, and writes only their own text messages.
+    // server opens threads (it checks who may be in one). A member writes their own text messages,
+    // the thread's last-message line AS THEMSELVES, and their OWN read mark — never anyone else's:
+    // each page works out what is unread from the read marks, so there is no shared counter to
+    // forge (an earlier version let a member write any value into anyone's unread count).
     function isThreadMember(d) {
       return isKnownRole() && emailVerified() && d.tenantId == tenantId() && myEmail() in d.members;
+    }
+    // The key a person's read mark is stored under: their email with every other character as _.
+    function myThreadKey() {
+      return myEmail().replace('[^a-z0-9]', '_');
+    }
+    function nearNow(t) {
+      return t is int && t > request.time.toMillis() - 300000 && t < request.time.toMillis() + 300000;
     }
     match /threads/{threadId} {
       allow read: if isThreadMember(resource.data) || (isAdmin() && resource.data.tenantId == tenantId());
       allow update: if isThreadMember(resource.data)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastAt', 'lastText', 'lastBy', 'unread', 'reads'])
-        && request.resource.data.lastText is string && request.resource.data.lastText.size() <= 140
-        && request.resource.data.unread is map && request.resource.data.reads is map;
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastAt', 'lastText', 'lastBy', 'reads'])
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['reads'])
+            || (request.resource.data.reads is map
+                && request.resource.data.reads.diff(resource.data.get('reads', {})).affectedKeys().hasOnly([myThreadKey()])
+                && request.resource.data.reads[myThreadKey()] is int
+                && request.resource.data.reads[myThreadKey()] < request.time.toMillis() + 60000))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastAt', 'lastText', 'lastBy'])
+            || (request.resource.data.lastBy == myEmail()
+                && request.resource.data.lastText is string && request.resource.data.lastText.size() <= 140
+                && nearNow(request.resource.data.lastAt)));
       allow create, delete: if false;
     }
     match /threads/{threadId}/messages/{msgId} {
@@ -450,7 +466,7 @@ service cloud.firestore {
         && request.resource.data.kind == 'text'
         && request.resource.data.by == myEmail()
         && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000
-        && request.resource.data.at is int;
+        && nearNow(request.resource.data.at);
       allow update, delete: if false;
     }
 

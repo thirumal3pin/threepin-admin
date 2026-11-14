@@ -224,7 +224,16 @@ test('messages: members read and write; others do not; admins read every thread;
   await assertFails(setDoc(doc(d, 'threads/th1/messages/m3'), { kind: 'text', text: 'fake', at: Date.now(), by: 'swami@threepin.in' }));
   await assertFails(setDoc(doc(d, 'threads/th1/messages/m4'), { kind: 'system', text: 'Approved by Swami', at: Date.now(), by: 'rameez@threepin.in' }));
   await assertFails(setDoc(doc(d, 'threads/th2/messages/m5'), { kind: 'text', text: 'hi', at: Date.now(), by: 'rameez@threepin.in' }));
-  await assertSucceeds(updateDoc(doc(d, 'threads/th1'), { lastAt: Date.now(), lastText: 'On my way', lastBy: 'rameez@threepin.in', 'unread.swami_threepin_in': 1, 'reads.rameez_threepin_in': Date.now() }));
+  await assertSucceeds(updateDoc(doc(d, 'threads/th1'), { lastAt: Date.now(), lastText: 'On my way', lastBy: 'rameez@threepin.in', 'reads.rameez_threepin_in': Date.now() }));
+  await assertSucceeds(updateDoc(doc(d, 'threads/th1'), { 'reads.rameez_threepin_in': Date.now() }));
+  // Nobody writes anyone else's counter or read mark, or posts the last line as someone else (the
+  // stored-script hole an earlier version had: any value in anyone's unread count).
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { 'unread.swami_threepin_in': '<img src=x onerror=alert(1)>' }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { 'reads.swami_threepin_in': Date.now() }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { lastAt: Date.now(), lastText: 'Approved', lastBy: 'swami@threepin.in' }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { lastAt: Date.now() - 86400000, lastText: 'x', lastBy: 'rameez@threepin.in' }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { 'reads.rameez_threepin_in': 'soon' }));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/m6'), { kind: 'text', text: 'backdated', at: Date.now() - 86400000, by: 'rameez@threepin.in' }));
   await assertFails(updateDoc(doc(d, 'threads/th1'), { members: ['rameez@threepin.in', 'swami@threepin.in', 'pradeep@threepin.in'] }));
   await assertFails(updateDoc(doc(d, 'threads/th1'), { title: 'renamed' }));
   await assertFails(setDoc(doc(d, 'threads/th9'), { tenantId: T, title: 'x', members: ['rameez@threepin.in'] }));

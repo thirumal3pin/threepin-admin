@@ -201,3 +201,19 @@
   .who-sel { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .who-sel select { flex: 1; }
   .sk-line { height: 14px; border-radius: 6px; background: linear-gradient(90deg, var(--bg2), var(--bg), var(--bg2)); background-size: 200% 100%; animation: sk 1.2s linear infinite; margin: 8px 0; }
+
+  /* Sheets: the last row of buttons stays in view; a wide one for a full record on a laptop. */
+  .sheet > .bar:last-child { position: sticky; bottom: calc(-1 * max(16px, env(safe-area-inset-bottom))); margin: 14px -16px 0; padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+    background: var(--card); border-top: 1px solid var(--border); z-index: 2; }
+  @media (min-width: 640px) {
+    .sheet { max-height: calc(100vh - 48px); }
+    .sheet .grip { display: none; }
+    .sheet.wide { width: min(760px, calc(100vw - 48px)); }
+  }
+  /* Toasts at the bottom, clear of headings (and above an agent's tab bar). */
+  .toast { top: auto; bottom: max(24px, env(safe-area-inset-bottom)); }
+  body.has-tabbar .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  /* Clickable rows say so on a laptop. */
+  @media (hover: hover) { .pcard:hover, .thread:hover, .row:hover { background: var(--bg2); } }
+  /* Status tags readable in light mode (4.5:1). */
+  .tag.green { color: light-dark(#166534, #7EE2A8); }

@@ -91,6 +91,26 @@ export function watchMyView(me, cb, { force = false } = {}) {
   return { refresh: () => refresh(true), stop: () => unsub && unsub() };
 }
 
+// ── The approval defaults an admin set (team.html → What agents see → Approvals) ──
+// An agent gets their own effective settings from the server; the team reads the settings document.
+let defaultsP = null;
+export function approvalDefaults(me) {
+  if (!defaultsP) defaultsP = (async () => {
+    try {
+      let a;
+      if (me.role === 'agent') a = ((await api('me')).config || {}).approvals;
+      else {
+        const { getDoc } = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+        const { effectiveConfig } = await import('./agent-config.js');
+        const snap = await getDoc(doc(db, 'agentConfigs', me.tenantId));
+        a = effectiveConfig(snap.exists() ? snap.data() : null).approvals;
+      }
+      return a ? { days: a.detailsDays, shareContact: !!a.shareContact, hours: a.contactHours } : {};
+    } catch (e) { return {}; }
+  })();
+  return defaultsP;
+}
+
 // ── Times ──
 const pad = n => String(n).padStart(2, '0');
 export function when(t, now = Date.now()) {
@@ -113,12 +133,11 @@ export function ago(t, now = Date.now()) {
   if (s < 86400) return Math.round(s / 3600) + ' h ago';
   return when(t, now);
 }
+// "until today 5:15 PM" · "until tomorrow 9:00 AM" · "until 18 Nov" · "with no time limit" · "ended"
 export function untilWords(t, now = Date.now()) {
-  if (!t) return 'no time limit';
-  const h = (t - now) / 3600000;
-  if (h <= 0) return 'ended';
-  if (h < 1) return 'ends in ' + Math.max(1, Math.round(h * 60)) + ' min';
-  if (h < 48) return 'ends in ' + Math.round(h) + ' h';
+  if (!t) return 'with no time limit';
+  if (t <= now) return 'ended';
+  if (t - now < 6 * 86400000) return 'until ' + when(t, now);
   return 'until ' + new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
@@ -133,33 +152,54 @@ export function toast(msg) {
   toastT = setTimeout(() => { el.hidden = true; }, 3200);
 }
 
-// ── Bottom sheet ──
-// openSheet(html, { onOpen(root, close), locked }) — Escape and the scrim close it unless locked.
+// ── Bottom sheet (a centred dialog on a laptop) ──
+// openSheet(html, { onOpen(root, close), locked, wide }). Everything behind it is inert while it is
+// open (Tab stays inside, a screen reader too). Escape and the scrim close it unless locked — and ask
+// first when something has been typed. Enter in a one-line field presses the main button. The last
+// row of buttons stays in view however long the sheet is.
 let sheetClose = null;
-export function openSheet(html, { onOpen, locked = false, label = '' } = {}) {
-  if (sheetClose) sheetClose();
+export function openSheet(html, { onOpen, locked = false, label = '', wide = false } = {}) {
+  if (sheetClose) sheetClose(true);
   const scrim = document.createElement('div'); scrim.className = 'scrim';
-  const sh = document.createElement('div'); sh.className = 'sheet'; sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true');
+  const sh = document.createElement('div'); sh.className = 'sheet' + (wide ? ' wide' : ''); sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true');
   if (label) sh.setAttribute('aria-label', label);
   sh.innerHTML = '<div class="grip"></div>' + html;
+  const behind = [...document.body.children].filter(el => el !== scrim && el !== sh && !el.hidden && el.tagName !== 'SCRIPT');
+  behind.forEach(el => { el.inert = true; });
   document.body.append(scrim, sh);
+  document.body.classList.add('sheet-open');
   const before = document.activeElement;
-  const close = () => {
+  let typed = false;
+  sh.addEventListener('input', () => { typed = true; });
+  const close = (force) => {
+    if (!force && typed && sh.querySelector('textarea, input[type=text], input[type=search], input[type=tel], input[type=email]')
+      && [...sh.querySelectorAll('textarea, input[type=text], input[type=tel], input[type=email]')].some(i => i.value.trim()) && !sh.dataset.done
+      && !confirm('Discard what you typed?')) return;
     scrim.remove(); sh.remove(); document.removeEventListener('keydown', onKey);
+    behind.forEach(el => { el.inert = false; });
+    document.body.classList.remove('sheet-open');
     if (sheetClose === close) sheetClose = null;
     if (before && before.focus) try { before.focus(); } catch (e) { /* gone */ }
   };
-  const onKey = e => { if (e.key === 'Escape' && !locked) close(); };
+  const onKey = e => {
+    if (e.key === 'Escape' && !locked) { e.preventDefault(); close(); }
+    if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.matches && e.target.matches('.sheet input[type=text], .sheet input[type=tel], .sheet input[type=email]')) {
+      const main = sh.querySelector('.bar .btn.primary:not([disabled])');
+      if (main) { e.preventDefault(); main.click(); }
+    }
+  };
   document.addEventListener('keydown', onKey);
-  if (!locked) scrim.addEventListener('click', close);
+  if (!locked) scrim.addEventListener('click', () => close());
   sheetClose = close;
-  sh.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
-  const first = sh.querySelector('textarea, input:not([type=hidden]):not([type=radio]):not([type=checkbox]), select, button:not([data-close])');
+  sh.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => close()));
+  // On a laptop the first text field takes the cursor; never a select (an arrow key would change it).
+  const first = sh.querySelector('textarea, input[type=text], input[type=tel], input[type=email]');
   if (first && window.matchMedia('(min-width: 640px)').matches) first.focus();
-  if (onOpen) onOpen(sh, close);
-  return close;
+  else { const b = sh.querySelector('[data-close], button'); if (b) b.focus({ preventScroll: true }); }
+  if (onOpen) onOpen(sh, () => { sh.dataset.done = '1'; close(true); });
+  return () => close(true);
 }
-export const closeSheet = () => { if (sheetClose) sheetClose(); };
+export const closeSheet = () => { if (sheetClose) sheetClose(true); };
 
 // A button that shows it is working and cannot be pressed twice.
 export async function busy(btn, run) {
@@ -176,28 +216,33 @@ export async function busy(btn, run) {
 export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
   return new Promise(resolve => {
     const isLead = req.kind === 'lead';
+    const need = req.need || 'details';
     const days = defaults.days == null ? '' : String(defaults.days);
     const hours = String(defaults.hours || 24);
+    const asks = need === 'time' ? 'more time on ' + esc(req.title) : need === 'number' ? 'the owner’s number for ' + esc(req.title) : isLead ? 'a matching buyer’s details' : esc(req.title);
+    const leadWhat = isLead ? String(req.title || '').replace(/^Lead:\s*/, '') : '';
+    canCoAgent = canCoAgent && !isLead && need === 'details';
     let done = false;
     openSheet(`
-      <h3>${esc(req.requesterName)} asks for ${isLead ? 'this lead’s details' : esc(req.title)}</h3>
+      <h3>${esc(req.requesterName)} asks for ${asks}</h3>
       <p class="sub">${req.clientName ? 'For their client ' + esc(req.clientName) + ' · ' : ''}asked ${esc(ago(req.createdAt))}${req.visitAt ? ' · wants a visit ' + esc(when(req.visitAt)) : ''}</p>
       ${req.reason ? `<div class="callout">“${esc(req.reason)}”</div>` : ''}
+      ${isLead ? `<div class="callout"><b>The buyer:</b> ${esc(leadWhat || 'a matching buyer')}<span id="dLeadName"></span></div><p class="note">If you approve, they see this lead’s name, number and conversation — to read only. It stays your client.</p>` : ''}
       <div class="seg" role="tablist" style="margin-top:6px">
         <button type="button" role="tab" data-d="approve" aria-selected="true">Approve</button>
         <button type="button" role="tab" data-d="reject" aria-selected="false">Reject</button>
       </div>
       <div id="dApprove">
-        ${!isLead && canCoAgent ? `<label class="toggle"><span><b>Make them a co-agent</b><small>A lasting collaboration: they see this property as you do, with no timer</small></span><input type="checkbox" id="dCo"></label>` : ''}
+        ${canCoAgent ? `<label class="toggle"><span><b>Make them a co-agent</b><small>A lasting collaboration with no timer: they see this property as you do, including new enquiries on it that nobody has been given yet</small></span><input type="checkbox" id="dCo"></label>` : ''}
         <div id="dTimers">
-          <div class="field"><label>${isLead ? 'Lead details for' : 'Property details for'}</label>
+          ${need === 'number' ? '' : `<div class="field"><label>${need === 'time' ? 'Details from now for' : isLead ? 'Lead details for' : 'Property details for'}</label>
             <div class="pick" id="dDays">
               ${[['', 'No limit'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['custom', 'Pick a date']].map(([v, l]) => `<label><input type="radio" name="dDays" value="${v}"${v === days ? ' checked' : ''}> ${l}</label>`).join('')}
             </div>
             <input type="datetime-local" id="dUntil" hidden aria-label="Details until">
-          </div>
-          ${isLead ? '' : `<label class="toggle"><span><b>Share the owner’s number</b><small>Off unless you switch it on; it has its own timer</small></span><input type="checkbox" id="dShare"${defaults.shareContact ? ' checked' : ''}></label>
-          <div class="field" id="dHoursF"${defaults.shareContact ? '' : ' hidden'}><label>Owner’s number for</label>
+          </div>`}
+          ${isLead || need === 'time' ? '' : `${need === 'number' ? '<input type="checkbox" id="dShare" checked hidden>' : `<label class="toggle"><span><b>Share the owner’s number</b><small>Off unless you switch it on; it has its own timer</small></span><input type="checkbox" id="dShare"${defaults.shareContact ? ' checked' : ''}></label>`}
+          <div class="field" id="dHoursF"${defaults.shareContact || need === 'number' ? '' : ' hidden'}><label>Owner’s number for</label>
             <div class="pick">${[['2', '2 hours'], ['24', '24 hours'], ['72', '3 days'], ['custom', 'Pick a time']].map(([v, l]) => `<label><input type="radio" name="dHours" value="${v}"${v === hours ? ' checked' : ''}> ${l}</label>`).join('')}</div>
             <input type="datetime-local" id="dCUntil" hidden aria-label="Owner’s number until">
           </div>`}
@@ -209,6 +254,9 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
     { label: 'Decide the request', onOpen: (sh, close) => {
       let mode = 'approve';
       const q = s => sh.querySelector(s);
+      // The lead's own agent (and admins) may see which lead it is (requestPrivate; never the asker).
+      if (isLead) import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => fs.getDoc(doc(db, 'requestPrivate', req.id)))
+        .then(snap => { if (snap.exists() && snap.data().leadName && q('#dLeadName')) q('#dLeadName').textContent = ' — your lead ' + snap.data().leadName; }).catch(() => {});
       sh.querySelectorAll('[data-d]').forEach(b => b.addEventListener('click', () => {
         mode = b.dataset.d;
         sh.querySelectorAll('[data-d]').forEach(x => x.setAttribute('aria-selected', String(x === b)));
@@ -219,7 +267,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
       }));
       const syncCustom = () => {
         const d = sh.querySelector('input[name=dDays]:checked');
-        q('#dUntil').hidden = !(d && d.value === 'custom');
+        if (q('#dUntil')) q('#dUntil').hidden = !(d && d.value === 'custom');
         const h = sh.querySelector('input[name=dHours]:checked');
         if (q('#dCUntil')) q('#dCUntil').hidden = !(h && h.value === 'custom');
       };
@@ -234,8 +282,10 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
           if (q('#dCo') && q('#dCo').checked) body.coAgent = true;
           else {
             const d = sh.querySelector('input[name=dDays]:checked');
-            if (d && d.value === 'custom') { const t = Date.parse(q('#dUntil').value); if (!t) { q('#dErr').textContent = 'Pick the date the details stop'; return; } body.until = t; }
-            else if (d && d.value) body.days = Number(d.value);
+            if (need !== 'number') {
+              if (d && d.value === 'custom') { const t = Date.parse(q('#dUntil').value); if (!t) { q('#dErr').textContent = 'Pick the date the details stop'; return; } body.until = t; }
+              else if (d && d.value) body.days = Number(d.value);
+            }
             if (q('#dShare') && q('#dShare').checked) {
               body.shareContact = true;
               const h = sh.querySelector('input[name=dHours]:checked');
@@ -248,7 +298,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
           await api('decide', body);
           done = true;
           toast(mode === 'approve' ? 'Approved — they can see it now' : 'Rejected — they’ve been told');
-          close();
+          close(true);
         } catch (e) {
           q('#dErr').textContent = e.message;
           if (e.status === 409) setTimeout(close, 1800);
@@ -261,7 +311,12 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
 
 // ── An agent's own leads (the three queries the rules allow), read once — for pickers ──
 import { collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
-export async function myLeads(me) {
+let myLeadsP = null;
+export function myLeads(me) {
+  if (!myLeadsP) myLeadsP = readMyLeads(me).catch(e => { myLeadsP = null; throw e; });
+  return myLeadsP;
+}
+async function readMyLeads(me) {
   const col = collection(db, 'leads');
   const qs = [
     query(col, where('tenantId', '==', me.tenantId), where('assignedAgent', '==', me.email)),

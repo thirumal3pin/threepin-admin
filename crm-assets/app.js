@@ -141,6 +141,8 @@ window.applyPipelineSnapshot = function(list){
   // With leads on screen a redraw is the costly part: the columns, settings and leads all arrive
   // on open within a moment of each other — one redraw for all of them, not one each.
   if(leads.length) refreshSoon(); else refreshAll();
+  // A lead opened before the stages arrived (a link straight to it): its stage picker gets them now.
+  if(currentDetailId){ const l = leads.find(x => x.id === currentDetailId); if(l) renderDetailStageRow(l); }
 };
 // One redraw for changes that land together (the column list, the settings): the next frame,
 // unless a leads snapshot redraws first (it cancels this one).
@@ -778,7 +780,7 @@ function agentFilterHtml(){
   const n = f => scoped.filter(l => matchesAgentFilter(l, f)).length;
   const picked = leadFilter.agents;
   const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentName(f);
-  const label = !picked.length ? 'Everyone' : picked.length <= 2 ? picked.map(nameOf).join(', ') : `${nameOf(picked[0])} +${picked.length - 1}`;
+  const label = !picked.length ? (document.documentElement.classList.contains('agent-mode') ? 'All my leads' : 'Everyone') : picked.length <= 2 ? picked.map(nameOf).join(', ') : `${nameOf(picked[0])} +${picked.length - 1}`;
   const row = (v, l) => `<label class="lf-pop-row"><input type="checkbox" ${picked.includes(v) ? 'checked' : ''} onchange="toggleLeadAgentFilter('${escapeHtml(v)}')"><span>${escapeHtml(l)}</span><span class="lf-n">${n(v)}</span></label>`;
   return `<details class="lf-agent${picked.length ? ' at' : ''}"${agentPopOpen ? ' open' : ''} ontoggle="agentPopOpen=this.open">
     <summary aria-label="Agent filter: ${escapeHtml(label)}" title="Show leads assigned to…"><span aria-hidden="true">👤</span> ${escapeHtml(label)} <span aria-hidden="true">▾</span></summary>

@@ -21,6 +21,7 @@ let people = [];
 let tab = (() => { try { return sessionStorage.getItem('pin.props.tab') || 'mine'; } catch (e) { return 'mine'; } })();
 let q = '';
 const wanted = new URLSearchParams(location.search).get('id');
+let openedWanted = false;
 
 api('me').then(j => { cfg = j.config || null; $('addProp').hidden = !(cfg && cfg.actions && cfg.actions.addProperties); }).catch(() => {});
 directory().then(p => { people = p; });
@@ -35,7 +36,8 @@ const watcher = watchMyView(me, (v, err) => {
   $('boot').hidden = true;
   $('app').hidden = false;
   render();
-  if (wanted) { const p = view.props.find(x => String(x.id) === wanted); if (p && !document.querySelector('.sheet')) openProperty(p); }
+  // ?id= opens that property once — not again every time the copy refreshes.
+  if (wanted && !openedWanted) { const p = view.props.find(x => String(x.id) === wanted); if (p) { openedWanted = true; if (!document.querySelector('.sheet')) openProperty(p); } }
 });
 $('refreshBtn').addEventListener('click', e => busy(e.currentTarget, async () => { watcher.refresh(); toast('Checking for changes…'); }));
 
@@ -54,7 +56,8 @@ const line = p => [p.config, price(p), p.zone].filter(Boolean).join(' · ');
 const availTag = p => {
   const a = String(p.availability || '');
   if (!a) return '';
-  const cls = /avail/i.test(a) ? 'green' : /sold|let|rent/i.test(a) ? 'red' : 'wait';
+  const off = /\b(not|un)\s*-?available|sold|let out|rented|withdrawn|inactive/i.test(a);
+  const cls = off ? 'red' : /^\s*(available|immediate|ready)/i.test(a) ? 'green' : 'wait';
   return `<span class="tag ${cls}">${esc(a)}</span>`;
 };
 
@@ -108,6 +111,7 @@ const LABELS = {
   maintenance: 'Maintenance', totalUnits: 'Units', totalTowers: 'Towers', status: 'Status', constructionStage: 'Construction', possession: 'Possession',
   possessionDate: 'Possession date', propertyAge: 'Age', readyToMove: 'Ready to move', newOrResale: 'New / resale', approval: 'Approval',
   builder: 'Builder', highlights: 'Highlights', amenities: 'Amenities', sheetNotes: 'Notes from the sheet', contactName: 'Owner', contactNumber: 'Owner’s number',
+  photosLink: 'Photos link', brochureLink: 'Brochure link', detailsText: 'WhatsApp share message',
   assignedAgent: 'Primary agent',
 };
 const ORDER = PROPERTY_FIELDS.flatMap(g => g.fields || []);
@@ -131,6 +135,9 @@ function kvHtml(p) {
 
 function openProperty(p) {
   if (!p) return;
+  try { const u = new URL(location.href); u.searchParams.set('id', p.id); history.replaceState(null, '', u); } catch (e) { /* old browser */ }
+  const clearId = () => { try { const u = new URL(location.href); if (u.searchParams.get('id') === String(p.id)) { u.searchParams.delete('id'); history.replaceState(null, '', u); } } catch (e) { /* fine */ } };
+  const watchClose = setInterval(() => { if (!document.querySelector('.sheet')) { clearInterval(watchClose); clearId(); } }, 400);
   const locked = p._access === 'summary';
   const mine = isMine(p);
   const matches = (view.matches || []).filter(m => m.propertyId === String(p.id));
@@ -150,25 +157,38 @@ function openProperty(p) {
       ${isUrl(p.brochureLink) ? `<a class="btn sm" href="${esc(p.brochureLink)}" target="_blank" rel="noopener"><i class="fa-regular fa-file-pdf"></i> Brochure</a>` : ''}
       ${p.detailsText ? `<button type="button" class="btn sm" id="pShare"><i class="fa-brands fa-whatsapp"></i> Copy share message</button>` : ''}
     </div>` : ''}
-    ${mine && can.editOwnProperties ? `<div class="field"><label for="pAvail">Availability</label><select id="pAvail">${['', 'Available', 'On hold', 'Booked', 'Sold', 'Let out'].map(a => `<option value="${a}"${String(p.availability || '') === a ? ' selected' : ''}${a ? '' : ' disabled'}>${a || 'Pick one'}</option>`).join('')}</select></div>` : ''}
+    ${mine && can.editOwnProperties ? `<div class="field"><label for="pAvail">Availability</label><select id="pAvail">${(() => {
+      const raw = String(p.availability || '');
+      const opts = ['Available', 'On hold', 'Booked', 'Sold', 'Let out'];
+      const cur = opts.find(o => o.toLowerCase() === raw.trim().toLowerCase()) || '';
+      return (raw && !cur ? `<option value="" selected disabled>${esc(raw)} (from the sheet)</option>` : !raw ? '<option value="" selected disabled>Pick one</option>' : '')
+        + opts.map(a => `<option value="${a}"${cur === a ? ' selected' : ''}>${a}</option>`).join('');
+    })()}</select></div>` : ''}
     ${matches.length ? `<div class="sec-h">Matching buyers <span class="n hot">${matches.length}</span></div>
       <p class="note">Leads with other agents (or nobody yet) whose requirement fits. Their name and number open once their agent or an admin approves.</p>
       ${matches.map(m => `<div class="match"><b>${esc(m.band || 'Match')}${m.pct ? ' · ' + m.pct + '%' : ''}</b>${m.name ? ' — ' + esc(m.name) : ''}
         ${m.requirement ? `<p>${esc(m.requirement)}</p>` : ''}${m.aiSummary ? `<p><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--ink3)"></i> ${esc(m.aiSummary)}</p>` : ''}
         ${m.phone ? `<p><a href="tel:${esc(m.phone)}">${esc(m.phone)}</a></p>` : ''}
-        <div class="bar" style="margin:10px 0 0">${m.requested === 'pending' ? '<span class="tag wait">Asked — waiting</span>' : m.requested === 'rejected' ? '<span class="tag red">Not approved</span>' : `<button type="button" class="btn sm" data-askref="${esc(m.ref)}"><i class="fa-solid fa-unlock"></i> Ask for their number</button>`}</div></div>`).join('')}` : ''}
+        <div class="bar" style="margin:10px 0 0;flex-wrap:wrap">${m.requested === 'pending' ? '<span class="tag wait">Asked — waiting</span>'
+          : `${m.requested === 'rejected' ? '<span class="tag red" style="align-self:center">Not approved last time</span>' : ''}<button type="button" class="btn sm" data-askref="${esc(m.ref)}"><i class="fa-solid fa-unlock"></i> ${m.requested === 'rejected' || m.requested === 'cancelled' || m.requested === 'expired' ? 'Ask again' : 'Ask for their number'}</button>`}</div></div>`).join('')}` : ''}
     ${!locked && ((p._access !== 'granted' && (cfg ? (cfg.ownPropertyFields || []).includes('notes') : true)) || (p._access === 'granted' && cfg && (cfg.grantedPropertyFields || []).includes('notes'))) ? `<div class="sec-h">Notes</div>
       ${mine && can.editOwnProperties ? `<div class="field"><textarea id="pNote" placeholder="Add a note about this property" maxlength="2000"></textarea><div class="bar" style="margin:8px 0 0;justify-content:flex-end"><button type="button" class="btn sm primary" id="pNoteGo">Add note</button></div></div>` : ''}
       <ul class="notes" id="pNotes"><li><div class="sk-line"></div></li></ul>` : ''}
     <div class="bar" style="flex-wrap:wrap">
-      ${locked ? (p._pending ? '<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span>' : `<button type="button" class="btn primary block" id="pAsk"><i class="fa-solid fa-unlock"></i> Request details</button>`) : ''}
-      <button type="button" class="btn${locked ? '' : ' block'}" id="pMsg"><i class="fa-regular fa-comments"></i> Message ${p.assignedAgent && !mine ? 'its agent' : 'about it'}</button>
-    </div>`, { label: p.name || 'Property', onOpen: (sh, close) => {
+      ${locked ? (p._pending ? `<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span><button type="button" class="btn danger" data-cancelreq="${esc(p._pending)}">Cancel request</button>` : `<button type="button" class="btn primary block" id="pAsk"><i class="fa-solid fa-unlock"></i> Request details</button>`) : ''}
+      ${p._access === 'granted' ? (p._pending ? '<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span>'
+        : `${p._grant && p._grant.until ? '<button type="button" class="btn" data-need="time"><i class="fa-regular fa-hourglass-half"></i> Ask for more time</button>' : ''}${p._grant && p._grant.contactUntil ? '' : '<button type="button" class="btn" data-need="number"><i class="fa-solid fa-phone"></i> Ask for the owner’s number</button>'}`) : ''}
+      <button type="button" class="btn${locked ? '' : ' block'}" id="pMsg"><i class="fa-regular fa-comments"></i> ${mine ? 'Message the team about it' : 'Message its agent'}</button>
+    </div>`, { label: p.name || 'Property', wide: true, onOpen: (sh, close) => {
       const qq = s => sh.querySelector(s);
       if (qq('#pShare')) qq('#pShare').addEventListener('click', async () => { try { await navigator.clipboard.writeText(p.detailsText); toast('Copied — paste it in WhatsApp'); } catch (e) { toast('Could not copy'); } });
       if (qq('#pAvail')) qq('#pAvail').addEventListener('change', e => {
         const v = e.target.value;
-        api('property-availability', { id: p.id, availability: v }).then(() => toast('Availability: ' + v)).catch(err => { toast('✗ ' + err.message); e.target.value = p.availability || ''; });
+        // Sold or let out takes it off the market for every other agent: asked first.
+        if ((v === 'Sold' || v === 'Let out') && !confirm(`Mark “${p.name || p._code}” as ${v.toLowerCase()}? Other agents stop seeing it, and it goes on “Changes to apply” for the sheet.`)) {
+          e.target.value = (['Available', 'On hold', 'Booked', 'Sold', 'Let out'].find(o => o.toLowerCase() === String(p.availability || '').toLowerCase())) || ''; return;
+        }
+        api('property-availability', { id: p.id, availability: v }).then(() => { toast('Availability: ' + v + ' — added to “Changes to apply” for the sheet'); watcher.refresh(); }).catch(err => { toast('✗ ' + err.message); e.target.value = p.availability || ''; });
       });
       if (qq('#pNotes')) loadNotes(p, qq('#pNotes'));
       if (qq('#pNoteGo')) qq('#pNoteGo').addEventListener('click', () => busy(qq('#pNoteGo'), async () => {
@@ -179,6 +199,11 @@ function openProperty(p) {
       }));
       sh.querySelectorAll('[data-askref]').forEach(b => b.addEventListener('click', () => askLead(b.dataset.askref, p)));
       if (qq('#pAsk')) qq('#pAsk').addEventListener('click', () => askProperty(p));
+      sh.querySelectorAll('[data-need]').forEach(b => b.addEventListener('click', () => askMore(p, b.dataset.need)));
+      sh.querySelectorAll('[data-cancelreq]').forEach(b => b.addEventListener('click', () => {
+        if (!confirm('Cancel your request for this property’s details?')) return;
+        busy(b, () => api('cancel', { id: b.dataset.cancelreq }).then(() => { toast('Request cancelled'); close(); }).catch(e => toast('✗ ' + e.message)));
+      }));
       qq('#pMsg').addEventListener('click', () => busy(qq('#pMsg'), async () => {
         try { const t = await api('thread-open', { type: 'property', linkedId: p.id }); location.href = 'messages.html?t=' + encodeURIComponent(t.id); }
         catch (e) { toast('✗ ' + e.message); }
@@ -189,7 +214,9 @@ function openProperty(p) {
 async function loadNotes(p, ul) {
   try {
     const j = await api('property-notes', { id: p.id });
-    ul.innerHTML = (j.notes || []).length ? j.notes.map(n => `<li>${esc(n.text)}<small>${esc(nameOf(people, n.author || n.by))} · ${esc(when(n.createdAt))}</small></li>`).join('') : '<li class="empty" style="background:none">No notes yet.</li>';
+    const li = n => `<li>${esc(n.text)}<small>${esc(nameOf(people, n.author || n.by))} · ${esc(when(n.createdAt))}</small></li>`;
+    ul.innerHTML = ((j.notes || []).length ? j.notes.map(li).join('') : '<li class="empty" style="background:none">No notes yet.</li>')
+      + ((j.internal || []).length ? '<li style="background:none;padding:6px 0 0"><b><i class="fa-solid fa-lock" style="color:var(--ink3)"></i> Office-only notes</b></li>' + j.internal.map(li).join('') : '');
   } catch (e) { ul.innerHTML = `<li>${esc(e.message)}</li>`; }
 }
 
@@ -217,6 +244,25 @@ function askProperty(p) {
         await api('request', { kind: 'property', targetId: p.id, reason, clientLeadId: qq('#aClient').value || null, visitAt: Date.parse(qq('#aVisit').value) || null });
         toast('Request sent'); close();
       } catch (e) { qq('#aErr').textContent = e.message; }
+    }));
+  } });
+}
+
+// More time on a shared property, or its owner's number: a request to the same people.
+function askMore(p, need) {
+  openSheet(`
+    <h3>${need === 'time' ? 'Ask for more time' : 'Ask for the owner’s number'}</h3>
+    <p class="sub">${esc(p.name || p._code)} · ${need === 'time' ? 'details ' + esc(untilWords(p._grant && p._grant.until)) : 'shared with you without the number'}</p>
+    <div class="field"><label for="mReason">Why (the approver sees this)</label><textarea id="mReason" maxlength="500" placeholder="${need === 'time' ? 'e.g. The client wants a second visit next week' : 'e.g. The client is ready to meet the owner'}"></textarea></div>
+    <p class="err" id="mErr"></p>
+    <div class="bar"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary block" id="mGo">Send request</button></div>`,
+  { label: need === 'time' ? 'Ask for more time' : 'Ask for the owner’s number', onOpen: (sh, close) => {
+    const qq = s => sh.querySelector(s);
+    qq('#mGo').addEventListener('click', () => busy(qq('#mGo'), async () => {
+      const reason = qq('#mReason').value.trim();
+      if (!reason) { qq('#mErr').textContent = 'Say why, so the approver can decide'; return; }
+      try { await api('request', { kind: 'property', targetId: p.id, need, reason }); toast('Request sent'); close(); }
+      catch (e) { qq('#mErr').textContent = e.message; }
     }));
   } });
 }
@@ -266,9 +312,9 @@ $('addProp').addEventListener('click', () => {
     sh.querySelector('#sGo').addEventListener('click', () => busy(sh.querySelector('#sGo'), async () => {
       if (!v('#sName')) { sh.querySelector('#sErr').textContent = 'Give it a title'; return; }
       try {
-        await api('property-submit', { fields: { name: v('#sName'), config: v('#sConfig'), startingPrice: v('#sPrice'), type: v('#sType'), zone: v('#sZone'),
+        const r = await api('property-submit', { fields: { name: v('#sName'), config: v('#sConfig'), startingPrice: v('#sPrice'), type: v('#sType'), zone: v('#sZone'),
           location: v('#sLoc'), contactName: v('#sOwner'), contactNumber: v('#sPhone'), photosLink: v('#sPhotos'), notes: v('#sNotes') } });
-        toast('Sent — an admin will approve it'); close();
+        toast(r.possibleDuplicate ? 'Sent — note: this owner or title may already be with us; an admin will check' : 'Sent — an admin will approve it'); close();
       } catch (e) { sh.querySelector('#sErr').textContent = e.message; }
     }));
   } });
@@ -290,7 +336,7 @@ function downloadList() {
   document.body.appendChild(a); a.click(); a.remove();
 }
 const dl = document.createElement('button');
-dl.type = 'button'; dl.className = 'btn sm'; dl.hidden = true; dl.setAttribute('aria-label', 'Download this list');
+dl.type = 'button'; dl.className = 'btn sm'; dl.hidden = true; dl.setAttribute('aria-label', 'Download this list'); dl.title = 'Download this list (CSV)';
 dl.innerHTML = '<i class="fa-solid fa-download"></i>';
 $('refreshBtn').before(dl);
 dl.addEventListener('click', () => view && downloadList());

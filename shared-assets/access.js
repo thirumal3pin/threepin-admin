@@ -84,6 +84,67 @@ async function forgetLocalCopy() {
   } catch (e) { return false; }
 }
 
+// ── What is waiting for me, on every page ──
+// Push notifications are out of scope, so the menu's badges are how a request or a message gets
+// noticed: approvals waiting on me (My Day), conversations with something new (Messages), and for
+// admins what is waiting in Team & access. Plus a short message when one of my own requests is
+// decided while I am elsewhere. A few small live queries, once per page.
+let inboxOn = false;
+async function startInbox(a) {
+  if (inboxOn || !a || !a.uid || window.__pinGated) return;
+  inboxOn = true;
+  try {
+    if (!a.tenantId) { const r = await auth.currentUser.getIdTokenResult(false); a = { ...a, tenantId: r.claims.tenantId || null }; }
+    if (!a.tenantId) return;
+    const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+    const db = fs.getFirestore(app);
+    const me = String(a.email || '').toLowerCase();
+    const key = me.replace(/[^a-z0-9]/g, '_');
+    const T = a.tenantId;
+    const badge = (k, n) => { if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge(k, n); };
+    const quiet = () => {};
+    const req = fs.collection(db, 'accessRequests');
+    if (a.role === 'agent' || a.role === 'admin') {
+      fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('approvers', 'array-contains', me), fs.where('status', '==', 'pending')),
+        s => badge('myday', s.docs.filter(d => d.data().requesterEmail !== me).length), quiet);
+    }
+    let known = null;
+    fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('requesterEmail', '==', me)), s => {
+      const now = new Map(s.docs.map(d => [d.id, d.data()]));
+      if (known && page !== 'myday') now.forEach((r, id) => {
+        const was = known.get(id);
+        if (was && was.status === 'pending' && (r.status === 'approved' || r.status === 'rejected'))
+          inboxToast((r.status === 'approved' ? 'Approved by ' : 'Not approved by ') + (r.decidedByName || 'an admin') + ' — ' + (r.kind === 'lead' ? 'a matching buyer' : r.title), 'myday.html');
+      });
+      known = now;
+    }, quiet);
+    fs.onSnapshot(fs.query(fs.collection(db, 'threads'), fs.where('tenantId', '==', T), fs.where('members', 'array-contains', me)),
+      s => badge('messages', s.docs.filter(d => { const t = d.data(); return t.lastAt && t.lastBy !== me && t.lastAt > Number((t.reads || {})[key] || 0); }).length), quiet);
+    if (a.role === 'admin') {
+      let pend = 0, subs = 0;
+      fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('status', '==', 'pending')), s => { pend = s.size; badge('team', pend + subs); }, quiet);
+      fs.onSnapshot(fs.query(fs.collection(db, 'propertySubmissions'), fs.where('tenantId', '==', T), fs.where('status', '==', 'pending')), s => { subs = s.size; badge('team', pend + subs); }, quiet);
+    }
+  } catch (e) { /* badges are a convenience: the pages themselves still show everything */ }
+}
+function inboxToast(text, href) {
+  let el = document.getElementById('pinInboxToast');
+  if (!el) {
+    el = document.createElement('a');
+    el.id = 'pinInboxToast';
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;left:50%;top:max(14px,env(safe-area-inset-top));translate:-50% 0;z-index:9999;max-width:calc(100vw - 32px);'
+      + 'background:var(--ink,#171717);color:var(--bg,#fff);padding:12px 16px;border-radius:12px;font:600 14px/1.35 var(--sans,system-ui);'
+      + 'box-shadow:0 8px 24px rgba(0,0,0,.25);text-decoration:none';
+    document.body.appendChild(el);
+  }
+  el.textContent = text + ' · Open';
+  el.href = href;
+  el.hidden = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, 7000);
+}
+
 function apply(a, { gatePage = true } = {}) {
   window.PinAccess = a;
   const nav = { role: a.role, tabs: a.config ? a.config.tabs : null, actions: a.config ? a.config.actions : null };
@@ -91,6 +152,7 @@ function apply(a, { gatePage = true } = {}) {
   else window.__pinAccess = nav;
   document.dispatchEvent(new CustomEvent('pin-access', { detail: a }));
   if (a.role === 'agent' && gatePage) gate(a);
+  startInbox(a);
 }
 
 // An agent on a page none of their tabs open: say so plainly, offer the pages they do have, and a
@@ -103,7 +165,8 @@ function gate(a) {
   // An agent opening the Property dashboard (a bookmark, a shared property link) goes to their own
   // Properties page, at the same property when the link named one.
   if ((page === 'property') && tabs.includes('properties')) {
-    const id = new URLSearchParams(location.search).get('id');
+    const qs = new URLSearchParams(location.search);
+    const id = qs.get('id') || qs.get('property');
     location.replace('listings.html' + (id ? '?id=' + encodeURIComponent(id) : ''));
     return;
   }
@@ -149,7 +212,7 @@ onAuthStateChanged(auth, async user => {
   try {
     const res = await user.getIdTokenResult(true);
     const role = res.claims.role || 'none';
-    const a = { uid: user.uid, at: Date.now(), role, email: user.email || '', config: null };
+    const a = { uid: user.uid, at: Date.now(), role, email: user.email || '', config: null, tenantId: res.claims.tenantId || null };
     if (role === 'agent') a.config = (await agentSettings(user)).config || { tabs: [] };
     write(sessionStorage, SESSION, a);
     write(localStorage, LAST, { uid: a.uid, role: a.role, tabs: a.config ? a.config.tabs : null, config: a.config });
@@ -173,6 +236,6 @@ onAuthStateChanged(auth, async user => {
     const res = await user.getIdTokenResult(false).catch(() => null);
     const role = (res && res.claims.role) || (last && last.uid === user.uid && last.role) || 'none';
     const config = role === 'agent' ? ((last && last.uid === user.uid && last.config) || { tabs: [] }) : null;
-    apply({ uid: user.uid, at: 0, role, email: user.email || '', config }, { gatePage: false });
+    apply({ uid: user.uid, at: 0, role, email: user.email || '', config, tenantId: (res && res.claims.tenantId) || null }, { gatePage: false });
   }
 });

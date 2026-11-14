@@ -36,7 +36,7 @@ const ROLE_LABEL = { admin: 'Admin', agent: 'Agent', none: 'Full access' };
 const ROLE_NOTE = {
   admin: 'Sees everything and decides who sees what.',
   agent: 'Sees their own properties and leads in full, and a summary of the rest. You choose the details in “What agents see”.',
-  none: 'Staff: sees all properties and leads, owner numbers included. Can’t change who sees what.',
+  none: 'Staff: sees all properties and leads, owner numbers included, and can set a property’s agents. Can’t change roles or what agents see.',
 };
 
 let me = null;         // { uid, email, tenantId }
@@ -110,7 +110,7 @@ function showTab(name) {
   setDirty(dirty);
 }
 document.querySelectorAll('#app > .seg button[data-tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-if (new URLSearchParams(location.search).get('tab') === 'requests') showTab('requests');
+{ const t = new URLSearchParams(location.search).get('tab'); if (['requests', 'agents', 'people'].includes(t)) showTab(t); }
 
 // ═══════ PEOPLE ═══════
 
@@ -611,9 +611,11 @@ async function save(nextShared, overrides) {
       tx.set(settingsRef(), out);
     });
     stored = out;
-    toast('Saved');
+    toast('Saved — agents see the change now');
     renderForWho();
     pickWho(forWho);
+    // Every agent's copy rebuilt at once: a setting that shows LESS must not stay in an old copy.
+    api('rebuild', {}).catch(() => toast('Saved. Agents get it the next time they open a page.'));
   } catch (e) {
     if (e.message === CONFLICT) {
       stored = e.now;

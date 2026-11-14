@@ -1,14 +1,15 @@
 // ═══════ MESSAGES (messages.html) — the team's own chat ═══════
 // Agent ↔ agent and agent ↔ admin, WhatsApp style. Not client messaging (that stays on TailorTalk).
 //   threads/{id}            { title, type: access_request | property | lead | general, linkedId, members,
-//                             names, lastAt, lastText, lastBy, unread: { key: n }, reads: { key: ms } }
+//                             names, lastAt, lastText, lastBy, reads: { key: ms } }
 //   threads/{id}/messages   { kind: text | system, text, at, by }
 // Threads are opened by the server (/api/agent thread-open; a request opens its own). A member
-// writes their own text messages and the thread's last line, unread counts and read marks — the
-// only things firestore.rules let them write. Read ticks come from the read marks: a message is
-// read once every other member's mark has passed it.
-import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy } from '../shared-assets/agent-client.js';
-import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, increment, updateDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+// writes their own text messages, the thread's last line as themselves, and their own read mark —
+// the only things firestore.rules let them write. What is unread is worked out from each person's
+// own read mark; read ticks from the others' marks (a message is read once every other member's mark
+// has passed it).
+import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults } from '../shared-assets/agent-client.js';
+import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 const me = await whenSignedIn();
 const isAdmin = me.role === 'admin', isAgent = me.role === 'agent';
@@ -23,6 +24,9 @@ let openId = null, msgUnsub = null, reqUnsub = null, msgs = [], openThread = nul
 let threadUnsub = null, docUnsub = null;
 
 directory().then(p => { people = p; renderList(); if (openThread) renderChat(); });
+// Unread: the conversation's last line is newer than my read mark, and not mine. Worked out here from
+// my own mark — nobody writes anyone else's counter.
+const isUnread = t => !!t && !!t.lastAt && t.lastBy !== me.email && (t.members || []).includes(me.email) && t.lastAt > Number((t.reads || {})[myKey] || 0);
 
 function watchThreads() {
   if (threadUnsub) threadUnsub();
@@ -31,8 +35,7 @@ function watchThreads() {
   threadUnsub = onSnapshot(qq, s => {
     threads = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     renderList();
-    const unread = threads.filter(t => (t.members || []).includes(me.email)).reduce((n, t) => n + ((t.unread || {})[myKey] || 0), 0);
-    if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge('messages', unread);
+    if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge('messages', threads.filter(isUnread).length);
     const want = new URLSearchParams(location.search).get('t');
     if (want && !openId && threads.some(t => t.id === want)) openChat(want);
   }, err => { if (!isShutdown(err)) $('threads').innerHTML = `<div class="empty"><i class="fa-solid fa-triangle-exclamation"></i>${esc(err.message)}</div>`; });
@@ -67,22 +70,26 @@ function renderList() {
   if (filter !== 'all') list = list.filter(t => t.type === filter);
   if (q) list = list.filter(t => String(t.title || '').toLowerCase().includes(q));
   $('threads').innerHTML = list.length ? list.map(t => {
-    const n = (t.unread || {})[myKey] || 0;
+    const n = isUnread(t);
     const by = t.lastBy ? (t.lastBy === me.email ? 'You: ' : nameOf(people, t.lastBy).split(' ')[0] + ': ') : '';
     const others = (t.members || []).filter(e => e !== me.email).map(e => nameOf(people, e).split(' ')[0]).join(', ');
     return `<div class="thread${n ? ' unread' : ''}" role="button" tabindex="0" data-id="${esc(t.id)}">
       <div class="av"><i class="${ICON[t.type] || ICON.general}"></i></div>
       <div class="bd"><b>${esc(t.title)}</b><small>${t.lastText ? esc(by + t.lastText) : esc(others)}</small></div>
-      <div class="side"><span>${esc(short(t.lastAt))}</span>${n ? `<span class="ub">${n > 99 ? '99+' : n}</span>` : ''}</div></div>`;
-  }).join('') : `<div class="empty"><i class="fa-regular fa-comments"></i>${q || filter !== 'all' ? 'No conversations here.' : 'No conversations yet. A request for details opens one; so does “Message” on a property, or New.'}</div>`;
+      <div class="side"><span>${esc(short(t.lastAt))}</span>${n ? '<span class="ub" aria-label="Unread"></span>' : ''}</div></div>`;
+  }).join('') : `<div class="empty"><i class="fa-regular fa-comments"></i>${q || filter !== 'all' ? 'No conversations here.' : 'No conversations yet. A request for details opens one; so does “Message” on a property or a lead, or New.'}</div>`;
   $('threads').querySelectorAll('.thread').forEach(el => {
-    el.addEventListener('click', () => openChat(el.dataset.id));
-    el.addEventListener('keydown', e => { if (e.key === 'Enter') openChat(el.dataset.id); });
+    el.addEventListener('click', () => openChat(el.dataset.id, { push: true }));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') openChat(el.dataset.id, { push: true }); });
+    if (el.dataset.id === openId) el.setAttribute('aria-current', 'true');
   });
 }
 
 // ── One conversation ──
-function openChat(id) {
+// push: a conversation opened by a tap is a step the browser's Back undoes (it closes the chat, it does
+// not leave Messages).
+function openChat(id, { push = false } = {}) {
+  const wasOpen = !!openId;
   closeChat(true);
   openId = id;
   openThread = threads.find(t => t.id === id) || null;
@@ -99,7 +106,10 @@ function openChat(id) {
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 900px)').matches) { e.preventDefault(); send(); } });
   $('compose').addEventListener('submit', e => { e.preventDefault(); send(); });
-  const url = new URL(location.href); url.searchParams.set('t', id); history.replaceState(null, '', url);
+  const url = new URL(location.href); url.searchParams.set('t', id);
+  if (push && !wasOpen) history.pushState({ chat: id }, '', url); else history.replaceState({ chat: id }, '', url);
+  if (window.matchMedia('(min-width: 900px)').matches) setTimeout(() => { const t = $('text'); if (t && !$('compose').hidden) t.focus(); }, 50);
+  renderList();
   renderHeader();
   // includeMetadataChanges: told also when a message this page sent reaches the server, so its clock
   // turns into ticks (without it the page hears nothing until the next message arrives).
@@ -119,12 +129,21 @@ function openChat(id) {
     }
   }, err => { $('msgs').innerHTML = `<div class="sys">${esc(err.code === 'permission-denied' ? 'You are not in this conversation.' : err.message)}</div>`; });
 }
-function closeChat(silent) {
+window.addEventListener('popstate', () => {
+  const t = new URLSearchParams(location.search).get('t');
+  if (!t && openId) closeChat(false, { fromHistory: true });
+  else if (t && t !== openId && threads.some(x => x.id === t)) openChat(t);
+});
+function closeChat(silent, { fromHistory = false } = {}) {
   if (msgUnsub) msgUnsub(); if (reqUnsub) reqUnsub(); if (docUnsub) docUnsub();
   msgUnsub = reqUnsub = docUnsub = null; openId = null; openThread = null; openReq = null;
   if (!silent) {
     $('chat').hidden = true; $('chat').innerHTML = ''; document.body.classList.remove('chat-open');
-    const url = new URL(location.href); url.searchParams.delete('t'); history.replaceState(null, '', url);
+    if (!fromHistory) {
+      if (history.state && history.state.chat) { history.back(); }
+      else { const url = new URL(location.href); url.searchParams.delete('t'); history.replaceState(null, '', url); }
+    }
+    renderList();
   }
 }
 window.addEventListener('keydown', e => { if (e.key === 'Escape' && openId && !document.querySelector('.sheet')) closeChat(); });
@@ -136,6 +155,9 @@ function renderHeader() {
   const link = t.type === 'property' && t.linkedId ? (isAgent ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(t.linkedId)
     : t.type === 'lead' && t.linkedId ? 'crm.html?lead=' + encodeURIComponent(t.linkedId) : '';
   $('chatTitle').outerHTML = `<${link ? `a href="${esc(link)}"` : 'div'} class="t" id="chatTitle"><b>${esc(t.title)}</b><small>${esc(others.join(', '))}${link ? ' · tap to open' : ''}</small></${link ? 'a' : 'div'}>`;
+  const member = (t.members || []).includes(me.email);
+  let note = document.getElementById('roNote');
+  if (!member && !note) { note = document.createElement('div'); note.id = 'roNote'; note.className = 'readonly-note'; note.textContent = 'You are reading this as an admin — you are not in this conversation, so you cannot reply.'; $('pinned').before(note); }
 }
 function renderPinned() {
   const r = openReq, el = $('pinned');
@@ -149,7 +171,7 @@ function renderPinned() {
     ${can || (r.status === 'pending' && r.requesterEmail === me.email) ? `<div class="acts">
       ${can ? '<button type="button" class="btn sm primary" id="pDecide">Approve or reject</button>' : ''}
       ${r.status === 'pending' && r.requesterEmail === me.email ? '<button type="button" class="btn sm danger" id="pCancel">Cancel request</button>' : ''}</div>` : ''}</div>`;
-  if ($('pDecide')) $('pDecide').addEventListener('click', () => decideSheet(r, { canCoAgent: r.kind === 'property' && isAdmin }));
+  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && isAdmin, defaults: await approvalDefaults(me) }));
   // (A property's primary agent can also make the asker a co-agent — from My Day, which knows whose
   // property it is.)
   if ($('pCancel')) $('pCancel').addEventListener('click', e => { if (confirm('Cancel this request?')) busy(e.currentTarget, () => api('cancel', { id: r.id }).catch(x => toast('✗ ' + x.message))); });
@@ -182,13 +204,12 @@ let lastMark = 0;
 function markRead() {
   const t = openThread;
   if (!t || !(t.members || []).includes(me.email) || document.visibilityState !== 'visible') return;
-  const latest = msgs.length ? msgs[msgs.length - 1].at || 0 : 0;
-  const unread = (t.unread || {})[myKey] || 0;
-  const mark = (t.reads || {})[myKey] || 0;
-  if (!unread && mark >= latest) return;
+  const latest = Math.max(Number(t.lastAt) || 0, msgs.length ? Number(msgs[msgs.length - 1].at) || 0 : 0);
+  const mark = Number((t.reads || {})[myKey] || 0);
+  if (mark >= latest) return;
   if (Date.now() - lastMark < 1500) { setTimeout(markRead, 1600); return; }
   lastMark = Date.now();
-  updateDoc(doc(db, 'threads', t.id), { ['unread.' + myKey]: 0, ['reads.' + myKey]: Date.now() }).catch(e => console.error('read mark:', e));
+  updateDoc(doc(db, 'threads', t.id), { ['reads.' + myKey]: Date.now() }).catch(e => console.error('read mark:', e));
 }
 document.addEventListener('visibilitychange', markRead);
 
@@ -201,9 +222,7 @@ async function send() {
   const now = Date.now();
   const b = writeBatch(db);
   b.set(doc(collection(db, 'threads', t.id, 'messages')), { kind: 'text', text: text.slice(0, 4000), at: now, by: me.email });
-  const patch = { lastAt: now, lastText: text.replace(/\s+/g, ' ').slice(0, 140), lastBy: me.email, ['unread.' + myKey]: 0, ['reads.' + myKey]: now };
-  (t.members || []).filter(e => e !== me.email).forEach(e => { patch['unread.' + emailKey(e)] = increment(1); });
-  b.update(doc(db, 'threads', t.id), patch);
+  b.update(doc(db, 'threads', t.id), { lastAt: now, lastText: text.replace(/\s+/g, ' ').slice(0, 140), lastBy: me.email, ['reads.' + myKey]: now });
   try { await b.commit(); }
   catch (e) { toast('✗ Not sent — ' + (e.code === 'permission-denied' ? 'you are not in this conversation' : 'check your connection')); ta.value = text; }
 }
@@ -215,7 +234,7 @@ $('newBtn').addEventListener('click', async () => {
     <h3>New conversation</h3>
     <div class="field"><label for="nTitle">Title (required)</label><input type="text" id="nTitle" maxlength="120" placeholder="e.g. Weekend visits in Adyar"></div>
     <div class="field"><label>With</label><div class="pick" id="nPeople">${list.map(p => `<label><input type="checkbox" value="${esc(p.email)}"> ${esc(p.name)}${p.role === 'admin' ? ' · admin' : p.role === 'agent' ? ' · agent' : ''}</label>`).join('') || '<span class="note">Nobody else on the team yet.</span>'}</div></div>
-    <p class="note">For a property or a lead, use “Message” on it instead — the conversation is linked to it.</p>
+    <p class="note">For a property or a lead, use “Message” on it instead — the conversation is linked to it. Admins can read every team conversation.</p>
     <p class="err" id="nErr"></p>
     <div class="bar"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary block" id="nGo">Start</button></div>`,
   { label: 'New conversation', onOpen: (sh, close) => {

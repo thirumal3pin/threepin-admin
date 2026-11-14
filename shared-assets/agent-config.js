@@ -107,7 +107,10 @@ const DEFAULTS = {
   tabs: ['myday', 'properties', 'crm', 'tasks', 'ads', 'campaigns', 'messages'],
   otherPropertyFields: ['title', 'config', 'budget', 'type', 'locality', 'availability', 'primaryAgent'],
   ownPropertyFields: ids(PROPERTY_FIELDS),          // primary and co-agents alike
-  grantedPropertyFields: ids(PROPERTY_FIELDS).filter(id => id !== 'contact'),
+  // Shared through an approved request: everything except the owner's number (the approver decides
+  // that), the office-only notes and the sheet's extra columns — those can hold the owner's lowest
+  // price, which a collaborating agent's side of the table must not see by default.
+  grantedPropertyFields: ids(PROPERTY_FIELDS).filter(id => !['contact', 'internal', 'sheet'].includes(id)),
   matchingLeadFields: ['requirement', 'aiSummary'],
   adsScope: 'own',
   campaignsScope: 'own',
@@ -202,9 +205,9 @@ function normalizeConfig(input, tenantId) {
   return out;
 }
 
-// Indian phone numbers written into free text (a note, a share message, a title): 10-digit mobiles
-// with or without +91 / 0 and spaces or dashes, and landlines like 044-2345 6789.
-const PHONE_RE = /(?:\+?91[\s.-]*|\b0)?(?:[6-9]\d{2}[\s.-]?\d{3}[\s.-]?\d{4}|[6-9]\d{4}[\s.-]?\d{5}|4\d[\s.-]?\d{4}[\s.-]?\d{4})\b/g;
+// Phone numbers written into free text (a note, a share message, a title): any ten digits with spaces,
+// dots or dashes between them, with or without +91 / 0 — mobiles and landlines like 044-2345 6789.
+const PHONE_RE = /(?<![\w])(?:\+?91[\s.-]*|0)?(?:\d[\s.-]?){9}\d(?![\w])/g;
 function maskPhones(v) {
   if (typeof v === 'string') return v.replace(PHONE_RE, '••••• •••••');
   if (Array.isArray(v)) return v.map(maskPhones);

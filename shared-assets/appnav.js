@@ -171,7 +171,7 @@
     },
     {
       // Admins only (role claim 'admin'): logins, roles and what agents may see. team.html.
-      id: 'team', label: 'Team & access', icon: 'fa-solid fa-user-shield', page: 'team', nav: 'team',
+      id: 'team', label: 'Team & access', icon: 'fa-solid fa-user-shield', page: 'team', nav: 'team', badge: 'team',
       note: 'Who can sign in, their role, and what agents see',
       adminOnly: true,
     },
@@ -335,7 +335,7 @@
     if (!n) return '';
     // A seller with no listing card is revenue sitting untouched — it earns
     // the same red treatment as an overdue follow-up or a property missing data.
-    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting' || item.badge === 'tasks' || item.badge === 'myday' || item.badge === 'messages';
+    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting' || item.badge === 'tasks' || item.badge === 'myday' || item.badge === 'messages' || item.badge === 'team';
     return '<span class="rl-badge' + (alert ? ' alert' : '') + '" aria-hidden="true">' + (n > 99 ? '99+' : n) + '</span>'
       + '<span class="sr-only"> (' + n + ')</span>';
   }

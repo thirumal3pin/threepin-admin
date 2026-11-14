@@ -124,7 +124,7 @@ onAuthStateChanged(auth, async user => {
     location.assign(agent ? 'myday.html' : DAILY_TASK);
     return;
   }
-  if (agent) agentTiles();
+  if (agent) agentTiles(); else teamTiles();
   const name = nameOf(user);
   $('who-hi').textContent = name ? 'Welcome back, ' + name : 'Welcome back';
   $('who-email').textContent = user.email || '';
@@ -178,10 +178,25 @@ $('signout-btn').addEventListener('click', async () => {
 });
 
 // The tiles an agent sees on this page: My Day, their Properties, the CRM (their leads), Messages.
+// Everyone else keeps their tiles, with My Day and Messages added up front (approvals and the team's
+// conversations live there).
+function teamTiles() {
+  const nav = document.querySelector('nav.tiles');
+  if (!nav || nav.dataset.team) return;
+  nav.dataset.team = '1';
+  const go = '<span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
+  const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const tile = (href, ico, nm, ds) => `<a class="tile rise" style="--i:0" href="${href}"><span class="ico">${ico}</span><span class="tx"><span class="nm">${nm}</span><span class="ds">${ds}</span></span>${go}</a>`;
+  nav.insertAdjacentHTML('beforeend', tile('myday.html', svg('<path d="M3.5 10.5 12 3.5l8.5 7M5.5 9v11h13V9"/>'), 'My Day', 'Approvals waiting on you, visits and follow-ups')
+    + tile('messages.html', svg('<path d="M4 5h16v11H8l-4 4z"/>'), 'Messages', 'The team’s conversations, one for every request'));
+}
+
 function agentTiles() {
   const nav = document.querySelector('nav.tiles');
   if (!nav || nav.dataset.agent) return;
   nav.dataset.agent = '1';
+  const k = document.querySelector('.kicker');
+  if (k) k.textContent = '3 PIN · Agent';
   const go = '<span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
   const tile = (i, href, ico, nm, ds, primary) => `<a class="tile${primary ? ' primary' : ''} rise" style="--i:${i}" href="${href}"><span class="ico">${ico}</span><span class="tx"><span class="nm">${nm}</span><span class="ds">${ds}</span></span>${go}</a>`;
   const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;

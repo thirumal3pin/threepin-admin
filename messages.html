@@ -28,7 +28,7 @@
   .thread .bd small { display: block; color: var(--ink3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread .side { flex: none; text-align: right; font-size: 12px; color: var(--ink3); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   .thread.unread .bd b, .thread.unread .side { color: var(--ink); }
-  .thread .ub { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #25D366; color: #06240F; font-weight: 700; font-size: 11.5px; display: grid; place-items: center; }
+  .thread .ub { width: 12px; height: 12px; border-radius: 50%; background: #25D366; display: block; }
   /* Chat */
   body.chat-open .wrap { padding-bottom: 0; }
   #chat { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
@@ -55,6 +55,22 @@
   .compose textarea { min-height: 44px; max-height: 140px; border-radius: 22px; padding: 11px 16px; resize: none; }
   .compose .send { flex: none; width: 46px; height: 46px; border-radius: 50%; border: 0; background: #25D366; color: #06240F; font-size: 18px; cursor: pointer; }
   .compose .send:disabled { opacity: .5; }
+  .readonly-note { padding: 8px 12px; font-size: 12.5px; background: light-dark(#FFF7E0, rgba(255,190,40,.12)); color: light-dark(#6B4600, #FFD27A); border-bottom: 1px solid var(--border); }
+  /* A laptop: the list on the left, the open conversation beside it (WhatsApp Web), not on top. */
+  .split-empty { display: none; }
+  @media (min-width: 900px) {
+    body.rail-on .wrap { margin: 0; max-width: 420px; padding-left: 16px; }
+    #chat { left: calc(var(--rail-w, 0px) + 436px); border-left: 1px solid var(--border); }
+    body.rail-on.rail-min #chat { left: calc(var(--rail-w-min, 0px) + 436px); }
+    body:not(.rail-on) #chat { left: 436px; }
+    #chat #back { display: none; }
+    .split-empty { display: grid; place-items: center; position: fixed; top: 0; bottom: 0; right: 0; left: calc(var(--rail-w, 0px) + 436px);
+      color: var(--ink3); text-align: center; border-left: 1px solid var(--border); background: var(--bg2); padding: 24px; }
+    body.rail-on.rail-min .split-empty { left: calc(var(--rail-w-min, 0px) + 436px); }
+    body.chat-open .split-empty { display: none; }
+    .msgs { padding: 16px 8%; }
+    .sys { max-width: 560px; }
+  }
 </style>
 <link rel="stylesheet" href="shared-assets/theme.css">
 </head>
@@ -76,6 +92,7 @@
     </div>
     <div class="card" id="threads"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>
     <div id="chat" hidden></div>
+    <div class="split-empty" id="splitEmpty"><div><i class="fa-regular fa-comments" style="font-size:28px;opacity:.5"></i><p style="margin:8px 0 0">Pick a conversation on the left.</p><p class="note" style="margin:4px 0 0">Admins can read every team conversation.</p></div></div>
   </main>
 </div>
 <script src="shared-assets/appnav.js"></script>
