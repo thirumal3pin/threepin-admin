@@ -37,8 +37,10 @@ service firebase.storage {
     // exactly so this comparison is possible — there is no per-object
     // metadata to consult and no way for a client to move a file between
     // tenants without landing on a path its own claim does not match.
+    // An agent (role claim 'agent', see firestore.rules) is never let into the finance files.
     function ownsTenant(tid) {
-      return request.auth != null && request.auth.token.tenantId == tid;
+      return request.auth != null && request.auth.token.tenantId == tid
+        && request.auth.token.get('role', '') != 'agent';
     }
 
     // Upload constraints, applied to writes only. 10 MB is a deliberate

@@ -1,11 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, getKnowledgeSources } from './_bot-shared.js';
 import { easyPost, EASY_MODEL } from './_easy.js';
+import { agentPost } from './_agent.js';
 
 // Two jobs in one function (Hobby plan: 12 functions):
 //   POST /api/bot-test-message  — the CRM's AI Bot "Live Test Chat": the draft bot workflow and the
 //                                 Knowledge Base, answered by Claude, nothing written anywhere.
 //   POST /api/easy              — Eåsy's ask box (rewritten here with ?op=easy, see vercel.json).
+//   POST /api/agent             — the agent layer: roles, team, agent settings (?op=agent, api/_agent.js).
 export const maxDuration = 60;
 
 const MAX_TURNS = 3;          // a reply, plus at most two update_lead_info rounds before it
@@ -72,6 +74,8 @@ async function testChatPost(request) {
 }
 
 export async function POST(request) {
-  if (new URL(request.url).searchParams.get('op') === 'easy') return easyPost(request);
+  const op = new URL(request.url).searchParams.get('op');
+  if (op === 'easy') return easyPost(request);
+  if (op === 'agent') return agentPost(request);
   return testChatPost(request);
 }

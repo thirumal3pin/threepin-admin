@@ -72,60 +72,60 @@
 
   var MAP = [
     {
-      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today',
+      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks',
       note: 'Your visits and tasks for today',
     },
     {
-      id: 'tasks', label: 'Tasks', icon: 'fa-solid fa-list-check', page: 'crm', nav: 'tasks', badge: 'tasks',
+      id: 'tasks', label: 'Tasks', icon: 'fa-solid fa-list-check', page: 'crm', nav: 'tasks', badge: 'tasks', tab: 'tasks',
       note: 'Work assigned to the team, and to you',
     },
     {
-      id: 'calendar', label: 'Team calendar', icon: 'fa-regular fa-calendar-days', page: 'crm', nav: 'calendar',
+      id: 'calendar', label: 'Team calendar', icon: 'fa-regular fa-calendar-days', page: 'crm', nav: 'calendar', tab: 'calendar',
       note: 'Who is where, and when everyone is free',
     },
     {
-      id: 'property', label: 'Properties', icon: 'fa-regular fa-building', page: 'property',
+      id: 'property', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', tab: 'properties',
       note: 'The inventory, and everything that keeps it right',
       items: [
         { id: 'all', label: 'Property Intelligence Dashboard', icon: 'fa-solid fa-list', page: 'property', nav: 'all' },
-        { id: 'missing', label: 'Missing data', icon: 'fa-solid fa-triangle-exclamation', page: 'property', nav: 'missing', badge: 'missing' },
-        { id: 'changes', label: 'Changes to apply', icon: 'fa-regular fa-clock', page: 'property', nav: 'changes' },
-        { id: 'areamap', label: 'Area map', icon: 'fa-solid fa-map-location-dot', page: 'property', nav: 'areamap' },
-        { id: 'sync', label: 'Sync from sheet', icon: 'fa-solid fa-rotate', page: 'property', nav: 'sync' },
+        { id: 'missing', label: 'Missing data', icon: 'fa-solid fa-triangle-exclamation', page: 'property', nav: 'missing', badge: 'missing', staffOnly: true },
+        { id: 'changes', label: 'Changes to apply', icon: 'fa-regular fa-clock', page: 'property', nav: 'changes', staffOnly: true },
+        { id: 'areamap', label: 'Area map', icon: 'fa-solid fa-map-location-dot', page: 'property', nav: 'areamap', staffOnly: true },
+        { id: 'sync', label: 'Sync from sheet', icon: 'fa-solid fa-rotate', page: 'property', nav: 'sync', staffOnly: true },
       ],
     },
     {
-      id: 'crm', label: 'CRM', icon: 'fa-regular fa-comments', page: 'crm',
+      id: 'crm', label: 'CRM', icon: 'fa-regular fa-comments', page: 'crm', tab: 'crm',
       note: 'Leads, the board and what is owed a reply',
       items: [
         { id: 'kanban', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'crm', nav: 'kanban' },
         { id: 'list', label: 'List', icon: 'fa-solid fa-bars', page: 'crm', nav: 'list' },
         { id: 'followups', label: 'Follow-ups', icon: 'fa-regular fa-calendar-check', page: 'crm', nav: 'followups', badge: 'followups' },
-        { id: 'dashboard', label: 'Analytics', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'dashboard' },
+        { id: 'dashboard', label: 'Analytics', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'dashboard', staffOnly: true },
       ],
     },
     {
-      id: 'wa', label: 'WhatsApp Campaigns', icon: 'fa-brands fa-whatsapp', page: 'crm',
+      id: 'wa', label: 'WhatsApp Campaigns', icon: 'fa-brands fa-whatsapp', page: 'crm', tab: 'campaigns',
       note: 'Templates, lead lists and campaigns through TailorTalk',
       items: [
         { id: 'campaigns', label: 'Dashboard', icon: 'fa-solid fa-gauge-high', page: 'crm', nav: 'campaigns' },
-        { id: 'cmp-templates', label: 'Templates', icon: 'fa-regular fa-file-lines', page: 'crm', nav: 'cmp-templates' },
-        { id: 'cmp-new', label: 'New campaign', icon: 'fa-regular fa-paper-plane', page: 'crm', nav: 'cmp-new' },
+        { id: 'cmp-templates', label: 'Templates', icon: 'fa-regular fa-file-lines', page: 'crm', nav: 'cmp-templates', staffOnly: true },
+        { id: 'cmp-new', label: 'New campaign', icon: 'fa-regular fa-paper-plane', page: 'crm', nav: 'cmp-new', staffOnly: true },
         { id: 'cmp-history', label: 'Campaigns', icon: 'fa-solid fa-clock-rotate-left', page: 'crm', nav: 'cmp-history' },
       ],
     },
     {
-      id: 'metaads', label: 'Meta Ads Leads', icon: 'fa-brands fa-meta', page: 'crm',
+      id: 'metaads', label: 'Meta Ads Leads', icon: 'fa-brands fa-meta', page: 'crm', tab: 'ads',
       note: 'Leads from the Google Sheets your Meta ads fill — test mode',
       items: [
         { id: 'meta-leads', label: 'Leads', icon: 'fa-solid fa-users', page: 'crm', nav: 'meta-leads' },
         { id: 'ml-dupes', label: 'Duplicates', icon: 'fa-regular fa-clone', page: 'crm', nav: 'ml-dupes' },
-        { id: 'ml-analysis', label: 'Analysis', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'ml-analysis' },
-        { id: 'ml-setup', label: 'Setup', icon: 'fa-solid fa-sliders', page: 'crm', nav: 'ml-setup' },
+        { id: 'ml-analysis', label: 'Analysis', icon: 'fa-solid fa-chart-column', page: 'crm', nav: 'ml-analysis', staffOnly: true },
+        { id: 'ml-setup', label: 'Setup', icon: 'fa-solid fa-sliders', page: 'crm', nav: 'ml-setup', staffOnly: true },
       ],
     },
     {
-      id: 'finance', label: 'Finance', icon: 'fa-solid fa-indian-rupee-sign', page: 'finance',
+      id: 'finance', label: 'Finance', icon: 'fa-solid fa-indian-rupee-sign', page: 'finance', tab: 'finance',
       note: 'Deals, bills, invoices and the books',
       groups: FIN_GROUPS.map(function (g) {
         return {
@@ -137,7 +137,7 @@
       }),
     },
     {
-      id: 'track', label: 'Shoot & Media', icon: 'fa-solid fa-camera-retro', page: 'track',
+      id: 'track', label: 'Shoot & Media', icon: 'fa-solid fa-camera-retro', page: 'track', tab: 'shoots',
       note: 'Listings from owner yes to brochure out, the shoots, and where each is posted',
       items: [
         { id: 'board', label: 'Board', icon: 'fa-solid fa-table-columns', page: 'track', nav: 'board' },
@@ -154,6 +154,12 @@
       note: 'New listing intake — Claude builds the brochure',
       apart: true,
     },
+    {
+      // Admins only (role claim 'admin'): logins, roles and what agents may see. team.html.
+      id: 'team', label: 'Team & access', icon: 'fa-solid fa-user-shield', page: 'team', nav: 'team',
+      note: 'Who can sign in, their role, and what agents see',
+      adminOnly: true,
+    },
   ];
 
   // Where each console lives, and what a bare visit to it should open.
@@ -162,6 +168,7 @@
     crm: { href: 'crm.html', home: 'kanban' },
     finance: { href: '3pinfinance', home: 'overview' },
     track: { href: 'propertytrack.html', home: 'board' },
+    team: { href: 'team.html', home: 'team' },
   };
 
   var K_SECTION = 'appnav.section';
@@ -175,6 +182,9 @@
   var active = null;       // id of the item the host says is showing
   var badges = {};
   var root = null;
+  // Who is looking (shared-assets/access.js): { role: 'admin' | 'agent' | 'none', tabs: [...] }.
+  // Unknown until access.js reports: admin-only entries stay hidden, everything else shows as before.
+  var access = (typeof window !== 'undefined' && window.__pinAccess) || null;
 
   // ── Small helpers ──
   function esc(s) {
@@ -215,6 +225,29 @@
     try { saved = JSON.parse(read(K_GROUPS, 'null')); } catch (e) { saved = null; }
     openGroups = new Set(Array.isArray(saved) ? saved : FIN_GROUPS.map(function (g) { return g[0]; }));
     return openGroups;
+  }
+
+  // ── What this person may see ──
+  // An agent sees only the sections whose `tab` the admin gave them (agentConfigs, team.html), and
+  // never a `staffOnly` entry. `adminOnly` entries are for admins. This only tidies the menu: what
+  // an agent can actually read is decided by the database rules and the server.
+  function allowed(entry, parent) {
+    if (entry.adminOnly) return !!(access && access.role === 'admin');
+    if (access && access.role === 'agent') {
+      if (entry.staffOnly) return false;
+      var tab = entry.tab || (parent && parent.tab);
+      return !!tab && (access.tabs || []).indexOf(tab) >= 0;
+    }
+    return true;
+  }
+  function visibleMap() {
+    return MAP.filter(function (sec) { return allowed(sec); }).map(function (sec) {
+      if (sec.items) return Object.assign({}, sec, { items: sec.items.filter(function (it) { return allowed(it, sec); }) });
+      if (sec.groups) return Object.assign({}, sec, { groups: sec.groups.map(function (g) {
+        return Object.assign({}, g, { items: g.items.filter(function (it) { return allowed(it, sec); }) });
+      }) });
+      return sec;
+    });
   }
 
   // ── Where a click goes ──
@@ -323,7 +356,7 @@
   function render() {
     if (!root) return;
     var nav = root.querySelector('.rail-nav');
-    nav.innerHTML = MAP.map(sectionHtml).join('');
+    nav.innerHTML = visibleMap().map(sectionHtml).join('');
     var who = root.querySelector('.rail-who');
     who.textContent = cfg.user || '';
     who.style.display = cfg.user ? '' : 'none';
@@ -564,6 +597,8 @@
 
     setActive: setActive,
     setUser: function (email) { if (cfg) { cfg.user = email; render(); } },
+    /* From shared-assets/access.js once the role is known. */
+    setAccess: function (a) { access = a || null; window.__pinAccess = access; render(); },
     setBadge: function (key, n) { badges[key] = Number(n) || 0; render(); },
     open: openDrawer,
     close: closeDrawer,

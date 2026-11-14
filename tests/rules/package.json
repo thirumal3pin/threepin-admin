@@ -1,0 +1,13 @@
+{
+  "name": "threepin-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Firestore security-rule tests, run against the local emulator (never the live database). Separate package so the site's deploy never installs them.",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "firebase": "^12.16.0"
+  }
+}

@@ -11,13 +11,17 @@
 // to the existing account.
 //
 // Usage:
-//   node scripts/add-team-member.js --email teammate@3pin.in --tenantId t_3pinrealty [--password somepass] [--role member]
+//   node scripts/add-team-member.js --email teammate@3pin.in --tenantId t_3pinrealty [--password somepass] [--role member] [--access admin|agent]
+//
+// --access sets the agent-layer role claim (firestore.rules, "Who is asking"): admin, agent, or
+// leave it out for a team member who works exactly as before. Admins can also do all of this from
+// team.html (Team & access) without a script.
 //
 // Your business's tenantId is t_3pinrealty (see docs/SOP.md).
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
-import { readFileSync } from 'node:fs';
+import { serviceAccount as readKey } from './_key.js';
 import { randomBytes } from 'node:crypto';
 
 function parseArgs(argv) {
@@ -39,10 +43,11 @@ async function main() {
     process.exit(1);
   }
 
-  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-    new URL('../api/pin-realty-firebase-adminsdk-fbsvc-e72a22d2f8.json', import.meta.url);
-  const serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'));
-  initializeApp({ credential: cert(serviceAccount) });
+  if (args.access && !['admin', 'agent'].includes(args.access)) {
+    console.error('--access must be admin or agent (leave it out for a team member as before)');
+    process.exit(1);
+  }
+  initializeApp({ credential: cert(readKey()) });
 
   const auth = getAuth();
   const db = getFirestore();
@@ -70,12 +75,16 @@ async function main() {
   // sign-in instead.
   if (!userRecord.emailVerified) userRecord = await auth.updateUser(userRecord.uid, { emailVerified: true });
 
-  await auth.setCustomUserClaims(userRecord.uid, { tenantId: args.tenantId });
+  // MERGE the claims: replacing them would wipe a role set earlier (admin/agent).
+  const claims = { ...(userRecord.customClaims || {}), tenantId: args.tenantId };
+  if (args.access) claims.role = args.access;
+  await auth.setCustomUserClaims(userRecord.uid, claims);
 
   await db.collection('users').doc(userRecord.uid).set({
     tenantId: args.tenantId,
     email: args.email,
     role: args.role || 'member',
+    ...(args.access ? { access: args.access } : {}),
     createdAt: Date.now()
   }, { merge: true });
 
@@ -83,6 +92,7 @@ async function main() {
   console.log('  tenantId:', args.tenantId);
   console.log('  uid:     ', userRecord.uid);
   console.log('  email:   ', args.email);
+  if (claims.role) console.log('  access:  ', claims.role);
   if (createdPassword) console.log('  password:', createdPassword, '(share this securely — it is not stored anywhere)');
   console.log('\nThey can log in at crm.html AND dashboard.html right away (same account, same tenant) and will see the same leads/properties/bot config/WhatsApp connection as everyone else on this tenant.');
 }

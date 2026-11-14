@@ -19,12 +19,51 @@ rules_version = '2';
 // it backfills tenantId onto every pre-existing properties doc so they
 // don't get locked out.
 
+// ── Who is asking ────────────────────────────────────────────────────────
+// Every login on the team carries the tenantId claim. Since the agent layer (Nov 2026) a login may
+// also carry a `role` claim, set only by the server (api/_agent.js, scripts/set-roles.mjs):
+//   'admin' — Thirumal, Swami, Pradeep, admin@: everything below, plus the admin-only paths
+//   'agent' — sees ONLY what the agent sections near the end allow: their own tasks, their own
+//             Daily task record and the agent settings. Properties and leads reach an agent as
+//             copies the server builds from the admin's settings (later phases), never directly.
+//   (none)  — everyone else on the team, exactly as before.
+// isSignedInWithTenant() is therefore "on the team and NOT an agent": every rule written before the
+// agent layer keeps meaning what it meant, and shuts agents out without being edited one by one.
+// The only way to become an agent's opposite is a claim, and only the Admin SDK writes claims.
+
 function tenantId() {
   return request.auth.token.tenantId;
 }
 
+function hasTenant() {
+  return request.auth != null && request.auth.token.get('tenantId', null) != null;
+}
+
+function role() {
+  return request.auth.token.get('role', '');
+}
+
+function isAgent() {
+  return hasTenant() && role() == 'agent';
+}
+
+// An admin's email must be confirmed, as a Tasks manager's is (Google always is; the team's
+// password accounts are created confirmed).
+function isAdmin() {
+  return hasTenant() && role() == 'admin' && request.auth.token.get('email_verified', false) == true;
+}
+
 function isSignedInWithTenant() {
-  return request.auth != null && tenantId() != null;
+  return hasTenant() && role() != 'agent';
+}
+
+// The same checks for paths an agent may also use (their own records only).
+function inMyTenant() {
+  return hasTenant() && resource.data.tenantId == tenantId();
+}
+
+function writingMyTenant() {
+  return hasTenant() && request.resource.data.tenantId == tenantId();
 }
 
 function ownsTenantDoc(id) {
@@ -134,9 +173,10 @@ service cloud.firestore {
 
     // Daily task: when each person opened each row (crm-assets/today.js). One document per person,
     // {tenant}__{uid}; nobody else reads or writes it, and it holds nothing but the open times.
+    // Agents keep one too (their own only), so hasTenant() rather than isSignedInWithTenant().
     match /todayOpens/{docId} {
-      allow read, delete: if isSignedInWithTenant() && docId == tenantId() + '__' + request.auth.uid;
-      allow create, update: if isSignedInWithTenant() && docId == tenantId() + '__' + request.auth.uid
+      allow read, delete: if hasTenant() && docId == tenantId() + '__' + request.auth.uid;
+      allow create, update: if hasTenant() && docId == tenantId() + '__' + request.auth.uid
         && request.resource.data.tenantId == tenantId()
         && request.resource.data.keys().hasOnly(['tenantId', 'email', 'opens', 'updatedAt'])
         && request.resource.data.opens is map;
@@ -249,8 +289,9 @@ service cloud.firestore {
         && d.history is list && d.history.size() <= 60;
     }
 
+    // Read by agents too: the Tasks page needs to know who the managers are.
     match /taskConfigs/{tid} {
-      allow read: if ownsTenantDoc(tid);
+      allow read: if hasTenant() && tid == tenantId();
       allow update: if ownsTenantDoc(tid) && emailVerified()
         && myEmail() in resource.data.managers
         && request.resource.data.tenantId == tid
@@ -259,17 +300,45 @@ service cloud.firestore {
       allow create, delete: if false;
     }
 
+    // An agent sees and works the tasks they can see like anyone else (hasTenant, not
+    // isSignedInWithTenant). Managing tasks stays with managers, who are never agents
+    // (isTaskManager() is built on isSignedInWithTenant()).
     match /tasks/{taskId} {
-      allow read: if isSignedInWithTenant() && (
+      allow read: if hasTenant() && (
         (emailVerified() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
         || (resource.data.tenantId == tenantId() && isTaskManager()));
       allow create: if writingOwnTenantField() && isTaskManager() && validTask(request.resource.data);
       allow delete: if ownsTenantField() && isTaskManager();
-      allow update: if ownsTenantField() && writingOwnTenantField() && validTask(request.resource.data) && (
+      allow update: if inMyTenant() && writingMyTenant() && validTask(request.resource.data) && (
         isTaskManager()
         || (emailVerified() && myEmail() in resource.data.assignees
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                  ['title', 'description', 'status', 'due', 'link', 'updatedAt', 'updatedBy', 'statusAt', 'completedAt', 'history'])));
+    }
+
+    // ---------------------------------------------------------------------
+    // AGENT LAYER (Nov 2026) — see the note on role() at the top.
+    // ---------------------------------------------------------------------
+
+    // The agent role settings (shared-assets/agent-config.js): which tabs agents get, which property
+    // and lead fields they see. Read by everyone on the tenant (an agent's pages need their own
+    // settings); written only by an admin, only known settings, and always for this tenant.
+    match /agentConfigs/{tid} {
+      allow read: if hasTenant() && tid == tenantId();
+      allow create, update: if isAdmin() && tid == tenantId()
+        && request.resource.data.tenantId == tid
+        && request.resource.data.keys().hasOnly(['tenantId', 'tabs', 'otherPropertyFields', 'ownPropertyFields',
+             'grantedPropertyFields', 'matchingLeadFields', 'adsScope', 'campaignsScope', 'approvals',
+             'overrides', 'updatedAt', 'updatedBy'])
+        && request.resource.data.tabs is list
+        && request.resource.data.otherPropertyFields is list
+        && request.resource.data.overrides is map;
+      allow delete: if false;
+    }
+
+    // Who changed whose role or access, and when. Written by the server only (api/_agent.js).
+    match /accessLog/{entryId} {
+      allow read, write: if false;
     }
 
     // Property notes + timeline events, scoped by the PARENT property's

@@ -15,13 +15,19 @@ export function getDb() {
 // `tenantId` custom claim set at provisioning time — see scripts/create-tenant.js).
 // Callers that need tenant scoping should treat a missing tenantId as
 // "not fully onboarded" rather than assuming a default.
-export async function verifyCrmUser(request) {
+//
+// AGENTS (custom claim role = 'agent', see firestore.rules) are refused here unless the caller
+// passes { allowAgent: true }. Every endpoint written before the agent layer hands back the whole
+// tenant's data and bypasses the Firestore rules (Admin SDK), so an agent must never reach one by
+// default; an endpoint that filters for agents opts in explicitly (api/_agent.js).
+export async function verifyCrmUser(request, { allowAgent = false } = {}) {
   const authHeader = request.headers.get('authorization') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (!token) return null;
   try {
     getDb(); // ensures the default app is initialized before getAuth()
     const decoded = await getAuth().verifyIdToken(token);
+    if (decoded.role === 'agent' && !allowAgent) return null;
     return { ...decoded, tenantId: decoded.tenantId || null };
   } catch {
     return null;
