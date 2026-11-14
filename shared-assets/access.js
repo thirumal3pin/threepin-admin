@@ -1,19 +1,25 @@
 // ═══════ WHO IS LOOKING — role-aware menu and page gate (agent layer) ═══════
 //
-// One <script type="module" src="shared-assets/access.js"> on each console page. Once the person is
-// signed in it reads their role claim and:
+// One <script type="module" src="shared-assets/access.js"> on each console page (whose <html> says
+// which console it is: data-console="crm" | "property" | "track" | "finance" | "team"). Once the
+// person is signed in it reads their role claim and:
 //   · admin  → shows the "Team & access" entry in the menu
-//   · agent  → asks the server for the agent settings that apply to them (one call, kept for the
-//              browser session) and hides every menu section they were not given; a page they were
-//              not given at all is replaced by a short note with a way back
+//   · agent  → asks the server for the agent settings that apply to them and hides every menu
+//              section they were not given; a page none of their tabs open is replaced by a short
+//              note with the pages they do have and a sign-out
 //   · anyone else → nothing changes
 // Exposes window.PinAccess = { role, email, config } and fires a 'pin-access' event on document.
 //
-// This file never touches Firestore (a page initialises its own Firestore with its own cache
-// settings first, and a second initialiser would break it). What an agent can READ is enforced by
-// firestore.rules and the server; this only keeps the screen honest.
+// The last answer is kept on the device (localStorage 'pin.access.last') so the menu is right from
+// the first paint of the next page (appnav.js reads it), and so a failed check (a blip, offline)
+// falls back to what was known instead of shutting an agent out of pages they are allowed.
+//
+// When a login becomes an agent, anything the browser saved for it while it had full access (the
+// pages keep a copy of the data in IndexedDB) is wiped once, then the page reloads.
+//
+// Nothing here is security: what an agent can READ is enforced by firestore.rules and the server.
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
-import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -35,25 +41,16 @@ const PAGE_TABS = {
   finance: ['finance'],
   team: [],
 };
-const page = document.documentElement.dataset.console
-  || (/propertytrack/.test(location.pathname) ? 'track'
-    : /dashboard|property\.html/.test(location.pathname) ? 'property'
-    : /3pinfinance/.test(location.pathname) ? 'finance'
-    : /team\.html/.test(location.pathname) ? 'team'
-    : /crm/.test(location.pathname) ? 'crm' : '');
+const page = document.documentElement.dataset.console || '';
 
-const CACHE = 'pin.access';
-const REFRESH_MS = 10 * 60 * 1000;   // re-read the role from Google at most every 10 minutes
+const SESSION = 'pin.access';          // this tab's answer, re-checked every 10 minutes
+const LAST = 'pin.access.last';        // the device's last answer (menu at first paint, offline fallback)
+const REFRESH_MS = 10 * 60 * 1000;
 
-function cached(uid) {
-  try {
-    const c = JSON.parse(sessionStorage.getItem(CACHE) || 'null');
-    return c && c.uid === uid && Date.now() - c.at < REFRESH_MS ? c : null;
-  } catch (e) { return null; }
-}
-function remember(v) { try { sessionStorage.setItem(CACHE, JSON.stringify(v)); } catch (e) { /* private window */ } }
+const read = (store, key) => { try { return JSON.parse(store.getItem(key) || 'null'); } catch (e) { return null; } };
+const write = (store, key, v) => { try { store.setItem(key, JSON.stringify(v)); } catch (e) { /* private window */ } };
 
-async function agentConfig(user) {
+async function agentSettings(user) {
   const token = await user.getIdToken();
   const r = await fetch('/api/agent', {
     method: 'POST',
@@ -61,15 +58,26 @@ async function agentConfig(user) {
     body: JSON.stringify({ action: 'me' }),
   });
   if (!r.ok) throw new Error('agent settings: ' + r.status);
-  return (await r.json()).config || null;
+  return r.json();
 }
 
-function apply(a) {
+// Clear what the pages saved in IndexedDB, then run `after` (reload, or go to the sign-in page).
+async function forgetLocalCopy() {
+  try {
+    const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+    const db = fs.getFirestore(app);
+    await fs.terminate(db);
+    await fs.clearIndexedDbPersistence(db);
+  } catch (e) { /* nothing saved, or another tab still holds it — the rules still refuse the server */ }
+}
+
+function apply(a, { gatePage = true } = {}) {
   window.PinAccess = a;
-  if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess({ role: a.role, tabs: a.config ? a.config.tabs : null });
-  else window.__pinAccess = { role: a.role, tabs: a.config ? a.config.tabs : null };
+  const nav = { role: a.role, tabs: a.config ? a.config.tabs : null };
+  if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess(nav);
+  else window.__pinAccess = nav;
   document.dispatchEvent(new CustomEvent('pin-access', { detail: a }));
-  if (a.role === 'agent') gate(a);
+  if (a.role === 'agent' && gatePage) gate(a);
 }
 
 // An agent on a page none of their tabs open: say so plainly, offer the pages they do have, and a
@@ -79,6 +87,7 @@ function gate(a) {
   if (!need) return;
   const tabs = (a.config && a.config.tabs) || [];
   if (need.some(t => tabs.includes(t))) return;
+  window.__pinGated = true;
   const btn = 'display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;'
     + 'font-weight:600;text-decoration:none;border:1px solid var(--border2,#D4D4D4);';
   const links = [];
@@ -87,7 +96,7 @@ function gate(a) {
   document.body.className = '';
   document.body.style.cssText = 'margin:0;background:var(--bg,#F8F8F8);color:var(--ink,#171717);font:15px/1.5 var(--sans,system-ui)';
   document.body.innerHTML =
-    '<main style="box-sizing:border-box;max-width:440px;margin:0 auto;padding:18vh 16px 40px;text-align:center">'
+    '<main id="pinGate" style="box-sizing:border-box;max-width:440px;margin:0 auto;padding:18vh 16px 40px;text-align:center">'
     + '<img src="/logo.jpg" alt="" width="44" height="44" style="border-radius:10px;background:#fff;padding:3px;margin-bottom:16px">'
     + '<h1 style="font-size:20px;margin:0 0 8px">This page isn’t part of your access</h1>'
     + '<p style="color:var(--ink3,#5C5C5C);margin:0 0 22px">Ask an admin if you need it.</p>'
@@ -98,28 +107,43 @@ function gate(a) {
     + '<button type="button" id="pinGateOut" style="' + btn + 'background:transparent;border-color:transparent;color:var(--ink3,#5C5C5C);font:inherit;font-weight:600;cursor:pointer">Sign out</button>'
     + '</div></main>';
   document.getElementById('pinGateOut').addEventListener('click', async () => {
-    const { signOut } = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js");
-    try { sessionStorage.removeItem(CACHE); } catch (e) {}
+    try { sessionStorage.removeItem(SESSION); localStorage.removeItem(LAST); } catch (e) {}
+    await forgetLocalCopy();
     await signOut(auth);
     location.assign('index.html');
   });
 }
 
 onAuthStateChanged(auth, async user => {
-  if (!user) { window.PinAccess = null; return; }
-  const hit = cached(user.uid);
-  if (hit) { apply(hit); return; }
+  if (!user) {
+    window.PinAccess = null;
+    if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess(null);
+    return;
+  }
+  const hit = read(sessionStorage, SESSION);
+  if (hit && hit.uid === user.uid && Date.now() - hit.at < REFRESH_MS) { apply(hit); return; }
   try {
     const res = await user.getIdTokenResult(true);
     const role = res.claims.role || 'none';
     const a = { uid: user.uid, at: Date.now(), role, email: user.email || '', config: null };
-    if (role === 'agent') a.config = await agentConfig(user);
-    remember(a);
+    if (role === 'agent') a.config = (await agentSettings(user)).config || { tabs: [] };
+    write(sessionStorage, SESSION, a);
+    write(localStorage, LAST, { uid: a.uid, role: a.role, tabs: a.config ? a.config.tabs : null, config: a.config });
+    if (role === 'agent' && !localStorage.getItem('pin.agentWiped.' + user.uid)) {
+      // Became an agent on this device: drop what was saved while this login had full access.
+      try { localStorage.setItem('pin.agentWiped.' + user.uid, String(Date.now())); } catch (e) {}
+      await forgetLocalCopy();
+      location.reload();
+      return;
+    }
     apply(a);
   } catch (e) {
-    // Offline or the server unreachable: an agent sees no menu sections rather than all of them.
+    // Could not check (offline, the server waking up): use what this device last knew, and never
+    // close a page on a guess — the rules still decide what can be read.
+    const last = read(localStorage, LAST);
     const res = await user.getIdTokenResult(false).catch(() => null);
-    const role = (res && res.claims.role) || 'none';
-    apply({ uid: user.uid, at: 0, role, email: user.email || '', config: role === 'agent' ? { tabs: [] } : null });
+    const role = (res && res.claims.role) || (last && last.uid === user.uid && last.role) || 'none';
+    const config = role === 'agent' ? ((last && last.uid === user.uid && last.config) || { tabs: [] }) : null;
+    apply({ uid: user.uid, at: 0, role, email: user.email || '', config }, { gatePage: false });
   }
 });

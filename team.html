@@ -40,13 +40,20 @@
   .wrap { max-width: 760px; margin: 0 auto; padding: 14px 16px 120px; }
 
   .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--bg2);
-    border-radius: 12px; margin-bottom: 16px; }
-  .seg button { border: 0; background: transparent; padding: 10px 8px; border-radius: 9px; font-weight: 600;
+    border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--border); }
+  .seg button { border: 1px solid transparent; background: transparent; padding: 10px 8px; border-radius: 9px; font-weight: 600;
     color: var(--ink3); cursor: pointer; min-height: 44px; }
-  .seg button[aria-selected="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .seg button[aria-selected="true"] { background: var(--raised); color: var(--ink); border-color: var(--border2);
+    box-shadow: 0 1px 2px rgba(0,0,0,.10); }
 
   .note { color: var(--ink3); font-size: 13.5px; margin: 0 0 14px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+  .group-h { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink3);
+    margin: 18px 4px 8px; display: flex; gap: 8px; align-items: baseline; }
+  .group-h:first-child { margin-top: 0; }
+  .group-h small { text-transform: none; letter-spacing: 0; font-weight: 500; }
+  .group-h.wide { flex-direction: column; align-items: flex-start; gap: 2px; }
+  #pendingWrap:not(:empty) { margin-bottom: 18px; }
   .list { padding: 0; margin: 0; list-style: none; }
   .row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border);
     cursor: pointer; min-height: 64px; }
@@ -56,90 +63,103 @@
     background: var(--bg2); color: var(--ink2); font-weight: 650; }
   .who { flex: 1; min-width: 0; }
   .who b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .who small { display: block; color: var(--ink3); font-size: 12.5px; }
+  .who small { display: block; color: var(--ink3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pill { flex: none; font-size: 12px; font-weight: 650; padding: 4px 9px; border-radius: 999px;
     background: var(--bg2); color: var(--ink2); }
   .pill.admin { background: var(--brand-soft); color: var(--brand-ink); }
   .pill.agent { background: light-dark(#E8F1FF, rgba(80,140,255,.16)); color: light-dark(#1D4ED8, #9DBBFF); }
   .pill.off { background: light-dark(#FDECEC, rgba(255,80,80,.14)); color: light-dark(#B42318, #FF9C9C); }
-  .listonly { padding: 12px 14px; color: var(--ink3); font-size: 13px; border-top: 1px solid var(--border); }
+  .pill.wait { background: light-dark(#FFF7E0, rgba(255,190,40,.14)); color: light-dark(#8A5A00, #FFD27A); }
+  .listonly { padding: 12px 14px; color: var(--ink3); font-size: 13px; }
+  .card.pending { border-color: light-dark(#F5D58A, rgba(255,190,40,.4)); }
 
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px;
     padding: 0 16px; border-radius: 10px; border: 1px solid var(--border2); background: var(--card);
-    font-weight: 600; cursor: pointer; }
+    font-weight: 600; cursor: pointer; text-align: center; }
   a.btn { text-decoration: none; color: var(--ink); }
   .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .btn.wa { background: #25D366; border-color: #25D366; color: #06240F; }
+  .btn.danger { color: light-dark(#B42318, #FF9C9C); }
   .btn.block { width: 100%; }
+  .btn.sm { min-height: 40px; padding: 0 12px; font-size: 13.5px; }
   .btn:disabled { opacity: .5; cursor: default; }
   .bar { display: flex; gap: 10px; margin: 14px 0; }
+  .stack { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; }
 
-  /* Agent settings */
+  /* What agents see */
+  .banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px;
+    border-radius: 12px; background: light-dark(#E8F1FF, rgba(80,140,255,.14)); color: light-dark(#1D3E8A, #BFD3FF);
+    border: 1px solid light-dark(#C9DBFF, rgba(80,140,255,.35)); }
+  .banner b { flex: 1; min-width: 160px; }
   .sec { padding: 14px; border-top: 1px solid var(--border); }
   .sec:first-child { border-top: 0; }
   .sec h2 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
+  .sec p { margin: 0 0 10px; color: var(--ink3); font-size: 13px; }
   details.sec { padding: 0; }
   details.sec > summary { list-style: none; display: flex; align-items: center; gap: 12px; padding: 14px; cursor: pointer; min-height: 60px; }
   details.sec > summary::-webkit-details-marker { display: none; }
   details.sec > summary .st { flex: 1; min-width: 0; }
-  details.sec > summary b { display: block; font-size: 15px; font-weight: 650; }
+  details.sec > summary b { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; flex-wrap: wrap; }
   details.sec > summary small { display: block; color: var(--ink3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  details.sec > summary i { color: var(--ink3); transition: rotate .15s; }
-  details.sec[open] > summary i { rotate: 180deg; }
-  details.sec > p, details.sec > .quick, details.sec > .checks { margin-left: 14px; margin-right: 14px; }
-  details.sec > .checks { padding-bottom: 10px; }
+  details.sec > summary > i { color: var(--ink3); transition: rotate .15s; }
+  details.sec[open] > summary > i { rotate: 180deg; }
+  details.sec > .body { padding: 0 14px 12px; }
+  .later { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--bg2); color: var(--ink3); }
   .quick { display: flex; gap: 8px; margin-bottom: 6px; }
-  .btn.sm { min-height: 40px; padding: 0 12px; font-size: 13.5px; }
-  .sec p { margin: 0 0 10px; color: var(--ink3); font-size: 13px; }
   .checks { display: grid; grid-template-columns: 1fr; gap: 2px; }
   @media (min-width: 560px) { .checks { grid-template-columns: 1fr 1fr; } }
   .chk { display: flex; align-items: center; gap: 10px; padding: 9px 4px; min-height: 44px; border-radius: 8px; cursor: pointer; }
   .chk input { width: 20px; height: 20px; accent-color: var(--brand); flex: none; }
-  .chk.dis { color: var(--ink4); cursor: default; }
-  .chk .tag { font-size: 11px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: var(--bg2); color: var(--ink3); margin-left: auto; }
-  .chk .warn { color: var(--brand-ink); font-size: 12px; margin-left: auto; }
+  .chk .lb { flex: 1; min-width: 0; }
+  .chk .lb small { display: block; color: var(--ink3); font-size: 12.5px; }
+  .chk .warn { color: var(--brand-ink); font-size: 12px; text-align: right; flex: none; max-width: 42%; }
+  .chk.diff .nm::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: light-dark(#2563EB, #8FB0FF); margin-left: 6px; vertical-align: middle; }
+  .aside { font-size: 13px; color: var(--ink3); margin: 8px 4px 0; }
   .field { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
   .field label { font-size: 13px; color: var(--ink2); font-weight: 600; }
-  select, input[type="email"] { min-height: 44px; padding: 0 12px; border: 1px solid var(--border2);
+  select, input[type="email"], input[type="text"], input[type="tel"] { min-height: 44px; padding: 0 12px; border: 1px solid var(--border2);
     border-radius: 10px; background: var(--card); width: 100%; }
-  .scope { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .scope label { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border2);
-    border-radius: 10px; min-height: 44px; cursor: pointer; }
-  .scope input { accent-color: var(--brand); }
+  .choices { display: grid; gap: 8px; }
+  .choices label { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border2);
+    border-radius: 12px; min-height: 48px; cursor: pointer; font-size: 15px; }
+  .choices input { margin-top: 3px; accent-color: var(--brand); flex: none; }
+  .choices b { display: block; font-weight: 600; }
+  .choices small { display: block; color: var(--ink3); font-size: 13px; }
   .for { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .for select { flex: 1; min-width: 200px; }
   .for .state { font-size: 12.5px; color: var(--ink3); }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 
   .savebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 10px 16px;
     padding-bottom: max(10px, env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--border);
-    display: flex; gap: 10px; justify-content: flex-end; }
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
   @media (min-width: 900px) { body.rail-on .savebar { left: var(--rail-w); } body.rail-on.rail-min .savebar { left: var(--rail-w-min); } }
-  .savebar .msg { flex: 1; align-self: center; font-size: 13px; color: var(--ink3); }
+  .savebar .msg { flex: 1; font-size: 13px; color: var(--ink3); }
 
   /* Bottom sheet */
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 50; }
   .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--card);
     border-radius: 16px 16px 0 0; padding: 8px 16px 16px; padding-bottom: max(16px, env(safe-area-inset-bottom));
-    max-height: 88vh; overflow: auto; box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
+    max-height: 90vh; overflow: auto; box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
   @media (min-width: 640px) { .sheet { left: 50%; right: auto; width: 520px; translate: -50% 0; bottom: 24px; border-radius: 16px; } }
   .grip { width: 40px; height: 4px; border-radius: 4px; background: var(--border2); margin: 4px auto 12px; }
-  .sheet h3 { margin: 0 0 4px; font-size: 17px; }
+  .sheet h3 { margin: 0 0 4px; font-size: 17px; overflow-wrap: anywhere; }
   .sheet .sub { color: var(--ink3); font-size: 13px; margin: 0 0 12px; overflow-wrap: anywhere; }
-  .sheet h3 { overflow-wrap: anywhere; }
-  .roles { display: grid; gap: 8px; }
-  .roles label { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--border2); border-radius: 12px; cursor: pointer; }
-  .roles input { margin-top: 3px; accent-color: var(--brand); }
-  .roles b { display: block; }
-  .roles small { color: var(--ink3); }
-  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); min-height: 52px; }
-  .toggle input { width: 22px; height: 22px; accent-color: var(--brand); }
+  .sheet .two { display: grid; grid-template-columns: 1fr; gap: 0 12px; }
+  @media (min-width: 480px) { .sheet .two { grid-template-columns: 1fr 1fr; } }
+  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); min-height: 52px; cursor: pointer; }
+  .toggle small { display: block; color: var(--ink3); font-size: 12.5px; }
+  .toggle input { width: 22px; height: 22px; accent-color: var(--brand); flex: none; }
+  .callout { padding: 10px 12px; border-radius: 10px; background: var(--bg2); font-size: 13.5px; color: var(--ink2); margin: 10px 0; }
+  .callout.warn { background: light-dark(#FFF7E0, rgba(255,190,40,.12)); color: light-dark(#6B4600, #FFD27A); }
   .err { color: light-dark(#B42318, #FF9C9C); font-size: 13px; min-height: 18px; margin: 8px 0 0; }
-  .pw { font-family: var(--code); font-size: 16px; padding: 12px; background: var(--bg2); border-radius: 10px; user-select: all; word-break: break-all; }
+  .pw { font-family: var(--code); font-size: 18px; letter-spacing: .02em; padding: 12px; background: var(--bg2); border-radius: 10px; user-select: all; overflow-wrap: anywhere; }
 
   .sk { height: 64px; border-top: 1px solid var(--border); background: linear-gradient(90deg, var(--bg2), var(--bg), var(--bg2)); background-size: 200% 100%; animation: sk 1.2s linear infinite; }
   @keyframes sk { to { background-position: -200% 0; } }
   .center { text-align: center; padding: 18vh 16px 0; }
-  .toast { position: fixed; left: 50%; top: max(64px, calc(env(safe-area-inset-top) + 56px)); translate: -50% 0; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.18); background: var(--ink); color: var(--bg);
-    padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; }
+  .toast { position: fixed; left: 50%; top: max(64px, calc(env(safe-area-inset-top) + 56px)); translate: -50% 0; z-index: 60; background: var(--ink); color: var(--bg);
+    padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: calc(100vw - 32px); }
 </style>
 <link rel="stylesheet" href="shared-assets/theme.css">
 </head>
@@ -155,30 +175,32 @@
 
     <div id="denied" class="center" hidden>
       <h2 style="margin:0 0 6px">Admins only</h2>
-      <p class="note">This page sets who can sign in and what agents see.</p>
+      <p class="note">This page decides who can sign in and what agents see.</p>
       <a class="btn" href="crm.html">Back to the CRM</a>
     </div>
 
     <div id="app" hidden>
       <div class="seg" role="tablist">
         <button type="button" role="tab" data-tab="people" aria-selected="true">People</button>
-        <button type="button" role="tab" data-tab="agents" aria-selected="false">Agent settings</button>
+        <button type="button" role="tab" data-tab="agents" aria-selected="false">What agents see</button>
       </div>
 
       <section id="tab-people">
-        <p class="note">Admins see and manage everything. Agents see only what <b>Agent settings</b> allows. Everyone else works exactly as before.</p>
-        <div class="card"><ul class="list" id="people"></ul></div>
+        <p class="note"><b>Admins</b> see everything and decide who sees what. <b>Agents</b> see their own properties and leads, and a summary of the rest. <b>Full access</b> staff see everything but can’t change access.</p>
+        <div id="pendingWrap"></div>
+        <div id="people"></div>
         <div class="bar"><button type="button" class="btn primary block" id="addBtn"><i class="fa-solid fa-user-plus"></i> Add a person</button></div>
       </section>
 
       <section id="tab-agents" hidden>
-        <p class="note">What agents see. Tabs apply as soon as you save. Property and lead fields apply as each part of the agent layer goes live.</p>
-        <div class="card" id="agentCard">
+        <p class="note">Menu changes reach an agent the next time they open a page (within 10 minutes). Sections marked <span class="later">Later update</span> are saved now and start working when those screens are ready.</p>
+        <div id="banner"></div>
+        <div class="card">
           <div class="for">
-            <select id="forWho" aria-label="Settings for"></select>
+            <select id="forWho" aria-label="Whose settings"></select>
             <span class="state" id="forState"></span>
           </div>
-          <div id="settings"></div>
+          <fieldset id="settingsFs"><div id="settings"></div></fieldset>
         </div>
       </section>
     </div>
@@ -187,7 +209,7 @@
 
 <div class="savebar" id="savebar" hidden>
   <span class="msg" id="saveMsg">Unsaved changes</span>
-  <button type="button" class="btn" id="resetBtn" hidden>Use shared settings</button>
+  <button type="button" class="btn" id="discardBtn">Discard</button>
   <button type="button" class="btn primary" id="saveBtn">Save</button>
 </div>
 

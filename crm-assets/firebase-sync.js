@@ -63,6 +63,7 @@ const DEFAULT_ENQUIRY_TYPES = ['Property Enquiry', 'Seller Listing', 'General'];
 // the `tenantId` custom claim set at provisioning time (scripts/create-tenant.js).
 // A user with no claim yet (not fully onboarded) gets no data access at all.
 let currentTenantId = null;
+let currentRole = '';     // the agent-layer role claim: '' (full access), 'admin' or 'agent'
 // Reads filtered by tenant wait for the sign-in to say which tenant. Asked before that (the
 // Campaigns screen asks for the inventory as the page loads), a query on a null tenant matches
 // nothing, and the CRM kept that empty property list for the rest of the session.
@@ -176,9 +177,12 @@ function watchTasksQuery(mode){
   tasksMode = mode;
   const me = signedInEmail();
   if(!me || !currentTenantId) return;
+  // An agent may read only the tasks assigned to them (firestore.rules), so theirs is that query.
   const q = mode === 'all'
     ? query(collection(db, 'tasks'), where('tenantId', '==', currentTenantId))
-    : query(collection(db, 'tasks'), where('visibleTo', 'array-contains', TaskModel.visKey(currentTenantId, me)));
+    : currentRole === 'agent'
+      ? query(collection(db, 'tasks'), where('tenantId', '==', currentTenantId), where('assignees', 'array-contains', me))
+      : query(collection(db, 'tasks'), where('visibleTo', 'array-contains', TaskModel.visKey(currentTenantId, me)));
   tasksUnsub = onSnapshot(q, snap => {
     if (window.applyTasksSnapshot) window.applyTasksSnapshot(snap.docs.map(d => ({ ...d.data(), id: d.id })), mode, null, snap.metadata.fromCache);
   }, err => {
@@ -450,6 +454,7 @@ onAuthStateChanged(auth, async (user) => {
       }).catch(() => {});
     }
     currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
+    currentRole = (tokenResult && tokenResult.claims.role) || '';
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
     } else {

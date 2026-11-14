@@ -23,6 +23,9 @@ const who = {
   admin: { uid: 'u_swami', tok: { tenantId: T, role: 'admin', email: 'swami@threepin.in', email_verified: true } },
   adminUnverified: { uid: 'u_fake', tok: { tenantId: T, role: 'admin', email: 'swami@threepin.in', email_verified: false } },
   agent: { uid: 'u_rameez', tok: { tenantId: T, role: 'agent', email: 'rameez@threepin.in', email_verified: true } },
+  typo: { uid: 'u_typo', tok: { tenantId: T, role: 'Agent', email: 'typo@threepin.in', email_verified: true } },
+  future: { uid: 'u_partner', tok: { tenantId: T, role: 'partner', email: 'p@threepin.in', email_verified: true } },
+  noTenant: { uid: 'u_stranger', tok: { email: 'stranger@gmail.com', email_verified: false } },
   other: { uid: 'u_x', tok: { tenantId: 't_other', email: 'x@other.in', email_verified: true } },
 };
 const db = k => env.authenticatedContext(who[k].uid, who[k].tok).firestore();
@@ -60,6 +63,12 @@ beforeEach(async () => {
       tenantId: T, title: 'Not his', description: '', status: 'todo', history: [],
       assignees: ['pradeep@threepin.in'], visibleTo: [`${T}|pradeep@threepin.in`],
     });
+    // A manager once let Rameez see Pradeep's tasks (before he became an agent).
+    await setDoc(doc(d, 'tasks/t4'), {
+      tenantId: T, title: 'Pradeep’s, Rameez a viewer', description: '', status: 'todo', history: [],
+      assignees: ['pradeep@threepin.in'], visibleTo: [`${T}|pradeep@threepin.in`, `${T}|rameez@threepin.in`],
+    });
+    await setDoc(doc(d, 'config/whatsappBot'), { token: 'legacy' });
     await setDoc(doc(d, `agentConfigs/${T}`), { tenantId: T, tabs: ['properties'], otherPropertyFields: ['title'], overrides: {} });
     await setDoc(doc(d, 'users/u_rameez'), { tenantId: T, role: 'agent' });
   });
@@ -125,11 +134,13 @@ test('agent cannot change their own role, nor anyone’s', async () => {
   await assertFails(getDoc(doc(d, 'accessLog/x')));
 });
 
-test('agent reads and works their own tasks, not others’, and cannot reassign one', async () => {
+test('agent reads and works the tasks assigned to them, not others’ — not even as a viewer — and cannot reassign one', async () => {
   const d = db('agent');
   await assertSucceeds(getDoc(doc(d, 'tasks/t1')));
   await assertFails(getDoc(doc(d, 'tasks/t2')));
-  await assertSucceeds(getDocs(query(collection(d, 'tasks'), where('visibleTo', 'array-contains', `${T}|rameez@threepin.in`))));
+  await assertFails(getDoc(doc(d, 'tasks/t4')));
+  await assertSucceeds(getDocs(query(collection(d, 'tasks'), where('tenantId', '==', T), where('assignees', 'array-contains', 'rameez@threepin.in'))));
+  await assertFails(getDocs(query(collection(d, 'tasks'), where('visibleTo', 'array-contains', `${T}|rameez@threepin.in`))));
   await assertSucceeds(updateDoc(doc(d, 'tasks/t1'), { status: 'doing', tenantId: T }));
   await assertFails(updateDoc(doc(d, 'tasks/t1'), { assignees: ['pradeep@threepin.in'] }));
   await assertFails(setDoc(doc(d, 'tasks/t3'), { tenantId: T, title: 'x', description: '', status: 'todo', history: [], assignees: [], visibleTo: [] }));
@@ -150,12 +161,45 @@ test('staff can now save their Daily task record too (the rule that was never pu
 const goodCfg = {
   tenantId: T, tabs: ['properties', 'crm'], otherPropertyFields: ['title', 'config', 'budget'],
   ownPropertyFields: ['title'], grantedPropertyFields: ['title'], matchingLeadFields: ['requirement'],
-  adsScope: 'own', campaignsScope: 'own', approvals: {}, overrides: {}, updatedAt: 1, updatedBy: 'swami@threepin.in',
+  adsScope: 'own', campaignsScope: 'own', actions: { addLeads: true }, approvals: {}, overrides: {}, updatedAt: 1, updatedBy: 'swami@threepin.in',
 };
 
-test('everyone on the team reads the agent settings', async () => {
-  await assertSucceeds(getDoc(doc(db('agent'), `agentConfigs/${T}`)));
+test('the team reads the agent settings; agents do not (they hold every agent’s overrides — the server hands each agent their own)', async () => {
+  await assertFails(getDoc(doc(db('agent'), `agentConfigs/${T}`)));
   await assertSucceeds(getDoc(doc(db('staff'), `agentConfigs/${T}`)));
+  await assertSucceeds(getDoc(doc(db('admin'), `agentConfigs/${T}`)));
+});
+
+test('a viewer of someone’s tasks who is NOT an agent still sees them (unchanged for the team)', async () => {
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'tasks/t5'), { tenantId: T, title: 'x', description: '', status: 'todo', history: [],
+      assignees: ['pradeep@threepin.in'], visibleTo: [`${T}|rajesh@threepin.in`] });
+  });
+  await assertSucceeds(getDoc(doc(db('staff'), 'tasks/t5')));
+});
+
+test('a role nobody defined (a typo, a future role) gets nothing — never full access', async () => {
+  for (const k of ['typo', 'future']) {
+    const d = db(k);
+    await assertFails(getDoc(doc(d, 'leads/lead_1')));
+    await assertFails(getDoc(doc(d, 'properties/ADRM0002')));
+    await assertFails(getDoc(doc(d, `finance/${T}/invoices/i1`)));
+    await assertFails(getDoc(doc(d, `settings/${T}`)));
+  }
+});
+
+test('the legacy config collection: the team only — not agents, not accounts without a tenant', async () => {
+  await assertSucceeds(getDoc(doc(db('staff'), 'config/whatsappBot')));
+  await assertFails(getDoc(doc(db('agent'), 'config/whatsappBot')));
+  await assertFails(getDoc(doc(db('noTenant'), 'config/whatsappBot')));
+});
+
+test('an account that signed itself up (no tenant) sees nothing', async () => {
+  const d = db('noTenant');
+  await assertFails(getDoc(doc(d, 'leads/lead_1')));
+  await assertFails(getDoc(doc(d, 'properties/ADRM0002')));
+  await assertFails(getDoc(doc(d, `agentConfigs/${T}`)));
+  await assertFails(getDoc(doc(d, 'tasks/t1')));
 });
 
 test('only an admin (confirmed email) writes the agent settings', async () => {

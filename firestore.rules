@@ -27,9 +27,10 @@ rules_version = '2';
 //             Daily task record and the agent settings. Properties and leads reach an agent as
 //             copies the server builds from the admin's settings (later phases), never directly.
 //   (none)  — everyone else on the team, exactly as before.
-// isSignedInWithTenant() is therefore "on the team and NOT an agent": every rule written before the
-// agent layer keeps meaning what it meant, and shuts agents out without being edited one by one.
-// The only way to become an agent's opposite is a claim, and only the Admin SDK writes claims.
+// isSignedInWithTenant() is therefore "on the team with full access": no role, or admin. Every rule
+// written before the agent layer keeps meaning what it meant and shuts agents out without being
+// edited one by one. It is an allow-list: a role nobody has defined yet (or a typo) gets nothing,
+// never full access. Only the Admin SDK writes claims.
 
 function tenantId() {
   return request.auth.token.tenantId;
@@ -54,7 +55,7 @@ function isAdmin() {
 }
 
 function isSignedInWithTenant() {
-  return hasTenant() && role() != 'agent';
+  return hasTenant() && role() in ['', 'admin'];
 }
 
 // The same checks for paths an agent may also use (their own records only).
@@ -211,8 +212,9 @@ service cloud.firestore {
     // by any signed-in CRM user only so existing tooling doesn't 403 outright
     // during the transition; nothing new should read/write these — they're
     // superseded by the per-tenant collections above.
+    // Nothing reads these any more; the team only (an account with no tenant, or an agent, never).
     match /config/{doc} {
-      allow read: if request.auth != null;
+      allow read: if isSignedInWithTenant();
       allow write: if false;
     }
 
@@ -300,12 +302,15 @@ service cloud.firestore {
       allow create, delete: if false;
     }
 
-    // An agent sees and works the tasks they can see like anyone else (hasTenant, not
-    // isSignedInWithTenant). Managing tasks stays with managers, who are never agents
-    // (isTaskManager() is built on isSignedInWithTenant()).
+    // An agent sees and works only the tasks ASSIGNED to them — not the ones a manager let them
+    // see as someone's viewer (a setting that may predate their becoming an agent). Their Tasks
+    // query is therefore tenantId == + assignees array-contains (crm-assets/firebase-sync.js).
+    // Managing tasks stays with managers, who are never agents (isTaskManager() is built on
+    // isSignedInWithTenant()).
     match /tasks/{taskId} {
       allow read: if hasTenant() && (
-        (emailVerified() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
+        (emailVerified() && !isAgent() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
+        || (emailVerified() && isAgent() && resource.data.tenantId == tenantId() && myEmail() in resource.data.assignees)
         || (resource.data.tenantId == tenantId() && isTaskManager()));
       allow create: if writingOwnTenantField() && isTaskManager() && validTask(request.resource.data);
       allow delete: if ownsTenantField() && isTaskManager();
@@ -321,14 +326,15 @@ service cloud.firestore {
     // ---------------------------------------------------------------------
 
     // The agent role settings (shared-assets/agent-config.js): which tabs agents get, which property
-    // and lead fields they see. Read by everyone on the tenant (an agent's pages need their own
-    // settings); written only by an admin, only known settings, and always for this tenant.
+    // and lead fields they see, what they may do. Read by the team; NOT by agents, who get only their
+    // own effective settings from the server (/api/agent "me") — the document holds every agent's
+    // overrides. Written only by an admin, only known settings, and always for this tenant.
     match /agentConfigs/{tid} {
-      allow read: if hasTenant() && tid == tenantId();
+      allow read: if isSignedInWithTenant() && tid == tenantId();
       allow create, update: if isAdmin() && tid == tenantId()
         && request.resource.data.tenantId == tid
         && request.resource.data.keys().hasOnly(['tenantId', 'tabs', 'otherPropertyFields', 'ownPropertyFields',
-             'grantedPropertyFields', 'matchingLeadFields', 'adsScope', 'campaignsScope', 'approvals',
+             'grantedPropertyFields', 'matchingLeadFields', 'adsScope', 'campaignsScope', 'actions', 'approvals',
              'overrides', 'updatedAt', 'updatedBy'])
         && request.resource.data.tabs is list
         && request.resource.data.otherPropertyFields is list

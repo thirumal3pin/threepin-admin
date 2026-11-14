@@ -1,9 +1,10 @@
 // ═══════ TEAM & ACCESS (team.html) — admins only ═══════
 //
-// People: every login on the tenant, its role (admin / agent / as before), enabled or not, on the
-//         team list or not — changed through /api/agent (api/_agent.js), because roles are custom
-//         claims and only the server may write them.
-// Agent settings: agentConfigs/{tenant}, written straight to Firestore (the rules let only an admin
+// People: every login on the tenant grouped by role (admin / agent / full access), plus accounts
+//         waiting for approval. Roles, active, name, WhatsApp, team lists, reset password, add and
+//         approve go through /api/agent (api/_agent.js): roles are custom claims and only the server
+//         may write them.
+// What agents see: agentConfigs/{tenant}, written straight to Firestore (the rules let only an admin
 //         write it, and only known settings). The model and defaults are shared-assets/agent-config.js.
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
@@ -18,27 +19,35 @@ const firebaseConfig = {
   messagingSenderId: "570586680667",
   appId: "1:570586680667:web:859a61bf99fe1824725e7e"
 };
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const SIGN_IN_URL = 'https://admin.threepin.in';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const ROLE_LABEL = { admin: 'Admin', agent: 'Agent', none: 'Team' };
+// An agent who opens this page is shown access.js's note instead; nothing below may run on it.
+if ($('app')) start();
+
+function start() {
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const ROLE_LABEL = { admin: 'Admin', agent: 'Agent', none: 'Full access' };
 const ROLE_NOTE = {
-  admin: 'Sees and manages everything: assigns properties, approves requests, changes these settings.',
-  agent: 'Sees only what Agent settings allows: their own properties and leads.',
-  none: 'Works exactly as before the agent layer: sees everything, cannot change access.',
+  admin: 'Sees everything and decides who sees what.',
+  agent: 'Sees their own properties and leads in full, and a summary of the rest. You choose the details in “What agents see”.',
+  none: 'Staff: sees all properties and leads, owner numbers included. Can’t change who sees what.',
 };
 
 let me = null;         // { uid, email, tenantId }
 let people = [];       // from /api/agent team
+let pending = [];
 let listOnly = [];
-let stored = null;     // agentConfigs/{tenant} as saved
+let stored = null;     // agentConfigs/{tenant} as last read or saved
 let draft = null;      // the settings being edited (full shape) for `forWho`
-let forWho = '';       // '' = all agents, else an agent's email
+let forWho = '';       // '' = all agents (common settings), else an agent's email
 let dirty = false;
+let saving = false;
 
 window.AppNav.boot({ console: 'team', select: () => {}, signOut: () => signOut(auth).then(() => location.assign('index.html')) });
 window.AppNav.setActive('team');
@@ -57,15 +66,21 @@ async function api(action, body = {}) {
 }
 
 function toast(msg) {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
   const t = document.createElement('div');
   t.className = 'toast';
+  t.setAttribute('role', 'status');
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2200);
+  setTimeout(() => t.remove(), 2400);
 }
+
+const displayOf = p => p.name || p.email;
+const firstName = p => (p.name ? p.name.split(' ')[0] : p.email.split('@')[0]);
 
 // ── Sign-in gate ──
 onAuthStateChanged(auth, async user => {
+  if (window.__pinGated || !$('app')) return;
   if (!user) { location.assign('index.html'); return; }
   window.AppNav.setUser(user.email || '');
   const res = await user.getIdTokenResult(true);
@@ -86,18 +101,20 @@ onAuthStateChanged(auth, async user => {
 });
 
 // ── Tabs ──
-document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-selected', String(x === b)));
-  $('tab-people').hidden = b.dataset.tab !== 'people';
-  $('tab-agents').hidden = b.dataset.tab !== 'agents';
-  $('savebar').hidden = b.dataset.tab !== 'agents' || !dirty;
-}));
+function showTab(name) {
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-selected', String(x.dataset.tab === name)));
+  $('tab-people').hidden = name !== 'people';
+  $('tab-agents').hidden = name !== 'agents';
+  setDirty(dirty);
+}
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 // ═══════ PEOPLE ═══════
 
 async function loadPeople() {
   const data = await api('team');
   people = data.users || [];
+  pending = data.pending || [];
   listOnly = data.listOnly || [];
   renderPeople();
   renderForWho();
@@ -106,86 +123,216 @@ async function loadPeople() {
 function ago(ms) {
   if (!ms) return 'never signed in';
   const d = Math.floor((Date.now() - ms) / 86400000);
-  if (d <= 0) return 'signed in today';
-  if (d === 1) return 'signed in yesterday';
-  if (d < 60) return 'signed in ' + d + ' days ago';
-  return 'signed in ' + new Date(ms).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 60) return d + 'd ago';
+  return new Date(ms).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+function rowHtml(p) {
+  const initial = displayOf(p).charAt(0).toUpperCase();
+  const bits = [];
+  if (p.name) bits.push(esc(p.email));
+  bits.push(esc(ago(p.lastLogin)));
+  if (!p.teamList) bits.push('not in team lists');
+  return '<li class="row" data-uid="' + esc(p.uid) + '" role="button" tabindex="0">'
+    + '<span class="av">' + esc(initial) + '</span>'
+    + '<span class="who"><b>' + esc(displayOf(p)) + (p.self ? ' (you)' : '') + '</b><small>' + bits.join(' · ') + '</small></span>'
+    + (p.active ? '' : '<span class="pill off">Off</span>')
+    + '<span class="pill ' + esc(p.role) + '">' + esc(ROLE_LABEL[p.role] || p.role) + '</span>'
+    + '</li>';
 }
 
 function renderPeople() {
-  const order = { admin: 0, agent: 1, none: 2 };
-  const rows = people.slice().sort((a, b) => (order[a.role] - order[b.role]) || a.email.localeCompare(b.email));
-  $('people').innerHTML = rows.map(p => {
-    const initial = (p.name || p.email || '?').charAt(0).toUpperCase();
-    return '<li class="row" data-uid="' + esc(p.uid) + '" role="button" tabindex="0">'
-      + '<span class="av">' + esc(initial) + '</span>'
-      + '<span class="who"><b>' + esc(p.name || p.email) + (p.self ? ' (you)' : '') + '</b>'
-      + '<small>' + (p.name ? esc(p.email) + ' · ' : '') + esc(ago(p.lastLogin)) + (p.teamList ? ' · on team list' : '') + '</small></span>'
-      + (p.active ? '' : '<span class="pill off">Disabled</span>')
-      + '<span class="pill ' + esc(p.role) + '">' + esc(ROLE_LABEL[p.role] || p.role) + '</span>'
-      + '</li>';
+  // Waiting for approval
+  $('pendingWrap').innerHTML = pending.length
+    ? '<h2 class="group-h wide">Waiting for approval <small>Signed up on their own. They see nothing until you let them in.</small></h2>'
+      + '<div class="card pending"><ul class="list">' + pending.map(p =>
+        '<li class="row" data-pending="' + esc(p.uid) + '" role="button" tabindex="0">'
+        + '<span class="av">' + esc((p.name || p.email).charAt(0).toUpperCase()) + '</span>'
+        + '<span class="who"><b>' + esc(p.name || p.email) + '</b><small>' + (p.name ? esc(p.email) + ' · ' : '')
+        + 'via ' + esc((p.via || []).join(', ') || 'email') + (p.created ? ' · ' + esc(ago(p.created)) : '') + '</small></span>'
+        + '<span class="pill wait">Waiting</span></li>').join('') + '</ul></div>'
+    : '';
+  // Grouped by role
+  const groups = [['admin', 'Admins'], ['agent', 'Agents'], ['none', 'Full access (staff)']];
+  $('people').innerHTML = groups.map(([role, title]) => {
+    const list = people.filter(p => p.role === role).sort((a, b) => displayOf(a).localeCompare(displayOf(b)));
+    if (!list.length && role !== 'agent') return '';
+    return '<h2 class="group-h">' + title + ' <small>' + list.length + '</small></h2><div class="card"><ul class="list">'
+      + (list.length ? list.map(rowHtml).join('') : '<li class="listonly">No agents yet. Add one with “Add a person”.</li>')
+      + '</ul></div>';
   }).join('')
-    + (listOnly.length ? '<li class="listonly">On the team list without a login: ' + listOnly.map(esc).join(', ') + '</li>' : '');
-  $('people').querySelectorAll('.row').forEach(r => {
-    const open = () => personSheet(people.find(p => p.uid === r.dataset.uid));
-    r.addEventListener('click', open);
-    r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-  });
+    + (listOnly.length ? '<p class="aside">In team lists but can’t sign in: ' + listOnly.map(esc).join(', ') + '</p>' : '');
+
+  const wire = (el, fn) => {
+    el.addEventListener('click', fn);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); } });
+  };
+  document.querySelectorAll('#people .row').forEach(r => wire(r, () => personSheet(people.find(p => p.uid === r.dataset.uid))));
+  document.querySelectorAll('#pendingWrap .row').forEach(r => wire(r, () => pendingSheet(pending.find(p => p.uid === r.dataset.pending))));
 }
 
 // ── Bottom sheet ──
+let closeSheet = null;
 function sheet(html, onMount) {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
   const host = $('sheetHost');
   host.innerHTML = '<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grip"></div>' + html + '</div>';
-  const close = () => { host.innerHTML = ''; window.AppNav.closeLayer && window.AppNav.closeLayer('team-sheet'); };
+  const close = () => {
+    if (!host.innerHTML) return;
+    host.innerHTML = '';
+    closeSheet = null;
+    if (window.AppNav.closeLayer) window.AppNav.closeLayer('team-sheet');
+  };
+  closeSheet = close;
   host.querySelector('.scrim').addEventListener('click', close);
   host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
-  if (window.AppNav.openLayer) window.AppNav.openLayer('team-sheet', () => { host.innerHTML = ''; });
-  onMount && onMount(host.querySelector('.sheet'), close);
+  if (window.AppNav.openLayer) window.AppNav.openLayer('team-sheet', () => { host.innerHTML = ''; closeSheet = null; });
+  const el = host.querySelector('.sheet');
+  onMount && onMount(el, close);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && closeSheet) closeSheet(); });
+
+function roleChoices(name, current) {
+  return '<div class="choices">' + ['agent', 'admin', 'none'].map(r =>
+    '<label><input type="radio" name="' + name + '" value="' + r + '"' + (r === current ? ' checked' : '') + '>'
+    + '<span><b>' + ROLE_LABEL[r] + (r === 'none' ? ' (staff)' : '') + '</b><small>' + esc(ROLE_NOTE[r]) + '</small></span></label>').join('') + '</div>';
 }
 
-function roleChoices(name, current, disabled) {
-  return '<div class="roles">' + ['admin', 'agent', 'none'].map(r =>
-    '<label><input type="radio" name="' + name + '" value="' + r + '"' + (r === current ? ' checked' : '') + (disabled ? ' disabled' : '') + '>'
-    + '<span><b>' + ROLE_LABEL[r] + (r === 'none' ? ' (as before)' : '') + '</b><small>' + esc(ROLE_NOTE[r]) + '</small></span></label>').join('') + '</div>';
+// What saving a role change will do, said before Save.
+function consequence(from, to, who) {
+  if (from === to) return '';
+  if (to === 'agent') return who + ' will be signed out, and from then on sees only what “What agents see” allows.';
+  if (from === 'admin') return who + ' will be signed out and can no longer change who sees what.';
+  if (to === 'admin') return who + ' will be able to see everything and change who sees what.';
+  return who + ' will see all properties and leads, owner numbers included.';
+}
+
+// Send someone their sign-in: on WhatsApp (to their number if we have it) or copied.
+function loginMessage(email, password) {
+  return 'Your 3 PIN Realty login\n' + SIGN_IN_URL + '\nEmail: ' + email
+    + (password ? '\nPassword: ' + password + '\n(or tap “Continue with Google”)' : '\nTap “Continue with Google” to sign in.');
+}
+function waLink(phone, text) { return 'https://wa.me/' + (phone || '') + '?text=' + encodeURIComponent(text); }
+
+function credentialsPanel(el, close, { email, password, phone, title, agent }) {
+  const msg = loginMessage(email, password);
+  el.innerHTML = '<div class="grip"></div><h3>' + esc(title) + '</h3>'
+    + (password
+      ? '<p class="sub">Send this password now. It isn’t saved anywhere and won’t be shown again.</p><div class="pw" id="pwBox">' + esc(password) + '</div>'
+      : '<p class="sub">They sign in with “Continue with Google”. No password needed.</p>')
+    + '<div class="stack">'
+    + '<a class="btn wa block" target="_blank" rel="noopener" href="' + esc(waLink(phone, msg)) + '"><i class="fa-brands fa-whatsapp"></i> Send login on WhatsApp</a>'
+    + '<button type="button" class="btn block" id="cpBtn"><i class="fa-regular fa-copy"></i> Copy login message</button>'
+    + (agent ? '<button type="button" class="btn block" id="custBtn">Customise what they see</button>' : '')
+    + '<button type="button" class="btn primary block" data-close>Done</button></div>';
+  el.querySelector('[data-close]').addEventListener('click', close);
+  el.querySelector('#cpBtn').addEventListener('click', () => navigator.clipboard.writeText(msg).then(() => toast('Copied')).catch(() => toast('Copy didn’t work — select the password')));
+  const cust = el.querySelector('#custBtn');
+  if (cust) cust.addEventListener('click', () => { close(); openSettingsFor(email); });
 }
 
 function personSheet(p) {
   if (!p) return;
+  const isAgent = p.role === 'agent';
   sheet(
-    '<h3>' + esc(p.name || p.email) + '</h3>' + (p.name ? '<p class="sub">' + esc(p.email) + '</p>' : '<p class="sub"></p>')
-    + (p.self ? '<p class="note">You can’t change your own role or disable yourself. Ask another admin.</p>' : '')
-    + roleChoices('role', p.role, p.self)
-    + '<label class="toggle"><span>Can sign in</span><input type="checkbox" id="pActive"' + (p.active ? ' checked' : '') + (p.self ? ' disabled' : '') + '></label>'
-    + '<label class="toggle"><span>On the team list<br><small class="note" style="margin:0">@mentions, Team calendar column, site visits</small></span><input type="checkbox" id="pList"' + (p.teamList ? ' checked' : '') + '></label>'
+    '<h3>' + esc(displayOf(p)) + (p.self ? ' (you)' : '') + '</h3><p class="sub">' + (p.name ? esc(p.email) : '') + '</p>'
+    + '<div class="two"><div class="field"><label for="pName">Name</label><input type="text" id="pName" value="' + esc(p.name) + '" autocomplete="off" placeholder="e.g. Rameez Khan"></div>'
+    + '<div class="field"><label for="pPhone">WhatsApp number</label><input type="tel" id="pPhone" inputmode="tel" value="' + esc(p.phone ? p.phone.replace(/^91/, '') : '') + '" placeholder="10-digit mobile"></div></div>'
+    + (p.self
+      ? '<div class="callout">You’re ' + (p.role === 'admin' ? 'an Admin' : ROLE_LABEL[p.role]) + '. Another admin can change your role or turn your account off.</div>'
+      : roleChoices('role', p.role) + '<div class="callout warn" id="pConseq" hidden></div>'
+        + '<label class="toggle"><span>Account active<small>Off = they’re signed out within an hour and can’t sign in</small></span><input type="checkbox" id="pActive"' + (p.active ? ' checked' : '') + '></label>')
+    + '<label class="toggle"><span>Show in team lists<small>Can be @mentioned, gets a Team calendar column, can be picked for site visits</small></span><input type="checkbox" id="pList"' + (p.teamList ? ' checked' : '') + '></label>'
+    + (p.self ? '' : '<div class="stack">' + (isAgent ? '<button type="button" class="btn block" id="pCust"><i class="fa-solid fa-sliders"></i> Customise what they see</button>' : '')
+      + '<button type="button" class="btn block" id="pReset"><i class="fa-solid fa-key"></i> Reset password</button></div>')
     + '<p class="err" id="pErr"></p>'
     + '<div class="bar"><button type="button" class="btn block" data-close>Cancel</button><button type="button" class="btn primary block" id="pSave">Save</button></div>',
     (el, close) => {
+      const conseq = el.querySelector('#pConseq');
+      el.querySelectorAll('input[name="role"]').forEach(i => i.addEventListener('change', () => {
+        const text = consequence(p.role, i.value, firstName(p));
+        conseq.textContent = text; conseq.hidden = !text;
+      }));
+      const cust = el.querySelector('#pCust');
+      if (cust) cust.addEventListener('click', () => { close(); openSettingsFor(p.email); });
+      const reset = el.querySelector('#pReset');
+      if (reset) reset.addEventListener('click', async () => {
+        if (!confirm('Give ' + displayOf(p) + ' a new password? They’ll be signed out everywhere.')) return;
+        reset.disabled = true;
+        try {
+          const r = await api('reset-password', { uid: p.uid });
+          credentialsPanel(el, close, { email: p.email, password: r.password, phone: p.phone, title: 'New password for ' + displayOf(p) });
+        } catch (e) { el.querySelector('#pErr').textContent = e.message; reset.disabled = false; }
+      });
       el.querySelector('#pSave').addEventListener('click', async () => {
         const btn = el.querySelector('#pSave');
         const err = el.querySelector('#pErr');
-        const role = (el.querySelector('input[name="role"]:checked') || {}).value || p.role;
-        const active = el.querySelector('#pActive').checked;
+        const role = p.self ? p.role : ((el.querySelector('input[name="role"]:checked') || {}).value || p.role);
+        const active = p.self ? p.active : el.querySelector('#pActive').checked;
         const list = el.querySelector('#pList').checked;
+        const name = el.querySelector('#pName').value.trim();
+        const phone = el.querySelector('#pPhone').value.trim();
         btn.disabled = true; err.textContent = '';
         try {
-          if (!p.self && role !== p.role) await api('set-role', { uid: p.uid, role });
-          if (!p.self && active !== p.active) await api('set-active', { uid: p.uid, active });
-          if (list !== p.teamList) await api('team-list', { email: p.email, on: list });
+          // One step at a time; each that succeeds is recorded on `p`, so a retry repeats nothing.
+          if (name !== p.name || phone.replace(/\D/g, '') !== String(p.phone || '').replace(/^91/, '')) {
+            const r = await api('set-profile', { uid: p.uid, name, phone });
+            p.name = r.name; p.phone = r.phone;
+          }
+          if (role !== p.role) { await api('set-role', { uid: p.uid, role }); p.role = role; }
+          if (active !== p.active) { await api('set-active', { uid: p.uid, active }); p.active = active; }
+          if (list !== p.teamList) { await api('team-list', { email: p.email, on: list }); p.teamList = list; }
           close();
           toast('Saved');
           await loadPeople();
-        } catch (e) { err.textContent = e.message; btn.disabled = false; }
+        } catch (e) {
+          err.textContent = e.message;
+          btn.disabled = false;
+          loadPeople().catch(() => {});
+        }
+      });
+    });
+}
+
+function pendingSheet(p) {
+  if (!p) return;
+  sheet(
+    '<h3>' + esc(p.name || p.email) + '</h3><p class="sub">' + esc(p.email) + ' · signed up via ' + esc((p.via || []).join(', ') || 'email') + '</p>'
+    + '<div class="callout warn">This person signed themselves up and sees nothing yet. Let them in only if you know this is them'
+    + ((p.via || []).includes('password') ? ': they chose their own password.' : '.') + '</div>'
+    + roleChoices('arole', 'agent')
+    + '<label class="toggle"><span>Show in team lists<small>Only for a real person’s mailbox</small></span><input type="checkbox" id="aList"></label>'
+    + '<p class="err" id="aErr"></p>'
+    + '<div class="bar"><button type="button" class="btn danger block" id="aDismiss">Remove request</button><button type="button" class="btn primary block" id="aOk">Let them in</button></div>',
+    (el, close) => {
+      el.querySelector('#aOk').addEventListener('click', async () => {
+        const btn = el.querySelector('#aOk');
+        btn.disabled = true;
+        try {
+          const role = (el.querySelector('input[name="arole"]:checked') || {}).value || 'agent';
+          await api('approve', { uid: p.uid, role, teamList: el.querySelector('#aList').checked });
+          close(); toast(p.email + ' is in as ' + ROLE_LABEL[role]);
+          await loadPeople();
+        } catch (e) { el.querySelector('#aErr').textContent = e.message; btn.disabled = false; }
+      });
+      el.querySelector('#aDismiss').addEventListener('click', async () => {
+        if (!confirm('Remove the sign-up for ' + p.email + '? They can sign up again.')) return;
+        try { await api('dismiss', { uid: p.uid }); close(); toast('Removed'); await loadPeople(); }
+        catch (e) { el.querySelector('#aErr').textContent = e.message; }
       });
     });
 }
 
 $('addBtn').addEventListener('click', () => {
   sheet(
-    '<h3>Add a person</h3><p class="sub">They sign in with this email: Google, or the password shown after you add them.</p>'
+    '<h3>Add a person</h3><p class="sub">They’ll sign in with this email: Google, or the password shown next.</p>'
     + '<div class="field"><label for="nEmail">Email</label><input type="email" id="nEmail" autocomplete="off" placeholder="name@threepin.in"></div>'
-    + roleChoices('nrole', 'agent', false)
-    + '<label class="toggle"><span>Add to the team list<br><small class="note" style="margin:0">Only for a real mailbox: it gets a Team calendar column</small></span><input type="checkbox" id="nList" checked></label>'
+    + '<div class="two"><div class="field"><label for="nName">Name</label><input type="text" id="nName" autocomplete="off" placeholder="e.g. Rameez Khan"></div>'
+    + '<div class="field"><label for="nPhone">WhatsApp number</label><input type="tel" id="nPhone" inputmode="tel" placeholder="10-digit mobile"></div></div>'
+    + roleChoices('nrole', 'agent')
+    + '<label class="toggle"><span>Show in team lists<small>Turn off for shared logins like sales@ that aren’t one person</small></span><input type="checkbox" id="nList" checked></label>'
     + '<p class="err" id="nErr"></p>'
     + '<div class="bar"><button type="button" class="btn block" data-close>Cancel</button><button type="button" class="btn primary block" id="nSave">Add</button></div>',
     (el, close) => {
@@ -195,29 +342,21 @@ $('addBtn').addEventListener('click', () => {
         const err = el.querySelector('#nErr');
         btn.disabled = true; err.textContent = '';
         try {
+          const role = (el.querySelector('input[name="nrole"]:checked') || {}).value || 'agent';
           const r = await api('add-user', {
-            email: el.querySelector('#nEmail').value,
-            role: (el.querySelector('input[name="nrole"]:checked') || {}).value || 'none',
+            email: el.querySelector('#nEmail').value, role,
+            name: el.querySelector('#nName').value, phone: el.querySelector('#nPhone').value,
             teamList: el.querySelector('#nList').checked,
           });
           await loadPeople();
-          if (r.password) {
-            el.innerHTML = '<div class="grip"></div><h3>' + esc(r.email) + ' is added</h3>'
-              + '<p class="sub">Send them this password now. It is not saved anywhere and won’t be shown again. They can also use “Continue with Google”.</p>'
-              + '<div class="pw">' + esc(r.password) + '</div>'
-              + '<div class="bar"><button type="button" class="btn block" id="cp">Copy</button><button type="button" class="btn primary block" data-close>Done</button></div>';
-            el.querySelector('[data-close]').addEventListener('click', close);
-            el.querySelector('#cp').addEventListener('click', () => navigator.clipboard.writeText(r.password).then(() => toast('Copied')));
-          } else {
-            close();
-            toast(r.email + ' already had a login: role set');
-          }
+          credentialsPanel(el, close, { email: r.email, password: r.password, phone: r.phone, agent: role === 'agent',
+            title: (r.name || r.email) + ' is added as ' + ROLE_LABEL[role] });
         } catch (e) { err.textContent = e.message; btn.disabled = false; }
       });
     });
 });
 
-// ═══════ AGENT SETTINGS ═══════
+// ═══════ WHAT AGENTS SEE ═══════
 
 const settingsRef = () => doc(db, 'agentConfigs', me.tenantId);
 
@@ -227,24 +366,48 @@ async function loadSettings() {
   pickWho('');
 }
 
-function agents() { return people.filter(p => p.role === 'agent').map(p => p.email.toLowerCase()); }
+function agents() { return people.filter(p => p.role === 'agent'); }
+function hasOverride(email) { return !!(stored && stored.overrides && stored.overrides[email]); }
 
 function renderForWho() {
-  if (!$('forWho')) return;
   const list = agents();
-  $('forWho').innerHTML = '<option value="">All agents (shared settings)</option>'
-    + list.map(e => '<option value="' + esc(e) + '"' + (e === forWho ? ' selected' : '') + '>' + esc(e) + '</option>').join('');
-  $('forWho').value = list.includes(forWho) ? forWho : '';
+  $('forWho').innerHTML = '<option value="">All agents (common settings)</option>'
+    + list.map(p => '<option value="' + esc(p.email.toLowerCase()) + '">' + esc(displayOf(p)) + (hasOverride(p.email.toLowerCase()) ? ' · own settings' : '') + '</option>').join('');
+  // The agent being edited is no longer an agent: back to the common settings, not a silent
+  // override for someone it no longer applies to.
+  if (forWho && !list.some(p => p.email.toLowerCase() === forWho)) { pickWho(''); return; }
+  $('forWho').value = forWho;
 }
 
-function hasOverride(email) { return !!(stored && stored.overrides && stored.overrides[email]); }
+function openSettingsFor(email) {
+  showTab('agents');
+  const key = String(email || '').toLowerCase();
+  if (dirty && !confirm('Discard your unsaved changes?')) return;
+  pickWho(key);
+  $('forWho').value = key;
+  window.scrollTo(0, 0);
+}
 
 function pickWho(who) {
   forWho = who;
   draft = AC.effectiveConfig(stored, who || null);
+  const p = people.find(x => x.email.toLowerCase() === who);
   $('forState').textContent = !who ? 'Applies to every agent without their own settings'
-    : hasOverride(who) ? 'Own settings for this agent' : 'Using the shared settings';
-  $('resetBtn').hidden = !(who && hasOverride(who));
+    : hasOverride(who) ? 'Own settings for this agent' : 'Same as the common settings until you change something';
+  $('banner').innerHTML = who
+    ? '<div class="banner"><b>Editing ' + esc(p ? displayOf(p) : who) + ' only</b>'
+      + (hasOverride(who) ? '<button type="button" class="btn sm" id="resetBtn">Reset to common settings</button>' : '')
+      + '<button type="button" class="btn sm" id="backBtn">All agents</button></div>'
+    : '';
+  const back = $('backBtn');
+  if (back) back.addEventListener('click', () => { if (!dirty || confirm('Discard your unsaved changes?')) { pickWho(''); $('forWho').value = ''; } });
+  const reset = $('resetBtn');
+  if (reset) reset.addEventListener('click', () => {
+    if (!confirm('Use the common settings for ' + (p ? displayOf(p) : who) + '?')) return;
+    const overrides = { ...((stored && stored.overrides) || {}) };
+    delete overrides[who];
+    save(AC.effectiveConfig(stored, null), overrides);
+  });
   setDirty(false);
   renderSettings();
 }
@@ -256,26 +419,17 @@ $('forWho').addEventListener('change', e => {
 
 function setDirty(on) {
   dirty = on;
-  $('savebar').hidden = !on && !(forWho && hasOverride(forWho));
-  $('saveMsg').textContent = on ? 'Unsaved changes' : (forWho && hasOverride(forWho) ? forWho.split('@')[0] + ' has their own settings' : '');
-  $('saveBtn').disabled = !on;
+  $('savebar').hidden = !on || $('tab-agents').hidden;
+  $('saveMsg').textContent = forWho ? 'Unsaved changes for ' + forWho.split('@')[0] : 'Unsaved changes for all agents';
 }
 
-const WARN = { contact: 'owner phone', address: 'reveals the address', internal: 'team-only notes' };
+$('discardBtn').addEventListener('click', () => pickWho(forWho));
 
-function checks(key, catalogue, opts = {}) {
-  const on = new Set(draft[key] || []);
-  return '<div class="checks">' + catalogue.map(item => {
-    const dis = opts.disabled && opts.disabled(item);
-    const tag = opts.tag && opts.tag(item);
-    const warn = opts.warn && opts.warn(item);
-    return '<label class="chk' + (dis ? ' dis' : '') + '"><input type="checkbox" data-key="' + key + '" value="' + esc(item.id) + '"'
-      + (on.has(item.id) ? ' checked' : '') + (dis ? ' disabled' : '') + '><span>' + esc(item.label) + '</span>'
-      + (tag ? '<span class="tag">' + esc(tag) + '</span>' : warn ? '<span class="warn">' + esc(warn) + '</span>' : '') + '</label>';
-  }).join('') + '</div>';
-}
+// The common settings, to mark what an agent's own settings change.
+const common = () => AC.effectiveConfig(stored, null);
 
-// What a folded section says it holds, so nobody has to open it to know.
+function laterTag(live) { return live ? '' : '<span class="later">Later update</span>'; }
+
 function summary(key, catalogue) {
   const on = draft[key] || [];
   if (!on.length) return 'Nothing';
@@ -284,72 +438,129 @@ function summary(key, catalogue) {
   return names.length <= 3 ? names.join(', ') : names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
 }
 
-// One foldable group of ticks. Tabs start open; the long field lists start folded.
-function fold(key, title, help, catalogue, opts = {}, open = false) {
-  const pickable = catalogue.filter(c => !(opts.disabled && opts.disabled(c)));
-  return '<details class="sec"' + (open ? ' open' : '') + ' data-fold="' + key + '">'
-    + '<summary><span class="st"><b>' + esc(title) + '</b><small data-sum="' + key + '">' + esc(summary(key, catalogue)) + '</small></span>'
-    + '<i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
-    + '<p>' + help + '</p>'
-    + (pickable.length > 4 ? '<div class="quick"><button type="button" class="btn sm" data-all="' + key + '">Tick all</button><button type="button" class="btn sm" data-none="' + key + '">Clear</button></div>' : '')
-    + checks(key, catalogue, opts) + '</details>';
+function checks(key, catalogue) {
+  const on = new Set(draft[key] || []);
+  const base = forWho ? new Set(common()[key] || []) : null;
+  return '<div class="checks">' + catalogue.map(item => {
+    const diff = base && base.has(item.id) !== on.has(item.id);
+    return '<label class="chk' + (diff ? ' diff' : '') + '"><input type="checkbox" data-key="' + key + '" value="' + esc(item.id) + '"'
+      + (on.has(item.id) ? ' checked' : '') + '><span class="lb"><span class="nm">' + esc(item.label) + '</span>' + (item.note ? '<small>' + esc(item.note) + '</small>' : '') + '</span>'
+      + (item.risk ? '<span class="warn">' + esc(item.risk) + '</span>' : '') + '</label>';
+  }).join('') + '</div>';
 }
 
-function scope(key, label) {
-  return '<div class="field"><label>' + esc(label) + '</label><div class="scope">'
-    + [['own', 'Only their properties'], ['all', 'Everything']].map(([v, l]) =>
-      '<label><input type="radio" name="' + key + '" data-scope="' + key + '" value="' + v + '"' + (draft[key] === v ? ' checked' : '') + '> ' + l + '</label>').join('')
-    + '</div></div>';
+function fold(key, title, help, catalogue, live, open = false, extra = '') {
+  return '<details class="sec"' + (open ? ' open' : '') + ' data-fold="' + key + '">'
+    + '<summary><span class="st"><b>' + esc(title) + ' ' + laterTag(live) + '</b><small data-sum="' + key + '">' + esc(summary(key, catalogue)) + '</small></span>'
+    + '<i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
+    + '<div class="body"><p>' + help + '</p>'
+    + (catalogue.length > 5 ? '<div class="quick"><button type="button" class="btn sm" data-all="' + key + '">Tick all</button><button type="button" class="btn sm" data-none="' + key + '">Clear</button></div>' : '')
+    + checks(key, catalogue) + extra + '</div></details>';
+}
+
+const READY_TABS = AC.TABS.filter(t => t.status === 'ready');
+const GRANTED = AC.PROPERTY_FIELDS.filter(f => f.id !== 'contact');
+const CAT = { tabs: READY_TABS, otherPropertyFields: AC.PROPERTY_FIELDS, ownPropertyFields: AC.PROPERTY_FIELDS, grantedPropertyFields: GRANTED, matchingLeadFields: AC.LEAD_FIELDS };
+
+function actionsSummary() {
+  const on = AC.ACTIONS.filter(a => draft.actions[a.id]);
+  return !on.length ? 'Nothing' : on.length === AC.ACTIONS.length ? 'Everything' : on.length + ' of ' + AC.ACTIONS.length;
+}
+function scopeSummary() {
+  const s = v => (v === 'all' ? 'all properties' : 'their properties');
+  return 'Ads: ' + s(draft.adsScope) + ' · Campaigns: ' + s(draft.campaignsScope);
+}
+function approvalsSummary() {
+  return (AC.APPROVERS.find(a => a.id === draft.approvals.approvers) || {}).label || '';
 }
 
 function renderSettings() {
   const a = draft.approvals;
-  const timer = (v, unit) => v === null ? 'No limit' : v + ' ' + unit + (v === 1 ? '' : 's');
-  const GRANTED = AC.PROPERTY_FIELDS.filter(f => f.id !== 'contact');
+  const later = AC.TABS.filter(t => t.status === 'later').map(t => t.label).join(', ');
+  const never = AC.TABS.filter(t => t.status === 'never').map(t => t.label).join(', ');
+  const timer = v => v === null ? 'No limit' : v + (v === 1 ? ' day' : ' days');
+  const hours = v => v < 24 ? v + ' hours' : (v / 24) + (v === 24 ? ' day' : ' days');
+  const radio = (name, value, current, label, note) => '<label><input type="radio" name="' + name + '" value="' + value + '"' + (current === value ? ' checked' : '') + '>'
+    + '<span><b>' + esc(label) + '</b>' + (note ? '<small>' + esc(note) + '</small>' : '') + '</span></label>';
+  const changed = key => forWho && JSON.stringify(common()[key]) !== JSON.stringify(draft[key]) ? ' <span class="later">changed</span>' : '';
+
   $('settings').innerHTML =
-    fold('tabs', 'Tabs', 'What appears in an agent’s menu. “Coming” tabs aren’t built for agents yet.', AC.TABS, { disabled: t => !t.ready, tag: t => (t.ready ? '' : 'coming') }, true)
-    + fold('otherPropertyFields', 'Other properties', 'Properties they are not assigned to. Shown with a lock and a “Request details” button.', AC.PROPERTY_FIELDS, { warn: f => WARN[f.id] })
-    + fold('ownPropertyFields', 'Their own properties', 'Where they are the primary or a secondary agent.', AC.PROPERTY_FIELDS)
-    + fold('grantedPropertyFields', 'After an approved request', 'A property someone approved for them. The owner contact is shared only if the approver switches it on, with a timer.', GRANTED)
-    + fold('matchingLeadFields', 'Matching leads', 'Leads that match their properties but aren’t theirs. The number needs approval unless you tick it here.', AC.LEAD_FIELDS, { warn: f => (f.id === 'phone' ? 'no approval needed' : '') })
-    + '<div class="sec"><h2>Ads and campaigns</h2>'
-    + scope('adsScope', 'Meta Ads Leads') + scope('campaignsScope', 'WhatsApp Campaigns') + '</div>'
-    + '<div class="sec"><h2>Approvals</h2><p>Defaults on the approve sheet. The approver can change them each time.</p>'
-    + '<label class="toggle"><span>A property’s own agents can approve requests on it</span><input type="checkbox" id="aAgents"' + (a.agentsApprove ? ' checked' : '') + '></label>'
-    + '<div class="field"><label for="aDays">Details access lasts</label><select id="aDays">'
-    + AC.DETAIL_TIMERS.map(v => '<option value="' + (v === null ? '' : v) + '"' + (v === a.detailsDays ? ' selected' : '') + '>' + timer(v, 'day') + '</option>').join('') + '</select></div>'
-    + '<label class="toggle"><span>“Share owner contact” starts on</span><input type="checkbox" id="aContact"' + (a.shareContact ? ' checked' : '') + '></label>'
-    + '<div class="field"><label for="aHours">Owner contact lasts</label><select id="aHours">'
-    + AC.CONTACT_TIMERS.map(v => '<option value="' + v + '"' + (v === a.contactHours ? ' selected' : '') + '>' + (v < 24 ? v + ' hours' : (v / 24) + (v === 24 ? ' day' : ' days')) + '</option>').join('') + '</select></div>'
-    + '</div>';
+    fold('tabs', 'Menu', 'What appears in an agent’s menu.', READY_TABS, AC.LIVE.tabs, true,
+      '<p class="aside">Coming later: ' + esc(later) + '<br>Not for agents: ' + esc(never) + '</p>')
+    + fold('otherPropertyFields', 'Properties not assigned to them', 'A summary of everyone else’s listings, with a lock and a “Request details” button.', AC.PROPERTY_FIELDS, AC.LIVE.fields)
+    + fold('ownPropertyFields', 'Properties assigned to them', 'Where they are the primary agent or a co-agent.', AC.PROPERTY_FIELDS, AC.LIVE.fields)
+    + fold('grantedPropertyFields', 'When a request is approved', 'A property someone approved for them. The owner’s number is shared only if the approver switches it on, with a timer.', GRANTED, AC.LIVE.fields)
+    + fold('matchingLeadFields', 'Buyers and tenants matching their properties', 'Leads that suit their listings but aren’t their own. Phone numbers inside summaries are always hidden.', AC.LEAD_FIELDS, AC.LIVE.fields)
+    + '<details class="sec" data-fold="actions"><summary><span class="st"><b>What agents can do ' + laterTag(AC.LIVE.actions) + changed('actions') + '</b><small data-sum="actions">' + esc(actionsSummary()) + '</small></span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
+    + '<div class="body"><div class="checks">' + AC.ACTIONS.map(x => '<label class="chk"><input type="checkbox" data-action="' + x.id + '"' + (draft.actions[x.id] ? ' checked' : '') + '><span class="lb">' + esc(x.label) + '<small>' + esc(x.note) + '</small></span></label>').join('') + '</div></div></details>'
+    + '<details class="sec" data-fold="scopes"><summary><span class="st"><b>Ads and campaigns ' + laterTag(AC.LIVE.scopes) + '</b><small data-sum="scopes">' + esc(scopeSummary()) + '</small></span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
+    + '<div class="body"><div class="field"><label>Meta Ads Leads</label><div class="choices">'
+    + radio('adsScope', 'own', draft.adsScope, 'Only their properties') + radio('adsScope', 'all', draft.adsScope, 'All properties', 'Includes every ad lead’s phone number') + '</div></div>'
+    + '<div class="field"><label>WhatsApp Campaigns</label><div class="choices">'
+    + radio('campaignsScope', 'own', draft.campaignsScope, 'Only their properties') + radio('campaignsScope', 'all', draft.campaignsScope, 'All properties', 'Includes every campaign’s leads') + '</div></div></div></details>'
+    + '<details class="sec" data-fold="approvals"><summary><span class="st"><b>Approvals ' + laterTag(AC.LIVE.approvals) + changed('approvals') + '</b><small data-sum="approvals">' + esc(approvalsSummary()) + '</small></span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>'
+    + '<div class="body"><div class="field"><label>Who can approve a request to see a property</label><div class="choices">'
+    + AC.APPROVERS.map(x => radio('approvers', x.id, a.approvers, x.label)).join('') + '</div></div>'
+    + '<div class="field"><label for="aDays">Approved access lasts (default)</label><select id="aDays">'
+    + AC.DETAIL_TIMERS.map(v => '<option value="' + (v === null ? '' : v) + '"' + (v === a.detailsDays ? ' selected' : '') + '>' + timer(v) + '</option>').join('') + '</select></div>'
+    + '<label class="toggle"><span>Owner’s number: switched on when approving<small>The approver can still change it each time</small></span><input type="checkbox" id="aContact"' + (a.shareContact ? ' checked' : '') + '></label>'
+    + '<div class="field"><label for="aHours">Owner’s number visible for</label><select id="aHours">'
+    + AC.CONTACT_TIMERS.map(v => '<option value="' + v + '"' + (v === a.contactHours ? ' selected' : '') + '>' + hours(v) + '</option>').join('') + '</select></div></div></details>';
 
   const el = $('settings');
-  const CAT = { tabs: AC.TABS, otherPropertyFields: AC.PROPERTY_FIELDS, ownPropertyFields: AC.PROPERTY_FIELDS, grantedPropertyFields: GRANTED, matchingLeadFields: AC.LEAD_FIELDS };
   const sync = key => {
     draft[key] = [...el.querySelectorAll('input[data-key="' + key + '"]:checked')].map(x => x.value);
     const sum = el.querySelector('[data-sum="' + key + '"]');
     if (sum) sum.textContent = summary(key, CAT[key]);
+    if (forWho) {
+      const base = new Set(common()[key] || []);
+      el.querySelectorAll('input[data-key="' + key + '"]').forEach(i => i.closest('.chk').classList.toggle('diff', base.has(i.value) !== i.checked));
+    }
     setDirty(true);
   };
-  el.querySelectorAll('input[data-key]').forEach(i => i.addEventListener('change', () => sync(i.dataset.key)));
+  // Ticking something that hands out owners' or buyers' numbers, office notes or exact addresses
+  // is confirmed in plain words first.
+  const RISK_TEXT = {
+    'otherPropertyFields:contact': 'Every agent will see every owner’s name and phone number, on properties that aren’t theirs. Continue?',
+    'otherPropertyFields:address': 'Every agent will see the exact address of properties that aren’t theirs. Continue?',
+    'otherPropertyFields:internal': 'Every agent will see office-only notes (lowest prices, commission talk) on properties that aren’t theirs. Continue?',
+    'otherPropertyFields:sheet': 'Extra sheet columns can contain anything, including owner details. Continue?',
+    'grantedPropertyFields:internal': 'Agents with an approved request will see office-only notes (lowest prices, commission talk). Continue?',
+    'grantedPropertyFields:sheet': 'Extra sheet columns can contain anything, including owner details. Continue?',
+    'matchingLeadFields:phone': 'Agents will get buyers’ and tenants’ phone numbers without asking. Continue?',
+  };
+  el.querySelectorAll('input[data-key]').forEach(i => i.addEventListener('change', () => {
+    const risk = RISK_TEXT[i.dataset.key + ':' + i.value];
+    if (i.checked && risk && !confirm(risk)) { i.checked = false; return; }
+    sync(i.dataset.key);
+  }));
   el.querySelectorAll('[data-all],[data-none]').forEach(b => b.addEventListener('click', () => {
     const key = b.dataset.all || b.dataset.none;
-    el.querySelectorAll('input[data-key="' + key + '"]:not(:disabled)').forEach(i => { i.checked = !!b.dataset.all; });
+    if (b.dataset.all && key === 'otherPropertyFields' && !confirm('Tick everything, owner numbers and addresses included, for properties that aren’t theirs?')) return;
+    el.querySelectorAll('input[data-key="' + key + '"]').forEach(i => { i.checked = !!b.dataset.all; });
     sync(key);
   }));
-  el.querySelectorAll('input[data-scope]').forEach(i => i.addEventListener('change', () => { draft[i.dataset.scope] = i.value; setDirty(true); }));
-  el.querySelector('#aAgents').addEventListener('change', e => { draft.approvals.agentsApprove = e.target.checked; setDirty(true); });
+  el.querySelectorAll('input[data-action]').forEach(i => i.addEventListener('change', () => {
+    draft.actions[i.dataset.action] = i.checked;
+    el.querySelector('[data-sum="actions"]').textContent = actionsSummary();
+    setDirty(true);
+  }));
+  el.querySelectorAll('input[name="adsScope"], input[name="campaignsScope"]').forEach(i => i.addEventListener('change', () => {
+    if (i.value === 'all' && !confirm('Agents will see ' + (i.name === 'adsScope' ? 'every ad lead, phone numbers included' : 'every campaign and its leads') + ', not only their own. Continue?')) {
+      el.querySelector('input[name="' + i.name + '"][value="own"]').checked = true; return;
+    }
+    draft[i.name] = i.value;
+    el.querySelector('[data-sum="scopes"]').textContent = scopeSummary();
+    setDirty(true);
+  }));
+  el.querySelectorAll('input[name="approvers"]').forEach(i => i.addEventListener('change', () => {
+    draft.approvals.approvers = i.value;
+    el.querySelector('[data-sum="approvals"]').textContent = approvalsSummary();
+    setDirty(true);
+  }));
   el.querySelector('#aContact').addEventListener('change', e => { draft.approvals.shareContact = e.target.checked; setDirty(true); });
   el.querySelector('#aDays').addEventListener('change', e => { draft.approvals.detailsDays = e.target.value === '' ? null : Number(e.target.value); setDirty(true); });
   el.querySelector('#aHours').addEventListener('change', e => { draft.approvals.contactHours = Number(e.target.value); setDirty(true); });
-}
-
-// What is saved: the shared settings, plus per agent only what differs from the shared settings.
-function buildDoc(nextShared, overrides) {
-  const out = AC.normalizeConfig({ ...nextShared, overrides }, me.tenantId);
-  out.updatedAt = Date.now();
-  out.updatedBy = me.email;
-  return out;
 }
 
 function diffFrom(base, cfg) {
@@ -358,22 +569,41 @@ function diffFrom(base, cfg) {
   return d;
 }
 
+// Save: the inputs are locked while it is in flight (nothing ticked meanwhile can be lost), and a
+// change another admin saved since this page loaded is never overwritten silently.
 async function save(nextShared, overrides) {
+  if (saving) return;
+  saving = true;
+  $('settingsFs').disabled = true;
   $('saveBtn').disabled = true;
   try {
-    const out = buildDoc(nextShared, overrides);
+    const fresh = await getDoc(settingsRef());
+    const now = fresh.exists() ? fresh.data() : null;
+    if (((now && now.updatedAt) || 0) !== ((stored && stored.updatedAt) || 0)) {
+      stored = now;
+      $('saveMsg').textContent = 'Another admin (' + ((now && now.updatedBy) || 'someone') + ') saved changes just now. Their version is loaded — make your change again.';
+      setTimeout(() => { renderForWho(); pickWho(forWho); }, 3000);
+      return;
+    }
+    const out = AC.normalizeConfig({ ...nextShared, overrides }, me.tenantId);
+    out.updatedAt = Date.now();
+    out.updatedBy = me.email;
     await setDoc(settingsRef(), out);
     stored = out;
     toast('Saved');
+    renderForWho();
     pickWho(forWho);
   } catch (e) {
     $('saveMsg').textContent = 'Not saved: ' + (e.code === 'permission-denied' ? 'only an admin can change these' : e.message);
+  } finally {
+    saving = false;
+    $('settingsFs').disabled = false;
     $('saveBtn').disabled = false;
   }
 }
 
 $('saveBtn').addEventListener('click', () => {
-  const shared = AC.effectiveConfig(stored, null);
+  const shared = common();
   const overrides = { ...((stored && stored.overrides) || {}) };
   if (!forWho) return save(draft, overrides);
   const d = diffFrom(shared, draft);
@@ -381,11 +611,5 @@ $('saveBtn').addEventListener('click', () => {
   return save(shared, overrides);
 });
 
-$('resetBtn').addEventListener('click', () => {
-  if (!forWho || !confirm('Use the shared settings for ' + forWho + '?')) return;
-  const overrides = { ...((stored && stored.overrides) || {}) };
-  delete overrides[forWho];
-  save(AC.effectiveConfig(stored, null), overrides);
-});
-
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+}

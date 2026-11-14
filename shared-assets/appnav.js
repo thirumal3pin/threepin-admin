@@ -183,8 +183,16 @@
   var badges = {};
   var root = null;
   // Who is looking (shared-assets/access.js): { role: 'admin' | 'agent' | 'none', tabs: [...] }.
-  // Unknown until access.js reports: admin-only entries stay hidden, everything else shows as before.
-  var access = (typeof window !== 'undefined' && window.__pinAccess) || null;
+  // From the first paint it is this device's last answer (access.js keeps it), so an agent's menu
+  // never flashes the full one. A device that has never been told waits for the answer (at most a
+  // few seconds) with the sections hidden; signed out (access null) shows the menu as before.
+  var access = (typeof window !== 'undefined' && window.__pinAccess) || (function () {
+    try {
+      var last = JSON.parse(localStorage.getItem('pin.access.last') || 'null');
+      return last && last.role ? { role: last.role, tabs: last.tabs || null } : { pending: true };
+    } catch (e) { return null; }
+  })();
+  if (access && access.pending) setTimeout(function () { if (access && access.pending) { access = null; render(); } }, 3000);
 
   // ── Small helpers ──
   function esc(s) {
@@ -232,11 +240,24 @@
   // never a `staffOnly` entry. `adminOnly` entries are for admins. This only tidies the menu: what
   // an agent can actually read is decided by the database rules and the server.
   function allowed(entry, parent) {
+    if (access && access.pending) return false;
     if (entry.adminOnly) return !!(access && access.role === 'admin');
     if (access && access.role === 'agent') {
       if (entry.staffOnly) return false;
       var tab = entry.tab || (parent && parent.tab);
       return !!tab && (access.tabs || []).indexOf(tab) >= 0;
+    }
+    return true;
+  }
+  // A ?nav= deep link to a view the menu would not offer this person (an agent following an old
+  // link to Setup or Analytics) is ignored; the page opens on its home view instead.
+  function navAllowed(nav) {
+    for (var i = 0; i < MAP.length; i++) {
+      var sec = MAP[i];
+      if (sec.page !== (cfg && cfg.console)) continue;
+      if (sec.nav === nav) return allowed(sec);
+      var list = itemsOf(sec);
+      for (var j = 0; j < list.length; j++) if (list[j].nav === nav) return allowed(sec) && allowed(list[j], sec);
     }
     return true;
   }
@@ -360,6 +381,8 @@
     var who = root.querySelector('.rail-who');
     who.textContent = cfg.user || '';
     who.style.display = cfg.user ? '' : 'none';
+    var sb = root.querySelector('.rail-brand-sb');
+    if (sb) sb.textContent = access && access.role === 'agent' ? 'Agent' : 'Admin';
   }
 
   // ═══════ STATE CHANGES ═══════
@@ -592,6 +615,7 @@
           history.replaceState(null, '', url.pathname + url.search + url.hash);
         }
       } catch (e) { /* older browser: no deep link, everything else still works */ }
+      if (value && access && access.role === 'agent' && !navAllowed(value)) return null;
       return value;
     },
 
@@ -599,6 +623,7 @@
     setUser: function (email) { if (cfg) { cfg.user = email; render(); } },
     /* From shared-assets/access.js once the role is known. */
     setAccess: function (a) { access = a || null; window.__pinAccess = access; render(); },
+    navAllowed: function (nav) { return navAllowed(nav); },
     setBadge: function (key, n) { badges[key] = Number(n) || 0; render(); },
     open: openDrawer,
     close: closeDrawer,

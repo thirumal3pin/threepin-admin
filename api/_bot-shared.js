@@ -16,18 +16,24 @@ export function getDb() {
 // Callers that need tenant scoping should treat a missing tenantId as
 // "not fully onboarded" rather than assuming a default.
 //
-// AGENTS (custom claim role = 'agent', see firestore.rules) are refused here unless the caller
-// passes { allowAgent: true }. Every endpoint written before the agent layer hands back the whole
-// tenant's data and bypasses the Firestore rules (Admin SDK), so an agent must never reach one by
-// default; an endpoint that filters for agents opts in explicitly (api/_agent.js).
-export async function verifyCrmUser(request, { allowAgent = false } = {}) {
+// ROLES (custom claim `role`, see firestore.rules): only full access ('' or 'admin') gets through by
+// default. AGENTS are refused unless the caller passes { allowAgent: true } — every endpoint written
+// before the agent layer hands back the whole tenant's data and bypasses the Firestore rules (Admin
+// SDK), so an agent must never reach one by default; an endpoint that filters for agents opts in
+// explicitly (api/_agent.js, the task emails). Any other role value (a typo, a role not defined yet)
+// is refused everywhere: an allow-list, never "everything but agents".
+//
+// { checkRevoked: true } also refuses a token whose login was disabled or signed out everywhere
+// since it was issued (one extra Auth lookup): used where a demoted admin must lose power at once.
+export async function verifyCrmUser(request, { allowAgent = false, checkRevoked = false } = {}) {
   const authHeader = request.headers.get('authorization') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (!token) return null;
   try {
     getDb(); // ensures the default app is initialized before getAuth()
-    const decoded = await getAuth().verifyIdToken(token);
-    if (decoded.role === 'agent' && !allowAgent) return null;
+    const decoded = await getAuth().verifyIdToken(token, checkRevoked);
+    const role = decoded.role || '';
+    if (role !== '' && role !== 'admin' && !(role === 'agent' && allowAgent)) return null;
     return { ...decoded, tenantId: decoded.tenantId || null };
   } catch {
     return null;

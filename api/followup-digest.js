@@ -526,14 +526,17 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const user = await verifyCrmUser(request);
+  // An agent may report a change to a task of theirs (handleTaskEvent lets only the task's own people
+  // or a manager set off its emails); the digest itself stays with the full-access team.
+  const isTask = new URL(request.url).searchParams.get('action') === 'task';
+  const user = await verifyCrmUser(request, { allowAgent: isTask });
   if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
     });
   }
-  if (new URL(request.url).searchParams.get('action') === 'task') return handleTaskEvent(request, user);
+  if (isTask) return handleTaskEvent(request, user);
   const db = getDb();
   const r = await digestForTenant(db, user.tenantId);
   // Record manual sends too (for the "last sent" indicator), but deliberately

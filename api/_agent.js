@@ -5,22 +5,30 @@
 //   body { action, ... }, Authorization: Bearer <Firebase ID token>
 //
 // Actions
-//   me          anyone on the team (agents included): { role, email, config } — config is the agent
-//               settings that apply to the caller (shared-assets/agent-config.js), sent to agents only
-//   team        admin: every login on the tenant with its role, whether it is enabled and on the
-//               team list, and when it last signed in
-//   set-role    admin: { uid, role: 'admin' | 'agent' | 'none' }
-//   set-active  admin: { uid, active } — disable or re-enable a login
-//   add-user    admin: { email, role, teamList } — a new login (or an existing account attached),
-//               returns a one-time password when it created one
-//   team-list   admin: { email, on } — on/off the team list (mentions, calendar, site visits)
+//   me              anyone on the team (agents included): { role, email, config, cfgAt } — config is
+//                   the caller's own effective agent settings (shared-assets/agent-config.js), sent to
+//                   agents only; agents never read agentConfigs directly (it holds everyone's overrides)
+//   team            admin: every login on the tenant (role, active, team list, name, WhatsApp, last
+//                   sign-in) and the accounts waiting for approval (signed up, no tenant yet)
+//   set-role        admin: { uid, role: 'admin' | 'agent' | 'none' }
+//   set-active      admin: { uid, active: true | false }
+//   set-profile     admin: { uid, name, phone } — the name everyone sees, the WhatsApp number
+//   reset-password  admin: { uid } — a new one-time password; signs them out everywhere
+//   add-user        admin: { email, role, name, phone, teamList } — a NEW person. Someone already on the
+//                   team is refused (change them from their row); an account that signed itself up
+//                   gets a fresh password, so nobody who pre-registered an address can keep it
+//   approve         admin: { uid, role, teamList } — let in an account waiting for approval, as it is
+//   dismiss         admin: { uid } — delete an account waiting for approval (it holds no data)
+//   team-list       admin: { email, on } — on/off the team lists (mentions, calendar, site visits)
 //
 // Roles are custom claims, so only this file and scripts/set-roles.mjs can change them; the rules
 // (firestore.rules, "Who is asking") read them. Claims are MERGED, never replaced: the tenantId
 // claim that every login needs must survive a role change. Every change is written to accessLog.
 //
-// Guard rails: an admin cannot change their own role or disable themselves, and the last admin
-// cannot be demoted or disabled — so the tenant can never be left with nobody to run it.
+// Guard rails: an admin cannot change their own role, disable or reset themselves; nothing may leave
+// the tenant without an enabled, confirmed admin. Admin actions check the caller's token against the
+// live account (checkRevoked), so an admin who was demoted, disabled or signed out everywhere loses
+// these powers at once — not when their token runs out an hour later.
 import { randomBytes } from 'node:crypto';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -31,24 +39,33 @@ import { teamKey } from '../crm-assets/mentions.js';
 const ROLES = ['admin', 'agent', 'none'];
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
 const isEmail = s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || ''));
+const newPassword = () => randomBytes(9).toString('base64url');
 
 export function isAdminToken(u) {
   return !!(u && u.tenantId && u.role === 'admin' && u.email_verified === true);
 }
 
-// Every login on this tenant. listUsers pages through the whole project (a handful of accounts).
-async function tenantUsers(tenantId) {
+// A WhatsApp number as stored: digits only, India's 91 added to a bare 10-digit mobile. '' = none.
+export function cleanPhone(s) {
+  const d = String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (!d) return '';
+  if (d.length === 10 && /^[6-9]/.test(d)) return '91' + d;
+  return d.length >= 11 && d.length <= 13 ? d : null;
+}
+const cleanName = s => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+
+async function allUsers() {
   const auth = getAuth();
   const out = [];
   let token;
   do {
     const page = await auth.listUsers(1000, token);
-    for (const u of page.users) if ((u.customClaims || {}).tenantId === tenantId) out.push(u);
+    out.push(...page.users);
     token = page.pageToken;
   } while (token);
   return out;
 }
-
+const tenantOf = u => (u.customClaims || {}).tenantId || null;
 const roleOf = u => (u.customClaims || {}).role || 'none';
 
 async function log(db, tenantId, by, what) {
@@ -72,12 +89,14 @@ async function setClaims(uid, patch) {
   return claims;
 }
 
-// Refuse anything that would leave the tenant without an enabled admin.
-function leavesNoAdmin(users, uid, nextRole, nextActive) {
+// Refuse anything that would leave the tenant without an enabled admin whose email is confirmed
+// (an unconfirmed "admin" cannot act: the rules and isAdminToken both require it).
+export function leavesNoAdmin(users, uid, next) {
   return !users.some(u => {
-    const role = u.uid === uid ? nextRole : roleOf(u);
-    const active = u.uid === uid ? nextActive : !u.disabled;
-    return role === 'admin' && active;
+    const n = u.uid === uid ? next : {};
+    const role = n.role !== undefined ? n.role : roleOf(u);
+    const active = n.active !== undefined ? n.active : !u.disabled;
+    return role === 'admin' && active && u.emailVerified;
   });
 }
 
@@ -86,67 +105,117 @@ async function me(user) {
   const out = { role, email: user.email || '' };
   if (role === 'agent') {
     const snap = await getDb().collection('agentConfigs').doc(user.tenantId).get();
-    out.config = effectiveConfig(snap.exists ? snap.data() : null, user.email);
+    const stored = snap.exists ? snap.data() : null;
+    out.config = effectiveConfig(stored, user.email);
+    out.cfgAt = (stored && stored.updatedAt) || 0;
   }
   return json(out);
 }
 
 async function team(user) {
   const db = getDb();
-  const [users, listed] = await Promise.all([tenantUsers(user.tenantId), teamListEmails(db, user.tenantId)]);
-  const rows = users.map(u => ({
+  const [users, listed] = await Promise.all([allUsers(), teamListEmails(db, user.tenantId)]);
+  const mine = users.filter(u => tenantOf(u) === user.tenantId);
+  const profiles = mine.length ? await db.getAll(...mine.map(u => db.collection('users').doc(u.uid))) : [];
+  const phoneOf = {};
+  profiles.forEach(d => { if (d.exists) phoneOf[d.id] = d.data().phone || ''; });
+  const rows = mine.map(u => ({
     uid: u.uid,
     email: u.email || '',
     name: u.displayName || '',
+    phone: phoneOf[u.uid] || '',
     role: roleOf(u),
     active: !u.disabled,
+    verified: !!u.emailVerified,
     teamList: listed.has(String(u.email || '').toLowerCase()),
     lastLogin: u.metadata.lastSignInTime ? Date.parse(u.metadata.lastSignInTime) : null,
     created: u.metadata.creationTime ? Date.parse(u.metadata.creationTime) : null,
     self: u.uid === user.uid,
   })).sort((a, b) => a.email.localeCompare(b.email));
-  // Team-list entries with no login yet (shared mailboxes like sales@).
+  // Accounts that signed themselves up (the sign-in page allows it) and belong to nobody yet: they
+  // see nothing until an admin lets them in here.
+  const pending = users.filter(u => !tenantOf(u) && u.email).map(u => ({
+    uid: u.uid,
+    email: u.email,
+    name: u.displayName || '',
+    via: (u.providerData || []).map(p => p.providerId === 'google.com' ? 'Google' : p.providerId === 'password' ? 'password' : p.providerId),
+    verified: !!u.emailVerified,
+    created: u.metadata.creationTime ? Date.parse(u.metadata.creationTime) : null,
+  })).sort((a, b) => (b.created || 0) - (a.created || 0));
   const withLogin = new Set(rows.map(r => r.email.toLowerCase()));
   const listOnly = [...listed].filter(e => !withLogin.has(e)).sort();
-  return json({ users: rows, listOnly });
+  return json({ users: rows, pending, listOnly });
+}
+
+// The target, checked to be a login on the caller's tenant.
+async function teammate(user, uid) {
+  if (!uid) return { error: json({ error: 'Missing person' }, 400) };
+  const users = (await allUsers()).filter(u => tenantOf(u) === user.tenantId);
+  const target = users.find(u => u.uid === uid);
+  if (!target) return { error: json({ error: 'No such login on this team' }, 404) };
+  return { users, target };
 }
 
 async function setRole(user, body) {
   const { uid, role } = body || {};
-  if (!uid || !ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or none' }, 400);
+  if (!ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or full access' }, 400);
   if (uid === user.uid) return json({ error: 'You cannot change your own role' }, 400);
-  const users = await tenantUsers(user.tenantId);
-  const target = users.find(u => u.uid === uid);
-  if (!target) return json({ error: 'No such login on this team' }, 404);
-  if (leavesNoAdmin(users, uid, role, !target.disabled)) return json({ error: 'That would leave the team with no admin' }, 400);
+  const { error, users, target } = await teammate(user, uid);
+  if (error) return error;
+  if (leavesNoAdmin(users, uid, { role })) return json({ error: 'That would leave the team with no admin' }, 400);
   const from = roleOf(target);
+  if (from === role) return json({ ok: true, uid, role, unchanged: true });
+  if (role === 'admin' && !target.emailVerified) await getAuth().updateUser(uid, { emailVerified: true });
   await setClaims(uid, { role: role === 'none' ? null : role });
   const db = getDb();
   await db.collection('users').doc(uid).set({
     tenantId: user.tenantId, email: target.email || '', access: role,
     accessSetBy: user.email || user.uid, accessSetAt: Date.now(),
   }, { merge: true });
-  // Taking power away should not wait for their token to expire: signing them out everywhere makes
-  // their next page load ask for a fresh sign-in, which carries the new role. (A token already in a
-  // browser stays valid for up to an hour for the database; the pages re-check the role on load.)
+  // Taking power away: signed out everywhere, so their next page load asks for a fresh sign-in that
+  // carries the new role. (The database honours an issued token for up to an hour; the server's
+  // admin actions do not — see checkRevoked above.)
   if (from === 'admin' || role === 'agent') await getAuth().revokeRefreshTokens(uid);
   await log(db, user.tenantId, user, { action: 'set-role', uid, email: target.email || '', from, to: role });
   return json({ ok: true, uid, role });
 }
 
 async function setActive(user, body) {
-  const { uid } = body || {};
-  const active = !!(body && body.active);
-  if (!uid) return json({ error: 'Missing uid' }, 400);
-  if (uid === user.uid && !active) return json({ error: 'You cannot disable your own login' }, 400);
-  const users = await tenantUsers(user.tenantId);
-  const target = users.find(u => u.uid === uid);
-  if (!target) return json({ error: 'No such login on this team' }, 404);
-  if (!active && leavesNoAdmin(users, uid, roleOf(target), false)) return json({ error: 'That would leave the team with no admin' }, 400);
+  const uid = body && body.uid;
+  if (!body || typeof body.active !== 'boolean') return json({ error: 'Say whether the account is active' }, 400);
+  const active = body.active;
+  if (uid === user.uid && !active) return json({ error: 'You cannot turn off your own account' }, 400);
+  const { error, users, target } = await teammate(user, uid);
+  if (error) return error;
+  if (!active && leavesNoAdmin(users, uid, { active: false })) return json({ error: 'That would leave the team with no admin' }, 400);
   await getAuth().updateUser(uid, { disabled: !active });
   if (!active) await getAuth().revokeRefreshTokens(uid);
   await log(getDb(), user.tenantId, user, { action: active ? 'enable' : 'disable', uid, email: target.email || '' });
   return json({ ok: true, uid, active });
+}
+
+async function setProfile(user, body) {
+  const { error, target } = await teammate(user, body && body.uid);
+  if (error) return error;
+  const name = cleanName(body.name);
+  const phone = cleanPhone(body.phone);
+  if (phone === null) return json({ error: 'Enter a 10-digit mobile number' }, 400);
+  await getAuth().updateUser(target.uid, { displayName: name || null });
+  await getDb().collection('users').doc(target.uid).set({ name, phone }, { merge: true });
+  await log(getDb(), user.tenantId, user, { action: 'set-profile', uid: target.uid, email: target.email || '' });
+  return json({ ok: true, uid: target.uid, name, phone });
+}
+
+async function resetPassword(user, body) {
+  const uid = body && body.uid;
+  if (uid === user.uid) return json({ error: 'Change your own password from the sign-in page' }, 400);
+  const { error, target } = await teammate(user, uid);
+  if (error) return error;
+  const password = newPassword();
+  await getAuth().updateUser(uid, { password, emailVerified: true });
+  await getAuth().revokeRefreshTokens(uid);
+  await log(getDb(), user.tenantId, user, { action: 'reset-password', uid, email: target.email || '' });
+  return json({ ok: true, uid, email: target.email || '', password });
 }
 
 async function setTeamList(db, tenantId, email, on) {
@@ -155,61 +224,108 @@ async function setTeamList(db, tenantId, email, on) {
     { team: { [key]: on ? { email: email.toLowerCase() } : FieldValue.delete() } }, { merge: true });
 }
 
+async function attach(user, rec, { role, name, phone, teamList, action }) {
+  await setClaims(rec.uid, { tenantId: user.tenantId, role: role === 'none' ? null : role });
+  const db = getDb();
+  const ref = db.collection('users').doc(rec.uid);
+  const had = await ref.get();
+  await ref.set({
+    tenantId: user.tenantId, email: rec.email, access: role, name, phone,
+    ...(had.exists && had.data().role ? {} : { role: 'member' }),
+    accessSetBy: user.email || user.uid, accessSetAt: Date.now(),
+    ...(had.exists ? {} : { createdAt: Date.now() }),
+  }, { merge: true });
+  if (teamList) await setTeamList(db, user.tenantId, rec.email, true);
+  await log(db, user.tenantId, user, { action, uid: rec.uid, email: rec.email, to: role });
+}
+
 async function addUser(user, body) {
   const email = String((body && body.email) || '').trim().toLowerCase();
   const role = (body && body.role) || 'none';
+  const name = cleanName(body && body.name);
+  const phone = cleanPhone(body && body.phone);
   if (!isEmail(email)) return json({ error: 'Enter an email address' }, 400);
-  if (!ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or none' }, 400);
+  if (!ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or full access' }, 400);
+  if (phone === null) return json({ error: 'Enter a 10-digit mobile number' }, 400);
   const auth = getAuth();
-  let rec, password = null, created = false;
-  try {
-    rec = await auth.getUserByEmail(email);
-    const t = (rec.customClaims || {}).tenantId;
+  let rec = null;
+  try { rec = await auth.getUserByEmail(email); } catch (e) { if (e.code !== 'auth/user-not-found') throw e; }
+  if (rec) {
+    const t = tenantOf(rec);
     if (t && t !== user.tenantId) return json({ error: 'That email belongs to another business' }, 400);
-  } catch (e) {
-    if (e.code !== 'auth/user-not-found') throw e;
-    password = randomBytes(9).toString('base64url');
-    rec = await auth.createUser({ email, password, emailVerified: true });
-    created = true;
+    if (t === user.tenantId) return json({ error: 'Already on the team — change their role from their row in People' }, 409);
   }
-  // Confirmed, as scripts/add-team-member.js does: a first "Continue with Google" then ADDS Google
-  // to the account instead of replacing the password.
-  if (!rec.emailVerified) rec = await auth.updateUser(rec.uid, { emailVerified: true });
-  await setClaims(rec.uid, { tenantId: user.tenantId, role: role === 'none' ? null : role });
-  const db = getDb();
-  await db.collection('users').doc(rec.uid).set({
-    tenantId: user.tenantId, email, access: role, role: 'member',
-    accessSetBy: user.email || user.uid, accessSetAt: Date.now(), createdAt: Date.now(),
-  }, { merge: true });
-  if (body && body.teamList) await setTeamList(db, user.tenantId, email, true);
-  await log(db, user.tenantId, user, { action: created ? 'add-user' : 'attach-user', uid: rec.uid, email, to: role });
-  return json({ ok: true, uid: rec.uid, email, role, created, password });
+  let password = null;
+  if (!rec) {
+    password = newPassword();
+    rec = await auth.createUser({ email, password, emailVerified: true, displayName: name || undefined });
+  } else {
+    // An account that signed itself up with this address. Whoever chose its password may not be
+    // the person being added, so the password is replaced and every session ended. A Google sign-in
+    // proves the address belongs to its holder and is left as it is.
+    const hasPassword = (rec.providerData || []).some(p => p.providerId === 'password');
+    const patch = { emailVerified: true, disabled: false };
+    if (name) patch.displayName = name;
+    if (hasPassword || !(rec.providerData || []).length) { password = newPassword(); patch.password = password; }
+    rec = await auth.updateUser(rec.uid, patch);
+    await auth.revokeRefreshTokens(rec.uid);
+  }
+  await attach(user, rec, { role, name, phone, teamList: !!(body && body.teamList), action: 'add-user' });
+  return json({ ok: true, uid: rec.uid, email, role, name, phone, password });
+}
+
+// Let in an account that signed itself up, keeping the sign-in it chose: the admin is vouching for
+// this person (team.html says so before they press Approve).
+async function approve(user, body) {
+  const { uid } = body || {};
+  const role = (body && body.role) || 'none';
+  if (!ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or full access' }, 400);
+  let rec;
+  try { rec = await getAuth().getUser(uid); } catch (e) { return json({ error: 'That request is gone' }, 404); }
+  if (tenantOf(rec)) return json({ error: 'Already let in' }, 409);
+  if (!rec.emailVerified) rec = await getAuth().updateUser(uid, { emailVerified: true });
+  await attach(user, rec, { role, name: rec.displayName || '', phone: '', teamList: !!(body && body.teamList), action: 'approve' });
+  return json({ ok: true, uid, email: rec.email, role });
+}
+
+async function dismiss(user, body) {
+  const { uid } = body || {};
+  let rec;
+  try { rec = await getAuth().getUser(uid); } catch (e) { return json({ ok: true, uid, gone: true }); }
+  if (tenantOf(rec)) return json({ error: 'That person is on a team; turn their account off instead' }, 409);
+  await getAuth().deleteUser(uid);
+  await log(getDb(), user.tenantId, user, { action: 'dismiss', uid, email: rec.email || '' });
+  return json({ ok: true, uid });
 }
 
 async function teamList(user, body) {
   const email = String((body && body.email) || '').trim().toLowerCase();
   if (!isEmail(email)) return json({ error: 'Enter an email address' }, 400);
-  const on = !!(body && body.on);
+  const on = body.on === true;
   const db = getDb();
   await setTeamList(db, user.tenantId, email, on);
   await log(db, user.tenantId, user, { action: on ? 'team-list-add' : 'team-list-remove', email });
   return json({ ok: true, email, on });
 }
 
-const ADMIN_ACTIONS = { team, 'set-role': setRole, 'set-active': setActive, 'add-user': addUser, 'team-list': teamList };
+const ADMIN_ACTIONS = {
+  team, 'set-role': setRole, 'set-active': setActive, 'set-profile': setProfile, 'reset-password': resetPassword,
+  'add-user': addUser, approve, dismiss, 'team-list': teamList,
+};
 
 export async function agentPost(request) {
-  const user = await verifyCrmUser(request, { allowAgent: true });
-  if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   let body;
-  try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }
+  try { body = await request.clone().json(); } catch { return json({ error: 'Bad request' }, 400); }
   const action = body && body.action;
+  const isAdminAction = Object.prototype.hasOwnProperty.call(ADMIN_ACTIONS, action);
+  // Admin actions re-check the token against the live account: revoked or disabled = refused now.
+  const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction });
+  if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   try {
     if (action === 'me') return await me(user);
-    const fn = ADMIN_ACTIONS[action];
-    if (!fn) return json({ error: 'Unknown action' }, 400);
+    if (!isAdminAction) return json({ error: 'Unknown action' }, 400);
     if (!isAdminToken(user)) return json({ error: 'Admins only' }, 403);
-    return await fn(user, body);
+    return await ADMIN_ACTIONS[action](user, body);
   } catch (e) {
     console.error('agent action failed:', action, e);
     return json({ error: 'Something went wrong — try again' }, 500);
