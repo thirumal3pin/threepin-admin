@@ -389,7 +389,12 @@ async function handleTaskEvent(request, user) {
   if (TM.lc(t.updatedBy) !== actor || !stamp || Date.now() - stamp > 10 * 60 * 1000) return json({ ok: false, error: 'No recent change by you' }, 409);
   const sentKey = event === 'status' ? 'status' : 'assigned';
   if (t.notified && Number(t.notified[sentKey]) === stamp) return json({ ok: true, sent: 0, already: true });
-  await snap.ref.set({ notified: { ...(t.notified || {}), [sentKey]: stamp } }, { merge: true });
+  // Someone on the task (not a manager) sets off at most one email of each kind per task every 10
+  // minutes: they can rewrite its status stamp at will, and must not be able to mail the team over
+  // and over. A manager reassigning twice in a row still reaches the new person.
+  const lastAt = Number((t.notified && t.notified[sentKey + 'At']) || 0);
+  if (!isMgr && Date.now() - lastAt < 10 * 60 * 1000) return json({ ok: true, sent: 0, already: true });
+  await snap.ref.set({ notified: { ...(t.notified || {}), [sentKey]: stamp, [sentKey + 'At']: Date.now() } }, { merge: true });
   const to = TM.recipientsFor(event, t, cfg, actor, event === 'assigned' ? body.added : null);
   const who = displayName(actor) || actor;
   let subject, html, text;
@@ -410,7 +415,8 @@ async function handleTaskEvent(request, user) {
     return { to: email, ok: !!(r && r.ok), error: r && r.error };
   }));
   const sent = results.filter(r => r.ok).length;
-  return json({ ok: !results.length || sent > 0, sent, results });
+  // Counts only: the page does not need — and an agent must not be handed — who was emailed.
+  return json({ ok: !results.length || sent > 0, sent, failed: results.length - sent });
 }
 
 // Each person's late and due-today tasks, one email each, once a day (settings.lastTaskDigestDate).

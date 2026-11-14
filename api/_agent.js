@@ -17,8 +17,11 @@
 //   add-user        admin: { email, role, name, phone, teamList } — a NEW person. Someone already on the
 //                   team is refused (change them from their row); an account that signed itself up
 //                   gets a fresh password, so nobody who pre-registered an address can keep it
-//   approve         admin: { uid, role, teamList } — let in an account waiting for approval, as it is
-//   dismiss         admin: { uid } — delete an account waiting for approval (it holds no data)
+//   approve         admin of the home tenant: { uid, role, teamList } — let in an account waiting for
+//                   approval, as agent or full access (never straight to admin). A Google sign-in is
+//                   kept; a password the account chose itself is replaced with a one-time one the admin
+//                   sends to the person, since nothing proves who registered the address
+//   dismiss         admin of the home tenant: { uid } — delete an account waiting for approval
 //   team-list       admin: { email, on } — on/off the team lists (mentions, calendar, site visits)
 //
 // Roles are custom claims, so only this file and scripts/set-roles.mjs can change them; the rules
@@ -37,6 +40,10 @@ import { effectiveConfig } from '../shared-assets/agent-config.js';
 import { teamKey } from '../crm-assets/mentions.js';
 
 const ROLES = ['admin', 'agent', 'none'];
+// Accounts that signed themselves up belong to no tenant, so they are the whole Firebase project's,
+// not one business's. Only the admins of the business that owns the project see, let in or remove
+// them (today the only tenant).
+const HOME_TENANT = process.env.HOME_TENANT_ID || 't_3pinrealty';
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
 const isEmail = s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || ''));
 const newPassword = () => randomBytes(9).toString('base64url');
@@ -117,12 +124,14 @@ async function team(user) {
   const [users, listed] = await Promise.all([allUsers(), teamListEmails(db, user.tenantId)]);
   const mine = users.filter(u => tenantOf(u) === user.tenantId);
   const profiles = mine.length ? await db.getAll(...mine.map(u => db.collection('users').doc(u.uid))) : [];
-  const phoneOf = {};
-  profiles.forEach(d => { if (d.exists) phoneOf[d.id] = d.data().phone || ''; });
+  // Name and number as an admin set them (users/{uid}); the account's own displayName is only a
+  // fallback — anyone can change their own, so it must never be how an admin recognises them.
+  const phoneOf = {}, nameOf = {};
+  profiles.forEach(d => { if (d.exists) { phoneOf[d.id] = d.data().phone || ''; nameOf[d.id] = d.data().name || ''; } });
   const rows = mine.map(u => ({
     uid: u.uid,
     email: u.email || '',
-    name: u.displayName || '',
+    name: nameOf[u.uid] || '',
     phone: phoneOf[u.uid] || '',
     role: roleOf(u),
     active: !u.disabled,
@@ -134,10 +143,10 @@ async function team(user) {
   })).sort((a, b) => a.email.localeCompare(b.email));
   // Accounts that signed themselves up (the sign-in page allows it) and belong to nobody yet: they
   // see nothing until an admin lets them in here.
-  const pending = users.filter(u => !tenantOf(u) && u.email).map(u => ({
+  const pending = user.tenantId !== HOME_TENANT ? [] : users.filter(u => !tenantOf(u) && u.email).map(u => ({
     uid: u.uid,
     email: u.email,
-    name: u.displayName || '',
+    nameGiven: u.displayName || '',      // chosen by whoever signed up: shown as such, never trusted
     via: (u.providerData || []).map(p => p.providerId === 'google.com' ? 'Google' : p.providerId === 'password' ? 'password' : p.providerId),
     verified: !!u.emailVerified,
     created: u.metadata.creationTime ? Date.parse(u.metadata.creationTime) : null,
@@ -211,10 +220,14 @@ async function resetPassword(user, body) {
   if (uid === user.uid) return json({ error: 'Change your own password from the sign-in page' }, 400);
   const { error, target } = await teammate(user, uid);
   if (error) return error;
+  // One admin may not take over another's account: an admin resets their own password from the
+  // sign-in page ("Forgot password").
+  if (roleOf(target) === 'admin') return json({ error: 'Admins reset their own password from the sign-in page' }, 403);
+  const hadPassword = (target.providerData || []).some(p => p.providerId === 'password');
   const password = newPassword();
   await getAuth().updateUser(uid, { password, emailVerified: true });
   await getAuth().revokeRefreshTokens(uid);
-  await log(getDb(), user.tenantId, user, { action: 'reset-password', uid, email: target.email || '' });
+  await log(getDb(), user.tenantId, user, { action: hadPassword ? 'reset-password' : 'password-login-added', uid, email: target.email || '' });
   return json({ ok: true, uid, email: target.email || '', password });
 }
 
@@ -277,18 +290,30 @@ async function addUser(user, body) {
 // Let in an account that signed itself up, keeping the sign-in it chose: the admin is vouching for
 // this person (team.html says so before they press Approve).
 async function approve(user, body) {
+  if (user.tenantId !== HOME_TENANT) return json({ error: 'Admins only' }, 403);
   const { uid } = body || {};
-  const role = (body && body.role) || 'none';
-  if (!ROLES.includes(role)) return json({ error: 'Pick a role: admin, agent or full access' }, 400);
+  const role = (body && body.role) || 'agent';
+  if (role !== 'agent' && role !== 'none') return json({ error: 'Let them in as an agent or full access; make them an admin afterwards if needed' }, 400);
   let rec;
   try { rec = await getAuth().getUser(uid); } catch (e) { return json({ error: 'That request is gone' }, 404); }
   if (tenantOf(rec)) return json({ error: 'Already let in' }, 409);
-  if (!rec.emailVerified) rec = await getAuth().updateUser(uid, { emailVerified: true });
-  await attach(user, rec, { role, name: rec.displayName || '', phone: '', teamList: !!(body && body.teamList), action: 'approve' });
-  return json({ ok: true, uid, email: rec.email, role });
+  // Google proves the address belongs to whoever signed in. A password chosen at sign-up proves
+  // nothing — it may be someone else's who registered this address first — so it is replaced with a
+  // one-time password the admin sends to the person, and every session is ended.
+  const google = (rec.providerData || []).some(p => p.providerId === 'google.com');
+  const hasPassword = (rec.providerData || []).some(p => p.providerId === 'password');
+  let password = null;
+  if (hasPassword || !google) {
+    password = newPassword();
+    rec = await getAuth().updateUser(uid, { password, emailVerified: true });
+    await getAuth().revokeRefreshTokens(uid);
+  }
+  await attach(user, rec, { role, name: '', phone: '', teamList: !!(body && body.teamList), action: 'approve' });
+  return json({ ok: true, uid, email: rec.email, role, password });
 }
 
 async function dismiss(user, body) {
+  if (user.tenantId !== HOME_TENANT) return json({ error: 'Admins only' }, 403);
   const { uid } = body || {};
   let rec;
   try { rec = await getAuth().getUser(uid); } catch (e) { return json({ ok: true, uid, gone: true }); }

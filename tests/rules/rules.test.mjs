@@ -185,7 +185,16 @@ test('a role nobody defined (a typo, a future role) gets nothing — never full 
     await assertFails(getDoc(doc(d, 'properties/ADRM0002')));
     await assertFails(getDoc(doc(d, `finance/${T}/invoices/i1`)));
     await assertFails(getDoc(doc(d, `settings/${T}`)));
+    await assertFails(getDoc(doc(d, `taskConfigs/${T}`)));
+    await assertFails(setDoc(doc(d, `todayOpens/${T}__${who[k].uid}`), { tenantId: T, email: 'x', opens: {}, updatedAt: 1 }));
   }
+  // even as an assignee or a viewer of a task
+  await env.withSecurityRulesDisabled(async ctx => {
+    await setDoc(doc(ctx.firestore(), 'tasks/t6'), { tenantId: T, title: 'x', description: '', status: 'todo', history: [],
+      assignees: ['typo@threepin.in'], visibleTo: [`${T}|typo@threepin.in`] });
+  });
+  await assertFails(getDoc(doc(db('typo'), 'tasks/t6')));
+  await assertFails(updateDoc(doc(db('typo'), 'tasks/t6'), { status: 'done', tenantId: T }));
 });
 
 test('the legacy config collection: the team only — not agents, not accounts without a tenant', async () => {

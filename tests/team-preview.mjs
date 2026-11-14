@@ -43,8 +43,8 @@ const seedUsers = () => ([
   { uid: 'u_rameez', email: 'rameez@threepin.in', name: '', phone: '', role: 'agent', active: true, verified: true, teamList: true, lastLogin: null },
 ]);
 const seedPending = () => ([
-  { uid: 'u_kumar', email: 'kumar.realtor@gmail.com', name: 'Kumar R', via: ['password'], verified: false, created: Date.now() - 2 * day },
-  { uid: 'u_spam', email: 'test123@mailinator.com', name: '', via: ['password'], verified: false, created: Date.now() - 9 * day },
+  { uid: 'u_kumar', email: 'kumar.realtor@gmail.com', nameGiven: 'Swami – new phone', via: ['password'], verified: false, created: Date.now() - 2 * day },
+  { uid: 'u_spam', email: 'test123@mailinator.com', nameGiven: '', via: ['password'], verified: false, created: Date.now() - 9 * day },
 ]);
 
 // ── The server stand-in (api/_agent.js's behaviour, guard rails included) ──
@@ -88,6 +88,7 @@ function makeServer(meKey, config, opts = {}) {
         }
         case 'reset-password':
           if (body.uid === me.uid) return [400, { error: 'Change your own password from the sign-in page' }];
+          if (u.role === 'admin') return [403, { error: 'Admins reset their own password from the sign-in page' }];
           return [200, { ok: true, email: u.email, password: 'Zr4-newPass9' }];
         case 'team-list': {
           const x = state.users.find(y => y.email === body.email); if (x) x.teamList = body.on === true; return [200, { ok: true }];
@@ -102,10 +103,11 @@ function makeServer(meKey, config, opts = {}) {
           return [200, { ok: true, email, role: body.role, name: String(body.name || '').trim(), phone: p, password: 'Qx7-pR2mZ9kL' }];
         }
         case 'approve': {
+          if (body.role !== 'agent' && body.role !== 'none') return [400, { error: 'Let them in as an agent or full access' }];
           const i = state.pending.findIndex(x => x.uid === body.uid); if (i < 0) return [404, { error: 'That request is gone' }];
           const p = state.pending.splice(i, 1)[0];
-          state.users.push({ uid: p.uid, email: p.email, name: p.name, phone: '', role: body.role, active: true, verified: true, teamList: !!body.teamList, lastLogin: null });
-          return [200, { ok: true }];
+          state.users.push({ uid: p.uid, email: p.email, name: '', phone: '', role: body.role, active: true, verified: true, teamList: !!body.teamList, lastLogin: null });
+          return [200, { ok: true, email: p.email, role: body.role, password: p.via.includes('password') ? 'Ap9-oneTime' : null }];
         }
         case 'dismiss': state.pending = state.pending.filter(x => x.uid !== body.uid); return [200, { ok: true }];
       }
@@ -133,6 +135,12 @@ export const setDoc = async (r, v) => {
   if (window.__slowSave) await new Promise(res => setTimeout(res, window.__slowSave));
   if (c.role !== 'admin' || !c.email_verified || !Object.keys(v).every(k => KEYS.includes(k))) { const e = new Error('denied'); e.code = 'permission-denied'; throw e; }
   window.__fs[r.path] = JSON.parse(JSON.stringify(v)); window.__writes = (window.__writes || 0) + 1;
+};
+export const runTransaction = async (db, fn) => {
+  const sets = [];
+  const tx = { get: getDoc, set: (r, v) => { sets.push([r, v]); return tx; } };
+  await fn(tx);
+  for (const [r, v] of sets) await setDoc(r, v);
 };
 export const collection = () => ({}), onSnapshot = () => () => {}, getDocs = async () => ({ docs: [] }), query = () => ({}), where = () => ({});
 export const clearIndexedDbPersistence = async () => { window.__cacheCleared = (window.__cacheCleared || 0) + 1; }, terminate = async () => {};
@@ -259,8 +267,16 @@ for (const scheme of ['light', 'dark']) {
   const wa = await page.getAttribute('.sheet a.btn.wa', 'href');
   ok('“Send login on WhatsApp” goes to his number with the sign-in message', /^https:\/\/wa\.me\/919840012345\?text=/.test(wa) && /Zr4-newPass9/.test(decodeURIComponent(wa)) && /admin\.threepin\.in/.test(decodeURIComponent(wa)), wa);
   await shot(page, 'phone-reset-password', false);
+  await page.click('.sheet .btn.primary[data-close]');
+  ok('Done closes the password sheet', !(await page.$('.sheet')));
+  await page.click('#people .row[data-uid="u_rameez"]'); await page.waitForSelector('.sheet');
   await page.keyboard.press('Escape');
-  ok('Escape closes the sheet', !(await page.$('.sheet')));
+  ok('Escape closes an ordinary sheet', !(await page.$('.sheet')));
+
+  // Another admin: no password reset (an admin cannot take over another admin's account)
+  await page.click('#people .row[data-uid="u_thirumal"]'); await page.waitForSelector('.sheet');
+  ok('Another admin’s sheet offers no password reset, and says why', !(await page.$('#pReset')) && /reset their own password/.test(await page.textContent('.sheet')));
+  await page.click('.sheet [data-close]');
 
   // Own row
   await page.click('#people .row[data-uid="u_swami"]'); await page.waitForSelector('.sheet');
@@ -288,6 +304,10 @@ for (const scheme of ['light', 'dark']) {
   ok('A new login shows its one-time password', (await page.textContent('.pw')) === 'Qx7-pR2mZ9kL');
   ok('…with WhatsApp to her number, Copy, and “Customise what they see”', /wa\.me\/919876543210/.test(await page.getAttribute('.sheet a.btn.wa', 'href')) && !!(await page.$('#cpBtn')) && !!(await page.$('#custBtn')));
   await shot(page, 'phone-add-password', false);
+  await page.keyboard.press('Escape');
+  ok('Escape does not throw away a one-time password still on screen', !!(await page.$('.pw')));
+  await page.mouse.click(195, 40);
+  ok('Nor does a tap outside the sheet', !!(await page.$('.pw')));
   await page.click('#custBtn');
   await page.waitForSelector('.banner');
   ok('“Customise what they see” opens her settings, clearly marked “Editing Kavya only”', /Editing Kavya only/.test(await page.textContent('.banner')));
@@ -296,10 +316,15 @@ for (const scheme of ['light', 'dark']) {
 
   // Waiting for approval
   await page.click('#pendingWrap .row[data-pending="u_kumar"]'); await page.waitForSelector('.sheet');
-  ok('A sign-up warns before letting them in (they chose their own password)', /chose their own password/.test(await page.textContent('.sheet .callout')));
+  ok('A sign-up is shown by its email; the name it gave itself is labelled as such, never as a name', await page.evaluate(() =>
+    /kumar\.realtor@gmail\.com/.test(document.querySelector('.sheet h3').textContent) && /calls themselves “Swami – new phone”/.test(document.querySelector('.sheet .sub').textContent)));
+  ok('…says the email is not confirmed, and that their chosen password will be replaced', /email not confirmed/.test(await page.textContent('.sheet .sub')) && /password they chose is replaced/.test(await page.textContent('.sheet .callout')));
+  ok('…and offers only Agent or Full access (never straight to Admin)', await page.evaluate(() => [...document.querySelectorAll('.sheet input[name=arole]')].map(i => i.value).join() === 'agent,none'));
   await shot(page, 'phone-pending-sheet', false);
-  await page.click('#aOk'); await waitToast(page);
-  ok('Let in: Kumar is now an agent on the team', page.server.state.users.some(u => u.uid === 'u_kumar' && u.role === 'agent') && await page.evaluate(() => /Kumar R/.test(document.querySelector('#people').textContent)));
+  await page.click('#aOk'); await page.waitForSelector('.pw');
+  ok('Let in: a one-time password to send them replaces the one they chose', (await page.textContent('.pw')) === 'Ap9-oneTime');
+  await page.click('.sheet [data-close]');
+  ok('Kumar is now an agent on the team, listed by email (not by his self-given name)', page.server.state.users.some(u => u.uid === 'u_kumar' && u.role === 'agent') && await page.evaluate(() => /kumar\.realtor@gmail\.com/.test(document.querySelector('#people').textContent) && !/Swami – new phone/.test(document.querySelector('#people').textContent)));
   await page.click('#pendingWrap .row[data-pending="u_spam"]'); await page.waitForSelector('.sheet');
   await page.click('#aDismiss'); await waitToast(page);
   ok('Remove request: the sign-up is gone and the waiting list hides', page.server.state.pending.length === 0 && await page.evaluate(() => !document.querySelector('#pendingWrap').textContent));
@@ -338,6 +363,7 @@ for (const scheme of ['light', 'dark']) {
   // Per agent
   await page.selectOption('#forWho', 'rameez@threepin.in');
   ok('Editing one agent is unmistakable: a banner names him', /Editing Rameez Khan only/.test(await page.textContent('.banner')));
+  ok('…and the banner never pushes the page sideways', await noSideways(page));
   await page.click('input[data-key=tabs][value=campaigns]');
   ok('What differs from the common settings is marked', await page.evaluate(() => document.querySelector('input[data-key=tabs][value=campaigns]').closest('.chk').classList.contains('diff')));
   ok('The save bar names whose changes they are', /for rameez/.test(await page.textContent('#saveMsg')));
@@ -377,8 +403,21 @@ for (const scheme of ['light', 'dark']) {
   // QA #19: another admin saved in the meantime
   await page.evaluate(() => { const d = window.__fs['agentConfigs/t_3pinrealty']; d.updatedAt += 5; d.updatedBy = 'thirumal@threepin.in'; d.tabs = ['crm']; });
   await page.click('input[data-key=tabs][value=tasks]');
-  await page.click('#saveBtn'); await page.waitForTimeout(400);
-  ok('Another admin’s newer save is not overwritten; you are told whose', /Another admin \(thirumal@threepin\.in\)/.test(await page.textContent('#saveMsg')) && (await fsDoc(page)).tabs.join() === 'crm');
+  await page.click('#saveBtn'); await page.waitForSelector('.toast');
+  ok('Another admin’s newer save is not overwritten; you are told whose', /Another admin \(thirumal@threepin\.in\)/.test(await page.textContent('.toast')) && (await fsDoc(page)).tabs.join() === 'crm');
+  ok('…their version is loaded at once, so a second click has nothing stale to save', await page.evaluate(() => document.getElementById('savebar').hidden
+    && [...document.querySelectorAll('input[data-key=tabs]:checked')].map(i => i.value).join() === 'crm'));
+
+  // An agent's own settings that end up identical to the common ones are dropped
+  await page.waitForTimeout(2500);
+  await page.selectOption('#forWho', 'kavya@threepin.in');
+  await page.click('input[data-key=tabs][value=tasks]');
+  await page.click('#saveBtn'); await waitToast(page);
+  ok('Kavya has her own settings (crm + tasks)', JSON.stringify((await fsDoc(page)).overrides) === JSON.stringify({ 'kavya@threepin.in': { tabs: ['crm', 'tasks'] } }), JSON.stringify((await fsDoc(page)).overrides));
+  await page.click('#backBtn');
+  await page.click('input[data-key=tabs][value=tasks]');
+  await page.click('#saveBtn'); await waitToast(page);
+  ok('When the common settings come to match hers, her identical own settings are dropped', Object.keys((await fsDoc(page)).overrides).length === 0, JSON.stringify((await fsDoc(page)).overrides));
   await page.context().close();
 }
 
@@ -412,6 +451,17 @@ console.log('\nSwami (admin) — desktop');
   await page.click('input[data-key=grantedPropertyFields][value=code]');
   await shot(page, 'desk-settings', false);
   ok('Desktop: the save bar sits beside the menu, not under it', await page.evaluate(() => document.getElementById('savebar').getBoundingClientRect().left >= document.getElementById('appRail').getBoundingClientRect().right - 1));
+  await page.context().close();
+}
+
+// ═══════ A shared phone: the last person was an agent ═══════
+console.log('\nShared phone — Swami signs in after Rameez');
+{
+  const page = await open('swami', DESK, '/crm.html?nav=tasks', { lastAccess: { uid: 'u_rameez', role: 'agent', tabs: ['crm'], config: { tabs: ['crm'] } } });
+  await page.waitForFunction(() => window.__ready === true && window.PinAccess, null, { timeout: 20000 });
+  await page.waitForTimeout(500);
+  const m = await menu(page);
+  ok('The admin gets the full menu with Team & access, not the previous agent’s cut-down one', m.includes('Finance') && m.includes('Team & access'), m.join(', '));
   await page.context().close();
 }
 

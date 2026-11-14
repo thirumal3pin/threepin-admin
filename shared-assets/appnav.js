@@ -183,16 +183,16 @@
   var badges = {};
   var root = null;
   // Who is looking (shared-assets/access.js): { role: 'admin' | 'agent' | 'none', tabs: [...] }.
-  // From the first paint it is this device's last answer (access.js keeps it), so an agent's menu
-  // never flashes the full one. A device that has never been told waits for the answer (at most a
-  // few seconds) with the sections hidden; signed out (access null) shows the menu as before.
+  // From the first paint it is this device's last answer (access.js keeps it, and every sign-out
+  // forgets it), so an agent's menu never flashes the full one. A device that has never been told
+  // waits for the answer with the sections hidden — never a timed fallback to the full menu;
+  // access.js always answers, from the server, the token, or signed out (access null).
   var access = (typeof window !== 'undefined' && window.__pinAccess) || (function () {
     try {
       var last = JSON.parse(localStorage.getItem('pin.access.last') || 'null');
       return last && last.role ? { role: last.role, tabs: last.tabs || null } : { pending: true };
     } catch (e) { return null; }
   })();
-  if (access && access.pending) setTimeout(function () { if (access && access.pending) { access = null; render(); } }, 3000);
 
   // ── Small helpers ──
   function esc(s) {
@@ -258,6 +258,16 @@
       if (sec.nav === nav) return allowed(sec);
       var list = itemsOf(sec);
       for (var j = 0; j < list.length; j++) if (list[j].nav === nav) return allowed(sec) && allowed(list[j], sec);
+    }
+    return true;
+  }
+  function navAllowedId(id) {
+    for (var i = 0; i < MAP.length; i++) {
+      var sec = MAP[i];
+      if (sec.page !== (cfg && cfg.console)) continue;
+      if (sec.id === id && !sec.items && !sec.groups) return allowed(sec);
+      var list = itemsOf(sec);
+      for (var j = 0; j < list.length; j++) if (list[j].id === id) return allowed(sec) && allowed(list[j], sec);
     }
     return true;
   }
@@ -511,6 +521,7 @@
     });
     root.querySelector('.rail-out').addEventListener('click', function () {
       closeDrawer();
+      try { localStorage.removeItem('pin.access.last'); sessionStorage.removeItem('pin.access'); } catch (e) {}
       if (cfg.signOut) cfg.signOut();
     });
 
@@ -622,7 +633,15 @@
     setActive: setActive,
     setUser: function (email) { if (cfg) { cfg.user = email; render(); } },
     /* From shared-assets/access.js once the role is known. */
-    setAccess: function (a) { access = a || null; window.__pinAccess = access; render(); },
+    setAccess: function (a) {
+      access = a || null; window.__pinAccess = access; render();
+      // An agent standing on a view they may not see (an old link, opened before the role was known):
+      // back to the console's home view.
+      if (access && access.role === 'agent' && cfg && active && cfg.select && !navAllowedId(active)) {
+        var home = PAGES[cfg.console] && PAGES[cfg.console].home;
+        if (home && home !== active && navAllowed(home)) cfg.select(home, null);
+      }
+    },
     navAllowed: function (nav) { return navAllowed(nav); },
     setBadge: function (key, n) { badges[key] = Number(n) || 0; render(); },
     open: openDrawer,

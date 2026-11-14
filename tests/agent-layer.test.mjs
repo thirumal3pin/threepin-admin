@@ -127,11 +127,22 @@ const agentSrc = readFileSync(new URL('../api/_agent.js', import.meta.url), 'utf
 ok('add-user refuses someone already on the team (no way around the role guard rails)', /Already on the team/.test(agentSrc));
 ok('add-user replaces the password of an account that signed itself up', /hasPassword[\s\S]{0,200}patch\.password = password/.test(agentSrc));
 ok('admin actions check the token against the live account', /checkRevoked: isAdminAction/.test(agentSrc));
+ok('approve: only agent or full access, never straight to admin', /role !== 'agent' && role !== 'none'/.test(agentSrc));
+ok('approve: a password the sign-up chose is replaced with a one-time one', /async function approve[\s\S]{0,1400}password = newPassword\(\)/.test(agentSrc));
+ok('sign-ups (the whole project’s) are handled only by the home tenant’s admins', /user\.tenantId !== HOME_TENANT \? \[\]/.test(agentSrc) && (agentSrc.match(/user\.tenantId !== HOME_TENANT\) return json/g) || []).length === 2);
+ok('an admin cannot reset another admin’s password', /roleOf\(target\) === 'admin'\) return json\(\{ error: 'Admins reset their own password/.test(agentSrc));
+ok('names come from what an admin set, not the account’s own display name', /name: nameOf\[u\.uid\] \|\| ''/.test(agentSrc));
 const shared = readFileSync(new URL('../api/_bot-shared.js', import.meta.url), 'utf8');
 ok('every endpoint lets in full access only, unless it opts in to agents; unknown roles never',
   /if \(role !== '' && role !== 'admin' && !\(role === 'agent' && allowAgent\)\) return null/.test(shared));
 const digest = readFileSync(new URL('../api/followup-digest.js', import.meta.url), 'utf8');
 ok('agents can still send the email for a change to their own task', /verifyCrmUser\(request, \{ allowAgent: isTask \}\)/.test(digest));
+ok('…at most one of each kind per task every 10 minutes (managers excepted), and who was emailed is not echoed', /!isMgr && Date\.now\(\) - lastAt < 10 \* 60 \* 1000/.test(digest) && !/sent, results \}/.test(digest));
+const acc = readFileSync(new URL('../shared-assets/access.js', import.meta.url), 'utf8');
+ok('the agent wipe is marked done only once it worked, retried next session, reset when no longer an agent', /if \(await forgetLocalCopy\(\)\) \{ try \{ localStorage\.setItem\(WIPED/.test(acc) && /role !== 'agent'\) \{ try \{ localStorage\.removeItem\(WIPED\)/.test(acc));
+ok('the wipe also clears data copies kept in localStorage', /pinProp:\|pinCal:\|pinTodayOpens:\|easy/.test(acc));
+const rulesSrc = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
+ok('rules: what agents may use is open to known roles only (an undefined role gets nothing)', /function isKnownRole\(\)/.test(rulesSrc) && !/allow (read|create|update|delete)[^;]*: if hasTenant\(\)/.test(rulesSrc));
 
 console.log(failed ? `\n${failed} failed, ${passed} passed.` : `\nAll good (${passed} checks).`);
 process.exit(failed ? 1 : 0);

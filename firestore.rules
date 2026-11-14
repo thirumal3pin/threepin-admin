@@ -58,13 +58,19 @@ function isSignedInWithTenant() {
   return hasTenant() && role() in ['', 'admin'];
 }
 
+// A role this file knows: full access ('' or admin) or agent. A role nobody has defined (a typo, a
+// future role) is neither, and gets nothing at all — not even what agents get.
+function isKnownRole() {
+  return isSignedInWithTenant() || isAgent();
+}
+
 // The same checks for paths an agent may also use (their own records only).
 function inMyTenant() {
-  return hasTenant() && resource.data.tenantId == tenantId();
+  return isKnownRole() && resource.data.tenantId == tenantId();
 }
 
 function writingMyTenant() {
-  return hasTenant() && request.resource.data.tenantId == tenantId();
+  return isKnownRole() && request.resource.data.tenantId == tenantId();
 }
 
 function ownsTenantDoc(id) {
@@ -176,8 +182,8 @@ service cloud.firestore {
     // {tenant}__{uid}; nobody else reads or writes it, and it holds nothing but the open times.
     // Agents keep one too (their own only), so hasTenant() rather than isSignedInWithTenant().
     match /todayOpens/{docId} {
-      allow read, delete: if hasTenant() && docId == tenantId() + '__' + request.auth.uid;
-      allow create, update: if hasTenant() && docId == tenantId() + '__' + request.auth.uid
+      allow read, delete: if isKnownRole() && docId == tenantId() + '__' + request.auth.uid;
+      allow create, update: if isKnownRole() && docId == tenantId() + '__' + request.auth.uid
         && request.resource.data.tenantId == tenantId()
         && request.resource.data.keys().hasOnly(['tenantId', 'email', 'opens', 'updatedAt'])
         && request.resource.data.opens is map;
@@ -293,7 +299,7 @@ service cloud.firestore {
 
     // Read by agents too: the Tasks page needs to know who the managers are.
     match /taskConfigs/{tid} {
-      allow read: if hasTenant() && tid == tenantId();
+      allow read: if isKnownRole() && tid == tenantId();
       allow update: if ownsTenantDoc(tid) && emailVerified()
         && myEmail() in resource.data.managers
         && request.resource.data.tenantId == tid
@@ -308,8 +314,8 @@ service cloud.firestore {
     // Managing tasks stays with managers, who are never agents (isTaskManager() is built on
     // isSignedInWithTenant()).
     match /tasks/{taskId} {
-      allow read: if hasTenant() && (
-        (emailVerified() && !isAgent() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
+      allow read: if isKnownRole() && (
+        (emailVerified() && isSignedInWithTenant() && (tenantId() + '|' + myEmail()) in resource.data.visibleTo)
         || (emailVerified() && isAgent() && resource.data.tenantId == tenantId() && myEmail() in resource.data.assignees)
         || (resource.data.tenantId == tenantId() && isTaskManager()));
       allow create: if writingOwnTenantField() && isTaskManager() && validTask(request.resource.data);

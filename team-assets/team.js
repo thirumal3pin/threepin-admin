@@ -8,7 +8,7 @@
 //         write it, and only known settings). The model and defaults are shared-assets/agent-config.js.
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, runTransaction } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import * as AC from '../shared-assets/agent-config.js';
 
 const firebaseConfig = {
@@ -149,9 +149,9 @@ function renderPeople() {
     ? '<h2 class="group-h wide">Waiting for approval <small>Signed up on their own. They see nothing until you let them in.</small></h2>'
       + '<div class="card pending"><ul class="list">' + pending.map(p =>
         '<li class="row" data-pending="' + esc(p.uid) + '" role="button" tabindex="0">'
-        + '<span class="av">' + esc((p.name || p.email).charAt(0).toUpperCase()) + '</span>'
-        + '<span class="who"><b>' + esc(p.name || p.email) + '</b><small>' + (p.name ? esc(p.email) + ' · ' : '')
-        + 'via ' + esc((p.via || []).join(', ') || 'email') + (p.created ? ' · ' + esc(ago(p.created)) : '') + '</small></span>'
+        + '<span class="av">' + esc(p.email.charAt(0).toUpperCase()) + '</span>'
+        + '<span class="who"><b>' + esc(p.email) + '</b><small>'
+        + 'via ' + esc((p.via || []).join(', ') || 'email') + (p.verified ? '' : ' · email not confirmed') + (p.created ? ' · ' + esc(ago(p.created)) : '') + '</small></span>'
         + '<span class="pill wait">Waiting</span></li>').join('') + '</ul></div>'
     : '';
   // Grouped by role
@@ -179,8 +179,12 @@ function sheet(html, onMount) {
   document.querySelectorAll('.toast').forEach(t => t.remove());
   const host = $('sheetHost');
   host.innerHTML = '<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grip"></div>' + html + '</div>';
-  const close = () => {
+  // A sheet showing a one-time password closes only with its Done button: Escape, a tap outside or
+  // Back would throw away a password that can't be shown again.
+  const locked = () => { const sh = host.querySelector('.sheet'); return !!(sh && sh.dataset.locked); };
+  const close = (force) => {
     if (!host.innerHTML) return;
+    if (locked() && force !== true) { toast('Copy or send the password first, then tap Done'); return; }
     host.innerHTML = '';
     closeSheet = null;
     if (window.AppNav.closeLayer) window.AppNav.closeLayer('team-sheet');
@@ -188,14 +192,22 @@ function sheet(html, onMount) {
   closeSheet = close;
   host.querySelector('.scrim').addEventListener('click', close);
   host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
-  if (window.AppNav.openLayer) window.AppNav.openLayer('team-sheet', () => { host.innerHTML = ''; closeSheet = null; });
+  const onBack = () => {
+    if (locked()) {   // Back was pressed: keep the sheet and its history entry
+      toast('Copy or send the password first, then tap Done');
+      if (window.AppNav.openLayer) window.AppNav.openLayer('team-sheet', onBack);
+      return;
+    }
+    host.innerHTML = ''; closeSheet = null;
+  };
+  if (window.AppNav.openLayer) window.AppNav.openLayer('team-sheet', onBack);
   const el = host.querySelector('.sheet');
   onMount && onMount(el, close);
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && closeSheet) closeSheet(); });
 
-function roleChoices(name, current) {
-  return '<div class="choices">' + ['agent', 'admin', 'none'].map(r =>
+function roleChoices(name, current, only) {
+  return '<div class="choices">' + (only || ['agent', 'admin', 'none']).map(r =>
     '<label><input type="radio" name="' + name + '" value="' + r + '"' + (r === current ? ' checked' : '') + '>'
     + '<span><b>' + ROLE_LABEL[r] + (r === 'none' ? ' (staff)' : '') + '</b><small>' + esc(ROLE_NOTE[r]) + '</small></span></label>').join('') + '</div>';
 }
@@ -218,6 +230,7 @@ function waLink(phone, text) { return 'https://wa.me/' + (phone || '') + '?text=
 
 function credentialsPanel(el, close, { email, password, phone, title, agent }) {
   const msg = loginMessage(email, password);
+  if (password) el.dataset.locked = '1';
   el.innerHTML = '<div class="grip"></div><h3>' + esc(title) + '</h3>'
     + (password
       ? '<p class="sub">Send this password now. It isn’t saved anywhere and won’t be shown again.</p><div class="pw" id="pwBox">' + esc(password) + '</div>'
@@ -227,10 +240,10 @@ function credentialsPanel(el, close, { email, password, phone, title, agent }) {
     + '<button type="button" class="btn block" id="cpBtn"><i class="fa-regular fa-copy"></i> Copy login message</button>'
     + (agent ? '<button type="button" class="btn block" id="custBtn">Customise what they see</button>' : '')
     + '<button type="button" class="btn primary block" data-close>Done</button></div>';
-  el.querySelector('[data-close]').addEventListener('click', close);
+  el.querySelector('[data-close]').addEventListener('click', () => close(true));
   el.querySelector('#cpBtn').addEventListener('click', () => navigator.clipboard.writeText(msg).then(() => toast('Copied')).catch(() => toast('Copy didn’t work — select the password')));
   const cust = el.querySelector('#custBtn');
-  if (cust) cust.addEventListener('click', () => { close(); openSettingsFor(email); });
+  if (cust) cust.addEventListener('click', () => { close(true); openSettingsFor(email); });
 }
 
 function personSheet(p) {
@@ -246,7 +259,7 @@ function personSheet(p) {
         + '<label class="toggle"><span>Account active<small>Off = they’re signed out within an hour and can’t sign in</small></span><input type="checkbox" id="pActive"' + (p.active ? ' checked' : '') + '></label>')
     + '<label class="toggle"><span>Show in team lists<small>Can be @mentioned, gets a Team calendar column, can be picked for site visits</small></span><input type="checkbox" id="pList"' + (p.teamList ? ' checked' : '') + '></label>'
     + (p.self ? '' : '<div class="stack">' + (isAgent ? '<button type="button" class="btn block" id="pCust"><i class="fa-solid fa-sliders"></i> Customise what they see</button>' : '')
-      + '<button type="button" class="btn block" id="pReset"><i class="fa-solid fa-key"></i> Reset password</button></div>')
+      + (p.role === 'admin' ? '<p class="aside">Admins reset their own password from the sign-in page.</p>' : '<button type="button" class="btn block" id="pReset"><i class="fa-solid fa-key"></i> Reset password</button>') + '</div>')
     + '<p class="err" id="pErr"></p>'
     + '<div class="bar"><button type="button" class="btn block" data-close>Cancel</button><button type="button" class="btn primary block" id="pSave">Save</button></div>',
     (el, close) => {
@@ -298,11 +311,14 @@ function personSheet(p) {
 
 function pendingSheet(p) {
   if (!p) return;
+  const google = (p.via || []).includes('Google');
   sheet(
-    '<h3>' + esc(p.name || p.email) + '</h3><p class="sub">' + esc(p.email) + ' · signed up via ' + esc((p.via || []).join(', ') || 'email') + '</p>'
-    + '<div class="callout warn">This person signed themselves up and sees nothing yet. Let them in only if you know this is them'
-    + ((p.via || []).includes('password') ? ': they chose their own password.' : '.') + '</div>'
-    + roleChoices('arole', 'agent')
+    '<h3>' + esc(p.email) + '</h3><p class="sub">Signed up via ' + esc((p.via || []).join(', ') || 'email')
+    + (p.verified ? '' : ' · email not confirmed') + (p.nameGiven ? ' · calls themselves “' + esc(p.nameGiven) + '”' : '') + '</p>'
+    + '<div class="callout warn">They see nothing yet. Let them in only if you know this email is theirs.'
+    + (google ? '' : ' The password they chose is replaced: you’ll get a one-time password to send them.') + '</div>'
+    + roleChoices('arole', 'agent', ['agent', 'none'])
+    + '<p class="aside">Need them as an admin? Let them in first, then change their role.</p>'
     + '<label class="toggle"><span>Show in team lists<small>Only for a real person’s mailbox</small></span><input type="checkbox" id="aList"></label>'
     + '<p class="err" id="aErr"></p>'
     + '<div class="bar"><button type="button" class="btn danger block" id="aDismiss">Remove request</button><button type="button" class="btn primary block" id="aOk">Let them in</button></div>',
@@ -312,9 +328,10 @@ function pendingSheet(p) {
         btn.disabled = true;
         try {
           const role = (el.querySelector('input[name="arole"]:checked') || {}).value || 'agent';
-          await api('approve', { uid: p.uid, role, teamList: el.querySelector('#aList').checked });
-          close(); toast(p.email + ' is in as ' + ROLE_LABEL[role]);
+          const r = await api('approve', { uid: p.uid, role, teamList: el.querySelector('#aList').checked });
           await loadPeople();
+          if (r.password) credentialsPanel(el, close, { email: r.email, password: r.password, phone: '', agent: role === 'agent', title: r.email + ' is in as ' + ROLE_LABEL[role] });
+          else { close(); toast(p.email + ' is in as ' + ROLE_LABEL[role]); }
         } catch (e) { el.querySelector('#aErr').textContent = e.message; btn.disabled = false; }
       });
       el.querySelector('#aDismiss').addEventListener('click', async () => {
@@ -569,37 +586,58 @@ function diffFrom(base, cfg) {
   return d;
 }
 
-// Save: the inputs are locked while it is in flight (nothing ticked meanwhile can be lost), and a
-// change another admin saved since this page loaded is never overwritten silently.
+// Save: the inputs are locked while it is in flight (nothing ticked meanwhile can be lost). The
+// write is a transaction that first checks the document is still the one this page loaded: a change
+// another admin saved meanwhile is never overwritten — their version is loaded at once and you are
+// told whose it was, so there is no stale draft left to save by clicking again.
+const CONFLICT = 'conflict';
 async function save(nextShared, overrides) {
   if (saving) return;
   saving = true;
   $('settingsFs').disabled = true;
   $('saveBtn').disabled = true;
   try {
-    const fresh = await getDoc(settingsRef());
-    const now = fresh.exists() ? fresh.data() : null;
-    if (((now && now.updatedAt) || 0) !== ((stored && stored.updatedAt) || 0)) {
-      stored = now;
-      $('saveMsg').textContent = 'Another admin (' + ((now && now.updatedBy) || 'someone') + ') saved changes just now. Their version is loaded — make your change again.';
-      setTimeout(() => { renderForWho(); pickWho(forWho); }, 3000);
-      return;
-    }
-    const out = AC.normalizeConfig({ ...nextShared, overrides }, me.tenantId);
+    const out = AC.normalizeConfig({ ...nextShared, overrides: tidyOverrides(nextShared, overrides) }, me.tenantId);
     out.updatedAt = Date.now();
     out.updatedBy = me.email;
-    await setDoc(settingsRef(), out);
+    const loadedAt = (stored && stored.updatedAt) || 0;
+    await runTransaction(db, async tx => {
+      const fresh = await tx.get(settingsRef());
+      const now = fresh.exists() ? fresh.data() : null;
+      if (((now && now.updatedAt) || 0) !== loadedAt) { const e = new Error(CONFLICT); e.now = now; throw e; }
+      tx.set(settingsRef(), out);
+    });
     stored = out;
     toast('Saved');
     renderForWho();
     pickWho(forWho);
   } catch (e) {
-    $('saveMsg').textContent = 'Not saved: ' + (e.code === 'permission-denied' ? 'only an admin can change these' : e.message);
+    if (e.message === CONFLICT) {
+      stored = e.now;
+      renderForWho();
+      pickWho(forWho);
+      toast('Another admin (' + ((e.now && e.now.updatedBy) || 'someone') + ') saved just now. Their version is loaded — make your change again.');
+    } else {
+      $('saveMsg').textContent = 'Not saved: ' + (e.code === 'permission-denied' ? 'only an admin can change these' : e.message);
+    }
   } finally {
     saving = false;
     $('settingsFs').disabled = false;
     $('saveBtn').disabled = false;
   }
+}
+
+// An agent's own settings keep only what still differs from the common ones; one left identical is
+// dropped, so nobody stays marked "own settings" for nothing.
+function tidyOverrides(shared, overrides) {
+  const base = AC.effectiveConfig(AC.normalizeConfig(shared), null);
+  const out = {};
+  Object.keys(overrides || {}).forEach(email => {
+    const full = AC.effectiveConfig({ ...AC.normalizeConfig(shared), overrides: { [email]: overrides[email] } }, email);
+    const d = diffFrom(base, full);
+    if (Object.keys(d).length) out[email] = d;
+  });
+  return out;
 }
 
 $('saveBtn').addEventListener('click', () => {

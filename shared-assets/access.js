@@ -61,14 +61,23 @@ async function agentSettings(user) {
   return r.json();
 }
 
-// Clear what the pages saved in IndexedDB, then run `after` (reload, or go to the sign-in page).
+// Clear what the pages saved on this device: Firestore's copy in IndexedDB, and the data copies kept
+// in localStorage (a property opened in full, the team calendar, Eåsy's chat, Daily task opens).
+// Returns false when IndexedDB could not be cleared (another tab of the site still holds it), so the
+// caller can try again on the next page load. Hygiene, not a control: what an agent can read is
+// decided by the rules and the server, and a copy already taken cannot be taken back.
+const DATA_KEYS = /^(pinProp:|pinCal:|pinTodayOpens:|easy\.)/;
 async function forgetLocalCopy() {
+  try {
+    Object.keys(localStorage).filter(k => DATA_KEYS.test(k)).forEach(k => localStorage.removeItem(k));
+  } catch (e) { /* private window */ }
   try {
     const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
     const db = fs.getFirestore(app);
     await fs.terminate(db);
     await fs.clearIndexedDbPersistence(db);
-  } catch (e) { /* nothing saved, or another tab still holds it — the rules still refuse the server */ }
+    return true;
+  } catch (e) { return false; }
 }
 
 function apply(a, { gatePage = true } = {}) {
@@ -117,9 +126,12 @@ function gate(a) {
 onAuthStateChanged(auth, async user => {
   if (!user) {
     window.PinAccess = null;
+    try { localStorage.removeItem(LAST); sessionStorage.removeItem(SESSION); } catch (e) {}
     if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess(null);
     return;
   }
+  const last0 = read(localStorage, LAST);
+  if (last0 && last0.uid !== user.uid) { try { localStorage.removeItem(LAST); } catch (e) {} if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess({ pending: true }); }
   const hit = read(sessionStorage, SESSION);
   if (hit && hit.uid === user.uid && Date.now() - hit.at < REFRESH_MS) { apply(hit); return; }
   try {
@@ -129,10 +141,15 @@ onAuthStateChanged(auth, async user => {
     if (role === 'agent') a.config = (await agentSettings(user)).config || { tabs: [] };
     write(sessionStorage, SESSION, a);
     write(localStorage, LAST, { uid: a.uid, role: a.role, tabs: a.config ? a.config.tabs : null, config: a.config });
-    if (role === 'agent' && !localStorage.getItem('pin.agentWiped.' + user.uid)) {
-      // Became an agent on this device: drop what was saved while this login had full access.
-      try { localStorage.setItem('pin.agentWiped.' + user.uid, String(Date.now())); } catch (e) {}
-      await forgetLocalCopy();
+    const WIPED = 'pin.agentWiped.' + user.uid;
+    if (role !== 'agent') { try { localStorage.removeItem(WIPED); } catch (e) {} }   // a later spell as agent wipes again
+    else if (!localStorage.getItem(WIPED) && !sessionStorage.getItem('pin.wipeTried')) {
+      // Became an agent on this device: drop what was saved while this login had full access. Marked
+      // done only once it worked; with another tab of the site open it fails and is tried again in the
+      // next browser session. Either way the page reloads (the wipe shuts this page's database
+      // connection) — once per tab session, so it can never loop.
+      try { sessionStorage.setItem('pin.wipeTried', '1'); } catch (e) {}
+      if (await forgetLocalCopy()) { try { localStorage.setItem(WIPED, String(Date.now())); } catch (e) {} }
       location.reload();
       return;
     }
