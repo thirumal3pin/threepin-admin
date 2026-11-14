@@ -130,7 +130,7 @@ ok('admin actions check the token against the live account', /checkRevoked: isAd
 ok('approve: only agent or full access, never straight to admin', /role !== 'agent' && role !== 'none'/.test(agentSrc));
 ok('approve: a password the sign-up chose is replaced with a one-time one', /async function approve[\s\S]{0,1400}password = newPassword\(\)/.test(agentSrc));
 ok('sign-ups (the whole project’s) are handled only by the home tenant’s admins', /user\.tenantId !== HOME_TENANT \? \[\]/.test(agentSrc) && (agentSrc.match(/user\.tenantId !== HOME_TENANT\) return json/g) || []).length === 2);
-ok('an admin cannot reset another admin’s password', /roleOf\(target\) === 'admin'\) return json\(\{ error: 'Admins reset their own password/.test(agentSrc));
+ok('an admin cannot reset another admin’s password', /roleOf\(target\) === 'admin'\) return json\(\{ error: 'Admins sign in with/.test(agentSrc));
 ok('names come from what an admin set, not the account’s own display name', /name: nameOf\[u\.uid\] \|\| ''/.test(agentSrc));
 const shared = readFileSync(new URL('../api/_bot-shared.js', import.meta.url), 'utf8');
 ok('every endpoint lets in full access only, unless it opts in to agents; unknown roles never',
