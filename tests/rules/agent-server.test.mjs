@@ -494,3 +494,19 @@ test('round 2: the rate limit holds under a burst', async () => {
   const results = await Promise.all(Array.from({ length: 30 }, () => W.throttle(db, U.kavya, 'burst', 5, 3600000)));
   assert.ok(results.filter(Boolean).length <= 5, 'at most 5 got through: ' + results.filter(Boolean).length);
 });
+
+
+test('round 3: access past its timer is switched off within minutes (so an open screen is closed), and visit answers come from the server', async () => {
+  const r = await call('rameez', 'request', { kind: 'property', targetId: 'ANR001' });
+  await call('swami', 'decide', { id: r.id, decision: 'approve', days: 1 });
+  const gid = `${T}__p__ANR001__rameez_threepin_in`;
+  await db.collection('grants').doc(gid).update({ expiresAt: Date.now() - 1000 });
+  W.__resetExpiredSweep();
+  await call('kavya', 'directory');   // anyone using the agent layer
+  assert.equal((await db.collection('grants').doc(gid).get()).data().active, false);
+  assert.equal((await db.collection('accessRequests').doc(r.id).get()).data().grantState, 'expired');
+  await call('rameez', 'lead-save', { id: 'lead_3', pairs: [[['siteVisitReplies'], [{ email: 'swami@threepin.in', status: 'accepted' }]]] });
+  assert.equal((await db.collection('leads').doc('lead_3').get()).data().siteVisitReplies, undefined, 'a colleague’s answer cannot be written by an agent');
+  await call('rameez', 'lead-save', { id: 'lead_3', pairs: [[['siteVisitReplies'], [{ email: 'swami@threepin.in', status: 'needsAction' }]]] });
+  assert.equal((await db.collection('leads').doc('lead_3').get()).data().siteVisitReplies[0].status, 'needsAction', 'a new booking’s “still to answer” list is fine');
+});

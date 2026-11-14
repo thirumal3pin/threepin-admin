@@ -221,8 +221,9 @@ export function canWorkLead(lead, email) {
 // names and numbers taken out (and more only if the settings say so).
 // A phone number however it is written: ten digits with any spaces, dots or dashes between them, with
 // or without +91 / 0 ("98400 12345", "9840 012 345", "98-40-01-23-45", "044-2345 6789").
-// Not a date and time ("15-11-2026 10:30"): a run touching a colon is left alone.
-export const PHONE_IN_TEXT = /(?<![\w:])(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?![\w:])/g;
+// Not a date and time ("15-11-2026 10:30"): a run running into a time (":30") is left alone —
+// "Mob:9840012345" is still a number.
+export const PHONE_IN_TEXT = /(?<!\w)(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?!\w|:\d)/g;
 const EMAIL_IN_TEXT = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
 export function scrubText(text, names) {
   let s = String(text || '').replace(PHONE_IN_TEXT, '•••').replace(EMAIL_IN_TEXT, '•••');

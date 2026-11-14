@@ -207,7 +207,7 @@ function normalizeConfig(input, tenantId) {
 
 // Phone numbers written into free text (a note, a share message, a title): any ten digits with spaces,
 // dots or dashes between them, with or without +91 / 0 — mobiles and landlines like 044-2345 6789.
-const PHONE_RE = /(?<![\w:])(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?![\w:])/g;
+const PHONE_RE = /(?<!\w)(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?!\w|:\d)/g;
 function maskPhones(v) {
   if (typeof v === 'string') return v.replace(PHONE_RE, '••••• •••••');
   if (Array.isArray(v)) return v.map(maskPhones);

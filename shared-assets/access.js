@@ -117,9 +117,12 @@ async function startInbox(a) {
       });
       known = now;
     }, quiet);
-    // The newest conversations only (an index keeps it a read per conversation shown).
+    // The newest conversations only (an index keeps it a read per conversation shown); without the
+    // index (not built yet) the plain query.
+    const unreadOf = s => s.docs.filter(d => { const t = d.data(); return t.lastAt && t.lastBy !== me && t.lastAt > Number((t.reads || {})[key] || 0); }).length;
+    const threadsQ = fs.query(fs.collection(db, 'threads'), fs.where('tenantId', '==', T), fs.where('members', 'array-contains', me));
     fs.onSnapshot(fs.query(fs.collection(db, 'threads'), fs.where('tenantId', '==', T), fs.where('members', 'array-contains', me), fs.orderBy('lastAt', 'desc'), fs.limit(40)),
-      s => badge('messages', s.docs.filter(d => { const t = d.data(); return t.lastAt && t.lastBy !== me && t.lastAt > Number((t.reads || {})[key] || 0); }).length), quiet);
+      s => badge('messages', unreadOf(s)), err => { if (err && (err.code === 'failed-precondition' || /index/i.test(err.message || ''))) fs.onSnapshot(threadsQ, s => badge('messages', unreadOf(s)), quiet); });
     if (a.role === 'admin') {
       let pend = 0, subs = 0;
       fs.onSnapshot(fs.query(req, fs.where('tenantId', '==', T), fs.where('status', '==', 'pending')), s => { pend = s.size; badge('team', pend + subs); }, quiet);

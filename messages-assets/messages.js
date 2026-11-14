@@ -28,13 +28,14 @@ directory().then(p => { people = p; renderList(); if (openThread) renderChat(); 
 // my own mark — nobody writes anyone else's counter.
 const isUnread = t => !!t && !!t.lastAt && t.lastBy !== me.email && (t.members || []).includes(me.email) && t.lastAt > Number((t.reads || {})[myKey] || 0);
 
+let plainThreads = false;   // the index is not there (yet): the plain query, sorted here
 function watchThreads() {
   if (threadUnsub) threadUnsub();
   const base = collection(db, 'threads');
   // The newest conversations (an index keeps this one read per conversation shown, however long the
   // history grows).
-  const qq = everyone && isAdmin ? query(base, where('tenantId', '==', me.tenantId), orderBy('lastAt', 'desc'), limit(200))
-    : query(base, where('tenantId', '==', me.tenantId), where('members', 'array-contains', me.email), orderBy('lastAt', 'desc'), limit(150));
+  const scope = everyone && isAdmin ? [where('tenantId', '==', me.tenantId)] : [where('tenantId', '==', me.tenantId), where('members', 'array-contains', me.email)];
+  const qq = plainThreads ? query(base, ...scope) : query(base, ...scope, orderBy('lastAt', 'desc'), limit(everyone && isAdmin ? 200 : 150));
   threadUnsub = onSnapshot(qq, s => {
     threads = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     renderList();
@@ -46,7 +47,11 @@ function watchThreads() {
       else getDoc(doc(db, 'threads', want)).then(sn => { if (sn.exists()) openChat(want); else toast('That conversation is no longer there'); })
         .catch(() => toast('That conversation is not one of yours'));
     }
-  }, err => { if (!isShutdown(err)) $('threads').innerHTML = `<div class="empty"><i class="fa-solid fa-triangle-exclamation"></i>${esc(err.message)}</div>`; });
+  }, err => {
+    if (isShutdown(err)) return;
+    if (!plainThreads && (err.code === 'failed-precondition' || /index/i.test(err.message || ''))) { plainThreads = true; watchThreads(); return; }
+    $('threads').innerHTML = `<div class="empty"><i class="fa-solid fa-triangle-exclamation"></i>${esc(err.message)}</div>`;
+  });
 }
 watchThreads();
 

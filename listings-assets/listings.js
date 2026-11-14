@@ -21,6 +21,7 @@ let people = [];
 let tab = (() => { try { return sessionStorage.getItem('pin.props.tab') || 'mine'; } catch (e) { return 'mine'; } })();
 let q = '';
 const wanted = new URLSearchParams(location.search).get('id');
+const numberTimers = new Set();   // properties whose owner's-number timer is already being watched
 let openedWanted = false;
 
 api('me').then(j => { cfg = j.config || null; $('addProp').hidden = !(cfg && cfg.actions && cfg.actions.addProperties); }).catch(() => {});
@@ -144,8 +145,10 @@ function openProperty(p) {
   let url = location.href;
   try { const u = new URL(location.href); u.searchParams.set('id', p.id); url = u.toString(); } catch (e) { /* old browser */ }
   // The owner's number goes the moment its timer ends, open sheet or not.
-  if (p._grant && p._grant.contactUntil && p._grant.contactUntil > Date.now()) {
-    setTimeout(() => { watcher.refresh(); const sh = document.querySelector('.sheet'); if (sh && sh.dataset.pid === String(p.id)) { toast('The owner’s number is no longer shared with you'); import('../shared-assets/agent-client.js').then(m => m.closeSheet()); } }, Math.min(p._grant.contactUntil - Date.now() + 1000, 2147000000));
+  if (p._grant && p._grant.contactUntil && p._grant.contactUntil > Date.now() && !numberTimers.has(String(p.id))) {
+    numberTimers.add(String(p.id));
+    setTimeout(() => {
+      numberTimers.delete(String(p.id)); watcher.refresh(); const sh = document.querySelector('.sheet'); if (sh && sh.dataset.pid === String(p.id)) { toast('The owner’s number is no longer shared with you'); import('../shared-assets/agent-client.js').then(m => m.closeSheet()); } }, Math.min(p._grant.contactUntil - Date.now() + 1000, 2147000000));
   }
   const locked = p._access === 'summary';
   const mine = isMine(p);

@@ -217,7 +217,9 @@ function subscribeAsAgent(tenantId){
   agentChrome();
   const me = signedInEmail();
   const parts = { a: [], b: [], c: [], g: [] };
-  const fromServer = { a: false, b: false, c: false };
+  // g: the leads opened by approved requests have arrived too (a ?lead= link to one must not give up
+  // before they are in).
+  const fromServer = { a: false, b: false, c: false, g: false };
   const push = () => {
     const by = new Map();
     [...parts.a, ...parts.b, ...parts.c, ...parts.g].forEach(l => by.set(l.id, l));
@@ -225,7 +227,7 @@ function subscribeAsAgent(tenantId){
     readOnlyIds.clear();
     list.forEach(l => { if (!canWork(l, me)) readOnlyIds.add(l.id); });
     savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
-    if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer.a && fromServer.b && fromServer.c, null);
+    if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer.a && fromServer.b && fromServer.c && fromServer.g, null);
   };
   [['a', where('assignedAgent', '==', me)], ['b', where('secondaryAgent', '==', me)], ['c', where('agentAccess', 'array-contains', me)]].forEach(([k, w]) => {
     onSnapshot(query(leadsCol, where('tenantId', '==', tenantId), w), snap => {
@@ -237,20 +239,34 @@ function subscribeAsAgent(tenantId){
   // Leads opened to the agent by an approved request: one document each, while its grant runs (the
   // rules check the grant on every read). Read-only.
   const grantLeads = new Map();   // leadId → unsubscribe
+  const grantTimers = new Map();  // leadId → the timer that closes it when its grant runs out
+  const grantArrived = new Set();
+  let grantsLive = false;
+  const grantsReady = () => { fromServer.g = grantsLive && [...grantLeads.keys()].every(id => grantArrived.has(id)); };
   onSnapshot(query(collection(db, 'grants'), where('tenantId', '==', tenantId), where('agentEmail', '==', me), where('kind', '==', 'lead'), where('active', '==', true)), snap => {
     const now = Date.now();
-    const want = new Set(snap.docs.map(d => d.data()).filter(g => !g.expiresAt || g.expiresAt > now).map(g => String(g.targetId)));
-    for (const [id, un] of grantLeads) if (!want.has(id)) { un(); grantLeads.delete(id); parts.g = parts.g.filter(l => l.id !== id); }
+    if (!snap.metadata.fromCache) grantsLive = true;
+    const live = snap.docs.map(d => d.data()).filter(g => !g.expiresAt || g.expiresAt > now);
+    const want = new Set(live.map(g => String(g.targetId)));
+    // Each one leaves the page the minute its timer ends (the server switches it off too).
+    live.forEach(g => { if (g.expiresAt && !grantTimers.has(String(g.targetId))) grantTimers.set(String(g.targetId), setTimeout(() => {
+      const id = String(g.targetId); grantTimers.delete(id);
+      const un = grantLeads.get(id); if (un) un(); grantLeads.delete(id); grantArrived.delete(id);
+      parts.g = parts.g.filter(l => l.id !== id); push();
+    }, Math.min(g.expiresAt - now + 500, 2147000000))); });
+    for (const [id, un] of grantLeads) if (!want.has(id)) { un(); grantLeads.delete(id); grantArrived.delete(id); parts.g = parts.g.filter(l => l.id !== id); }
     want.forEach(id => {
       if (grantLeads.has(id)) return;
       grantLeads.set(id, onSnapshot(doc(db, 'leads', id), s => {
         parts.g = parts.g.filter(l => l.id !== id);
         if (s.exists()) parts.g.push({ ...s.data(), id: s.id });
+        grantArrived.add(id); grantsReady();
         push();
-      }, () => { parts.g = parts.g.filter(l => l.id !== id); push(); }));
+      }, () => { parts.g = parts.g.filter(l => l.id !== id); grantArrived.add(id); grantsReady(); push(); }));
     });
+    grantsReady();
     push();
-  }, err => console.error('Firestore agent grants error:', err));
+  }, err => { console.error('Firestore agent grants error:', err); grantsLive = true; grantsReady(); push(); });
   onSnapshot(pipelineRef(tenantId), (snap) => {
     if (snap.exists() && window.applyPipelineSnapshot) window.applyPipelineSnapshot(snap.data().stages || []);
   }, (err) => console.error('Firestore pipeline sync error:', err));

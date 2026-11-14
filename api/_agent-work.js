@@ -589,6 +589,12 @@ async function leadSave(db, user, body) {
   const { patch, refused } = leadPatchFrom(body || {}, me);
   // Which properties an enquiry is about decides which agents reach it: on a lead that is not their
   // own (an unassigned enquiry on their property), an agent cannot change that.
+  // Visit replies are written by the server from Google (who accepted, who declined); from an agent's
+  // page only the fresh "still to answer" list a new booking makes — never a colleague's answer.
+  if (user.role === 'agent' && 'siteVisitReplies' in patch) {
+    const v = patch.siteVisitReplies;
+    if (!(Array.isArray(v) && v.every(e => e && typeof e === 'object' && e.status === 'needsAction'))) delete patch.siteVisitReplies;
+  }
   const ownLead = lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me;
   if (user.role === 'agent' && !ownLead) Object.keys(patch).filter(k => k.split('.')[0] === 'propertyCodes' || k.split('.')[0] === 'unlinkedPropertyIds').forEach(k => { delete patch[k]; refused.push(k); });
   if (!Object.keys(patch).filter(k => k !== 'updatedAt' && k !== 'updatedBy').length) return json({ ok: true, unchanged: true, refused });
@@ -869,7 +875,8 @@ async function decide(db, user, body) {
       if (!s.exists || s.data().tenantId !== user.tenantId) throw Object.assign(new Error('No such request'), { http: 404 });
       const r = { ...s.data(), _id: s.id };
       // First decision wins: whoever is second sees who decided, and when.
-      if (r.status !== 'pending') throw Object.assign(new Error(r.status === 'cancelled' ? 'The agent cancelled this request' : r.status === 'expired' ? 'This request expired — the agent can ask again' : `Already ${r.status} by ${r.decidedByName || r.decidedBy}`), { http: 409, request: r });
+      const lastNote = ((r.history || []).slice(-1)[0] || {}).note;
+      if (r.status !== 'pending') throw Object.assign(new Error(r.status === 'cancelled' ? (lastNote === 'access taken back' ? 'Their access was taken back, so this request was closed' : 'The agent cancelled this request') : r.status === 'expired' ? 'This request expired — the agent can ask again' : `Already ${r.status} by ${r.decidedByName || r.decidedBy}`), { http: 409, request: r });
       if (r.requesterEmail === me) throw Object.assign(new Error('You cannot decide your own request'), { http: 403 });
       const cur = await currentApprovers(db, t, r, cfgDoc, admins);
       if (!isAdmin && !cur.approvers.includes(me)) throw Object.assign(new Error('You can’t decide this request — the property (or lead) is no longer yours'), { http: 403 });
@@ -1244,9 +1251,35 @@ const AGENT_ONLY = new Set(['view', 'crm-boot']);
 export const isWorkAction = a => Object.prototype.hasOwnProperty.call(AGENT_ACTIONS, a) || Object.prototype.hasOwnProperty.call(ADMIN_WORK, a);
 export const isAdminWork = a => Object.prototype.hasOwnProperty.call(ADMIN_WORK, a);
 
+// Grants whose timer has run out are switched off (active:false) whenever anyone uses the agent layer —
+// at most every 10 minutes per warm server. The rules already refuse a new read at the time; this
+// write is what makes Firestore close a screen that had the lead open (it re-checks the rules when the
+// grant changes, not when the clock passes), so access ends within minutes, not at the morning tidy-up.
+const expiredSweptAt = new Map();
+export const __resetExpiredSweep = () => expiredSweptAt.clear();   // tests only
+export async function switchOffExpired(db, tenantId) {
+  const last = expiredSweptAt.get(tenantId) || 0;
+  if (Date.now() - last < 10 * 60 * 1000) return 0;
+  expiredSweptAt.set(tenantId, Date.now());
+  const now = Date.now();
+  let n = 0;
+  for (const g of await loadGrants(db, tenantId)) {
+    if (g.expiresAt && g.expiresAt <= now) {
+      await db.collection('grants').doc(g.id).update({ active: false, history: FieldValue.arrayUnion({ at: now, by: 'system', what: 'expired' }) }).catch(() => {});
+      if (g.requestId) await db.collection('accessRequests').doc(g.requestId).update({ grantState: 'expired', grantChangedAt: now }).catch(() => {});
+      n++;
+    } else if (g.includeContact && g.contactExpiresAt && g.contactExpiresAt <= now) {
+      await db.collection('grants').doc(g.id).update({ includeContact: false, history: FieldValue.arrayUnion({ at: now, by: 'system', what: 'contact-expired' }) }).catch(() => {});
+      n++;
+    }
+  }
+  return n;
+}
+
 export async function workPost(user, action, body, isAdmin) {
   const db = getDb();
   if (!user.email) return json({ ok: false, error: 'Your login has no email' }, 403);
+  await switchOffExpired(db, user.tenantId).catch(e => console.error('switch off expired grants:', e.message));
   if (isAdminWork(action)) {
     if (!isAdmin) return json({ ok: false, error: 'Admins only' }, 403);
     return ADMIN_WORK[action](db, user, body);

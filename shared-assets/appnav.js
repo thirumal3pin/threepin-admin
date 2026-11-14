@@ -87,8 +87,7 @@
       note: 'Team chat, and a thread for every request',
     },
     {
-      // An agent's day is My Day (one "today" page, not two that disagree).
-      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks', notForAgents: true,
+      id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks',
       note: 'Your visits and tasks for today',
     },
     {
