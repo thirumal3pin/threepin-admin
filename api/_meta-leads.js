@@ -31,6 +31,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import { getDb, verifyCrmUser } from './_bot-shared.js';
+import { effectiveConfig } from '../shared-assets/agent-config.js';
 import { getSheetsToken, TENANT_ID } from './_inventory-shared.js';
 import * as TM from '../shared-assets/task-model.js';
 import { parseSheetLink, classifyColumns, columnIssues, ROLES, planSheetWrite } from '../crm-assets/metaLeadsModel.js';
@@ -136,6 +137,15 @@ export function cleanSources(list, prev, by, now) {
 }
 
 /** One action. → [body, status]. */
+// An agent's view of the setup: only the tabs for their own properties (deps.agentCodes, a Set of
+// property codes; absent for everyone else). A source with none of their tabs is left out entirely.
+export function scopeSources(cfg, codes) {
+  if (!codes) return cfg;
+  const sources = (cfg.sources || []).map(s => ({ ...s, tabs: (s.tabs || []).filter(t => codes.has(String(t.propertyCode || s.propertyCode || '').toUpperCase())) }))
+    .filter(s => s.tabs.length);
+  return { ...cfg, sources, lastRead: null };
+}
+
 export async function metaLeadsAction(user, body, deps) {
   const T = user.tenantId, db = deps.db, me = String(user.email || '').toLowerCase();
   const sa = deps.serviceAccount;
@@ -148,7 +158,8 @@ export async function metaLeadsAction(user, body, deps) {
   if (action === 'brief') return briefAction(user, { ...body }, { ...deps, classify: deps.classify || defaultClassify });
 
   if (action === 'config') {
-    const [cfg, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
+    const [cfg0, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
+    const cfg = scopeSources(cfg0, deps.agentCodes);
     return [{ ok: true, mode: 'test', sources: cfg.sources || [], lastRead: cfg.lastRead || null, updatedAt: cfg.updatedAt || null, updatedBy: cfg.updatedBy || null, manager, shareWith }, 200];
   }
 
@@ -192,7 +203,8 @@ export async function metaLeadsAction(user, body, deps) {
     const sid = String(body.spreadsheetId || ''), gid = Number(body.gid);
     const edits = Array.isArray(body.edits) ? body.edits.slice(0, 1000) : [];
     if (!edits.length) return [{ ok: false, error: 'Nothing to write' }, 400];
-    const [cfg, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
+    const [cfg0, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
+    const cfg = scopeSources(cfg0, deps.agentCodes);
     const src = (cfg.sources || []).find(x => x.id === sid);
     const tab = src && (src.tabs || []).find(t => t.gid === gid);
     if (!src || !tab) return [{ ok: false, error: 'That tab is not connected in Setup' }, 404];
@@ -253,7 +265,7 @@ export async function metaLeadsAction(user, body, deps) {
   }
 
   if (action === 'read') {
-    const cfg = await loadConfig(db, T);
+    const cfg = scopeSources(await loadConfig(db, T), deps.agentCodes);
     const sources = (cfg.sources || []).filter(s => s.on !== false);
     const only = body.sourceId ? String(body.sourceId) : null;
     const tok = tokenOnce();
@@ -299,6 +311,10 @@ export async function metaLeadsAction(user, body, deps) {
         sheets.push({ id: s.id, title: s.title, ok: false, error: e.message });
       }
     }
+    if (deps.agentCodes) {
+      // An agent's read changes nothing in the setup: no new tabs listed, no "last read" line.
+      return [{ ok: true, mode: 'test', at: deps.now(), tabs, errors, shareWith: null, mods, unchanged, newTabs: [] }, 200];
+    }
     if (discovered.length) {
       // Added to the setup as read just now (not the copy loaded before the read): nothing else is touched.
       const curCfg = await loadConfig(db, T);
@@ -323,17 +339,45 @@ export async function metaLeadsAction(user, body, deps) {
   return [{ ok: false, error: 'Unknown action' }, 400];
 }
 
+// What an agent may do here (the agent layer): read the leads of the ads for their own properties
+// (or every ad, when the admin set "Ads: all"), mark them up in the sheet, and ask for one person's
+// AI brief. Never the setup, never everyone's stored briefs.
+const AGENT_ACTIONS = new Set(['config', 'read', 'write', 'brief', 'briefs']);
+async function agentAdsCodes(db, user) {
+  const snap = await db.collection('agentConfigs').doc(user.tenantId).get();
+  const cfg = effectiveConfig(snap.exists ? snap.data() : null, user.email);
+  if (!cfg.tabs.includes('ads')) return { refused: true };
+  if (cfg.adsScope === 'all') return { codes: null };
+  const me = String(user.email || '').toLowerCase();
+  const [a, b] = await Promise.all([
+    db.collection('properties').where('tenantId', '==', user.tenantId).where('assignedAgent', '==', me).get(),
+    db.collection('properties').where('tenantId', '==', user.tenantId).where('secondaryAgents', 'array-contains', me).get(),
+  ]);
+  const codes = new Set();
+  [...a.docs, ...b.docs].forEach(d => { codes.add(String(d.data().propertyCode || d.id).toUpperCase()); codes.add(String(d.id).toUpperCase()); });
+  return { codes };
+}
+
 export async function metaLeadsPost(request) {
-  const user = await verifyCrmUser(request);
+  const user = await verifyCrmUser(request, { allowAgent: true });
   if (!user || !user.tenantId) return json({ ok: false, error: 'Unauthorized' }, 401);
   // The lead sheets are 3 PIN Realty's: another tenant's valid token must not read them.
   if (user.tenantId !== TENANT_ID) return json({ ok: false, error: 'Not available for your account' }, 403);
   let body = {};
   try { body = await request.json(); } catch { /* empty */ }
+  let agentCodes;
+  if (user.role === 'agent') {
+    const action = String((body && body.action) || '');
+    if (!AGENT_ACTIONS.has(action)) return json({ ok: false, error: 'Not part of your access' }, 403);
+    if (action === 'briefs') return json({ ok: true, briefs: {} });
+    const scope = await agentAdsCodes(getDb(), user);
+    if (scope.refused) return json({ ok: false, error: 'Meta Ads Leads is not part of your access' }, 403);
+    agentCodes = scope.codes || undefined;
+  }
   let sa = null;
   try { sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || 'null'); } catch { sa = null; }
   try {
-    const [out, status] = await metaLeadsAction(user, body, makeDeps({ serviceAccount: sa }));
+    const [out, status] = await metaLeadsAction(user, body, { ...makeDeps({ serviceAccount: sa }), agentCodes });
     return json(out, status);
   } catch (e) {
     console.error('meta-leads error:', e);

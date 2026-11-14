@@ -38,6 +38,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { effectiveConfig } from '../shared-assets/agent-config.js';
 import { teamKey } from '../crm-assets/mentions.js';
+import { workPost, isWorkAction, isAdminWork } from './_agent-work.js';
 
 const ROLES = ['admin', 'agent', 'none'];
 // Accounts that signed themselves up belong to no tenant, so they are the whole Firebase project's,
@@ -342,12 +343,15 @@ export async function agentPost(request) {
   let body;
   try { body = await request.clone().json(); } catch { return json({ error: 'Bad request' }, 400); }
   const action = body && body.action;
-  const isAdminAction = Object.prototype.hasOwnProperty.call(ADMIN_ACTIONS, action);
+  const isAdminAction = Object.prototype.hasOwnProperty.call(ADMIN_ACTIONS, action) || isAdminWork(action);
   // Admin actions re-check the token against the live account: revoked or disabled = refused now.
-  const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction });
+  // So does every decision on a request (an approver demoted or switched off must not decide).
+  const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction || action === 'decide' });
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   try {
     if (action === 'me') return await me(user);
+    // Phases 2–6: properties, leads, requests, messages (api/_agent-work.js).
+    if (isWorkAction(action)) return await workPost(user, action, body, isAdminToken(user));
     if (!isAdminAction) return json({ error: 'Unknown action' }, 400);
     if (!isAdminToken(user)) return json({ error: 'Admins only' }, 403);
     return await ADMIN_ACTIONS[action](user, body);

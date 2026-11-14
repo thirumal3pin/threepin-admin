@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" data-console="myprops">
+<head>
+<script src="shared-assets/quota-notice.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Properties — 3 PIN Realty</title>
+<link rel="preload" href="shared-assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="shared-assets/fonts/inter.css">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="3 PIN">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<script>try{var t=localStorage.getItem('crmTheme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/agent-ui.css">
+<style>
+  .pcard { display: flex; gap: 12px; padding: 14px; border-top: 1px solid var(--border); cursor: pointer; align-items: flex-start; }
+  .pcard:first-child { border-top: 0; }
+  .pcard:active { background: var(--bg2); }
+  .pcard .ic { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand-ink); }
+  .pcard.locked .ic { background: var(--bg2); color: var(--ink3); }
+  .pcard.locked b { color: var(--ink2); }
+  .pcard .bd { flex: 1; min-width: 0; }
+  .pcard .bd b { display: block; font-weight: 600; overflow-wrap: anywhere; }
+  .pcard .bd small { display: block; color: var(--ink3); font-size: 13px; margin-top: 2px; }
+  .pcard .side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  /* Not .fab: Font Awesome owns that class (its brand-icon font). */
+  .add-fab { position: fixed; right: 16px; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 25; box-shadow: 0 6px 20px rgba(0,0,0,.18); border-radius: 999px; }
+  .detail-h { display: flex; gap: 10px; align-items: flex-start; }
+  .detail-h h3 { flex: 1; }
+  .match { padding: 12px; border: 1px solid var(--border); border-radius: 12px; margin-top: 10px; }
+  .match p { margin: 6px 0 0; font-size: 13.5px; color: var(--ink2); }
+  .notes { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+  .notes li { font-size: 13.5px; padding: 10px; background: var(--bg2); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .notes li small { display: block; color: var(--ink3); font-size: 12px; margin-top: 4px; }
+</style>
+<link rel="stylesheet" href="shared-assets/theme.css">
+</head>
+<body>
+<div id="appRoot">
+  <header class="top">
+    <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <h1>Properties</h1>
+    <button type="button" class="btn sm" id="refreshBtn" aria-label="Refresh"><i class="fa-solid fa-rotate"></i></button>
+  </header>
+  <main class="wrap" id="main">
+    <div id="boot"><div class="card"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div></div>
+    <div id="app" hidden>
+      <div class="seg three" role="tablist" id="tabs">
+        <button type="button" role="tab" data-tab="mine" aria-selected="true">Mine</button>
+        <button type="button" role="tab" data-tab="granted" aria-selected="false">Shared</button>
+        <button type="button" role="tab" data-tab="all" aria-selected="false">All</button>
+      </div>
+      <p class="note" id="tabNote"></p>
+      <div class="search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" id="q" placeholder="Search title, BHK, area" aria-label="Search properties"></div>
+      <div class="card" id="list"></div>
+      <p class="aside" id="built"></p>
+    </div>
+    <button type="button" class="btn primary add-fab" id="addProp" hidden><i class="fa-solid fa-plus"></i> Add a property</button>
+  </main>
+</div>
+<script src="shared-assets/appnav.js"></script>
+<script src="shared-assets/install-app.js"></script>
+<script type="module" src="shared-assets/access.js"></script>
+<script type="module" src="listings-assets/listings.js"></script>
+</body>
+</html>

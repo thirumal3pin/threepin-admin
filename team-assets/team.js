@@ -102,12 +102,15 @@ onAuthStateChanged(auth, async user => {
 
 // ── Tabs ──
 function showTab(name) {
-  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-selected', String(x.dataset.tab === name)));
+  document.querySelectorAll('#app > .seg button[data-tab]').forEach(x => x.setAttribute('aria-selected', String(x.dataset.tab === name)));
   $('tab-people').hidden = name !== 'people';
   $('tab-agents').hidden = name !== 'agents';
+  $('tab-requests').hidden = name !== 'requests';
+  if (name === 'requests') document.dispatchEvent(new CustomEvent('team-requests-open'));
   setDirty(dirty);
 }
-document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+document.querySelectorAll('#app > .seg button[data-tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+if (new URLSearchParams(location.search).get('tab') === 'requests') showTab('requests');
 
 // ═══════ PEOPLE ═══════
 

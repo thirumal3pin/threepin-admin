@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
+import { leadVisibleTo } from '../shared-assets/agent-access.js';
 import { LEAD_SUMMARY_MODEL, LEAD_SUMMARY_MAX_TOKENS, buildLeadSummarySystemPrompt, buildLeadSummaryUserPrompt } from './_lead-summary-shared.js';
 import { writeLead } from './_lead-views.js';
 
@@ -19,7 +20,8 @@ function getAnthropic() {
 // aiSummaryError, leaving the last successful aiSummary exactly as it was —
 // the UI shows the stale summary plus a small "couldn't refresh" notice.
 export async function generatePost(request) {
-  const user = await verifyCrmUser(request);
+  // Agents may refresh the summary of a lead that is theirs (checked below, once it is read).
+  const user = await verifyCrmUser(request, { allowAgent: true });
   if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
@@ -41,7 +43,8 @@ export async function generatePost(request) {
   const db = getDb();
   const leadRef = db.collection('leads').doc(leadId);
   const snap = await leadRef.get();
-  if (!snap.exists || snap.data().tenantId !== user.tenantId) {
+  if (!snap.exists || snap.data().tenantId !== user.tenantId
+      || (user.role === 'agent' && !leadVisibleTo(snap.data(), user.email))) {
     return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
   const lead = snap.data();

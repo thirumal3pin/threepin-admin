@@ -1,4 +1,4 @@
-// Firestore rules — the agent layer, phase 1. Runs against the LOCAL emulator only:
+// Firestore rules — the agent layer, phases 1–6. Runs against the LOCAL emulator only:
 //   cd tests/rules && npm test        (needs Java: the emulator is a Java program)
 //
 // Three kinds of login, as firestore.rules describes them:
@@ -46,6 +46,29 @@ beforeEach(async () => {
     await setDoc(doc(d, 'properties/ADRM0002/internalNotes/n1'), { text: 'owner floor 1.2 Cr' });
     await setDoc(doc(d, 'leads/lead_1'), { tenantId: T, name: 'Ramesh', phone: '9111111111', assignedAgent: 'rameez@threepin.in' });
     await setDoc(doc(d, 'leads/lead_1/notes/n1'), { text: 'called' });
+    await setDoc(doc(d, 'leads/lead_2'), { tenantId: T, name: 'Kumar', phone: '9222222222', assignedAgent: 'swami@threepin.in' });
+    await setDoc(doc(d, 'leads/lead_2/notes/n1'), { text: 'private' });
+    await setDoc(doc(d, 'leads/lead_3'), { tenantId: T, name: 'Divya', phone: '9333333333', assignedAgent: 'swami@threepin.in', agentAccess: ['rameez@threepin.in'] });
+    await setDoc(doc(d, 'leads/lead_4'), { tenantId: T, name: 'Arun', phone: '9444444444', secondaryAgent: 'rameez@threepin.in' });
+    await setDoc(doc(d, 'leads/lead_x'), { tenantId: 't_other', name: 'Other', assignedAgent: 'rameez@threepin.in' });
+    await setDoc(doc(d, `agentViews/${T}__u_rameez`), { tenantId: T, uid: 'u_rameez', expiresAt: Date.now() + 3600000, props: [] });
+    await setDoc(doc(d, `agentViews/${T}__u_other`), { tenantId: T, uid: 'u_other', expiresAt: Date.now() + 3600000, props: [] });
+    await setDoc(doc(d, `agentViews/${T}__u_old`), { tenantId: T, uid: 'u_old', expiresAt: Date.now() - 1000, props: [] });
+    await setDoc(doc(d, 'accessRequests/r1'), { tenantId: T, requesterEmail: 'rameez@threepin.in', approvers: ['swami@threepin.in'], status: 'pending' });
+    await setDoc(doc(d, 'accessRequests/r2'), { tenantId: T, requesterEmail: 'swami@threepin.in', approvers: ['rameez@threepin.in'], status: 'pending' });
+    await setDoc(doc(d, 'accessRequests/r3'), { tenantId: T, requesterEmail: 'pradeep@threepin.in', approvers: ['swami@threepin.in'], status: 'pending' });
+    await setDoc(doc(d, 'requestPrivate/r1'), { tenantId: T, approvers: ['swami@threepin.in'], leadId: 'lead_2' });
+    await setDoc(doc(d, 'requestPrivate/r2'), { tenantId: T, approvers: ['rameez@threepin.in'], leadId: 'lead_1' });
+    await setDoc(doc(d, 'grants/g1'), { tenantId: T, agentEmail: 'rameez@threepin.in', active: true });
+    await setDoc(doc(d, 'grants/g2'), { tenantId: T, agentEmail: 'pradeep@threepin.in', active: true });
+    await setDoc(doc(d, 'visitAlerts/v1'), { tenantId: T, to: ['rameez@threepin.in'] });
+    await setDoc(doc(d, 'visitAlerts/v2'), { tenantId: T, to: ['swami@threepin.in'] });
+    await setDoc(doc(d, 'assignmentLog/a1'), { tenantId: T, propertyId: 'ADRM0002' });
+    await setDoc(doc(d, 'propertySubmissions/s1'), { tenantId: T, byEmail: 'rameez@threepin.in' });
+    await setDoc(doc(d, 'threads/th1'), { tenantId: T, title: 'Access: 3 BHK', members: ['rameez@threepin.in', 'swami@threepin.in'], lastAt: 1, lastText: '', unread: {}, reads: {} });
+    await setDoc(doc(d, 'threads/th1/messages/m1'), { kind: 'text', text: 'hi', at: 1, by: 'swami@threepin.in' });
+    await setDoc(doc(d, 'threads/th2'), { tenantId: T, title: 'Private', members: ['pradeep@threepin.in', 'thirumal@threepin.in'], lastAt: 1, lastText: '', unread: {}, reads: {} });
+    await setDoc(doc(d, 'threads/th2/messages/m1'), { kind: 'text', text: 'secret', at: 1, by: 'swami@threepin.in' });
     await setDoc(doc(d, `leadViews/${T}__v1_0`), { tenantId: T, rows: {} });
     await setDoc(doc(d, `settings/${T}`), { team: {} });
     await setDoc(doc(d, `pipelines/${T}`), { stages: [] });
@@ -107,24 +130,108 @@ test('agent cannot read or write properties, even one assigned to them (copies c
   await assertFails(getDoc(doc(d, 'propertyChanges/c1')));
 });
 
-test('agent cannot read leads, lead notes or the packed lead views', async () => {
+test('agent reads only their own leads (assigned, secondary, or reached through agentAccess), never the packed views', async () => {
   const d = db('agent');
-  await assertFails(getDoc(doc(d, 'leads/lead_1')));
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_1')));
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_3')));
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_4')));
+  await assertFails(getDoc(doc(d, 'leads/lead_2')));
+  await assertFails(getDoc(doc(d, 'leads/lead_x')));
+  await assertFails(getDoc(doc(d, 'leads/lead_none')));
   await assertFails(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T))));
-  await assertFails(getDoc(doc(d, 'leads/lead_1/notes/n1')));
+  const mine = await assertSucceeds(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T), where('assignedAgent', '==', 'rameez@threepin.in'))));
+  if (mine.size !== 1) throw new Error('expected 1 assigned lead, got ' + mine.size);
+  await assertSucceeds(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T), where('secondaryAgent', '==', 'rameez@threepin.in'))));
+  await assertSucceeds(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T), where('agentAccess', 'array-contains', 'rameez@threepin.in'))));
+  await assertFails(getDocs(query(collection(d, 'leads'), where('tenantId', '==', T), where('assignedAgent', '==', 'swami@threepin.in'))));
+  await assertSucceeds(getDoc(doc(d, 'leads/lead_1/notes/n1')));
+  await assertFails(getDoc(doc(d, 'leads/lead_2/notes/n1')));
+  await assertFails(setDoc(doc(d, 'leads/lead_1/notes/n2'), { text: 'direct write' }));
+  await assertFails(updateDoc(doc(d, 'leads/lead_1'), { stageId: 'won', tenantId: T }));
+  await assertFails(updateDoc(doc(d, 'leads/lead_2'), { assignedAgent: 'rameez@threepin.in', tenantId: T }));
+  await assertFails(setDoc(doc(d, 'leads/lead_9'), { tenantId: T, name: 'x', assignedAgent: 'rameez@threepin.in' }));
   await assertFails(getDoc(doc(d, `leadViews/${T}__v1_0`)));
   await assertFails(getDoc(doc(d, 'conversations/c1')));
-  await assertFails(setDoc(doc(d, 'leads/lead_2'), { tenantId: T, name: 'x' }));
 });
 
-test('agent cannot open finance, shoots, settings or the pipeline', async () => {
+test('an agent whose email is not confirmed reads no lead at all', async () => {
+  const d = env.authenticatedContext('u_rameez', { tenantId: T, role: 'agent', email: 'rameez@threepin.in', email_verified: false }).firestore();
+  await assertFails(getDoc(doc(d, 'leads/lead_1')));
+});
+
+test('agent cannot open finance, shoots or settings; reads the stage names only', async () => {
   const d = db('agent');
   await assertFails(getDoc(doc(d, `finance/${T}`)));
   await assertFails(getDoc(doc(d, `finance/${T}/invoices/i1`)));
   await assertFails(getDoc(doc(d, 'listings/L1')));
   await assertFails(getDoc(doc(d, `settings/${T}`)));
   await assertFails(setDoc(doc(d, `settings/${T}`), { team: { me: { email: 'rameez@threepin.in' } } }));
-  await assertFails(getDoc(doc(d, `pipelines/${T}`)));
+  await assertSucceeds(getDoc(doc(d, `pipelines/${T}`)));
+  await assertFails(setDoc(doc(d, `pipelines/${T}`), { stages: [] }));
+});
+
+test('agent reads their own copy of the properties, only while it has not run out, and nobody else’s', async () => {
+  const d = db('agent');
+  await assertSucceeds(getDoc(doc(d, `agentViews/${T}__u_rameez`)));
+  await assertFails(getDoc(doc(d, `agentViews/${T}__u_other`)));
+  await assertFails(setDoc(doc(d, `agentViews/${T}__u_rameez`), { tenantId: T, expiresAt: 9e15, props: [{ id: 'X' }] }));
+  const old = env.authenticatedContext('u_old', { tenantId: T, role: 'agent', email: 'old@threepin.in', email_verified: true }).firestore();
+  await assertFails(getDoc(doc(old, `agentViews/${T}__u_old`)));
+  await assertFails(getDoc(doc(db('staff'), `agentViews/${T}__u_rameez`)));
+});
+
+test('requests: the asker and the approvers read them; the lead behind a lead request is for approvers only; nobody writes them', async () => {
+  const d = db('agent');
+  await assertSucceeds(getDoc(doc(d, 'accessRequests/r1')));
+  await assertSucceeds(getDoc(doc(d, 'accessRequests/r2')));
+  await assertFails(getDoc(doc(d, 'accessRequests/r3')));
+  await assertSucceeds(getDocs(query(collection(d, 'accessRequests'), where('tenantId', '==', T), where('requesterEmail', '==', 'rameez@threepin.in'))));
+  await assertSucceeds(getDocs(query(collection(d, 'accessRequests'), where('tenantId', '==', T), where('approvers', 'array-contains', 'rameez@threepin.in'))));
+  await assertFails(getDocs(query(collection(d, 'accessRequests'), where('tenantId', '==', T))));
+  await assertFails(getDoc(doc(d, 'requestPrivate/r1')));
+  await assertSucceeds(getDoc(doc(d, 'requestPrivate/r2')));
+  await assertFails(updateDoc(doc(d, 'accessRequests/r2'), { status: 'approved' }));
+  await assertFails(setDoc(doc(d, 'accessRequests/new'), { tenantId: T, requesterEmail: 'rameez@threepin.in', approvers: [], status: 'approved' }));
+  await assertSucceeds(getDocs(query(collection(db('staff'), 'accessRequests'), where('tenantId', '==', T))));
+  await assertFails(updateDoc(doc(db('admin'), 'accessRequests/r1'), { status: 'approved' }));
+});
+
+test('grants, visit alerts and submissions: the agent sees their own only; nobody creates a grant from the page', async () => {
+  const d = db('agent');
+  await assertSucceeds(getDoc(doc(d, 'grants/g1')));
+  await assertFails(getDoc(doc(d, 'grants/g2')));
+  await assertFails(setDoc(doc(d, 'grants/g3'), { tenantId: T, agentEmail: 'rameez@threepin.in', active: true }));
+  await assertFails(updateDoc(doc(d, 'grants/g1'), { expiresAt: null }));
+  await assertFails(setDoc(doc(db('admin'), 'grants/g4'), { tenantId: T, agentEmail: 'rameez@threepin.in', active: true }));
+  await assertSucceeds(getDoc(doc(d, 'visitAlerts/v1')));
+  await assertFails(getDoc(doc(d, 'visitAlerts/v2')));
+  await assertSucceeds(getDocs(query(collection(d, 'visitAlerts'), where('tenantId', '==', T), where('to', 'array-contains', 'rameez@threepin.in'))));
+  await assertFails(getDoc(doc(d, 'assignmentLog/a1')));
+  await assertSucceeds(getDoc(doc(db('staff'), 'assignmentLog/a1')));
+  await assertSucceeds(getDoc(doc(d, 'propertySubmissions/s1')));
+  await assertFails(setDoc(doc(d, 'propertySubmissions/s2'), { tenantId: T, byEmail: 'rameez@threepin.in' }));
+});
+
+test('messages: members read and write; others do not; admins read every thread; a message is always from its writer', async () => {
+  const d = db('agent');
+  await assertSucceeds(getDoc(doc(d, 'threads/th1')));
+  await assertFails(getDoc(doc(d, 'threads/th2')));
+  await assertSucceeds(getDocs(query(collection(d, 'threads'), where('tenantId', '==', T), where('members', 'array-contains', 'rameez@threepin.in'))));
+  await assertFails(getDocs(query(collection(d, 'threads'), where('tenantId', '==', T))));
+  await assertSucceeds(getDocs(collection(d, 'threads/th1/messages')));
+  await assertFails(getDocs(collection(d, 'threads/th2/messages')));
+  await assertSucceeds(setDoc(doc(d, 'threads/th1/messages/m2'), { kind: 'text', text: 'On my way', at: Date.now(), by: 'rameez@threepin.in' }));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/m3'), { kind: 'text', text: 'fake', at: Date.now(), by: 'swami@threepin.in' }));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/m4'), { kind: 'system', text: 'Approved by Swami', at: Date.now(), by: 'rameez@threepin.in' }));
+  await assertFails(setDoc(doc(d, 'threads/th2/messages/m5'), { kind: 'text', text: 'hi', at: Date.now(), by: 'rameez@threepin.in' }));
+  await assertSucceeds(updateDoc(doc(d, 'threads/th1'), { lastAt: Date.now(), lastText: 'On my way', lastBy: 'rameez@threepin.in', 'unread.swami_threepin_in': 1, 'reads.rameez_threepin_in': Date.now() }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { members: ['rameez@threepin.in', 'swami@threepin.in', 'pradeep@threepin.in'] }));
+  await assertFails(updateDoc(doc(d, 'threads/th1'), { title: 'renamed' }));
+  await assertFails(setDoc(doc(d, 'threads/th9'), { tenantId: T, title: 'x', members: ['rameez@threepin.in'] }));
+  await assertSucceeds(getDoc(doc(db('admin'), 'threads/th2')));
+  await assertSucceeds(getDocs(collection(db('admin'), 'threads/th2/messages')));
+  await assertFails(getDoc(doc(db('staff'), 'threads/th2')));
+  await assertFails(updateDoc(doc(db('admin'), 'threads/th2'), { lastText: 'x' }));
 });
 
 test('agent cannot change their own role, nor anyone’s', async () => {

@@ -219,7 +219,7 @@ try {
   agentFilters = saved.startsWith('[') ? JSON.parse(saved) : (saved ? [saved] : []);
 } catch(e) { agentFilters = []; }
 const agentNameOf = e => e ? String(e).split('@')[0].split(/[._-]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : '';
-const propAgents = p => [p.assignedAgent, p.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
+const propAgents = p => [...new Set([p.assignedAgent, p.secondaryAgent, ...(Array.isArray(p.secondaryAgents) ? p.secondaryAgents : [])].filter(Boolean).map(e => String(e).toLowerCase()))];
 const myEmail = () => String((window.dashboardAuth && window.dashboardAuth.getUserEmail && window.dashboardAuth.getUserEmail()) || '').toLowerCase();
 function agentMatches(p, f){
   const a = propAgents(p);
@@ -266,41 +266,103 @@ document.addEventListener('click', e => {
   const open = document.querySelector('details.agf-d[open]');
   if(open && !open.contains(e.target)){ open.open = false; agentPopOpen = false; }
 });
+// The property's agents (agent layer): ONE primary agent and any number of co-agents, saved by the
+// server (/api/agent "assign"), which keeps the history, moves the property's enquiries to its new
+// agents and rebuilds their copies. Below them, who else was given this property's details through
+// an approved request — with Hide number / Take back for admins.
+const coAgentsOfProp = p => [...new Set([...(Array.isArray(p.secondaryAgents) ? p.secondaryAgents : []), p.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase()))].filter(e => e !== String(p.assignedAgent || '').toLowerCase());
+async function agentApi(action, body){
+  const token = window.dashboardAuth && await window.dashboardAuth.getIdToken();
+  const r = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ action, ...body }) });
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+let propAccess = { id: null, data: null, busy: false };
 function renderPropAgents(p){
   const el = document.getElementById('dpAgents');
   if(!el || !p) return;
   if(!propTeam.length) loadPropTeam();
-  const withCurrent = e => e && !propTeam.includes(String(e).toLowerCase()) ? [String(e).toLowerCase(), ...propTeam] : propTeam;
-  const primary = p.assignedAgent || '', secondary = p.secondaryAgent || '';
-  const sel = (which, value, list, empty, disabled) => `<select class="dp-agent-sel${value ? '' : ' empty'}" onchange="setPropertyAgent('${which}', this.value)"${disabled ? ' disabled' : ''} aria-label="${which === 'primary' ? 'Property agent' : 'Secondary agent'}">
-      <option value="">${empty}</option>
-      ${list.map(e => `<option value="${escapeHtml(e)}"${String(value).toLowerCase() === e ? ' selected' : ''}>${escapeHtml(agentNameOf(e))}</option>`).join('')}
-    </select>`;
+  const primary = String(p.assignedAgent || '').toLowerCase();
+  const co = coAgentsOfProp(p);
+  const withCurrent = list => [...new Set([...list.filter(Boolean), ...propTeam])];
+  const opts = (list, value) => list.map(e => `<option value="${escapeHtml(e)}"${value === e ? ' selected' : ''}>${escapeHtml(agentNameOf(e))}</option>`).join('');
+  const addable = withCurrent([]).filter(e => e !== primary && !co.includes(e));
+  const isAdmin = !!(window.PinAccess && window.PinAccess.role === 'admin');
   el.innerHTML = `
-    <div class="dp-agent"><span class="dp-agent-l">Property agent</span>${sel('primary', primary, withCurrent(primary), 'Unassigned', false)}</div>
-    <div class="dp-agent"><span class="dp-agent-l">Secondary</span>${sel('secondary', secondary, withCurrent(secondary).filter(e => e !== String(primary).toLowerCase()), primary ? 'None' : 'Pick a property agent first', !primary)}</div>
-    ${p.agentsSetBy ? `<span class="dp-agent-by">set by ${escapeHtml(agentNameOf(p.agentsSetBy))}</span>` : ''}`;
+    <div class="dp-agent"><span class="dp-agent-l">Primary agent</span><select class="dp-agent-sel${primary ? '' : ' empty'}" onchange="assignPropertyAgents(this.value, null)" aria-label="Primary agent">
+      <option value="">Unassigned</option>${opts(withCurrent([primary]), primary)}</select></div>
+    <div class="dp-agent dp-coagents"><span class="dp-agent-l">Co-agents</span>
+      ${co.map(e => `<span class="dp-chip">${escapeHtml(agentNameOf(e))}<button type="button" aria-label="Remove ${escapeHtml(agentNameOf(e))}" onclick="assignPropertyAgents(null, ${escapeHtml(JSON.stringify(co.filter(x => x !== e)))})">✕</button></span>`).join('')}
+      ${primary ? `<select class="dp-agent-sel empty dp-add" onchange="if(this.value) assignPropertyAgents(null, ${escapeHtml(JSON.stringify(co))}.concat(this.value))" aria-label="Add a co-agent"><option value="">+ Add co-agent</option>${opts(addable, '')}</select>` : '<span class="dp-agent-by">Pick the primary agent first</span>'}
+    </div>
+    ${p.agentsSetBy ? `<span class="dp-agent-by">set by ${escapeHtml(agentNameOf(p.agentsSetBy))}</span>` : ''}
+    <div class="dp-access" id="dpAccess">${renderPropAccess(p, isAdmin)}</div>`;
+  if(propAccess.id !== p.id){ propAccess = { id: p.id, data: null, busy: false }; loadPropAccess(p.id); }
 }
-async function setPropertyAgent(which, value){
+function renderPropAccess(p, isAdmin){
+  const d = propAccess.id === p.id ? propAccess.data : null;
+  if(!d) return '';
+  const fmt = t => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  const live = d.grants.filter(g => g.live);
+  const pend = d.requests.filter(r => r.status === 'pending');
+  if(!live.length && !pend.length && !d.log.length) return '';
+  const grantRow = g => `<li><b>${escapeHtml(g.agentName || agentNameOf(g.agentEmail))}</b> — details ${g.expiresAt ? 'until ' + fmt(g.expiresAt) : 'with no time limit'}${g.contactLive ? `; owner’s number ${g.contactExpiresAt ? 'until ' + fmt(g.contactExpiresAt) : 'shared'}` : ''}
+    <span class="dp-agent-by">approved by ${escapeHtml(g.grantedByName || agentNameOf(g.grantedBy))}</span>
+    ${isAdmin ? `${g.contactLive ? `<button type="button" class="dp-mini" onclick="changePropGrant('hide-contact','${escapeHtml(g.id)}')">Hide number</button>` : ''}<button type="button" class="dp-mini danger" onclick="changePropGrant('revoke','${escapeHtml(g.id)}')">Take back</button>` : ''}</li>`;
+  return `<details class="dp-access-d"${live.length || pend.length ? ' open' : ''}><summary>Who else has access${live.length ? ` · ${live.length}` : ''}${pend.length ? ` · ${pend.length} waiting` : ''}</summary>
+    ${live.length ? `<ul class="dp-access-l">${live.map(grantRow).join('')}</ul>` : '<p class="dp-agent-by">Nobody outside its agents.</p>'}
+    ${pend.length ? `<p class="dp-agent-l" style="margin-top:8px">Waiting for a decision</p><ul class="dp-access-l">${pend.map(r => `<li><b>${escapeHtml(r.requesterName)}</b> asked ${fmt(r.createdAt)}${r.reason ? ' — “' + escapeHtml(r.reason) + '”' : ''} <a class="dp-mini" href="myday.html?req=${encodeURIComponent(r.id)}">Decide</a></li>`).join('')}</ul>` : ''}
+    ${d.log.length ? `<p class="dp-agent-l" style="margin-top:8px">Agent history</p><ul class="dp-access-l">${d.log.slice(0, 8).map(x => `<li>${fmt(x.at)} — ${escapeHtml(agentNameOf(x.by))}: ${x.to && x.to.primary ? escapeHtml(agentNameOf(x.to.primary)) : 'unassigned'}${x.to && x.to.co && x.to.co.length ? ' + ' + x.to.co.map(e => escapeHtml(agentNameOf(e))).join(', ') : ''}${x.why ? ' <span class="dp-agent-by">(' + escapeHtml(x.why) + ')</span>' : ''}</li>`).join('')}</ul>` : ''}
+  </details>`;
+}
+async function loadPropAccess(id){
+  try {
+    const d = await agentApi('property-access', { id });
+    if(propAccess.id !== id) return;
+    propAccess.data = d;
+    const p = properties.find(x => x.id === id);
+    const box = document.getElementById('dpAccess');
+    if(p && box) box.innerHTML = renderPropAccess(p, !!(window.PinAccess && window.PinAccess.role === 'admin'));
+  } catch(e) { /* the panel is extra: the agents above still work */ }
+}
+async function changePropGrant(action, grantId){
+  if(action === 'revoke' && !confirm('Take back this agent’s access to the property? They are told in Messages.')) return;
+  try { await agentApi(action, { grantId }); showToast(action === 'revoke' ? 'Access taken back' : 'Owner’s number hidden'); }
+  catch(e) { showToast('✗ ' + e.message); }
+  propAccess.id = null;
+  renderPropAgents(properties.find(x => x.id === currentDetailId));
+}
+// primary: a new primary (or '' to clear), null = unchanged. co: the new co-agent list, null = unchanged.
+async function assignPropertyAgents(primary, co){
   const p = properties.find(x => x.id === currentDetailId);
   if(!p) return;
-  const v = value ? String(value).toLowerCase() : null;
-  const before = { a: p.assignedAgent || null, s: p.secondaryAgent || null };
-  if(which === 'primary'){ p.assignedAgent = v; if(!v || p.secondaryAgent === v) p.secondaryAgent = null; }
-  else p.secondaryAgent = v && v !== p.assignedAgent ? v : null;
-  p.agentsSetAt = Date.now();
-  p.agentsSetBy = myEmail() || null;
+  const before = { a: p.assignedAgent || null, co: coAgentsOfProp(p), s: p.secondaryAgent || null };
+  const nextPrimary = primary === null ? String(p.assignedAgent || '').toLowerCase() : String(primary || '').toLowerCase();
+  let nextCo = co === null ? before.co : co.map(e => String(e).toLowerCase());
+  nextCo = [...new Set(nextCo)].filter(e => e && e !== nextPrimary);
+  if(!nextPrimary) nextCo = [];
+  p.assignedAgent = nextPrimary || null; p.secondaryAgents = nextCo; p.secondaryAgent = nextCo[0] || null;
+  p.agentsSetAt = Date.now(); p.agentsSetBy = myEmail() || null;
   renderPropAgents(p);
   try {
-    await window.dashboardFirebase.setPropertyAgents(p.id, { assignedAgent: p.assignedAgent || null, secondaryAgent: p.secondaryAgent || null, agentsSetAt: p.agentsSetAt, agentsSetBy: p.agentsSetBy });
-    showToast(p.assignedAgent ? `Agent: ${agentNameOf(p.assignedAgent)}${p.secondaryAgent ? ' + ' + agentNameOf(p.secondaryAgent) : ''}` : 'Agent cleared');
+    await agentApi('assign', { propertyId: p.id, primary: nextPrimary, coAgents: nextCo });
+    showToast(p.assignedAgent ? `Agents: ${agentNameOf(p.assignedAgent)}${nextCo.length ? ' + ' + nextCo.map(agentNameOf).join(', ') : ''}` : 'Agents cleared');
   } catch(e) {
-    p.assignedAgent = before.a; p.secondaryAgent = before.s;
+    p.assignedAgent = before.a; p.secondaryAgents = before.co; p.secondaryAgent = before.s;
     renderPropAgents(p);
-    showToast('✗ Could not save the agent — check your connection');
+    showToast('✗ Could not save the agents — ' + e.message);
   }
+  propAccess.id = null;
   renderAgentFilter();
   applyFilters();
+}
+// Kept for anything that still calls the old one-at-a-time picker.
+function setPropertyAgent(which, value){
+  const p = properties.find(x => x.id === currentDetailId);
+  if(!p) return;
+  if(which === 'primary') return assignPropertyAgents(value || '', null);
+  return assignPropertyAgents(null, value ? [value] : []);
 }
 
 function applyFilters(){
@@ -761,7 +823,7 @@ function renderGrid(){
           <div>
             <div class="card-name" title="${e.name}">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
             <div class="card-loc" title="${e.location}">📍 ${e.location}</div>
-            <div class="card-agent${p.assignedAgent ? '' : ' none'}">👤 ${p.assignedAgent ? escapeHtml(agentNameOf(p.assignedAgent)) + (p.secondaryAgent ? ' <span class="card-agent2">+ ' + escapeHtml(agentNameOf(p.secondaryAgent)) + '</span>' : '') : 'Unassigned'}</div>
+            <div class="card-agent${p.assignedAgent ? '' : ' none'}">👤 ${p.assignedAgent ? escapeHtml(agentNameOf(p.assignedAgent)) + (coAgentsOfProp(p).length ? ' <span class="card-agent2">+ ' + coAgentsOfProp(p).map(e => escapeHtml(agentNameOf(e))).join(', ') + '</span>' : '') : 'Unassigned'}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
             <button class="card-action-btn card-share" onclick="sharePropertyLink('${e.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>

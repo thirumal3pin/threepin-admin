@@ -36,7 +36,11 @@ const auth = getAuth(app);
 // Which console needs which tab. A page an agent has none of these tabs for is closed to them.
 const PAGE_TABS = {
   crm: ['crm', 'tasks', 'ads', 'campaigns', 'calendar'],
-  property: ['properties'],
+  // The Property dashboard is the full inventory: an agent's Properties is listings.html.
+  property: [],
+  myprops: ['properties'],
+  myday: ['myday'],
+  messages: ['messages'],
   track: ['shoots'],
   finance: ['finance'],
   team: [],
@@ -82,7 +86,7 @@ async function forgetLocalCopy() {
 
 function apply(a, { gatePage = true } = {}) {
   window.PinAccess = a;
-  const nav = { role: a.role, tabs: a.config ? a.config.tabs : null };
+  const nav = { role: a.role, tabs: a.config ? a.config.tabs : null, actions: a.config ? a.config.actions : null };
   if (window.AppNav && window.AppNav.setAccess) window.AppNav.setAccess(nav);
   else window.__pinAccess = nav;
   document.dispatchEvent(new CustomEvent('pin-access', { detail: a }));
@@ -96,12 +100,20 @@ function gate(a) {
   if (!need) return;
   const tabs = (a.config && a.config.tabs) || [];
   if (need.some(t => tabs.includes(t))) return;
+  // An agent opening the Property dashboard (a bookmark, a shared property link) goes to their own
+  // Properties page, at the same property when the link named one.
+  if ((page === 'property') && tabs.includes('properties')) {
+    const id = new URLSearchParams(location.search).get('id');
+    location.replace('listings.html' + (id ? '?id=' + encodeURIComponent(id) : ''));
+    return;
+  }
   window.__pinGated = true;
   const btn = 'display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;'
     + 'font-weight:600;text-decoration:none;border:1px solid var(--border2,#D4D4D4);';
   const links = [];
+  if (tabs.includes('myday')) links.push(['myday.html', 'Open My Day']);
   if (tabs.some(t => PAGE_TABS.crm.includes(t))) links.push(['crm.html', 'Open the CRM']);
-  if (tabs.includes('properties')) links.push(['dashboard.html', 'Open Properties']);
+  if (tabs.includes('properties')) links.push(['listings.html', 'Open Properties']);
   document.body.className = '';
   document.body.style.cssText = 'margin:0;background:var(--bg,#F8F8F8);color:var(--ink,#171717);font:15px/1.5 var(--sans,system-ui)';
   document.body.innerHTML =

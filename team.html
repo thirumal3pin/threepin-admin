@@ -17,6 +17,7 @@
 <script>try{var t=localStorage.getItem('crmTheme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/agent-ui.css">
 <style>
   /* Team & access — admins only. Laid out for a phone first (380px), widening to a column on desktop.
      Colours, type and radii come from shared-assets/theme.css (loaded last). */
@@ -180,9 +181,10 @@
     </div>
 
     <div id="app" hidden>
-      <div class="seg" role="tablist">
+      <div class="seg three" role="tablist">
         <button type="button" role="tab" data-tab="people" aria-selected="true">People</button>
         <button type="button" role="tab" data-tab="agents" aria-selected="false">What agents see</button>
+        <button type="button" role="tab" data-tab="requests" aria-selected="false">Requests <span class="n" id="reqN" hidden></span></button>
       </div>
 
       <section id="tab-people">
@@ -192,8 +194,12 @@
         <div class="bar"><button type="button" class="btn primary block" id="addBtn"><i class="fa-solid fa-user-plus"></i> Add a person</button></div>
       </section>
 
+      <section id="tab-requests" hidden>
+        <p class="note">Agents ask for a property’s details (or a matching buyer’s number) from their Properties page. The property’s primary agent or any admin decides — the first decision wins. Everything shared is listed here, and you can take it back at any time.</p>
+        <div id="requests"><div class="card"><div class="sk"></div><div class="sk"></div></div></div>
+      </section>
       <section id="tab-agents" hidden>
-        <p class="note">Menu changes reach an agent the next time they open a page (within 10 minutes). Sections marked <span class="later">Later update</span> are saved now and start working when those screens are ready.</p>
+        <p class="note">Changes reach an agent the next time they open a page (within 10 minutes): the menu, what they see of each property and lead, and what they may do.</p>
         <div id="banner"></div>
         <div class="card">
           <div class="for">
@@ -219,5 +225,6 @@
 <script src="shared-assets/install-app.js"></script>
 <script type="module" src="shared-assets/access.js"></script>
 <script type="module" src="team-assets/team.js"></script>
+<script type="module" src="team-assets/requests.js"></script>
 </body>
 </html>

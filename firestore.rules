@@ -85,6 +85,19 @@ function writingOwnTenantField() {
   return isSignedInWithTenant() && request.resource.data.tenantId == tenantId();
 }
 
+// An agent's own lead (see the leads rule). The email must be confirmed, so nobody becomes an agent's
+// colleague by typing an address.
+function agentEmail() {
+  return request.auth.token.email.lower();
+}
+function agentOwnsLead(d) {
+  return isAgent() && request.auth.token.get('email_verified', false) == true
+    && d.tenantId == tenantId()
+    && (d.get('assignedAgent', '') == agentEmail()
+        || d.get('secondaryAgent', '') == agentEmail()
+        || agentEmail() in d.get('agentAccess', []));
+}
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -97,6 +110,8 @@ service cloud.firestore {
     }
     match /pipelines/{tid} {
       allow read, write: if ownsTenantDoc(tid);
+      // The stage names, for an agent's board.
+      allow read: if isAgent() && tid == tenantId();
     }
     match /settings/{tid} {
       allow read, write: if ownsTenantDoc(tid);
@@ -125,6 +140,12 @@ service cloud.firestore {
       allow list: if ownsTenantField();
       allow update: if ownsTenantField() && writingOwnTenantField();
       allow create: if writingOwnTenantField();
+      // An agent reads the leads that are theirs: assigned to them, or reached through the agent
+      // layer (agentAccess: enquiries on their properties, a lead approved for them — the server
+      // keeps it, api/_agent-work.js). Three queries, one per field (crm-assets/firebase-sync.js).
+      // An agent never writes a lead directly: their changes go through the server, which checks
+      // each field and keeps the lead views in step.
+      allow get, list: if agentOwnsLead(resource.data);
     }
 
     // Lead views (shared-assets/lead-views.js): {tenant}__meta and {tenant}__v{n}_{i}, each lead as a
@@ -159,10 +180,12 @@ service cloud.firestore {
     match /leads/{leadId}/notes/{noteId} {
       allow read, write: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
     }
     match /leads/{leadId}/history/{eventId} {
       allow read, write: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
     }
     // TailorTalk's AI profile, bookings and conversation for a lead. Readable by the lead's
     // tenant; written only by api/tailortalk.js (Admin SDK), so the page can never overwrite
@@ -170,6 +193,7 @@ service cloud.firestore {
     match /leads/{leadId}/tailortalk/{docId} {
       allow read: if isSignedInWithTenant() &&
         get(/databases/$(database)/documents/leads/$(leadId)).data.tenantId == tenantId();
+      allow read: if agentOwnsLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
       allow write: if false;
     }
     match /conversations/{convoId} {
@@ -351,6 +375,83 @@ service cloud.firestore {
     // Who changed whose role or access, and when. Written by the server only (api/_agent.js).
     match /accessLog/{entryId} {
       allow read, write: if false;
+    }
+
+    // ── Phases 2–6. Everything below is WRITTEN only by the server (api/_agent-work.js, Admin SDK),
+    // except Messages, where a member writes their own messages. "Staff" is isSignedInWithTenant():
+    // admins and full-access logins, who already see every property and lead.
+
+    // An agent's copy of the properties (their own in full, others as a summary, shared ones as
+    // approved) and their matching leads. Theirs only, and only while nothing in it has run out:
+    // the server sets expiresAt to the first grant or owner's-number timer that ends, so a copy
+    // holding something past its time cannot be opened until it is rebuilt without it.
+    match /agentViews/{docId} {
+      allow get: if isAgent() && docId == tenantId() + '__' + request.auth.uid
+        && resource.data.expiresAt > request.time.toMillis();
+      allow list, write: if false;
+    }
+
+    // Requests for details: the agent who asked, its approvers, and staff.
+    match /accessRequests/{reqId} {
+      allow read: if ownsTenantField()
+        || (isAgent() && emailVerified() && resource.data.tenantId == tenantId()
+            && (resource.data.requesterEmail == myEmail() || myEmail() in resource.data.approvers));
+      allow write: if false;
+    }
+    // Which lead a lead request is about — for its approvers, never for the agent asking.
+    match /requestPrivate/{reqId} {
+      allow read: if ownsTenantField()
+        || (isAgent() && emailVerified() && resource.data.tenantId == tenantId() && myEmail() in resource.data.approvers);
+      allow write: if false;
+    }
+    // Approved access (details timer, owner's-number tier, revoke): the agent holding it, and staff.
+    match /grants/{grantId} {
+      allow read: if ownsTenantField()
+        || (isAgent() && emailVerified() && resource.data.tenantId == tenantId() && resource.data.agentEmail == myEmail());
+      allow write: if false;
+    }
+    // Who was made a property's primary or co-agent, by whom and when.
+    match /assignmentLog/{entryId} {
+      allow read: if ownsTenantField();
+      allow write: if false;
+    }
+    // A site visit another agent booked, moved, called off or finished on your property.
+    match /visitAlerts/{alertId} {
+      allow read: if ownsTenantField()
+        || (isAgent() && emailVerified() && resource.data.tenantId == tenantId() && myEmail() in resource.data.to);
+      allow write: if false;
+    }
+    // Properties an agent sourced, waiting for an admin.
+    match /propertySubmissions/{subId} {
+      allow read: if ownsTenantField()
+        || (isAgent() && emailVerified() && resource.data.tenantId == tenantId() && resource.data.byEmail == myEmail());
+      allow write: if false;
+    }
+
+    // Messages: team conversations. Only members (and admins) read a thread and its messages; the
+    // server opens threads (it checks who may be in one). A member updates only the thread's
+    // last-message line, unread counts and read marks, and writes only their own text messages.
+    function isThreadMember(d) {
+      return isKnownRole() && emailVerified() && d.tenantId == tenantId() && myEmail() in d.members;
+    }
+    match /threads/{threadId} {
+      allow read: if isThreadMember(resource.data) || (isAdmin() && resource.data.tenantId == tenantId());
+      allow update: if isThreadMember(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastAt', 'lastText', 'lastBy', 'unread', 'reads'])
+        && request.resource.data.lastText is string && request.resource.data.lastText.size() <= 140
+        && request.resource.data.unread is map && request.resource.data.reads is map;
+      allow create, delete: if false;
+    }
+    match /threads/{threadId}/messages/{msgId} {
+      allow read: if isThreadMember(get(/databases/$(database)/documents/threads/$(threadId)).data)
+        || (isAdmin() && get(/databases/$(database)/documents/threads/$(threadId)).data.tenantId == tenantId());
+      allow create: if isThreadMember(get(/databases/$(database)/documents/threads/$(threadId)).data)
+        && request.resource.data.keys().hasOnly(['kind', 'text', 'at', 'by'])
+        && request.resource.data.kind == 'text'
+        && request.resource.data.by == myEmail()
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000
+        && request.resource.data.at is int;
+      allow update, delete: if false;
     }
 
     // Property notes + timeline events, scoped by the PARENT property's

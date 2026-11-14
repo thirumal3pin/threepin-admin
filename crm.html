@@ -400,6 +400,8 @@ function toggleDensity(){
         <a class="dp-act tt dp-act-more" id="dpTtBtn" href="#" target="tailortalkChat" rel="noopener" hidden
            title="Open this conversation in TailorTalk, on the business number">↪ TailorTalk</a>
         <button class="dp-act dp-act-more" onclick="openEditLeadModal(currentDetailId)">✏️ Edit</button>
+        <!-- Messages (agent layer): a team conversation linked to this lead, with its agents. -->
+        <button class="dp-act dp-act-more" onclick="messageAboutLead(currentDetailId)">🗨️ Message team</button>
         <button class="dp-act danger dp-act-more" onclick="deleteLead(currentDetailId)">🗑️ Delete</button>
         <!-- Phones: the rarer actions fold behind this, so the row never scrolls sideways. -->
         <button type="button" class="dp-act dp-more-btn" id="dpMoreBtn" aria-expanded="false" aria-label="More actions" onclick="toggleDpMore()">⋯</button>

@@ -72,6 +72,21 @@
 
   var MAP = [
     {
+      // The agent layer: everyone's day in one place (myday.html) — an agent's home page.
+      id: 'myday', label: 'My Day', icon: 'fa-solid fa-house', page: 'myday', nav: 'myday', tab: 'myday', badge: 'myday',
+      note: 'Approvals, site visits and follow-ups for today',
+    },
+    {
+      // An agent's Properties: their own in full, the rest as a summary (listings.html). Everyone
+      // else has the Property dashboard below.
+      id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'myprops', nav: 'myprops', tab: 'properties',
+      note: 'Your properties, and the rest as a summary', agentOnly: true,
+    },
+    {
+      id: 'messages', label: 'Messages', icon: 'fa-regular fa-message', page: 'messages', nav: 'messages', tab: 'messages', badge: 'messages',
+      note: 'Team chat, and a thread for every request',
+    },
+    {
       id: 'today', label: 'Daily task', icon: 'fa-regular fa-sun', page: 'crm', nav: 'today', tab: 'tasks',
       note: 'Your visits and tasks for today',
     },
@@ -84,7 +99,7 @@
       note: 'Who is where, and when everyone is free',
     },
     {
-      id: 'property', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', tab: 'properties',
+      id: 'property', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', tab: 'properties', notForAgents: true,
       note: 'The inventory, and everything that keeps it right',
       items: [
         { id: 'all', label: 'Property Intelligence Dashboard', icon: 'fa-solid fa-list', page: 'property', nav: 'all' },
@@ -110,7 +125,7 @@
       items: [
         { id: 'campaigns', label: 'Dashboard', icon: 'fa-solid fa-gauge-high', page: 'crm', nav: 'campaigns' },
         { id: 'cmp-templates', label: 'Templates', icon: 'fa-regular fa-file-lines', page: 'crm', nav: 'cmp-templates', staffOnly: true },
-        { id: 'cmp-new', label: 'New campaign', icon: 'fa-regular fa-paper-plane', page: 'crm', nav: 'cmp-new', staffOnly: true },
+        { id: 'cmp-new', label: 'New campaign', icon: 'fa-regular fa-paper-plane', page: 'crm', nav: 'cmp-new', needs: 'sendCampaigns' },
         { id: 'cmp-history', label: 'Campaigns', icon: 'fa-solid fa-clock-rotate-left', page: 'crm', nav: 'cmp-history' },
       ],
     },
@@ -164,6 +179,9 @@
 
   // Where each console lives, and what a bare visit to it should open.
   var PAGES = {
+    myday: { href: 'myday.html', home: 'myday' },
+    myprops: { href: 'listings.html', home: 'myprops' },
+    messages: { href: 'messages.html', home: 'messages' },
     property: { href: 'dashboard.html', home: 'all' },
     crm: { href: 'crm.html', home: 'kanban' },
     finance: { href: '3pinfinance', home: 'overview' },
@@ -190,7 +208,7 @@
   var access = (typeof window !== 'undefined' && window.__pinAccess) || (function () {
     try {
       var last = JSON.parse(localStorage.getItem('pin.access.last') || 'null');
-      return last && last.role ? { role: last.role, tabs: last.tabs || null } : { pending: true };
+      return last && last.role ? { role: last.role, tabs: last.tabs || null, actions: (last.config && last.config.actions) || null } : { pending: true };
     } catch (e) { return null; }
   })();
 
@@ -242,8 +260,12 @@
   function allowed(entry, parent) {
     if (access && access.pending) return false;
     if (entry.adminOnly) return !!(access && access.role === 'admin');
+    if (entry.agentOnly) return !!(access && access.role === 'agent');
     if (access && access.role === 'agent') {
+      if (entry.notForAgents) return false;
       if (entry.staffOnly) return false;
+      // An entry for something the admin may switch off for agents (agent settings → actions).
+      if (entry.needs && !(access.actions && access.actions[entry.needs])) return false;
       var tab = entry.tab || (parent && parent.tab);
       return !!tab && (access.tabs || []).indexOf(tab) >= 0;
     }
@@ -313,7 +335,7 @@
     if (!n) return '';
     // A seller with no listing card is revenue sitting untouched — it earns
     // the same red treatment as an overdue follow-up or a property missing data.
-    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting' || item.badge === 'tasks';
+    var alert = item.badge === 'followups' || item.badge === 'missing' || item.badge === 'sellers' || item.badge === 'posting' || item.badge === 'tasks' || item.badge === 'myday' || item.badge === 'messages';
     return '<span class="rl-badge' + (alert ? ' alert' : '') + '" aria-hidden="true">' + (n > 99 ? '99+' : n) + '</span>'
       + '<span class="sr-only"> (' + n + ')</span>';
   }
@@ -393,6 +415,44 @@
     who.style.display = cfg.user ? '' : 'none';
     var sb = root.querySelector('.rail-brand-sb');
     if (sb) sb.textContent = access && access.role === 'agent' ? 'Agent' : 'Admin';
+    renderTabbar();
+  }
+
+  // ── An agent's tab bar (phones): My Day · Properties · Messages · Leads · More ──
+  // The four places an agent goes all day, one tap each; More opens the full menu. Only the tabs
+  // the admin gave them, and only below the desktop width (the rail is always there above it).
+  var TABBAR = [
+    { id: 'myday', label: 'My Day', icon: 'fa-solid fa-house', page: 'myday', nav: 'myday', tab: 'myday', badge: 'myday' },
+    { id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'myprops', nav: 'myprops', tab: 'properties' },
+    { id: 'messages', label: 'Messages', icon: 'fa-regular fa-message', page: 'messages', nav: 'messages', tab: 'messages', badge: 'messages' },
+    { id: 'kanban', label: 'Leads', icon: 'fa-regular fa-comments', page: 'crm', nav: 'kanban', tab: 'crm' },
+  ];
+  function renderTabbar() {
+    var bar = document.getElementById('pinTabbar');
+    var on = !!(access && access.role === 'agent');
+    document.body.classList.toggle('has-tabbar', on);
+    if (!on) { if (bar) bar.remove(); return; }
+    if (!bar) {
+      bar = document.createElement('nav');
+      bar.id = 'pinTabbar'; bar.className = 'pin-tabbar'; bar.setAttribute('aria-label', 'Main');
+      document.body.appendChild(bar);
+      bar.addEventListener('click', function (e) {
+        var more = e.target.closest('[data-more]');
+        if (more) { e.preventDefault(); openDrawer(); return; }
+        var a = e.target.closest('a[data-item]');
+        if (!a || e.metaKey || e.ctrlKey) return;
+        var it = TABBAR.filter(function (x) { return x.id === a.dataset.item; })[0];
+        if (it && it.page === cfg.console) { e.preventDefault(); goto(it); }
+      });
+    }
+    var tabs = (access.tabs || []);
+    bar.innerHTML = TABBAR.filter(function (it) { return tabs.indexOf(it.tab) >= 0; }).map(function (it) {
+      var here = it.page === cfg.console && (it.page !== 'crm' || active === 'kanban' || active === 'list');
+      var n = it.badge ? (badges[it.badge] || 0) : 0;
+      return '<a href="' + esc(hrefFor(it)) + '" data-item="' + esc(it.id) + '"' + (here ? ' aria-current="page" class="on"' : '') + '>'
+        + '<i class="' + esc(it.icon) + '" aria-hidden="true"></i><span>' + esc(it.label) + '</span>'
+        + (n ? '<b class="tb-n" aria-label="' + n + ' new">' + (n > 99 ? '99+' : n) + '</b>' : '') + '</a>';
+    }).join('') + '<a href="#" data-more><i class="fa-solid fa-bars" aria-hidden="true"></i><span>More</span></a>';
   }
 
   // ═══════ STATE CHANGES ═══════

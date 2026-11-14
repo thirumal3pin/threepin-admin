@@ -43,7 +43,9 @@ while (!(await up())) {
   await new Promise(r => setTimeout(r, 300));
 }
 
-const tests = spawn(process.execPath, ['--test', '--test-concurrency=1', 'rules.test.mjs'], { stdio: 'inherit' });
+// The rules, then the agent-layer server against the same emulator (api/_agent-work.js).
+const files = process.argv.slice(2).length ? process.argv.slice(2) : ['rules.test.mjs', 'agent-server.test.mjs'];
+const tests = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files], { stdio: 'inherit', env: { ...process.env, FIRESTORE_EMULATOR_HOST: '127.0.0.1:' + PORT } });
 const code = await new Promise(res => tests.on('exit', res));
 emu.kill();
 process.exit(code);

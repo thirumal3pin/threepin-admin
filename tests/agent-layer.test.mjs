@@ -11,7 +11,7 @@ console.log('3 PIN Realty — Agent layer\n');
 
 // ── Defaults = the brief and the owner's answers of 14 Nov ──
 const d = AC.effectiveConfig(null, 'rameez@threepin.in');
-ok('menu: Properties, CRM, Tasks, Meta Ads, Campaigns', d.tabs.join() === 'properties,crm,tasks,ads,campaigns', d.tabs.join());
+ok('menu: My Day, Properties, CRM, Tasks, Meta Ads, Campaigns, Messages', d.tabs.join() === 'myday,properties,crm,tasks,ads,campaigns,messages', d.tabs.join());
 ok('other properties: a richer summary with no street — title, BHK, budget, type, locality, availability, primary agent',
   d.otherPropertyFields.join() === 'title,config,budget,type,locality,availability,primaryAgent', d.otherPropertyFields.join());
 ok('…and never the street, the owner, office notes or the sheet’s extra columns', !['address', 'contact', 'internal', 'sheet'].some(f => d.otherPropertyFields.includes(f)));
@@ -22,8 +22,9 @@ ok('ads and campaigns: their properties only', d.adsScope === 'own' && d.campaig
 ok('actions: add leads, edit own notes/availability, submit properties, export theirs, send campaigns — all on', AC.ACTIONS.every(a => d.actions[a.id] === true) && AC.ACTIONS.length === 5);
 ok('approvals: the primary agent or an admin; no time limit; owner’s number off; 24 hours offered',
   d.approvals.approvers === 'primary' && d.approvals.detailsDays === null && d.approvals.shareContact === false && d.approvals.contactHours === 24);
-ok('the defaults are not shared objects (editing one result cannot change the next)', (() => { d.tabs.push('x'); d.actions.addLeads = false; const e = AC.effectiveConfig(null); return e.tabs.length === 5 && e.actions.addLeads; })());
-ok('only the menu changes anything yet; the rest is marked for a later update', AC.LIVE.tabs === true && !AC.LIVE.fields && !AC.LIVE.actions && !AC.LIVE.approvals);
+ok('the defaults are not shared objects (editing one result cannot change the next)', (() => { d.tabs.push('x'); d.actions.addLeads = false; const e = AC.effectiveConfig(null); return e.tabs.length === 7 && e.actions.addLeads; })());
+ok('every section is in force since phases 2–6 (menu, fields, actions, scopes, approvals)', Object.values(AC.LIVE).every(v => v === true) && Object.keys(AC.LIVE).length === 5);
+ok('My Day and Messages can be given to agents; the Team calendar cannot yet', AC.TABS.find(t => t.id === 'myday').status === 'ready' && AC.TABS.find(t => t.id === 'messages').status === 'ready' && AC.TABS.find(t => t.id === 'calendar').status === 'later');
 ok('tabs that are not built for agents cannot be given', AC.TABS.filter(t => t.status !== 'ready').every(t => !AC.normalizeConfig({ tabs: [t.id] }).tabs.length));
 
 // ── Cleaning ──
@@ -102,10 +103,13 @@ for (const s of sections) {
     (tab && tabIds.includes(tab)) || adminOnly || s.id === 'brochure', s.line);
 }
 ok('Team & access is admin-only and goes to team.html', /id: 'team'[\s\S]{0,200}adminOnly: true/.test(mapSrc) && /team: \{ href: 'team.html'/.test(nav));
-ok('setup screens stay with the full-access team (staffOnly)', ['missing', 'changes', 'sync', 'ml-setup', 'cmp-templates', 'cmp-new'].every(id => new RegExp("id: '" + id + "'[^\\n]*staffOnly: true").test(nav)));
+ok('setup screens stay with the full-access team (staffOnly)', ['missing', 'changes', 'sync', 'ml-setup', 'cmp-templates'].every(id => new RegExp("id: '" + id + "'[^\\n]*staffOnly: true").test(nav)));
+ok('New campaign shows to an agent only when the admin lets agents send', /id: 'cmp-new'[^\n]*needs: 'sendCampaigns'/.test(nav) && /entry\.needs && !\(access\.actions/.test(nav));
+ok('agents get their own Properties page; the Property dashboard is not theirs', /id: 'myprops'[^\n]*\n[^\n]*agentOnly: true/.test(nav) && /id: 'property'[^\n]*notForAgents: true/.test(nav));
+ok('an agent’s tab bar on phones: My Day, Properties, Messages, Leads, More', /renderTabbar/.test(nav) && /data-more/.test(nav));
 ok('the menu starts from the device’s last known role (no flash of the full menu)', /pin\.access\.last/.test(nav));
 ok('a deep link to a view an agent may not see is ignored', /navAllowed\(value\)/.test(nav));
-for (const [file, c] of [['crm.html', 'crm'], ['dashboard.html', 'property'], ['property.html', 'property'], ['propertytrack.html', 'track'], ['3pinfinance.html', 'finance'], ['team.html', 'team']]) {
+for (const [file, c] of [['crm.html', 'crm'], ['dashboard.html', 'property'], ['property.html', 'property'], ['propertytrack.html', 'track'], ['3pinfinance.html', 'finance'], ['team.html', 'team'], ['myday.html', 'myday'], ['messages.html', 'messages'], ['listings.html', 'myprops']]) {
   const html = readFileSync(new URL('../' + file, import.meta.url), 'utf8');
   ok(`${file} says which console it is and loads access.js`, new RegExp('<html[^>]*data-console="' + c + '"').test(html) && /shared-assets\/access\.js/.test(html));
 }

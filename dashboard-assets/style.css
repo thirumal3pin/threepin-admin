@@ -1460,6 +1460,17 @@ a.nm-row{ text-decoration:none; }
 .dp-agent-sel.empty{color:var(--ink3);font-weight:500;border-style:dashed;}
 .dp-agent-sel:disabled{opacity:.55;cursor:not-allowed;}
 .dp-agent-by{font-size:11.5px;color:var(--ink3);}
+.dp-coagents{flex-wrap:wrap;}
+.dp-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg2,#F1F1F1);border:1px solid var(--border);border-radius:999px;padding:4px 4px 4px 10px;font-size:13px;font-weight:600;}
+.dp-chip button{border:0;background:transparent;color:var(--ink3);font-size:12px;min-width:28px;min-height:28px;border-radius:50%;cursor:pointer;}
+.dp-chip button:hover{background:var(--border);color:var(--ink);}
+.dp-add{min-width:140px;}
+.dp-access{flex-basis:100%;}
+.dp-access-d summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink2,#3F3F3F);padding:6px 0;}
+.dp-access-l{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px;}
+.dp-access-l li{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+.dp-mini{font:inherit;font-size:12px;font-weight:600;border:1px solid var(--border);background:var(--white);color:var(--ink);border-radius:8px;padding:5px 10px;min-height:32px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;}
+.dp-mini.danger{color:#B91C1C;border-color:#F3C2C2;}
 .card-agent{font-size:11.5px;font-weight:600;color:var(--ink2);margin-top:3px;}
 .card-agent.none{color:var(--ink3);font-weight:500;}
 .card-agent2{font-weight:500;color:var(--ink3);}

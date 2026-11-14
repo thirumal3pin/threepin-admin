@@ -250,6 +250,8 @@ function startLiveRefresh(){
 }
 async function liveRefresh(loud){
   if(liveRefreshRunning || !window.crmAuth) return;
+  // An agent's leads update live from the database; the whole-team TailorTalk refresh is the team's.
+  if(window.crmAuth.getRole && window.crmAuth.getRole() === 'agent') return;
   liveRefreshRunning = true;
   lastLiveRefresh = Date.now();
   try{
@@ -7363,3 +7365,26 @@ document.addEventListener('visibilitychange', () => {
   const away = Date.now() - p.at;
   if(away > 5000 && away < 30 * 60000 && !document.querySelector('.modal-overlay.open')) openFollowUpLogModal(p.id, 'What happened on the call?');
 });
+
+
+// ═══════ AGENT LAYER — the CRM's part ═══════
+// "Message team" on a lead: opens (or makes) the Messages conversation linked to it, with its agents.
+async function messageAboutLead(leadId){
+  if(!leadId || !window.crmAuth) return;
+  try {
+    const token = await window.crmAuth.getIdToken();
+    const r = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ action: 'thread-open', type: 'lead', linkedId: leadId }) });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok || j.ok === false) throw new Error(j.error || 'Could not open the conversation');
+    location.href = 'messages.html?t=' + encodeURIComponent(j.id);
+  } catch(e) { showToast('✗ ' + e.message); }
+}
+// A lead an agent added that the server refused (the number is already with the team): taken off the
+// board again, and said plainly — without saying whose it is.
+window.agentLeadRefused = function(leadId, message, body){
+  const i = leads.findIndex(l => l.id === leadId);
+  if(i >= 0) leads.splice(i, 1);
+  if(typeof refreshAll === 'function') refreshAll();
+  if(body && body.mine && body.leadId){ showToast('You already have this client — opening them'); setTimeout(() => openDetail(body.leadId), 400); return; }
+  alert(message || 'This lead was not added.');
+};

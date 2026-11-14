@@ -79,7 +79,7 @@ async function tenantOf(user) {
   if (!(r && r.claims.tenantId)) {
     try { r = await user.getIdTokenResult(true); failed = false; } catch (e) { failed = !r; }
   }
-  return { tenant: (r && r.claims.tenantId) || null, failed };
+  return { tenant: (r && r.claims.tenantId) || null, role: (r && r.claims.role) || '', failed };
 }
 
 function nameOf(user) {
@@ -99,7 +99,7 @@ async function forgetLocalCopy() {
 
 onAuthStateChanged(auth, async user => {
   if (!user) { intent = false; setBusy(false); show('signin'); return; }
-  const { tenant, failed } = await tenantOf(user);
+  const { tenant, role, failed } = await tenantOf(user);
   if (auth.currentUser !== user) return;   // signed out, or another account, while we were asking
   if (failed) {
     // Could not reach Google to check: keep the person signed in and let them retry.
@@ -117,11 +117,14 @@ onAuthStateChanged(auth, async user => {
     return;   // the null state that follows shows the sign-in with the message above
   }
   setError('');
+  // An agent's home is My Day; their tiles are the pages they have (the menu shows the rest).
+  const agent = role === 'agent';
   if (intent) {
     show('opening');
-    location.assign(DAILY_TASK);
+    location.assign(agent ? 'myday.html' : DAILY_TASK);
     return;
   }
+  if (agent) agentTiles();
   const name = nameOf(user);
   $('who-hi').textContent = name ? 'Welcome back, ' + name : 'Welcome back';
   $('who-email').textContent = user.email || '';
@@ -173,3 +176,17 @@ $('signout-btn').addEventListener('click', async () => {
   try { await signOut(auth); } catch (e) { /* the state change below puts the sign-in back */ }
   forgetLocalCopy();
 });
+
+// The tiles an agent sees on this page: My Day, their Properties, the CRM (their leads), Messages.
+function agentTiles() {
+  const nav = document.querySelector('nav.tiles');
+  if (!nav || nav.dataset.agent) return;
+  nav.dataset.agent = '1';
+  const go = '<span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
+  const tile = (i, href, ico, nm, ds, primary) => `<a class="tile${primary ? ' primary' : ''} rise" style="--i:${i}" href="${href}"><span class="ico">${ico}</span><span class="tx"><span class="nm">${nm}</span><span class="ds">${ds}</span></span>${go}</a>`;
+  const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  nav.innerHTML = tile(1, 'myday.html', svg('<path d="M3.5 10.5 12 3.5l8.5 7M5.5 9v11h13V9"/>'), 'My Day', 'Approvals, site visits and follow-ups for today', true)
+    + tile(2, 'listings.html', svg('<rect x="3.5" y="3.5" width="7" height="8" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.8"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.8"/><rect x="3.5" y="14.5" width="7" height="6" rx="1.8"/>'), 'Properties', 'Yours in full, the rest as a summary')
+    + tile(3, 'crm.html', svg('<circle cx="9" cy="8" r="3.4"/><path d="M2.5 20c.6-3.6 3.3-5.6 6.5-5.6s5.9 2 6.5 5.6"/>'), 'My leads', 'Your enquiries, follow-ups and visits')
+    + tile(4, 'messages.html', svg('<path d="M4 5h16v11H8l-4 4z"/>'), 'Messages', 'Talk to the team about a property or a lead');
+}

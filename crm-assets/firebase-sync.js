@@ -103,6 +103,7 @@ async function seedSampleLeadsIfEmpty(tenantId){
 function subscribeToData(tenantId){
   if(subscribed) return;
   subscribed = true;
+  if (currentRole === 'agent') { subscribeAsAgent(tenantId); return; }
   // The listeners start at once — from this browser's local copy, then the server. They used to
   // wait for the three first-time seeds below: three server round trips before a single lead
   // showed (and, on a weak phone signal, much longer). The seeds only ever write for a brand-new
@@ -163,6 +164,112 @@ function subscribeToData(tenantId){
     if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(data.tailortalkWorkspace || null);
   }, (err) => console.error('Firestore settings sync error:', err));
 }
+
+// ═══════ AGENT MODE (the agent layer) ═══════
+// An agent's CRM shows only their leads: assigned to them, as the secondary agent, or reached
+// through the agent layer (agentAccess — enquiries on their properties, a lead approved for them).
+// Those are the three queries firestore.rules allow an agent; the packed lead views are not theirs
+// to read. Every change they make goes to the server (/api/agent), which checks each field and keeps
+// the lead views in step for everyone else. The team settings come from the server too, without the
+// rest of settings/{tenant}.
+async function agentApi(action, body){
+  const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+  const r = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ action, ...body }) });
+  let j = {};
+  try { j = await r.json(); } catch (e) { j = {}; }
+  if (!r.ok || j.ok === false) { const err = new Error(j.error || ('HTTP ' + r.status)); err.status = r.status; err.body = j; throw err; }
+  return j;
+}
+function agentRefused(what){
+  if (window.showToast) window.showToast(what || 'Not part of your access — ask an admin');
+  return Promise.resolve();
+}
+// What an agent's CRM leaves out: the team's settings menus, the AI bot, Eåsy (it reads the whole
+// tenant), deleting a lead and choosing a lead's agent. The server refuses all of it anyway; this
+// only spares them buttons that would say no.
+function agentChrome(){
+  if (document.getElementById('agentModeCss')) return;
+  document.documentElement.classList.add('agent-mode');
+  const st = document.createElement('style');
+  st.id = 'agentModeCss';
+  st.textContent = ['openStageManager', 'openDigestManager', 'openDashboardEmailManager', 'openBotEditor', 'runBackfillSummaries', 'runTailorTalkSync', 'deleteLead']
+    .map(f => `.agent-mode [onclick^="${f}"]`).join(',') + ',.agent-mode #autoBtn,.agent-mode #easyBtn,.agent-mode .easy-fab,.agent-mode .easy-panel{display:none!important}'
+    + '.agent-mode #dpAgents select{pointer-events:none;appearance:none;-webkit-appearance:none;border-style:solid;background-image:none}'
+    + '.agent-mode .agent-only-note{display:block}';
+  document.head.appendChild(st);
+  // Download only when the admin allows it (agent settings → Download or copy their lists).
+  const exportBtn = () => document.querySelector('[onclick^="openExportModal"]');
+  const apply = a => { const b = exportBtn(); if (b && a && a.config && a.config.actions) b.style.display = a.config.actions.exportOwn ? '' : 'none'; };
+  if (window.PinAccess) apply(window.PinAccess);
+  document.addEventListener('pin-access', e => apply(e.detail));
+}
+function subscribeAsAgent(tenantId){
+  agentChrome();
+  const me = signedInEmail();
+  const parts = { a: [], b: [], c: [] };
+  const fromServer = { a: false, b: false, c: false };
+  const push = () => {
+    const by = new Map();
+    [...parts.a, ...parts.b, ...parts.c].forEach(l => by.set(l.id, l));
+    const list = [...by.values()];
+    savedAs = new Map(list.map(l => { const j = JSON.stringify(l); savedFor.set(l, j); delivered.add(l.id); return [l.id, j]; }));
+    if (window.applyLeadsSnapshot) window.applyLeadsSnapshot(list, fromServer.a && fromServer.b && fromServer.c, null);
+  };
+  [['a', where('assignedAgent', '==', me)], ['b', where('secondaryAgent', '==', me)], ['c', where('agentAccess', 'array-contains', me)]].forEach(([k, w]) => {
+    onSnapshot(query(leadsCol, where('tenantId', '==', tenantId), w), snap => {
+      parts[k] = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+      if (!snap.metadata.fromCache) fromServer[k] = true;
+      push();
+    }, err => console.error('Firestore agent leads (' + k + ') error:', err));
+  });
+  onSnapshot(pipelineRef(tenantId), (snap) => {
+    if (snap.exists() && window.applyPipelineSnapshot) window.applyPipelineSnapshot(snap.data().stages || []);
+  }, (err) => console.error('Firestore pipeline sync error:', err));
+  agentApi('crm-boot').then(d => {
+    if (window.applyEnquiryTypesSnapshot) window.applyEnquiryTypesSnapshot(d.enquiryTypes || DEFAULT_ENQUIRY_TYPES);
+    if (window.applyTeamSnapshot) window.applyTeamSnapshot(d.team || {});
+    if (window.applyTtWorkspaceSnapshot) window.applyTtWorkspaceSnapshot(d.tailortalkWorkspace || null);
+    if (window.applyDefaultLeadAgent) window.applyDefaultLeadAgent(me);
+    if (window.applyViewsSnapshot) window.applyViewsSnapshot({});
+    if (window.applyAutomationSettingsSnapshot) window.applyAutomationSettingsSnapshot({});
+  }).catch(e => console.error('CRM settings for an agent:', e));
+}
+// A save from an agent's page: the changed fields (or the whole new lead) to the server.
+function agentSaveLead(lead, data){
+  const was = savedFor.get(lead) || savedAs.get(lead.id);
+  if (was || delivered.has(lead.id)) {
+    const base = was ? JSON.parse(was) : {};
+    const pairs = diffPaths(writable(base), data).filter(([seg]) => seg[0] !== 'tenantId');
+    if (!pairs.length) return Promise.resolve();
+    const now = JSON.stringify(applyPaths(base, pairs));
+    savedFor.set(lead, now); savedAs.set(lead.id, now);
+    return agentApi('lead-save', { id: lead.id, pairs }).then(r => {
+      if (r && r.refused && r.refused.length) console.warn('Not yours to change on this lead:', r.refused.join(', '));
+    }).catch(e => saveFailed('save lead', e));
+  }
+  // A new lead: the server checks the number against the whole team first.
+  return agentApi('lead-add', { lead: { ...data, id: lead.id } }).then(r => {
+    savedAs.set(lead.id, JSON.stringify({ ...lead, ...data })); delivered.add(lead.id);
+    return r;
+  }).catch(e => {
+    if (window.agentLeadRefused) window.agentLeadRefused(lead.id, e.message, e.body || {});
+    else if (window.showToast) window.showToast('⚠ ' + e.message);
+    // Never settles: whatever the page meant to do once the lead was saved (its first note, its
+    // history line) must not run for a lead that was not added.
+    return new Promise(() => {});
+  });
+}
+const agentPatch = (leadId, patch) => agentApi('lead-save', { id: leadId, data: patch }).catch(e => saveFailed('save lead', e));
+// The agent's own copy of the properties, for the CRM's pickers and matching: what their settings
+// let them see, never the whole inventory.
+async function agentInventory(){
+  const tid = await whenTenant();
+  await agentApi('view').catch(() => {});
+  const s = await getDoc(doc(db, 'agentViews', tid + '__' + auth.currentUser.uid));
+  const props = s.exists() ? (s.data().props || []) : [];
+  return props.map(p => ({ ...p, propertyCode: p.propertyCode || p._code || p.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }));
+}
+const isAgentMode = () => currentRole === 'agent';
 
 // ═══════ TASKS (shared-assets/task-model.js holds the rules) ═══════
 // The configuration first (who manages, who sees whose), then the tasks this person may see: a
@@ -266,6 +373,7 @@ window.crmFirebase = {
     const rest = writable(lead);
     if ('phone' in rest && typeof window.phoneKey === 'function') rest.phoneKey = window.phoneKey(rest.phone);
     const data = { ...rest, tenantId: currentTenantId };
+    if (isAgentMode()) return agentSaveLead(lead, data);
     const ref = doc(db, 'leads', lead.id);
     // A lead the page received: only the fields this save changed, as an update — never the rest
     // of the page's copy (which may be older than what is saved), and never re-creating a lead
@@ -289,15 +397,16 @@ window.crmFirebase = {
   // "Use TailorTalk's value": writes the value AND hands the field back to TailorTalk in one
   // update — saveLead() would drop the field again because it is no longer held.
   // Lead agent (and a secondary). Only these keys, so nothing else on the lead is rewritten.
-  setLeadAgents: (leadId, patch) => views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
+  setLeadAgents: (leadId, patch) => isAgentMode() ? agentRefused('Only admins choose a lead’s agent') : views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
   // "Not a seller": the lead's own fields, and its Property & Media card when that card is still
   // the empty one made automatically. A card someone has worked on is never deleted from here.
-  setLeadFields: (leadId, patch) => views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
+  setLeadFields: (leadId, patch) => isAgentMode() ? agentPatch(leadId, patch) : views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update'),
   getListing: (id) => getDoc(doc(db, 'listings', id)).then(s => (s.exists() ? { id: s.id, ...s.data() } : null)),
-  watchTrackTasks: () => watchTrackTasks(),
+  watchTrackTasks: () => isAgentMode() ? undefined : watchTrackTasks(),
   deleteListing: (id) => deleteDoc(doc(db, 'listings', id)),
   releaseLeadField: (leadId, field, value) => {
     const patch = { [field]: value, ['ttHold.' + field]: false };
+    if (isAgentMode()) return agentPatch(leadId, patch);
     return views.save(currentTenantId, doc(db, 'leads', leadId), patch, 'update')
       .catch(e => { console.error('Firestore release field error:', e); throw e; });
   },
@@ -306,23 +415,24 @@ window.crmFirebase = {
   updateLeadAi: (leadId, fields) => {
     const safe = Object.fromEntries(Object.entries(fields).filter(([k]) => /^ai\.[A-Za-z_.]+$/.test(k)));
     if (!Object.keys(safe).length) return Promise.resolve();
+    if (isAgentMode()) return agentPatch(leadId, safe);
     return views.save(currentTenantId, doc(db, 'leads', leadId), safe, 'update')
       .catch(e => console.error('Firestore AI field update error:', e));
   },
-  saveAutomationSettings: ({ enabled }) => setDoc(settingsRef(currentTenantId), { leadAutomation: { enabled: !!enabled } }, { merge: true })
+  saveAutomationSettings: ({ enabled }) => isAgentMode() ? agentRefused() : setDoc(settingsRef(currentTenantId), { leadAutomation: { enabled: !!enabled } }, { merge: true })
     .catch(e => console.error('Firestore save automation settings error:', e)),
   // Saved team views: settings.views.{id}. One dotted path per view, so two people saving
   // different views at the same moment never overwrite each other.
-  saveView: (view) => updateDoc(settingsRef(currentTenantId), { ['views.' + view.id]: view })
+  saveView: (view) => isAgentMode() ? Promise.reject(new Error('Saved views are for the team')) : updateDoc(settingsRef(currentTenantId), { ['views.' + view.id]: view })
     .catch(e => { console.error('Firestore save view error:', e); throw e; }),
-  deleteView: (id) => updateDoc(settingsRef(currentTenantId), { ['views.' + id]: deleteField() })
+  deleteView: (id) => isAgentMode() ? Promise.reject(new Error('Saved views are for the team')) : updateDoc(settingsRef(currentTenantId), { ['views.' + id]: deleteField() })
     .catch(e => { console.error('Firestore delete view error:', e); throw e; }),
   // The inventory (properties collection) — read once, on first use, not kept live. The WHOLE
   // record: the visit invitation takes the seller's name and number from it, and the buyer
   // matching reads type, BHK, furnishing, facing, possession and more. It was trimmed to seven
   // fields, so invitations went out without the seller and matching worked half-blind. A failed
   // read is passed on (not turned into an empty list) so the pickers can say so.
-  getInventory: () => whenTenant().then(tid => getDocs(query(collection(db, 'properties'), where('tenantId', '==', tid))))
+  getInventory: () => isAgentMode() ? agentInventory().catch(e => { console.error('Agent inventory read error:', e); throw e; }) : whenTenant().then(tid => getDocs(query(collection(db, 'properties'), where('tenantId', '==', tid))))
     .then(s => s.docs.map(d => { const p = d.data(); return { ...p, id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || p.zone || '', config: p.config || '', startingPrice: p.startingPrice || '', soldOut: !!p.soldOut }; }))
     .catch(e => { console.error('Firestore inventory read error:', e); throw e; }),
   // TailorTalk's AI profile + conversation for one lead (one document, loaded on open).
@@ -341,11 +451,11 @@ window.crmFirebase = {
     s => cb(s.exists() ? s.data() : null, null),
     e => { console.error('Firestore watch tailortalk error:', e); cb(null, e); }
   ),
-  deleteLead: (id) => views.save(currentTenantId, doc(db, 'leads', id), null, 'delete').catch(e => saveFailed('delete lead', e)),
+  deleteLead: (id) => isAgentMode() ? agentRefused('Ask an admin to delete a lead') : views.save(currentTenantId, doc(db, 'leads', id), null, 'delete').catch(e => saveFailed('delete lead', e)),
   // Opening a lead re-checks its row in the views against the lead itself, in a transaction (1 read),
   // and puts the row right if anything ever made them differ — without waiting for the daily rebuild.
   // shown: the lead as this page has it. → 'same' · 'healed' · 'removed' · 'skipped' · 'failed'
-  healLead: (id, shown) => views.heal(currentTenantId, id, shown),
+  healLead: (id, shown) => isAgentMode() ? Promise.resolve('skipped') : views.heal(currentTenantId, id, shown),
 
   // ── Notes / history subcollections ──
   // since: only what was added after then (a lead opened again) — else all of it.
@@ -356,29 +466,29 @@ window.crmFirebase = {
   getLeadHistory: (leadId, since) => getDocs(since ? query(collection(db, 'leads', leadId, 'history'), where('at', '>', since)) : collection(db, 'leads', leadId, 'history'))
     .then(s => s.docs.map(d => d.data()))
     .catch(e => { console.error('Firestore get history error:', e); throw e; }),
-  saveNote: (leadId, note) => setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
-  deleteNoteDoc: (leadId, noteId) => deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
-  saveHistory: (leadId, event) => setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
+  saveNote: (leadId, note) => isAgentMode() ? agentApi('lead-note', { id: leadId, note }).catch(e => saveFailed('save note', e)) : setDoc(doc(db, 'leads', leadId, 'notes', note.id), note).catch(e => saveFailed('save note', e)),
+  deleteNoteDoc: (leadId, noteId) => isAgentMode() ? agentApi('lead-note-delete', { id: leadId, noteId }).catch(e => saveFailed('delete note', e)) : deleteDoc(doc(db, 'leads', leadId, 'notes', noteId)).catch(e => saveFailed('delete note', e)),
+  saveHistory: (leadId, event) => isAgentMode() ? agentApi('lead-history', { id: leadId, event }).catch(e => saveFailed('save history', e)) : setDoc(doc(db, 'leads', leadId, 'history', event.id), event).catch(e => saveFailed('save history', e)),
 
-  savePipeline: (stages) => setDoc(pipelineRef(currentTenantId), { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
+  savePipeline: (stages) => isAgentMode() ? agentRefused() : setDoc(pipelineRef(currentTenantId), { stages }).catch(e => console.error('Firestore save pipeline error:', e)),
   getBotConfig: async () => {
-    if (!currentTenantId) return null;
+    if (!currentTenantId || isAgentMode()) return null;
     const snap = await getDoc(whatsappBotRef(currentTenantId));
     return snap.exists() ? snap.data() : null;
   },
-  saveBotConfig: (config) => setDoc(whatsappBotRef(currentTenantId), config, { merge: true }),
-  saveEnquiryTypes: (enquiryTypes) => setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
+  saveBotConfig: (config) => isAgentMode() ? agentRefused() : setDoc(whatsappBotRef(currentTenantId), config, { merge: true }),
+  saveEnquiryTypes: (enquiryTypes) => isAgentMode() ? agentRefused() : setDoc(settingsRef(currentTenantId), { enquiryTypes }, { merge: true }).catch(e => console.error('Firestore save enquiry types error:', e)),
   // The curated property list behind the Add Lead combobox. Leads already in
   // the CRM contribute their properties client-side; this doc is what makes a
   // brand-new property selectable before its first lead exists.
-  saveProperties: (properties) => setDoc(settingsRef(currentTenantId), { properties }, { merge: true }).catch(e => console.error('Firestore save properties error:', e)),
-  saveFollowupDigestSettings: (enabled, recipients, emailEnabled, emails) => setDoc(settingsRef(currentTenantId), {
+  saveProperties: (properties) => isAgentMode() ? Promise.resolve() : setDoc(settingsRef(currentTenantId), { properties }, { merge: true }).catch(e => console.error('Firestore save properties error:', e)),
+  saveFollowupDigestSettings: (enabled, recipients, emailEnabled, emails) => isAgentMode() ? agentRefused() : setDoc(settingsRef(currentTenantId), {
     followupDigestEnabled: enabled,
     followupDigestRecipients: recipients,
     followupDigestEmailEnabled: emailEnabled,
     followupDigestEmails: emails
   }, { merge: true }).catch(e => console.error('Firestore save digest settings error:', e)),
-  saveDashboardEmailSettings: (enabled, recipients) => setDoc(settingsRef(currentTenantId), {
+  saveDashboardEmailSettings: (enabled, recipients) => isAgentMode() ? agentRefused() : setDoc(settingsRef(currentTenantId), {
     dashboardEmailEnabled: enabled,
     dashboardEmailRecipients: recipients
   }, { merge: true }).catch(e => console.error('Firestore save dashboard email settings error:', e))
@@ -430,7 +540,8 @@ window.crmAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOutAndForget(auth),
   getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null),
-  getTenantId: () => currentTenantId
+  getTenantId: () => currentTenantId,
+  getRole: () => currentRole
 };
 
 onAuthStateChanged(auth, async (user) => {

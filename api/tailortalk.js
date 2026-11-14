@@ -55,6 +55,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { waitUntil } from '@vercel/functions';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
+import { visitAlert, visitPropertyFor, agentCampaignGate } from './_agent-work.js';
+import { leadVisibleTo } from '../shared-assets/agent-access.js';
 import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull, campaignRepliesAfter } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
 import {
@@ -207,8 +209,8 @@ async function syncCron(request) {
   return json({ ok: true, done, ...total, aiQueued: queued, aiRan });
 }
 
-async function crmUser(request) {
-  const user = await verifyCrmUser(request);
+async function crmUser(request, opts) {
+  const user = await verifyCrmUser(request, opts);
   const tenantId = process.env.TAILORTALK_TENANT_ID;
   return user && user.tenantId && user.tenantId === tenantId ? user : null;
 }
@@ -306,12 +308,17 @@ async function refreshPost(request) {
 
 // "Re-check" on one lead.
 async function aiLeadPost(request) {
-  const user = await crmUser(request);
+  // An agent may ask for a re-check of a lead that is theirs.
+  const user = await crmUser(request, { allowAgent: true });
   if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
   let body = {};
   try { body = await request.json(); } catch { /* validated below */ }
   if (!body.leadId || typeof body.leadId !== 'string') return json({ ok: false, error: 'leadId required' }, 400);
   const db = getDb();
+  if (user.role === 'agent') {
+    const ls = await db.collection('leads').doc(body.leadId).get();
+    if (!ls.exists || ls.data().tenantId !== user.tenantId || !leadVisibleTo(ls.data(), user.email)) return json({ ok: false, error: 'Not your lead' }, 403);
+  }
   const auto = await automationSettings(db, user.tenantId);
   try {
     // The Re-check button asks for a fresh read, so it is made even if nothing new has been
@@ -457,11 +464,16 @@ async function bookVisit({ db, user, ref, lead, property, heal = false }) {
 }
 
 async function calendarPost(request) {
-  const user = await crmUser(request);
+  // Agents may book, read the answers to and answer the site visits of their OWN leads (the agent
+  // layer): nothing else in the calendar — the team's diaries are not part of their access.
+  const user = await crmUser(request, { allowAgent: true });
   if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
   let body = {};
   try { body = await request.json(); } catch { /* validated below */ }
   const db = getDb();
+  const agent = user.role === 'agent';
+  if (agent && !['visit', 'replies', 'respond'].includes(body.op)) return json({ ok: false, error: 'Not part of your access' }, 403);
+  const notMine = lead => agent && !leadVisibleTo(lead, user.email);
 
   try {
     if (body.op === 'visit') {
@@ -470,12 +482,20 @@ async function calendarPost(request) {
       const snap = await ref.get();
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = { id: snap.id, ...snap.data() };
-      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (lead.tenantId !== user.tenantId || notMine(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
+      const before = { ...lead };
       // The page saves the visit and asks for the invitation at the same moment: the visit it just
       // saved comes with the request, so the invitation is never built from a copy the save has not
       // reached yet (that sent it from sales@ with nobody on it).
       Object.assign(lead, visitFromBody(body.visit, user));
-      return json(await bookVisit({ db, user, ref, lead, property: body.property }));
+      // An agent's invitation is written from the property as THEY may see it (no owner's number
+      // unless it is theirs or was shared with them), never from what the page sends.
+      const property = agent ? await visitPropertyFor(db, user, lead.siteVisitProperty) : body.property;
+      // Booked on a colleague's property: its agents hear (client's first name only) — whether or not
+      // Google Calendar answers.
+      const alerted = visitAlert(db, user, before, lead).catch(e => console.error('visit alert failed:', e.message));
+      try { return json(await bookVisit({ db, user, ref, lead, property })); }
+      finally { await alerted; }
     }
 
     // Who has answered an invitation the CRM sent. Read on demand rather than
@@ -487,7 +507,7 @@ async function calendarPost(request) {
       const snap = await ref.get();
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = snap.data();
-      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (lead.tenantId !== user.tenantId || notMine(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
       if (!lead.calendarEventId || !lead.calendarEventOwner) return json({ ok: true, replies: [] });
       const replies = await visitReplies({ organiser: lead.calendarEventOwner, eventId: lead.calendarEventId });
       // Kept on the lead so the board, the attention list and the daily digest
@@ -505,7 +525,7 @@ async function calendarPost(request) {
       const snap = await ref.get();
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = snap.data();
-      if (lead.tenantId !== user.tenantId) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (lead.tenantId !== user.tenantId || notMine(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
       if (!lead.calendarEventId) return json({ ok: false, error: 'There is no invitation to answer' }, 400);
 
       // You answer for yourself. Accepting on a colleague's behalf would put a
@@ -522,7 +542,8 @@ async function calendarPost(request) {
       // Only when it is really missing — never on a rate limit or an outage, which would re-send it to
       // everyone on every click.
       if (!r.ok && (r.notInvited || (r.gone && [404, 410].includes(r.status)))) {
-        const booked = await bookVisit({ db, user, ref, lead: { id: snap.id, ...lead }, property: null, heal: true });
+        const booked = await bookVisit({ db, user, ref, lead: { id: snap.id, ...lead }, heal: true,
+          property: agent ? await visitPropertyFor(db, user, lead.siteVisitProperty) : null });
         if (booked.ok && booked.eventId) {
           r = await respondToVisit({ agent: me, eventId: booked.eventId,
             response: body.response, reason: typeof body.reason === 'string' ? body.reason : '',
@@ -684,12 +705,19 @@ function campaignAi() {
 }
 
 async function campaignPost(request) {
-  const user = await crmUser(request);
+  // Agents: view campaigns and send to their own leads, as the admin allows (api/_agent-work.js).
+  const user = await crmUser(request, { allowAgent: true });
   if (!user) return json({ ok: false, error: 'Unauthorized' }, 401);
   let body = {};
   try { body = await request.json(); } catch { /* validated per op */ }
   try {
-    const r = await campaignAction(getDb(), user, process.env.TAILORTALK_AGENT_TOKEN, body, makeDeps({ ai: campaignAi() }));
+    let gate = null;
+    if (user.role === 'agent') {
+      gate = await agentCampaignGate(getDb(), user, body);
+      if (gate.refuse) return json({ ok: false, error: gate.refuse }, 403);
+    }
+    let r = await campaignAction(getDb(), user, process.env.TAILORTALK_AGENT_TOKEN, body, makeDeps({ ai: campaignAi() }));
+    if (gate) r = gate.filter(r);
     return json(r, r && r.ok === false && !r.notConfigured ? 400 : 200);
   } catch (e) {
     console.error('campaign ' + (body && body.op) + ' failed:', e);

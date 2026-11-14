@@ -18,9 +18,8 @@
  * `overrides` holds per-agent changes keyed by lower-case email; effectiveConfig(cfg, email) lays
  * the agent's override over the common settings, setting by setting (a list replaces a list).
  *
- * `live` on each section says whether it already changes anything. The menu does from the day it
- * is saved; the property and lead copies, the actions and the approvals arrive with later phases,
- * and the settings page says so instead of implying they are in force.
+ * `live` on each section says whether it already changes anything. Since phases 2–6 (Nov 2026)
+ * every section does: the menu, the property and lead copies, the actions and the approvals.
  *
  * An ES module: the pages import it, and so do the server (api/_agent.js) and the tests.
  */
@@ -33,8 +32,8 @@ const TABS = [
   { id: 'tasks', label: 'Tasks & Daily task', note: 'Tasks assigned to them', status: 'ready' },
   { id: 'ads', label: 'Meta Ads Leads', note: 'Ad leads (which ones: below)', status: 'ready' },
   { id: 'campaigns', label: 'WhatsApp Campaigns', note: 'Campaigns (which ones: below)', status: 'ready' },
-  { id: 'myday', label: 'My Day', status: 'later' },
-  { id: 'messages', label: 'Messages', status: 'later' },
+  { id: 'myday', label: 'My Day', note: 'Approvals, site visits and follow-ups for today — their home page', status: 'ready' },
+  { id: 'messages', label: 'Messages', note: 'Team chat, and a thread for every request', status: 'ready' },
   { id: 'calendar', label: 'Team calendar', status: 'later' },
   { id: 'shoots', label: 'Shoot & Media', status: 'never' },
   { id: 'finance', label: 'Finance', status: 'never' },
@@ -99,13 +98,13 @@ const DETAIL_TIMERS = [null, 1, 3, 7];         // days; null = no limit
 const CONTACT_TIMERS = [2, 24, 72];            // hours
 
 // Which sections change anything yet (see the note at the top).
-const LIVE = { tabs: true, fields: false, actions: false, scopes: false, approvals: false };
+const LIVE = { tabs: true, fields: true, actions: true, scopes: true, approvals: true };
 
 function ids(list) { return list.map(x => x.id); }
 const readyTabs = () => TABS.filter(t => t.status === 'ready').map(t => t.id);
 
 const DEFAULTS = {
-  tabs: ['properties', 'crm', 'tasks', 'ads', 'campaigns'],
+  tabs: ['myday', 'properties', 'crm', 'tasks', 'ads', 'campaigns', 'messages'],
   otherPropertyFields: ['title', 'config', 'budget', 'type', 'locality', 'availability', 'primaryAgent'],
   ownPropertyFields: ids(PROPERTY_FIELDS),          // primary and co-agents alike
   grantedPropertyFields: ids(PROPERTY_FIELDS).filter(id => id !== 'contact'),
