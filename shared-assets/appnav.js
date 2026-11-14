@@ -414,7 +414,7 @@
     who.textContent = cfg.user || '';
     who.style.display = cfg.user ? '' : 'none';
     var sb = root.querySelector('.rail-brand-sb');
-    if (sb) sb.textContent = access && access.role === 'agent' ? 'Agent' : 'Admin';
+    if (sb) sb.textContent = access && access.role === 'agent' ? 'Agent' : access && access.role === 'admin' ? 'Admin' : 'Team';
     renderTabbar();
   }
 

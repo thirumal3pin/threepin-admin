@@ -136,7 +136,7 @@ function inboxToast(text, href) {
     el = document.createElement('a');
     el.id = 'pinInboxToast';
     el.setAttribute('role', 'status');
-    el.style.cssText = 'position:fixed;left:50%;top:max(14px,env(safe-area-inset-top));translate:-50% 0;z-index:9999;max-width:calc(100vw - 32px);'
+    el.style.cssText = 'position:fixed;left:50%;bottom:calc(' + (document.body.classList.contains('has-tabbar') ? '78px' : '20px') + ' + env(safe-area-inset-bottom));translate:-50% 0;z-index:9999;max-width:calc(100vw - 32px);'
       + 'background:var(--ink,#171717);color:var(--bg,#fff);padding:12px 16px;border-radius:12px;font:600 14px/1.35 var(--sans,system-ui);'
       + 'box-shadow:0 8px 24px rgba(0,0,0,.25);text-decoration:none';
     document.body.appendChild(el);

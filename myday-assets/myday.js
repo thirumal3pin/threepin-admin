@@ -17,6 +17,7 @@ const me = await whenSignedIn();
 const isAdmin = me.role === 'admin';
 const isAgent = me.role === 'agent';
 window.AppNav.boot({ console: 'myday', select: () => {}, signOut: () => import('../shared-assets/agent-client.js').then(m => m.signOutHere()) });
+window.AppNav.setUser(me.email);
 window.AppNav.setActive('myday');
 
 let people = [];
@@ -131,14 +132,17 @@ function collabHtml(a) {
 // ── Drawing ──
 const allRequests = () => { const m = new Map([...S.pendingAll, ...S.approve, ...S.asked]); return [...m.values()]; };
 const canDecide = r => r.status === 'pending' && r.requesterEmail !== me.email && (isAdmin || (r.approvers || []).includes(me.email));
-const statusTag = r => ({ pending: '<span class="tag wait">Waiting</span>', approved: '<span class="tag green">Approved</span>', rejected: '<span class="tag red">Rejected</span>',
+const statusTag = r => (r.status === 'approved' && !liveAccess(r) ? '<span class="tag">Approved</span>' : '') || ({ pending: '<span class="tag wait">Waiting</span>', approved: '<span class="tag green">Approved</span>', rejected: '<span class="tag red">Rejected</span>',
   cancelled: '<span class="tag">Cancelled</span>', expired: '<span class="tag">Expired</span>' }[r.status] || '');
 const reqTitle = r => r.kind === 'lead' ? 'A matching buyer' + (r.title ? ' — ' + esc(String(r.title).replace(/^Lead:\s*/, '')) : '’s details') : r.need === 'time' ? 'More time on ' + esc(r.title) : r.need === 'number' ? 'The owner’s number for ' + esc(r.title) : esc(r.title);
+// Approved and still running — a hidden owner's number leaves the details shared, so it counts.
+const liveAccess = r => r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden') && !(r.terms && r.terms.until && r.terms.until < Date.now());
 const terms = r => {
   const t = r.terms || {};
   if (r.status !== 'approved') return '';
   if (r.grantState === 'revoked') return 'access taken back' + (r.grantChangedByName ? ' by ' + r.grantChangedByName : '');
   if (r.grantState === 'expired') return 'access ended';
+  if (r.grantState === 'contact-hidden') return (t.until ? 'details ' + untilWords(t.until) : 'details with no time limit') + ' · owner’s number hidden';
   if (t.coAgent) return 'now a co-agent';
   return (t.until ? 'details ' + untilWords(t.until) : 'details with no time limit') + (t.contact ? ' · owner’s number ' + (t.contactUntil ? untilWords(t.contactUntil) : 'shared') : '');
 };
@@ -156,8 +160,8 @@ function requestItem(r, mode) {
         ${canDecide(r) ? `<button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>` : ''}
         ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
         ${r.status === 'pending' && r.requesterEmail === me.email ? `<button type="button" class="btn sm danger" data-cancel="${esc(r.id)}">Cancel</button>` : ''}
-        ${r.status === 'approved' && !r.grantState && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="listings.html?id=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
-        ${r.status === 'approved' && !r.grantState && r.grantId && r.decidedBy === me.email && r.requesterEmail !== me.email ? `${r.terms && r.terms.contact ? `<button type="button" class="btn sm" data-hide="${esc(r.grantId)}">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-end="${esc(r.grantId)}">End access</button>` : ''}
+        ${liveAccess(r) && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="listings.html?id=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
+        ${liveAccess(r) && r.grantId && r.decidedBy === me.email && r.requesterEmail !== me.email ? `${r.terms && r.terms.contact ? `<button type="button" class="btn sm" data-hide="${esc(r.grantId)}">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-end="${esc(r.grantId)}">End access</button>` : ''}
       </div></div></div>`;
 }
 
@@ -265,7 +269,7 @@ function bindActions(root) {
   root.querySelectorAll('[data-decide]').forEach(b => b.addEventListener('click', async () => {
     const r = allRequests().find(x => x.id === b.dataset.decide);
     if (!r) return;
-    await decideSheet(r, { canCoAgent: canCo(r), defaults: await approvalDefaults(me) });
+    await decideSheet(r, { canCoAgent: canCo(r), defaults: { ...(await approvalDefaults(me)), isAdmin } });
   }));
   root.querySelectorAll('[data-more]').forEach(b => b.addEventListener('click', () => {
     busy(b, () => api('request', { kind: 'property', targetId: b.dataset.more, need: 'time', reason: 'Asking for more time' })
@@ -296,7 +300,7 @@ function openWanted(reqs) {
     return;
   }
   wantedDone = true;
-  if (canDecide(r)) approvalDefaults(me).then(d => decideSheet(r, { canCoAgent: canCo(r), defaults: d }));
+  if (canDecide(r)) approvalDefaults(me).then(d => decideSheet(r, { canCoAgent: canCo(r), defaults: { ...d, isAdmin } }));
   else toast(r.status === 'pending' ? 'This request is waiting on someone else' : 'Already ' + r.status + (r.decidedByName ? ' by ' + r.decidedByName : ''));
 }
 

@@ -162,7 +162,7 @@ let sheetSeq = 0;
 // The phone's Back button closes the sheet (it does not leave the page): opening one adds a step to
 // the browser's history; closing it by ✕, the scrim or Escape takes that step back. url: the address
 // to show while it is open (a property's own link).
-export function openSheet(html, { onOpen, locked = false, label = '', wide = false, url = null } = {}) {
+export function openSheet(html, { onOpen, locked = false, label = '', wide = false, url = null, focus = true } = {}) {
   // One sheet opened from another (Request details from a property) takes over its history step
   // rather than closing it and adding a new one (whose Back would then close the new sheet).
   const replacing = !!sheetClose;
@@ -218,7 +218,7 @@ export function openSheet(html, { onOpen, locked = false, label = '', wide = fal
   sheetClose = close;
   sh.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => close()));
   // On a laptop the first text field takes the cursor; never a select (an arrow key would change it).
-  const first = sh.querySelector('textarea, input[type=text], input[type=tel], input[type=email]');
+  const first = focus && sh.querySelector('textarea, input[type=text], input[type=tel], input[type=email]');
   if (first && window.matchMedia('(min-width: 640px)').matches) first.focus();
   else { const b = sh.querySelector('[data-close], button'); if (b) b.focus({ preventScroll: true }); }
   if (onOpen) onOpen(sh, () => { sh.dataset.done = '1'; return close(true); });
@@ -280,6 +280,17 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
     { label: 'Decide the request', onOpen: (sh, close) => {
       let mode = 'approve';
       const q = s => sh.querySelector(s);
+      // Another approver deciding first: said here at once, not only when Approve is pressed.
+      import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => {
+        const un = fs.onSnapshot(doc(db, 'accessRequests', req.id), snap => {
+          if (!sh.isConnected) { un(); return; }
+          const d = snap.exists() ? snap.data() : null;
+          if (d && d.status !== 'pending') {
+            q('#dErr').textContent = d.status === 'approved' || d.status === 'rejected' ? `Already ${d.status === 'approved' ? 'approved' : 'rejected'} by ${d.decidedByName || 'someone'}` : 'This request was ' + d.status;
+            q('#dGo').disabled = true; un();
+          }
+        }, () => {});
+      }).catch(() => {});
       // The lead's own agent (and admins) may see which lead it is (requestPrivate; never the asker).
       if (isLead) import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => fs.getDoc(doc(db, 'requestPrivate', req.id)))
         .then(snap => { if (snap.exists() && snap.data().leadName && q('#dLeadName')) q('#dLeadName').textContent = ' — your lead ' + snap.data().leadName; }).catch(() => {});

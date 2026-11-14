@@ -128,6 +128,13 @@ onAuthStateChanged(auth, async user => {
   // The buyers' chat button (bottom right) must never sit on a tile: room is left under them.
   const tilesNav = document.querySelector('nav.tiles');
   if (tilesNav) tilesNav.style.paddingBottom = '96px';
+  // On a phone the buyers' chat button would sit on a tile at first sight: for the signed-in team it
+  // is hidden there (it is for buyers; the sign-in screen keeps it).
+  if (!document.getElementById('teamWidgetOff')) {
+    const st = document.createElement('style'); st.id = 'teamWidgetOff';
+    st.textContent = '@media (max-width: 520px) { iframe[src*="tailortalk" i], [id*="tailortalk" i], [class*="tailortalk" i] { display: none !important; } } .who-hi { white-space: normal; overflow-wrap: anywhere; }';
+    document.head.appendChild(st);
+  }
   const name = nameOf(user);
   $('who-hi').textContent = name ? 'Welcome back, ' + name : 'Welcome back';
   $('who-email').textContent = user.email || '';
@@ -190,7 +197,7 @@ function teamTiles() {
   const go = '<span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
   const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const tile = (href, ico, nm, ds) => `<a class="tile rise" style="--i:0" href="${href}"><span class="ico">${ico}</span><span class="tx"><span class="nm">${nm}</span><span class="ds">${ds}</span></span>${go}</a>`;
-  nav.insertAdjacentHTML('beforeend', tile('myday.html', svg('<path d="M3.5 10.5 12 3.5l8.5 7M5.5 9v11h13V9"/>'), 'My Day', 'Approvals waiting on you, visits and follow-ups')
+  nav.insertAdjacentHTML('afterbegin', tile('myday.html', svg('<path d="M3.5 10.5 12 3.5l8.5 7M5.5 9v11h13V9"/>'), 'My Day', 'Approvals waiting on you, visits and follow-ups')
     + tile('messages.html', svg('<path d="M4 5h16v11H8l-4 4z"/>'), 'Messages', 'The team’s conversations, one for every request'));
 }
 

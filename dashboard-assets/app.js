@@ -324,7 +324,7 @@ function agentHistoryLine(x){
   const by = agentNameOf(x.by) || 'Someone';
   const from = x.from || { co: [] }, to = x.to || { co: [] };
   const parts = [];
-  if((from.primary || null) !== (to.primary || null)) parts.push(to.primary ? `made ${agentNameOf(to.primary)} the primary agent` : 'removed the primary agent');
+  if((from.primary || null) !== (to.primary || null)) parts.push(to.primary ? (String(to.primary).toLowerCase() === String(x.by || '').toLowerCase() ? 'made themselves the primary agent' : `made ${agentNameOf(to.primary)} the primary agent`) : 'removed the primary agent');
   const added = (to.co || []).filter(e => !(from.co || []).includes(e)), gone = (from.co || []).filter(e => !(to.co || []).includes(e));
   if(added.length) parts.push('added ' + added.map(agentNameOf).join(', ') + ' as co-agent' + (added.length > 1 ? 's' : ''));
   if(gone.length) parts.push('took ' + gone.map(agentNameOf).join(', ') + ' off as co-agent' + (gone.length > 1 ? 's' : ''));
@@ -363,7 +363,7 @@ async function assignPropertyAgents(primary, co){
   const curPrimary = String(p.assignedAgent || '').toLowerCase();
   if(primary !== null && String(primary || '').toLowerCase() !== curPrimary){
     const msg = !primary
-      ? `Remove ${agentNameOf(curPrimary)} as the primary agent${before.co.length ? ' (the co-agents ' + before.co.map(agentNameOf).join(', ') + ' go too)' : ''}? The property's enquiries stop reaching them.`
+      ? `Remove ${agentNameOf(curPrimary)} as the primary agent${before.co.length ? ' (' + (before.co.length === 1 ? 'the co-agent ' : 'the co-agents ') + before.co.map(agentNameOf).join(', ') + (before.co.length === 1 ? ' goes' : ' go') + ' too)' : ''}? The property's enquiries stop reaching them.`
       : curPrimary ? `Make ${agentNameOf(primary)} the primary agent instead of ${agentNameOf(curPrimary)}? The property's enquiries move with it.` : null;
     if(msg && !confirm(msg)){ renderPropAgents(p); return; }
   }

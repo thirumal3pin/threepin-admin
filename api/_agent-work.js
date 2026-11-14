@@ -400,6 +400,7 @@ async function propertySubmit(db, user, body) {
   SUBMIT_FIELDS.forEach(k => { if (f[k] != null) fields[k] = String(f[k]).replace(/[<>]/g, '').trim().slice(0, k === 'notes' ? MAX_TEXT : 300); });
   if (!fields.name) return json({ ok: false, error: 'Give the property a title' }, 400);
   if (fields.photosLink && !/^https:\/\/\S+$/i.test(fields.photosLink)) return json({ ok: false, error: 'The photos link must start with https://' }, 400);
+  if (fields.contactNumber && String(fields.contactNumber).replace(/\D/g, '').length < 10) return json({ ok: false, error: 'The owner’s number needs at least 10 digits' }, 400);
   if (!(await throttle(db, user, 'submit', 10, 3600000))) return json({ ok: false, error: 'Too many properties at once — try again in an hour' }, 429);
   // Owners often list with several brokers: the same owner's number, or the same title in the same
   // locality, may already be in the inventory. The agent is told it may be a duplicate (never which
@@ -955,7 +956,11 @@ async function decide(db, user, body) {
   await systemLineFor(db, r.threadId, line, { requestId: ref.id }, me);
   // Approved: their copy is rebuilt now, so it opens at once. Rejected: only the "asked" mark changes.
   if (decision === 'approved') await rebuildAgents(db, user.tenantId, [r.requesterEmail]).catch(e => console.error('rebuild after decide:', e.message));
-  else await patchView(db, user.tenantId, r.requesterUid, markAsked(r, r.kind === 'lead' ? 'rejected' : null));
+  else await patchView(db, user.tenantId, r.requesterUid, d => {
+    markAsked(r, r.kind === 'lead' ? 'rejected' : null)(d);
+    // The locked card says so at once (not after the next rebuild).
+    if (r.kind === 'property' && (r.need || 'details') === 'details') (d.props || []).forEach(p => { if (String(p.id) === String(r.targetId) && p._access === 'summary') p._refused = { note, by: who, at: Date.now() }; });
+  });
   return json({ ok: true, status: decision, grantId: patch.grantId || null });
 }
 

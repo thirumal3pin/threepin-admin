@@ -13,6 +13,7 @@ const me = await whenSignedIn();
 if (me.role !== 'agent') location.replace('dashboard.html');
 
 window.AppNav.boot({ console: 'myprops', select: () => {}, signOut: () => import('../shared-assets/agent-client.js').then(m => m.signOutHere()) });
+window.AppNav.setUser(me.email);
 window.AppNav.setActive('myprops');
 
 let view = null;          // agentViews document
@@ -192,7 +193,7 @@ function openProperty(p) {
       ${p._access === 'granted' ? (p._pending ? '<span class="tag wait" style="align-self:center">You asked — waiting for a decision</span>'
         : `${p._grant && p._grant.until ? '<button type="button" class="btn" data-need="time"><i class="fa-regular fa-hourglass-half"></i> Ask for more time</button>' : ''}${p._grant && p._grant.contactUntil ? '' : '<button type="button" class="btn" data-need="number"><i class="fa-solid fa-phone"></i> Ask for the owner’s number</button>'}`) : ''}
       <button type="button" class="btn${locked ? '' : ' block'}" id="pMsg"><i class="fa-regular fa-comments"></i> ${mine ? 'Message the team about it' : 'Message its agent'}</button>
-    </div>`, { label: p.name || 'Property', wide: true, url, onOpen: (sh, close) => {
+    </div>`, { label: p.name || 'Property', wide: true, url, focus: false, onOpen: (sh, close) => {
       sh.dataset.pid = String(p.id);
       const qq = s => sh.querySelector(s);
       if (qq('#pShare')) qq('#pShare').addEventListener('click', async () => { try { await navigator.clipboard.writeText(p.detailsText); toast('Copied — paste it in WhatsApp'); } catch (e) { toast('Could not copy'); } });

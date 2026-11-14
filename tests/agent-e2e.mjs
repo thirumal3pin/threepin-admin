@@ -286,6 +286,30 @@ try {
     noErrors(page, 'Messages (agent)');
   }
 
+  section('The pinned card’s buttons work (an approver deciding from the conversation)');
+  {
+    const page = rameez.page;
+    // A property of his that is on the market (ADY002 was put on hold earlier in this run).
+    await db.collection('properties').doc('RMZ009').set({ tenantId: S.T, id: 'RMZ009', propertyCode: 'RMZ009', name: '3 BHK, Mogappair', config: '3 BHK', startingPrice: '₹1.1 Cr', zone: 'Mogappair', availability: 'Available', assignedAgent: 'rameez@threepin.in' });
+    const k = await S.api('kavya', 'request', { kind: 'property', targetId: 'RMZ009', reason: 'My client wants Mogappair' });
+    await page.goto(BASE + '/messages.html?t=' + encodeURIComponent(k.threadId));
+    await page.waitForSelector('#pDecide', { timeout: 25000 });
+    await page.click('#pDecide');
+    ok('“Approve or reject” on the pinned card opens the decision', !!(await until(() => page.evaluate(() => !!document.querySelector('#dGo')))));
+    await page.keyboard.press('Escape');
+    await until(() => page.evaluate(() => !document.querySelector('.sheet')));
+    // On a laptop, with the menu expanded: the conversation beside the list, the card's button there.
+    const { ctx: lc, page: lp } = await as('swami', { viewport: { width: 1440, height: 900 } });
+    await lp.goto(BASE + '/messages.html?t=' + encodeURIComponent(k.threadId));
+    await lp.waitForSelector('#pDecide', { timeout: 25000 });
+    const geo = await lp.evaluate(() => ({ chat: document.getElementById('chat').getBoundingClientRect().left, list: document.getElementById('threads').getBoundingClientRect().right, rail: document.body.classList.contains('rail-on') }));
+    ok('laptop: the open conversation sits beside the list (menu expanded)', geo.rail && geo.chat >= geo.list - 2, JSON.stringify(geo));
+    ok('laptop: the decision button shows while the reply box has the cursor', await lp.evaluate(() => { const b = document.getElementById('pDecide'); return !!b && b.getBoundingClientRect().height > 0; }));
+    await lp.click('#pDecide');
+    ok('laptop: and it opens the decision', !!(await until(() => lp.evaluate(() => !!document.querySelector('#dGo')))));
+    await lc.close();
+  }
+
   section('Badges on every page');
   {
     const page = rameez.page;
@@ -323,7 +347,9 @@ try {
     await sp.goto(BASE + '/team.html?tab=requests');
     await sp.waitForSelector('#requests [data-a="revoke"]', { timeout: 25000 });
     await sp.click('#requests [data-a="hide-contact"]');
-    ok('Hide number: the owner’s number is off', !!(await until(async () => { const q = await db.collection('grants').where('kind', '==', 'property').get(); return q.docs[0].data().includeContact === false; })));
+    ok('Hide number: the owner’s number is off', !!(await until(async () => { const q = await db.collection('grants').where('kind', '==', 'property').where('agentEmail', '==', 'rameez@threepin.in').get(); return q.docs[0].data().includeContact === false; })));
+    await rameez.page.goto(BASE + '/myday.html');
+    ok('…but the details are still shared: Rameez keeps “Open property”', !!(await until(() => rameez.page.evaluate(() => /owner’s number hidden/.test(document.body.textContent) && [...document.querySelectorAll('a.btn')].some(a => /Open property/.test(a.textContent))))));
     // The list redraws when the number is hidden: press Take back on the redrawn row.
     await until(() => sp.evaluate(() => !document.querySelector('#requests [data-a="hide-contact"]') && !!document.querySelector('#requests [data-a="revoke"]')));
     await sp.evaluate(() => [...document.querySelectorAll('#requests .item')].find(i => /Anna Nagar/.test(i.textContent) && i.querySelector('[data-a="revoke"]')).querySelector('[data-a="revoke"]').click());

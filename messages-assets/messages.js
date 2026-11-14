@@ -15,6 +15,7 @@ const me = await whenSignedIn();
 const isAdmin = me.role === 'admin', isAgent = me.role === 'agent';
 const myKey = emailKey(me.email);
 window.AppNav.boot({ console: 'messages', select: () => {}, signOut: () => import('../shared-assets/agent-client.js').then(m => m.signOutHere()) });
+window.AppNav.setUser(me.email);
 window.AppNav.setActive('messages');
 
 let people = [];
@@ -22,6 +23,13 @@ let threads = [];
 let filter = 'all', q = '', everyone = false;
 let openId = null, msgUnsub = null, reqUnsub = null, msgs = [], openThread = null, openReq = null;
 let threadUnsub = null, docUnsub = null, wantTried = false, chatPushed = false;
+// Is this property one I am the primary agent of (my own copy says so)?
+let myViewP = null;
+function isMyOwnProperty(id) {
+  if (!isAgent) return Promise.resolve(false);
+  if (!myViewP) myViewP = getDoc(doc(db, 'agentViews', me.tenantId + '__' + me.uid)).then(s => (s.exists() ? s.data().props || [] : [])).catch(() => []);
+  return myViewP.then(props => props.some(p => String(p.id) === String(id) && p._access === 'own'));
+}
 
 directory().then(p => { people = p; renderList(); if (openThread) renderChat(); });
 // Unread: the conversation's last line is newer than my read mark, and not mine. Worked out here from
@@ -76,7 +84,7 @@ const ICON = { access_request: 'fa-solid fa-lock-open', property: 'fa-regular fa
 const short = t => {
   if (!t) return '';
   const d = new Date(t), now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, m => m.toUpperCase());
   if (now - d < 6 * 86400000) return d.toLocaleDateString('en-IN', { weekday: 'short' });
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 };
@@ -188,9 +196,10 @@ function renderPinned() {
   const st = { pending: mineReq ? 'Waiting for a decision' : 'Waiting for your decision', approved: `Approved by ${byWho(r.decidedBy)} · ${when(r.decidedAt)}`,
     rejected: `Not approved by ${byWho(r.decidedBy)} · ${when(r.decidedAt)}`, cancelled: (mineReq ? 'You' : r.requesterName) + ' cancelled it', expired: 'Expired — nobody decided in time' }[r.status] || r.status;
   const what = r.kind === 'lead' ? 'a matching buyer' + (r.title ? ' — ' + String(r.title).replace(/^Lead:\s*/, '') : '') : r.need === 'time' ? 'more time on ' + r.title : r.need === 'number' ? 'the owner’s number for ' + r.title : r.title;
-  const live = r.status === 'approved' && !r.grantState;
+  // Hiding the owner's number leaves the details shared: still live access.
+  const live = r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden');
   el.innerHTML = `<div class="pinned"><b><i class="fa-solid fa-thumbtack" style="color:var(--ink3)"></i> ${mineReq ? 'You' : esc(r.requesterName)} asked for ${esc(what)}</b>
-    <div><span class="tag ${r.status === 'approved' && !r.grantState ? 'green' : r.status === 'rejected' ? 'red' : r.status === 'pending' ? 'wait' : ''}">${esc(r.grantState === 'revoked' ? 'Access taken back' : r.grantState === 'expired' ? 'Access ended' : st)}</span></div>
+    <div><span class="tag ${live ? 'green' : r.status === 'rejected' ? 'red' : r.status === 'pending' ? 'wait' : ''}">${esc(r.grantState === 'revoked' ? 'Access taken back' : r.grantState === 'expired' ? 'Access ended' : r.grantState === 'contact-hidden' ? st + ' · owner’s number hidden' : st)}</span></div>
     <div class="acts">
       ${can ? '<button type="button" class="btn sm primary" id="pDecide">Approve or reject</button>' : ''}
       ${r.status === 'pending' && mineReq ? '<button type="button" class="btn sm danger" id="pCancel">Cancel request</button>' : ''}
@@ -199,7 +208,7 @@ function renderPinned() {
       ${live && mineReq && r.kind === 'property' && r.terms && r.terms.until && r.terms.until - Date.now() < 2 * 86400000 ? '<button type="button" class="btn sm" id="pMore">Ask for more time</button>' : ''}
     </div></div>`;
   if (!el.querySelector('.acts').children.length) el.querySelector('.acts').remove();
-  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && isAdmin, defaults: { ...(await approvalDefaults(me)), isAdmin } }));
+  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && (isAdmin || await isMyOwnProperty(r.targetId)), defaults: { ...(await approvalDefaults(me)), isAdmin } }));
   if ($('pCancel')) $('pCancel').addEventListener('click', e => { if (confirm('Cancel this request?')) busy(e.currentTarget, () => api('cancel', { id: r.id }).catch(x => toast('✗ ' + x.message))); });
   if ($('pMore')) $('pMore').addEventListener('click', e => busy(e.currentTarget, () => api('request', { kind: 'property', targetId: r.targetId, need: 'time', reason: 'Asking for more time' }).then(() => toast('Asked for more time')).catch(x => toast('✗ ' + x.message))));
   // The lead opened to them: its id is on their own grant (they can read it), never on the request.
@@ -220,7 +229,7 @@ function renderChat() {
     const mine = m.by === me.email;
     const prev = msgs[i - 1];
     const showBy = !mine && others.length > 1 && !(prev && prev.by === m.by && prev.kind !== 'system');
-    const time = new Date(m.at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+    const time = new Date(m.at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, x => x.toUpperCase());
     const tick = mine ? (m.pending ? '<i class="fa-regular fa-clock"></i>' : `<span class="tick${readAt !== Infinity && readAt >= m.at ? ' read' : ''}"><i class="fa-solid fa-check-double"></i></span>`) : '';
     html += `<div class="bub ${mine ? 'mine' : 'them'}">${showBy ? `<span class="by">${esc(nameOf(people, m.by))}</span>` : ''}${esc(m.text)}<span class="meta">${time} ${tick}</span></div>`;
   });

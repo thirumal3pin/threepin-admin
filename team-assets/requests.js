@@ -37,7 +37,7 @@ async function start() {
     const empty = t => `<div class="empty">${t}</div>`;
     let html = '';
     html += block('Waiting for a decision', pending.length, pending.length ? pending.map(r => `<div class="item"><div class="ic brand"><i class="fa-solid ${r.kind === 'lead' ? 'fa-user-lock' : 'fa-building-lock'}"></i></div>
-      <div class="bd"><b>${esc(r.requesterName)} asks for ${r.kind === 'lead' ? 'a matching buyer’s details' : r.need === 'time' ? 'more time on ' + esc(r.title) : r.need === 'number' ? 'the owner’s number for ' + esc(r.title) : esc(r.title)}</b>
+      <div class="bd"><b>${esc(r.requesterName)} asks for ${r.kind === 'lead' ? 'a matching buyer — ' + esc(String(r.title || '').replace(/^Lead:\s*/, '')) : r.need === 'time' ? 'more time on ' + esc(r.title) : r.need === 'number' ? 'the owner’s number for ' + esc(r.title) : esc(r.title)}</b>
         <small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${esc(ago(r.createdAt))} · decides: ${esc((r.approvers || []).map(e => nameOf(people, e).split(' ')[0]).join(', '))}</small>
         ${r.reason ? `<div class="q">“${esc(r.reason)}”</div>` : ''}
         <div class="acts"><button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}</div></div></div>`).join('') : empty('Nothing waiting.'));
@@ -50,17 +50,17 @@ async function start() {
         ${(s.duplicateOf || []).length ? `<div class="callout warn" style="margin:8px 0 0">May already be with us: ${s.duplicateOf.map(id => `<a href="property.html?id=${encodeURIComponent(id)}" target="_blank">${esc(id)}</a>`).join(', ')} (same owner’s number or title)</div>` : ''}
         <div class="acts"><button type="button" class="btn sm primary" data-sub="${esc(s.id)}" data-d="approve">Approve</button><button type="button" class="btn sm danger" data-sub="${esc(s.id)}" data-d="reject">Reject</button></div></div></div>`).join('') : empty('Nothing waiting.'));
     html += block('Shared right now', live.length, live.length ? live.map(g => `<div class="item"><div class="ic blue"><i class="fa-solid fa-lock-open"></i></div>
-      <div class="bd"><b>${esc(g.agentName || nameOf(people, g.agentEmail))} — ${g.kind === 'lead' ? 'a buyer’s details' : esc(g.title)}</b>
+      <div class="bd"><b>${esc(g.agentName || nameOf(people, g.agentEmail))} — ${g.kind === 'lead' ? 'a buyer: ' + esc(String(g.title || '').replace(/^Lead:\s*/, '')) : esc(g.title)}</b>
         <small>Details ${g.expiresAt ? esc(untilWords(g.expiresAt)) : 'with no time limit'}${g.includeContact && (!g.contactExpiresAt || g.contactExpiresAt > now) ? ' · owner’s number ' + esc(untilWords(g.contactExpiresAt)) : ''} · approved by ${esc(g.grantedByName || nameOf(people, g.grantedBy))} ${esc(ago(g.grantedAt))}</small>
         <div class="acts"><button type="button" class="btn sm" data-extend="${esc(g.id)}">Extend</button>${g.includeContact && (!g.contactExpiresAt || g.contactExpiresAt > now) ? `<button type="button" class="btn sm" data-grant="${esc(g.id)}" data-a="hide-contact">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-grant="${esc(g.id)}" data-a="revoke">Take back</button></div></div></div>`).join('') : empty('Nothing is shared outside its agents.'));
     html += block('Decided in the last 30 days', recent.length, recent.length ? recent.slice(0, 50).map(r => `<div class="item"><div class="ic ${r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid fa-clock-rotate-left"></i></div>
-      <div class="bd"><b>${esc(r.requesterName)} — ${r.kind === 'lead' ? 'a buyer’s details' : esc(r.title)}</b>
-        <small><span class="tag ${r.status === 'approved' && !r.grantState ? 'green' : r.status === 'rejected' ? 'red' : ''}">${esc({ approved: 'Approved', rejected: 'Not approved', cancelled: 'Cancelled', expired: 'Expired' }[r.status] || r.status)}</span>${r.decidedBy && r.status !== 'cancelled' && r.decidedBy !== 'system' ? ' by ' + esc(r.decidedByName || nameOf(people, r.decidedBy)) : ''} · ${esc(when(r.decidedAt))}${r.grantState === 'revoked' ? ' · <span class="tag">taken back' + (r.grantChangedByName ? ' by ' + esc(r.grantChangedByName) : '') + '</span>' : r.grantState === 'expired' ? ' · <span class="tag">ended</span>' : r.grantState === 'contact-hidden' ? ' · <span class="tag">number hidden</span>' : ''}</small>
+      <div class="bd"><b>${esc(r.requesterName)} — ${r.kind === 'lead' ? 'a buyer: ' + esc(String(r.title || '').replace(/^Lead:\s*/, '')) : esc(r.title)}</b>
+        <small><span class="tag ${r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden') ? 'green' : r.status === 'rejected' ? 'red' : ''}">${esc({ approved: 'Approved', rejected: 'Not approved', cancelled: 'Cancelled', expired: 'Expired' }[r.status] || r.status)}</span>${r.decidedBy && r.status !== 'cancelled' && r.decidedBy !== 'system' ? ' by ' + esc(r.decidedByName || nameOf(people, r.decidedBy)) : ''} · ${esc(when(r.decidedAt))}${r.grantState === 'revoked' ? ' · <span class="tag">taken back' + (r.grantChangedByName ? ' by ' + esc(r.grantChangedByName) : '') + '</span>' : r.grantState === 'expired' ? ' · <span class="tag">ended</span>' : r.grantState === 'contact-hidden' ? ' · <span class="tag">number hidden</span>' : ''}</small>
         ${r.note ? `<div class="q">${esc(r.note)}</div>` : ''}</div></div>`).join('') : empty('Nothing decided lately.'));
     $('requests').innerHTML = html;
     $('requests').querySelectorAll('[data-decide]').forEach(b => b.addEventListener('click', async () => {
       const r = S.reqs.find(x => x.id === b.dataset.decide);
-      if (r) decideSheet(r, { canCoAgent: r.kind === 'property', defaults: await approvalDefaults(me) });
+      if (r) decideSheet(r, { canCoAgent: r.kind === 'property', defaults: { ...(await approvalDefaults(me)), isAdmin: true } });
     }));
     $('requests').querySelectorAll('[data-extend]').forEach(b => b.addEventListener('click', () => extend(S.grants.find(g => g.id === b.dataset.extend))));
     $('requests').querySelectorAll('[data-grant]').forEach(b => b.addEventListener('click', () => {
@@ -74,7 +74,7 @@ async function start() {
   function extend(g) {
     if (!g) return;
     openSheet(`<h3>Extend access</h3>
-      <p class="sub">${esc(g.agentName || nameOf(people, g.agentEmail))} — ${g.kind === 'lead' ? 'a buyer’s details' : esc(g.title)} · details ${esc(untilWords(g.expiresAt))}</p>
+      <p class="sub">${esc(g.agentName || nameOf(people, g.agentEmail))} — ${g.kind === 'lead' ? 'a buyer: ' + esc(String(g.title || '').replace(/^Lead:\s*/, '')) : esc(g.title)} · details ${esc(untilWords(g.expiresAt))}</p>
       <div class="field"><label>Details from now for</label><div class="pick">${[['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['', 'No limit']].map(([v, l], i) => `<label><input type="radio" name="xDays" value="${v}"${i === 1 ? ' checked' : ''}> ${l}</label>`).join('')}</div></div>
       <p class="err" id="xErr"></p>
       <div class="bar"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary block" id="xGo">Extend</button></div>`,
@@ -97,7 +97,7 @@ async function start() {
     { onOpen: (sh, close) => sh.querySelector('#sbGo').addEventListener('click', () => busy(sh.querySelector('#sbGo'), async () => {
       const note = sh.querySelector('#sbNote').value.trim();
       if (d === 'reject' && !note) { sh.querySelector('#sbErr').textContent = 'Say why, for the agent'; return; }
-      try { const r = await api('submission-decide', { id, decision: d, note }); toast(d === 'approve' ? 'Added as ' + r.propertyId : 'Rejected'); close(); }
+      try { const r = await api('submission-decide', { id, decision: d, note }); close(); if (d === 'approve') { toast('Added to the inventory — opening it to fill in the rest'); setTimeout(() => window.open('property.html?id=' + encodeURIComponent(r.propertyId), '_blank'), 600); } else toast('Rejected — they’ve been told'); }
       catch (e) { sh.querySelector('#sbErr').textContent = e.message; }
     })) });
   }
