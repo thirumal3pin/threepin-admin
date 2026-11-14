@@ -259,7 +259,7 @@ function personSheet(p) {
         + '<label class="toggle"><span>Account active<small>Off = they’re signed out within an hour and can’t sign in</small></span><input type="checkbox" id="pActive"' + (p.active ? ' checked' : '') + '></label>')
     + '<label class="toggle"><span>Show in team lists<small>Can be @mentioned, gets a Team calendar column, can be picked for site visits</small></span><input type="checkbox" id="pList"' + (p.teamList ? ' checked' : '') + '></label>'
     + (p.self ? '' : '<div class="stack">' + (isAgent ? '<button type="button" class="btn block" id="pCust"><i class="fa-solid fa-sliders"></i> Customise what they see</button>' : '')
-      + (p.role === 'admin' ? '<p class="aside">Admins reset their own password from the sign-in page.</p>' : '<button type="button" class="btn block" id="pReset"><i class="fa-solid fa-key"></i> Reset password</button>') + '</div>')
+      + (p.role === 'admin' ? '<p class="aside">Admins sign in with “Continue with Google”, so no password reset is needed.</p>' : '<button type="button" class="btn block" id="pReset"><i class="fa-solid fa-key"></i> Reset password</button>') + '</div>')
     + '<p class="err" id="pErr"></p>'
     + '<div class="bar"><button type="button" class="btn block" data-close>Cancel</button><button type="button" class="btn primary block" id="pSave">Save</button></div>',
     (el, close) => {

@@ -217,12 +217,12 @@ async function setProfile(user, body) {
 
 async function resetPassword(user, body) {
   const uid = body && body.uid;
-  if (uid === user.uid) return json({ error: 'Change your own password from the sign-in page' }, 400);
+  if (uid === user.uid) return json({ error: 'Sign in with “Continue with Google” — no password needed' }, 400);
   const { error, target } = await teammate(user, uid);
   if (error) return error;
-  // One admin may not take over another's account: an admin resets their own password from the
-  // sign-in page ("Forgot password").
-  if (roleOf(target) === 'admin') return json({ error: 'Admins reset their own password from the sign-in page' }, 403);
+  // One admin may not take over another's account. Admins are threepin.in Google Workspace accounts:
+  // a forgotten password does not matter, "Continue with Google" signs them in.
+  if (roleOf(target) === 'admin') return json({ error: 'Admins sign in with “Continue with Google” — no password reset needed' }, 403);
   const hadPassword = (target.providerData || []).some(p => p.providerId === 'password');
   const password = newPassword();
   await getAuth().updateUser(uid, { password, emailVerified: true });

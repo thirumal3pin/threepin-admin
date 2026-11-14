@@ -88,7 +88,7 @@ function makeServer(meKey, config, opts = {}) {
         }
         case 'reset-password':
           if (body.uid === me.uid) return [400, { error: 'Change your own password from the sign-in page' }];
-          if (u.role === 'admin') return [403, { error: 'Admins reset their own password from the sign-in page' }];
+          if (u.role === 'admin') return [403, { error: 'Admins sign in with “Continue with Google” — no password reset needed' }];
           return [200, { ok: true, email: u.email, password: 'Zr4-newPass9' }];
         case 'team-list': {
           const x = state.users.find(y => y.email === body.email); if (x) x.teamList = body.on === true; return [200, { ok: true }];
@@ -275,7 +275,7 @@ for (const scheme of ['light', 'dark']) {
 
   // Another admin: no password reset (an admin cannot take over another admin's account)
   await page.click('#people .row[data-uid="u_thirumal"]'); await page.waitForSelector('.sheet');
-  ok('Another admin’s sheet offers no password reset, and says why', !(await page.$('#pReset')) && /reset their own password/.test(await page.textContent('.sheet')));
+  ok('Another admin’s sheet offers no password reset, and says why', !(await page.$('#pReset')) && /Continue with Google/.test(await page.textContent('.sheet')));
   await page.click('.sheet [data-close]');
 
   // Own row
