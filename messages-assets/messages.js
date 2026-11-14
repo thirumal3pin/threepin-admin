@@ -44,7 +44,9 @@ function watchThreads() {
   // history grows).
   const scope = everyone && isAdmin ? [where('tenantId', '==', me.tenantId)] : [where('tenantId', '==', me.tenantId), where('members', 'array-contains', me.email)];
   const qq = plainThreads ? query(base, ...scope) : query(base, ...scope, orderBy('lastAt', 'desc'), limit(everyone && isAdmin ? 200 : 150));
-  threadUnsub = onSnapshot(qq, s => {
+  threadUnsub = onSnapshot(qq, { includeMetadataChanges: true }, s => {
+    // An empty answer from this device's copy is not "no conversations": wait for the server's.
+    if (s.metadata.fromCache && !s.docs.length && !threads.length && navigator.onLine !== false) return;
     threads = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     renderList();
     if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge('messages', threads.filter(isUnread).length);

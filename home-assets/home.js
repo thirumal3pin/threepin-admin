@@ -132,7 +132,7 @@ onAuthStateChanged(auth, async user => {
   // is hidden there (it is for buyers; the sign-in screen keeps it).
   if (!document.getElementById('teamWidgetOff')) {
     const st = document.createElement('style'); st.id = 'teamWidgetOff';
-    st.textContent = '@media (max-width: 520px) { iframe[src*="tailortalk" i], [id*="tailortalk" i], [class*="tailortalk" i] { display: none !important; } } .who-hi { white-space: normal; overflow-wrap: anywhere; }';
+    st.textContent = '@media (max-width: 520px) { iframe[src*="tailortalk" i], [id*="tailortalk" i], [class*="tailortalk" i], #tt-widget-container, [id^="tt-widget" i], [class*="tt-widget" i] { display: none !important; } } .who-hi { white-space: normal; overflow-wrap: anywhere; }';
     document.head.appendChild(st);
   }
   const name = nameOf(user);
