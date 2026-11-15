@@ -12,6 +12,12 @@
   'use strict';
 
   var panel = 'all';   // the page underneath: all | missing | changes | areamap | brochure
+  // An agent's menu has no Property section: their "Properties" entry (myprops) is this same page.
+  function rail(id) {
+    var agent = document.body.classList.contains('agent-mode') || document.documentElement.classList.contains('as-agent')
+      || (window.PinAccess && window.PinAccess.role === 'agent');
+    return id === 'all' && agent ? 'myprops' : id;
+  }
 
   function showAll() {
     if (typeof closeMissing === 'function') closeMissing();
@@ -21,7 +27,16 @@
     if (typeof closeDetail === 'function') closeDetail();
   }
 
+  // The office's panels open only once this login is known not to be an agent's — the device may not
+  // know yet (a first sign-in here, or after signing out): a link to one waits for the answer.
+  var OFFICE = { missing: 1, changes: 1, areamap: 1, sync: 1, brochure: 1 };
+  var waitingNav = null;
+  function officeOk() {
+    var a = window.PinAccess;
+    return !!a && !a.pending && a.role !== 'agent' && !document.documentElement.classList.contains('as-agent');
+  }
   function select(nav) {
+    if (OFFICE[nav] && !officeOk()) { waitingNav = window.PinAccess && !window.PinAccess.pending ? null : nav; return; }
     switch (nav) {
       case 'missing': showAll(); if (typeof openMissing === 'function') openMissing(); panel = 'missing'; break;
       case 'changes': showAll(); if (typeof openChanges === 'function') openChanges(); panel = 'changes'; break;
@@ -34,11 +49,15 @@
     // up and each close puts the rail back on All properties on its way past.
     // Sync and Create brochure never touch `panel`, so a dialog leaves the
     // highlight on the page it opened over — which is still where you are.
-    window.AppNav.setActive(panel);
+    window.AppNav.setActive(rail(panel));
   }
 
   window.AppNav.boot({ console: 'property', select: select, signOut: function () { window.pinAuth.logout(); } });
-  window.AppNav.setActive('all');
+  window.AppNav.setActive(rail('all'));
+  document.addEventListener('pin-access', function () {
+    window.AppNav.setActive(rail(panel));
+    if (waitingNav && officeOk()) { var n = waitingNav; waitingNav = null; select(n); }
+  });
 
   // Closing a panel from its own back button has to move the rail too,
   // otherwise the highlight claims you are still inside it.
@@ -48,7 +67,7 @@
     window[fn] = function () {
       var out = original.apply(this, arguments);
       panel = 'all';
-      window.AppNav.setActive('all');
+      window.AppNav.setActive(rail('all'));
       return out;
     };
   });

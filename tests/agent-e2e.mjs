@@ -83,47 +83,63 @@ try {
     await shot(page, '02-rameez-myday');
     noErrors(page, 'My Day (agent)');
 
-    await page.goto(BASE + '/listings.html');
-    await page.waitForSelector('#list .pcard', { timeout: 25000 });
-    const mine = await page.$$eval('#list .pcard b', bs => bs.map(b => b.textContent));
-    ok('Mine: only ADY002', mine.length === 1 && /Adyar/.test(mine[0]), mine.join(', '));
-    await page.click('#tabs [data-tab="all"]');
-    const all = await page.$$eval('#list .pcard', cs => cs.map(c => c.textContent));
-    ok('All: every active property, the sold villa left out', all.length === 3 && !all.some(t => /ECR/.test(t)), all.length);
-    ok('others are locked, with their agent named', all.some(t => /Anna Nagar/.test(t) && /Locked/.test(t) && /Swami/.test(t)));
+    // His Properties: the Property dashboard itself, from his own copy (dashboard-assets/agent-mode.js).
+    await page.goto(BASE + '/dashboard.html');
+    await page.waitForFunction(() => window.PinAgent && window.PinAgent.view && document.querySelectorAll('#pgrid .card').length > 0, null, { timeout: 30000 });
+    const grid = () => page.$$eval('#pgrid .card', cs => cs.map(c => c.textContent.replace(/\s+/g, ' ')));
+    let cards = await grid();
+    ok('the Property dashboard, from his copy: Mine shows only ADY002', cards.length === 1 && /Adyar/.test(cards[0]), cards.join(' || ').slice(0, 300));
+    ok('his menu marks Properties as where he is', await page.evaluate(() => [...document.querySelectorAll('[aria-current="page"]')].some(a => /Properties/.test(a.textContent))));
+    await page.evaluate(() => setAgentAccessFilter('all'));
+    cards = await grid();
+    ok('All: every active property, the sold villa left out', cards.length === 3 && !cards.some(t => /ECR/.test(t)), cards.length);
+    ok('others are locked, with their agent named', cards.some(t => /Anna Nagar/.test(t) && /Locked/.test(t) && /Swami/.test(t)), cards.join(' || ').slice(0, 400));
+    ok('no owner’s number or street on a locked card, and no Call', !cards.some(t => /9840012345|6th Avenue/.test(t)) && await page.evaluate(() => [...document.querySelectorAll('#pgrid .card.ag-locked')].every(c => !c.querySelector('.cta-call'))));
     await shot(page, '03-rameez-properties-all');
-    // The locked card: summary only.
-    await page.click('.pcard[data-id="ANR001"]');
-    await page.waitForSelector('.sheet');
-    const sheet = await page.textContent('.sheet');
-    ok('a locked property shows the summary only — no street, no owner', /Only this summary/.test(sheet) && !/6th Avenue|9840012345|Mr Owner/.test(sheet), sheet.slice(0, 200));
+    // A locked property: the summary only, Overview only, and Request details.
+    await page.evaluate(() => openDetail('ANR001'));
+    await page.waitForSelector('#dp.open .ag-panel.locked');
+    const locked = await page.evaluate(() => ({ text: document.getElementById('dp').textContent, tabs: [...document.querySelectorAll('.dp-tab')].filter(t => t.style.display !== 'none').map(t => t.textContent.trim()),
+      office: [...document.querySelectorAll('#dp .dp-hact.danger, #dpSoldOut, #dp [onclick^="openEditModal"]')].every(b => getComputedStyle(b).display === 'none') }));
+    ok('a locked property: the summary only — no street, no owner — and only its Overview', /Only this summary/.test(locked.text) && !/6th Avenue|9840012345|Mr Owner/.test(locked.text) && locked.tabs.join() === 'Overview', JSON.stringify(locked.tabs));
+    ok('the office’s Edit, Delete and Mark Sold Out are not offered', locked.office);
     await shot(page, '04-rameez-locked-sheet');
-    await page.click('#pAsk');
+    await page.click('.ag-panel [data-ag="ask"]');
     await page.waitForSelector('#aReason');
     await until(() => page.evaluate(() => document.querySelectorAll('#aClient option').length > 1));
     await page.selectOption('#aClient', 'lead_3');
     await page.fill('#aReason', 'My client Arjun wants a 3 BHK in Anna Nagar; can visit Saturday');
     await shot(page, '05-rameez-request-sheet');
+    page.__lastDialog = null;
     await page.click('#aGo');
     const req = await until(async () => { const q = await db.collection('accessRequests').where('requesterEmail', '==', 'rameez@threepin.in').get(); return q.size ? { id: q.docs[0].id, ...q.docs[0].data() } : null; });
     ok('the request is saved, for the primary agent and the admins, with the client’s first name only', req && req.approvers.includes('swami@threepin.in') && req.approvers.includes('thirumal@threepin.in') && req.clientName === 'Arjun' && !('clientLeadId' in req), JSON.stringify(req && { a: req.approvers, c: req.clientName }));
     ok('…and the property’s code, for everyone on the request', req && req.targetCode === 'ANR001', req && req.targetCode);
-    await until(() => page.evaluate(() => /Asked/.test(document.querySelector('.pcard[data-id="ANR001"]').textContent)));
-    ok('the card now says Asked', /Asked/.test(await page.textContent('.pcard[data-id="ANR001"]')));
-    // His own property in full, with a matching buyer.
-    await page.click('#tabs [data-tab="mine"]');
-    await page.click('.pcard[data-id="ADY002"]');
-    await page.waitForSelector('.sheet .kv');
-    const own = await page.textContent('.sheet');
+    ok('sent without a “discard what you typed?” question, and the sheet is closed', !!(await until(() => page.evaluate(() => !document.querySelector('.sheet')))) && !page.__lastDialog, page.__lastDialog);
+    ok('the property now says he asked', !!(await until(() => page.evaluate(() => /You asked/.test((document.querySelector('.ag-panel') || {}).textContent || '')))));
+    await page.evaluate(() => closeDetail());
+    ok('the card now says Asked', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('#pgrid .card')].some(c => /Anna Nagar/.test(c.textContent) && /Asked/.test(c.textContent))))));
+    // His own property in full: the owner's number, the buyers who match, availability and a note.
+    await page.evaluate(() => { setAgentAccessFilter('mine'); openDetail('ADY002'); });
+    await page.waitForSelector('#dp.open .ag-panel.mine');
+    const own = await page.textContent('#dp');
     ok('his own property opens in full — address and owner’s number', /LB Road/.test(own) && /9840099999/.test(own));
-    ok('a matching buyer is shown without name or number', /Matching buyers/.test(own) && /2 BHK/.test(own) && !/Divya|9222222222/.test(own), own.slice(own.indexOf('Matching'), own.indexOf('Matching') + 300));
+    await page.click('.dp-tab:has-text("Matching Buyers")');
+    await until(() => page.evaluate(() => !!document.querySelector('#dpAgMatches [data-askref]')));
+    const mb = await page.textContent('#dpAgMatches');
+    ok('a buyer with another agent who matches is shown without name or number', /2 BHK/.test(mb) && !/Divya|9222222222/.test(mb), mb.slice(0, 300));
     await shot(page, '06-rameez-own-property');
-    await page.selectOption('#pAvail', 'On hold');
+    await page.selectOption('.ag-panel select[data-ag="avail"]', 'On hold');
     ok('availability changes on his own property', !!(await until(async () => (await doc('properties', 'ADY002')).availability === 'On hold')));
-    await page.fill('#pNote', 'Owner open to 92 L');
-    await page.click('#pNoteGo');
-    ok('a note is added', !!(await until(async () => (await db.collection('properties').doc('ADY002').collection('notes').get()).docs.some(d => /92 L/.test(d.data().text)))));
-    await page.click('[data-askref]');
+    await page.click('.dp-tab:has-text("Notes & CRM")');
+    await page.waitForSelector('#noteInput');
+    await page.fill('#noteInput', 'Owner open to 92 L');
+    await page.press('#noteInput', 'Enter');
+    ok('a note is added (through the server)', !!(await until(async () => (await db.collection('properties').doc('ADY002').collection('notes').get()).docs.some(d => /92 L/.test(d.data().text)))));
+    ok('…and the tab stays where he is after the availability change', await page.evaluate(() => document.querySelector('.dp-tab.active').textContent.includes('Notes')));
+    await page.click('.dp-tab:has-text("Matching Buyers")');
+    ok('…pointed to at the top of the tab', /with other agents also match/.test(await page.textContent('#dpAgJump')));
+    await page.click('#dpAgMatches [data-askref]');
     await page.waitForSelector('#lReason');
     await page.fill('#lReason', 'ADY002 fits her exactly');
     await page.click('#lGo');
@@ -135,10 +151,10 @@ try {
   section('Kavya (another agent) — her own only');
   {
     const { ctx, page } = await as('kavya');
-    await page.goto(BASE + '/listings.html');
-    await page.waitForSelector('#list .pcard', { timeout: 25000 });
-    const mine = await page.$$eval('#list .pcard b', bs => bs.map(b => b.textContent));
-    ok('Mine: only her VEL003', mine.length === 1 && /Velachery/.test(mine[0]), mine.join());
+    await page.goto(BASE + '/dashboard.html');
+    await page.waitForFunction(() => window.PinAgent && window.PinAgent.view && document.querySelectorAll('#pgrid .card').length > 0, null, { timeout: 30000 });
+    const mine = await page.$$eval('#pgrid .card', cs => cs.map(c => c.textContent));
+    ok('Mine: only her VEL003', mine.length === 1 && /Velachery/.test(mine[0]), mine.join().slice(0, 200));
     const read = await page.evaluate(async () => {
       const fs = await import('https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js');
       const app = (await import('https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js')).getApps()[0];
@@ -213,14 +229,13 @@ try {
   section('Rameez — the shared property opens; the buyer is in his CRM');
   {
     const page = rameez.page;
-    await page.goto(BASE + '/listings.html');
-    await page.waitForSelector('#list .pcard', { timeout: 25000 });
-    await page.click('#tabs [data-tab="granted"]');
-    await until(() => page.evaluate(() => !!document.querySelector('.pcard[data-id="ANR001"]')));
-    ok('Shared tab: ANR001 with its timer', /Shared · (ends in|until)/.test(await page.textContent('.pcard[data-id="ANR001"]')));
-    await page.click('.pcard[data-id="ANR001"]');
-    await page.waitForSelector('.sheet .kv');
-    const t = await page.textContent('.sheet');
+    await page.goto(BASE + '/dashboard.html');
+    await page.waitForFunction(() => window.PinAgent && window.PinAgent.view && properties.length > 0, null, { timeout: 30000 });
+    await page.evaluate(() => setAgentAccessFilter('granted'));
+    ok('Shared: ANR001 with its timer', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('#pgrid .card')].some(c => /Anna Nagar/.test(c.textContent) && /Shared · (ends in|until)/.test(c.textContent))))));
+    await page.evaluate(() => openDetail('ANR001'));
+    await page.waitForSelector('#dp.open .ag-panel.granted');
+    const t = await page.textContent('#dp');
     ok('…in full, with the owner’s number while that timer runs', /6th Avenue/.test(t) && /9840012345/.test(t));
     await shot(page, '10-rameez-shared-property');
     await page.goto(BASE + '/crm.html');
@@ -475,11 +490,10 @@ try {
     ok('Take back: the grant ends', !!(await until(async () => { const q = await db.collection('grants').where('kind', '==', 'property').get(); return q.docs[0].data().active === false; })));
     noErrors(sp, 'Team (admin) revoke');
     await ctx.close();
-    await page.goto(BASE + '/listings.html');
-    await page.waitForSelector('#list .pcard, #list .empty', { timeout: 25000 });
-    await page.click('#tabs [data-tab="all"]');
-    await until(() => page.evaluate(() => /Locked/.test((document.querySelector('.pcard[data-id="ANR001"]') || {}).textContent || '')));
-    ok('Rameez: ANR001 is locked again', /Locked/.test(await page.textContent('.pcard[data-id="ANR001"]')));
+    await page.goto(BASE + '/dashboard.html');
+    await page.waitForFunction(() => window.PinAgent && window.PinAgent.view && properties.length > 0, null, { timeout: 30000 });
+    await page.evaluate(() => setAgentAccessFilter('all'));
+    ok('Rameez: ANR001 is locked again', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('#pgrid .card')].some(c => /Anna Nagar/.test(c.textContent) && /Locked/.test(c.textContent))))));
   }
 
   // ═══ Staff and admin keep everything ═══
@@ -492,7 +506,8 @@ try {
     ok('…and no agent tab bar', await page.evaluate(() => !document.getElementById('pinTabbar')));
     await page.goto(BASE + '/listings.html');
     await page.waitForURL(/dashboard\.html/, { timeout: 15000 });
-    ok('the agent Properties page sends him to the full dashboard', true);
+    await page.waitForFunction(() => typeof properties !== 'undefined' && properties.length >= 3, null, { timeout: 25000 });
+    ok('an old Properties link sends him to the full dashboard — every property, no agent view', await page.evaluate(() => !window.PinAgent && properties.length >= 4 && properties.some(p => p.contactNumber)));
     await page.goto(BASE + '/myday.html');
     await page.waitForSelector('#sections .card', { timeout: 25000 });
     ok('My Day opens for him too', /Good|day/.test(await page.textContent('#hello')));
@@ -500,17 +515,22 @@ try {
     await ctx.close();
   }
 
-  section('Rameez on the Property dashboard link → his own Properties');
+  section('Property links for an agent — the property, on his dashboard');
   {
     const page = rameez.page;
-    await page.goto(BASE + '/dashboard.html?id=ADY002');
-    await page.waitForURL(/listings\.html\?id=ADY002/, { timeout: 20000 }).catch(() => {});
-    ok('sent to listings.html at the same property', /listings\.html\?id=ADY002/.test(page.url()), page.url());
+    const at = id => page.evaluate(id => typeof currentDetailId !== 'undefined' && currentDetailId === id && document.getElementById('dp').classList.contains('open'), id);
+    await page.goto(BASE + '/dashboard.html?property=ADY002');
+    ok('a dashboard link opens his own property', !!(await until(async () => (await at('ADY002')) && page.evaluate(() => !!document.querySelector('.ag-panel.mine')))));
+    await page.goto(BASE + '/listings.html?id=ADY002');
+    ok('an old Properties link lands on the same property', !!(await until(async () => /dashboard\.html/.test(page.url()) && (await at('ADY002')))), page.url());
+    await page.goto(BASE + '/property.html?id=ANR001');
+    ok('a shared property link opens its summary for him, locked', !!(await until(async () => (await at('ANR001')) && page.evaluate(() => !!document.querySelector('.ag-panel.locked')))));
+    noErrors(page, 'Property links (agent)');
   }
 
   // ═══ Screens: desktop and dark ═══
   section('Screens: desktop and dark');
-  for (const [key, path, name] of [['rameez', '/myday.html', '20-desktop-myday'], ['rameez', '/listings.html', '21-desktop-properties'], ['swami', '/messages.html', '22-desktop-messages']]) {
+  for (const [key, path, name] of [['rameez', '/myday.html', '20-desktop-myday'], ['rameez', '/dashboard.html', '21-desktop-properties'], ['swami', '/messages.html', '22-desktop-messages']]) {
     const { ctx, page } = await as(key, { viewport: { width: 1280, height: 820 } });
     await page.goto(BASE + path);
     await page.waitForTimeout(2500);
@@ -518,7 +538,7 @@ try {
     ok(`${name}: no sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await ctx.close();
   }
-  for (const [key, path, name] of [['rameez', '/myday.html', '23-dark-myday'], ['rameez', '/listings.html', '24-dark-properties'], ['rameez', '/messages.html', '25-dark-messages']]) {
+  for (const [key, path, name] of [['rameez', '/myday.html', '23-dark-myday'], ['rameez', '/dashboard.html', '24-dark-properties'], ['rameez', '/messages.html', '25-dark-messages']]) {
     const { ctx, page } = await as(key, { dark: true });
     await page.goto(BASE + path);
     await page.waitForTimeout(2500);

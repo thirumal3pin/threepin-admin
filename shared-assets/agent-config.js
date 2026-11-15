@@ -59,7 +59,7 @@ const PROPERTY_FIELDS = [
   { id: 'builder', label: 'Builder', fields: ['builder'] },
   { id: 'highlights', label: 'Highlights and amenities', fields: ['highlights', 'amenities'] },
   { id: 'media', label: 'Photos, brochure and WhatsApp share message', fields: ['photosLink', 'brochureLink', 'detailsText'] },
-  { id: 'notes', label: 'Property notes and history', fields: ['sheetNotes'], sub: ['notes'] },
+  { id: 'notes', label: 'Property notes and history', fields: ['sheetNotes'], sub: ['notes'], risk: 'may mention the owner or the address (phone numbers are hidden)' },
   { id: 'internal', label: 'Office-only notes', sub: ['internalNotes'], risk: 'may hold the owner’s lowest price' },
   { id: 'sheet', label: 'Extra columns from the property sheet', fields: ['sheetExtras'], risk: 'may contain anything' },
   { id: 'coAgents', label: 'Co-agents’ names', fields: ['secondaryAgents', 'secondaryAgent'] },
@@ -207,7 +207,11 @@ function normalizeConfig(input, tenantId) {
 
 // Phone numbers written into free text (a note, a share message, a title): any ten digits with spaces,
 // dots or dashes between them, with or without +91 / 0 — mobiles and landlines like 044-2345 6789.
-const PHONE_RE = /(?<!\w)(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?!\w|:\d)/g;
+// A phone number however it is written: ten digits with up to six spaces, dots, dashes (- – —),
+// slashes, brackets or underscores between them, with or without +91 / 0 — "98400 12345",
+// "98400 - 12345", "98400–12345", "98400_12345", "044-2345 6789". Never commas (lists, prices), and not
+// a date and time ("15-11-2026 10:30": a run that runs into a time is left alone).
+const PHONE_RE = /(?<!\w)(?:\+?91[\s.\-\/()_\p{Pd}]{0,6}|0)?(?:\d[\s.\-\/()_\p{Pd}]{0,6}){9}\d(?!\w|:\d)/gu;
 function maskPhones(v) {
   if (typeof v === 'string') return v.replace(PHONE_RE, '••••• •••••');
   if (Array.isArray(v)) return v.map(maskPhones);

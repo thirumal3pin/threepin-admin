@@ -94,16 +94,16 @@
     const map = mapsHref(p);
     return `
     <div style="flex:1;min-width:240px;">
-      <div class="dp-builder-tag">${e.propertyCode?e.propertyCode+' · ':''}${e.builder} · ${e.type}${e.saleType?' · '+e.saleType:''}${e.zone?' · '+e.zone:''}</div>
+      <div class="dp-builder-tag">${[e.propertyCode, e.builder, e.type, e.saleType, e.zone].filter(Boolean).join(' · ')}</div>
       <h1 class="dp-title">${e.name}</h1>
-      <div class="dp-loc">📍 ${e.location}${map?` &nbsp;<a class="dp-maplink" href="${escapeHtml(map)}" target="_blank" rel="noopener">Open Map Pin ↗</a>`:''}</div>
-      <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="dp-call">📞 Call ${e.contactName} — ${e.contactNumber}</a>
+      ${e.location || e.zone || map ? `<div class="dp-loc">📍 ${e.location || e.zone}${map?` &nbsp;<a class="dp-maplink" href="${escapeHtml(map)}" target="_blank" rel="noopener">Open Map Pin ↗</a>`:''}</div>` : ''}
+      ${p.contactNumber ? `<a href="tel:${encodeURIComponent(p.contactNumber)}" class="dp-call">📞 Call ${e.contactName ? e.contactName + ' — ' : ''}${e.contactNumber}</a>` : ''}
       <div class="res-chips">${resourceChips(p)}</div>
     </div>
     <div class="dp-price-box${String(p.startingPrice || '').trim().length > 28 ? ' long' : ''}">
       <div class="dp-price">${e.startingPrice}</div>
       ${e.pricePerSqft?`<div class="dp-psf">${e.pricePerSqft}</div>`:''}
-      <div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+(e.constructionStage||'Under Construction')}</span></div>
+      ${isReady(p) || p.status || p.constructionStage ? `<div style="margin-top:8px;"><span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+(e.constructionStage||'Under Construction')}</span></div>` : ''}
       ${e.propertyAge?`<div class="dp-age">${e.propertyAge}</div>`:''}
     </div>`;
   }
@@ -244,7 +244,7 @@
         <tr><td>Type</td><td>${e.type}${e.saleType?' · '+e.saleType:''}</td></tr>
         ${e.propertyAge?`<tr><td>Property Age</td><td>${e.propertyAge}</td></tr>`:''}
         ${group('Location')}
-        <tr><td>Location</td><td>${e.location}</td></tr>
+        <tr><td>Location</td><td>${e.location || e.zone}</td></tr>
         ${e.zone?`<tr><td>Zone</td><td>${e.zone}</td></tr>`:''}
         <tr><td>Map Pin</td><td>${map?link(map,'Open in Google Maps'):'—'}</td></tr>
         ${e.nearby?`<tr><td>Nearby</td><td>${e.nearby}</td></tr>`:''}
@@ -279,7 +279,7 @@
         ${group('Resources & Contact')}
         <tr><td>Brochure</td><td>${brochures.length ? brochures.map((u,i) => link(u, i ? 'File '+(i+1) : 'Open Brochure')).join(' · ') : '—'}</td></tr>
         <tr><td>Photos</td><td>${link(p.photosLink,'Open Photo Folder')}</td></tr>
-        <tr><td>Contact</td><td>${e.contactName} — ${e.contactNumber}</td></tr>
+        ${e.contactName || e.contactNumber ? `<tr><td>Contact</td><td>${[e.contactName, e.contactNumber].filter(Boolean).join(' — ')}</td></tr>` : ''}
         ${p.sheetExtras&&p.sheetExtras['Owner_Builder_Contact']?`<tr><td>Owner / Builder</td><td>${escapeHtml(p.sheetExtras['Owner_Builder_Contact'])}</td></tr>`:''}
       </table></div>
     </div>`;

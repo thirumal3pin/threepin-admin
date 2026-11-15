@@ -84,6 +84,8 @@ export async function teamOf(db, tenantId, fresh = false) {
   return list;
 }
 export const adminsOf = team => team.filter(u => u.role === 'admin' && u.active && u.verified).map(u => u.email);
+// The logins that are agents (switched off ones too — their clients stay theirs), for canWorkLead.
+export const agentEmailsOf = async (db, tenantId) => new Set((await teamOf(db, tenantId)).filter(u => u.role === 'agent').map(u => u.email));
 const nameIn = (team, email) => { const u = team.find(x => x.email === lc(email)); return u ? u.name : (lc(email).split('@')[0] || ''); };
 
 async function loadConfig(db, tenantId) {
@@ -350,14 +352,19 @@ async function propertyNotes(db, user, body) {
 }
 
 const OWN = new Set(['own', 'co']);
+const NOTE_KINDS = ['note', 'visit', 'call', 'price', 'status', 'booking'];   // dashboard-assets/app.js NOTE_KINDS
 async function propertyNote(db, user, body) {
   const a = await accessTo(db, user, body && body.id);
   if (a.error) return a.error;
+  if (user.role === 'agent' && !a.cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
   if (user.role === 'agent' && (!OWN.has(a.access) || !a.cfg.actions.editOwnProperties)) return json({ ok: false, error: 'You can add notes only on your own properties' }, 403);
-  const text = String((body && body.text) || '').trim().slice(0, MAX_TEXT);
+  const text = plainText(String((body && body.text) || '')).trim().slice(0, MAX_TEXT);
   if (!text) return json({ ok: false, error: 'Write the note first' }, 400);
   const now = Date.now();
-  const entry = { id: 'n' + now + randomBytes(2).toString('hex'), text, kind: 'note', eventDate: '', createdAt: now, author: lc(user.email) };
+  // The dashboard's kinds of entry (a dated site visit, a call…); anything else is a plain note.
+  const kind = NOTE_KINDS.includes(body && body.kind) ? body.kind : 'note';
+  const eventDate = kind !== 'note' && /^\d{4}-\d{2}-\d{2}$/.test(String((body && body.eventDate) || '')) ? String(body.eventDate) : '';
+  const entry = { id: 'n' + now + randomBytes(2).toString('hex'), text, kind, eventDate, createdAt: now, author: lc(user.email) };
   await db.collection('properties').doc(a.p.id).collection('notes').doc(entry.id).set(entry);
   return json({ ok: true, note: entry });
 }
@@ -366,6 +373,7 @@ const AVAILABILITY = ['Available', 'On hold', 'Booked', 'Sold', 'Let out'];
 async function propertyAvailability(db, user, body) {
   const a = await accessTo(db, user, body && body.id);
   if (a.error) return a.error;
+  if (user.role === 'agent' && !a.cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
   if (user.role === 'agent' && (!OWN.has(a.access) || !a.cfg.actions.editOwnProperties)) return json({ ok: false, error: 'You can change availability only on your own properties' }, 403);
   const value = String((body && body.availability) || '');
   if (!AVAILABILITY.includes(value)) return json({ ok: false, error: 'Pick one: ' + AVAILABILITY.join(', ') }, 400);
@@ -577,7 +585,7 @@ async function leadFor(db, user, id, { work = false } = {}) {
   if (user.role === 'agent') {
     const visible = AA.leadVisibleTo(lead, user.email) || !!(await liveLeadGrant(db, user, lead.id));
     if (!visible) return missing;
-    if (work && !AA.canWorkLead(lead, user.email)) return { error: json({ ok: false, readOnly: true, error: 'You can read this lead, but it is with another agent — ask them or an admin to change it' }, 403) };
+    if (work && !AA.canWorkLead(lead, user.email, await agentEmailsOf(db, user.tenantId))) return { error: json({ ok: false, readOnly: true, error: 'You can read this lead, but it is another agent’s client — ask them or an admin to change it' }, 403) };
   }
   return { ref, lead };
 }
@@ -1190,7 +1198,8 @@ export async function visitAlert(db, user, before, after) {
   if (!p) return null;
   const me = lc(user.email);
   // Told: the property's agents who do not work this lead themselves.
-  const to = AA.agentsOf(p).filter(e => e !== me && !AA.canWorkLead(after, e));
+  const agentSet = await agentEmailsOf(db, user.tenantId);
+  const to = AA.agentsOf(p).filter(e => e !== me && !AA.canWorkLead(after, e, agentSet));
   if (!to.length) return null;
   const team = await teamOf(db, user.tenantId);
   const first = String((after && after.name) || '').trim().split(/\s+/)[0] || 'a client';
@@ -1311,7 +1320,8 @@ async function agentLeadIds(db, user) {
     col.where('tenantId', '==', user.tenantId).where('agentAccess', 'array-contains', me).select(...fields).get(),
   ]);
   const out = new Map();
-  qs.forEach(q => q.docs.forEach(d => { if (AA.canWorkLead(d.data(), me)) out.set(d.id, d.data()); }));
+  const agentSet = await agentEmailsOf(db, user.tenantId);
+  qs.forEach(q => q.docs.forEach(d => { if (AA.canWorkLead(d.data(), me, agentSet)) out.set(d.id, d.data()); }));
   return out;
 }
 export async function agentCampaignGate(db, user, body) {

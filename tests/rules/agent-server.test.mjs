@@ -179,6 +179,43 @@ test('the primary agent approves as a co-agent; a co-agent may not add others', 
   assert.equal((await view('rameez')).props.find(x => x.id === 'ADY002')._access, 'co');
 });
 
+test('an enquiry on his property is his to work, even while the office holds it — never another agent’s client', async () => {
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  await opens('rameez');   // works out which enquiries reach him
+  // lead_5: an enquiry on ADY002 held by the office's admin account — how nearly every enquiry arrives.
+  let r = await call('rameez', 'lead-save', { id: 'lead_5', pairs: [[['stageId'], 'contacted']] });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  let l = (await db.collection('leads').doc('lead_5').get()).data();
+  assert.equal(l.stageId, 'contacted');
+  assert.equal(l.assignedAgent, 'admin@threepin.in', 'it stays with whoever holds it');
+  assert.equal((await call('rameez', 'lead-note', { id: 'lead_5', note: { id: 'n5', text: 'Called — visiting Sunday' } })).ok, true, 'notes too');
+  assert.equal((await call('rameez', 'lead-save', { id: 'lead_1', pairs: [[['stageId'], 'contacted']] })).ok, true, 'an enquiry nobody holds, as before');
+  assert.equal((await call('rameez', 'lead-save', { id: 'lead_6', pairs: [[['stageId'], 'won']] })).status, 404, 'Kavya’s own client, linked to ADY002, never reaches him');
+  // Handed to another agent after his access was worked out: refused at once, before any re-sync.
+  await db.collection('leads').doc('lead_5').update({ assignedAgent: 'kavya@threepin.in' });
+  r = await call('rameez', 'lead-save', { id: 'lead_5', pairs: [[['stageId'], 'closed_lost']] });
+  assert.equal(r.status, 403, 'now Kavya’s client');
+  assert.equal(r.readOnly, true);
+  assert.equal((await call('rameez', 'lead-note', { id: 'lead_5', note: { id: 'n6', text: 'x' } })).status, 403);
+  l = (await db.collection('leads').doc('lead_5').get()).data();
+  assert.equal(l.stageId, 'contacted', 'unchanged');
+});
+
+test('a note on his property: its kind and date are kept, markup is not; notes and availability need the Properties tab', async () => {
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  assert.equal((await call('rameez', 'property-note', { id: 'ADY002', text: 'Showed it to Arjun', kind: 'visit', eventDate: '2026-11-20' })).ok, true);
+  assert.equal((await call('rameez', 'property-note', { id: 'ADY002', text: '<img src=x onerror=alert(1)>Owner <b>keen</b>', kind: 'nonsense', eventDate: 'tomorrow' })).ok, true);
+  const notes = (await db.collection('properties').doc('ADY002').collection('notes').get()).docs.map(d => d.data());
+  const visit = notes.find(n => /Arjun/.test(n.text)), plain = notes.find(n => /keen/.test(n.text));
+  assert.equal(visit.kind, 'visit'); assert.equal(visit.eventDate, '2026-11-20');
+  assert.equal(plain.kind, 'note', 'an unknown kind is a plain note'); assert.equal(plain.eventDate, '');
+  assert.ok(!/[<>]/.test(plain.text), 'no markup from an agent reaches a colleague’s screen: ' + plain.text);
+  await db.collection('agentConfigs').doc(T).set({ tenantId: T, overrides: { 'rameez@threepin.in': { tabs: ['myday', 'crm', 'messages'] } }, updatedAt: 9 });
+  assert.equal((await call('rameez', 'property-note', { id: 'ADY002', text: 'x' })).status, 403, 'Properties taken away: no notes');
+  assert.equal((await call('rameez', 'property-availability', { id: 'ADY002', availability: 'Sold' })).status, 403, '…and no marking it sold');
+  assert.notEqual((await db.collection('properties').doc('ADY002').get()).data().availability, 'Sold');
+});
+
 test('agents change only what is theirs on a lead, through the server', async () => {
   let r = await call('rameez', 'lead-save', { id: 'lead_3', pairs: [[['stageId'], 'contacted'], [['followUpAt'], 123], [['assignedAgent'], 'kavya@threepin.in'], [['ai', 'verdict'], 'x'], [['ai', 'suggestion'], null]] });
   assert.equal(r.ok, true);

@@ -55,7 +55,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { waitUntil } from '@vercel/functions';
 import { getDb, verifyCrmUser } from './_bot-shared.js';
-import { visitAlert, visitPropertyFor, agentCampaignGate } from './_agent-work.js';
+import { visitAlert, visitPropertyFor, agentCampaignGate, agentEmailsOf } from './_agent-work.js';
 import { leadVisibleTo, canWorkLead } from '../shared-assets/agent-access.js';
 import { applyTailorTalkEvent, pullTailorTalkPage, walkRefreshPull, campaignRepliesAfter } from './_tailortalk-sync.js';
 import { normaliseSignal } from './_tailortalk-shared.js';
@@ -318,7 +318,7 @@ async function aiLeadPost(request) {
   if (user.role === 'agent') {
     // A re-check re-reads the lead's notes and moves its stage: only on a lead the agent works.
     const ls = await db.collection('leads').doc(body.leadId).get();
-    if (!ls.exists || ls.data().tenantId !== user.tenantId || !canWorkLead(ls.data(), user.email)) return json({ ok: false, error: 'Not your lead' }, 403);
+    if (!ls.exists || ls.data().tenantId !== user.tenantId || !canWorkLead(ls.data(), user.email, await agentEmailsOf(db, user.tenantId))) return json({ ok: false, error: 'Not your lead' }, 403);
   }
   const auto = await automationSettings(db, user.tenantId);
   try {
@@ -478,8 +478,10 @@ async function calendarPost(request) {
   if (agent && !['visit', 'replies', 'respond', 'answer', 'event', 'day', undefined].includes(body.op)) return json({ ok: false, error: 'Not part of your access' }, 403);
   if (agent && (body.op === 'day' || body.op === undefined)) body.people = [String(user.email || '').toLowerCase()];
   const notMine = lead => agent && !leadVisibleTo(lead, user.email);
-  // Booking a visit is working the lead: their own, or an enquiry nobody has been given yet.
-  const cannotWork = lead => agent && !canWorkLead(lead, user.email);
+  // Booking a visit is working the lead: their own, or an enquiry on their property (never another
+  // agent's client — the agents are looked up once, when it is asked).
+  let agentSet = null;
+  const cannotWork = async lead => agent && !canWorkLead(lead, user.email, agentSet || (agentSet = await agentEmailsOf(db, user.tenantId)));
 
   try {
     if (body.op === 'visit') {
@@ -488,7 +490,7 @@ async function calendarPost(request) {
       const snap = await ref.get();
       if (!snap.exists) return json({ ok: false, error: 'No such lead' }, 404);
       const lead = { id: snap.id, ...snap.data() };
-      if (lead.tenantId !== user.tenantId || cannotWork(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
+      if (lead.tenantId !== user.tenantId || await cannotWork(lead)) return json({ ok: false, error: 'Not your lead' }, 403);
       const before = { ...lead };
       // The page saves the visit and asks for the invitation at the same moment: the visit it just
       // saved comes with the request, so the invitation is never built from a copy the save has not

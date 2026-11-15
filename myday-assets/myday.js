@@ -125,7 +125,7 @@ const isAgentSubject = () => isAgent || (people.find(p => p.email === subject) |
 // property one tap away.
 function collabHtml(a) {
   const words = { booked: 'booked a visit', moved: 'moved a visit', cancelled: 'called off a visit', done: 'finished a visit' }[a.kind] || 'booked a visit';
-  const href = (isAgent ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(a.propertyId);
+  const href = (isAgent ? 'dashboard.html?property=' : 'property.html?id=') + encodeURIComponent(a.propertyId);
   return `<a class="bd" href="${href}"><b><span class="tag brand">Collaboration visit</span> ${esc(a.propertyTitle)}</b><small>${esc(a.byName)} (agent) ${words} for their client ${esc(a.clientName)}${a.at ? ' · ' + esc(when(a.at)) : ''}</small></a>`;
 }
 
@@ -160,7 +160,7 @@ function requestItem(r, mode) {
         ${canDecide(r) ? `<button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>` : ''}
         ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
         ${r.status === 'pending' && r.requesterEmail === me.email ? `<button type="button" class="btn sm danger" data-cancel="${esc(r.id)}">Cancel</button>` : ''}
-        ${liveAccess(r) && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="listings.html?id=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
+        ${liveAccess(r) && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="dashboard.html?property=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
         ${liveAccess(r) && r.grantId && r.decidedBy === me.email && r.requesterEmail !== me.email ? `${r.terms && r.terms.contact ? `<button type="button" class="btn sm" data-hide="${esc(r.grantId)}">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-end="${esc(r.grantId)}">End access</button>` : ''}
       </div></div></div>`;
 }
@@ -228,7 +228,7 @@ function render() {
   const ending = S.grants.filter(g => g.active && g.expiresAt && g.expiresAt > now && g.expiresAt < now + 2 * DAY).sort((a, b) => a.expiresAt - b.expiresAt);
   if (ending.length) html += `<div id="s-ending">${section('Access ending soon', ending.length, ending.map(g => `<div class="item"><div class="ic blue"><i class="fa-regular fa-hourglass-half"></i></div>
     <div class="bd"><b>${g.kind === 'lead' ? 'A buyer’s details' : esc(g.title)}</b><small>Details ${esc(untilWords(g.expiresAt))}${g.includeContact && g.contactExpiresAt > now ? ' · owner’s number ' + esc(untilWords(g.contactExpiresAt)) : ''}</small>
-      ${subject === me.email && g.kind === 'property' ? `<div class="acts"><button type="button" class="btn sm" data-more="${esc(g.targetId)}">Ask for more time</button><a class="btn sm" href="listings.html?id=${encodeURIComponent(g.targetId)}">Open property</a></div>` : ''}</div></div>`).join(''), { hot: true })}</div>`;
+      ${subject === me.email && g.kind === 'property' ? `<div class="acts"><button type="button" class="btn sm" data-more="${esc(g.targetId)}">Ask for more time</button><a class="btn sm" href="dashboard.html?property=${encodeURIComponent(g.targetId)}">Open property</a></div>` : ''}</div></div>`).join(''), { hot: true })}</div>`;
   html += `<div id="s-mine">${section(subject === me.email ? 'My requests' : 'Their requests', mine.length,
     !ld('asked') ? loading() : mine.length ? mine.map(r => requestItem(r, 'mine')).join('') : empty('fa-solid fa-lock-open', isAgent ? 'No open requests. Ask for a property’s details from Properties → All.' : 'No open requests.'))}</div>`;
   }

@@ -4,6 +4,7 @@ import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
+import { canWorkLead } from '../shared-assets/agent-access.js';
 import { diffPaths, applyPaths } from '../shared-assets/lead-views.js';
 import { isUntouchedCard } from '../track-assets/seller-sync.js';
 import * as TaskModel from '../shared-assets/task-model.js';
@@ -203,16 +204,11 @@ function agentChrome(){
   if (window.PinAccess) apply(window.PinAccess);
   document.addEventListener('pin-access', e => apply(e.detail));
 }
-// Which of an agent's leads they can only read (canWorkLead in shared-assets/agent-access.js, the
-// server's own test): not theirs and not an unassigned enquiry on their property — or opened to them
-// by an approved request.
+// Which of an agent's leads they can only read: canWorkLead (shared-assets/agent-access.js), the
+// server's own test — their own leads and the enquiries on their properties (even ones the office
+// holds) are theirs to work; a lead opened to them by an approved request is theirs to read.
 const readOnlyIds = new Set();
-function canWork(l, me){
-  if (!l) return false;
-  const a = String(l.assignedAgent || '').toLowerCase(), s = String(l.secondaryAgent || '').toLowerCase();
-  if (a === me || s === me) return true;
-  return !l.assignedAgent && Array.isArray(l.agentAccess) && l.agentAccess.map(x => String(x).toLowerCase()).includes(me);
-}
+const canWork = (l, me) => canWorkLead(l, me);
 function subscribeAsAgent(tenantId){
   agentChrome();
   const me = signedInEmail();

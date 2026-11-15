@@ -20,6 +20,24 @@ let hideSoldOut = false;
 let currentSearch = '';
 let currentDetailId = null;
 
+// An agent's login (dashboard-assets/agent-mode.js sets window.PinAgent): the same dashboard from their
+// own copy of the inventory. The office's actions refuse here too, so a stray button or an old link
+// cannot reach them (the server and firestore.rules refuse them anyway).
+function officeOnly(){
+  const agent = !!window.PinAgent || document.documentElement.classList.contains('as-agent')
+    || (window.dashboardAuth && window.dashboardAuth.getRole && window.dashboardAuth.getRole() === 'agent')
+    || (window.PinAccess && window.PinAccess.role === 'agent');
+  if(!agent) return false;
+  showToast('That’s for the office — ask an admin');
+  return true;
+}
+let agentAccessFilter = (() => { try { return sessionStorage.getItem('pin.props.tab') || ''; } catch (e) { return ''; } })();
+const agentAccessOf = p => (p._access === 'own' || p._access === 'co') ? 'mine' : p._access === 'granted' ? 'granted' : 'all';
+const currentAgentAccess = () => agentAccessFilter || (properties.some(p => agentAccessOf(p) === 'mine') ? 'mine' : 'all');
+// A search looks through everything an agent can see — not only the list they happen to be on.
+const agentQuerying = () => !!(currentSearch || '').trim() || !!(window.PinAdvanced && PinAdvanced.isActive());
+window.onPinAgentChange = () => { renderAgentFilter(); applyFilters(); refreshOpenDetail(); };
+
 // ═══════ HELPERS ═══════
 const isReady = p => p.status === 'Ready to Move';
 const splitList = s => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
@@ -244,6 +262,14 @@ let agentPopOpen = false;
 function renderAgentFilter(){
   const box = document.getElementById('agentFilt');
   if(!box) return;
+  if(window.PinAgent){
+    const mine = properties.filter(p => agentAccessOf(p) === 'mine').length, shared = properties.filter(p => p._access === 'granted').length, cur = agentQuerying() ? 'all' : currentAgentAccess();
+    const b = (v, l, n) => `<button type="button" aria-pressed="${cur === v}" onclick="setAgentAccessFilter('${v}')">${l}<span class="n">${n}</span></button>`;
+    const seg = `<div class="ag-seg" role="group" aria-label="Which properties">${b('mine', 'Mine', mine)}${b('granted', 'Shared', shared)}${b('all', 'All', properties.length)}</div>`;
+    const top = document.getElementById('agentSeg');
+    if(top){ top.innerHTML = seg; box.innerHTML = ''; } else box.innerHTML = seg;
+    return;
+  }
   const n = f => properties.filter(p => agentMatches(p, f)).length;
   const nameOf = f => f === 'none' ? 'Unassigned' : f === 'me' ? 'Mine' : agentNameOf(f);
   const label = !agentFilters.length ? 'All agents' : agentFilters.length <= 2 ? agentFilters.map(nameOf).join(', ') : `${nameOf(agentFilters[0])} +${agentFilters.length - 1}`;
@@ -264,6 +290,7 @@ function setAgentFilters(list){
   applyFilters();
 }
 function setAgentFilter(v){ setAgentFilters(v ? [v] : []); }
+function setAgentAccessFilter(v){ agentAccessFilter = v; try { sessionStorage.setItem('pin.props.tab', v); } catch(e) {} renderAgentFilter(); applyFilters(); }
 function toggleAgentFilter(v){ setAgentFilters(agentFilters.includes(v) ? agentFilters.filter(x => x !== v) : [...agentFilters, v]); }
 document.addEventListener('click', e => {
   const open = document.querySelector('details.agf-d[open]');
@@ -285,6 +312,7 @@ let propAccess = { id: null, data: null, busy: false };
 function renderPropAgents(p){
   const el = document.getElementById('dpAgents');
   if(!el || !p) return;
+  if(window.PinAgent){ el.innerHTML = window.PinAgent.agentsLine(p); return; }
   if(!propTeam.length) loadPropTeam();
   const primary = String(p.assignedAgent || '').toLowerCase();
   const co = coAgentsOfProp(p);
@@ -408,7 +436,8 @@ function applyFilters(){
     if(currentType!=='all' && (norm[p.type]||p.type)!==currentType) return false;
     if(showFavOnly && !favorites.includes(p.id)) return false;
     if(hideSoldOut && p.soldOut) return false;
-    if(!agentFilterPasses(p)) return false;
+    if(window.PinAgent){ const f = agentQuerying() ? 'all' : currentAgentAccess(); if(f !== 'all' && agentAccessOf(p) !== f) return false; }
+    else if(!agentFilterPasses(p)) return false;
     return true;
   });
 
@@ -461,6 +490,7 @@ function applyFilters(){
 
   if(sortSel && sortSel.value !== sort) sortSel.value = sort;
   filteredProperties = res;
+  if(window.PinAgent) renderAgentFilter();   // a search shows All as the list it looked through
   if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
   renderNearMisses(base, text, res);
@@ -823,7 +853,15 @@ function renderGrid(){
   if(filteredProperties.length===0){
     grid.innerHTML=''; noRes.style.display='block';
     const sub = document.querySelector('.nores-s');
-    if(sub){
+    const title = document.querySelector('.nores-t');
+    // An agent's own list (or what is shared with them) being empty is not a search that missed.
+    const agentEmpty = window.PinAgent && !(currentSearch || '').trim() && !(window.PinAdvanced && PinAdvanced.isActive()) && currentAgentAccess() !== 'all';
+    if(title) title.textContent = agentEmpty ? (currentAgentAccess() === 'mine' ? 'No properties are assigned to you yet' : 'Nothing is shared with you right now') : 'No properties match your search';
+    if(sub && agentEmpty){
+      sub.innerHTML = currentAgentAccess() === 'mine'
+        ? 'An admin makes you a property’s agent on its page. Meanwhile, <b>All</b> shows every property — open a locked one to ask for its details.'
+        : 'Open a locked property in <b>All</b> and ask for its details — once approved, it shows here.';
+    } else if(sub){
       const advOn = window.PinAdvanced && PinAdvanced.isActive();
       sub.innerHTML = advOn
         ? 'Try removing a filter — or switch the panel to <b>ANY filter</b> to widen the search.'
@@ -834,7 +872,7 @@ function renderGrid(){
   noRes.style.display='none';
   const q = (currentSearch||'').trim();
   const advOn = window.PinAdvanced && PinAdvanced.isActive();
-  const dupN = duplicateRecords.length;
+  const dupN = window.PinAgent ? 0 : duplicateRecords.length;
   rCnt.innerHTML = `Showing <b>${filteredProperties.length}</b> of ${properties.length} properties`
     + (dupN ? ` <button type="button" class="dup-note" onclick="showDuplicates()" title="Records that look like the same property entered twice. Nothing has been hidden — open this to check them.">${dupN} possible duplicate${dupN > 1 ? 's' : ''}</button>` : '')
     + (q ? ` for <b>${escapeHtml(q)}</b>` : '')
@@ -847,16 +885,18 @@ function renderGrid(){
     const priceLong = String(p.startingPrice || '').length > 28;
     const pType = p.type||'';
     const typeBadge = pType.includes('Plot')?'bs':pType.includes('Villa')||pType.includes('House')?'bp':'bb';
+    const locked = !!window.PinAgent && p._access === 'summary';
+    const agentName = p._primaryName || (p.assignedAgent ? agentNameOf(p.assignedAgent) : '');
     return `
-    <div class="card ${isSoldOut?'sold-out':''}">
+    <div class="card ${isSoldOut?'sold-out':''}${locked?' ag-locked':''}">
       <div class="card-bar ${isReady(p)?'rtm':'uc'}"></div>
       ${isSoldOut?'<div class="sold-out-overlay"><div class="sold-out-overlay-text">SOLD OUT</div></div>':''}
       <div class="card-body" onclick="openDetail('${e.id}')">
         <div class="card-r1">
           <div>
             <div class="card-name" title="${e.name}">${e.propertyCode?`<span class="card-code-inline">${e.propertyCode}</span> — `:''}${e.name}</div>
-            <div class="card-loc" title="${e.location}">📍 ${e.location}</div>
-            <div class="card-agent${p.assignedAgent ? '' : ' none'}">👤 ${p.assignedAgent ? escapeHtml(agentNameOf(p.assignedAgent)) + (coAgentsOfProp(p).length ? ' <span class="card-agent2">+ ' + coAgentsOfProp(p).map(e => escapeHtml(agentNameOf(e))).join(', ') + '</span>' : '') : 'Unassigned'}</div>
+            <div class="card-loc" title="${e.location || e.zone}">📍 ${e.location || e.zone}</div>
+            <div class="card-agent${agentName ? '' : ' none'}">👤 ${agentName ? escapeHtml(agentName) + (coAgentsOfProp(p).length ? ' <span class="card-agent2">+ ' + coAgentsOfProp(p).map(e => escapeHtml(agentNameOf(e))).join(', ') + '</span>' : '') : 'Unassigned'}</div>
           </div>
           <div class="card-actions" onclick="event.stopPropagation()">
             <button class="card-action-btn card-share" onclick="sharePropertyLink('${e.id}',event)" title="Share internal link" aria-label="Share internal link">${PinPropertyView.SHARE_ICON}</button>
@@ -864,8 +904,9 @@ function renderGrid(){
           </div>
         </div>
         <div class="badges">
-          <span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+e.possession}</span>
-          <span class="badge ${typeBadge}" title="${e.config}">${e.config}</span>
+          ${window.PinAgent ? agentBadge(p) : ''}
+          ${isReady(p) || e.possession ? `<span class="badge ${isReady(p)?'bg':'ba'}">${isReady(p)?'✓ Ready to Move':'⏳ '+e.possession}</span>` : ''}
+          ${e.config ? `<span class="badge ${typeBadge}" title="${e.config}">${e.config}</span>` : ''}
         </div>
         <div class="price-row">
           <div class="price-main-wrap">
@@ -888,11 +929,18 @@ function renderGrid(){
         </div>
       </div>
       <div class="card-cta">
-        <a href="tel:${encodeURIComponent(p.contactNumber||'')}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>
-        <div class="cta-btn cta-view" onclick="openDetail('${e.id}')">View Details →</div>
+        ${p.contactNumber ? `<a href="tel:${encodeURIComponent(p.contactNumber)}" class="cta-btn cta-call" onclick="event.stopPropagation()">📞 Call</a>` : ''}
+        <div class="cta-btn cta-view${locked ? ' cta-ask' : ''}" onclick="openDetail('${e.id}')">${locked ? '🔒 See summary →' : 'View Details →'}</div>
       </div>
     </div>`;
   }).join('');
+}
+
+// An agent's card says whose it is to them: theirs, shared with them (and until when), or locked.
+function agentBadge(p){
+  if(p._access === 'summary') return p._pending ? '<span class="badge ag-asked">Asked — waiting</span>' : '<span class="badge ag-lock">🔒 Locked</span>';
+  if(p._access === 'granted') return `<span class="badge ag-shared">Shared${p._grant && p._grant.until && window.PinAgent.until ? ' · ' + escapeHtml(window.PinAgent.until(p._grant.until)) : ''}</span>`;
+  return `<span class="badge ag-mine">${p._access === 'co' ? 'Co-agent' : 'Mine'}</span>`;
 }
 
 // One muted line per card while a query is live, naming the field that
@@ -972,6 +1020,7 @@ function openLeadCrm(id){
 
 // ═══════ SOLD OUT ═══════
 async function toggleSoldOut(id){
+  if(officeOnly()) return;
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   const prev = p.soldOut;
@@ -1040,7 +1089,10 @@ function compareSelected(){
   // Nothing of the last property opened stays: its agents, its tabs, its Call bar.
   document.getElementById('dp').classList.add('comparing');
   const ag = document.getElementById('dpAgents'); if(ag) ag.innerHTML = '';
+  document.getElementById('dp').classList.remove('ag-locked');
   document.getElementById('dp').classList.add('open');
+  // A step of its own in the history: Back closes the comparison, it does not leave the dashboard.
+  if(!detailUrlPushed){ history.pushState({ pinCompare: 1 }, '', location.href); detailUrlPushed = true; }
 }
 
 // ═══════ DETAIL PANEL ═══════
@@ -1057,8 +1109,13 @@ function renderDetail(id){
   const p = properties.find(x=>x.id===id);
   if(!p) return false;
   currentDetailId = id;
+  const ag = window.PinAgent, locked = !!ag && p._access === 'summary';
+  dpAgentSig = ag ? agentSigOf(p) : null;
+  dpMatchSig = ag ? agentMatchSig(p) : null;
   document.getElementById('dp').classList.remove('comparing');
-  PinPropertyView.cacheProperty(p);
+  document.getElementById('dp').classList.toggle('ag-locked', locked);
+  // (Not for an agent: the copy kept for a fast shared-link page would outlive their access to it.)
+  if(!ag) PinPropertyView.cacheProperty(p);
   document.querySelector('.dp-tabs').style.display='';   // the stylesheet decides: a row, or a 3 × 2 grid on a phone
   document.querySelector('.dp-hdr-actions').style.display='flex';
   const fav = favorites.includes(id);
@@ -1070,8 +1127,9 @@ function renderDetail(id){
 
   document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
   renderPropAgents(p);
-  // The sticky mobile bar carries Call; CSS decides whether it is visible.
+  // The sticky mobile bar carries Call; CSS decides whether it is visible — and no number, no Call.
   document.getElementById('dpMabCall').href = 'tel:' + (p.contactNumber || '');
+  document.getElementById('dpMabCall').style.display = p.contactNumber ? '' : 'none';
 
   const overview = PinPropertyView.overviewTab(p);
   const specs = PinPropertyView.specsTab(p);
@@ -1080,7 +1138,7 @@ function renderDetail(id){
   const lvl = p.interestLevel || '';
   const crm = `
     <div class="tab-panel">
-      <div class="sec">
+      <div class="sec interest-sec">
         <div class="sec-title">👤 Client Interest Level</div>
         <div class="interest-buttons">
           <button class="interest-btn hot ${lvl==='hot'?'active':''}" data-lvl="hot" onclick="setInterest('${id}','hot')">🔥 Hot Lead</button>
@@ -1095,7 +1153,7 @@ function renderDetail(id){
       <div class="sec">
         <div class="sec-title">📝 Notes & Events</div>
         <div id="notesPanel">${renderNotes(id)}</div>
-        <div class="note-add">
+        ${ag && !ag.canEdit(p) ? '' : `<div class="note-add">
           <div class="note-add-row">
             <select class="note-kind-sel" id="noteKind" onchange="onNoteKindChange()">
               ${Object.entries(NOTE_KINDS).map(([k,v])=>`<option value="${k}">${v.icon} ${escapeHtml(v.label)}</option>`).join('')}
@@ -1108,7 +1166,7 @@ function renderDetail(id){
             <input class="note-input" id="noteInput" placeholder="What happened? (e.g. client budget, site visit outcome, revised price)…" onkeydown="if(event.key==='Enter')addNoteInline('${id}')">
             <button class="note-btn" onclick="addNoteInline('${id}')">Add</button>
           </div>
-        </div>
+        </div>`}
       </div>
     </div>`;
 
@@ -1116,36 +1174,48 @@ function renderDetail(id){
     <div class="tab-panel">
       <div class="sec">
         <div class="sec-title">🔒 Internal Notes &amp; Instructions</div>
-        <div class="int-warn">Team-only. Seen by the team on the property's page and its link — never in the client copy (WhatsApp details, brochure, print), never written to the Inventory sheet, and never touched by Sync from Sheet.</div>
+        ${ag ? '<div class="int-warn">The office’s notes on this property, shared with you as its agent — to read.</div>' : `<div class="int-warn">Team-only. Seen by the team on the property's page and its link — never in the client copy (WhatsApp details, brochure, print), never written to the Inventory sheet, and never touched by Sync from Sheet.</div>`}
         <div id="internalNotesPanel">${renderInternalNotes(id)}</div>
-        <div class="note-add">
+        ${ag ? '' : `<div class="note-add int-add">
           <textarea class="int-input" id="intInput" rows="3" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();addInternalNote('${id}');}" placeholder="Add a pointer or a paragraph — owner's number, negotiation floor, access instructions, anything the team needs but the client must not see…"></textarea>
           <div class="note-add-row int-add-actions">
             <span class="int-hint">Enter for a new line · Ctrl+Enter to add</span>
             <button class="note-btn" onclick="addInternalNote('${id}')">Add</button>
           </div>
-        </div>
+        </div>`}
       </div>
     </div>`;
 
   // Order MUST match DETAIL_TABS — showTab() looks the panel up by index.
-  const matches = `<div class="tab-panel"><div class="sec"><div id="dpMatches"></div></div></div>`;
-  document.getElementById('dpBody').innerHTML = overview + matches + specs + pitch + crm + internal;
+  const matches = `<div class="tab-panel"><div class="sec">${ag ? '<div id="dpAgJump"></div>' : ''}<div id="dpMatches"></div>${ag ? '<div id="dpAgMatches"></div>' : ''}</div></div>`;
+  // An agent's access line (and what they can ask for) sits above every tab — never a tab of its own.
+  document.getElementById('dpBody').innerHTML = (ag ? ag.accessPanel(p) : '') + overview + matches + specs + pitch + crm + internal;
   document.getElementById('dp').classList.add('open');
-  // reset tabs
-  document.querySelectorAll('.dp-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
-  renderMatchingBuyers(id);
+  // reset tabs — an agent sees only the tabs their access to this property opens
+  const tabOn = { overview: true, matches: !locked, specs: !locked, pitch: !locked, notes: !ag || ag.allows(p, 'notes'), internal: !ag || ag.allows(p, 'internal') };
+  document.querySelectorAll('.dp-tab').forEach((t,i)=>{ t.classList.toggle('active',i===0); t.style.display = tabOn[DETAIL_TABS[i]] ? '' : 'none'; });
+  if(ag) ag.wire(p, document.getElementById('dpBody'));
+  if(!locked) renderMatchingBuyers(id);
   // Notes live in a subcollection, so they arrive after the panel paints —
   // repaintNotes() checks currentDetailId before writing, so a slow response
   // for a property the user already navigated away from is discarded.
-  loadPropertyNotes(id);
+  if(tabOn.notes) loadPropertyNotes(id);
   // Internal notes are a second on-demand subcollection, loaded the same way
   // and for the same reason. editingInternalNoteId is per-panel state, so a
   // half-finished edit must not follow the user to the next property.
   editingInternalNoteId = null;
-  loadInternalNotes(id);
+  if(tabOn.internal) loadInternalNotes(id);
   return true;
 }
+// What an agent's open property must be redrawn for: their access to it, a request on it, its timers,
+// and their settings arriving. Not its availability: they set that here (the menu already shows it),
+// and a redraw would take them off the tab they went on to, typing and all.
+let dpAgentSig = null, dpMatchSig = null;
+// The buyers with other agents on an agent's own property, and where each request stands: redrawn in
+// their tab alone when that changes (the tab being read stays).
+const agentMatchSig = p => window.PinAgent ? window.PinAgent.matchesFor(p.id).map(m => m.ref + ':' + (m.requested || '')).join('|') : '';
+const agentSigOf = p => [p._access, p._pending || '', p._refused ? 1 : 0, p._grant ? (p._grant.until || '') + '/' + (p._grant.contactUntil || '') : '',
+  window.PinAgent && window.PinAgent.cfg ? 1 : 0].join('|');
 
 // ═══════ AREA MAP ═══════
 //
@@ -1166,6 +1236,7 @@ function renderDetail(id){
 let amSearch = '';
 
 function openAreaMap(){
+  if(officeOnly()) return;
   document.getElementById('areaMapPanel').classList.add('open');
   renderAreaMap();
 }
@@ -1328,7 +1399,7 @@ function renderMatchingBuyers(id){
     const live = matches.filter(m => !m.vetoed).length;
     PinMatchPanel.render(el, matches, {
       title: live === 1 ? '1 buyer worth calling' : `${live} buyers worth calling`,
-      subtitle: `out of ${leads.length} in the CRM`,
+      subtitle: window.PinAgent ? `out of your ${leads.length} lead${leads.length === 1 ? '' : 's'}` : `out of ${leads.length} in the CRM`,
       empty: matchLeadsFailed
         ? 'Could not read the CRM leads just now — close and reopen this property to try again.'
         : leads.length
@@ -1350,6 +1421,7 @@ function renderMatchingBuyers(id){
         if(act === 'crm') window.open('crm.html?lead=' + encodeURIComponent(key), '_blank', 'noopener');
       }
     });
+    if(window.PinAgent) window.PinAgent.otherMatches(document.getElementById('dpAgMatches'), p, document.getElementById('dpAgJump'));
   });
 }
 
@@ -1391,7 +1463,9 @@ window.addEventListener('popstate', e => {
   const id = e.state && e.state.pinDetail;
   if(id && properties.some(p=>p.id===id)){
     detailUrlPushed = true;
-    renderDetail(id);
+    // Already open on it (a sheet over it was closed with Back): left as it is, tab and scroll included.
+    const dpEl = document.getElementById('dp');
+    if(!(currentDetailId === id && dpEl && dpEl.classList.contains('open'))) renderDetail(id);
   } else {
     detailUrlPushed = false;
     hideDetailPanel();
@@ -1435,7 +1509,7 @@ function formatNoteWhen(n){
 function renderNotes(id){
   if(!notesLoaded[id]) return `<div class="empty-mini">Loading notes…</div>`;
   const list = sortedNotes(id);
-  if(!list.length) return `<div class="empty-mini">Nothing logged yet. Add the first note or event below.</div>`;
+  if(!list.length) return `<div class="empty-mini">${canAddNotesTo(id) ? 'Nothing logged yet. Add the first note or event below.' : 'Nothing logged yet.'}</div>`;
   return list.map(n=>{
     const kind = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
     return `
@@ -1451,6 +1525,8 @@ function renderNotes(id){
   }).join('');
 }
 
+// An agent adds notes only on their own properties (the server checks too): the empty line says so.
+function canAddNotesTo(id){ if(!window.PinAgent) return true; const p = properties.find(x => x.id === id); return !!p && window.PinAgent.canEdit(p); }
 function repaintNotes(id){
   const panel = document.getElementById('notesPanel');
   // Guard against a slow fetch landing after the user moved to another
@@ -1462,6 +1538,7 @@ function repaintNotes(id){
 // anyone typed before this change is lost. Runs only when the property has
 // no server-side notes at all, so it can never duplicate an existing log.
 async function migrateLegacyNotes(id){
+  if(window.PinAgent) return [];
   let legacy;
   try{ legacy = JSON.parse(localStorage.getItem('pinNotes')) || {}; }catch(e){ return []; }
   const list = legacy[id];
@@ -1530,6 +1607,7 @@ async function addNoteInline(id){
 }
 
 async function deleteNote(id,noteId){
+  if(officeOnly()) return;
   const list = notes[id]||[];
   const removed = list.find(n=>n.id===noteId);
   if(!removed) return;
@@ -1572,7 +1650,7 @@ function sortedInternalNotes(id){
 function renderInternalNotes(id){
   if(!internalNotesLoaded[id]) return `<div class="empty-mini">Loading internal notes…</div>`;
   const list = sortedInternalNotes(id);
-  if(!list.length) return `<div class="empty-mini">No internal notes yet. Add the first pointer or paragraph below.</div>`;
+  if(!list.length) return `<div class="empty-mini">${window.PinAgent ? 'No office notes on this property.' : 'No internal notes yet. Add the first pointer or paragraph below.'}</div>`;
   return list.map(n=>{
     if(editingInternalNoteId===n.id){
       return `
@@ -1622,6 +1700,7 @@ async function loadInternalNotes(id){
 }
 
 async function addInternalNote(id){
+  if(officeOnly()) return;
   const inp = document.getElementById('intInput');
   const txt = inp.value.trim();
   if(!txt){ inp.focus(); return; }
@@ -1648,6 +1727,7 @@ async function addInternalNote(id){
 }
 
 function startEditInternalNote(id,noteId){
+  if(officeOnly()) return;
   editingInternalNoteId = noteId;
   repaintInternalNotes(id);
   const ta = document.getElementById('intEdit_'+noteId);
@@ -1660,6 +1740,7 @@ function cancelEditInternalNote(id){
 }
 
 async function saveInternalNoteEdit(id,noteId){
+  if(officeOnly()) return;
   const ta = document.getElementById('intEdit_'+noteId);
   if(!ta) return;
   const txt = ta.value.trim();
@@ -1687,6 +1768,7 @@ async function saveInternalNoteEdit(id,noteId){
 }
 
 async function deleteInternalNote(id,noteId){
+  if(officeOnly()) return;
   const list = internalNotes[id]||[];
   const removed = list.find(n=>n.id===noteId);
   if(!removed) return;
@@ -1707,6 +1789,7 @@ async function deleteInternalNote(id,noteId){
 // Interest level lives on the property document (not localStorage) so it
 // shows up for the whole team and survives a browser reset.
 async function setInterest(id,lvl){
+  if(officeOnly()) return;
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   const prev = p.interestLevel || '';
@@ -1893,6 +1976,7 @@ function normalizeProperty(data){
 }
 
 function openAddModal(){
+  if(window.PinAgent){ window.PinAgent.addProperty(); return; }
   pModalMode = 'add'; pModalEditId = null; pModalOriginalFull = null;
   document.getElementById('pmTitle').textContent = 'Add New Property';
   document.getElementById('pmErr').classList.remove('show');
@@ -1908,6 +1992,7 @@ function openAddModal(){
 }
 
 function openEditModal(id){
+  if(officeOnly()) return;
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   pModalMode = 'edit'; pModalEditId = id; pModalOriginalFull = {...p};
@@ -2032,6 +2117,7 @@ async function savePModal(){
 }
 
 async function deleteProperty(id){
+  if(officeOnly()) return;
   const p = properties.find(x=>x.id===id);
   if(!p) return;
   // A property still in use leaves the board's cards and the CRM's leads pointing at nothing: say
@@ -2196,7 +2282,9 @@ function refreshOpenDetail(){
   const dp = document.getElementById('dp');
   if(!currentDetailId || !dp || !dp.classList.contains('open')) return;
   const p = properties.find(x=>x.id===currentDetailId);
-  if(!p){ closeDetail(); showToast('That property was removed'); return; }
+  if(!p){ closeDetail(); showToast(window.PinAgent ? 'That property is no longer shared with you' : 'That property was removed'); return; }
+  if(window.PinAgent && dpAgentSig !== agentSigOf(p)){ renderDetail(p.id); return; }
+  if(window.PinAgent && dpMatchSig !== agentMatchSig(p)){ dpMatchSig = agentMatchSig(p); if(document.getElementById('dpMatches')) renderMatchingBuyers(p.id); }
   const isSoldOut = !!p.soldOut, fav = favorites.includes(p.id);
   document.getElementById('dpFav').classList.toggle('active', fav);
   document.getElementById('dpFav').textContent = fav ? '★ Saved' : '★ Save';
@@ -2204,6 +2292,7 @@ function refreshOpenDetail(){
   document.getElementById('dpSoldOut').textContent = isSoldOut ? '✓ Marked Sold Out' : '🏷️ Mark Sold Out';
   document.getElementById('dpHero').innerHTML = PinPropertyView.hero(p);
   document.getElementById('dpMabCall').href = 'tel:' + (p.contactNumber || '');
+  document.getElementById('dpMabCall').style.display = p.contactNumber ? '' : 'none';
   document.querySelectorAll('.interest-btn').forEach(b => b.classList.toggle('active', b.dataset.lvl === (p.interestLevel || '')));
   if(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('dp-agent-sel')) return;
   renderPropAgents(p);
@@ -2240,6 +2329,7 @@ function openLinkedProperty(){
 // to say which one and why would be worse than showing the duplicate: the
 // owner has to be able to check the call and remove the loser at source.
 window.showDuplicates = function(){
+  if(officeOnly()) return;
   const pairs = duplicateRecords;
   if(!pairs.length) return;
   const rows = pairs.map(x => `
@@ -2296,7 +2386,7 @@ window.showDuplicates = function(){
 // in case anything about the upload goes wrong.
 let interestMigrationRan = false;
 async function migrateLegacyInterests(){
-  if(interestMigrationRan || !properties.length) return;
+  if(interestMigrationRan || !properties.length || window.PinAgent) return;
   interestMigrationRan = true;
   let legacy;
   try{ legacy = JSON.parse(localStorage.getItem('pinInterests')) || {}; }catch(e){ return; }
@@ -2508,6 +2598,7 @@ function renderSyncPreview(d){
 }
 
 async function openSyncModal(){
+  if(officeOnly()) return;
   if(syncBusy) return;
   syncBusy = true;
   const modal = document.getElementById('syncModal');
@@ -2664,6 +2755,7 @@ function updateMissingCount(){
 }
 
 function openMissing(){
+  if(officeOnly()) return;
   document.getElementById('missingPanel').classList.add('open');
   renderMissing();
 }
@@ -2733,6 +2825,7 @@ function toggleMissingEditor(propId, fieldKey){
 }
 
 async function saveMissingField(propId, fieldKey){
+  if(officeOnly()) return;
   const inp = document.getElementById('mdInput');
   const val = inp ? inp.value.trim() : '';
   if(!val){ if(inp) inp.focus(); return; }
@@ -2759,6 +2852,7 @@ async function saveMissingField(propId, fieldKey){
 }
 
 async function markFieldNA(propId, fieldKey){
+  if(officeOnly()) return;
   const p = properties.find(x => x.id === propId);
   if(!p) return;
   const f = MISSING_FIELDS.find(x => x.key === fieldKey);
@@ -2798,6 +2892,7 @@ function dayLabel(key){
 }
 
 async function openChanges(){
+  if(officeOnly()) return;
   document.getElementById('changesPanel').classList.add('open');
   if(!changeLogLoaded){
     document.getElementById('changesBody').innerHTML = '<div class="empty-mini">Loading change history…</div>';
@@ -2946,6 +3041,7 @@ function exportChangesCsv(){
 // live in property-view.js, shared with property.html. Only the
 // multi-select export below is dashboard-only.
 function exportSelected(format){
+  if(window.PinAgent && !window.PinAgent.can('exportOwn')){ showToast('Downloading lists isn’t part of your access'); return; }
   const sel=Array.from(selectedProperties).map(id=>properties.find(p=>p.id===id));
   if(!sel.length){showToast('No properties selected');return;}
   if(format==='csv'){
@@ -2973,6 +3069,8 @@ const DASH_LAYERS = [
 ];
 document.addEventListener('keydown', e => {
   if(e.key !== 'Escape') return;
+  // A sheet on top (an agent's request) answers its own Escape — the property behind it stays open.
+  if(document.body.classList.contains('sheet-open') || document.querySelector('.sheet')) return;
   const hit = DASH_LAYERS.find(([id]) => { const el = document.getElementById(id); return el && el.classList.contains('open'); });
   if(hit){ e.preventDefault(); try { hit[1](); } catch(err) { document.getElementById(hit[0]).classList.remove('open'); } }
 });
@@ -3006,6 +3104,7 @@ async function openSiteVisit(id){
 // read it), logged in the property's Notes, and kept as a dashboard edit (propertyChanges) so the
 // Inventory sync does not put the sheet's old pin back before the sheet is updated.
 async function setPropertyMap(id, url, via){
+  if(officeOnly()) return;
   const p = properties.find(x => x.id === id);
   if(!p) return false;
   const prev = String(p.mapLink || '').trim(), next = String(url || '').trim();

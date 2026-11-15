@@ -24,6 +24,10 @@
 <!-- The admin's look, last so it has the final say: Inter, neutral greys, the brand orange (shared-assets/theme.css). -->
 <link rel="stylesheet" href="shared-assets/theme.css">
 <link rel="stylesheet" href="crm-assets/easy.css">
+<!-- An agent's login: the same dashboard from their own copy (dashboard-assets/agent-mode.js). The class
+     comes from the device's last answer (access.js), so the office's tools never flash on the screen. -->
+<link rel="stylesheet" href="dashboard-assets/agent-mode.css">
+<script>try{var pa=JSON.parse(localStorage.getItem('pin.access.last')||'null');if(pa&&pa.role==='agent')document.documentElement.classList.add('as-agent');}catch(e){}</script>
 </head>
 <body>
 
@@ -147,6 +151,9 @@
   </div>
   <div class="gmeta">
     <div class="gmeta-l" id="rCnt"></div>
+    <!-- An agent's Mine / Shared / All (dashboard-assets/agent-mode.js): here, not in the filters, so a
+         phone shows it without opening Filters & Sort. -->
+    <div class="gmeta-r" id="agentSeg"></div>
   </div>
   <!-- Client-brief results: the whole inventory ranked against one sentence,
        rendered by the shared match panel so a property scored here looks
@@ -210,11 +217,11 @@
       </button>
       <div class="dp-hdr-actions">
         <button class="dp-hact share" onclick="sharePropertyLink(currentDetailId)">🔗 Share Link</button>
-        <button class="dp-hact" onclick="openSiteVisit(currentDetailId)" title="Write the WhatsApp site visit confirmation for this property">📅 Site visit</button>
+        <button class="dp-hact needs-full" onclick="openSiteVisit(currentDetailId)" title="Write the WhatsApp site visit confirmation for this property">📅 Site visit</button>
         <button class="dp-hact fav" id="dpFav" onclick="toggleFavFromDetail()">★ Save</button>
-        <button class="dp-hact crm-btn" id="dpCrm" onclick="openLeadCrm(currentDetailId)">📋 Lead CRM</button>
+        <button class="dp-hact crm-btn needs-full" id="dpCrm" onclick="openLeadCrm(currentDetailId)">📋 Lead CRM</button>
         <button class="dp-hact" id="dpSoldOut" onclick="toggleSoldOut(currentDetailId)">🏷️ Mark Sold Out</button>
-        <button class="dp-hact" onclick="printProperty(currentDetailId)">🖨️ Print</button>
+        <button class="dp-hact needs-full" onclick="printProperty(currentDetailId)">🖨️ Print</button>
         <button class="dp-hact" onclick="openEditModal(currentDetailId)">✏️ Edit</button>
         <button class="dp-hact danger" onclick="deleteProperty(currentDetailId)">🗑️ Delete</button>
       </div>

@@ -82,7 +82,7 @@ async function start() {
       <div class="bar"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary block" id="xGo">Extend</button></div>`,
     { label: 'Extend access', onOpen: (sh, close) => sh.querySelector('#xGo').addEventListener('click', () => busy(sh.querySelector('#xGo'), async () => {
       const v = (sh.querySelector('input[name=xDays]:checked') || {}).value;
-      try { await api('grant-extend', { grantId: g.id, ...(v ? { days: Number(v) } : {}) }); toast('Extended — they’ve been told'); close(); }
+      try { await api('grant-extend', { grantId: g.id, ...(v ? { days: Number(v) } : {}) }); toast('Extended — they’ve been told'); close(true); }
       catch (e) { sh.querySelector('#xErr').textContent = e.message; }
     })) });
   }
@@ -99,7 +99,7 @@ async function start() {
     { onOpen: (sh, close) => sh.querySelector('#sbGo').addEventListener('click', () => busy(sh.querySelector('#sbGo'), async () => {
       const note = sh.querySelector('#sbNote').value.trim();
       if (d === 'reject' && !note) { sh.querySelector('#sbErr').textContent = 'Say why, for the agent'; return; }
-      try { const r = await api('submission-decide', { id, decision: d, note }); close(); if (d === 'approve') { toast('Added to the inventory — opening it to fill in the rest'); setTimeout(() => window.open('property.html?id=' + encodeURIComponent(r.propertyId), '_blank'), 600); } else toast('Rejected — they’ve been told'); }
+      try { const r = await api('submission-decide', { id, decision: d, note }); close(true); if (d === 'approve') { toast('Added to the inventory — opening it to fill in the rest'); setTimeout(() => window.open('property.html?id=' + encodeURIComponent(r.propertyId), '_blank'), 600); } else toast('Rejected — they’ve been told'); }
       catch (e) { sh.querySelector('#sbErr').textContent = e.message; }
     })) });
   }

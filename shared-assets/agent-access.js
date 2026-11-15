@@ -207,14 +207,20 @@ export function leadVisibleTo(lead, email) {
   return lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me
     || (Array.isArray(lead.agentAccess) && lead.agentAccess.map(lc).includes(me));
 }
-// May this agent WORK the lead (stage, notes, follow-ups, visits, campaigns) — not only read it?
-// Their own leads, and an enquiry on their property that nobody has been given yet. A lead they
-// reach through a grant, or one assigned to someone else, is theirs to read only.
-export function canWorkLead(lead, email) {
+// May this agent WORK the lead (stage, notes, follow-ups, visits, WhatsApp, campaigns) — not only
+// read it? Their own leads, and an enquiry on a property they are the primary or a co-agent of
+// (agentAccess) — even when the office has it: nearly every enquiry comes in assigned to the office's
+// admin account, which left a property's agents only able to read its enquiries. Never another
+// agent's client: agentAccess is never given for one, and agentEmails (the server passes the logins
+// that are agents) catches a lead handed to another agent since agentAccess was last worked out. A
+// lead reached only through an approved request (a grant) is not in agentAccess: it stays read-only.
+export function canWorkLead(lead, email, agentEmails = null) {
   const me = lc(email);
   if (!me || !lead) return false;
   if (lc(lead.assignedAgent) === me || lc(lead.secondaryAgent) === me) return true;
-  return !lead.assignedAgent && Array.isArray(lead.agentAccess) && lead.agentAccess.map(lc).includes(me);
+  if (!(Array.isArray(lead.agentAccess) && lead.agentAccess.map(lc).includes(me))) return false;
+  if (agentEmails && [lc(lead.assignedAgent), lc(lead.secondaryAgent)].some(e => e && e !== me && agentEmails.has(e))) return false;
+  return true;
 }
 
 // What a matching lead shows an agent who does not work it: the requirement and an AI summary with
@@ -223,7 +229,7 @@ export function canWorkLead(lead, email) {
 // or without +91 / 0 ("98400 12345", "9840 012 345", "98-40-01-23-45", "044-2345 6789").
 // Not a date and time ("15-11-2026 10:30"): a run running into a time (":30") is left alone —
 // "Mob:9840012345" is still a number.
-export const PHONE_IN_TEXT = /(?<!\w)(?:\+?91[\s.\-/()]*|0)?(?:\d[\s.\-/()]{0,2}){9}\d(?!\w|:\d)/g;
+export const PHONE_IN_TEXT = /(?<!\w)(?:\+?91[\s.\-\/()_\p{Pd}]{0,6}|0)?(?:\d[\s.\-\/()_\p{Pd}]{0,6}){9}\d(?!\w|:\d)/gu;   // as agent-config.js PHONE_RE
 const EMAIL_IN_TEXT = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
 export function scrubText(text, names) {
   let s = String(text || '').replace(PHONE_IN_TEXT, '•••').replace(EMAIL_IN_TEXT, '•••');

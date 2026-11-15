@@ -367,7 +367,11 @@ function remember() {
   const all = hostPhones(); all[h.name.toLowerCase()] = h.phone;
   try { localStorage.setItem(HOSTS_KEY, JSON.stringify(all)); } catch (e) {}
 }
-function close() { $('svmModal').classList.remove('open'); S = null; }
+function close() {
+  const was = $('svmModal').classList.contains('open');
+  $('svmModal').classList.remove('open'); S = null;
+  if (was && window.AppNav && window.AppNav.closeLayer) window.AppNav.closeLayer('site-visit');
+}
 function copy() {
   remember(); saveMap();
   const text = $('svmMsg').value, done = () => S && S.toast('Site visit message copied');
@@ -417,5 +421,7 @@ export function openSiteVisitDialog(opts = {}) {
   fillProperty();
   refresh();
   $('svmModal').classList.add('open');
+  // Back closes the dialog, not the page (or the property) behind it.
+  if (window.AppNav && window.AppNav.openLayer) window.AppNav.openLayer('site-visit', () => { $('svmModal').classList.remove('open'); S = null; });
   setTimeout(() => (opts.name ? $('svmTime') : $('svmName')).focus(), 50);
 }

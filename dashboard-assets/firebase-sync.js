@@ -52,6 +52,8 @@ const propertiesCol = collection(db, 'properties');
 // (scripts/create-tenant.js / scripts/migrate-existing-tenant.js). A user
 // with no claim yet gets no data access at all.
 let currentTenantId = null;
+let currentRole = 'none';     // the login's role claim: 'agent' gets the agent view (agent-mode.js)
+let agentStarted = false;
 let subscribed = false;
 let propsSeenLive = false, propsShown = false;   // the server's list of properties has arrived / anything drawn yet
 const singleMode = window.__pinPageMode === 'single';   // property.html: no saved copy, nothing to wait for
@@ -297,6 +299,7 @@ window.dashboardAuth = {
   login: (email, password) => signInWithEmailAndPassword(auth, email, password),
   logout: () => signOutAndForget(auth),
   getTenantId: () => currentTenantId,
+  getRole: () => currentRole,
   getUserEmail: () => (auth.currentUser && auth.currentUser.email) || '',
   // Bearer token for calls to api/*, which verify it server-side rather than
   // trusting anything the page claims about who is signed in.
@@ -322,10 +325,21 @@ onAuthStateChanged(auth, async (user) => {
       }).catch(() => {});
     }
     currentTenantId = (tokenResult && tokenResult.claims.tenantId) || null;
+    currentRole = (tokenResult && tokenResult.claims.role) || 'none';
+    if (currentRole !== 'agent' && typeof document !== 'undefined') document.documentElement.classList.remove('as-agent');
     if (!currentTenantId) {
       console.error('This account has no tenantId claim yet — contact support to finish onboarding.');
       // The single-property page otherwise sits on its skeleton for ever.
       if (pageMode === 'single' && window.onPinTenantMissing) window.onPinTenantMissing();
+    } else if (currentRole === 'agent') {
+      // An agent: the same dashboard, from their own copy of the inventory (they cannot read the
+      // properties — firestore.rules). Nothing below subscribes to the inventory for them.
+      if (!agentStarted) {
+        agentStarted = true;
+        import('./agent-mode.js').then(m => m.start({ user, uid: user.uid, email: String(user.email || '').toLowerCase(), tenantId: currentTenantId, role: 'agent' },
+          { markLive: () => { propsSeenLive = true; propsShown = true; } }))
+          .catch(e => console.error('Could not open the agent view:', e));
+      }
     } else if (pageMode === 'single') {
       // Single-property page: it loads its own doc, no collection listener.
       if (window.onPinTenantReady) window.onPinTenantReady(currentTenantId);

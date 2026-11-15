@@ -91,6 +91,17 @@ ok('approved copy: contact-looking sheet columns dropped (owner, landlord, Whats
   grantedWithSheet.sheetExtras && !['Owner_Builder_Contact', 'Landlord', 'WhatsApp', 'Mob'].some(k => k in grantedWithSheet.sheetExtras)
   && grantedWithSheet.sheetExtras.Facing_Road === '40 ft' && !/9876501234/.test(grantedWithSheet.sheetExtras.Caretaker_note), JSON.stringify(grantedWithSheet.sheetExtras));
 ok('prices and sizes are not mistaken for phone numbers', AC.maskPhones('1.2 Cr · 1450 sq.ft · UDS 650 · plot 2400') === '1.2 Cr · 1450 sq.ft · UDS 650 · plot 2400');
+// However a number is written in a note, it is hidden (the security review found these getting past).
+for (const t of ['Owner Ravi 98400 - 12345', 'Owner 98400–12345', 'Owner 98400—12345', 'Owner 98400_12345', 'Call +91 98400 12345', 'Ph (+91) 98400-12345', 'Office 044-2345 6789', 'mob: 98 400 123 45', 'Owner 98400  -  12345', 'Owner\u00a098400\u00a012345']) {
+  const m = AC.maskPhones(t);
+  ok(`a number written “${t}” is hidden`, !/\d{3}/.test(m.replace(/[^\d]/g, ' ').replace(/\b\d{1,2}\b/g, '')) && m.includes('•'), m);
+}
+ok('a date and time is not taken for a number', AC.maskPhones('Visit on 15-11-2026 10:30') === 'Visit on 15-11-2026 10:30');
+ok('a list or a price with commas is left alone', AC.maskPhones('Units 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 · ₹1,80,00,000') === 'Units 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 · ₹1,80,00,000');
+{
+  const AAp = await import('../shared-assets/agent-access.js');
+  ok('the same for a buyer’s text shown to other agents', !/12345/.test(AAp.scrubText('Wants 2 BHK, call 98400 - 12345 or 98400–12345', [])));
+}
 ok('a copy is a copy (changing it leaves the property alone)', (() => { full.geo.lat = 9; return prop.geo.lat === 1; })());
 ok('subcollections follow their groups', AC.propertySubs(['notes', 'internal']).join() === 'notes,internalNotes' && AC.propertySubs(['title']).length === 0);
 
@@ -109,13 +120,39 @@ for (const s of sections) {
 ok('Team & access is admin-only and goes to team.html', /id: 'team'[\s\S]{0,200}adminOnly: true/.test(mapSrc) && /team: \{ href: 'team.html'/.test(nav));
 ok('setup screens stay with the full-access team (staffOnly)', ['missing', 'changes', 'sync', 'ml-setup', 'cmp-templates'].every(id => new RegExp("id: '" + id + "'[^\\n]*staffOnly: true").test(nav)));
 ok('New campaign shows to an agent only when the admin lets agents send', /id: 'cmp-new'[^\n]*needs: 'sendCampaigns'/.test(nav) && /entry\.needs && !\(access\.actions/.test(nav));
-ok('agents get their own Properties page; the Property dashboard is not theirs', /id: 'myprops'[^\n]*\n[^\n]*agentOnly: true/.test(nav) && /id: 'property'[^\n]*notForAgents: true/.test(nav));
+ok('an agent’s Properties is the Property dashboard (their own entry, from their own copy); the office’s Property section is not theirs', /id: 'myprops'[^\n]*page: 'property'[^\n]*\n[^\n]*agentOnly: true/.test(nav) && /id: 'property'[^\n]*notForAgents: true/.test(nav));
 ok('an agent’s tab bar on phones: My Day, Properties, Messages, Leads, More', /renderTabbar/.test(nav) && /data-more/.test(nav));
 ok('the menu starts from the device’s last known role (no flash of the full menu)', /pin\.access\.last/.test(nav));
 ok('a deep link to a view an agent may not see is ignored', /navAllowed\(value\)/.test(nav));
-for (const [file, c] of [['crm.html', 'crm'], ['dashboard.html', 'property'], ['property.html', 'property'], ['propertytrack.html', 'track'], ['3pinfinance.html', 'finance'], ['team.html', 'team'], ['myday.html', 'myday'], ['messages.html', 'messages'], ['listings.html', 'myprops']]) {
+for (const [file, c] of [['crm.html', 'crm'], ['dashboard.html', 'property'], ['property.html', 'property'], ['propertytrack.html', 'track'], ['3pinfinance.html', 'finance'], ['team.html', 'team'], ['myday.html', 'myday'], ['messages.html', 'messages']]) {
   const html = readFileSync(new URL('../' + file, import.meta.url), 'utf8');
   ok(`${file} says which console it is and loads access.js`, new RegExp('<html[^>]*data-console="' + c + '"').test(html) && /shared-assets\/access\.js/.test(html));
+}
+
+// ── The Property dashboard for an agent (dashboard-assets/agent-mode.js) ──
+{
+  const sync = readFileSync(new URL('../dashboard-assets/firebase-sync.js', import.meta.url), 'utf8');
+  const i = sync.indexOf("currentRole === 'agent'"), j = sync.indexOf('subscribeToProperties(currentTenantId)');
+  ok('an agent’s login never subscribes to the inventory: it opens the agent view first', i > 0 && j > i && /import\('\.\/agent-mode\.js'\)/.test(sync));
+  const mode = readFileSync(new URL('../dashboard-assets/agent-mode.js', import.meta.url), 'utf8');
+  ok('the agent view reads only the agent’s own copy (agentViews) and the server', /watchMyView/.test(mode) && !/collection\(db, 'properties'\)|doc\(db, 'properties'/.test(mode));
+  ok('the office’s actions refuse in the agent view (save, delete, agents, internal notes)', ['saveProperty', 'deleteProperty', 'setPropertyAgents', 'saveInternalNote', 'deleteInternalNote', 'deletePropertyNote'].every(k => new RegExp(k + ': \\(\\) => refuse\\(\\)').test(mode)));
+  const listings = readFileSync(new URL('../listings.html', import.meta.url), 'utf8');
+  ok('the old agent Properties page forwards to the dashboard, at the same property', /location\.replace\('dashboard\.html'/.test(listings) && /property=/.test(listings));
+  const app = readFileSync(new URL('../dashboard-assets/app.js', import.meta.url), 'utf8');
+  ok('no copy of an agent’s property is kept in the browser for the shared-link page', /if\(!ag\) PinPropertyView\.cacheProperty\(p\)/.test(app));
+}
+// ── Who may work a lead (shared-assets/agent-access.js canWorkLead) ──
+{
+  const AA = await import('../shared-assets/agent-access.js');
+  const agents = new Set(['rameez@threepin.in', 'kavya@threepin.in']);
+  const office = { assignedAgent: 'admin@threepin.in', agentAccess: ['rameez@threepin.in'] };
+  ok('an enquiry on his property is his to work, even while the office holds it', AA.canWorkLead(office, 'rameez@threepin.in', agents) && AA.canWorkLead(office, 'rameez@threepin.in'));
+  ok('…and one nobody holds', AA.canWorkLead({ agentAccess: ['rameez@threepin.in'] }, 'rameez@threepin.in', agents));
+  ok('his own lead, as before', AA.canWorkLead({ assignedAgent: 'rameez@threepin.in' }, 'rameez@threepin.in', agents));
+  ok('never another agent’s client — even while agentAccess still names him', !AA.canWorkLead({ assignedAgent: 'kavya@threepin.in', agentAccess: ['rameez@threepin.in'] }, 'rameez@threepin.in', agents)
+    && !AA.canWorkLead({ assignedAgent: 'admin@threepin.in', secondaryAgent: 'kavya@threepin.in', agentAccess: ['rameez@threepin.in'] }, 'rameez@threepin.in', agents));
+  ok('a lead he only reaches through an approved request stays read-only', !AA.canWorkLead({ assignedAgent: 'swami@threepin.in' }, 'rameez@threepin.in', agents));
 }
 
 // ── Server ──

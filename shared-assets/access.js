@@ -36,8 +36,8 @@ const auth = getAuth(app);
 // Which console needs which tab. A page an agent has none of these tabs for is closed to them.
 const PAGE_TABS = {
   crm: ['crm', 'tasks', 'ads', 'campaigns', 'calendar'],
-  // The Property dashboard is the full inventory: an agent's Properties is listings.html.
-  property: [],
+  // The Property dashboard: an agent sees it from their own copy (dashboard-assets/agent-mode.js).
+  property: ['properties'],
   myprops: ['properties'],
   myday: ['myday'],
   messages: ['messages'],
@@ -113,7 +113,9 @@ async function startInbox(a) {
       if (known && page !== 'myday') now.forEach((r, id) => {
         const was = known.get(id);
         if (was && was.status === 'pending' && (r.status === 'approved' || r.status === 'rejected'))
-          inboxToast((r.status === 'approved' ? 'Approved by ' : 'Not approved by ') + (r.decidedByName || 'an admin') + ' — ' + (r.kind === 'lead' ? 'a matching buyer' : r.title), 'myday.html');
+          inboxToast((r.status === 'approved' ? 'Approved by ' : 'Not approved by ') + (r.decidedByName || 'an admin') + ' — ' + (r.kind === 'lead' ? 'a matching buyer' : r.title),
+            r.kind === 'property' && r.targetId ? (a.role === 'agent' ? 'dashboard.html?property=' : 'property.html?id=') + encodeURIComponent(r.targetId)
+              : r.kind === 'lead' && r.status === 'approved' ? 'crm.html' : 'myday.html');
       });
       known = now;
     }, quiet);
@@ -131,6 +133,8 @@ async function startInbox(a) {
   } catch (e) { /* badges are a convenience: the pages themselves still show everything */ }
 }
 function inboxToast(text, href) {
+  // Not over an open sheet: a tap on it would leave the page and throw away what is being typed there.
+  if (document.querySelector('.sheet')) { setTimeout(() => inboxToast(text, href), 1500); return; }
   let el = document.getElementById('pinInboxToast');
   if (!el) {
     el = document.createElement('a');
@@ -165,20 +169,12 @@ function gate(a) {
   if (!need) return;
   const tabs = (a.config && a.config.tabs) || [];
   if (need.some(t => tabs.includes(t))) return;
-  // An agent opening the Property dashboard (a bookmark, a shared property link) goes to their own
-  // Properties page, at the same property when the link named one.
-  if ((page === 'property') && tabs.includes('properties')) {
-    const qs = new URLSearchParams(location.search);
-    const id = qs.get('id') || qs.get('property');
-    location.replace('listings.html' + (id ? '?id=' + encodeURIComponent(id) : ''));
-    return;
-  }
   window.__pinGated = true;
   const btn = 'display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;'
     + 'font-weight:600;text-decoration:none;border:1px solid var(--border2,#D4D4D4);';
   const links = [];
   if (tabs.includes('myday')) links.push(['myday.html', 'Open My Day']);
-  if (tabs.includes('properties')) links.push(['listings.html', 'Open Properties']);
+  if (tabs.includes('properties')) links.push(['dashboard.html', 'Open Properties']);
   if (tabs.some(t => PAGE_TABS.crm.includes(t))) links.push(['crm.html', 'Open Leads']);
   if (tabs.includes('messages')) links.push(['messages.html', 'Open Messages']);
   document.body.className = '';

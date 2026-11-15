@@ -195,7 +195,7 @@ function renderHeader() {
   const t = openThread;
   if (!t || !$('chatTitle')) return;
   const others = (t.members || []).filter(e => e !== me.email).map(e => nameOf(people, e));
-  const link = t.type === 'property' && t.linkedId ? (isAgent ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(t.linkedId)
+  const link = t.type === 'property' && t.linkedId ? (isAgent ? 'dashboard.html?property=' : 'property.html?id=') + encodeURIComponent(t.linkedId)
     : t.type === 'lead' && t.linkedId ? 'crm.html?lead=' + encodeURIComponent(t.linkedId)
     : t.type === 'access_request' && t.linkedId ? 'myday.html?req=' + encodeURIComponent(t.linkedId) : '';
   $('chatTitle').outerHTML = `<${link ? `a href="${esc(link)}"` : 'div'} class="t" id="chatTitle"><b>${esc(t.title)}</b><small>${esc(others.join(', '))}${link ? ' · tap to open' : ''}</small></${link ? 'a' : 'div'}>`;
@@ -223,7 +223,7 @@ function renderPinned() {
     <div class="acts">
       ${can ? '<button type="button" class="btn sm primary" id="pDecide">Approve or reject</button>' : ''}
       ${r.status === 'pending' && mineReq ? '<button type="button" class="btn sm danger" id="pCancel">Cancel request</button>' : ''}
-      ${live && mineReq && r.kind === 'property' ? `<a class="btn sm primary" href="listings.html?id=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
+      ${live && mineReq && r.kind === 'property' ? `<a class="btn sm primary" href="dashboard.html?property=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
       ${live && mineReq && r.kind === 'lead' ? '<button type="button" class="btn sm primary" id="pOpenLead">Open in Leads</button>' : ''}
       ${live && mineReq && r.kind === 'property' && r.terms && r.terms.until && r.terms.until - Date.now() < 2 * 86400000 ? '<button type="button" class="btn sm" id="pMore">Ask for more time</button>' : ''}
     </div></div>`;
@@ -445,7 +445,7 @@ $('newBtn').addEventListener('click', async () => {
       const members = [...sh.querySelectorAll('#nPeople input:checked')].map(i => i.value);
       if (!title) { sh.querySelector('#nErr').textContent = 'Give it a title'; return; }
       if (!members.length) { sh.querySelector('#nErr').textContent = 'Pick at least one person'; return; }
-      try { const r = await api('thread-open', { type: 'general', title, members }); await close(); openChat(r.id, { push: true }); }
+      try { const r = await api('thread-open', { type: 'general', title, members }); await close(true); openChat(r.id, { push: true }); }
       catch (e) { sh.querySelector('#nErr').textContent = e.message; }
     }));
   } });

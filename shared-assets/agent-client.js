@@ -1,5 +1,5 @@
 // ═══════ THE AGENT LAYER'S PAGES — what they share ═══════
-// My Day (myday.html), Properties for agents (listings.html) and Messages (messages.html):
+// My Day (myday.html), Messages (messages.html) and the Property dashboard for agents (dashboard-assets/agent-mode.js):
 // signing in, the server (/api/agent), the agent's copy of the properties, the team directory,
 // and the small pieces of screen they all use (toast, bottom sheet, times).
 //
@@ -241,7 +241,7 @@ export async function busy(btn, run) {
 // (their own property in full, anyone else's as the summary). Never for a lead — a lead's id can carry
 // the client's number.
 export const propertyCode = r => String((r && (r.targetCode || r.targetId)) || '');
-export const propertyHref = (id, role) => (role === 'agent' ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(id);
+export const propertyHref = (id, role) => (role === 'agent' ? 'dashboard.html?property=' : 'property.html?id=') + encodeURIComponent(id);
 // (The iPhone home-screen app is the exception: a new tab there is Safari, without the app's sign-in —
 // so the link opens in place.)
 export function codeLine(r, role, { link = true } = {}) {

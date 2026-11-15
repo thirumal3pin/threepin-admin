@@ -310,6 +310,8 @@ function drawBrochureLog(){
 
 function openBrochureModal(){ openBrochurePage(); }
 function openBrochurePage(){
+  // The office's page: never for an agent (it also brings back this device's saved draft).
+  if (typeof officeOnly === 'function' && officeOnly()) return;
   const err = bfEl('bfErr');
   err.classList.remove('show');
   err.textContent = '';

@@ -43,8 +43,11 @@ export async function generatePost(request) {
   const db = getDb();
   const leadRef = db.collection('leads').doc(leadId);
   const snap = await leadRef.get();
+  // An agent: only a lead they work — never another agent's client, whatever its agentAccess still
+  // says (the list of agents is looked up only for them, so the team's own calls pay nothing).
+  const agentSet = user.role === 'agent' ? await (await import('./_agent-work.js')).agentEmailsOf(db, user.tenantId) : null;
   if (!snap.exists || snap.data().tenantId !== user.tenantId
-      || (user.role === 'agent' && !canWorkLead(snap.data(), user.email))) {
+      || (user.role === 'agent' && !canWorkLead(snap.data(), user.email, agentSet))) {
     return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
   const lead = snap.data();

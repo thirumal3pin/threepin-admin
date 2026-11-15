@@ -538,7 +538,7 @@ a.bf-prev-open:hover{text-decoration:none;opacity:.88;}
 .mobile-fab{display:none;}
 
 /* ── TOAST ── */
-#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;font-size:14px;font-weight:600;padding:12px 26px;border-radius:99px;box-shadow:var(--shadow-lg);z-index:600;opacity:0;transition:opacity .28s, transform .28s;pointer-events:none;}
+#toast{width:max-content;max-width:calc(100vw - 32px);text-align:center;position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;font-size:14px;font-weight:600;padding:12px 26px;border-radius:99px;box-shadow:var(--shadow-lg);z-index:600;opacity:0;transition:opacity .28s, transform .28s;pointer-events:none;}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
 @media(max-width:680px){

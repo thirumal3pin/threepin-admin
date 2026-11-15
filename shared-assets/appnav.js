@@ -77,9 +77,9 @@
       note: 'Approvals, site visits and follow-ups for today',
     },
     {
-      // An agent's Properties: their own in full, the rest as a summary (listings.html). Everyone
-      // else has the Property dashboard below.
-      id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'myprops', nav: 'myprops', tab: 'properties',
+      // An agent's Properties: the Property dashboard, from their own copy — their own in full, the
+      // rest as a summary (dashboard-assets/agent-mode.js). Everyone else has the section below.
+      id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', nav: 'all', tab: 'properties',
       note: 'Your properties, and the rest as a summary', agentOnly: true,
     },
     {
@@ -180,7 +180,7 @@
   // Where each console lives, and what a bare visit to it should open.
   var PAGES = {
     myday: { href: 'myday.html', home: 'myday' },
-    myprops: { href: 'listings.html', home: 'myprops' },
+    myprops: { href: 'dashboard.html', home: 'all' },
     messages: { href: 'messages.html', home: 'messages' },
     property: { href: 'dashboard.html', home: 'all' },
     crm: { href: 'crm.html', home: 'kanban' },
@@ -316,16 +316,22 @@
   }
 
   function goto(item) {
-    closeDrawer();
-    if (item.page === cfg.console) {
-      // Marked first, then handed over: an entry that opens a dialog rather
-      // than a page (Sync, Create brochure) puts the highlight back on the
-      // page underneath, and it has to get the last word.
-      setActive(item.id);
-      if (cfg.select) cfg.select(item.nav, item);
+    if (item.page !== cfg.console) {
+      // Leaving from the open menu: its history step becomes the next page, so Back from there comes
+      // back here — not to a menu that is open.
+      var top = layers.length && layers[layers.length - 1].id === 'drawer';
+      if (top) { layers.pop(); document.body.classList.remove('rail-open'); syncToggle(); location.replace(hrefFor(item)); return; }
+      closeDrawer();
+      location.href = hrefFor(item);
       return;
     }
-    location.href = hrefFor(item);
+    // Marked first, then handed over: an entry that opens a dialog rather
+    // than a page (Sync, Create brochure) puts the highlight back on the
+    // page underneath, and it has to get the last word. (After the menu's own step back has landed.)
+    closeDrawer(function () {
+      setActive(item.id);
+      if (cfg.select) cfg.select(item.nav, item);
+    });
   }
 
   // ═══════ RENDER ═══════
@@ -423,7 +429,7 @@
   // the admin gave them, and only below the desktop width (the rail is always there above it).
   var TABBAR = [
     { id: 'myday', label: 'My Day', icon: 'fa-solid fa-house', page: 'myday', nav: 'myday', tab: 'myday', badge: 'myday' },
-    { id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'myprops', nav: 'myprops', tab: 'properties' },
+    { id: 'myprops', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', nav: 'all', tab: 'properties' },
     { id: 'messages', label: 'Messages', icon: 'fa-regular fa-message', page: 'messages', nav: 'messages', tab: 'messages', badge: 'messages' },
     { id: 'kanban', label: 'Leads', icon: 'fa-solid fa-user-group', page: 'crm', nav: 'kanban', tab: 'crm' },
   ];
@@ -499,8 +505,19 @@
     write(K_MIN, on ? '1' : '0');
     syncToggle();
   }
-  function openDrawer() { document.body.classList.add('rail-open'); syncToggle(); }
-  function closeDrawer() { document.body.classList.remove('rail-open'); syncToggle(); }
+  // On a phone the open menu is a layer with its own history step: Back closes it (as it closes a
+  // sheet), it does not leave the page.
+  function openDrawer() {
+    var was = document.body.classList.contains('rail-open');
+    document.body.classList.add('rail-open'); syncToggle();
+    if (!was && !isDesktop()) openLayer('drawer', function () { document.body.classList.remove('rail-open'); syncToggle(); });
+  }
+  function closeDrawer(then) {
+    var was = document.body.classList.contains('rail-open');
+    document.body.classList.remove('rail-open'); syncToggle();
+    var stepped = was && closeLayer('drawer');
+    if (typeof then === 'function') { if (stepped) afterPop.push(then); else then(); }
+  }
   function toggle() {
     if (isDesktop()) setMin(!document.body.classList.contains('rail-min'));
     else document.body.classList.contains('rail-open') ? closeDrawer() : openDrawer();
@@ -621,6 +638,7 @@
   var layers = [];      // [{ id, close }]
   var skipPops = 0;     // our own history.back() calls, not the person's
   var deferred = 0;     // entries to add once those land (a panel opened while one was still closing)
+  var afterPop = [];    // what runs once our own step back has landed (a menu choice made on this page)
   function pushEntry() {
     try { history.pushState({ pinLayer: layers.length ? layers[layers.length - 1].id : '', pinDepth: layers.length }, '', location.href); } catch (e) {}
   }
@@ -634,17 +652,21 @@
   function closeLayer(id) {
     var i = -1;
     for (var k = layers.length - 1; k >= 0; k--) if (layers[k].id === id) { i = k; break; }
-    if (i < 0) return;
+    if (i < 0) return false;
     layers.splice(i, 1);
     // Its entry not pushed yet (still waiting on an earlier back): nothing to take out.
-    if (deferred) { deferred--; return; }
+    if (deferred) { deferred--; return false; }
     skipPops++;
-    try { history.back(); } catch (e) { skipPops--; }
+    try { history.back(); } catch (e) { skipPops--; return false; }
+    return true;
   }
   window.addEventListener('popstate', function () {
     if (skipPops) {
       skipPops--;
-      if (!skipPops) while (deferred) { deferred--; pushEntry(); }
+      if (!skipPops) {
+        while (deferred) { deferred--; pushEntry(); }
+        afterPop.splice(0).forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } });
+      }
       return;
     }
     var top = layers.pop();
