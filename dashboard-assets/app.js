@@ -1846,6 +1846,9 @@ const PROPERTY_FIELDS = [
   { key:'nearby', label:'Nearby', group:'Description', example:'Nearby area' },
   { key:'nearbyLandmark', label:'Nearby Landmark', group:'Description', example:'Landmark name' },
   { key:'connectivity', label:'Connectivity', group:'Description', wide:true, example:'Metro / Road connectivity details' },
+  // The text Share Details copies for WhatsApp. It has no Inventory column — the brochure pipeline
+  // writes it once, and "Sync from Sheet" never replaces it — so this is the place to correct it.
+  { key:'detailsText', label:'WhatsApp copy text (Share Details)', group:'Description', textarea:true, wide:true, rows:10, sheetless:true, hint:'What Share Details copies for WhatsApp', example:'' },
   { key:'contactName', label:'Contact Name', group:'Contact', example:'Swaminathan' },
   { key:'contactNumber', label:'Contact Number', group:'Contact', example:'98848 83370' },
 ];
@@ -1870,7 +1873,7 @@ function ensurePModalFormBuilt(){
         html += `<select id="pf_${f.key}" oninput="onPModalFieldInput('${f.key}')">` +
           f.options.map(o=>`<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('') + `</select>`;
       } else if(f.textarea){
-        html += `<textarea id="pf_${f.key}" rows="2" placeholder="${escapeHtml(f.hint||'')}" oninput="onPModalFieldInput('${f.key}')"></textarea>`;
+        html += `<textarea id="pf_${f.key}" rows="${f.rows||2}" placeholder="${escapeHtml(f.hint||'')}" oninput="onPModalFieldInput('${f.key}')"></textarea>`;
       } else {
         const listAttr = f.datalist ? ` list="pf_${f.key}_list"` : '';
         html += `<input type="text" id="pf_${f.key}"${listAttr} placeholder="${escapeHtml(f.placeholder||'')}" oninput="onPModalFieldInput('${f.key}')">`;
@@ -2180,6 +2183,8 @@ let changeLogLoaded = false;
 let changeFilter = 'pending'; // 'pending' | 'applied' | 'all'
 let changeSearch = '';
 
+const SHEETLESS_FIELDS = new Set(PROPERTY_FIELDS.filter(f => f.sheetless).map(f => f.key));
+
 function newChangeId(){
   return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 }
@@ -2220,7 +2225,8 @@ async function recordChanges(property, kind, diffs, extra, mustSave){
     id: newChangeId(),
     ...stamp, ...d,
     kind, at, by,
-    appliedToSheet: false,
+    // A field with no Inventory column (Share Details) has nothing to copy to the sheet.
+    appliedToSheet: SHEETLESS_FIELDS.has(d.field),
     ...(extra||{})
   }));
   changeLog = entries.concat(changeLog);
