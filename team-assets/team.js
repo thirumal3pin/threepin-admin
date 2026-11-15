@@ -654,5 +654,6 @@ $('saveBtn').addEventListener('click', () => {
   return save(shared, overrides);
 });
 
-window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+// Unsaved settings, or a one-time password still on screen (the laptop menu stays clickable beside a sheet).
+window.addEventListener('beforeunload', e => { if (dirty || $('sheetHost').querySelector('.sheet[data-locked]')) { e.preventDefault(); e.returnValue = ''; } });
 }

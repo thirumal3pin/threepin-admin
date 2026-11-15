@@ -159,8 +159,7 @@
   .sk { height: 64px; border-top: 1px solid var(--border); background: linear-gradient(90deg, var(--bg2), var(--bg), var(--bg2)); background-size: 200% 100%; animation: sk 1.2s linear infinite; }
   @keyframes sk { to { background-position: -200% 0; } }
   .center { text-align: center; padding: 18vh 16px 0; }
-  .toast { position: fixed; left: 50%; top: max(64px, calc(env(safe-area-inset-top) + 56px)); translate: -50% 0; z-index: 60; background: var(--ink); color: var(--bg);
-    padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: calc(100vw - 32px); }
+  /* Toasts: shared-assets/agent-ui.css only. A copy here loads later and undoes it. */
 </style>
 <link rel="stylesheet" href="shared-assets/theme.css">
 </head>

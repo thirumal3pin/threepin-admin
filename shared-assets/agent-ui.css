@@ -142,8 +142,10 @@
   .sk { height: 64px; border-top: 1px solid var(--border); background: linear-gradient(90deg, var(--bg2), var(--bg), var(--bg2)); background-size: 200% 100%; animation: sk 1.2s linear infinite; }
   @keyframes sk { to { background-position: -200% 0; } }
   .center { text-align: center; padding: 18vh 16px 0; }
-  .toast { position: fixed; left: 50%; top: max(64px, calc(env(safe-area-inset-top) + 56px)); translate: -50% 0; z-index: 60; background: var(--ink); color: var(--bg);
-    padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: calc(100vw - 32px); }
+  /* width: max-content — with left: 50% an auto width shrinks to half the screen and wraps early. */
+  .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; z-index: 60; background: var(--ink); color: var(--bg);
+    padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+    width: max-content; max-width: calc(100vw - 32px); pointer-events: none; }
 
   /* ── Agent layer pages (My Day, Properties, Messages) ── */
   .seg.three { grid-template-columns: repeat(3, 1fr); }
@@ -210,9 +212,16 @@
     .sheet .grip { display: none; }
     .sheet.wide { width: min(760px, calc(100vw - 48px)); }
   }
-  /* Toasts at the bottom, clear of headings (and above an agent's tab bar). */
-  .toast { top: auto; bottom: max(24px, env(safe-area-inset-bottom)); }
+  /* Toasts sit at the bottom (the .toast rule above), clear of headings and above an agent's tab bar.
+     Keep that rule the only one: a page that copies .toast with a "top" sets both edges and stretches
+     it into a tall bar (tests/css.test.mjs checks). On a laptop they centre over the page, not the
+     menu; while a sheet is open they go to the top, clear of its buttons. */
   body.has-tabbar .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  @media (min-width: 900px) {
+    body.rail-on:not(.sheet-open) .toast { left: calc(50% + var(--rail-w) / 2); max-width: calc(100vw - var(--rail-w) - 32px); }
+    body.rail-on.rail-min:not(.sheet-open) .toast { left: calc(50% + var(--rail-w-min) / 2); max-width: calc(100vw - var(--rail-w-min) - 32px); }
+  }
+  body.sheet-open .toast, body:has(#sheetHost > .sheet) .toast { top: max(64px, calc(env(safe-area-inset-top) + 56px)); bottom: auto; left: 50%; max-width: calc(100vw - 32px); }
   /* Clickable rows say so on a laptop. */
   @media (hover: hover) { .pcard:hover, .thread:hover, .row:hover { background: var(--bg2); } }
   /* Status tags readable in light mode (4.5:1). */
