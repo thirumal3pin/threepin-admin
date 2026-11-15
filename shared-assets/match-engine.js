@@ -586,6 +586,9 @@
     const head = fold([p.name, p.availability, p.type, p.propertyType, p.status].filter(Boolean).join(' | '));
     if (PROP_RENT.test(head)) return 'rent';
     const price = fold([p.startingPrice, p.price].filter(Boolean).join(' '));
+    // "Rent: ₹6 lakh per month": a price that says it is the rent, or is quoted by the month, is a
+    // rental however big it is — unless it is the rental income of a property being sold.
+    if (/^\s*rent\b|\b(?:per\s*month|\/\s*month|p\.?\s*m\b|monthly|a\s*month)\b/.test(price) && !INCOME.test(price + ' ' + head)) return 'rent';
     // A big figure is a sale price, unless it is the deposit or advance on a rental.
     const sold = (saleSpans || []).some(r => r[1] >= 5 * LAKH)
       && ((!/\b(?:deposit|advance)\b/.test(price) && !LEASEISH.test(price)) || INCOME.test(price + ' ' + head));

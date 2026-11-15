@@ -37,10 +37,11 @@ export function extractPropertyFacts(texts) {
   const out = { deal: null, type: null, config: null, sizes: [], price: null, priceValue: null };
   if (!all.trim()) return out;
 
-  // Sale or rent. Renting out wins only when there is no sale wording at all.
-  const sale = /\b(sale|sell|selling|resale|sold)\b/i.test(all);
-  const rent = /\b(rent(al)?|rent(ing)? out|lease|tenant|per month|\/month|monthly)\b/i.test(all);
-  out.deal = sale ? 'sale' : rent ? 'rent' : null;
+  // Sale or rent: weighed, never "any sale word wins". An agent's sign-off ("Agent. Buying Selling
+  // Properties") says what they do, not what this property is; "Rent 6 lak, 6 Month Advance" says
+  // it is a rental. When both sides are equally strong the answer is unknown, not a guess.
+  out.deal = dealOf(all);
+  const rent = out.deal === 'rent';
 
   for (const [k, re] of TYPES) if (re.test(all)) { out.type = k; break; }
 
@@ -90,13 +91,14 @@ export function extractPropertyFacts(texts) {
 
   // Price: crores / lakhs for a sale (a range "55-60L" kept as a range, sorted by its low end),
   // a monthly figure for rent.
-  const big = all.match(new RegExp(`(?:₹|rs\\.?|inr)?\\s*${NUM}(?:\\s*(?:-|to|–)\\s*${NUM})?\\s*(cr|crs|crore|crores|l|lac|lacs|lakh|lakhs)\\b`, 'i'));
+  const big = all.match(new RegExp(`(?:₹|rs\\.?|inr)?\\s*${NUM}(?:\\s*(?:-|to|–)\\s*${NUM})?\\s*(cr|crs|crore|crores|l|lac|lacs|lacks|lak|laks|lakh|lakhs)\\b`, 'i'));
   if (big) {
     const n = num(big[1]), hi = big[2] ? num(big[2]) : null, u = big[3].toLowerCase();
     const crore = /^cr/.test(u);
     out.priceValue = Math.round(n * (crore ? 1e7 : 1e5));
-    out.price = `₹${fmtNum(n)}${hi ? '–' + fmtNum(hi) : ''} ${crore ? 'Cr' : 'L'}`;
-    if (!out.deal && !rent) out.deal = 'sale';
+    // A rental quoted in lakhs ("Rent 6 lakh, 6 months advance") is 6 lakh a month, not a price.
+    out.price = `₹${fmtNum(n)}${hi ? '–' + fmtNum(hi) : ''} ${crore ? 'Cr' : 'L'}${rent && !crore ? '/month' : ''}`;
+    if (!out.deal) out.deal = 'sale';
   } else {
     // "for Rent in Mylapore – 8,600 Sq. Ft." — the number after "rent" there is the area, not the
     // rent: a figure followed by an area unit (or not ending there: "8,60" of "8,600"), or one
@@ -114,6 +116,50 @@ export function extractPropertyFacts(texts) {
     }
   }
   return out;
+}
+
+// ── Sale or rent ──
+// What an agent or broker says they do ("Buying Selling Properties", "buying, selling & renting",
+// "real estate agent") is about them, not this property: it is taken out before weighing.
+const TRADE_LINE = /\b(?:buy(?:ing)?|sell(?:ing)?|sale|rent(?:al|ing)?|leas(?:e|ing))(?:\s*(?:[,/&+]|and)?\s*(?:buy(?:ing)?|sell(?:ing)?|sale|rent(?:al|ing)?|leas(?:e|ing)))+\s*(?:of\s+)?(?:propert(?:y|ies)|real\s*estate|services?)\b|\breal\s*estate\s*(?:agent|broker|consultant|services?)\b/gi;
+// Strong: says what THIS property is. Weak: words that lean one way.
+const RENT_STRONG = /\b(?:for\s*rent|for\s*lease|on\s*rent|to[\s-]*let|rent(?:ing)?\s*out|give\s*(?:it\s*)?(?:for|on)\s*rent|rent\s*(?:is|:|-|of|rs\.?|₹)?\s*₹?\s*\d|monthly\s*rent|expected\s*rent|\d+\s*months?\s*(?:advance|deposit)|(?:advance|deposit)\s*(?:of\s*)?\d+\s*months?)/gi;
+const RENT_WEAK = /\b(?:rent(?:al)?|lease|tenants?|per\s*month|\/\s*month|monthly|p\.?\s*m\b|advance|deposit|families\s*only|bachelors?)\b/gi;
+const SALE_STRONG = /\b(?:for\s*sale|to\s*sell|want\s*to\s*sell|wants\s*to\s*sell|planning\s*to\s*sell|sell\s*(?:my|our|this|it|the)|selling\s*(?:my|our|this|the)|resale|sale\s*price|outright|guideline\s*value)\b/gi;
+const SALE_WEAK = /\b(?:sale|sell|selling|sold|crores?|cr\b)\b/gi;
+const hits = (re, s) => (s.match(re) || []).length;
+
+/**
+ * 'sale', 'rent' or null for a text about ONE property. Strong phrases count 3, leaning words 1;
+ * the side that is clearly ahead wins, and a tie is null (shown as nothing, never a wrong label).
+ * Exported for the board and the TailorTalk sync, which also weigh the AI's read of the chat.
+ */
+export function dealOf(text) {
+  const s = ' ' + String(text || '').replace(TRADE_LINE, ' ') + ' ';
+  const rStrong = hits(RENT_STRONG, s), sStrong = hits(SALE_STRONG, s);
+  // A rental income on a property for sale ("pre-leased, rental income 1.5L/month") is a sale.
+  const income = /\b(?:rental\s*income|pre[\s-]*leased|tenanted|yield|roi)\b/i.test(s);
+  const r = rStrong * 3 + hits(RENT_WEAK, s) - (income ? 3 : 0);
+  const sa = sStrong * 3 + hits(SALE_WEAK, s) + (income ? 3 : 0);
+  if (!r && !sa) return null;
+  if (r > sa) return 'rent';
+  if (sa > r) return 'sale';
+  return null;
+}
+
+/**
+ * What TailorTalk's own summary ("List, residential individual house for rent") or the CRM's AI
+ * says the owner is doing: 'rent', 'sale' or null. This is a read of the whole conversation, so
+ * it outranks patterns picked out of single messages.
+ */
+export function dealFromIntent(intentText, aiIntent) {
+  if (aiIntent === 'rent_out') return 'rent';
+  if (aiIntent === 'sell') return 'sale';
+  const t = String(intentText || '').toLowerCase();
+  if (!t) return null;
+  const rent = /\b(?:for\s*rent|for\s*lease|on\s*rent|rent(?:ing)?\s*out|rental\s*listing|let\s*out|to\s*let)\b|^\s*rent\b/.test(t);
+  const sale = /\b(?:for\s*sale|sell(?:ing)?\b(?!\s*(?:and|\/|&)\s*buy)|sale\b)/.test(t.replace(TRADE_LINE, ' '));
+  return rent && !sale ? 'rent' : sale && !rent ? 'sale' : null;
 }
 
 /** The size to sort by: built-up first, then land, then any. */

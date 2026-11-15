@@ -3,7 +3,7 @@
 //
 //   node tests/property-facts.test.mjs
 
-import { extractPropertyFacts, sortSize } from '../crm-assets/propertyFacts.js';
+import { extractPropertyFacts, sortSize, dealOf, dealFromIntent } from '../crm-assets/propertyFacts.js';
 
 let pass = 0, fail = 0;
 const eq = (label, got, want) => {
@@ -37,6 +37,19 @@ eq('…nor grounds or a BHK count', [read('rent 2 grounds').price, read('Rent in
 eq('…and a plain rent figure still reads', [read('Rent 25000').price, read('expected rent 45k').price], ['₹25,000/month', '₹45,000/month']);
 eq('Sorting by size uses the built-up area first', sortSize(extractPropertyFacts('2858sqft land 7000sqft built up house')), 7000);
 eq('Prices sort by value: crores above lakhs', extractPropertyFacts('3.6 crores').priceValue > extractPropertyFacts('95 lakhs').priceValue, true);
+
+// ── Sale or rent: weighed, never "any sale word wins" (the Boat Club card, 13 Nov 2026) ──
+const PREMRAJU = 'Sir, am Premraju from Ashok Nagar, Agent. Buying Selling Properties \n\nRent Individual Bungala for Families at Boat Club 4.5 Ground, with Garden, 5 Car Parking, 5 Bed Rooms, Rent 6 lak, 6 Month, Advance, No Photos only with Costomer Profile';
+eq('An agent\'s "Buying Selling Properties" does not make a rental a sale', extractPropertyFacts(PREMRAJU).deal, 'rent');
+eq('…and "Rent 6 lak" is 6 lakh a month', extractPropertyFacts(PREMRAJU).price, '₹6 L/month');
+eq('A typed card price "Rent: ₹6 lakh per month" is a rental', dealOf('Rent: ₹6 lakh per month'), 'rent');
+eq('A sale with "for sale" stays a sale', dealOf('3BHK flat for sale in Adyar, 2.5 Cr'), 'sale');
+eq('A sale with rental income stays a sale', dealOf('Commercial building for sale, rental income 9 lakhs per month'), 'sale');
+eq('Selling AND renting said equally is unknown, not a guess', dealOf('house for sale or for rent'), null);
+eq('An agent line alone says nothing', dealOf('Agent. Buying Selling Properties'), null);
+eq('TailorTalk\'s summary "List … for rent" is a rental', dealFromIntent('List, residential individual house for rent; Premraju is an agent'), 'rent');
+eq('…"Sell, residential plot" is a sale', dealFromIntent('Sell, residential plot, for himself'), 'sale');
+eq('…the CRM AI\'s intent wins', [dealFromIntent('', 'rent_out'), dealFromIntent('', 'sell'), dealFromIntent('', 'buy')], ['rent', 'sale', null]);
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

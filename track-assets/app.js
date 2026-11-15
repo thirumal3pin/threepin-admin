@@ -28,7 +28,7 @@ import * as P from './track-pipeline.js';
 import * as BF from './brochure-flow.js';
 import * as VO from './voiceover.js';
 import { planSync, newListingFor, isSellerLead as isSeller } from './seller-sync.js';
-import { extractPropertyFacts, sortSize, TYPE_LABELS } from '../crm-assets/propertyFacts.js';
+import { extractPropertyFacts, sortSize, TYPE_LABELS, dealOf, dealFromIntent } from '../crm-assets/propertyFacts.js';
 import { displayName } from '../crm-assets/mentions.js';
 import * as TG from './tags.js';
 import * as EF from './edit-flow.js';
@@ -1705,7 +1705,9 @@ function sellerItem(x) {
   // What the card itself says (Edit details) wins over what was read from the chat or the lead's words.
   const mine = cardSizes(x), read = ((fromChat && fromChat.sizes && fromChat.sizes.length) ? fromChat.sizes : typed.sizes) || [];
   const f = {
-    deal: x.deal || (fromChat && fromChat.deal) || typed.deal,
+    // Sale or rent, most trusted first: what the card says (Edit details), the price typed on the
+    // card ("Rent: ₹6 lakh per month"), the CRM AI's read of the whole chat, then single messages.
+    deal: x.deal || dealOf(x.askingPrice) || dealFromIntent('', lead && lead.ai && lead.ai.intent) || (fromChat && fromChat.deal) || typed.deal,
     type: x.propType || (fromChat && fromChat.type) || typed.type,
     config: x.config || (fromChat && fromChat.config) || typed.config,
     sizes: [...mine, ...read.filter(s => !mine.some(m => m.kind === s.kind))],

@@ -19,7 +19,7 @@
 //                            only fills a follow-up when a booking arrives and none is set.
 
 import { createHash } from 'node:crypto';
-import { extractPropertyFacts } from '../crm-assets/propertyFacts.js';
+import { extractPropertyFacts, dealFromIntent } from '../crm-assets/propertyFacts.js';
 
 export const FOLLOW_FIELDS = ['name', 'propertyInterest', 'budget', 'enquiryType'];
 
@@ -323,6 +323,10 @@ function factsOf(chat, d) {
   const texts = chat.filter(m => m.role === 'user').map(userText).filter(Boolean);
   texts.push(clean(d.requirement_details), clean(d.budget_and_finance));
   const f = extractPropertyFacts(texts.filter(Boolean));
+  // TailorTalk's own summary of the whole chat ("List, residential individual house for rent")
+  // decides sale or rent when it is clear; the patterns above only fill in when it is not.
+  const told = dealFromIntent(d.intent_and_who);
+  if (told) f.deal = told;
   return (f.deal || f.type || f.config || f.sizes.length || f.price) ? f : null;
 }
 function askAt(chat, until) {
