@@ -107,6 +107,7 @@ try {
     await page.click('#aGo');
     const req = await until(async () => { const q = await db.collection('accessRequests').where('requesterEmail', '==', 'rameez@threepin.in').get(); return q.size ? { id: q.docs[0].id, ...q.docs[0].data() } : null; });
     ok('the request is saved, for the primary agent and the admins, with the client’s first name only', req && req.approvers.includes('swami@threepin.in') && req.approvers.includes('thirumal@threepin.in') && req.clientName === 'Arjun' && !('clientLeadId' in req), JSON.stringify(req && { a: req.approvers, c: req.clientName }));
+    ok('…and the property’s code, for everyone on the request', req && req.targetCode === 'ANR001', req && req.targetCode);
     await until(() => page.evaluate(() => /Asked/.test(document.querySelector('.pcard[data-id="ANR001"]').textContent)));
     ok('the card now says Asked', /Asked/.test(await page.textContent('.pcard[data-id="ANR001"]')));
     // His own property in full, with a matching buyer.
@@ -160,11 +161,23 @@ try {
     await page.goto(BASE + '/myday.html');
     await page.waitForSelector('#s-approve [data-decide]', { timeout: 25000 });
     ok('the property request waits on him', /Rameez asks for 3 BHK Apartment, Anna Nagar/.test(await page.textContent('#s-approve')));
+    const card = await page.evaluate(() => {
+      const items = [...document.querySelectorAll('#s-approve .item')];
+      const it = items.find(x => /Anna Nagar/.test(x.textContent)), a = it && it.querySelector('.pcode a');
+      return it && { code: (it.querySelector('.pcode .code') || {}).textContent, href: a && a.getAttribute('href'), target: a && a.target,
+        leadCode: items.filter(x => /matching buyer/i.test(x.textContent)).some(x => x.querySelector('.pcode')) };
+    });
+    ok('his card shows the property’s code and opens it in a new tab (an admin: the full property page)', card && card.code === 'ANR001' && card.href === 'property.html?id=ANR001' && card.target === '_blank', JSON.stringify(card));
+    ok('…never a code on a buyer request (a lead’s id can carry the client’s number)', card && card.leadCode === false, JSON.stringify(card));
     await shot(page, '07-swami-myday-approvals');
     const btns = await page.$$('#s-approve [data-decide]');
     // The property request (not the lead one).
     for (const b of btns) { const t = await b.evaluate(x => x.closest('.item').textContent); if (/Anna Nagar/.test(t)) { await b.click(); break; } }
     await page.waitForSelector('#dGo');
+    ok('the approve sheet shows the code and “Open property” in a new tab, to look before deciding', await page.evaluate(() => {
+      const a = document.querySelector('.sheet .pcode a');
+      return (document.querySelector('.sheet .pcode .code') || {}).textContent === 'ANR001' && a && a.getAttribute('href') === 'property.html?id=ANR001' && a.target === '_blank';
+    }));
     await page.click('input[name=dDays][value="3"]');
     await page.check('#dShare');
     await page.click('input[name=dHours][value="24"]');
@@ -244,6 +257,7 @@ try {
     const sys = await page.textContent('#msgs');
     ok('the system lines: asked, approved with its timers', /asked for the details/.test(sys) && /Approved by Swami — details until/.test(sys) && /owner’s number until/.test(sys), sys.slice(0, 300));
     ok('the pinned card says approved', !!(await until(() => page.evaluate(() => /Approved by Swami/.test(document.querySelector('#pinned').textContent)))));
+    ok('…with the property’s code — the asker gets no approver’s new-tab link (he has “Open property”)', await page.evaluate(() => (document.querySelector('#pinned .pcode .code') || {}).textContent === 'ANR001' && !document.querySelector('#pinned .pcode a')));
     await page.fill('#text', 'Thanks! Visiting Saturday 11 AM.');
     await page.click('#send');
     await page.waitForSelector('.bub.mine');
@@ -261,6 +275,111 @@ try {
     await sp.fill('#text', 'Great, the owner knows.');
     await sp.click('#send');
     ok('Rameez gets the reply live', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('.bub.them')].some(b => /owner knows/.test(b.textContent))))));
+    ok('Swami’s pinned card: the code and the property in a new tab', await sp.evaluate(() => { const a = document.querySelector('#pinned .pcode a'); return (document.querySelector('#pinned .pcode .code') || {}).textContent === 'ANR001' && a && a.target === '_blank' && a.getAttribute('href') === 'property.html?id=ANR001'; }));
+    // Replies — Swami answers one message from the arrow beside it (a mouse)…
+    await sp.hover('.bub.them:has-text("Visiting Saturday")');
+    await sp.click('.bub.them:has-text("Visiting Saturday") .rp');
+    await sp.waitForSelector('#replyBar:not([hidden])');
+    const bar = await sp.textContent('#replyBar');
+    ok('reply: the bar above the box says who is answered and quotes them', /Replying to Rameez/.test(bar) && /Visiting Saturday/.test(bar), bar);
+    await sp.fill('#text', 'Saturday 11 is fine.');
+    await sp.click('#send');
+    const msgsOf = () => db.collection('threads').doc(th.id).collection('messages');
+    const rep = await until(async () => { const q = await msgsOf().where('text', '==', 'Saturday 11 is fine.').get(); return q.size ? q.docs[0].data() : null; });
+    const orig = (await msgsOf().where('text', '==', 'Thanks! Visiting Saturday 11 AM.').get()).docs[0];
+    ok('reply: saved with the id of the message it answers (the rules check it is in this thread)', rep && orig && rep.replyTo === orig.id, JSON.stringify(rep));
+    ok('reply: the bar is gone once sent', await sp.evaluate(() => document.getElementById('replyBar').hidden));
+    ok('reply: Rameez sees his own words quoted (“You”) on top of the answer', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('.bub.them')].some(b => {
+      const q = b.querySelector('.quote');
+      return q && /^You$/.test(q.querySelector('b').textContent) && /Visiting Saturday/.test(q.textContent) && /Saturday 11 is fine/.test(b.textContent);
+    })))));
+    // …tapping that quote goes back to the message it answers…
+    await sp.click('.bub.mine .quote');
+    ok('reply: tapping the quote goes to the message it answers', !!(await until(() => sp.evaluate(() => [...document.querySelectorAll('.bub.flash')].some(b => /Visiting Saturday/.test(b.textContent))))));
+    // …and from the keyboard: Shift+Tab from the box reaches the newest message's arrow, Enter replies.
+    await sp.focus('#text');
+    await sp.keyboard.press('Shift+Tab');
+    await sp.waitForTimeout(250);
+    const kb = await sp.evaluate(() => { const a = document.activeElement; return { rp: !!(a && a.classList.contains('rp')), shown: a ? getComputedStyle(a).opacity : '' }; });
+    ok('reply: the keyboard reaches the reply arrow, and it shows when it has the focus', kb.rp && kb.shown === '1', JSON.stringify(kb));
+    await sp.keyboard.press('Enter');
+    ok('reply: Enter on it starts the reply', await sp.evaluate(() => !document.getElementById('replyBar').hidden && document.activeElement.id === 'text'));
+    await sp.keyboard.press('Escape');
+    // …and Rameez, on his phone, swipes Swami's message to the right to answer it.
+    const swiped = await page.evaluate(async () => {
+      const el = [...document.querySelectorAll('.bub.them')].find(b => /owner knows/.test(b.textContent));
+      const r = el.getBoundingClientRect(), x = r.left + 30, y = r.top + r.height / 2;
+      const fire = (type, dx) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x + dx, clientY: y + dx / 20 }));
+      fire('pointerdown', 0);
+      for (const dx of [8, 16, 30, 48, 66, 80]) { fire('pointermove', dx); await new Promise(z => setTimeout(z, 16)); }
+      fire('pointerup', 80);
+      await new Promise(z => setTimeout(z, 60));
+      const b = document.getElementById('replyBar');
+      return { open: !b.hidden, text: b.textContent, back: el.style.translate === '' };
+    });
+    ok('reply: a swipe to the right on a phone starts a reply to that message, and the message springs back', swiped.open && /Replying to Swami/.test(swiped.text) && /owner knows/.test(swiped.text) && swiped.back, JSON.stringify(swiped));
+    const scrolled = await page.evaluate(async () => {
+      const el = [...document.querySelectorAll('.bub.them')].find(b => /owner knows/.test(b.textContent));
+      document.getElementById('replyX').click();
+      const r = el.getBoundingClientRect(), x = r.left + 30, y = r.top + r.height / 2;
+      const fire = (type, d) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 8, pointerType: 'touch', isPrimary: true, clientX: x + d / 6, clientY: y - d }));
+      fire('pointerdown', 0); for (const d of [10, 30, 60, 90]) fire('pointermove', d); fire('pointerup', 90);
+      return document.getElementById('replyBar').hidden;
+    });
+    ok('reply: an up-and-down move is a scroll, not a reply', scrolled);
+    await page.waitForTimeout(500);   // (a tap right after a swipe is ignored on purpose)
+    await page.evaluate(() => [...document.querySelectorAll('.bub.them')].find(b => /owner knows/.test(b.textContent)).querySelector('.rp').click());
+    ok('reply: the arrow starts one too', await page.evaluate(() => !document.getElementById('replyBar').hidden));
+    await page.keyboard.press('Escape');
+    ok('reply: Escape drops the reply and keeps the conversation open', await page.evaluate(() => document.getElementById('replyBar').hidden && !!document.getElementById('msgs')));
+    // A real touch screen: a message arriving in the middle of a swipe must not break it (the list
+    // waits to redraw until the finger lifts), the next swipe works too, and a tap shows the arrow.
+    {
+      const { ctx: tctx, page: tp } = await as('rameez', { touch: true });
+      await tp.goto(BASE + '/messages.html?t=' + encodeURIComponent(th.id));
+      await tp.waitForSelector('.bub.them', { timeout: 25000 });
+      await tp.waitForTimeout(500);
+      const cdp = await tctx.newCDPSession(tp);
+      const swipeOn = async (text, midway) => {
+        const el = tp.locator('.bub.them', { hasText: text }).last();
+        await el.scrollIntoViewIfNeeded();
+        const b = await el.boundingBox();
+        const x0 = b.x + 30, y0 = b.y + b.height / 2;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+        for (let dx = 6; dx <= 90; dx += 6) {
+          await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + dx, y: y0 }] });
+          await tp.waitForTimeout(16);
+          if (dx === 36 && midway) await midway();
+        }
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await tp.waitForTimeout(200);
+      };
+      await swipeOn('owner knows', async () => {
+        await db.collection('threads').doc(th.id).collection('messages').add({ kind: 'text', text: 'Also: bring the keys', at: Date.now(), by: 'swami@threepin.in' });
+        await tp.waitForTimeout(600);   // it reaches the page while the finger is still down
+      });
+      ok('touch: a message arriving mid-swipe doesn’t break it — the reply starts', await tp.evaluate(() => !document.getElementById('replyBar').hidden && /owner knows/.test(document.getElementById('replyBar').textContent)));
+      ok('…and that message shows once the finger lifts', !!(await until(() => tp.evaluate(() => /bring the keys/.test(document.getElementById('msgs').textContent)))));
+      await tp.click('#replyX');
+      await tp.waitForTimeout(450);
+      await swipeOn('bring the keys');
+      ok('touch: the next swipe works too', await tp.evaluate(() => /bring the keys/.test(document.getElementById('replyBar').textContent)));
+      await tp.click('#replyX');
+      await tp.waitForTimeout(450);
+      const bubble = tp.locator('.bub.them', { hasText: 'owner knows' }).last();
+      ok('touch: no arrow until asked for (a phone has no hover)', await bubble.evaluate(el => getComputedStyle(el.querySelector('.rp')).opacity === '0'));
+      // (✕ put the cursor back in the box: the first tap only puts the keyboard away, as phones do.)
+      await bubble.tap();
+      await tp.waitForTimeout(250);
+      ok('touch: a tap while typing only puts the keyboard away', await tp.evaluate(() => document.activeElement.id !== 'text' && !document.querySelector('#msgs .tapped')));
+      await bubble.tap();
+      await tp.waitForTimeout(250);
+      ok('touch: tapping a message shows its reply arrow — a way without the swipe', await bubble.evaluate(el => el.classList.contains('tapped') && getComputedStyle(el.querySelector('.rp')).opacity === '1'));
+      await bubble.locator('.rp').tap();
+      ok('…and tapping the arrow starts the reply', await tp.evaluate(() => !document.getElementById('replyBar').hidden && /owner knows/.test(document.getElementById('replyBar').textContent)));
+      noErrors(tp, 'Messages (touch screen)');
+      await tctx.close();
+    }
     await shot(sp, '13-swami-chat');
     noErrors(sp, 'Messages (admin)');
     await ctx.close();

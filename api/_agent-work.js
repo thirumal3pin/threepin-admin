@@ -792,7 +792,7 @@ async function request(db, user, body) {
   const team = await teamOf(db, user.tenantId);
   const cfg = effectiveConfig(await loadConfig(db, user.tenantId), me);
   const admins = adminsOf(team);
-  let title, approvers, targetId, targetRef = null, privateLead = null;
+  let title, approvers, targetId, targetCode = null, targetRef = null, privateLead = null;
   if (kind === 'property') {
     if (user.role === 'agent' && !cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
     const p = await getProperty(db, user.tenantId, body.targetId);
@@ -805,7 +805,7 @@ async function request(db, user, body) {
     if (!live) need = 'details';
     else if (need === 'details') return json({ ok: false, error: 'You already have this property’s details — ask for more time or for the owner’s number instead' }, 400);
     else if (need === 'number' && AA.contactLive(grant)) return json({ ok: false, error: 'You already have the owner’s number' }, 400);
-    targetId = p.id; title = p.name || p.id;
+    targetId = p.id; title = p.name || p.id; targetCode = p.propertyCode || p.id;   // shown to everyone on the request
     approvers = AA.approversFor({ kind, property: p, approvers: cfg.approvals.approvers, admins, requester: me });
   } else {
     // A matching lead, named by its reference — opened again here, never sent by id.
@@ -839,7 +839,7 @@ async function request(db, user, body) {
   const thread = await threadFor(db, user.tenantId, { type: 'access_request', linkedId: reqRef.id,
     title: `${need === 'time' ? 'More time' : need === 'number' ? 'Owner’s number' : 'Access'}: ${title.slice(0, 60)}${clientName ? ' · for ' + clientName : ''}`, members: [me, ...approvers], by: me, team });
   const req = {
-    tenantId: user.tenantId, kind, need, targetId, targetRef, title,
+    tenantId: user.tenantId, kind, need, targetId, targetCode, targetRef, title,
     requesterUid: user.uid, requesterEmail: me, requesterName: nameIn(team, me),
     clientName, reason, visitAt,
     approvers, status: 'pending', createdAt: now, threadId: thread.id,

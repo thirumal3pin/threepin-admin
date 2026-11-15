@@ -235,10 +235,27 @@ export async function busy(btn, run) {
   try { return await run(); } finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = label; } }
 }
 
-// ── The approve sheet (My Day, Messages, the property page) ──
+// ── A request's property: its code, and a link that opens it in a new tab ──
+// The code is the inventory's Property_ID (the property's id); everyone on the request sees it. The
+// link opens what the viewer may see: admins and staff the full property page, an agent their own view
+// (their own property in full, anyone else's as the summary). Never for a lead — a lead's id can carry
+// the client's number.
+export const propertyCode = r => String((r && (r.targetCode || r.targetId)) || '');
+export const propertyHref = (id, role) => (role === 'agent' ? 'listings.html?id=' : 'property.html?id=') + encodeURIComponent(id);
+// (The iPhone home-screen app is the exception: a new tab there is Safari, without the app's sign-in —
+// so the link opens in place.)
+export function codeLine(r, role, { link = true } = {}) {
+  if (!r || r.kind !== 'property' || !r.targetId) return '';
+  const code = propertyCode(r);
+  const newTab = !(typeof navigator !== 'undefined' && navigator.standalone === true);
+  return `<div class="pcode"><span class="code" title="Property code">${esc(code)}</span>${link ? `<a href="${esc(propertyHref(r.targetId, role))}"${newTab ? ` target="_blank" rel="noopener" aria-label="Open property ${esc(code)} in a new tab"` : ` aria-label="Open property ${esc(code)}"`}>Open property <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a>` : ''}</div>`;
+}
+
+// ── The approve sheet (My Day, Messages, Team & access) ──
 // The decision on one access request, first decision wins (the server's transaction). opts: { req,
-// canCoAgent, defaults: { days, shareContact, hours } } → resolves true when a decision was saved.
-export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
+// canCoAgent, defaults: { days, shareContact, hours }, role (the viewer's, for the property link) }
+// → resolves true when a decision was saved.
+export function decideSheet(req, { canCoAgent = false, defaults = {}, role = defaults.isAdmin ? 'admin' : 'agent' } = {}) {
   return new Promise(resolve => {
     const isLead = req.kind === 'lead';
     const need = req.need || 'details';
@@ -250,6 +267,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {} } = {}) {
     let done = false;
     openSheet(`
       <h3>${esc(req.requesterName)} asks for ${asks}</h3>
+      ${codeLine(req, role)}
       <p class="sub">${req.clientName ? 'For their client ' + esc(req.clientName) + ' · ' : ''}asked ${esc(ago(req.createdAt))}${req.visitAt ? ' · wants a visit ' + esc(when(req.visitAt)) : ''}</p>
       ${req.reason ? `<div class="callout">“${esc(req.reason)}”</div>` : ''}
       ${isLead ? `<div class="callout"><b>The buyer:</b> ${esc(leadWhat || 'a matching buyer')}<span id="dLeadName"></span></div><p class="note">If you approve, they see this lead’s name, number and conversation — to read only. It stays your client.</p>` : ''}

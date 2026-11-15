@@ -2,13 +2,15 @@
 // Agent ↔ agent and agent ↔ admin, WhatsApp style. Not client messaging (that stays on TailorTalk).
 //   threads/{id}            { title, type: access_request | property | lead | general, linkedId, members,
 //                             names, lastAt, lastText, lastBy, reads: { key: ms } }
-//   threads/{id}/messages   { kind: text | system, text, at, by }
+//   threads/{id}/messages   { kind: text | system, text, at, by, replyTo? }
+//                           replyTo: the id of the message it answers, in this thread (the quote is
+//                           drawn from that message itself, so it can't be made up — firestore.rules).
 // Threads are opened by the server (/api/agent thread-open; a request opens its own). A member
 // writes their own text messages, the thread's last line as themselves, and their own read mark —
 // the only things firestore.rules let them write. What is unread is worked out from each person's
 // own read mark; read ticks from the others' marks (a message is read once every other member's mark
 // has passed it).
-import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults } from '../shared-assets/agent-client.js';
+import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
 import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 const me = await whenSignedIn();
@@ -23,6 +25,10 @@ let threads = [];
 let filter = 'all', q = '', everyone = false;
 let openId = null, msgUnsub = null, reqUnsub = null, msgs = [], openThread = null, openReq = null;
 let threadUnsub = null, docUnsub = null, wantTried = false, chatPushed = false;
+// Replying: the message being answered (shown above the box until sent or ✕), and the answered
+// messages older than the 300 loaded — fetched once by id, so their quotes still show.
+let replyTo = null, lastSwipeEnd = 0, msgsLoaded = false;   // (msgsLoaded: "no messages yet" only once they have come)
+const quoted = new Map();   // id → message | null (being fetched) | false (not there)
 // Is this property one I am the primary agent of (my own copy says so)?
 let myViewP = null;
 function isMyOwnProperty(id) {
@@ -125,8 +131,10 @@ function openChat(id, { push = false } = {}) {
     <div class="chat-h"><button type="button" class="btn sm" id="back" aria-label="Back to conversations"><i class="fa-solid fa-arrow-left"></i></button><div class="t" id="chatTitle"></div></div>
     <div id="pinned"></div>
     <div class="msgs" id="msgs" aria-live="polite"><div class="day">Loading…</div></div>
+    <div class="replybar" id="replyBar" hidden></div>
     <form class="compose" id="compose"><textarea id="text" rows="1" maxlength="4000" placeholder="Message" aria-label="Message"></textarea><button type="submit" class="send" id="send" aria-label="Send"><i class="fa-solid fa-paper-plane"></i></button></form>`;
   $('back').addEventListener('click', () => closeChat());
+  replyTo = null; msgsLoaded = false; quoted.clear(); untap();
   const ta = $('text');
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 900px)').matches) { e.preventDefault(); send(); } });
@@ -141,6 +149,7 @@ function openChat(id, { push = false } = {}) {
   // turns into ticks (without it the page hears nothing until the next message arrives).
   msgUnsub = onSnapshot(query(collection(db, 'threads', id, 'messages'), orderBy('at', 'desc'), limit(300)), { includeMetadataChanges: true }, s => {
     msgs = s.docs.map(d => ({ ...d.data(), id: d.id, pending: d.metadata.hasPendingWrites })).reverse();
+    msgsLoaded = true;
     renderChat();
     markRead();
   }, err => { if (!isShutdown(err)) $('msgs').innerHTML = `<div class="sys">${esc(err.message)}</div>`; });
@@ -150,6 +159,7 @@ function openChat(id, { push = false } = {}) {
     openThread = { ...s.data(), id: s.id };
     renderHeader(); renderChat(); markRead();
     if ($('compose')) $('compose').hidden = !(openThread.members || []).includes(me.email);
+    if (!canReply() && replyTo) { replyTo = null; renderReplyBar(); }
     if (!reqUnsub && openThread.type === 'access_request' && openThread.linkedId) {
       reqUnsub = onSnapshot(doc(db, 'accessRequests', openThread.linkedId), r => { openReq = r.exists() ? { ...r.data(), id: r.id } : null; renderPinned(); }, () => {});
     }
@@ -162,7 +172,7 @@ window.addEventListener('popstate', () => {
 });
 function closeChat(silent, { fromHistory = false } = {}) {
   if (msgUnsub) msgUnsub(); if (reqUnsub) reqUnsub(); if (docUnsub) docUnsub();
-  msgUnsub = reqUnsub = docUnsub = null; openId = null; openThread = null; openReq = null;
+  msgUnsub = reqUnsub = docUnsub = null; openId = null; openThread = null; openReq = null; replyTo = null;
   if (!silent) {
     $('chat').hidden = true; $('chat').innerHTML = ''; document.body.classList.remove('chat-open');
     if (!fromHistory) {
@@ -174,7 +184,12 @@ function closeChat(silent, { fromHistory = false } = {}) {
     renderList();
   }
 }
-window.addEventListener('keydown', e => { if (e.key === 'Escape' && openId && !document.querySelector('.sheet')) closeChat(); });
+// Escape: first drops a reply being written, then closes the conversation.
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented || !openId || document.querySelector('.sheet')) return;   // (a sheet's own Escape is not ours)
+  if (replyTo) { replyTo = null; renderReplyBar(); return; }
+  closeChat();
+});
 
 function renderHeader() {
   const t = openThread;
@@ -200,7 +215,10 @@ function renderPinned() {
   const what = r.kind === 'lead' ? 'a matching buyer' + (r.title ? ' — ' + String(r.title).replace(/^Lead:\s*/, '') : '') : r.need === 'time' ? 'more time on ' + r.title : r.need === 'number' ? 'the owner’s number for ' + r.title : r.title;
   // Hiding the owner's number leaves the details shared: still live access.
   const live = r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden');
+  // The property's code for everyone on it; the approvers (and admins) also get it in a new tab, to
+  // look before deciding. The asker has "Open property" below once it is shared.
   el.innerHTML = `<div class="pinned"><b><i class="fa-solid fa-thumbtack" style="color:var(--ink3)"></i> ${mineReq ? 'You' : esc(r.requesterName)} asked for ${esc(what)}</b>
+    ${codeLine(r, me.role, { link: !mineReq })}
     <div><span class="tag ${live ? 'green' : r.status === 'rejected' ? 'red' : r.status === 'pending' ? 'wait' : ''}">${esc(r.grantState === 'revoked' ? 'Access taken back' : r.grantState === 'expired' ? 'Access ended' : r.grantState === 'contact-hidden' ? st + ' · owner’s number hidden' : st)}</span></div>
     <div class="acts">
       ${can ? '<button type="button" class="btn sm primary" id="pDecide">Approve or reject</button>' : ''}
@@ -210,7 +228,7 @@ function renderPinned() {
       ${live && mineReq && r.kind === 'property' && r.terms && r.terms.until && r.terms.until - Date.now() < 2 * 86400000 ? '<button type="button" class="btn sm" id="pMore">Ask for more time</button>' : ''}
     </div></div>`;
   if (!el.querySelector('.acts').children.length) el.querySelector('.acts').remove();
-  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && (isAdmin || await isMyOwnProperty(r.targetId)), defaults: { ...(await approvalDefaults(me)), isAdmin } }));
+  if ($('pDecide')) $('pDecide').addEventListener('click', async () => decideSheet(r, { canCoAgent: r.kind === 'property' && (isAdmin || await isMyOwnProperty(r.targetId)), defaults: { ...(await approvalDefaults(me)), isAdmin }, role: me.role }));
   if ($('pCancel')) $('pCancel').addEventListener('click', e => { if (confirm('Cancel this request?')) busy(e.currentTarget, () => api('cancel', { id: r.id }).catch(x => toast('✗ ' + x.message))); });
   if ($('pMore')) $('pMore').addEventListener('click', e => busy(e.currentTarget, () => api('request', { kind: 'property', targetId: r.targetId, need: 'time', reason: 'Asking for more time' }).then(() => toast('Asked for more time')).catch(x => toast('✗ ' + x.message))));
   // The lead opened to them: its id is on their own grant (they can read it), never on the request.
@@ -219,25 +237,161 @@ function renderPinned() {
 function renderChat() {
   const box = $('msgs');
   if (!box) return;
+  // A finger on a message: redraw once it lifts (a redraw would swap the element under the finger, and
+  // Safari would send the rest of the touch to the removed one — the swipe stuck).
+  if (swipe) { drawLater = true; return; }
   const t = openThread || {};
   const others = (t.members || []).filter(e => e !== me.email);
   const readAt = Math.min(...others.map(e => (t.reads || {})[emailKey(e)] || 0), Infinity);
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const rp = canReply() ? id => `<button type="button" class="rp" data-reply="${esc(id)}" aria-label="Reply" title="Reply"><i class="fa-solid fa-reply"></i></button>` : () => '';
+  const tap = id => (id === tappedId ? ' tapped' : '');
   let lastDay = '', html = '';
   msgs.forEach((m, i) => {
     const day = new Date(m.at || Date.now()).toDateString();
     if (day !== lastDay) { lastDay = day; html += `<div class="day">${esc(new Date(m.at || Date.now()).toDateString() === new Date().toDateString() ? 'Today' : new Date(m.at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }))}</div>`; }
-    if (m.kind === 'system') { html += `<div class="sys">${esc(m.text)}</div>`; return; }
+    if (m.kind === 'system') { html += `<div class="sys${tap(m.id)}" data-mid="${esc(m.id)}">${esc(m.text)}${rp(m.id)}</div>`; return; }
     const mine = m.by === me.email;
     const prev = msgs[i - 1];
     const showBy = !mine && others.length > 1 && !(prev && prev.by === m.by && prev.kind !== 'system');
     const time = new Date(m.at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, x => x.toUpperCase());
     const tick = mine ? (m.pending ? '<i class="fa-regular fa-clock"></i>' : `<span class="tick${readAt !== Infinity && readAt >= m.at ? ' read' : ''}"><i class="fa-solid fa-check-double"></i></span>`) : '';
-    html += `<div class="bub ${mine ? 'mine' : 'them'}">${showBy ? `<span class="by">${esc(nameOf(people, m.by))}</span>` : ''}${esc(m.text)}<span class="meta">${time} ${tick}</span></div>`;
+    // (One line on purpose: the bubble keeps the message's own line breaks, so any space here would show.)
+    html += `<div class="bub ${mine ? 'mine' : 'them'}${tap(m.id)}" data-mid="${esc(m.id)}">${showBy ? `<span class="by">${esc(nameOf(people, m.by))}</span>` : ''}${m.replyTo ? quoteHtml(m.replyTo) : ''}${esc(m.text)}<span class="meta">${time} ${tick}</span>${rp(m.id)}</div>`;
   });
-  box.innerHTML = html || '<div class="sys">No messages yet — say hello.</div>';
+  box.innerHTML = html || (msgsLoaded ? '<div class="sys">No messages yet — say hello.</div>' : '<div class="day">Loading…</div>');
   if (nearBottom || msgs.length && msgs[msgs.length - 1].by === me.email) box.scrollTop = box.scrollHeight;
 }
+
+// ── Replies (WhatsApp style) ──
+// Swipe a message to the right on a phone (or tap it, then its arrow); the arrow beside it on a laptop
+// (hover, or Tab from the box). The quote sits above the box until sent or ✕ (Escape). In the
+// conversation a reply shows the message it answers — tap the quote to go back to that message.
+const canReply = () => !!openThread && (openThread.members || []).includes(me.email);
+const snippet = s => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+const whoSaid = m => (m.kind === 'system' ? 'Update' : m.by === me.email ? 'You' : nameOf(people, m.by));
+function originalOf(id) {
+  const m = msgs.find(x => x.id === id);
+  if (m) return m;
+  if (quoted.has(id)) return quoted.get(id);
+  quoted.set(id, null);
+  const tid = openId;
+  getDoc(doc(db, 'threads', tid, 'messages', id))
+    .then(s => { if (openId !== tid) return; quoted.set(id, s.exists() ? { ...s.data(), id } : false); renderChat(); })
+    .catch(() => { if (openId === tid) quoted.delete(id); });   // offline: asked again at the next redraw
+  return null;
+}
+function quoteHtml(id) {
+  const o = originalOf(id);
+  const who = o ? whoSaid(o) : '';
+  const text = o === null ? '…' : o === false ? 'This message isn’t available' : snippet(o.text);
+  return `<button type="button" class="quote${o && o.kind !== 'system' && o.by === me.email ? ' me' : ''}" data-jump="${esc(id)}" title="Go to this message"><b>${esc(who)}</b><span>${esc(text)}</span></button>`;
+}
+function startReply(id) {
+  const m = msgs.find(x => x.id === id) || quoted.get(id);
+  if (!m || !canReply()) return;
+  replyTo = { id, m };
+  untap();
+  renderReplyBar();
+  const ta = $('text');
+  if (ta) ta.focus();
+}
+function renderReplyBar() {
+  const bar = $('replyBar'), box = $('msgs');
+  if (!bar) return;
+  // At the newest message when the bar opens or closes: stay there (the bar takes room from the list).
+  const atBottom = box && box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const keep = () => { if (atBottom) box.scrollTop = box.scrollHeight; };
+  bar.hidden = !replyTo;
+  if (!replyTo) { bar.innerHTML = ''; keep(); return; }
+  const m = replyTo.m;
+  bar.innerHTML = `<div class="rq${m.kind !== 'system' && m.by === me.email ? ' me' : ''}"><b>${esc(m.kind === 'system' ? 'Replying to the update' : m.by === me.email ? 'Replying to yourself' : 'Replying to ' + nameOf(people, m.by))}</b><span>${esc(snippet(m.text))}</span></div>`
+    + '<button type="button" class="x" id="replyX" aria-label="Cancel the reply" title="Cancel the reply"><i class="fa-solid fa-xmark"></i></button>';
+  keep();
+  $('replyX').addEventListener('click', () => { replyTo = null; renderReplyBar(); const ta = $('text'); if (ta) ta.focus(); });
+}
+function jumpTo(id) {
+  const box = $('msgs');
+  const el = box && box.querySelector(`[data-mid="${CSS.escape(id)}"]`);
+  if (!el) { toast('That message is further back than this conversation shows'); return; }
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1700);
+}
+// A tap on a message (touch screens) shows its reply arrow for a few seconds — the way to reply
+// without the swipe gesture.
+let tappedId = null, tapT = null, typingAtDown = false;
+function untap() {
+  tappedId = null; clearTimeout(tapT);
+  document.querySelectorAll('#msgs .tapped').forEach(x => x.classList.remove('tapped'));
+}
+const MSG = '#msgs .bub[data-mid], #msgs .sys[data-mid]';
+document.addEventListener('click', e => {
+  if (!e.target.closest || !e.target.closest('#msgs')) return;
+  if (Date.now() - lastSwipeEnd < 400) return;   // the end of a swipe is not a tap
+  const r = e.target.closest('[data-reply]');
+  if (r) { startReply(r.dataset.reply); return; }
+  const j = e.target.closest('[data-jump]');
+  if (j) { jumpTo(j.dataset.jump); return; }
+  const el = e.target.closest(MSG);
+  if (!el || e.target.closest('a, button') || !canReply() || !window.matchMedia('(hover: none)').matches || String(getSelection() || '')) return;
+  // A tap while typing only puts the keyboard away (as phones do) — and the pinned card unfolding then
+  // moves the messages under the finger, so it is not a tap on any one of them.
+  if (typingAtDown) { typingAtDown = false; return; }
+  const id = el.dataset.mid, again = id === tappedId;
+  untap();
+  if (again) return;
+  tappedId = id; el.classList.add('tapped');
+  tapT = setTimeout(untap, 5000);
+});
+// Touch: the message follows the finger to the right; far enough and let go → reply. A mostly
+// up-and-down move is a scroll, left to the browser (touch-action on the bubbles). Listened for on the
+// whole page, so a finger lifted anywhere still ends it; a new touch also ends whatever was left.
+const SWIPE = 56;   // px to the right that makes it a reply
+let swipe = null, drawLater = false, swipeGuard = null;
+function endSwipe(e) {
+  const s = swipe;
+  if (!s || (e && e.pointerId !== s.pid)) return;
+  swipe = null;
+  clearTimeout(swipeGuard);
+  if (s.on) {
+    lastSwipeEnd = Date.now();
+    s.el.classList.remove('swiping');
+    s.el.style.translate = '';
+    s.el.style.removeProperty('--rp');
+    if (e && e.type === 'pointerup' && s.dx >= SWIPE && s.el.isConnected) startReply(s.id);
+  }
+  if (drawLater) { drawLater = false; renderChat(); }
+}
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse') return;
+  if (e.isPrimary) typingAtDown = !!(document.activeElement && document.activeElement.id === 'text');
+  if (swipe && e.isPrimary) endSwipe(null);
+  if (swipe) return;   // a second finger
+  const el = e.target.closest && e.target.closest(MSG);
+  if (!el || e.target.closest('a') || !canReply()) return;
+  swipe = { el, id: el.dataset.mid, x: e.clientX, y: e.clientY, dx: 0, on: false, buzzed: false, pid: e.pointerId };
+  swipeGuard = setTimeout(() => endSwipe(null), 4000);   // never hold the list longer than this
+});
+document.addEventListener('pointermove', e => {
+  const s = swipe;
+  if (!s || e.pointerId !== s.pid) return;
+  const dx = e.clientX - s.x, dy = e.clientY - s.y;
+  if (!s.on) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { endSwipe(null); return; }
+    if (dx < 10 || dx < Math.abs(dy) * 1.5) return;
+    if (!s.el.isConnected) { endSwipe(null); return; }
+    s.on = true;
+    s.el.classList.add('swiping');
+    try { s.el.setPointerCapture(e.pointerId); } catch (x) { /* fine */ }
+  }
+  s.dx = Math.max(0, Math.min(dx - 10, 88));
+  s.el.style.translate = s.dx + 'px 0';
+  s.el.style.setProperty('--rp', String(Math.min(1, s.dx / SWIPE)));
+  if (s.dx >= SWIPE && !s.buzzed) { s.buzzed = true; try { if (navigator.vibrate) navigator.vibrate(10); } catch (x) { /* fine */ } }
+});
+document.addEventListener('pointerup', endSwipe);
+document.addEventListener('pointercancel', endSwipe);
 
 let lastMark = 0;
 function markRead() {
@@ -260,12 +414,19 @@ async function send() {
   const t = openThread;
   if (!text || !t) return;
   ta.value = ''; ta.style.height = 'auto';
+  const reply = replyTo;
+  replyTo = null; renderReplyBar();
   const now = Date.now();
+  const msg = { kind: 'text', text: text.slice(0, 4000), at: now, by: me.email };
+  if (reply) msg.replyTo = reply.id;
   const b = writeBatch(db);
-  b.set(doc(collection(db, 'threads', t.id, 'messages')), { kind: 'text', text: text.slice(0, 4000), at: now, by: me.email });
+  b.set(doc(collection(db, 'threads', t.id, 'messages')), msg);
   b.update(doc(db, 'threads', t.id), { lastAt: now, lastText: text.replace(/\s+/g, ' ').slice(0, 140), lastBy: me.email, ['reads.' + myKey]: now });
   try { await b.commit(); }
-  catch (e) { toast('✗ Not sent — ' + (e.code === 'permission-denied' ? 'you are not in this conversation' : 'check your connection')); ta.value = text; }
+  catch (e) {
+    toast('✗ Not sent — ' + (e.code === 'permission-denied' ? 'you are not in this conversation' : 'check your connection'));
+    if (openThread && openThread.id === t.id) { ta.value = text; if (reply && !replyTo) { replyTo = reply; renderReplyBar(); } }
+  }
 }
 
 // ── A new conversation ──

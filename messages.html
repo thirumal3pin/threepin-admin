@@ -61,6 +61,56 @@
   @media (max-width: 899px) { #chat:has(#text:focus) .pinned .acts, #chat:has(#text:focus) .pinned > div:not(.acts) { display: none; } }
   .bub.mine .meta { color: light-dark(#5C6E59, #B9D4C2); }
   .readonly-note { padding: 8px 12px; font-size: 12.5px; background: light-dark(#FFF7E0, rgba(255,190,40,.12)); color: light-dark(#6B4600, #FFD27A); border-bottom: 1px solid var(--border); }
+  /* Replies. The quote inside a reply (tap → the message it answers); the reply bar above the box; the
+     reply arrow — beside a message on hover (laptop), drawn out by a swipe to the right (phone). */
+  .msgs { overflow-x: hidden; }
+  .bub, .sys { touch-action: pan-y pinch-zoom; transition: translate .18s ease-out; }
+  .sys { position: relative; }
+  .bub.swiping, .sys.swiping { transition: none; }
+  .bub .quote { display: block; width: 100%; min-width: 0; margin: 2px 0 5px; padding: 5px 9px 6px; border: 0; border-left: 4px solid var(--brand); border-radius: 6px;
+    background: light-dark(rgba(0,0,0,.05), rgba(255,255,255,.07)); color: inherit; font: inherit; text-align: left; white-space: normal; cursor: pointer; }
+  .bub .quote b { display: block; font-size: 12.5px; font-weight: 650; color: var(--brand-ink); }
+  .bub .quote span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; color: var(--ink2); overflow-wrap: anywhere; }
+  .bub .quote.me, .replybar .rq.me { border-left-color: light-dark(#1F9D55, #3DDC84); }
+  .bub .quote.me b, .replybar .rq.me b { color: light-dark(#167A3F, #7EE2A8); }
+  /* Inside your own green bubble: a deeper ground and darker type, readable at 4.5:1 in both themes. */
+  .bub.mine .quote { background: light-dark(rgba(0,0,0,.06), rgba(0,0,0,.24)); }
+  .bub.mine .quote b { color: light-dark(#7A4300, #FFB55C); }
+  .bub.mine .quote span { color: light-dark(#3D4A3B, #D5DDD3); }
+  .bub.mine .quote.me b { color: light-dark(#0F5E2F, #7EE2A8); }
+  /* The reply arrow: hidden until the message is hovered (laptop), tapped (phone) or the arrow has the
+     keyboard's focus — never hidden from the keyboard or a screen reader. */
+  .rp { position: absolute; top: 50%; translate: 0 -50%; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: 1px solid var(--border); display: grid; place-items: center;
+    background: var(--card); color: var(--ink2); box-shadow: 0 1px 3px rgba(0,0,0,.14); cursor: pointer; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 1; /* above the hover bridge below */ }
+  .bub.them .rp { right: -40px; }
+  .bub.mine .rp { left: -40px; }
+  .sys .rp { right: -16px; }
+  .rp:focus-visible, .bub.tapped > .rp, .sys.tapped > .rp { opacity: 1; pointer-events: auto; }
+  @media (hover: hover) {
+    .bub:hover > .rp, .sys:hover > .rp { opacity: 1; pointer-events: auto; }
+    .rp:hover { color: var(--ink); background: var(--bg2); }
+    /* The room between a message and its arrow still counts as the message, so the arrow stays put. */
+    .bub.them::after, .bub.mine::after { content: ""; position: absolute; top: 0; bottom: 0; width: 46px; }
+    .bub.them::after { left: 100%; }
+    .bub.mine::after { right: 100%; }
+  }
+  @media (pointer: coarse) { .rp { width: 40px; height: 40px; font-size: 15px; } .bub.them .rp { right: -46px; } .bub.mine .rp { left: -46px; } .sys .rp { right: -20px; } }
+  /* Touch screens: a message answers a tap (iPhone Safari passes a tap on plain text up to the page
+     only when it is marked tappable), without the grey tap flash. */
+  @media (hover: none) { .bub[data-mid], .sys[data-mid] { cursor: pointer; -webkit-tap-highlight-color: transparent; } }
+  .bub.swiping::before, .sys.swiping::before { content: "\f3e5"; font-family: "Font Awesome 6 Free"; font-weight: 900; font-size: 12px; line-height: 1;
+    position: absolute; left: -38px; top: 50%; translate: 0 -50%; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--card); color: var(--ink2); box-shadow: 0 1px 2px rgba(0,0,0,.15); opacity: var(--rp, 0); scale: calc(.6 + .4 * var(--rp, 0)); }
+  .bub.flash, .sys.flash { animation: flash 1.7s ease-out; }
+  @keyframes flash { 0%, 35% { box-shadow: 0 0 0 3px var(--brand); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .replybar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; background: var(--card); border-top: 1px solid var(--border); }
+  .replybar .rq { flex: 1; min-width: 0; padding: 6px 10px; border-left: 4px solid var(--brand); border-radius: 8px; background: var(--bg2); }
+  .replybar .rq b { display: block; font-size: 12.5px; font-weight: 650; color: var(--brand-ink); }
+  .replybar .rq span { display: block; font-size: 13px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .replybar .x { flex: none; width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent; color: var(--ink2); font-size: 16px; cursor: pointer; }
+  .replybar .x:hover { background: var(--bg2); color: var(--ink); }
+  .replybar:not([hidden]) + .compose { border-top: 0; }
   /* A laptop: the list on the left, the open conversation beside it (WhatsApp Web), not on top. */
   .split-empty { display: none; }
   @media (min-width: 900px) {

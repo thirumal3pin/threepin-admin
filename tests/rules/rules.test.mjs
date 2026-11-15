@@ -69,6 +69,9 @@ beforeEach(async () => {
     await setDoc(doc(d, 'threads/th1/messages/m1'), { kind: 'text', text: 'hi', at: 1, by: 'swami@threepin.in' });
     await setDoc(doc(d, 'threads/th2'), { tenantId: T, title: 'Private', members: ['pradeep@threepin.in', 'thirumal@threepin.in'], lastAt: 1, lastText: '', unread: {}, reads: {} });
     await setDoc(doc(d, 'threads/th2/messages/m1'), { kind: 'text', text: 'secret', at: 1, by: 'swami@threepin.in' });
+    await setDoc(doc(d, 'threads/th3'), { tenantId: T, title: 'Weekend visits', members: ['rameez@threepin.in', 'swami@threepin.in'], lastAt: 1, lastText: '', reads: {} });
+    await setDoc(doc(d, 'threads/th3/messages/x3'), { kind: 'text', text: 'Only in th3', at: 1, by: 'swami@threepin.in' });
+    await setDoc(doc(d, 'threads/th1/messages/s1'), { kind: 'system', text: 'Rameez asked for the details of 3 BHK', at: 1, by: 'rameez@threepin.in' });
     await setDoc(doc(d, `leadViews/${T}__v1_0`), { tenantId: T, rows: {} });
     await setDoc(doc(d, `settings/${T}`), { team: {} });
     await setDoc(doc(d, `pipelines/${T}`), { stages: [] });
@@ -230,6 +233,21 @@ test('grants, visit alerts and submissions: the agent sees their own only; nobod
   await assertSucceeds(getDoc(doc(db('staff'), 'assignmentLog/a1')));
   await assertSucceeds(getDoc(doc(d, 'propertySubmissions/s1')));
   await assertFails(setDoc(doc(d, 'propertySubmissions/s2'), { tenantId: T, byEmail: 'rameez@threepin.in' }));
+});
+
+test('a reply names a message in the same conversation by id — never a made-up quote, never another thread', async () => {
+  const d = db('agent');
+  const msg = extra => ({ kind: 'text', text: 'Sunday works', at: Date.now(), by: 'rameez@threepin.in', ...extra });
+  await assertSucceeds(setDoc(doc(d, 'threads/th1/messages/r1'), msg({ replyTo: 'm1' })));
+  await assertSucceeds(setDoc(doc(d, 'threads/th1/messages/r2'), msg({ replyTo: 's1' })));            // the request's own line
+  await assertSucceeds(setDoc(doc(d, 'threads/th1/messages/r3'), msg({ replyTo: 'r1' })));            // a reply to a reply
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r4'), msg({ replyTo: 'gone' })));             // no such message
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r5'), msg({ replyTo: 'x3' })));               // it is in another thread (one they can read)
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r6'), msg({ replyTo: '../../th3/messages/x3' })));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r7'), msg({ replyTo: { id: 'm1', text: 'I never said this' } })));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r8'), msg({ replyTo: 42 })));
+  await assertFails(setDoc(doc(d, 'threads/th1/messages/r9'), msg({ replyTo: 'm1', quote: 'I never said this' })));
+  await assertFails(setDoc(doc(d, 'threads/th2/messages/r10'), msg({ replyTo: 'm1' })));             // not their conversation
 });
 
 test('messages: members read and write; others do not; admins read every thread; a message is always from its writer', async () => {

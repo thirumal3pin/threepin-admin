@@ -6,7 +6,7 @@
 //                            as primary agent
 //   Shared right now         every running grant: who, what, until when — Hide number, Take back
 //   Decided lately           the last 30 days, both ways
-import { $, esc, api, db, isShutdown, whenSignedIn, directory, nameOf, when, ago, untilWords, toast, decideSheet, openSheet, busy, approvalDefaults } from '../shared-assets/agent-client.js';
+import { $, esc, api, db, isShutdown, whenSignedIn, directory, nameOf, when, ago, untilWords, toast, decideSheet, openSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
 import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 if ($('tab-requests')) start();
@@ -39,6 +39,7 @@ async function start() {
     html += block('Waiting for a decision', pending.length, pending.length ? pending.map(r => `<div class="item"><div class="ic brand"><i class="fa-solid ${r.kind === 'lead' ? 'fa-user-lock' : 'fa-building-lock'}"></i></div>
       <div class="bd"><b>${esc(r.requesterName)} asks for ${r.kind === 'lead' ? 'a matching buyer — ' + esc(String(r.title || '').replace(/^Lead:\s*/, '')) : r.need === 'time' ? 'more time on ' + esc(r.title) : r.need === 'number' ? 'the owner’s number for ' + esc(r.title) : esc(r.title)}</b>
         <small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${esc(ago(r.createdAt))} · decides: ${esc((r.approvers || []).map(e => nameOf(people, e).split(' ')[0]).join(', '))}</small>
+        ${codeLine(r, me.role)}
         ${r.reason ? `<div class="q">“${esc(r.reason)}”</div>` : ''}
         <div class="acts"><button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}</div></div></div>`).join('') : empty('Nothing waiting.'));
     html += block('Properties agents added', subs.length, subs.length ? subs.map(s => `<div class="item"><div class="ic"><i class="fa-regular fa-building"></i></div>
@@ -52,15 +53,16 @@ async function start() {
     html += block('Shared right now', live.length, live.length ? live.map(g => `<div class="item"><div class="ic blue"><i class="fa-solid fa-lock-open"></i></div>
       <div class="bd"><b>${esc(g.agentName || nameOf(people, g.agentEmail))} — ${g.kind === 'lead' ? 'a buyer: ' + esc(String(g.title || '').replace(/^Lead:\s*/, '')) : esc(g.title)}</b>
         <small>Details ${g.expiresAt ? esc(untilWords(g.expiresAt)) : 'with no time limit'}${g.includeContact && (!g.contactExpiresAt || g.contactExpiresAt > now) ? ' · owner’s number ' + esc(untilWords(g.contactExpiresAt)) : ''} · approved by ${esc(g.grantedByName || nameOf(people, g.grantedBy))} ${esc(ago(g.grantedAt))}</small>
+        ${codeLine(g, me.role)}
         <div class="acts"><button type="button" class="btn sm" data-extend="${esc(g.id)}">Extend</button>${g.includeContact && (!g.contactExpiresAt || g.contactExpiresAt > now) ? `<button type="button" class="btn sm" data-grant="${esc(g.id)}" data-a="hide-contact">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-grant="${esc(g.id)}" data-a="revoke">Take back</button></div></div></div>`).join('') : empty('Nothing is shared outside its agents.'));
     html += block('Decided in the last 30 days', recent.length, recent.length ? recent.slice(0, 50).map(r => `<div class="item"><div class="ic ${r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid fa-clock-rotate-left"></i></div>
       <div class="bd"><b>${esc(r.requesterName)} — ${r.kind === 'lead' ? 'a buyer: ' + esc(String(r.title || '').replace(/^Lead:\s*/, '')) : esc(r.title)}</b>
         <small><span class="tag ${r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden') ? 'green' : r.status === 'rejected' ? 'red' : ''}">${esc({ approved: 'Approved', rejected: 'Not approved', cancelled: 'Cancelled', expired: 'Expired' }[r.status] || r.status)}</span>${r.decidedBy && r.status !== 'cancelled' && r.decidedBy !== 'system' ? ' by ' + esc(r.decidedByName || nameOf(people, r.decidedBy)) : ''} · ${esc(when(r.decidedAt))}${r.grantState === 'revoked' ? ' · <span class="tag">taken back' + (r.grantChangedByName ? ' by ' + esc(r.grantChangedByName) : '') + '</span>' : r.grantState === 'expired' ? ' · <span class="tag">ended</span>' : r.grantState === 'contact-hidden' ? ' · <span class="tag">number hidden</span>' : ''}</small>
-        ${r.note ? `<div class="q">${esc(r.note)}</div>` : ''}</div></div>`).join('') : empty('Nothing decided lately.'));
+        ${codeLine(r, me.role)}${r.note ? `<div class="q">${esc(r.note)}</div>` : ''}</div></div>`).join('') : empty('Nothing decided lately.'));
     $('requests').innerHTML = html;
     $('requests').querySelectorAll('[data-decide]').forEach(b => b.addEventListener('click', async () => {
       const r = S.reqs.find(x => x.id === b.dataset.decide);
-      if (r) decideSheet(r, { canCoAgent: r.kind === 'property', defaults: { ...(await approvalDefaults(me)), isAdmin: true } });
+      if (r) decideSheet(r, { canCoAgent: r.kind === 'property', defaults: { ...(await approvalDefaults(me)), isAdmin: true }, role: me.role });
     }));
     $('requests').querySelectorAll('[data-extend]').forEach(b => b.addEventListener('click', () => extend(S.grants.find(g => g.id === b.dataset.extend))));
     $('requests').querySelectorAll('[data-grant]').forEach(b => b.addEventListener('click', () => {

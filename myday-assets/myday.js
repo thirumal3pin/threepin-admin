@@ -8,7 +8,7 @@
 // What it reads, all allowed by firestore.rules: access requests where the person is an approver or
 // the asker, visit alerts addressed to them, their leads (three queries, as the CRM's agent mode),
 // and, for an agent, their own copy of the properties.
-import { $, esc, lc, api, db, isShutdown, whenSignedIn, watchMyView, directory, nameOf, when, ago, untilWords, toast, decideSheet, busy, approvalDefaults } from '../shared-assets/agent-client.js';
+import { $, esc, lc, api, db, isShutdown, whenSignedIn, watchMyView, directory, nameOf, when, ago, untilWords, toast, decideSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
 import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { canWorkLead, codeKey } from '../shared-assets/agent-access.js';
@@ -155,7 +155,7 @@ function requestItem(r, mode) {
     ? `<b>${esc(r.requesterName)} asks for ${reqTitle(r).replace(/^(More|The|A) /, m => m.toLowerCase())}</b><small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${esc(ago(r.createdAt))}${r.visitAt ? ' · visit wanted ' + esc(when(r.visitAt)) : ''}</small>`
     : `<b>${reqTitle(r)}</b><small>${decided}</small>`;
   return `<div class="item"><div class="ic ${mode === 'approve' ? 'brand' : r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid ${ic}"></i></div>
-    <div class="bd">${head}${r.reason && mode === 'approve' ? `<div class="q">“${esc(r.reason)}”</div>` : ''}${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
+    <div class="bd">${head}${codeLine(r, me.role, { link: r.requesterEmail !== me.email })}${r.reason && mode === 'approve' ? `<div class="q">“${esc(r.reason)}”</div>` : ''}${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
       <div class="acts">
         ${canDecide(r) ? `<button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>` : ''}
         ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
@@ -269,7 +269,7 @@ function bindActions(root) {
   root.querySelectorAll('[data-decide]').forEach(b => b.addEventListener('click', async () => {
     const r = allRequests().find(x => x.id === b.dataset.decide);
     if (!r) return;
-    await decideSheet(r, { canCoAgent: canCo(r), defaults: { ...(await approvalDefaults(me)), isAdmin } });
+    await decideSheet(r, { canCoAgent: canCo(r), defaults: { ...(await approvalDefaults(me)), isAdmin }, role: me.role });
   }));
   root.querySelectorAll('[data-more]').forEach(b => b.addEventListener('click', () => {
     busy(b, () => api('request', { kind: 'property', targetId: b.dataset.more, need: 'time', reason: 'Asking for more time' })
@@ -300,7 +300,7 @@ function openWanted(reqs) {
     return;
   }
   wantedDone = true;
-  if (canDecide(r)) approvalDefaults(me).then(d => decideSheet(r, { canCoAgent: canCo(r), defaults: { ...d, isAdmin } }));
+  if (canDecide(r)) approvalDefaults(me).then(d => decideSheet(r, { canCoAgent: canCo(r), defaults: { ...d, isAdmin }, role: me.role }));
   else toast(r.status === 'pending' ? 'This request is waiting on someone else' : 'Already ' + r.status + (r.decidedByName ? ' by ' + r.decidedByName : ''));
 }
 

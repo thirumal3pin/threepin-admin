@@ -467,15 +467,21 @@ service cloud.firestore {
                 && nearNow(request.resource.data.lastAt)));
       allow create, delete: if false;
     }
+    // A reply names the message it answers by id only (replyTo) — the page shows the quote from that
+    // message itself, so a quote can't be made up — and only a message in this same conversation.
     match /threads/{threadId}/messages/{msgId} {
       allow read: if isThreadMember(get(/databases/$(database)/documents/threads/$(threadId)).data)
         || (isAdmin() && get(/databases/$(database)/documents/threads/$(threadId)).data.tenantId == tenantId());
       allow create: if isThreadMember(get(/databases/$(database)/documents/threads/$(threadId)).data)
-        && request.resource.data.keys().hasOnly(['kind', 'text', 'at', 'by'])
+        && request.resource.data.keys().hasOnly(['kind', 'text', 'at', 'by', 'replyTo'])
         && request.resource.data.kind == 'text'
         && request.resource.data.by == myEmail()
         && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000
-        && nearNow(request.resource.data.at);
+        && nearNow(request.resource.data.at)
+        && (!('replyTo' in request.resource.data)
+            || (request.resource.data.replyTo is string
+                && request.resource.data.replyTo.matches('^[A-Za-z0-9_-]{1,64}$')
+                && exists(/databases/$(database)/documents/threads/$(threadId)/messages/$(request.resource.data.replyTo))));
       allow update, delete: if false;
     }
 

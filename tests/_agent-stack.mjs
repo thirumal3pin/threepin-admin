@@ -184,8 +184,9 @@ export async function startStack({ emuPort = Number(process.env.E2E_EMU_PORT) ||
   export async function clearIndexedDbPersistence() {}
   `;
   const browser = await chromium.launch({ channel: 'chrome', headless });
-  async function as(key, { viewport = { width: 390, height: 844 }, dark = false } = {}) {
-    const ctx = await browser.newContext({ viewport, colorScheme: dark ? 'dark' : 'light', deviceScaleFactor: 2 });
+  // touch: a phone's touch screen (no hover; real touch gestures through page.touchscreen / CDP).
+  async function as(key, { viewport = { width: 390, height: 844 }, dark = false, touch = false } = {}) {
+    const ctx = await browser.newContext({ viewport, colorScheme: dark ? 'dark' : 'light', deviceScaleFactor: 2, ...(touch ? { hasTouch: true, isMobile: true } : {}) });
     const p = PEOPLE[key];
     await ctx.addInitScript(u => { window.__fakeUser = u; }, p);
     await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js', r => r.fulfill({ contentType: 'text/javascript', body: FAKE_AUTH }));
