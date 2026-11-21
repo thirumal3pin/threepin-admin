@@ -37,9 +37,16 @@ export const STAGE_DEFS = [
   // the brief, the photos upload, the voice-over, the "Shoot for" cuts and the brochure are all done.
   { key: 'media_ready', name: 'Media ready', kind: 'open', color: '#BE185D', step: 4, targetDays: 3,
     rule: 'Media, photos, voice-over and brochure all done — ready to go live' },
-  { key: 'live', name: 'Live — marketing', kind: 'open', color: '#15803D', step: 5, targetDays: 30,
+  // An admin's check before a listing goes Live: an agent's listing waits here (they cannot move it
+  // on themselves), and an admin approves it — or sends it back to Details & docs with a note.
+  // A listing the office runs itself may skip both columns.
+  { key: 'for_approval', name: 'Sent for approval', kind: 'open', color: '#B45309', step: 5, targetDays: 1,
+    rule: 'Waiting for an admin to check it before it goes live' },
+  { key: 'approved', name: 'Approved', kind: 'open', color: '#0F766E', step: 6, targetDays: 2,
+    rule: 'An admin approved it — mark it Live when marketing starts' },
+  { key: 'live', name: 'Live — marketing', kind: 'open', color: '#15803D', step: 7, targetDays: 30,
     rule: 'Listed and being shown to buyers' },
-  { key: 'closed', name: 'Sold / Rented', kind: 'won', color: '#166534', step: 6,
+  { key: 'closed', name: 'Sold / Rented', kind: 'won', color: '#166534', step: 8,
     rule: 'Deal done on this property' },
   { key: 'on_hold', name: 'On hold', kind: 'hold', color: '#64748B', step: null,
     rule: 'Owner paused it — the reason is kept' },
@@ -52,7 +59,7 @@ const DEF_BY_KEY = Object.fromEntries(STAGE_DEFS.map(d => [d.key, d]));
 
 // The forward path a listing walks. On hold and Dropped sit beside it: neither
 // is progress.
-export const LADDER = ['new_listing', 'details', 'shoot_scheduled', 'shoot_done', 'media_ready', 'live', 'closed'];
+export const LADDER = ['new_listing', 'details', 'shoot_scheduled', 'shoot_done', 'media_ready', 'for_approval', 'approved', 'live', 'closed'];
 
 // A dropped listing is worth as much as a lost lead — the reason is the whole
 // value of the record, so it is asked for rather than assumed.
@@ -83,6 +90,8 @@ const LEGACY_NAMES = {
   'shoot scheduled': 'shoot_scheduled', 'scheduled': 'shoot_scheduled',
   'shot': 'shoot_done', 'shoot done': 'shoot_done',
   'media ready': 'media_ready',
+  'sent for approval': 'for_approval', 'for approval': 'for_approval', 'waiting for approval': 'for_approval',
+  'approved': 'approved',
   'live': 'live', 'live — marketing': 'live', 'live - marketing': 'live', 'marketing': 'live',
   'sold / rented': 'closed', 'sold': 'closed', 'rented': 'closed', 'closed': 'closed',
   'on hold': 'on_hold',
@@ -182,7 +191,7 @@ export function retireColumns(stages) {
 
 // Columns added since a board was first saved. A board without one gains it on load, placed right
 // after its anchor column, with a fresh id — no listing points at it yet, so nothing else changes.
-export const ADDED = [{ key: 'media_ready', after: 'shoot_done' }];
+export const ADDED = [{ key: 'media_ready', after: 'shoot_done' }, { key: 'for_approval', after: 'media_ready' }, { key: 'approved', after: 'for_approval' }];
 export function addNewColumns(stages) {
   let out = (stages || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
   let changed = false;

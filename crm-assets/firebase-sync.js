@@ -208,6 +208,8 @@ function agentChrome(){
 // server's own test — their own leads and the enquiries on their properties (even ones the office
 // holds) are theirs to work; a lead opened to them by an approved request is theirs to read.
 const readOnlyIds = new Set();
+// A lead another agent's request approval opened to this agent: until when (0 = no limit).
+const sharedUntil = new Map();
 const canWork = (l, me) => canWorkLead(l, me);
 function subscribeAsAgent(tenantId){
   agentChrome();
@@ -244,6 +246,7 @@ function subscribeAsAgent(tenantId){
     if (!snap.metadata.fromCache) grantsLive = true;
     const live = snap.docs.map(d => d.data()).filter(g => !g.expiresAt || g.expiresAt > now);
     const want = new Set(live.map(g => String(g.targetId)));
+    sharedUntil.clear(); live.forEach(g => sharedUntil.set(String(g.targetId), g.expiresAt || 0));
     // Each one leaves the page the minute its timer ends (the server switches it off too).
     live.forEach(g => { if (g.expiresAt && !grantTimers.has(String(g.targetId))) grantTimers.set(String(g.targetId), setTimeout(() => {
       const id = String(g.targetId); grantTimers.delete(id);
@@ -413,6 +416,9 @@ function saveFailed(what, e){
   window.showToast('⚠ Not saved — ' + why + '. Try again.');
 }
 window.crmFirebase = {
+  // An agent's login (their own copy of the properties, requests through the server).
+  isAgent: () => isAgentMode(),
+  agentAction: (action, body) => agentApi(action, body),
   // Notes + history live in per-lead subcollections now (see saveNote /
   // saveHistory below), so they are stripped from the parent write: the lead
   // doc stays small and constant-size, so a note-add never rewrites a growing
@@ -601,6 +607,8 @@ window.crmAuth = {
   getRole: () => currentRole
 };
 window.crmFirebase.isReadOnly = id => isAgentMode() && readOnlyIds.has(id);
+// Shared with this agent by an approved request (read only): { until } (0 = no limit), else null.
+window.crmFirebase.sharedLead = id => (isAgentMode() && readOnlyIds.has(id) && sharedUntil.has(String(id)) ? { until: sharedUntil.get(String(id)) } : null);
 
 onAuthStateChanged(auth, async (user) => {
   if(user){

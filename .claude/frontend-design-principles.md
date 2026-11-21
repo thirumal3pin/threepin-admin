@@ -140,6 +140,53 @@ icons. Every icon occupies the same 26px box so labels align whether or not they
    a stray `}` silently discards the next rule; one hid a whole Dashboard `@media` block), `tests/sdk-stubs.test.mjs` (every Firebase stand-in a test serves offers
    every name the pages import — else a page module silently fails to load in its preview).
 
+## 8. Modern Web Guidance — the web platform's own best practice
+
+Added 20 Nov 2026 at the owner's request: Google Chrome's **Modern Web Guidance** (stewarded with the
+Edge, Firefox and MDN teams) is part of these instructions. The full guide set is in the repo as a
+project skill: **`.claude/skills/modern-web-guidance/`** (Apache 2.0; where it came from and how to
+update it: `SOURCE.md` there).
+
+**How to use it.** Before building or changing any screen, find the guides for what you are about
+to make and follow them, together with sections 1–7 above. Search the descriptions:
+
+    grep -h '^description:' -r .claude/skills/modern-web-guidance/guides | grep -i <word>
+
+(`npx modern-web-guidance search` does the same when the machine allows it.) The ones that apply to
+almost every screen here: `user-experience/*` (all three), `accessibility/accessibility`,
+`ui-components/dialog`, `ui-components/tabs`, `ui-components/menu`, `forms/forms`,
+`forms/validate-input-after-interaction`, `accessibility/accessible-error-announcement`,
+`ui-behaviors/drag-and-drop`, `ui-atoms/responsive-table`.
+
+**Browser support policy.** Baseline *widely available* features are used freely. *Newly
+available* or limited ones only with the fallback the guide gives (or so that, without them, the
+screen still works — e.g. `field-sizing: content` simply does not grow the box). No polyfill
+libraries; this is a no-build site.
+
+**What it means in this app** (the rules the guides add to the sections above):
+- **Don't interrupt.** A blocking dialog only for consequential steps (approve with options, delete,
+  sold). Everything else happens **in place**: approve with the defaults in one tap, reject with
+  the reason typed under the request, a request's note typed in the row — no pop-up, no Messages
+  detour. (`user-experience/content-first-noise-reduction`)
+- **State on the row.** Whatever someone is waiting on says its state where they look for it —
+  "Details requested · asked 2 h ago", "Approved · details until 27 Nov", "Rejected by Swami: …".
+  Never make a person open a thread to find out.
+- **Secondary content folds** into `<details>` (a timeline, an AI summary, "what they told us").
+- **Targets**: 24×24 minimum, **44×44 on touch** (`@media (pointer: coarse)`); icon-only buttons have
+  an `aria-label`; decorative icons `aria-hidden="true"`. (`user-experience/form-factor-adaptation`)
+- **Every action is a `<button>` or a link**, reachable by keyboard; nothing appears only on hover;
+  `:focus-visible` always shows a ring. A drag (the board) always has a button or select that does
+  the same. (`user-experience/natural-interactions`, `ui-behaviors/drag-and-drop`)
+- **Sideways scrollers** (a board, a chip row) scroll natively with `scroll-snap`, no touch handlers;
+  a scroller with no focusable children gets `tabindex="0"`, `role="region"` and a label.
+- **Components adapt to their container** (container queries), media queries only for the input
+  (`pointer`) and the user's settings (`prefers-color-scheme`, `prefers-reduced-motion`).
+- **Text**: `text-wrap: balance` on short headings, `pretty` on body text; long codes and links wrap
+  (`overflow-wrap`); never truncate a heading.
+- **Errors and live updates are announced**: an error under its field has `role="alert"`; a list
+  that changes by itself sits in an `aria-live="polite"` region. (`accessibility/accessible-error-announcement`)
+- When a guide shaped a change, say so in the change's notes (which guide, what it changed).
+
 ---
 
 **In one line:** Inter on neutral white, one orange spent where the decision is, flat cards on a

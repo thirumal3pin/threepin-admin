@@ -83,6 +83,12 @@
       note: 'Your properties, and the rest as a summary', agentOnly: true,
     },
     {
+      // An agent's own listings, stage by stage: the Shoot & Media pipeline for their properties,
+      // with an admin's approval before Live (mylistings.html, api/_agent-listings.js).
+      id: 'mylistings', label: 'My listings', icon: 'fa-solid fa-table-columns', page: 'mylistings', nav: 'board', tab: 'properties', needs: 'listings',
+      note: 'Your properties from owner yes to Live — stages, brochure, approval', agentOnly: true,
+    },
+    {
       id: 'messages', label: 'Messages', icon: 'fa-regular fa-message', page: 'messages', nav: 'messages', tab: 'messages', badge: 'messages',
       note: 'Team chat, and a thread for every request',
     },
@@ -181,6 +187,7 @@
   var PAGES = {
     myday: { href: 'myday.html', home: 'myday' },
     myprops: { href: 'dashboard.html', home: 'all' },
+    mylistings: { href: 'mylistings.html', home: 'board' },
     messages: { href: 'messages.html', home: 'messages' },
     property: { href: 'dashboard.html', home: 'all' },
     crm: { href: 'crm.html', home: 'kanban' },
@@ -260,7 +267,10 @@
   function allowed(entry, parent) {
     if (access && access.pending) return false;
     if (entry.adminOnly) return !!(access && access.role === 'admin');
-    if (entry.agentOnly) return !!(access && access.role === 'agent');
+    // An agents-only entry still obeys the actions an admin switched off (My listings).
+    if (entry.agentOnly && !(access && access.role === 'agent')) return false;
+    if (entry.agentOnly && entry.needs && !(access.actions && access.actions[entry.needs])) return false;
+    if (entry.agentOnly) return true;
     if (access && access.role === 'agent') {
       if (entry.notForAgents) return false;
       if (entry.staffOnly) return false;

@@ -62,8 +62,10 @@ export function assignmentPatch(primary, coAgents) {
 // Still on the market. Sold or let properties, and ones taken off ("inactive", "withdrawn"), are
 // not offered to other agents' clients.
 const GONE = /\b(sold|let out|rented|leased out|withdrawn|inactive|on hold|not available|unavailable|closed)\b/i;
+// A property added when an agent's listing was approved stays out of the other agents' sight
+// (listingHidden) until that listing goes Live (api/_agent-listings.js).
 export function isActiveProperty(p) {
-  if (!p || p.soldOut === true) return false;
+  if (!p || p.soldOut === true || p.listingHidden === true) return false;
   return !GONE.test(String(p.availability || ''));
 }
 

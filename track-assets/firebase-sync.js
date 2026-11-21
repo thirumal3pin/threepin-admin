@@ -143,7 +143,10 @@ window.trackFirebase = {
   // document can never drift out of its tenant.
   async saveListing(listing){
     if(!currentTenantId) throw new Error('No tenant');
-    const { notes, history, lead, property, ...rest } = listing;
+    // adminApproval, decidingAt, agentEmail, agentName, duplicateOf are the server's (api/_agent-listings.js):
+    // a copy held on this device never writes them back over a newer decision. (`approval` — Swami's
+    // approval to list — is the board's own and is saved as before.)
+    const { notes, history, lead, property, adminApproval, decidingAt, agentEmail, agentName, duplicateOf, ...rest } = listing;
     await setDoc(doc(db, 'listings', listing.id), { ...rest, tenantId: currentTenantId }, { merge: true });
   },
 
@@ -309,7 +312,8 @@ function invRow(d) {
     id: d.id, propertyCode: p.propertyCode || d.id, name: p.name || '', location: p.location || '',
     config: p.config || '', startingPrice: p.startingPrice || '', type: p.type || '',
     sqftRange: p.sqftRange || '', uds: p.uds || '',   // a card's "Use … details" (built-up area, UDS)
-    photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut
+    photosLink: p.photosLink || '', brochureLink: p.brochureLink || '', detailsText: p.detailsText || '', soldOut: !!p.soldOut,
+    listingHidden: !!p.listingHidden   // waiting on an agent's listing approval (api/_agent-listings.js)
   };
 }
 

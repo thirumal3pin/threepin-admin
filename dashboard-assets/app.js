@@ -938,9 +938,10 @@ function renderGrid(){
 
 // An agent's card says whose it is to them: theirs, shared with them (and until when), or locked.
 function agentBadge(p){
-  if(p._access === 'summary') return p._pending ? '<span class="badge ag-asked">Asked — waiting</span>' : '<span class="badge ag-lock">🔒 Locked</span>';
-  if(p._access === 'granted') return `<span class="badge ag-shared">Shared${p._grant && p._grant.until && window.PinAgent.until ? ' · ' + escapeHtml(window.PinAgent.until(p._grant.until)) : ''}</span>`;
-  return `<span class="badge ag-mine">${p._access === 'co' ? 'Co-agent' : 'Mine'}</span>`;
+  if(p._access === 'summary') return p._pending ? '<span class="badge ag-asked">⏳ Details requested</span>' : p._refused ? '<span class="badge ag-lock">🔒 Not approved — ask again</span>' : '<span class="badge ag-lock">🔒 Locked</span>';
+  if(p._access === 'granted') return `<span class="badge ag-shared">Shared${p._grant && p._grant.until && window.PinAgent.until ? ' · ' + escapeHtml(window.PinAgent.until(p._grant.until)) : ''}</span>${p._pending ? '<span class="badge ag-asked">⏳ Asked for more</span>' : ''}`;
+  // Their own: and how many buyers with other agents fit it (the Matches tab lists them).
+  return `<span class="badge ag-mine">${p._access === 'co' ? 'Co-agent' : 'Mine'}</span>${p._matchN ? `<span class="badge ag-matchn" title="Buyers with other agents whose requirement fits this property — see the Matches tab">🎯 ${p._matchN} buyer${p._matchN === 1 ? '' : 's'} match</span>` : ''}`;
 }
 
 // One muted line per card while a query is live, naming the field that

@@ -19,7 +19,7 @@ ok('assigned properties (primary or co-agent): everything, owner included', d.ow
 ok('approved requests: everything but the owner (the approver decides that), the office-only notes and the sheet’s extra columns', ['contact', 'internal', 'sheet'].every(f => !d.grantedPropertyFields.includes(f)) && d.grantedPropertyFields.length === AC.PROPERTY_FIELDS.length - 3);
 ok('matching leads: what they want and the AI summary, no phone', d.matchingLeadFields.join() === 'requirement,aiSummary');
 ok('ads and campaigns: their properties only', d.adsScope === 'own' && d.campaignsScope === 'own');
-ok('actions: add leads, edit own notes/availability, submit properties, export theirs, send campaigns — all on', AC.ACTIONS.every(a => d.actions[a.id] === true) && AC.ACTIONS.length === 5);
+ok('actions: add leads, edit own notes/availability, submit properties, run My listings, export theirs, send campaigns — all on', AC.ACTIONS.every(a => d.actions[a.id] === true) && AC.ACTIONS.length === 6);
 ok('approvals: the primary agent or an admin; no time limit; owner’s number off; 24 hours offered',
   d.approvals.approvers === 'primary' && d.approvals.detailsDays === null && d.approvals.shareContact === false && d.approvals.contactHours === 24);
 ok('the defaults are not shared objects (editing one result cannot change the next)', (() => { d.tabs.push('x'); d.actions.addLeads = false; const e = AC.effectiveConfig(null); return e.tabs.length === 7 && e.actions.addLeads; })());

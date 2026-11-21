@@ -170,6 +170,10 @@ async function main(){
     });
     console.log(`\n${offer.length} propert${offer.length===1?'y':'ies'} had a value shortened — offered in the dashboard's Sync dialog to keep in Notes.`);
   }
+  // A brochure's Inventory row for a listing not approved yet: that listing's agent gets the property,
+  // out of other agents' sight until it goes Live (api/_agent-listings.js).
+  const { claimReservedCreates } = await import('../api/_agent-listings.js');
+  await claimReservedCreates(db, TENANT_ID, plan.writes, existing).catch(e => console.error('reserved codes:', e.message));
   await commitWrites(db, plan.writes, plan.staleExtras);   // no Notes: the person picks them in the dashboard
   console.log(`\n✓ Wrote ${plan.writes.length} propert${plan.writes.length === 1 ? 'y' : 'ies'}. ${plan.orphans.length} left untouched.`);
 }

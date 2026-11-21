@@ -10,7 +10,8 @@
 // The stages whose "late" threshold the admin can set, with the days they come with.
 export const TARGET_STAGES = [
   ['new_listing', 'New listing', 2], ['details', 'Details & docs', 3], ['shoot_scheduled', 'Shoot scheduled', 5],
-  ['shoot_done', 'Shoot done', 2], ['media_ready', 'Media ready', 3], ['live', 'Live — marketing', 30]
+  ['shoot_done', 'Shoot done', 2], ['media_ready', 'Media ready', 3], ['for_approval', 'Sent for approval', 1],
+  ['approved', 'Approved', 2], ['live', 'Live — marketing', 30]
 ];
 // The documents a listing is checked for (Settings → Configurations can change the list). A checklist
 // only: it is shown on the card and never holds a card back or raises an alert.

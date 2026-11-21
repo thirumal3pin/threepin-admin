@@ -38,7 +38,7 @@ export function voDue(x, stages) {
   if (kind && kind !== 'open') return false;
   if (x && x.kind === 'series') return true;
   const key = st ? stageKeyOf(st) : '';
-  return !!(x && x.shootDoneAt) || ['shoot_done', 'media_ready', 'live'].includes(key);
+  return !!(x && x.shootDoneAt) || ['shoot_done', 'media_ready', 'for_approval', 'approved', 'live'].includes(key);
 }
 
 // Every voice-over still to make across the board: [{ x, left, at }]. asked: only those the editor has

@@ -1433,6 +1433,8 @@ body.dp-resizing{cursor:col-resize;user-select:none;}
 .mention-menu button.at,.mention-menu button:hover{background:var(--purple-bg);}
 .mention{color:var(--purple);font-weight:600;background:var(--purple-bg);border-radius:5px;padding:0 3px;}
 .tt-chip.mention{background:var(--purple-bg);color:var(--purple);box-shadow:inset 2px 0 0 var(--purple);font-weight:700;}
+/* An agent's lead opened to them by another agent's approval (read only) */
+.tt-chip.shared{background:light-dark(#E8F1FF, rgba(80,140,255,.16));color:light-dark(#1D4ED8, #9DBBFF);font-weight:700;}
 .st-item.mention{margin-bottom:8px;background:var(--purple-bg);border-color:var(--purple-line);box-shadow:inset 3px 0 0 var(--purple);}
 .tl-filters{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 10px;}
 .tl-f{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;border:1.5px solid var(--border);background:var(--white);color:var(--ink3);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;}
@@ -2436,3 +2438,6 @@ button.cmpl-name:hover{text-decoration:underline;}
 .td-q{color:var(--ink2);font-style:italic;}
 .td-link{font:inherit;font-size:12.5px;font-weight:600;color:var(--blue);background:none;border:0;padding:0 0 0 6px;cursor:pointer;}
 .td-link:hover{text-decoration:underline;}
+/* A lead shared with an agent to READ (another agent's client): nothing on it looks editable */
+#dp.lead-ro .note-add, #dp.lead-ro .note-fu-row, #dp.lead-ro .note-fu-actions, #dp.lead-ro .note-fu-quick, #dp.lead-ro .note-fu-hint { display: none !important; }
+#dp.lead-ro #dpStageSel { pointer-events: none; opacity: .6; }

@@ -12,6 +12,7 @@ import { $, esc, lc, api, db, isShutdown, whenSignedIn, watchMyView, directory, 
 import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { canWorkLead, codeKey } from '../shared-assets/agent-access.js';
+import { renderMatches, matchCounts } from '../shared-assets/agent-matches.js';
 
 const me = await whenSignedIn();
 const isAdmin = me.role === 'admin';
@@ -23,7 +24,8 @@ window.AppNav.setActive('myday');
 let people = [];
 let subject = me.email;              // whose day
 let unsubs = [];
-const S = { asked: new Map(), approve: new Map(), pendingAll: new Map(), leads: new Map(), alerts: [], props: [], subs: [], grants: [] };
+const S = { asked: new Map(), approve: new Map(), pendingAll: new Map(), leads: new Map(), alerts: [], props: [], subs: [], grants: [], matches: [], listings: null, queue: null };
+let reqFilter = 'all';
 let tab = 'today';
 let histRange = 7, histKind = 'all';
 const SEEN_KEY = () => 'pin.myday.seen.' + subject;
@@ -68,7 +70,7 @@ function setSubject(email) {
 function watchAll() {
   unsubs.forEach(u => { try { u(); } catch (e) { /* gone */ } });
   unsubs = [];
-  Object.assign(S, { asked: new Map(), approve: new Map(), pendingAll: new Map(), leads: new Map(), alerts: [], props: [], subs: [], subsAll: [], grants: [], names: new Map(), loaded: {} });
+  Object.assign(S, { asked: new Map(), approve: new Map(), pendingAll: new Map(), leads: new Map(), alerts: [], props: [], subs: [], subsAll: [], grants: [], names: new Map(), matches: [], listings: null, queue: null, loaded: {} });
   // "New since my last visit": what arrived after the last time they LEFT this page (marked on the
   // way out, so a reload or a switch of person does not hide what they have not looked at yet).
   try { seenBefore = Number(localStorage.getItem(SEEN_KEY()) || 0); } catch (e) { seenBefore = 0; }
@@ -106,12 +108,18 @@ function watchAll() {
     const w = watchMyView(me, v => { if (v) {
       S.props = (v.props || []).filter(p => p._access === 'own' || p._access === 'co').map(p => ({ id: p.id, code: p._code, name: p.name, access: p._access }));
       S.names = new Map((v.props || []).flatMap(p => [[String(p._code || '').toLowerCase(), p.name], [String(p.id).toLowerCase(), p.name]]));
+      S.propById = new Map((v.props || []).map(p => [String(p.id), p]));
+      S.matches = v.matches || [];
+      S.loaded.matches = true;
       render();
     } });
     unsubs.push(() => w.stop());
     live(query(collection(db, 'propertySubmissions'), where('tenantId', '==', T), where('byEmail', '==', me.email)), 'subs', s => { S.subs = s.docs.map(d => ({ ...d.data(), id: d.id })); });
+    // My listings that need me: sent back by an admin, approved (mark them Live), or waiting.
+    loadMine();
   } else {
     if (isAdmin) live(query(collection(db, 'propertySubmissions'), where('tenantId', '==', T), where('status', '==', 'pending')), 'subsAll', s => { S.subsAll = s.docs.map(d => ({ ...d.data(), id: d.id })); });
+    if (isAdmin && subject === me.email) loadQueue();
     const pc = collection(db, 'properties');
     const pp = { a: [], b: [] };
     const mergeP = () => { const m = new Map(); [...pp.a, ...pp.b].forEach(p => m.set(p.id, p)); S.props = [...m.values()]; };
@@ -120,6 +128,16 @@ function watchAll() {
   }
 }
 
+// Admins: the listings waiting for a decision (an agent sent them for approval). Agents: their own
+// listings that need them. Asked when the page opens and again on coming back to it (at most once a
+// minute — a few reads each).
+function loadQueue() { S.queueAt = Date.now(); api('listing-queue').then(j => { S.queue = j.listings || []; render(); }).catch(() => { S.queue = S.queue || []; }); }
+function loadMine() { S.mineAt = Date.now(); api('listings').then(j => { S.listings = j.listings || []; S.stages = j.stages || []; render(); }).catch(() => { S.listings = S.listings || []; }); }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || subject !== me.email) return;
+  if (isAdmin && Date.now() - (S.queueAt || 0) > 60000) loadQueue();
+  if (isAgent && Date.now() - (S.mineAt || 0) > 60000) loadMine();
+});
 const isAgentSubject = () => isAgent || (people.find(p => p.email === subject) || {}).role === 'agent';
 // A colleague's visit on my property: who, for which client (first name only), when — and the
 // property one tap away.
@@ -152,31 +170,92 @@ function requestItem(r, mode) {
   const decider = r.decidedBy === me.email ? 'you' : r.decidedBy === 'system' ? 'the system' : (r.decidedByName || nameOf(people, r.decidedBy));
   const decided = r.status !== 'pending' ? `${statusTag(r)} by ${esc(decider)} ${esc(ago(r.decidedAt))}${terms(r) ? ' · ' + esc(terms(r)) : ''}` : statusTag(r) + ' asked ' + esc(ago(r.createdAt));
   const head = mode === 'approve'
-    ? `<b>${esc(r.requesterName)} asks for ${reqTitle(r).replace(/^(More|The|A) /, m => m.toLowerCase())}</b><small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${esc(ago(r.createdAt))}${r.visitAt ? ' · visit wanted ' + esc(when(r.visitAt)) : ''}</small>`
+    ? `<b>${esc(r.requesterName)} asks for ${reqTitle(r).replace(/^(More|The|A) /, m => m.toLowerCase())}</b><small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${r.kind === 'lead' && r.aboutCode ? 'for their property <span class="code">' + esc(r.aboutCode) + '</span>' + (r.aboutTitle ? ' ' + esc(r.aboutTitle) : '') + ' · ' : ''}${esc(ago(r.createdAt))}${r.visitAt ? ' · visit wanted ' + esc(when(r.visitAt)) : ''}</small>${r.kind === 'lead' ? `<small class="yourlead" data-yourlead="${esc(r.id)}">${esc(yourLead.get(r.id) || '')}</small>` : ''}`
     : `<b>${reqTitle(r)}</b><small>${decided}</small>`;
   return `<div class="item"><div class="ic ${mode === 'approve' ? 'brand' : r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid ${ic}"></i></div>
     <div class="bd">${head}${codeLine(r, me.role, { link: r.requesterEmail !== me.email })}${r.reason && mode === 'approve' ? `<div class="q">“${esc(r.reason)}”</div>` : ''}${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
       <div class="acts">
-        ${canDecide(r) ? `<button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>` : ''}
+        ${canDecide(r) ? `<button type="button" class="btn sm primary" data-quick="${esc(r.id)}" aria-describedby="qa-${esc(r.id)}"${QD ? '' : ' disabled'}><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button><button type="button" class="btn sm" data-reject="${esc(r.id)}">Reject</button><button type="button" class="btn sm quiet" data-decide="${esc(r.id)}">More options</button>` : ''}
         ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
         ${r.status === 'pending' && r.requesterEmail === me.email ? `<button type="button" class="btn sm danger" data-cancel="${esc(r.id)}">Cancel</button>` : ''}
         ${liveAccess(r) && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="dashboard.html?property=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
         ${liveAccess(r) && r.grantId && r.decidedBy === me.email && r.requesterEmail !== me.email ? `${r.terms && r.terms.contact ? `<button type="button" class="btn sm" data-hide="${esc(r.grantId)}">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-end="${esc(r.grantId)}">End access</button>` : ''}
-      </div></div></div>`;
+      </div>
+      ${canDecide(r) ? `<p class="qa-terms" id="qa-${esc(r.id)}">${esc(quickTerms(r))}</p>
+      <div class="rj" data-rj="${esc(r.id)}" hidden><label for="rj-${esc(r.id)}">Why (they see this)</label><textarea id="rj-${esc(r.id)}" maxlength="500" rows="2" placeholder="e.g. The owner has given this to us exclusively for now"></textarea><p class="rj-err" role="alert"></p>
+        <div class="acts"><button type="button" class="btn sm danger" data-rjsend="${esc(r.id)}">Send rejection</button><button type="button" class="btn sm quiet" data-rjback="${esc(r.id)}">Not now</button></div></div>` : ''}
+      ${r.kind === 'lead' && r.requesterEmail === me.email && liveAccess(r) && leadOfRequest(r) ? `<div class="acts"><a class="btn sm primary" href="${leadLink(leadOfRequest(r))}">Open in Leads</a></div>` : ''}
+      </div></div>`;
+}
+// The lead an approved lead request opened (the grant carries it; the request never does).
+const leadOfRequest = r => { const g = S.grants.find(x => x.kind === 'lead' && x.requestId === r.id && x.active); return g ? g.targetId : null; };
+// What one tap on Approve gives: the admin's defaults (team.html → What agents see → Approvals).
+let QD = null;
+approvalDefaults(me).then(d => { QD = d || {}; render(); });
+function quickBody(r) {
+  if (!QD) throw new Error('Still loading the approval settings — try again in a moment');
+  const d = QD, need = r.need || 'details';
+  const body = { id: r.id, decision: 'approve' };
+  // One tap never hands out access with no end: 7 days unless the admin set another default.
+  if (need !== 'number') body.days = Number(d.days) > 0 ? Number(d.days) : 7;
+  if (r.kind === 'property' && (need === 'number' || (need === 'details' && d.shareContact))) { body.shareContact = true; body.hours = Number(d.hours || 24); }
+  return body;
+}
+function quickTerms(r) {
+  if (!QD) return 'Loading what Approve gives…';
+  const b = quickBody(r);
+  const parts = [];
+  if ((r.need || 'details') !== 'number') parts.push(b.days ? `details for ${b.days} day${b.days === 1 ? '' : 's'}` : 'details with no time limit');
+  if (b.shareContact) parts.push(`owner’s number for ${b.hours >= 48 ? Math.round(b.hours / 24) + ' days' : b.hours + ' hours'}`);
+  else if (r.kind === 'property') parts.push('without the owner’s number');
+  return 'Approve gives ' + parts.join(', ') + '. More options to change it.';
 }
 
+// The lead's own agent (and admins) may see WHICH of their clients a buyer request is about
+// (requestPrivate; never the asker). Read once per request.
+const yourLead = new Map();
+function fillYourLeads(reqs) {
+  reqs.filter(r => r.kind === 'lead' && canDecide(r) && !yourLead.has(r.id)).forEach(r => {
+    yourLead.set(r.id, '');
+    import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => fs.getDoc(fs.doc(db, 'requestPrivate', r.id))).then(snap => {
+      const n = snap.exists() ? snap.data().leadName : '';
+      if (!n) return;
+      const words = (isAdmin ? 'The client: ' : 'Your client: ') + n;
+      yourLead.set(r.id, words);
+      const el = document.querySelector(`[data-yourlead="${CSS.escape(r.id)}"]`); if (el) el.textContent = words;
+    }).catch(() => {});
+  });
+}
 function section(title, n, body, { hot = false, more = '' } = {}) {
   return `<div class="sec-h">${title} <span class="n${hot && n ? ' hot' : ''}">${n}</span>${more}</div><div class="card">${body}</div>`;
 }
 const empty = (icon, text) => `<div class="empty"><i class="${icon}"></i>${text}</div>`;
 const loading = () => '<div class="sk"></div>';
 
+// A reason half-typed (Reject, Send back) is never wiped by a redraw: every open box, its text and the
+// cursor are carried over to the fresh page (the buyers list is carried over whole, below).
+function keepOpenBoxes() {
+  const open = [...document.querySelectorAll('#sections [data-rj]:not([hidden]), #sections [data-lrj]:not([hidden])')]
+    .map(b => ({ sel: b.hasAttribute('data-rj') ? `[data-rj="${CSS.escape(b.dataset.rj)}"]` : `[data-lrj="${CSS.escape(b.dataset.lrj)}"]`, text: (b.querySelector('textarea') || {}).value || '' }));
+  const a = document.activeElement;
+  const focus = a && a.id && a.closest && a.closest('#sections') ? { id: a.id, start: a.selectionStart, end: a.selectionEnd } : null;
+  return () => {
+    open.forEach(o => { const b = document.querySelector('#sections ' + o.sel); if (!b) return; b.hidden = false; const t = b.querySelector('textarea'); if (t) t.value = o.text; });
+    if (focus) { const el = document.getElementById(focus.id); if (el) { el.focus({ preventScroll: true }); try { if (focus.start != null) el.setSelectionRange(focus.start, focus.end); } catch (e) { /* not a text box */ } } }
+  };
+}
 function render() {
   if (!S.loaded) return;
+  const restoreBoxes = keepOpenBoxes();
   const now = Date.now(), sod = startOfDay(now), eod = endOfDay(now);
   const reqs = allRequests();
   const toDecide = reqs.filter(canDecide).sort((a, b) => a.createdAt - b.createdAt);
-  const mine = reqs.filter(r => r.requesterEmail === subject && (r.status === 'pending' || (r.decidedAt || 0) >= now - DAY)).sort((a, b) => b.createdAt - a.createdAt);
+  // Waiting, and everything decided in the last week (a rejection read on Monday is still there on Friday).
+  const mineAll = reqs.filter(r => r.requesterEmail === subject && (r.status === 'pending' || (r.decidedAt || 0) >= now - 7 * DAY)).sort((a, b) => (b.status === 'pending') - (a.status === 'pending') || b.createdAt - a.createdAt);
+  const reqKey = r => r.status === 'pending' ? 'pending' : r.status === 'approved' && liveAccess(r) ? 'approved' : r.status === 'rejected' ? 'rejected' : 'ended';
+  const reqCounts = mineAll.reduce((c, r) => { c[reqKey(r)] = (c[reqKey(r)] || 0) + 1; return c; }, {});
+  if (reqFilter !== 'all' && (!reqCounts[reqFilter] || mineAll.length <= 2)) reqFilter = 'all';
+  const mine = mineAll.filter(r => reqFilter === 'all' || reqKey(r) === reqFilter);
   const leads = [...S.leads.values()];
   const workable = leads.filter(l => !isAgentSubject() || canWorkLead(l, subject));
   const visits = workable.filter(l => l.siteVisitAt >= sod && l.siteVisitAt <= eod && l.siteVisitStatus !== 'cancelled')
@@ -224,13 +303,28 @@ function render() {
   if (isAdmin && subject === me.email && S.subsAll.length) html += section('Properties agents added', S.subsAll.length, `<div class="item"><div class="ic brand"><i class="fa-regular fa-building"></i></div><div class="bd"><b>${S.subsAll.length === 1 ? 'One property is' : S.subsAll.length + ' properties are'} waiting for your approval</b><small>${esc(S.subsAll.map(x => (x.fields || {}).name).filter(Boolean).slice(0, 3).join(' · '))}</small><div class="acts"><a class="btn sm primary" href="team.html?tab=requests">Review in Team &amp; access</a></div></div></div>`, { hot: true });
   if (asksAndApproves) html += `<div id="s-approve">${section('Approvals waiting on ' + (subject === me.email ? 'me' : esc(name)), toDecide.length,
     !ld('approve') ? loading() : toDecide.length ? toDecide.map(r => requestItem(r, 'approve')).join('') : empty('fa-regular fa-circle-check', 'Nothing waiting for a decision.'), { hot: true })}</div>`;
+  // Admins: listings an agent sent for approval — decided right here.
+  if (isAdmin && subject === me.email && S.queue && S.queue.length) html += `<div id="s-lq">${section('Listings waiting for approval', S.queue.length, S.queue.map(listingQueueItem).join(''), { hot: true, more: '<a class="more" href="propertytrack.html">Shoot &amp; Media board</a>' })}</div>`;
+  // Agents: their listings that need them (sent back, approved — mark Live, waiting).
+  if (isAgent && subject === me.email && S.listings) {
+    const need = S.listings.filter(x => !x.virtual && (x.stageKey === 'for_approval' || x.stageKey === 'approved' || (x.approval && x.approval.decision === 'returned' && x.stageKey === 'details')));
+    if (need.length) html += `<div id="s-ml">${section('My listings', need.length, need.map(myListingItem).join(''), { hot: need.some(x => x.stageKey !== 'for_approval'), more: '<a class="more" href="mylistings.html">All my listings</a>' })}</div>`;
+  }
   if (asksAndApproves) {
   const ending = S.grants.filter(g => g.active && g.expiresAt && g.expiresAt > now && g.expiresAt < now + 2 * DAY).sort((a, b) => a.expiresAt - b.expiresAt);
   if (ending.length) html += `<div id="s-ending">${section('Access ending soon', ending.length, ending.map(g => `<div class="item"><div class="ic blue"><i class="fa-regular fa-hourglass-half"></i></div>
     <div class="bd"><b>${g.kind === 'lead' ? 'A buyer’s details' : esc(g.title)}</b><small>Details ${esc(untilWords(g.expiresAt))}${g.includeContact && g.contactExpiresAt > now ? ' · owner’s number ' + esc(untilWords(g.contactExpiresAt)) : ''}</small>
       ${subject === me.email && g.kind === 'property' ? `<div class="acts"><button type="button" class="btn sm" data-more="${esc(g.targetId)}">Ask for more time</button><a class="btn sm" href="dashboard.html?property=${encodeURIComponent(g.targetId)}">Open property</a></div>` : ''}</div></div>`).join(''), { hot: true })}</div>`;
-  html += `<div id="s-mine">${section(subject === me.email ? 'My requests' : 'Their requests', mine.length,
-    !ld('asked') ? loading() : mine.length ? mine.map(r => requestItem(r, 'mine')).join('') : empty('fa-solid fa-lock-open', isAgent ? 'No open requests. Ask for a property’s details from Properties → All.' : 'No open requests.'))}</div>`;
+  const reqChips = mineAll.length > 2 ? `<div class="mx-chips" role="group" aria-label="Show requests" id="reqChips">${[['all', 'All'], ['pending', 'Waiting'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['ended', 'Ended']]
+    .filter(([k]) => k === 'all' || reqCounts[k]).map(([k, l]) => `<button type="button" class="mx-chip" data-rf="${k}" aria-pressed="${k === reqFilter}">${l} <span>${k === 'all' ? mineAll.length : reqCounts[k]}</span></button>`).join('')}</div>` : '';
+  html += `<div id="s-mine">${section(subject === me.email ? 'My requests' : 'Their requests', mineAll.length,
+    !ld('asked') ? loading() : (reqChips ? `<div class="pad">${reqChips}</div>` : '') + (mine.length ? mine.map(r => requestItem(r, 'mine')).join('') : empty('fa-solid fa-lock-open', isAgent ? 'No requests this week. Ask from a property, or from Buyers for my properties below.' : 'No requests this week.')),
+    { more: '<span class="more">last 7 days · older in History</span>' })}</div>`;
+  }
+  // Buyers with other agents who fit my properties: request, see the answer, call — on the row.
+  if (isAgent && subject === me.email && S.matches.length) {
+    const c = matchCounts(S.matches);
+    html += `<div id="s-buyers">${section('Buyers for my properties', S.matches.length, '<div class="pad" id="buyersBox"></div>', { hot: c.approved > 0, more: `<span class="more">${[c.approved ? c.approved + ' approved' : '', c.new ? c.new + ' not asked' : ''].filter(Boolean).join(' · ')}</span>` })}</div>`;
   }
   html += `<div id="s-visits">${section('Site visits today', visits.length,
     !leadsLoaded ? loading() : visits.length ? visits.map(v => `<div class="item"><div class="ic ${v.ic}"><i class="fa-solid fa-location-dot"></i></div>${v.html}</div>`).join('') : empty('fa-regular fa-calendar', 'No site visits today.'))}</div>`;
@@ -244,11 +338,52 @@ function render() {
   if (subject === me.email) html += `<div class="card" style="margin-top:18px"><div class="item"><div class="ic"><i class="fa-regular fa-sun"></i></div><a class="bd" href="crm.html?nav=today"><b>Tasks and meetings for today</b><small>Your assigned tasks and calendar invitations are in Daily task</small></a></div></div>`;
   const subs = S.subs.filter(s => s.status === 'pending' || (s.decidedAt || 0) >= now - 3 * DAY);
   if (subs.length) html += section('Properties I sent for approval', subs.length, subs.map(s => `<div class="item"><div class="ic"><i class="fa-regular fa-building"></i></div><div class="bd"><b>${esc((s.fields || {}).name)}</b><small>${s.status === 'pending' ? '<span class="tag wait">Waiting for an admin</span>' : s.status === 'approved' ? '<span class="tag green">Approved</span> — now in your properties' : '<span class="tag red">Not approved</span>' + (s.note ? ' — ' + esc(s.note) : '')}</small></div></div>`).join(''));
+  // The buyers list keeps what the agent was doing (a note half-typed) across redraws: it is moved
+  // into the fresh page, not drawn again, unless its matches changed.
+  const keepBuyers = $('buyersBox');
   $('sections').innerHTML = html;
+  const box = $('buyersBox');
+  if (box) {
+    const sig = JSON.stringify(S.matches.map(m => [m.ref, m.propertyId, m.requested, m.granted && m.granted.until]));
+    if (keepBuyers && keepBuyers.dataset.sig === sig) box.replaceWith(keepBuyers);
+    else {
+      box.dataset.sig = sig;
+      renderMatches(box, S.matches, { api, toast, showProperty: true, limit: 5,
+        propName: id => { const p = S.propById && S.propById.get(String(id)); return p ? (p._code ? p._code + ' · ' : '') + (p.name || '') : ''; },
+        propHref: id => 'dashboard.html?property=' + encodeURIComponent(id) });
+    }
+  }
   bindActions($('sections'));
+  restoreBoxes();
   if (window.AppNav && window.AppNav.setBadge && subject === me.email) window.AppNav.setBadge('myday', toDecide.length);
   renderHistory(reqs);
   openWanted(reqs);
+  fillYourLeads(reqs);
+}
+
+function listingQueueItem(x) {
+  return `<div class="item"><div class="ic brand"><i class="fa-regular fa-building" aria-hidden="true"></i></div>
+    <div class="bd"><b>${esc(x.title || 'Untitled listing')}</b><small>${esc([x.location, x.config, x.askingPrice].filter(Boolean).join(' · '))} · sent by ${esc(x.agentName || nameOf(people, x.agentEmail) || 'the office')} ${esc(ago(x.sentAt))}</small>
+      ${x.note ? `<div class="q">“${esc(x.note)}”</div>` : ''}
+      <small>${x.deal ? (x.deal === 'rent' ? 'For rent' : 'For sale') + ' · ' : ''}${x.ownerInformed ? '✓ owner agreed' : 'owner’s agreement not ticked'}${x.ownerApproved ? ' · ✓ owner approved the photos' : ''}${x.brochure === 'created' ? ' · brochure ready' : x.brochure === 'requested' ? ' · brochure asked for' : ''}</small>
+      ${x.duplicateOf && x.duplicateOf.length ? `<div class="callout warn">Possible duplicate — the same owner or title is already with us: ${esc(x.duplicateOf.join(', '))}. Check before approving.</div>` : ''}
+      <div class="acts">
+        <button type="button" class="btn sm primary" data-lapprove="${esc(x.id)}"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button>
+        <button type="button" class="btn sm" data-lreturn="${esc(x.id)}">Send back</button>
+        ${x.photosLink ? `<a class="btn sm quiet" href="${esc(x.photosLink)}" target="_blank" rel="noopener">Photos</a>` : ''}
+      </div>
+      <div class="rj" data-lrj="${esc(x.id)}" hidden><label for="lrj-${esc(x.id)}">What to fix (the agent sees this)</label><textarea id="lrj-${esc(x.id)}" maxlength="500" rows="2" placeholder="e.g. Add the floor plan and the exact price"></textarea><p class="rj-err" role="alert"></p>
+        <div class="acts"><button type="button" class="btn sm" data-lrjsend="${esc(x.id)}">Send back</button><button type="button" class="btn sm quiet" data-lrjback="${esc(x.id)}">Not now</button></div></div>
+      <p class="qa-terms">Approving adds it to the inventory with ${esc(x.agentName || 'its agent')} as the agent; other agents see it once it goes Live.</p>
+    </div></div>`;
+}
+function myListingItem(x) {
+  const a = x.approval || {};
+  const back = x.stageKey === 'details' && a.decision === 'returned';
+  const tag = back ? '<span class="tag red">Sent back</span>' : x.stageKey === 'approved' ? '<span class="tag green">Approved</span>' : '<span class="tag wait">Waiting for approval</span>';
+  const line = back ? `by ${esc(a.decidedByName || 'an admin')} ${esc(ago(a.decidedAt))}` : x.stageKey === 'approved' ? `by ${esc(a.decidedByName || 'an admin')} — mark it Live when marketing starts` : `sent ${esc(ago(a.sentAt || x.stageChangedAt))}`;
+  return `<div class="item"><div class="ic ${back ? 'red' : x.stageKey === 'approved' ? 'green' : ''}"><i class="fa-solid fa-table-columns" aria-hidden="true"></i></div>
+    <a class="bd" href="mylistings.html?id=${encodeURIComponent(x.id)}"><b>${esc(x.title || 'Untitled listing')}</b><small>${tag} ${line}</small>${back && a.note ? `<div class="q">“${esc(a.note)}”</div>` : ''}</a></div>`;
 }
 
 function renderHistory(reqs) {
@@ -266,6 +401,34 @@ function renderHistory(reqs) {
 const canCo = r => r.kind === 'property' && (isAdmin || S.props.some(p => String(p.id) === String(r.targetId) && p.access === 'own'));
 
 function bindActions(root) {
+  const chips = root.querySelector('#reqChips');
+  if (chips) chips.addEventListener('click', e => { const b = e.target.closest('[data-rf]'); if (!b) return; reqFilter = b.dataset.rf; render(); });
+  // One tap: approved with the admin's defaults.
+  root.querySelectorAll('[data-quick]').forEach(b => b.addEventListener('click', () => {
+    const r = allRequests().find(x => x.id === b.dataset.quick);
+    if (!r) return;
+    busy(b, () => Promise.resolve().then(() => api('decide', quickBody(r))).then(() => toast('Approved — ' + quickTerms(r).replace(/^Approve gives /, '').replace(/\. More options.*$/, ''))).catch(e => toast('✗ ' + e.message)));
+  }));
+  // Reject: the reason is typed right under the request (no pop-up).
+  const rjOf = id => root.querySelector(`[data-rj="${CSS.escape(id)}"]`);
+  root.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', () => { const box = rjOf(b.dataset.reject); if (!box) return; box.hidden = false; box.querySelector('textarea').focus(); }));
+  root.querySelectorAll('[data-rjback]').forEach(b => b.addEventListener('click', () => { const box = rjOf(b.dataset.rjback); if (box) box.hidden = true; }));
+  root.querySelectorAll('[data-rjsend]').forEach(b => b.addEventListener('click', () => {
+    const box = rjOf(b.dataset.rjsend), note = box.querySelector('textarea').value.trim(), err = box.querySelector('.rj-err');
+    if (!note) { err.textContent = 'Say why — they see it'; box.querySelector('textarea').focus(); return; }
+    busy(b, () => api('decide', { id: b.dataset.rjsend, decision: 'reject', note }).then(() => toast('Rejected — they’ve been told')).catch(e => { err.textContent = e.message; }));
+  }));
+  // Listings waiting for approval (admins).
+  const lrjOf = id => root.querySelector(`[data-lrj="${CSS.escape(id)}"]`);
+  root.querySelectorAll('[data-lapprove]').forEach(b => b.addEventListener('click', () => busy(b, () => api('listing-decide', { id: b.dataset.lapprove, decision: 'approve' })
+    .then(j => { toast(j.created ? `Approved — added to the inventory as ${j.propertyCode}` : 'Approved'); loadQueue(); }).catch(e => toast('✗ ' + e.message)))));
+  root.querySelectorAll('[data-lreturn]').forEach(b => b.addEventListener('click', () => { const box = lrjOf(b.dataset.lreturn); if (!box) return; box.hidden = false; box.querySelector('textarea').focus(); }));
+  root.querySelectorAll('[data-lrjback]').forEach(b => b.addEventListener('click', () => { const box = lrjOf(b.dataset.lrjback); if (box) box.hidden = true; }));
+  root.querySelectorAll('[data-lrjsend]').forEach(b => b.addEventListener('click', () => {
+    const box = lrjOf(b.dataset.lrjsend), note = box.querySelector('textarea').value.trim(), err = box.querySelector('.rj-err');
+    if (!note) { err.textContent = 'Say what to fix — the agent sees it'; box.querySelector('textarea').focus(); return; }
+    busy(b, () => api('listing-decide', { id: b.dataset.lrjsend, decision: 'return', note }).then(() => { toast('Sent back to the agent'); loadQueue(); }).catch(e => { err.textContent = e.message; }));
+  }));
   root.querySelectorAll('[data-decide]').forEach(b => b.addEventListener('click', async () => {
     const r = allRequests().find(x => x.id === b.dataset.decide);
     if (!r) return;

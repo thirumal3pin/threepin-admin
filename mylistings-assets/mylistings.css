@@ -1,0 +1,108 @@
+/* My listings (mylistings.html): an agent's board and list. Base pieces (cards, buttons, sheets,
+   tags, chips) come from shared-assets/agent-ui.css; colours and type from shared-assets/theme.css.
+   Modern Web Guidance: the board scrolls natively with scroll-snap (natural-interactions), columns
+   the list's rows adapt to their container (a container query), targets are 44px on touch screens
+   (form-factor-adaptation), and nothing is reachable only by hover. */
+.ml-wrap { max-width: 1400px; margin: 0 auto; padding: 14px 16px 120px; }
+.ml-intro { max-width: 680px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ml-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.ml-search { flex: 1 1 240px; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border2); background: var(--card); }
+.ml-search i { color: var(--ink3); }
+.ml-search input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-size: 14px; }
+.ml-search:focus-within { outline: 2px solid var(--ink); outline-offset: 1px; }
+.ml-view { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--border); }
+.ml-view button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0 12px; min-height: 38px; border-radius: 8px; font-weight: 650; font-size: 13.5px; color: var(--ink3); cursor: pointer; }
+.ml-view button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+.ml-chips { margin-bottom: 6px; }
+.mx-chip.hot span { color: var(--brand-ink); font-weight: 700; }
+
+/* Board */
+.ml-board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; scroll-snap-type: x proximity;
+  padding: 4px 2px 16px; margin: 0 -2px; overscroll-behavior-x: contain; }
+.ml-board:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ml-col { flex: 0 0 min(86vw, 300px); scroll-snap-align: start; display: flex; flex-direction: column; background: var(--bg2); border-radius: 14px; padding: 10px; border: 1px solid var(--border); }
+.ml-col.gate { background: light-dark(#FFF8EC, rgba(255,170,60,.07)); border-color: light-dark(#F5D9A8, rgba(255,170,60,.25)); }
+.ml-col.paused { opacity: .9; }
+/* An empty stage takes less room, so the stages with cards are in view. */
+.ml-col.empty { flex-basis: min(60vw, 200px); }
+.ml-col-h { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
+.ml-col-h b { font-size: 13.5px; flex: 1; }
+.ml-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.ml-n { min-width: 24px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--card); border: 1px solid var(--border); font-size: 12px; font-weight: 650; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
+.ml-rule { margin: 4px 4px 10px 21px; font-size: 11.5px; color: var(--ink3); line-height: 1.35; text-wrap: pretty; }
+.ml-col-b { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.ml-none { margin: 8px 4px; font-size: 12.5px; color: var(--ink4); text-align: center; }
+
+.ml-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.ml-card.late { border-color: light-dark(#F3C98B, rgba(255,170,60,.45)); }
+.ml-ctop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ml-code { font-family: var(--code, ui-monospace, monospace); font-weight: 700; letter-spacing: .08em; font-size: 11.5px; color: var(--ink2); }
+.ml-code.none { font-family: inherit; letter-spacing: 0; font-weight: 600; color: var(--ink4); }
+.ml-age { font-size: 11.5px; font-weight: 650; color: var(--ink3); padding: 2px 8px; border-radius: 999px; background: var(--bg2); font-variant-numeric: tabular-nums; }
+.ml-age.warn { background: light-dark(#FFF1DB, rgba(255,170,60,.16)); color: light-dark(#8A4B00, #FFC979); }
+.ml-title { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 0 0; font: inherit; font-size: 14.5px; font-weight: 650; color: var(--ink); cursor: pointer; text-wrap: balance; overflow-wrap: break-word; }
+.ml-title:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.ml-title:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+.ml-meta { margin-top: 3px; font-size: 12.5px; color: var(--ink3); overflow-wrap: break-word; }
+.ml-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.ml-tags .tag { margin: 0; }
+.ml-need { margin-top: 8px; font-size: 12.5px; font-weight: 600; color: light-dark(#9A3412, #FDBA74); display: flex; gap: 6px; align-items: baseline; }
+.ml-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.ml-acts .btn.sm { min-height: 36px; font-size: 13px; padding: 0 10px; }
+.ml-wait { font-size: 12.5px; color: var(--ink3); font-weight: 600; }
+
+/* List */
+.ml-list { overflow: hidden; container: mllist / inline-size; }
+.ml-row { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
+.ml-row:first-child { border-top: 0; }
+.ml-row-stage { display: flex; align-items: center; gap: 8px; }
+.ml-row-stage small { color: var(--ink3); font-size: 12px; }
+.ml-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; padding: 3px 10px; border-radius: 999px;
+  background: color-mix(in srgb, var(--c, #999) 12%, var(--card)); color: color-mix(in srgb, var(--c, #999) 75%, var(--ink)); border: 1px solid color-mix(in srgb, var(--c, #999) 30%, transparent); }
+.ml-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, #999); }
+@container mllist (inline-size > 720px) {
+  .ml-row { grid-template-columns: minmax(0, 1fr) 190px 200px; align-items: center; }
+  .ml-row-act { justify-self: end; }
+}
+
+/* Sheet */
+.ml-sh-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.ml-steps { list-style: none; display: flex; gap: 4px; padding: 0; margin: 4px 0 14px; overflow-x: auto; scrollbar-width: none; }
+.ml-steps li { flex: 1 0 auto; min-width: 64px; }
+.ml-steps li::before { content: ""; display: block; height: 4px; border-radius: 4px; background: var(--border); margin-bottom: 4px; }
+.ml-steps li.done::before { background: var(--ink3); }
+.ml-steps li.now::before { background: var(--brand); }
+.ml-steps span { font-size: 10.5px; color: var(--ink4); white-space: nowrap; }
+.ml-steps li.now span { color: var(--ink); font-weight: 650; font-size: 11px; }
+.ml-sh-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 6px; }
+.ml-move { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ink3); }
+.ml-move select { min-height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--border2); background: var(--card); color: var(--ink); font: inherit; font-size: 13.5px; }
+.ml-sec { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 4px; }
+.ml-sec > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14.5px; list-style: none; }
+.ml-sec > summary::-webkit-details-marker { display: none; }
+.ml-sec > summary::after { content: "\f078"; font-family: "Font Awesome 6 Free"; font-weight: 900; font-size: 11px; margin-left: auto; color: var(--ink3); transition: rotate .15s; }
+.ml-sec[open] > summary::after { rotate: 180deg; }
+.ml-sec > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 6px; }
+.ml-sum { font-weight: 500; font-size: 12.5px; color: var(--ink3); }
+.ml-sec .field input, .ml-sec .field select, .ml-sec .field textarea, .sheet .field input, .sheet .field select, .sheet .field textarea {
+  min-height: 42px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border2); background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
+.sheet .field textarea { min-block-size: 72px; resize: vertical; field-sizing: content; }
+.ml-tl { list-style: none; padding: 0; margin: 4px 0 8px; }
+.ml-tl li { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
+.ml-tl li:first-child { border-top: 0; }
+.ml-tl small { color: var(--ink3); font-size: 12px; }
+.ml-sh-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.ml-empty { padding: 28px 18px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.ml-empty i { font-size: 26px; color: var(--ink3); }
+.ml-empty p { margin: 0 0 8px; color: var(--ink3); max-width: 420px; }
+@media (pointer: coarse) { .ml-acts .btn.sm, .ml-view button, .ml-move select { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .ml-sec > summary::after { transition: none; } }
+
+.ml-checks { border: 0; padding: 0; margin: 10px 0; display: grid; grid-template-columns: 1fr; gap: 2px; }
+.ml-checks legend { font-size: 13px; font-weight: 600; color: var(--ink2); padding: 0; margin-bottom: 4px; }
+.ml-checks label { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 14px; cursor: pointer; }
+.ml-checks input { width: 20px; height: 20px; accent-color: var(--brand); flex: none; }
+@media (min-width: 640px) { .ml-checks { grid-template-columns: 1fr 1fr; } }
+.sheet .field input[readonly] { background: var(--bg2); color: var(--ink3); }
+#officeNote a { color: var(--brand-ink); font-weight: 600; }

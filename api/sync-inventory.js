@@ -5,6 +5,7 @@ import {
   findLostDetail, writeRecoveredNotes, keepFromChoice
 } from './_inventory-shared.js';
 import { metaLeadsPost } from './_meta-leads.js';
+import { claimReservedCreates } from './_agent-listings.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
 // scripts/sync-inventory.js — both import api/_inventory-shared.js, so the
@@ -144,6 +145,9 @@ export async function POST(request){
       });
     }
 
+    // A brochure's Inventory row for a listing not yet approved: that listing's agent gets the new
+    // property, out of other agents' sight until it goes Live (api/_agent-listings.js).
+    await claimReservedCreates(db, TENANT_ID, plan.writes, existing).catch(e => console.error('sync: reserved codes:', e.message));
     await commitWrites(db, plan.writes, plan.staleExtras, plan.keepNotes);
     return json({ ok: true, ...summary, written: plan.writes.length,
                   appliedIds: plan.writes.map(p => p.id),

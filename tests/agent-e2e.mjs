@@ -118,14 +118,14 @@ try {
     ok('sent without a “discard what you typed?” question, and the sheet is closed', !!(await until(() => page.evaluate(() => !document.querySelector('.sheet')))) && !page.__lastDialog, page.__lastDialog);
     ok('the property now says he asked', !!(await until(() => page.evaluate(() => /You asked/.test((document.querySelector('.ag-panel') || {}).textContent || '')))));
     await page.evaluate(() => closeDetail());
-    ok('the card now says Asked', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('#pgrid .card')].some(c => /Anna Nagar/.test(c.textContent) && /Asked/.test(c.textContent))))));
+    ok('the card now says Details requested', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('#pgrid .card')].some(c => /Anna Nagar/.test(c.textContent) && /Details requested/.test(c.textContent))))));
     // His own property in full: the owner's number, the buyers who match, availability and a note.
     await page.evaluate(() => { setAgentAccessFilter('mine'); openDetail('ADY002'); });
     await page.waitForSelector('#dp.open .ag-panel.mine');
     const own = await page.textContent('#dp');
     ok('his own property opens in full — address and owner’s number', /LB Road/.test(own) && /9840099999/.test(own));
     await page.click('.dp-tab:has-text("Matching Buyers")');
-    await until(() => page.evaluate(() => !!document.querySelector('#dpAgMatches [data-askref]')));
+    await until(() => page.evaluate(() => !!document.querySelector('#dpAgMatches [data-mx="ask"]')));
     const mb = await page.textContent('#dpAgMatches');
     ok('a buyer with another agent who matches is shown without name or number', /2 BHK/.test(mb) && !/Divya|9222222222/.test(mb), mb.slice(0, 300));
     await shot(page, '06-rameez-own-property');
@@ -139,11 +139,15 @@ try {
     ok('…and the tab stays where he is after the availability change', await page.evaluate(() => document.querySelector('.dp-tab.active').textContent.includes('Notes')));
     await page.click('.dp-tab:has-text("Matching Buyers")');
     ok('…pointed to at the top of the tab', /with other agents also match/.test(await page.textContent('#dpAgJump')));
-    await page.click('#dpAgMatches [data-askref]');
-    await page.waitForSelector('#lReason');
-    await page.fill('#lReason', 'ADY002 fits her exactly');
-    await page.click('#lGo');
+    ok('…each row says where his request stands: not asked yet', /Not asked yet/.test(await page.textContent('#dpAgMatches')));
+    await page.click('#dpAgMatches [data-mx="ask"]');
+    // Asked right on the row: a short note, already written for him — no pop-up.
+    await page.waitForSelector('#dpAgMatches .mx-ask:not([hidden]) textarea');
+    ok('…the note is pre-filled', (await page.inputValue('#dpAgMatches .mx-ask textarea')).length > 10);
+    await page.fill('#dpAgMatches .mx-ask textarea', 'ADY002 fits her exactly');
+    await page.click('#dpAgMatches [data-mx="send"]');
     ok('a request for the buyer’s number is sent', !!(await until(async () => (await db.collection('accessRequests').where('kind', '==', 'lead').get()).size === 1)));
+    ok('…and the row says “Details requested” at once, with Cancel request', !!(await until(() => page.evaluate(() => /Details requested/.test(document.querySelector('#dpAgMatches').textContent) && !!document.querySelector('#dpAgMatches [data-mx="cancel"]')))));
     noErrors(page, 'Properties (agent)');
   }
 

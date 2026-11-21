@@ -39,6 +39,7 @@ const PAGE_TABS = {
   // The Property dashboard: an agent sees it from their own copy (dashboard-assets/agent-mode.js).
   property: ['properties'],
   myprops: ['properties'],
+  mylistings: ['properties'],
   myday: ['myday'],
   messages: ['messages'],
   track: ['shoots'],

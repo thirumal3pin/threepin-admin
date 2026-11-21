@@ -11,6 +11,7 @@
 // agents — is not offered to them, and is refused here too if anything still asks.
 // Loaded by dashboard-assets/firebase-sync.js only for an agent's login.
 import { api, watchMyView, directory, nameOf as nameIn, myLeads, untilWords, openSheet, busy, esc } from '../shared-assets/agent-client.js';
+import { renderMatches, matchCounts } from '../shared-assets/agent-matches.js';
 
 const say = msg => (typeof window.showToast === 'function' ? window.showToast(msg) : console.log(msg));
 const refuse = (what = 'That’s for the office — ask an admin') => Promise.reject(Object.assign(new Error(what), { code: 'agent-refused' }));
@@ -156,28 +157,26 @@ export function start(me, { markLive } = {}) {
     });
   };
   // Buyers with other agents (or nobody yet) whose requirement fits one of the agent's own
-  // properties: worked out by the server, without names or numbers, each with "Ask for their number".
+  // properties: worked out by the server. Each row says where the agent's request stands — not asked,
+  // requested, approved (with the name, number, Call and Open in Leads), rejected with the reason —
+  // and asking or cancelling happens on the row (shared-assets/agent-matches.js).
   // (Drawn beside the match panel, not inside it: the panel redraws itself when opened up further.)
   A.otherMatches = (el, p, jumpEl) => {
     if (!el) return;
-    el.innerHTML = ''; if (jumpEl) jumpEl.innerHTML = '';
-    if (!isMine(p)) return;
+    if (jumpEl) jumpEl.innerHTML = '';
+    if (!isMine(p)) { el.innerHTML = ''; el.className = ''; return; }
     const list = A.matchesFor(p.id);
-    const box = el;
-    box.className = 'ag-matches';
-    box.innerHTML = list.length ? `<div class="ag-matches-h">Buyers with other agents who match <span class="ag-n">${list.length}</span></div>
-      <p class="ag-note">Their name and number open once their agent or an admin approves.</p>
-      ${list.map(m => `<div class="ag-match"><b>${esc(m.band || 'Match')}${m.pct ? ' · ' + m.pct + '%' : ''}</b>${m.name ? ' — ' + esc(m.name) : ''}
-        ${m.requirement ? `<p>${esc(m.requirement)}</p>` : ''}${m.aiSummary ? `<p class="ag-ai">${esc(m.aiSummary)}</p>` : ''}
-        ${m.phone ? `<p><a href="tel:${esc(m.phone)}">${esc(m.phone)}</a></p>` : ''}
-        <div class="ag-acts">${m.requested === 'pending' ? '<span class="ag-tag wait">Asked — waiting</span>'
-          : `${m.requested === 'rejected' ? '<span class="ag-tag red">Not approved last time</span>' : ''}<button type="button" class="ag-btn" data-askref="${esc(m.ref)}"><i class="fa-solid fa-unlock"></i> ${['rejected', 'cancelled', 'expired'].includes(m.requested) ? 'Ask again' : 'Ask for their number'}</button>`}</div></div>`).join('')}` : '';
-    if (!list.length) { box.className = ''; return; }
-    box.querySelectorAll('[data-askref]').forEach(b => b.addEventListener('click', () => askLead(b.dataset.askref, p, b)));
+    if (!list.length) { el.innerHTML = ''; el.className = ''; return; }
+    const c = matchCounts(list);
+    el.className = 'ag-matches';
+    el.innerHTML = `<div class="ag-matches-h">Buyers with other agents who match <span class="ag-n">${list.length}</span></div>
+      <p class="ag-note">Request their details right here — their agent or an admin decides, and the answer shows on the row.</p><div class="ag-mx"></div>`;
+    renderMatches(el.querySelector('.ag-mx'), list, { api, toast: say, propName: () => p._code || p.name || '', onChange: () => A.refresh() });
     // At the top of the tab: they would otherwise sit below every one of the agent's own matches.
     if (jumpEl) {
-      jumpEl.innerHTML = `<button type="button" class="ag-jump"><i class="fa-solid fa-arrow-down"></i> ${list.length} buyer${list.length === 1 ? '' : 's'} with other agents also match — see ${list.length === 1 ? 'it' : 'them'}</button>`;
-      jumpEl.querySelector('button').addEventListener('click', () => box.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      const bits = [c.approved ? c.approved + ' approved' : '', c.pending ? c.pending + ' waiting' : '', c.new ? c.new + ' not asked' : ''].filter(Boolean).join(' · ');
+      jumpEl.innerHTML = `<button type="button" class="ag-jump"><i class="fa-solid fa-arrow-down"></i> ${list.length} buyer${list.length === 1 ? '' : 's'} with other agents also match${bits ? ' — ' + bits : ''}</button>`;
+      jumpEl.querySelector('button').addEventListener('click', () => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     }
   };
 
@@ -226,32 +225,12 @@ export function start(me, { markLive } = {}) {
       }));
     } });
   }
-  function askLead(ref, p, btn) {
-    openSheet(`
-      <h3>Ask for this buyer’s details</h3>
-      <p class="sub">A matching buyer for ${esc(p.name || p._code)}</p>
-      <div class="field"><label for="lReason">Why (their agent sees this)</label><textarea id="lReason" maxlength="500" placeholder="e.g. My 2 BHK in Adyar fits exactly what they want"></textarea></div>
-      <p class="note">Their agent or an admin decides. Once approved, the lead shows in your CRM with their name and number.</p>
-      <p class="err" id="lErr"></p>
-      <div class="bar"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary block" id="lGo">Send request</button></div>`,
-    { label: 'Ask for the buyer', onOpen: (sh, close) => {
-      const qq = s => sh.querySelector(s);
-      qq('#lGo').addEventListener('click', () => busy(qq('#lGo'), async () => {
-        const reason = qq('#lReason').value.trim();
-        if (!reason) { qq('#lErr').textContent = 'Say why, so their agent can decide'; return; }
-        try {
-          await api('request', { kind: 'lead', ref, reason });
-          if (btn && btn.isConnected) btn.outerHTML = '<span class="ag-tag wait">Asked — waiting</span>';   // at once, before the copy catches up
-          say('Request sent'); close(true); A.refresh();
-        }
-        catch (e) { qq('#lErr').textContent = e.message; }
-      }));
-    } });
-  }
-
   // ── A property the agent sourced: an admin checks it before it joins the inventory ──
-  A.addProperty = () => {
+  // Now a listing on My listings (it walks the stages, and an admin approves it before Live); the
+  // older one-step submission below stays for anything that still calls it with { legacy: true }.
+  A.addProperty = (opts = {}) => {
     if (!A.can('addProperties')) { say('Adding properties isn’t part of your access — ask an admin'); return; }
+    if (!opts.legacy && A.can('listings')) { location.href = 'mylistings.html?new=1'; return; }
     openSheet(`
       <h3>Add a property you sourced</h3>
       <p class="sub">An admin checks it before it joins the inventory, with you as its agent.</p>

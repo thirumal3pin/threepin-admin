@@ -471,9 +471,23 @@ function sortCards(arr) {
   return items.sort((a, b) => by(a, b) || urgent(a, b)).map(o => o.x);
 }
 
+// The detail panel of an agent's own listing: whose it is, where its admin approval stands, and the
+// decision right there (the same as My Day's).
+function agentListingBox(x) {
+  const k = P.stageKeyOf(stageById(x.stageId));
+  const a = x.adminApproval || {};
+  const who = esc(x.agentName || personName(x.agentEmail) || 'an agent');
+  const line = k === 'for_approval' ? `${who} sent it for approval${a.sentAt ? ' ' + esc(timeAgo(a.sentAt)) : ''}${a.note ? ': “' + esc(a.note) + '”' : ''}`
+    : a.decision === 'approved' ? `Approved${a.decidedByName ? ' by ' + esc(a.decidedByName) : ''} — ${who} marks it Live when marketing starts`
+    : a.decision === 'returned' ? `Sent back to ${who}${a.note ? ': “' + esc(a.note) + '”' : ''}`
+    : `${who}’s listing — it goes Live after an admin approves it`;
+  return `<div class="tk-agentbox"><b>🤝 ${who}’s listing (My listings)</b><div>${line}</div>
+    ${k === 'for_approval' ? `<div class="tk-agentbox-a"><button type="button" class="tk-btn sm" onclick="approveListingById('${x.id}')">Approve</button><button type="button" class="tk-btn ghost sm" onclick="sendBackListingById('${x.id}')">Send back</button></div>` : ''}</div>`;
+}
 function listingAgents(x) {
   const l = x.leadId ? leadById(x.leadId) : null;
-  return [l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase());
+  // An agent's own listing (My listings) is theirs, whatever lead it has.
+  return [...new Set([isAgentListing(x) && x.agentEmail, l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean).map(e => String(e).toLowerCase()))];
 }
 // One filter of the view's set: a value in or out, or all of them cleared.
 function toggleIn(set, v) { if (set.has(v)) set.delete(v); else set.add(v); renderFilterBar(); applyFilters(); }
@@ -703,7 +717,7 @@ function cardUrgency(x) {
 const personName = e => { const s = String(e || '').split('@')[0]; return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; };
 function agentsOf(it) {
   const l = it.lead;
-  return [l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean);
+  return [...new Set([it.x && isAgentListing(it.x) && it.x.agentEmail, l && l.assignedAgent, l && l.secondaryAgent].filter(Boolean))];
 }
 function factChips(f, maxSizes) {
   const chip = (t, cls) => `<span class="sl-chip${cls ? ' ' + cls : ''}">${esc(t)}</span>`;
@@ -1240,6 +1254,73 @@ window.onColDragOver = onColDragOver; window.onColDragLeave = onColDragLeave;
 window.onColDrop = onColDrop; window.onCardKeydown = onCardKeydown;
 
 // ═══════ MOVING A LISTING ═══════
+// A card moved to Live here: its property opens to the other agents (a property added when an agent's
+// listing was approved stays hidden until then). The server checks the card really is in Live.
+// An agent's own listing (My listings): it reaches Live only through an admin's approval.
+const isAgentListing = x => !!(x && x.agentEmail && x.source !== 'office');
+const agentListingApproved = x => {
+  if (!x) return false;
+  if ((x.adminApproval && x.adminApproval.decision === 'approved') || (x.reached && x.reached.approved)) return true;
+  // A property already in the inventory and open to everyone (not waiting on this listing's approval).
+  const key = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const p = x.propertyCode ? (inventory || []).find(q => key(q.propertyCode || q.id) === key(x.propertyCode)) : null;
+  return !!p && !p.listingHidden;
+};
+async function liveSync(x) {
+  if (!x || !x.propertyCode || !window.trackAuth) return;
+  try {
+    const token = await window.trackAuth.getIdToken();
+    await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ action: 'listing-live', id: x.id }) });
+  } catch (e) { console.error('live sync:', e); }
+}
+const deciding = new Set();
+async function sendBackListing(x) {
+  if (deciding.has(x.id)) return;
+  const note = prompt(`Send “${x.title || 'this listing'}” back to ${x.agentName || 'the agent'}? Say what to fix — they see it:`);
+  if (note == null) { if (currentDetailId === x.id) openDetail(x.id); return; }
+  if (!note.trim()) { toast('Say what to fix — the agent sees it'); return; }
+  deciding.add(x.id);
+  try {
+    const token = window.trackAuth && await window.trackAuth.getIdToken();
+    const r = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ action: 'listing-decide', id: x.id, decision: 'return', note: note.trim() }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || 'Could not send it back');
+    const st = P.stageForKey(stages, 'details');
+    if (st) { x.prevStageId = x.stageId; x.stageId = st.id; x.stageChangedAt = Date.now(); }
+    x.adminApproval = { ...(x.adminApproval || {}), decision: 'returned', note: note.trim(), decidedAt: Date.now() };
+    applyFilters();
+    if (currentDetailId === x.id) openDetail(x.id);
+    toast('Sent back — ' + (x.agentName || 'the agent') + ' sees what to fix');
+  } catch (e) { toast('✗ ' + e.message); if (currentDetailId === x.id) openDetail(x.id); }
+  finally { deciding.delete(x.id); }
+}
+window.approveListingById = id => { const x = listings.find(l => l.id === id); if (x) approveListing(x); };
+window.sendBackListingById = id => { const x = listings.find(l => l.id === id); if (x) sendBackListing(x); };
+async function approveListing(x) {
+  if (deciding.has(x.id)) return;
+  const note = !confirm(`Approve “${x.title || x.propertyCode || 'this listing'}”${x.agentName ? ' from ' + x.agentName : ''}? ${x.propertyCode ? '' : 'It is added to the inventory with its agent; '}other agents see it once it goes Live.`) ? null : '';
+  if (note === null) { if (currentDetailId === x.id) openDetail(x.id); return; }
+  deciding.add(x.id);
+  try {
+    const token = window.trackAuth && await window.trackAuth.getIdToken();
+    const r = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ action: 'listing-decide', id: x.id, decision: 'approve', note }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || 'Could not approve it');
+    // The card as the server left it, at once — so an edit before the snapshot arrives does not
+    // write the old stage back.
+    const st = P.stageForKey(stages, 'approved');
+    if (st) { x.prevStageId = x.stageId; x.stageId = st.id; x.stageChangedAt = Date.now(); }
+    if (j.propertyCode) x.propertyCode = j.propertyCode;
+    x.adminApproval = { ...(x.adminApproval || {}), decision: 'approved', decidedAt: Date.now() };
+    applyFilters();
+    if (currentDetailId === x.id) openDetail(x.id);
+    toast(j.created ? `Approved — added to the inventory as ${j.propertyCode}` : 'Approved');
+  } catch (e) { toast('✗ ' + e.message); if (currentDetailId === x.id) openDetail(x.id); }
+  finally { deciding.delete(x.id); }
+}
 function changeStage(id, stageId, opts) {
   opts = opts || {};
   if (notLiveYet()) return;
@@ -1256,6 +1337,27 @@ function changeStage(id, stageId, opts) {
   const now = Date.now();
   const from = stageById(x.stageId);
   const key = P.stageKeyOf(to);
+  // Approving goes through the server (api/_agent-listings.js listing-decide): a listing not in the
+  // inventory yet is added there with its agent, hidden from other agents until it goes Live — the
+  // same thing My Day's Approve does. The card moves when the server has saved it.
+  // An agent's listing: approved only through the server (an admin), and Live only after that.
+  if (isAgentListing(x) && key === 'approved') { approveListing(x); return; }
+  // Out of Sent for approval to an earlier column: that is an admin sending it back, with a note.
+  if (isAgentListing(x) && P.stageKeyOf(from) === 'for_approval' && P.ladderIndex(key) >= 0 && P.ladderIndex(key) < P.ladderIndex('for_approval')) {
+    const role = window.__pinAccess && window.__pinAccess.role;
+    if (role && role !== 'admin') { toast('An admin sends an agent’s listing back (with a note for them)'); if (currentDetailId === id) openDetail(id); return; }
+    sendBackListing(x); return;
+  }
+  // Whether its property is open to everyone needs the inventory: loaded first, then asked again.
+  if (isAgentListing(x) && key === 'live' && !agentListingApproved(x) && x.propertyCode && !inventory) {
+    loadInventory().then(() => changeStage(id, stageId, opts));
+    return;
+  }
+  if (isAgentListing(x) && key === 'live' && !agentListingApproved(x)) {
+    toast(`${x.agentName || 'The agent'}’s listing goes Live once it is approved — drag it to Approved first`);
+    if (currentDetailId === id) openDetail(id);
+    return;
+  }
 
   addHistory(x, 'stage', `Moved from <b>${esc(from ? from.name : 'no column')}</b> to <b>${esc(to.name)}</b>${opts.reason ? ' — ' + esc(opts.reasonLabel || opts.reason) : ''}`);
   x.prevStageId = x.stageId || null;
@@ -1286,7 +1388,9 @@ function changeStage(id, stageId, opts) {
   else { x.holdReason = null; x.holdUntil = null; }
   x.updatedAt = now;
   x.updatedBy = currentUserEmail || null;
-  persist(x);
+  // Into Live: once saved, its property opens to the other agents (liveSync).
+  if (key === 'live' && window.trackFirebase) window.trackFirebase.saveListing(x).then(() => liveSync(x)).catch(e => { console.error('Save failed:', e); toast('Could not save — check your connection'); });
+  else persist(x);
   if (calOff) shootCalendar(x, true);
   applyFilters();
   if (currentDetailId === id) openDetail(id);
@@ -1921,6 +2025,7 @@ function summaryHtml(x, lead, stage) {
       ${it.missing.length ? `<div class="sl-miss">Missing: ${esc(it.missing.join(', '))} — add it with Edit details at the bottom</div>` : ''}
     </div>
     <div class="tk-sum-tags"><span class="tk-sum-k">Tags</span>${window.tagEditorHtml ? window.tagEditorHtml('l:' + x.id, x.tags) : tagChips(x.tags)}</div>
+    ${isAgentListing(x) ? agentListingBox(x) : ''}
     <div class="tk-sum-grid">
       <div class="tk-sum-f"><span>Agent</span><b class="${agents.length ? '' : 'none'}">👤 ${agents.length ? esc(agents.map(personName).join(' + ')) : 'Unassigned'}</b>${lead ? '<span class="tk-sum-sub">set on the CRM lead</span>' : ''}</div>
       <div class="tk-sum-f stage"><span>Stage</span>
@@ -2602,13 +2707,16 @@ function advanceTo(id, key, why) {
   if (stageKindOfId(x.stageId) !== 'open') return;
   const cur = P.ladderIndex(P.stageKeyOf(stageById(x.stageId)));
   if (cur < 0 || cur >= P.ladderIndex(key)) return;
+  // An agent's listing never moves past the approval on its own (a post going live in Posting).
+  if (isAgentListing(x) && P.ladderIndex(key) > P.ladderIndex('media_ready') && !agentListingApproved(x)) return;
   const now = Date.now(), from = stageById(x.stageId);
   addHistory(x, 'stage', `Moved from <b>${esc(from ? from.name : 'no column')}</b> to <b>${esc(to.name)}</b> — automatically${why ? ', ' + esc(why) : ''}`);
   x.prevStageId = x.stageId; x.stageId = to.id; x.stageChangedAt = now; x.stageChangedBy = 'automatic';
   markReached(x, key, now);
   x.updatedAt = now;
   x.updatedBy = currentUserEmail || null;
-  persist(x);
+  if (key === 'live' && window.trackFirebase) window.trackFirebase.saveListing(x).then(() => liveSync(x)).catch(e => console.error('Save failed:', e));
+  else persist(x);
   applyFilters();
 }
 // What the brochure panel (brochure-panel.js) needs from the board.
@@ -4184,7 +4292,10 @@ window.edPastToggle = () => { edPastAll = !edPastAll; renderEditor(); };
 // What the Editor view needs to know about a card — or one cut of it (k): its stage, whether it is shot
 // (a series: all its properties), its shoot date, and its posts in Posting (a cut: its outlet's only).
 function edCtx(x, k) {
-  const stageKey = P.stageKeyOf(stageById(x.stageId));
+  // Waiting for an admin's approval, or approved: everything the shoot was for is done — the Editor
+  // treats it as Media ready.
+  const rawKey = P.stageKeyOf(stageById(x.stageId));
+  const stageKey = rawKey === 'for_approval' || rawKey === 'approved' ? 'media_ready' : rawKey;
   const posts = (window.pgPostsFor && window.pgPostsFor(x, k ? EF.channelsOfCut(x, k) : null)) || { total: 0, scheduled: 0, live: 0, planned: 0, channels: [] };
   const postAt = posts.nextAt || posts.planDay || 0;
   const left = k ? (EF.cutPlanned(x, k) && EF.cutEdit(x, k).status !== 'done' ? 1 : 0) : cutsLeft(x);

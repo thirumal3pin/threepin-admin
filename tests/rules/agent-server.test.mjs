@@ -36,7 +36,7 @@ const view = async who => (await db.collection('agentViews').doc(`${T}__${U[who]
 const opens = async who => { await call(who, 'view'); return view(who); };
 
 async function clear() {
-  for (const c of ['properties', 'leads', 'grants', 'accessRequests', 'requestPrivate', 'agentViews', 'threads', 'visitAlerts', 'assignmentLog', 'propertySubmissions', 'agentConfigs', 'agentThrottle', 'propertyChanges']) {
+  for (const c of ['properties', 'leads', 'grants', 'accessRequests', 'requestPrivate', 'agentViews', 'threads', 'visitAlerts', 'assignmentLog', 'propertySubmissions', 'agentConfigs', 'agentThrottle', 'propertyChanges', 'listings', 'trackPipelines', 'listingCodes']) {
     const s = await db.collection(c).get();
     for (const d of s.docs) {
       for (const sub of ['messages', 'notes', 'history']) { const ss = await d.ref.collection(sub).get(); for (const x of ss.docs) await x.ref.delete(); }
@@ -47,6 +47,7 @@ async function clear() {
 
 beforeEach(async () => {
   await clear();
+  (await import('../../api/_agent-listings.js')).__clearSnapCache();
   const P = (id, o) => db.collection('properties').doc(id).set({ tenantId: T, id, propertyCode: id, ...o });
   await P('ANR001', { name: '3 BHK Apartment, Anna Nagar', config: '3 BHK', startingPrice: '₹1.8 Cr', type: 'Apartment', zone: 'Anna Nagar',
     location: '12, 6th Avenue, Anna Nagar', contactName: 'Mr Owner', contactNumber: '9840012345', availability: 'Available',
@@ -279,7 +280,21 @@ test('matching leads: requirement and AI summary without name or number; the num
   assert.equal((await call('rameez', 'lead-save', { id: 'lead_2', pairs: [[['stageId'], 'closed_lost']] })).status, 403, '…to read, not to change: it is still Swami’s client');
   assert.equal((await call('rameez', 'lead-note', { id: 'lead_2', note: { id: 'n9', text: 'bought elsewhere' } })).status, 403, 'no notes either: they feed the lead’s AI reading');
   assert.equal((await call('rameez', 'thread-open', { type: 'lead', linkedId: 'lead_2' })).ok, true, 'he can talk to its agent about it');
-  assert.ok(!(await view('rameez')).matches.some(x => x.ref === m.ref), 'no longer a "matching" lead');
+  // Approved: the buyer stays on the match list WITH what was approved, so the agent sees the answer
+  // where he asked — no Messages needed.
+  const after = (await view('rameez')).matches.find(x => x.ref === m.ref);
+  assert.ok(after, 'still on the list once approved');
+  assert.equal(after.requested, 'approved');
+  assert.equal(after.granted.leadId, 'lead_2');
+  assert.equal(after.granted.name, 'Divya Raman');
+  assert.equal(after.granted.phone, '9222222222', 'the number he was given, to call from the row');
+  assert.equal(after.req.status, 'approved');
+  assert.equal(after.req.by, 'Swami');
+  // Taken back: the details leave the row at once (the copy is rebuilt on a revoke).
+  await call('swami', 'revoke', { grantId: `${T}__l__lead_2__rameez_threepin_in`, reason: 'done' });
+  const gone = (await view('rameez')).matches.find(x => x.ref === m.ref);
+  assert.ok(!gone || !gone.granted, 'no name or number once access ended: ' + JSON.stringify(gone));
+  assert.ok(!JSON.stringify((await view('rameez')).matches).includes('9222222222'));
 });
 
 test('a visit booked on a colleague’s property alerts its agents with the client’s first name only', async () => {
@@ -462,8 +477,13 @@ test('“asked” marks: the most telling request wins; after a no he can ask ag
   assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).requested, 'cancelled');
   const b = await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: '2' });
   assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).requested, 'pending');
+  assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).req.id, b.id, 'the row knows which request (to cancel it there)');
   await call('swami', 'decide', { id: b.id, decision: 'reject', note: 'not now' });
-  assert.equal((await view('rameez')).matches.find(x => x.ref === m.ref).requested, 'rejected');
+  const rj = (await view('rameez')).matches.find(x => x.ref === m.ref);
+  assert.equal(rj.requested, 'rejected');
+  assert.equal(rj.req.note, 'not now', 'the reason shows on the row');
+  assert.equal(rj.req.by, 'Swami');
+  assert.equal((await opens('rameez')).matches.find(x => x.ref === m.ref).req.note, 'not now', '…and after a full rebuild too');
   assert.equal((await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: '3' })).ok, true, 'asked again after a no');
 });
 
@@ -546,4 +566,238 @@ test('round 3: access past its timer is switched off within minutes (so an open 
   assert.equal((await db.collection('leads').doc('lead_3').get()).data().siteVisitReplies, undefined, 'a colleague’s answer cannot be written by an agent');
   await call('rameez', 'lead-save', { id: 'lead_3', pairs: [[['siteVisitReplies'], [{ email: 'swami@threepin.in', status: 'needsAction' }]]] });
   assert.equal((await db.collection('leads').doc('lead_3').get()).data().siteVisitReplies[0].status, 'needsAction', 'a new booking’s “still to answer” list is fine');
+});
+
+// ═══════ An agent's listings: the pipeline, with an admin's approval before Live ═══════
+const L = await import('../../api/_agent-listings.js');
+const stageKey = async id => { const x = (await db.collection('listings').doc(id).get()).data(); const st = (await db.collection('trackPipelines').doc(T).get()).data().stages; return (st.find(s => s.id === x.stageId) || {}).key; };
+
+test('listings: an agent adds one, walks it through the stages, and cannot approve it himself', async () => {
+  const a = await call('rameez', 'listing-save', { fields: { title: '3 BHK, Perungudi', location: 'Perungudi, OMR', config: '3 BHK' } });
+  assert.equal(a.ok, true, JSON.stringify(a));
+  let x = (await db.collection('listings').doc(a.id).get()).data();
+  assert.equal(x.agentEmail, 'rameez@threepin.in');
+  assert.equal(x.source, 'agent');
+  assert.equal(await stageKey(a.id), 'new_listing');
+  const st = (await db.collection('trackPipelines').doc(T).get()).data().stages;
+  assert.ok(st.some(s => s.key === 'for_approval') && st.some(s => s.key === 'approved'), 'the pipeline gained the approval columns');
+  // Kavya does not see or touch Rameez's listing.
+  assert.ok(!(await call('kavya', 'listings')).listings.some(l => l.id === a.id));
+  assert.equal((await call('kavya', 'listing-stage', { id: a.id, key: 'details' })).status, 404);
+  // Steps forward.
+  for (const k of ['details', 'shoot_scheduled', 'shoot_done', 'media_ready']) assert.equal((await call('rameez', 'listing-stage', { id: a.id, key: k })).ok, true, k);
+  // Not into Approved, not into Live, by himself.
+  assert.equal((await call('rameez', 'listing-stage', { id: a.id, key: 'approved' })).status, 403);
+  assert.equal((await call('rameez', 'listing-stage', { id: a.id, key: 'live' })).status, 403);
+  // For approval: the basics must be there first.
+  let r = await call('rameez', 'listing-stage', { id: a.id, key: 'for_approval' });
+  assert.equal(r.status, 400);
+  assert.deepEqual(r.gaps, ['sale or rent', 'the price', 'the photos link']);
+  await call('rameez', 'listing-save', { id: a.id, fields: { deal: 'sale', askingPrice: '₹2.35 Cr', photosLink: 'https://drive.google.com/drive/folders/x', sellerName: 'Owner', sellerPhone: '9840011111' } });
+  r = await call('rameez', 'listing-stage', { id: a.id, key: 'for_approval', note: 'owner wants it live Friday' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const q = await call('swami', 'listing-queue');
+  assert.equal(q.listings.length, 1);
+  assert.equal(q.listings[0].note, 'owner wants it live Friday');
+  assert.equal((await call('rameez', 'listing-queue')).status, 403, 'the queue is for admins');
+  assert.equal((await call('rameez', 'listing-decide', { id: a.id, decision: 'approve' })).status, 403);
+  assert.equal((await call('rajesh', 'listing-stage', { id: a.id, key: 'approved' })).status, 403, 'full-access staff do not approve either');
+  // Sent back with a note, then approved.
+  assert.equal((await call('swami', 'listing-decide', { id: a.id, decision: 'return' })).status, 400, 'say what to fix');
+  r = await call('swami', 'listing-decide', { id: a.id, decision: 'return', note: 'add the floor plan' });
+  assert.equal(await stageKey(a.id), 'details');
+  const card = (await call('rameez', 'listings')).listings.find(l => l.id === a.id);
+  assert.equal(card.approval.decision, 'returned');
+  assert.equal(card.approval.note, 'add the floor plan');
+  await call('rameez', 'listing-stage', { id: a.id, key: 'for_approval' });
+  r = await call('swami', 'listing-decide', { id: a.id, decision: 'approve' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.created, true);
+  assert.equal(r.propertyCode, 'PERU0001', 'a code from the area');
+  const p = (await db.collection('properties').doc('PERU0001').get()).data();
+  assert.equal(p.assignedAgent, 'rameez@threepin.in', 'he is its primary agent');
+  assert.equal(p.listingHidden, true);
+  assert.equal(p.contactNumber, '9840011111');
+  assert.equal((await db.collection('propertyChanges').where('propertyId', '==', 'PERU0001').get()).size, 1, 'on the office’s Changes to apply');
+  // Hidden from Kavya until Live; Rameez sees it as his own.
+  assert.ok(!(await opens('kavya')).props.some(x => x.id === 'PERU0001'), 'other agents do not see it before Live');
+  assert.equal((await opens('rameez')).props.find(x => x.id === 'PERU0001')._access, 'own');
+  r = await call('rameez', 'listing-stage', { id: a.id, key: 'live' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal((await db.collection('properties').doc('PERU0001').get()).data().listingHidden, false);
+  // Other agents get it on their copy's next regular rebuild (≤ 30 min — not forced, to save reads).
+  await W.rebuildAgents(db, T, ['kavya@threepin.in']);
+  assert.ok((await view('kavya')).props.some(x => x.id === 'PERU0001' && x._access === 'summary'), 'Live: other agents see its summary');
+  // The timeline says what happened, with markup that is safe to show.
+  const h = await call('rameez', 'listing-history', { id: a.id });
+  assert.ok(h.items.some(i => /Approved by Swami/.test(i.text)));
+  assert.ok(h.items.every(i => !/<(?!\/?b>)/.test(i.text)));
+});
+
+test('listings: his own inventory properties show as cards; moving one makes its listing; sold takes it off the market', async () => {
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  let j = await call('rameez', 'listings');
+  const v = j.listings.find(l => l.id === 'p:ADY002');
+  assert.ok(v && v.virtual && v.stageKey === 'live', JSON.stringify(j.listings));
+  const r = await call('rameez', 'listing-stage', { id: 'p:ADY002', key: 'closed', availability: 'Sold' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  j = await call('rameez', 'listings');
+  assert.ok(!j.listings.some(l => l.id === 'p:ADY002'), 'now a real listing');
+  assert.equal(j.listings.find(l => l.propertyCode === 'ADY002').stageKey, 'closed');
+  assert.equal((await db.collection('properties').doc('ADY002').get()).data().availability, 'Sold');
+  // Someone else's property is not his to make a listing for.
+  assert.equal((await call('rameez', 'listing-stage', { id: 'p:ANR001', key: 'details' })).status, 403);
+  assert.equal((await call('rameez', 'listing-save', { propertyId: 'ANR001', fields: {} })).status, 403);
+});
+
+test('listings: the brochure is asked for through the office’s form, with a code; a bad photos link is refused', async () => {
+  const sent = [];
+  L.useHelpers({ ...(await import('../../api/_agent-work.js')).__listingHelpers(), fetch: async (url, o) => { sent.push({ url, body: String(o.body) }); return { ok: true, status: 200 }; } });
+  const a = await call('rameez', 'listing-save', { fields: { title: '2 BHK, Vanagaram', location: 'Vanagaram', photosLink: 'http://not-secure' } });
+  assert.equal(a.status, 400, 'https only');
+  const b = await call('rameez', 'listing-save', { fields: { title: '2 BHK, Vanagaram', location: 'Vanagaram', photosLink: 'https://drive.google.com/x' } });
+  let r = await call('rameez', 'listing-brochure', { id: b.id });
+  assert.equal(r.status, 400, 'the write-up first');
+  r = await call('rameez', 'listing-brochure', { id: b.id, description: '2 BHK FOR SALE' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.code, 'VANA0001');
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].body.includes('VANA0001') && sent[0].body.includes('2+BHK+FOR+SALE'));
+  assert.equal((await call('rameez', 'listing-brochure', { id: b.id, description: 'again' })).status, 409, 'not twice in a row');
+  const card = (await call('rameez', 'listings')).listings.find(l => l.id === b.id);
+  assert.equal(card.brochure.state, 'requested');
+  assert.equal(card.draftCode, 'VANA0001');
+  L.useHelpers((await import('../../api/_agent-work.js')).__listingHelpers());
+});
+
+test('listings: the pure rules', () => {
+  assert.equal(L.nextCode('Perungudi, OMR', new Set(['PERU0001', 'peru-0002'])), 'PERU0003');
+  assert.equal(L.nextCode('', new Set()), 'PROP0001');
+  assert.equal(L.agentMoveRefusal({ fromKey: 'media_ready', toKey: 'approved' }) !== '', true);
+  assert.equal(L.agentMoveRefusal({ fromKey: 'approved', toKey: 'live' }), '');
+  assert.equal(L.agentMoveRefusal({ fromKey: 'details', toKey: 'live', inInventoryOpen: true }), '', 'an inventory property already on the market');
+  assert.equal(L.agentMoveRefusal({ fromKey: 'details', toKey: 'live', approvedBefore: true }), '', 'approved once, paused, back to work: Live again');
+  assert.notEqual(L.agentMoveRefusal({ fromKey: 'live', toKey: 'closed', role: 'co' }), '', 'a co-agent does not close it');
+  assert.notEqual(L.agentMoveRefusal({ fromKey: 'details', toKey: 'closed' }), '', 'never approved: not sold');
+  assert.deepEqual(L.approvalGaps({ title: 'x', location: 'y', config: '2 BHK', deal: 'sale', askingPrice: '1 Cr', photosLink: 'https://a' }), []);
+  assert.equal(L.listingRole({ agentEmail: 'r@x.in' }, { assignedAgent: null }, 'r@x.in'), 'primary', 'a property nobody was given is still its creator’s');
+  assert.equal(L.listingRole({ agentEmail: 'r@x.in' }, { assignedAgent: 'k@x.in' }, 'r@x.in'), null);
+  assert.equal(L.safeHtml('<b>ok</b><img src=x onerror=1>'), '<b>ok</b>');
+});
+
+test('listings (review): codes are reserved, nothing is overwritten, access follows the property, the start is the server’s', async () => {
+  // Another business already has PERU0001: approving here never overwrites it.
+  await db.collection('properties').doc('PERU0001').set({ tenantId: 't_other', id: 'PERU0001', name: 'Theirs' });
+  const mk = async who => {
+    const a = await call(who, 'listing-save', { fields: { title: '3 BHK, Perungudi', location: 'Perungudi', config: '3 BHK', deal: 'sale', askingPrice: '1 Cr', photosLink: 'https://x.y/z' } });
+    for (const k of ['details', 'shoot_scheduled', 'shoot_done', 'media_ready', 'for_approval']) await call(who, 'listing-stage', { id: a.id, key: k });
+    return a.id;
+  };
+  const a = await mk('rameez'), b = await mk('kavya');
+  const [ra, rb] = await Promise.all([call('swami', 'listing-decide', { id: a, decision: 'approve' }), call('swami', 'listing-decide', { id: b, decision: 'approve' })]);
+  assert.ok(ra.ok && rb.ok, JSON.stringify([ra, rb]));
+  assert.notEqual(ra.propertyCode, rb.propertyCode, 'two approvals at once get two codes');
+  assert.ok(![ra.propertyCode, rb.propertyCode].includes('PERU0001'), 'the other business’s code is skipped');
+  assert.equal((await db.collection('properties').doc('PERU0001').get()).data().name, 'Theirs', 'never overwritten');
+  assert.equal((await db.collection('properties').doc(ra.propertyCode).get()).data().assignedAgent, 'rameez@threepin.in');
+  assert.equal((await db.collection('properties').doc(rb.propertyCode).get()).data().assignedAgent, 'kavya@threepin.in');
+  // Kavya never gets Rameez's listing (or its seller) through a shared code.
+  assert.ok(!(await call('kavya', 'listings')).listings.some(l => l.id === a));
+  // The property moves to Kavya: Rameez loses the listing although he created it.
+  await call('swami', 'assign', { propertyId: ra.propertyCode, primary: 'kavya@threepin.in' });
+  assert.ok(!(await call('rameez', 'listings')).listings.some(l => l.id === a), 'off his board');
+  assert.equal((await call('rameez', 'listing-stage', { id: a, key: 'live' })).status, 404, 'and he cannot move it');
+  // A start stage in the request is ignored: an inventory property starts where its state says.
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  const c = await call('rameez', 'listing-save', { propertyId: 'ADY002', key: 'approved', fields: {} });
+  assert.equal(await stageKey(c.id), 'live', 'not Approved');
+  // Office board: moving a card to Live there opens its hidden property.
+  await db.collection('listings').doc(b).update({ stageId: 'live' });
+  assert.equal((await call('swami', 'listing-live', { id: b })).changed, true);
+  assert.equal((await db.collection('properties').doc(rb.propertyCode).get()).data().listingHidden, false);
+  assert.equal((await call('rameez', 'listing-live', { id: b })).status, 403, 'agents use their own Mark Live');
+  // An admin whose email is not confirmed does not approve.
+  const x = await mk('rameez');
+  const r = await W.workPost({ ...U.swami, email_verified: false }, 'listing-stage', { id: x, key: 'approved' }, false);
+  assert.equal(r.status, 403);
+});
+
+test('listings (round 2): brochure first — the sheet sync gives the property to the agent, hidden; approval links it; nobody loses the card', async () => {
+  const sent = [];
+  L.useHelpers({ ...W.__listingHelpers(), fetch: async () => { sent.push(1); return { ok: true, status: 200 }; } });
+  const a = await call('rameez', 'listing-save', { fields: { title: '2 BHK, Mogappair', location: 'Mogappair', config: '2 BHK', deal: 'rent', askingPrice: '₹25,000/month', photosLink: 'https://x.y/z', sellerPhone: '9840055555' } });
+  const b = await call('rameez', 'listing-brochure', { id: a.id, description: '2 BHK FOR RENT' });
+  assert.equal(b.code, 'MOGA0001');
+  // The office adds the brochure's Inventory row; "Sync from sheet" creates the property.
+  const write = { id: 'MOGA0001', propertyCode: 'MOGA0001', tenantId: T, name: '2 BHK, Mogappair', availability: 'Available' };
+  assert.equal(await L.claimReservedCreates(db, T, [write], new Map()), 1);
+  await db.collection('properties').doc('MOGA0001').set(write);
+  assert.equal(write.assignedAgent, 'rameez@threepin.in');
+  assert.equal(write.listingHidden, true);
+  assert.equal(write.dealType, 'rent');
+  // Before the office links it: no second card for the waiting property, and no way round the approval.
+  let mine = (await call('rameez', 'listings')).listings;
+  assert.ok(mine.some(l => l.id === a.id) && !mine.some(l => l.id === 'p:MOGA0001'), JSON.stringify(mine.map(l => l.id)));
+  assert.notEqual((await call('rameez', 'listing-stage', { id: 'p:MOGA0001', key: 'live' })).ok, true, 'the waiting property cannot be moved on its own');
+  // The office board links the card by its brochure code.
+  await db.collection('listings').doc(a.id).update({ propertyCode: 'MOGA0001' });
+  assert.equal((await call('swami', 'listing-live', { id: a.id })).status, 409, 'the board cannot open it before approval');
+  assert.ok((await call('rameez', 'listings')).listings.some(l => l.id === a.id), 'still on his board');
+  assert.ok(!(await opens('kavya')).props.some(p => p.id === 'MOGA0001'), 'not shown to other agents before approval');
+  for (const k of ['details', 'shoot_scheduled', 'shoot_done', 'media_ready', 'for_approval']) assert.equal((await call('rameez', 'listing-stage', { id: a.id, key: k })).ok, true, k);
+  const r = await call('swami', 'listing-decide', { id: a.id, decision: 'approve' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.created, false, 'linked to the synced property, not a second one');
+  assert.equal(r.propertyCode, 'MOGA0001');
+  // A late "send back" from a stale queue is refused.
+  assert.equal((await call('swami', 'listing-decide', { id: a.id, decision: 'return', note: 'late' })).status, 409);
+  assert.equal((await call('rameez', 'listing-stage', { id: a.id, key: 'live' })).ok, true);
+  await W.rebuildAgents(db, T, ['kavya@threepin.in']);
+  assert.ok((await view('kavya')).props.some(p => p.id === 'MOGA0001'), 'Live: other agents see it (their next rebuild)');
+  L.useHelpers(W.__listingHelpers());
+});
+
+test('listings (round 2): saving never wipes a hidden owner number; inventory facts go to the property; a co-agent cannot change them or close it', async () => {
+  const AC = await import('../../shared-assets/agent-config.js');
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in', coAgents: ['kavya@threepin.in'] });
+  await db.collection('agentConfigs').doc(T).set({ tenantId: T, updatedAt: 1, ownPropertyFields: AC.PROPERTY_FIELDS.map(f => f.id).filter(id => id !== 'contact') });
+  // An office listing on his property, with the owner's contact on it.
+  await db.collection('listings').doc('lst_office').set({ id: 'lst_office', tenantId: T, title: 'Adyar flat', propertyCode: 'ADY002', stageId: 'live', sellerName: 'Ravi', sellerPhone: '9840099999', source: 'office' });
+  const card = (await call('rameez', 'listings')).listings.find(l => l.id === 'lst_office');
+  assert.equal(card.sellerPhone, '', 'not shown to him');
+  assert.equal(card.contactHidden, true);
+  let r = await call('rameez', 'listing-save', { id: 'lst_office', fields: { sellerName: '', sellerPhone: '', askingPrice: '₹99 L' } });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const x = (await db.collection('listings').doc('lst_office').get()).data();
+  assert.equal(x.sellerPhone, '9840099999', 'the owner’s number stays');
+  assert.equal(x.sellerName, 'Ravi');
+  assert.equal((await db.collection('properties').doc('ADY002').get()).data().startingPrice, '₹99 L', 'the price goes to the inventory');
+  assert.ok((await db.collection('propertyChanges').where('propertyId', '==', 'ADY002').get()).docs.some(d => d.data().field === 'startingPrice'), '…and on Changes to apply');
+  r = await call('kavya', 'listing-save', { id: 'lst_office', fields: { askingPrice: '₹1 Cr' } });
+  assert.equal(r.status, 403, 'a co-agent does not change the inventory');
+  assert.equal((await call('kavya', 'listing-stage', { id: 'lst_office', key: 'closed', availability: 'Sold' })).status, 403, '…nor marks it sold');
+  assert.equal((await call('kavya', 'listing-save', { id: 'lst_office', fields: { remarks: 'owner calls after 6' } })).ok, true, 'notes are fine');
+  assert.equal((await call('rameez', 'listing-save', { id: 'lst_office', fields: { askingPrice: '' } })).status, 400, 'the inventory price is changed, never cleared');
+  // Media ticks merge with the board's own.
+  await db.collection('listings').doc('lst_office').update({ media: { drone: true, tour: true } });
+  assert.equal((await call('rameez', 'listing-save', { id: 'lst_office', fields: { media: { photos: true, video: false, floorPlan: false } } })).ok, true);
+  assert.deepEqual((await db.collection('listings').doc('lst_office').get()).data().media, { drone: true, tour: true, photos: true, video: false, floorPlan: false });
+  // The board's own "approval" (Swami's approval to list) is never touched by the agent flow.
+  await db.collection('listings').doc('lst_office').update({ approval: { by: 'swami@threepin.in', at: 5 } });
+  await call('rameez', 'listing-save', { id: 'lst_office', fields: { remarks: 'x' } });
+  assert.deepEqual((await db.collection('listings').doc('lst_office').get()).data().approval, { by: 'swami@threepin.in', at: 5 });
+});
+
+test('match rows (round 2): the newest answer shows — a no after an ended yes', async () => {
+  await call('swami', 'assign', { propertyId: 'ADY002', primary: 'rameez@threepin.in' });
+  const m = (await opens('rameez')).matches.find(x => x.propertyId === 'ADY002');
+  const a = await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: 'fits', propertyId: 'ADY002' });
+  assert.equal((await db.collection('accessRequests').doc(a.id).get()).data().aboutCode, 'ADY002', 'the approver sees which of his properties');
+  await call('swami', 'decide', { id: a.id, decision: 'approve', days: 1 });
+  await call('swami', 'revoke', { grantId: `${T}__l__lead_2__rameez_threepin_in`, reason: 'done' });
+  const b = await call('rameez', 'request', { kind: 'lead', ref: m.ref, reason: 'again' });
+  await call('swami', 'decide', { id: b.id, decision: 'reject', note: 'already shortlisted, do not call' });
+  const row = (await opens('rameez')).matches.find(x => x.ref === m.ref);
+  assert.equal(row.req.status, 'rejected', JSON.stringify(row.req));
+  assert.equal(row.req.note, 'already shortlisted, do not call');
 });

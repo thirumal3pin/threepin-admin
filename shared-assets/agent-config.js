@@ -84,6 +84,7 @@ const ACTIONS = [
   { id: 'addLeads', label: 'Add leads', note: 'If the number is already with the team, they’re told so, not whose lead it is' },
   { id: 'editOwnProperties', label: 'Edit notes and availability on their properties', note: 'Price and owner details stay with admins' },
   { id: 'addProperties', label: 'Add properties they source', note: 'An admin approves before it appears' },
+  { id: 'listings', label: 'Run their own listings on My listings', note: 'Stages from owner yes to Live; an admin approves before Live' },
   { id: 'exportOwn', label: 'Download or copy their lists', note: 'Only what they can see' },
   { id: 'sendCampaigns', label: 'Send WhatsApp campaigns to their leads', note: 'From the company number' },
 ];
@@ -114,7 +115,7 @@ const DEFAULTS = {
   matchingLeadFields: ['requirement', 'aiSummary'],
   adsScope: 'own',
   campaignsScope: 'own',
-  actions: { addLeads: true, editOwnProperties: true, addProperties: true, exportOwn: true, sendCampaigns: true },
+  actions: { addLeads: true, editOwnProperties: true, addProperties: true, listings: true, exportOwn: true, sendCampaigns: true },
   approvals: {
     approvers: 'primary',       // who may approve a request on a property
     detailsDays: null,          // default details timer on the approve sheet (null = no limit)

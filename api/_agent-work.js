@@ -24,12 +24,15 @@
 //                        contactUntil, coAgent, note } — first decision wins (transaction)
 //   cancel             { id } my own pending request
 //   thread-open        { type, linkedId, title, members } open (or make) a Messages thread
+//   listings, listing-history, listing-save, listing-stage, listing-brochure
+//                      an agent's own listings, from owner yes to Live (api/_agent-listings.js)
 // Staff and admin actions (refused to agents)
 //   assign             { propertyId, primary, coAgents } one primary, any number of co-agents
 //   property-access    { id } who else has this property's details, requests, agent history
 // Admin actions
 //   revoke             { grantId, reason } · hide-contact { grantId }
 //   submission-decide  { id, decision, note }
+//   listing-decide     { id, decision: 'approve' | 'return', note } · listing-queue
 //   rebuild            { email? } rebuild one agent's copy, or every agent's
 //
 // Reads are kept low (the project is on Firebase's free plan): a rebuild reads the properties
@@ -41,6 +44,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getDb } from './_bot-shared.js';
 import { writeLead, readLeads } from './_lead-views.js';
 import * as AA from '../shared-assets/agent-access.js';
+import { LISTING_ACTIONS, LISTING_ADMIN, useHelpers as listingHelpers } from './_agent-listings.js';
 import { effectiveConfig, maskPhones, projectProperty } from '../shared-assets/agent-config.js';
 import '../dashboard-assets/search-engine.js';
 import '../shared-assets/chennai-geo.js';
@@ -166,13 +170,18 @@ export async function syncLeadAccess(db, tenantId, { properties, leads, grants, 
   return changed;
 }
 
-function matchesFor({ tenantId, email, view, properties, leads, cfg, requested, grants }) {
+// Buyers with other agents (or nobody yet) who fit the agent's own properties. Each says where the
+// agent's request for them stands (req: waiting, approved, rejected with the reason, expired), and a
+// buyer whose details were approved stays on the list WITH those details (granted) while the grant
+// runs — the agent can read that lead anyway (firestore.rules leadGrantOpen) — so the match page
+// answers "did they say yes?" without opening Messages.
+function matchesFor({ tenantId, email, view, properties, leads, cfg, requested, reqInfo, grants }) {
   const fields = cfg.matchingLeadFields || [];
   if (!fields.length || !PinMatch) return [];
   const mineIds = new Set(view.filter(p => p._access === 'own' || p._access === 'co').map(p => String(p.id)));
   if (!mineIds.size) return [];
-  const granted = new Set((grants || []).filter(g => g.kind === 'lead' && lc(g.agentEmail) === email && AA.grantLive(g)).map(g => String(g.targetId)));
-  const others = leads.filter(l => !AA.leadVisibleTo(l, email) && !granted.has(String(l.id)));
+  const granted = new Map((grants || []).filter(g => g.kind === 'lead' && lc(g.agentEmail) === email && AA.grantLive(g)).map(g => [String(g.targetId), g]));
+  const others = leads.filter(l => !AA.leadVisibleTo(l, email));
   const out = [];
   const seen = new Set();
   properties.filter(p => mineIds.has(String(p.id))).forEach(p => {
@@ -183,10 +192,14 @@ function matchesFor({ tenantId, email, view, properties, leads, cfg, requested, 
       const key = ref + '|' + p.id;
       if (seen.has(key)) return;
       seen.add(key);
+      const g = granted.get(String(m.lead.id));
+      const info = (reqInfo && reqInfo.get(ref)) || null;
       out.push(AA.matchCard(m.lead, fields, {
         ref, propertyId: String(p.id), pct: Math.round(m.pct || 0),
         band: (PinMatch.band(m.pct, false) || {}).label || '',
-        requested: requested.get(ref) || null,
+        requested: g ? 'approved' : (requested.get(ref) || null),
+        req: info,
+        ...(g ? { granted: { leadId: String(m.lead.id), name: String(m.lead.name || ''), phone: String(m.lead.phone || ''), until: (typeof g.expiresAt === 'number' ? g.expiresAt : null) } } : {}),
       }));
     });
   });
@@ -210,11 +223,21 @@ async function writeView(db, tenantId, agent, ctx) {
   const requested = new Map();
   const pendingProps = {};
   const refusedProps = {};
-  // Several requests for one lead (asked, cancelled, asked again): what shows is the most telling —
-  // waiting before approved before not approved — and the newest within each.
-  const RANK = { pending: 4, approved: 3, rejected: 2, expired: 1, cancelled: 0 };
+  // Several requests for one lead (asked, cancelled, asked again): what shows is the NEWEST answer —
+  // a "no" after an earlier "yes" that ended is the one that counts — except that a request still
+  // waiting always shows. (A grant still running shows as approved anyway: matchesFor.)
+  const RANK = { pending: 1, approved: 0, rejected: 0, expired: 0, cancelled: 0 };
+  const reqInfo = new Map();
   reqs.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(r => {
-    if (r.kind === 'lead') { const was = requested.get(r.targetRef); if (!was || (RANK[r.status] || 0) >= (RANK[was] || 0)) requested.set(r.targetRef, r.status); }
+    if (r.kind === 'lead') {
+      const was = requested.get(r.targetRef);
+      if (!was || (RANK[r.status] || 0) >= (RANK[was] || 0)) {
+        requested.set(r.targetRef, r.status);
+        // What the match row says about it: when it was asked, who decided and why.
+        reqInfo.set(r.targetRef, { status: r.status, id: r.id, at: r.createdAt || 0, decidedAt: r.decidedAt || 0, by: r.decidedByName || '',
+          note: String(r.note || '').slice(0, 300), until: (r.terms && r.terms.until) || null, grantState: r.grantState || null });
+      }
+    }
     if (r.kind === 'property' && r.status === 'pending') pendingProps[r.targetId] = r.id;
     if (r.kind === 'property' && (r.need || 'details') === 'details') {
       if (r.status === 'rejected') refusedProps[r.targetId] = { note: r.note || '', by: r.decidedByName || '', at: r.decidedAt || 0 };
@@ -225,7 +248,11 @@ async function writeView(db, tenantId, agent, ctx) {
     if (pendingProps[p.id]) p._pending = pendingProps[p.id];
     else if (p._access === 'summary' && refusedProps[p.id]) p._refused = refusedProps[p.id];
   });
-  const matches = matchesFor({ tenantId, email: agent.email, view, properties: ctx.properties, leads: ctx.leads, cfg, requested, grants: ctx.grants });
+  const matches = matchesFor({ tenantId, email: agent.email, view, properties: ctx.properties, leads: ctx.leads, cfg, requested, reqInfo, grants: ctx.grants });
+  // How many buyers with other agents fit each of the agent's own properties (the card's badge).
+  const matchN = {};
+  matches.forEach(m => { matchN[m.propertyId] = (matchN[m.propertyId] || 0) + 1; });
+  view.forEach(p => { if (matchN[String(p.id)]) p._matchN = matchN[String(p.id)]; });
   const mine = ctx.grants.filter(g => lc(g.agentEmail) === agent.email);
   const next = AA.nextExpiry(mine, now);
   const doc = {
@@ -768,9 +795,10 @@ async function patchView(db, tenantId, uid, fn) {
     });
   } catch (e) { /* the next rebuild puts it right */ }
 }
-const markAsked = (r, value) => d => {
+// info: what the match row says about a lead request (status, when, who decided, why).
+const markAsked = (r, value, info) => d => {
   if (r.kind === 'property') (d.props || []).forEach(p => { if (String(p.id) === String(r.targetId)) { if (value) p._pending = value; else delete p._pending; } });
-  else (d.matches || []).forEach(m => { if (m.ref === r.targetRef) m.requested = value; });
+  else (d.matches || []).forEach(m => { if (m.ref === r.targetRef) { m.requested = value; if (info) m.req = info; } });
 };
 // Who may decide a request NOW: worked out from the property (or lead) as it is at the moment of
 // deciding, not when the agent asked — a primary agent replaced since cannot approve any more, the
@@ -800,7 +828,7 @@ async function request(db, user, body) {
   const team = await teamOf(db, user.tenantId);
   const cfg = effectiveConfig(await loadConfig(db, user.tenantId), me);
   const admins = adminsOf(team);
-  let title, approvers, targetId, targetCode = null, targetRef = null, privateLead = null;
+  let title, approvers, targetId, targetCode = null, targetRef = null, privateLead = null, aboutCode = null, aboutTitle = null;
   if (kind === 'property') {
     if (user.role === 'agent' && !cfg.tabs.includes('properties')) return json({ ok: false, error: 'Properties is not part of your access' }, 403);
     const p = await getProperty(db, user.tenantId, body.targetId);
@@ -827,6 +855,11 @@ async function request(db, user, body) {
     if (await liveLeadGrant(db, user, lead.id)) return json({ ok: false, error: 'You already have this lead’s details' }, 400);
     targetId = ref; targetRef = ref; privateLead = { leadId: lead.id, leadName: lead.name || '' };
     title = 'Lead: ' + (AA.requirementOf(lead) ? AA.scrubText(AA.requirementOf(lead), [lead.name]).slice(0, 60) : 'matching buyer');
+    // Which of the asker's own properties it is for (the approver sees the code): only one of theirs.
+    if (body.propertyId) {
+      const own = await getProperty(db, user.tenantId, String(body.propertyId));
+      if (own && AA.roleOn(own, me)) { aboutCode = AA.codeOf(own); aboutTitle = String(own.name || '').slice(0, 120); }
+    }
     approvers = AA.approversFor({ kind, lead, approvers: cfg.approvals.approvers, admins, requester: me });
   }
   if (!approvers.length) return json({ ok: false, error: 'Nobody can approve this yet — ask an admin' }, 400);
@@ -849,7 +882,7 @@ async function request(db, user, body) {
   const req = {
     tenantId: user.tenantId, kind, need, targetId, targetCode, targetRef, title,
     requesterUid: user.uid, requesterEmail: me, requesterName: nameIn(team, me),
-    clientName, reason, visitAt,
+    clientName, reason, visitAt, ...(aboutCode ? { aboutCode, aboutTitle } : {}),
     approvers, status: 'pending', createdAt: now, threadId: thread.id,
     history: [{ at: now, by: me, what: 'asked', note: reason || null }],
   };
@@ -858,7 +891,7 @@ async function request(db, user, body) {
   if (privateLead) b.set(db.collection('requestPrivate').doc(reqRef.id), { tenantId: user.tenantId, approvers, ...privateLead });
   await b.commit();
   await systemMessage(db, thread.ref, thread.data.members, `${req.requesterName} asked for ${what}${clientName ? ' for their client ' + clientName : ''}${reason ? ': “' + reason + '”' : ''}`, { requestId: reqRef.id }, me);
-  if (user.role === 'agent') await patchView(db, user.tenantId, user.uid, markAsked(req, kind === 'lead' ? 'pending' : reqRef.id));
+  if (user.role === 'agent') await patchView(db, user.tenantId, user.uid, markAsked(req, kind === 'lead' ? 'pending' : reqRef.id, { status: 'pending', id: reqRef.id, at: Date.now() }));
   return json({ ok: true, id: reqRef.id, threadId: thread.id });
 }
 
@@ -965,7 +998,7 @@ async function decide(db, user, body) {
   // Approved: their copy is rebuilt now, so it opens at once. Rejected: only the "asked" mark changes.
   if (decision === 'approved') await rebuildAgents(db, user.tenantId, [r.requesterEmail]).catch(e => console.error('rebuild after decide:', e.message));
   else await patchView(db, user.tenantId, r.requesterUid, d => {
-    markAsked(r, r.kind === 'lead' ? 'rejected' : null)(d);
+    markAsked(r, r.kind === 'lead' ? 'rejected' : null, { status: 'rejected', id: ref.id, at: r.createdAt || 0, decidedAt: Date.now(), by: who, note: String(note || '').slice(0, 300) })(d);
     // The locked card says so at once (not after the next rebuild).
     if (r.kind === 'property' && (r.need || 'details') === 'details') (d.props || []).forEach(p => { if (String(p.id) === String(r.targetId) && p._access === 'summary') p._refused = { note, by: who, at: Date.now() }; });
   });
@@ -988,7 +1021,7 @@ async function cancel(db, user, body) {
     });
   } catch (e) { if (e.http) return json({ ok: false, error: e.message }, e.http); throw e; }
   await systemLineFor(db, r.threadId, `${r.requesterName} cancelled the request`, null, me);
-  await patchView(db, user.tenantId, user.uid, markAsked(r, r.kind === 'lead' ? 'cancelled' : null));
+  await patchView(db, user.tenantId, user.uid, markAsked(r, r.kind === 'lead' ? 'cancelled' : null, { status: 'cancelled', id: ref.id, at: r.createdAt || 0, decidedAt: Date.now() }));
   return json({ ok: true });
 }
 
@@ -1244,7 +1277,12 @@ export async function visitPropertyFor(db, user, code) {
   return { ...projectProperty(p, a.fields), propertyCode: p.propertyCode || p.id };
 }
 
+// An agent's listings (api/_agent-listings.js): the helpers it shares with this file.
+export const __listingHelpers = () => ({ loadConfig, teamOf, nameIn, throttle, markDirty, rebuildAgents, getProperty, setAvailability: propertyAvailability });
+listingHelpers(__listingHelpers());
+
 const AGENT_ACTIONS = {
+  ...LISTING_ACTIONS,
   view, directory, 'crm-boot': crmBoot,
   'property-notes': propertyNotes, 'property-note': propertyNote, 'property-availability': propertyAvailability, 'property-submit': propertySubmit,
   'lead-save': leadSave, 'lead-note': leadNote, 'lead-note-delete': leadNoteDelete, 'lead-history': leadHistory, 'lead-add': leadAdd,
@@ -1256,6 +1294,7 @@ const AGENT_ACTIONS = {
   'grant-extend': (db, u, b) => grantChange(db, u, b, 'extend'),
 };
 const ADMIN_WORK = {
+  ...LISTING_ADMIN,
   'submission-decide': submissionDecide,
   rebuild: async (db, u, b) => json({ ok: true, rebuilt: await rebuildAgents(db, u.tenantId, b && b.email ? [b.email] : null) }),
 };

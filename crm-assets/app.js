@@ -2923,6 +2923,9 @@ function leadCardHtml(l, sort){
   const step = nextStepOf(l);
   const what = [l.propertyInterest, l.budget].filter(Boolean).map(s => escapeHtml(s)).join(' · ');
   const chips = [];
+  // An agent's lead shared by another agent's approval: read only, and until when.
+  const shared = window.crmFirebase && window.crmFirebase.sharedLead ? window.crmFirebase.sharedLead(l.id) : null;
+  if(shared) chips.push(`<span class="tt-chip shared" title="Another agent’s client, opened to you to read">🔓 Shared${shared.until ? ' till ' + escapeHtml(new Date(shared.until).toLocaleDateString('en-IN', { day:'numeric', month:'short' })) : ''}</span>`);
   const mention = myOpenMention(l);
   if(mention) chips.push(`<span class="tt-chip mention" title="${escapeHtml((window.crmMentions.displayName(mention.by || '') || 'Someone') + ': ' + (mention.text || ''))}">@ you</span>`);
   chips.push(...campaignChips(l));
@@ -5793,6 +5796,17 @@ function renderMatchingProperties(l){
       includeVetoed: true, includeSeen: true, minPct: 40, limit: 40
     });
     const live = matches.filter(m => !m.vetoed).length;
+    // An agent: where they stand with each property — theirs, shared with them, asked for, refused,
+    // or only a summary — and "Request details" right on the row, for this client.
+    const asAgent = !!(window.crmFirebase && window.crmFirebase.isAgent && window.crmFirebase.isAgent());
+    const agentState = p => {
+      if(!asAgent || !p._access) return '';
+      if(p._access === 'own' || p._access === 'co') return 'Your property';
+      if(p._access === 'granted') return 'Shared with you' + (p._grant && p._grant.until ? ' until ' + new Date(p._grant.until).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '');
+      if(p._pending) return '⏳ Details requested — waiting';
+      if(p._refused) return '✗ Not approved' + (p._refused.note ? ': “' + p._refused.note + '”' : '') + ' — you can ask again';
+      return '🔒 Summary only';
+    };
     PinMatchPanel.render(el, matches, {
       title: live === 1 ? '1 property worth sending' : `${live} properties worth sending`,
       subtitle: `out of ${list.length} in the inventory`,
@@ -5804,14 +5818,35 @@ function renderMatchingProperties(l){
         sub: [
           m.p.location, m.p.config,
           m.property.priceLo != null ? PinMatch.priceLabel(m.property) : m.p.startingPrice,
-          m.alreadyShared ? '· already shared with them' : ''
+          m.alreadyShared ? '· already shared with them' : '',
+          agentState(m.p)
         ].filter(Boolean).join(' · '),
         actions: [
-          { id:'open', key:m.p.id, label:'Open property →', href:'dashboard.html?property=' + encodeURIComponent(m.p.id), blank:true, primary:true },
-          m.alreadyShared ? null : { id:'link', key:m.p.id, label:'Link to this lead' }
+          { id:'open', key:m.p.id, label:'Open property →', href:'dashboard.html?property=' + encodeURIComponent(m.p.id), blank:true, primary:!(asAgent && m.p._access === 'summary' && !m.p._pending) },
+          asAgent && m.p._access === 'summary' && !m.p._pending ? { id:'request', key:m.p.id, label: m.p._refused ? 'Ask again' : 'Request details', primary:true } : null,
+          m.alreadyShared || (asAgent && m.p._access === 'summary') ? null : { id:'link', key:m.p.id, label:'Link to this lead' }
         ].filter(Boolean)
       }),
       onAction: (act, key) => {
+        if(act === 'request' && asAgent){
+          const btn = [...el.querySelectorAll('[data-pm-act="request"]')].find(b => b.getAttribute('data-pm-key') === String(key));
+          const p = list.find(x => String(x.id) === String(key));
+          const first = String(l.name || '').trim().split(/\s+/)[0];
+          const want = [l.propertyInterest, l.budget ? 'budget ' + l.budget : ''].filter(Boolean).join(', ');
+          const reason = `For my client${first ? ' ' + first : ''}${want ? ' (' + want + ')' : ''} — ${p && p.name ? p.name : 'this property'} fits what they want.`;
+          if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+          window.crmFirebase.agentAction('request', { kind:'property', targetId:String(key), reason:reason.slice(0, 480), clientLeadId:l.id })
+            .then(() => {
+              if(p) p._pending = 'sent';
+              if(typeof showToast === 'function') showToast('Request sent — you’ll see the answer in My Day');
+              renderMatchingProperties(l);
+            })
+            .catch(e => {
+              if(btn){ btn.disabled = false; btn.textContent = 'Request details'; }
+              if(typeof showToast === 'function') showToast('✗ ' + (e && e.message || 'Could not send the request'));
+            });
+          return;
+        }
         // Reuses the existing link path, so a property linked from here is
         // indistinguishable from one linked by hand — same history entry,
         // same automation rules.
@@ -7412,6 +7447,9 @@ function markReadOnlyLead(l){
   if(!n){ n = document.createElement('div'); n.id = 'dpReadOnly'; n.setAttribute('role', 'note');
     n.style.cssText = 'margin:8px 28px 0;padding:10px 12px;border-radius:10px;background:var(--bg2);border:1px solid var(--border);font-size:13px;color:var(--ink2)';
     box.after(n); }
-  n.textContent = '🔒 Read only — this lead is ' + (l.assignedAgent ? 'with ' + agentName(l.assignedAgent) : 'with the team') + '. Use “Message team” to talk to them about it.';
+  const shared = window.crmFirebase.sharedLead ? window.crmFirebase.sharedLead(l.id) : null;
+  n.textContent = shared
+    ? '🔓 Shared with you to read — ' + (l.assignedAgent ? agentName(l.assignedAgent) + '’s client' : 'the team’s client') + (shared.until ? ', until ' + new Date(shared.until).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' }) : ', with no time limit') + '. Call or WhatsApp them from here; changes stay with their agent.'
+    : '🔒 Read only — this lead is ' + (l.assignedAgent ? 'with ' + agentName(l.assignedAgent) : 'with the team') + '. Use “Message team” to talk to them about it.';
   document.getElementById('dp') && document.getElementById('dp').classList.add('lead-ro');
 }

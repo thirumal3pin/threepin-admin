@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" data-console="mylistings">
+<head>
+<script src="shared-assets/quota-notice.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>My listings — 3 PIN Realty</title>
+<link rel="preload" href="shared-assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="shared-assets/fonts/inter.css">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="3 PIN">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<script>try{var t=localStorage.getItem('crmTheme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/agent-ui.css">
+<link rel="stylesheet" href="shared-assets/agent-matches.css">
+<link rel="stylesheet" href="mylistings-assets/mylistings.css">
+<link rel="stylesheet" href="shared-assets/theme.css">
+</head>
+<body>
+<div id="appRoot">
+  <header class="top">
+    <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <h1>My listings</h1>
+    <button type="button" class="btn sm primary" id="addBtn" hidden><i class="fa-solid fa-plus" aria-hidden="true"></i> New listing</button>
+  </header>
+  <main class="ml-wrap" id="main">
+    <p class="note ml-intro">Your properties from “owner said yes” to Live. Move each one on as the work gets done — an admin approves it before it goes Live.</p>
+    <div class="ml-bar">
+      <label class="ml-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span class="sr">Search</span><input type="search" id="q" placeholder="Search title, code, area, owner" autocomplete="off"></label>
+      <div class="ml-view" role="group" aria-label="View">
+        <button type="button" data-view="board" aria-pressed="true"><i class="fa-solid fa-table-columns" aria-hidden="true"></i> Board</button>
+        <button type="button" data-view="list" aria-pressed="false"><i class="fa-solid fa-list" aria-hidden="true"></i> List</button>
+      </div>
+    </div>
+    <div class="mx-chips ml-chips" id="chips" role="group" aria-label="Show"></div>
+    <div id="out"><div class="card"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div></div>
+  </main>
+</div>
+<script src="shared-assets/appnav.js"></script>
+<script src="shared-assets/install-app.js"></script>
+<script type="module" src="shared-assets/access.js"></script>
+<script type="module" src="mylistings-assets/mylistings.js"></script>
+</body>
+</html>
