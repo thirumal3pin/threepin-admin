@@ -119,6 +119,61 @@ export const STATES = [
   'Andaman & Nicobar Islands', 'Other Territory',
 ];
 
+// The two-digit GST state code — the first two digits of every GSTIN, and what a tax invoice
+// prints beside the state name. 28 is undivided Andhra Pradesh's old code; 25 was Daman & Diu
+// before it merged into 26.
+const GST_CODES = {
+  'Jammu & Kashmir': '01', 'Himachal Pradesh': '02', 'Punjab': '03', 'Chandigarh': '04', 'Uttarakhand': '05',
+  'Haryana': '06', 'Delhi': '07', 'Rajasthan': '08', 'Uttar Pradesh': '09', 'Bihar': '10', 'Sikkim': '11',
+  'Arunachal Pradesh': '12', 'Nagaland': '13', 'Manipur': '14', 'Mizoram': '15', 'Tripura': '16',
+  'Meghalaya': '17', 'Assam': '18', 'West Bengal': '19', 'Jharkhand': '20', 'Odisha': '21', 'Chhattisgarh': '22',
+  'Madhya Pradesh': '23', 'Gujarat': '24', 'Dadra & Nagar Haveli and Daman & Diu': '26', 'Maharashtra': '27',
+  'Karnataka': '29', 'Goa': '30', 'Lakshadweep': '31', 'Kerala': '32', 'Tamil Nadu': '33', 'Puducherry': '34',
+  'Andaman & Nicobar Islands': '35', 'Telangana': '36', 'Andhra Pradesh': '37', 'Ladakh': '38', 'Other Territory': '97',
+};
+const BY_CODE = { ...Object.fromEntries(Object.entries(GST_CODES).map(([s, c]) => [c, s])), 28: 'Andhra Pradesh', 25: 'Dadra & Nagar Haveli and Daman & Diu' };
+
+const squash = s => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
+const editDistance = (a, b) => {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
+};
+
+// A state as one of STATES, or '' when it cannot be told. Typed states are where invoices went
+// wrong ("Tamin Nadu" read as another state and printed IGST), so a near miss of one or two
+// letters is mended to the state it plainly meant; anything further off is left for a person.
+export function normState(s) {
+  const k = squash(s);
+  if (!k) return '';
+  const exact = STATES.find(x => squash(x) === k);
+  if (exact) return exact;
+  const alias = { tn: 'Tamil Nadu', pondicherry: 'Puducherry', orissa: 'Odisha', newdelhi: 'Delhi', bombay: 'Maharashtra' }[k];
+  if (alias) return alias;
+  let best = '', bestD = 3;
+  for (const x of STATES) { const d = editDistance(k, squash(x)); if (d < bestD) { best = x; bestD = d; } }
+  return best;
+}
+// In-state or not, read through normState so a misspelt state can never flip CGST+SGST to
+// IGST. An unknown or blank place of supply counts as in-state, as it always has.
+export function sameState(place, home) {
+  const raw = String(place || '').trim();
+  if (!raw) return true;
+  const h = normState(home || 'Tamil Nadu') || String(home || 'Tamil Nadu').trim().toLowerCase();
+  return (normState(raw) || raw.toLowerCase()) === h;
+}
+export const stateCode = s => GST_CODES[normState(s)] || '';
+export const stateFromGstin = g => BY_CODE[String(g || '').trim().slice(0, 2)] || '';
+// "Tamil Nadu (33)" — how the place of supply and the client's state print.
+export const stateWithCode = s => { const n = normState(s) || String(s || '').trim(); const c = stateCode(n); return c ? `${n} (${c})` : n; };
+
 export const PAY_VIA = [['1000', 'Bank (1000)'], ['2300', 'Credit card (2300)'], ['1010', 'Petty cash (1010)']];
 
 // How the money moved through the bank account. Not an account: UPI, a debit card and
@@ -863,9 +918,7 @@ export function reversalLines(lines) {
 
 export function splitGst(base, rate, clientState, companyState) {
   const total = num(base) * num(rate) / 100;
-  const home = (companyState || 'Tamil Nadu').trim().toLowerCase();
-  const theirs = (clientState || '').trim().toLowerCase();
-  const intra = !theirs || theirs === home;
+  const intra = sameState(clientState, companyState);
   return intra
     ? { cgst: total / 2, sgst: total / 2, igst: 0, total }
     : { cgst: 0, sgst: 0, igst: total, total };
@@ -927,9 +980,7 @@ export function invoiceTotals(items, rate, placeOfSupply, homeState = S.settings
     .filter(i => i.amt > 0);
   const base = r2(lines.reduce((a, i) => a + i.amt, 0));
   const tax = r2(base * num(rate) / 100);
-  const home = String(homeState || 'Tamil Nadu').trim().toLowerCase();
-  const pos = String(placeOfSupply || '').trim().toLowerCase();
-  const intra = !pos || pos === home;
+  const intra = sameState(placeOfSupply, homeState);
   return { items: lines, base, tax, ...gstHeads(tax, intra), total: r2(base + tax), intra };
 }
 
@@ -1032,8 +1083,7 @@ export function gstr1Rows(month) {
       const p = S.parties.find(x => x.id === i.partyId);
       const cn = i.kind === 'creditnote';
       const sign = cn ? -1 : 1;
-      const interState = String(i.placeOfSupply || S.settings.state).trim().toLowerCase()
-        !== String(S.settings.state || '').trim().toLowerCase();
+      const interState = !sameState(i.placeOfSupply, S.settings.state);
       const type = cn
         ? (p?.gstin ? 'CDNR' : 'CDNUR')
         : p?.gstin ? 'B2B'

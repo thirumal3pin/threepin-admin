@@ -22,7 +22,7 @@ import {
   A, EXP, PAY_VIA, TDS_SECTIONS, num, today, ym, addMonths, mlabel, fmt, esc,
   getState, deal, pname, partySides, sideParty, bal, partyBalances,
   schedule, prepaidLeft, splitGst, fyOf,
-  gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal, STATES,
+  gstHeads, outputTaxLines, inputTaxLines, gstComputation, tdsFyTotal, STATES, sameState, normState,
   GST_OUTPUT, GST_INPUT, GST_RCM,
   openBills, openInvoices, billOutstanding, invoiceOutstanding, allocate, vendorAdvance, billTaxBack,
   expectedFor, currentPlan, addDays, lastDayOfMonth,
@@ -351,11 +351,7 @@ function rcmChecks(v, show = true) {
 }
 
 // Is a place of supply inside the company's own state? Unknown counts as in-state.
-const isIntra = place => {
-  const home = (S().settings.state || 'Tamil Nadu').trim().toLowerCase();
-  const p = String(place || '').trim().toLowerCase();
-  return !p || p === home;
-};
+const isIntra = place => sameState(place, S().settings.state);
 
 // A bill document. `_key` lets an update elsewhere in the same save refer to this document's
 // id before it exists ('$bill'); finance-sync.js substitutes the real id.
@@ -2836,7 +2832,8 @@ EV.raiseinv = {
     const pid = pidOf(v.party);
     if (!pid) return need('Name the client.');
     // For a service the place of supply is the recipient's location (IGST Act s.12(2)).
-    const pos = String(v.placeOfSupply || v.billTo?.state || partyState(v.party) || st.state || '').trim();
+    const posRaw = String(v.placeOfSupply || v.billTo?.state || partyState(v.party) || st.state || '').trim();
+    const pos = normState(posRaw) || posRaw;
     const t = invoiceTotals(v.items, v.gstRate, pos, st.state);
     if (!t.base) return need('Add a line with an amount.');
     const date = v.date || today();
