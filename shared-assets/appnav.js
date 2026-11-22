@@ -105,6 +105,12 @@
       note: 'Who is where, and when everyone is free',
     },
     {
+      // Sign in and out for the day; the attendance admins also see everyone's day and the alerts
+      // (attendance.html, api/_attendance.js). Everyone's, agents included — no tab.
+      id: 'attendance', label: 'Attendance', icon: 'fa-regular fa-clock', page: 'attendance', nav: 'attendance', everyone: true,
+      note: 'Sign in and out, and your hours',
+    },
+    {
       id: 'property', label: 'Properties', icon: 'fa-regular fa-building', page: 'property', tab: 'properties', notForAgents: true,
       note: 'The inventory, and everything that keeps it right',
       items: [
@@ -194,6 +200,7 @@
     finance: { href: '3pinfinance', home: 'overview' },
     track: { href: 'propertytrack.html', home: 'board' },
     team: { href: 'team.html', home: 'team' },
+    attendance: { href: 'attendance.html', home: 'attendance' },
   };
 
   var K_SECTION = 'appnav.section';
@@ -267,6 +274,7 @@
   function allowed(entry, parent) {
     if (access && access.pending) return false;
     if (entry.adminOnly) return !!(access && access.role === 'admin');
+    if (entry.everyone) return true;
     // An agents-only entry still obeys the actions an admin switched off (My listings).
     if (entry.agentOnly && !(access && access.role === 'agent')) return false;
     if (entry.agentOnly && entry.needs && !(access.actions && access.actions[entry.needs])) return false;

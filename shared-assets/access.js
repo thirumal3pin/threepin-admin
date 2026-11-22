@@ -42,6 +42,7 @@ const PAGE_TABS = {
   mylistings: ['properties'],
   myday: ['myday'],
   messages: ['messages'],
+  // Attendance is everyone's (anyone whose attendance is kept signs in there), so it has no tab.
   track: ['shoots'],
   finance: ['finance'],
   team: [],
@@ -161,6 +162,11 @@ function apply(a, { gatePage = true } = {}) {
   document.dispatchEvent(new CustomEvent('pin-access', { detail: a }));
   if (a.role === 'agent' && gatePage) gate(a);
   startInbox(a);
+  // Attendance: the first page after 7 am offers today's sign-in (shared-assets/attendance-prompt.js;
+  // at most one server call per person per day, remembered on the device).
+  if (a.tenantId && !window.__pinGated && auth.currentUser) {
+    import('./attendance-prompt.js').then(m => m.maybePrompt({ ...a, user: auth.currentUser }, { page })).catch(() => {});
+  }
 }
 
 // An agent on a page none of their tabs open: say so plainly, offer the pages they do have, and a

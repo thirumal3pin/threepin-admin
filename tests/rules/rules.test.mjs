@@ -382,3 +382,15 @@ test('admins keep everything staff has', async () => {
   await assertSucceeds(getDoc(doc(d, `finance/${T}/invoices/i1`)));
   await assertSucceeds(getDoc(doc(d, 'tasks/t2')));
 });
+
+test('attendance records are server-only: no login reads or writes them directly', async () => {
+  const id = `${T}__u_rajesh__2026-11-22`;
+  for (const k of ['staff', 'admin', 'agent']) {
+    const d = db(k);
+    await assertFails(getDoc(doc(d, `attendance/${id}`)));
+    await assertFails(setDoc(doc(d, `attendance/${id}`), { tenantId: T, uid: who[k].uid, events: [] }));
+    await assertFails(getDoc(doc(d, `attendanceConfig/${T}`)));
+    await assertFails(setDoc(doc(d, `attendanceConfig/${T}`), { admins: [who[k].tok.email] }));
+    await assertFails(getDoc(doc(d, `attendanceSeen/${T}__${who[k].uid}`)));
+  }
+});

@@ -14,6 +14,7 @@
     { "source": "/api/backfill-lead-summaries", "destination": "/api/lead-summary?op=backfill" },
     { "source": "/api/easy", "destination": "/api/bot-test-message?op=easy" },
     { "source": "/api/agent", "destination": "/api/bot-test-message?op=agent" },
+    { "source": "/api/attendance", "destination": "/api/bot-test-message?op=attendance" },
     { "source": "/api/meta-leads", "destination": "/api/sync-inventory?op=meta-leads" },
     { "source": "/ads", "destination": "/crm.html" },
     { "source": "/ads.html", "destination": "/crm.html" },

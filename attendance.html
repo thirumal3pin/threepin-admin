@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en" data-console="attendance">
+<head>
+<script src="shared-assets/quota-notice.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Attendance — 3 PIN Realty</title>
+<link rel="preload" href="shared-assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="shared-assets/fonts/inter.css">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="3 PIN">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<script>try{var t=localStorage.getItem('crmTheme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="shared-assets/appnav.css">
+<link rel="stylesheet" href="shared-assets/agent-ui.css">
+<link rel="stylesheet" href="attendance-assets/attendance.css">
+<link rel="stylesheet" href="shared-assets/theme.css">
+</head>
+<body>
+<div id="appRoot">
+  <header class="top">
+    <button type="button" class="rail-toggle" data-rail-toggle aria-label="Show menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <h1>Attendance</h1>
+  </header>
+  <main class="at-wrap" id="main">
+    <section class="card at-me" id="me" aria-labelledby="meTitle">
+      <div class="pad">
+        <h2 id="meTitle" class="at-h">Today <span class="at-date" id="meDate"></span></h2>
+        <div id="meBody"><div class="sk"></div><div class="sk"></div></div>
+      </div>
+    </section>
+
+    <details class="card at-hist" id="hist">
+      <summary class="pad"><span>My last 7 days</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>
+      <div class="pad at-hist-b" id="histBody"></div>
+    </details>
+
+    <section id="admin" hidden aria-labelledby="teamTitle">
+      <div class="at-teambar">
+        <h2 id="teamTitle" class="at-h">Team</h2>
+        <label class="at-day"><span class="sr">Day</span><input type="date" id="day"></label>
+        <button type="button" class="btn sm" id="refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh</button>
+      </div>
+
+      <section class="card at-alerts" aria-labelledby="alertsTitle">
+        <div class="pad">
+          <div class="at-alerts-h">
+            <h3 id="alertsTitle">Alerts <span class="at-n" id="alertN">0</span></h3>
+            <button type="button" class="btn sm" id="clearAll" hidden>Clear all</button>
+          </div>
+          <ul class="at-alist" id="alerts" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <div class="at-sum" id="sum"></div>
+      <section class="card" aria-label="Everyone’s day">
+        <ul class="at-people" id="people"></ul>
+      </section>
+
+      <details class="card at-setup">
+        <summary class="pad"><span>Whose attendance is kept · test alert</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary>
+        <div class="pad">
+          <p class="note">Everyone on the team except agents, unless you change it here. Alerts go by e-mail to <span id="adminList"></span>, and appear above for each of you to clear.</p>
+          <ul class="at-tracked" id="tracked"></ul>
+          <button type="button" class="btn sm" id="testMail"><i class="fa-regular fa-envelope" aria-hidden="true"></i> Send a test alert e-mail</button>
+        </div>
+      </details>
+    </section>
+  </main>
+</div>
+<script src="shared-assets/appnav.js"></script>
+<script src="shared-assets/install-app.js"></script>
+<script type="module" src="shared-assets/access.js"></script>
+<script type="module" src="attendance-assets/attendance.js"></script>
+</body>
+</html>
