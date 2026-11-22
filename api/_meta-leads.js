@@ -24,6 +24,12 @@
 //   briefs   every stored brief                                                         [the team]
 //   write    the team's columns of a connected tab (assigned, rating, remarks, follow-ups) [the team]
 //            — a new column                                                             [managers]
+//            — "Assigned to": agents never; to or from an agent: admins only (api/_meta-assign.js)
+//   set-auto-assign  { scope: 'sheet' | 'property', key, email | null } — the default person for new
+//            leads of a sheet or a property; null removes it                                [admins]
+//
+// Who gets a lead, the grants an agent's lead brings, the default person and the "new lead" e-mail:
+// api/_meta-assign.js.
 //
 // Adding a column outright (field 'header') is for managers; a write that needs Rating / Assigned to /
 // Follow up N where the tab has none adds that one column for anyone working the lead.
@@ -36,6 +42,8 @@ import { getSheetsToken, TENANT_ID } from './_inventory-shared.js';
 import * as TM from '../shared-assets/task-model.js';
 import { parseSheetLink, classifyColumns, columnIssues, ROLES, planSheetWrite } from '../crm-assets/metaLeadsModel.js';
 import { briefAction, briefsAction, defaultClassify } from './_meta-leads-brief.js';
+import { sendEmail } from './_bot-shared.js';
+import * as MA from './_meta-assign.js';
 
 const COLLECTION = 'metaLeadConfigs';
 const EDITS = 'metaLeadEdits';
@@ -45,6 +53,8 @@ const MAX_SOURCES = 60, MAX_TABS = 40, MAX_ROWS = 5000;
 const READ_RANGE = `A1:AZ${MAX_ROWS}`;
 
 const quoteTab = t => `'${String(t).replace(/'/g, "''")}'`;
+// One entry per person and lead (a lead's several rows assigned at once is still one lead to call).
+const dedupeBy = list => { const seen = new Set(); return list.filter(a => { const k = a.email + '|' + ((a.enquiry && (a.enquiry.phoneKey || a.enquiry.metaId)) || Math.random()); if (seen.has(k)) return false; seen.add(k); return true; }); };
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -58,7 +68,12 @@ export function makeDeps(overrides = {}) {
     token: overrides.token || ((sa, scope) => getSheetsToken(sa, scope)),
     now: overrides.now || (() => Date.now()),
     // The lead AI (api/_lead-ai.js classifyLead) — a stand-in in the tests.
-    classify: overrides.classify || defaultClassify
+    classify: overrides.classify || defaultClassify,
+    // Who is on the team (Auth); the "new lead for you" e-mail; rebuilding an agent's copy after a grant.
+    team: overrides.team,
+    mail: overrides.mail || ((to, m) => sendEmail(to, m.subject, m.text, m.html)),
+    rebuildAgents: overrides.rebuildAgents || (async (db, T, emails) => (await import('./_agent-work.js')).rebuildAgents(db, T, emails)),
+    appUrl: overrides.appUrl || process.env.APP_URL || 'https://admin.threepin.in',
   };
 }
 
@@ -146,6 +161,14 @@ export function scopeSources(cfg, codes) {
   return { ...cfg, sources, lastRead: null };
 }
 
+// An agent's copy of the setup: every connected sheet (a lead assigned to them can be in any of them),
+// without the last-read line or the default-person rules. Which ROWS they get is decided on read.
+function agentSetup(cfg) {
+  return { ...cfg, lastRead: null, autoAssign: null };
+}
+// Whether an agent sees every row of a tab (their own property, or "Ads: all") — else only theirs.
+const agentOwnsTab = (deps, code) => !deps.agentCodes || deps.agentCodes.has(String(code || '').toUpperCase());
+
 export async function metaLeadsAction(user, body, deps) {
   const T = user.tenantId, db = deps.db, me = String(user.email || '').toLowerCase();
   const sa = deps.serviceAccount;
@@ -158,9 +181,34 @@ export async function metaLeadsAction(user, body, deps) {
   if (action === 'brief') return briefAction(user, { ...body }, { ...deps, classify: deps.classify || defaultClassify });
 
   if (action === 'config') {
-    const [cfg0, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
-    const cfg = scopeSources(cfg0, deps.agentCodes);
-    return [{ ok: true, mode: 'test', sources: cfg.sources || [], lastRead: cfg.lastRead || null, updatedAt: cfg.updatedAt || null, updatedBy: cfg.updatedBy || null, manager, shareWith }, 200];
+    const [cfg0, manager, people] = await Promise.all([loadConfig(db, T), loadManager(db, T, me), MA.teamPeople(T, deps)]);
+    const isAgent = user.role === 'agent';
+    const cfg = isAgent ? agentSetup(cfg0, deps) : cfg0;
+    return [{ ok: true, mode: 'test', sources: cfg.sources || [], lastRead: cfg.lastRead || null, updatedAt: cfg.updatedAt || null, updatedBy: cfg.updatedBy || null, manager, shareWith,
+      // What the page may offer: only admins assign to agents; agents never assign.
+      isAdmin: MA.isAdminUser(user), isAgent, agents: people.filter(p => p.role === 'agent').map(p => p.email),
+      autoAssign: isAgent ? null : (cfg0.autoAssign || { sheets: {}, props: {} }) }, 200];
+  }
+
+  // The default person for the new leads of a sheet or a property (admins). email null = none.
+  if (action === 'set-auto-assign') {
+    if (!MA.isAdminUser(user)) return [{ ok: false, error: 'Only an admin can set who gets new leads' }, 403];
+    const scope = body.scope === 'sheet' ? 'sheets' : body.scope === 'property' ? 'props' : null;
+    const key = scope === 'props' ? String(body.key || '').trim().toUpperCase().slice(0, 40) : String(body.key || '').trim().slice(0, 120);
+    if (!scope || !key) return [{ ok: false, error: 'Say which sheet or property' }, 400];
+    const email = body.email ? String(body.email).trim().toLowerCase() : null;
+    if (email) {
+      const people = await MA.teamPeople(T, deps);
+      if (!people.some(p => p.email === email)) return [{ ok: false, error: 'That person is not on the team' }, 400];
+    }
+    const cfg = await loadConfig(db, T);
+    if (scope === 'sheets' && !(cfg.sources || []).some(x => x.id === key)) return [{ ok: false, error: 'That sheet is not connected' }, 404];
+    const cur = cfg.autoAssign || { sheets: {}, props: {} };
+    const next = { sheets: { ...(cur.sheets || {}) }, props: { ...(cur.props || {}) } };
+    if (email) next[scope][key] = { email, since: deps.now(), by: me, at: deps.now() };
+    else delete next[scope][key];
+    await db.collection(COLLECTION).doc(T).set({ autoAssign: next, updatedAt: deps.now(), updatedBy: me }, { merge: true });
+    return [{ ok: true, autoAssign: next }, 200];
   }
 
   if (action === 'inspect' || action === 'save' || action === 'available') {
@@ -203,19 +251,34 @@ export async function metaLeadsAction(user, body, deps) {
     const sid = String(body.spreadsheetId || ''), gid = Number(body.gid);
     const edits = Array.isArray(body.edits) ? body.edits.slice(0, 1000) : [];
     if (!edits.length) return [{ ok: false, error: 'Nothing to write' }, 400];
-    const [cfg0, manager] = await Promise.all([loadConfig(db, T), loadManager(db, T, me)]);
-    const cfg = scopeSources(cfg0, deps.agentCodes);
+    const [cfg, manager, people] = await Promise.all([loadConfig(db, T), loadManager(db, T, me), MA.teamPeople(T, deps)]);
     const src = (cfg.sources || []).find(x => x.id === sid);
     const tab = src && (src.tabs || []).find(t => t.gid === gid);
     if (!src || !tab) return [{ ok: false, error: 'That tab is not connected in Setup' }, 404];
     if (src.on === false || tab.on === false) return [{ ok: false, error: 'That sheet or tab is switched off in Setup' }, 409];
     if (edits.some(e => e && e.field === 'header') && !manager) return [{ ok: false, error: 'Only a manager can add a column' }, 403];
+    const code = tab.propertyCode || src.propertyCode || '';
+    const isAgent = user.role === 'agent';
+    if (isAgent && edits.some(e => e && e.field === 'header')) return [{ ok: false, error: 'Not part of your access' }, 403];
     const wtok = deps.token(sa, WRITE_SCOPE);
     try {
       const meta = await sheetMeta(deps, wtok, sid, shareWith);
       const now = meta.tabs.find(t => t.gid === gid);
       if (!now) return [{ ok: false, error: 'That tab is no longer in the sheet' }, 404];
       const [values] = await batchGet(deps, wtok, sid, [`${quoteTab(now.title)}!${READ_RANGE}`], shareWith);
+      const tabObj = { sourceId: src.id, spreadsheetId: sid, sheetTitle: meta.title || src.title, title: now.title, gid, propertyCode: code, overrides: tab.overrides || {}, values: values || [] };
+      const { by: before, cols: tabCols } = MA.enquiriesById(tabObj);
+      // "Assigned to" changed by name (field) or by its column (Edit this row): both are an assignment.
+      const assignedCols = new Set(tabCols.filter(c => c.role === 'assigned').map(c => c.index));
+      const asAssign = edits.map(e => (e && e.field !== 'assigned' && e.col != null && e.col !== '' && assignedCols.has(Number(e.col)) ? { ...e, field: 'assigned' } : e));
+      const allowed = MA.checkAssignEdits(user, asAssign, people);
+      if (!allowed.ok) return [{ ok: false, error: allowed.error }, allowed.status];
+      // An agent writes only the rows they can see: every row of their own property's tab, else only
+      // the leads assigned to them.
+      if (isAgent && !agentOwnsTab(deps, code)) {
+        const notMine = edits.filter(e => e && e.metaId && !MA.isExactlyFor((before.get(String(e.metaId)) || { team: {} }).team.assigned, me, people));
+        if (notMine.length) return [{ ok: false, error: 'You can only update the leads assigned to you' }, 403];
+      }
       const plan = planSheetWrite({ values: values || [], overrides: tab.overrides || {}, edits });
       if (plan.updates.length) {
         await google(deps, wtok, `${SHEETS}${sid}/values:batchUpdate`, 'this sheet', shareWith, {
@@ -227,7 +290,11 @@ export async function metaLeadsAction(user, body, deps) {
             applied: plan.applied.slice(0, 300), added: plan.added });
         } catch (e) { console.error('meta-leads: edit log not kept', e && e.message); }
       }
-      return [{ ok: true, applied: plan.applied, added: plan.added, conflicts: plan.conflicts, errors: plan.errors }, 200];
+      // Who was just given a lead: their property granted (agents), an e-mail (everyone).
+      const newly = plan.applied.filter(a => assignedCols.has(a.col) && a.value).map(a => ({ email: MA.exactlyWho(a.value, people), propertyCode: code, enquiry: before.get(a.metaId) }))
+        .filter(a => a.email);
+      const after = newly.length ? await MA.afterAssigned(db, T, me, dedupeBy(newly), people, deps) : null;
+      return [{ ok: true, applied: plan.applied, added: plan.added, conflicts: plan.conflicts, errors: plan.errors, granted: after ? after.granted : [] }, 200];
     } catch (e) {
       return [{ ok: false, error: e.code === 'share' ? `The app cannot edit this sheet — share it with ${shareWith} as Editor (not Viewer)` : e.message, code: e.code || 'error' }, e.code === 'share' ? 403 : 502];
     }
@@ -265,8 +332,10 @@ export async function metaLeadsAction(user, body, deps) {
   }
 
   if (action === 'read') {
-    const cfg = scopeSources(await loadConfig(db, T), deps.agentCodes);
+    const isAgent = user.role === 'agent';
+    const [cfg, people] = await Promise.all([loadConfig(db, T), MA.teamPeople(T, deps)]);
     const sources = (cfg.sources || []).filter(s => s.on !== false);
+    const autoAssigned = [];
     const only = body.sourceId ? String(body.sourceId) : null;
     const tok = tokenOnce();
     let driveP = null;
@@ -301,38 +370,83 @@ export async function metaLeadsAction(user, body, deps) {
         const live = found.filter(f => f.now);
         const values = await batchGet(deps, tok(), s.spreadsheetId, live.map(f => `${quoteTab(f.now.title)}!${READ_RANGE}`), shareWith);
         live.forEach((f, i) => { if ((values[i] || []).length >= MAX_ROWS) errors.push({ sourceId: s.id, title: `${meta.title || s.title} › ${f.now.title}`, error: `Only the first ${MAX_ROWS - 1} rows are read — split this tab` }); });
-        live.forEach((f, i) => tabs.push({
-          sourceId: s.id, spreadsheetId: s.spreadsheetId, sheetTitle: meta.title || s.title, title: f.now.title, gid: f.t.gid,
-          propertyCode: f.t.propertyCode || s.propertyCode, tag: f.t.tag || '', remark: f.t.remark || '', overrides: f.t.overrides || {}, values: values[i] || []
-        }));
+        for (let i = 0; i < live.length; i++) {
+          const f = live[i];
+          let tab = {
+            sourceId: s.id, spreadsheetId: s.spreadsheetId, sheetTitle: meta.title || s.title, title: f.now.title, gid: f.t.gid,
+            propertyCode: f.t.propertyCode || s.propertyCode, tag: f.t.tag || '', remark: f.t.remark || '', overrides: f.t.overrides || {}, values: values[i] || []
+          };
+          // The default person for this sheet or property: new leads nobody has yet are given to them now.
+          const rule = MA.ruleFor(cfg.autoAssign, s.id, tab.propertyCode);
+          const want = rule ? MA.autoAssignEdits(tab, rule, deps.now()) : [];
+          if (want.length) {
+            try {
+              const plan = planSheetWrite({ values: tab.values, overrides: tab.overrides, edits: want });
+              if (plan.updates.length) {
+                await google(deps, deps.token(sa, WRITE_SCOPE), `${SHEETS}${s.spreadsheetId}/values:batchUpdate`, 'this sheet', shareWith, {
+                  valueInputOption: 'RAW', data: plan.updates.map(u => ({ range: `${quoteTab(f.now.title)}!${u.range}`, values: [[u.value]] }))
+                });
+                const byId = MA.enquiriesById(tab).by;
+                // The rows as they are now, so the page shows the new names without another read.
+                const vals = tab.values.map(r => (Array.isArray(r) ? r.slice() : []));
+                for (const u of plan.updates) {
+                  const m = /^([A-Z]+)(\d+)$/.exec(u.range); if (!m) continue;
+                  const col = m[1].split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1, row = Number(m[2]) - 1;
+                  while (vals.length <= row) vals.push([]);
+                  vals[row][col] = u.value;
+                }
+                tab = { ...tab, values: vals };
+                plan.applied.forEach(a => autoAssigned.push({ email: rule.email, propertyCode: tab.propertyCode, enquiry: byId.get(a.metaId), auto: true }));
+                try { await db.collection(EDITS).add({ tenantId: T, by: 'auto:' + rule.scope, at: deps.now(), spreadsheetId: s.spreadsheetId, gid: f.t.gid, tab: f.now.title, applied: plan.applied.slice(0, 300), added: plan.added }); } catch (e) { /* the log is a convenience */ }
+              }
+            } catch (e) { errors.push({ sourceId: s.id, title: `${meta.title || s.title} › ${f.now.title}`, error: 'Could not give the new leads to ' + MA.assignLabel(rule.email) + ': ' + e.message }); }
+          }
+          if (isAgent && !agentOwnsTab(deps, tab.propertyCode)) {
+            tab = MA.rowsForAgent(tab, me, people, null);
+            if (!tab) continue;
+          }
+          tabs.push(tab);
+        }
         sheets.push({ id: s.id, title: meta.title || s.title, ok: true, rows: live.map((f, i) => ({ gid: f.t.gid, title: f.now.title, rows: Math.max((values[i] || []).length - 1, 0) })) });
       } catch (e) {
         errors.push({ sourceId: s.id, title: s.title, error: e.message, code: e.code || 'error' });
         sheets.push({ id: s.id, title: s.title, ok: false, error: e.message });
       }
     }
-    if (deps.agentCodes) {
+    if (autoAssigned.length) await MA.afterAssigned(db, T, 'auto', dedupeBy(autoAssigned), people, deps);
+    if (isAgent) {
       // An agent's read changes nothing in the setup: no new tabs listed, no "last read" line.
-      return [{ ok: true, mode: 'test', at: deps.now(), tabs, errors, shareWith: null, mods, unchanged, newTabs: [] }, 200];
+      return [{ ok: true, mode: 'test', at: deps.now(), tabs, errors: errors.map(e => ({ ...e, error: 'This sheet could not be read just now' })), shareWith: null, mods, unchanged, newTabs: [] }, 200];
     }
     if (discovered.length) {
       // Added to the setup as read just now (not the copy loaded before the read): nothing else is touched.
-      const curCfg = await loadConfig(db, T);
-      const next = (curCfg.sources || []).map(x => {
-        const d = discovered.find(y => y.id === x.id);
-        if (!d) return x;
-        const have = new Set((x.tabs || []).map(t => Number(t.gid)));
-        return { ...x, tabs: [...(x.tabs || []), ...d.fresh.filter(t => !have.has(t.gid)).map(t => ({ gid: t.gid, title: String(t.title || '').slice(0, 120), on: false, overrides: {}, fresh: true }))] };
+      const ref = db.collection(COLLECTION).doc(T);
+      await db.runTransaction(async t => {
+        const curCfg = (await t.get(ref)).data() || {};
+        const next = (curCfg.sources || []).map(x => {
+          const d = discovered.find(y => y.id === x.id);
+          if (!d) return x;
+          const have = new Set((x.tabs || []).map(tb => Number(tb.gid)));
+          return { ...x, tabs: [...(x.tabs || []), ...d.fresh.filter(tb => !have.has(tb.gid)).map(tb => ({ gid: tb.gid, title: String(tb.title || '').slice(0, 120), on: false, overrides: {}, fresh: true }))] };
+        });
+        t.set(ref, { sources: next }, { merge: true });
       });
-      await db.collection(COLLECTION).doc(T).set({ sources: next }, { merge: true });
     }
     const newTabs = discovered.flatMap(d => d.fresh.map(t => ({ sourceId: d.id, sheetTitle: d.title, title: t.title, gid: t.gid })));
     const at = deps.now();
-    // One sheet read on its own updates its line of the last read and keeps the others'.
-    const prevSheets = only && cfg.lastRead && Array.isArray(cfg.lastRead.sheets) ? cfg.lastRead.sheets.filter(x => x.id !== only) : [];
+    // The "last read" line: only when a sheet was really read (a refresh of unchanged sheets writes
+    // nothing — the free plan's writes are few), and in a transaction, because the page reads three
+    // sheets at once and each would otherwise drop the others' lines.
     const order = (cfg.sources || []).map(x => x.id);
-    const merged = [...prevSheets, ...sheets].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-    await db.collection(COLLECTION).doc(T).set({ lastRead: { at, by: me, sheets: merged } }, { merge: true });
+    if (sheets.some(x => !x.unchanged)) {
+      const ref = db.collection(COLLECTION).doc(T);
+      await db.runTransaction(async t => {
+        const cur = ((await t.get(ref)).data() || {}).lastRead || {};
+        const fresh = new Set(sheets.map(x => x.id));
+        const merged = [...(Array.isArray(cur.sheets) ? cur.sheets.filter(x => !fresh.has(x.id)) : []), ...sheets].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        t.set(ref, { lastRead: { at, by: me, sheets: merged } }, { merge: true });
+      });
+    }
     return [{ ok: true, mode: 'test', at, tabs, errors, shareWith, mods, unchanged, newTabs }, 200];
   }
 
@@ -344,10 +458,30 @@ export async function metaLeadsAction(user, body, deps) {
 // AI brief. Never the setup, never everyone's stored briefs.
 // (No AI brief for agents: it is built from the CRM lead's notes and conversation, whoever's it is.)
 const AGENT_ACTIONS = new Set(['config', 'read', 'write', 'briefs']);
+// Agents who have been given at least one ad lead (api/_meta-assign.js keeps the list): the menu shows
+// them Meta Ads Leads even when the admin did not give them the Ads tab. Used by api/_agent.js 'me'.
+export async function hasAssignedAdLeads(db, tenantId, email) {
+  try {
+    const d = await db.collection(MA.ASSIGN_DOC).doc(tenantId).get();
+    const agents = (d.exists && d.data().agents) || {};
+    return !!agents[String(email || '').toLowerCase().replace(/[^a-z0-9]/g, '_')];
+  } catch (e) { return false; }
+}
+// The page reads three sheets at once, each a call: an agent's scope (4 reads) is kept 2 minutes.
+const scopeCache = new Map();
 async function agentAdsCodes(db, user) {
+  const k = user.tenantId + '|' + String(user.email || '').toLowerCase();
+  const hit = scopeCache.get(k);
+  if (hit && Date.now() - hit.at < 120000) return hit.v;
+  const v = await agentAdsCodesFresh(db, user);
+  scopeCache.set(k, { at: Date.now(), v });
+  return v;
+}
+async function agentAdsCodesFresh(db, user) {
   const snap = await db.collection('agentConfigs').doc(user.tenantId).get();
   const cfg = effectiveConfig(snap.exists ? snap.data() : null, user.email);
-  if (!cfg.tabs.includes('ads')) return { refused: true };
+  // Without the Ads tab an agent still sees the ad leads an admin assigned to them — and only those.
+  if (!cfg.tabs.includes('ads')) return { codes: new Set() };
   if (cfg.adsScope === 'all') return { codes: null };
   const me = String(user.email || '').toLowerCase();
   const [a, b, c] = await Promise.all([

@@ -115,8 +115,10 @@
       }
     }
     await Promise.all([worker(), worker(), worker()]);
-    // Not changed since the last read: the rows already here stand.
-    if (S.read && out.unchanged.length) out.tabs = out.tabs.concat((S.read.tabs || []).filter(function (t) { return out.unchanged.indexOf(t.sourceId) >= 0; }));
+    // Not changed since the last read: the rows already here stand. A sheet that could not be read just
+    // now (a weak connection, Google slow) keeps the rows it had — its leads never vanish for a blip.
+    var keep = out.unchanged.concat(out.errors.map(function (e) { return e.sourceId; }).filter(function (id) { return id && !out.tabs.some(function (t) { return t.sourceId === id; }); }));
+    if (S.read && keep.length) out.tabs = out.tabs.concat((S.read.tabs || []).filter(function (t) { return keep.indexOf(t.sourceId) >= 0; }));
     var order = ids;
     out.tabs.sort(function (a, b) { return order.indexOf(a.sourceId) - order.indexOf(b.sourceId); });
     return out;
@@ -339,6 +341,7 @@
     return out;
   }
   function briefHtml(p) {
+    if (isAgentMe()) return '';   // the AI brief reads the office's notes and chats: for the team (the server refuses agents)
     names();
     var b = S.briefs[p.key], v = b && b.v, busy = !!S.brun[p.key] || S.bq.indexOf(p.key) >= 0;
     var k = js(p.key);
@@ -348,7 +351,7 @@
       '</span></div>';
     if (!v) {
       return '<div class="ml-brief empty">' + head + (busy ? '<div class="ml-dim">Reading the enquiries, the sheet’s notes' + (p.crm ? ', and the CRM notes and chat' : '') + '…</div>' :
-        '<div class="ml-brief-get"><div class="ml-dim">' + (b && b.err ? 'Could not read: ' + esc(b.err) : 'The stage, when to call and what to say, what they want — read by the AI from the form, the sheet’s notes' + (p.crm ? ' and the CRM' : '') + '.') + '</div>' +
+        '<div class="ml-brief-get"><div class="ml-dim">' + (b && b.err && Date.now() - (b.errAt || 0) < DAY_MS ? 'Could not read: ' + esc(b.err) : 'The stage, when to call and what to say, what they want — read by the AI from the form, the sheet’s notes' + (p.crm ? ' and the CRM' : '') + '.') + '</div>' +
         '<button class="ml-btn sm" onclick="MetaLeads.brief(' + k + ')"><i class="fa-solid fa-wand-magic-sparkles"></i> Get AI brief</button></div>') + '</div>';
     }
     var stale = !busy && briefStale(p, b);
@@ -585,7 +588,20 @@
       t(create, 'Would be new CRM leads', '', "MetaLeads.filter('create')") + '</div>';
   }
   // My leads / Unassigned (to take) / All — the first thing an agent picks.
-  function canTake() { var m = me(); return !!m && roster().indexOf(m) >= 0; }
+  // Who gives leads to whom (the server checks the same, api/_meta-assign.js): agents never assign;
+  // only an admin gives a lead to an agent or takes one from them; office staff assign among themselves.
+  function isAgentMe() { return !!(S.cfg && S.cfg.isAgent); }
+  function isAdminMe() { return !!(S.cfg && S.cfg.isAdmin); }
+  function isAgentEmail(e) { return !!(S.cfg && (S.cfg.agents || []).indexOf(String(e || '').toLowerCase()) >= 0); }
+  function assignRoster() { return roster().filter(function (e) { return isAdminMe() || !isAgentEmail(e); }); }
+  // Whether I may change who has this lead (what is written in it now).
+  function canReassign(current) {
+    if (isAgentMe()) return false;
+    if (isAdminMe() || !current) return true;
+    var who = MM().matchAgent(current, roster());
+    return !(who && isAgentEmail(who));
+  }
+  function canTake() { var m = me(); return !!m && !isAgentMe() && roster().indexOf(m) >= 0; }
   function mineSwitch() {
     var scope = peopleFor(S.prop), F = S.f;
     var mine = scope.filter(function (x) { return x.team.agent === me(); }).length;
@@ -630,9 +646,9 @@
     var head = '<label class="ml-selall"><input type="checkbox" ' + (all ? 'checked' : '') + ' onchange="MetaLeads.selAll(this.checked)"> ' + (keys.length ? keys.length + ' selected' : 'Select all ' + list.length) + '</label>';
     var sm = '<button class="ml-link ml-selbtn" onclick="MetaLeads.selMode()">' + (S.selMode ? 'Done' : 'Select') + '</button>';
     if (!keys.length) return '<div class="ml-bulk">' + head + sm + '</div>';
-    var opts = '<option value="">Assign to…</option>' + roster().map(function (e) { return '<option value="' + esc(e) + '">' + esc(agentLabel(e)) + '</option>'; }).join('') + '<option value="_none">— Not assigned —</option>';
+    var opts = '<option value="">Assign to…</option>' + assignRoster().map(function (e) { return '<option value="' + esc(e) + '">' + esc(agentLabel(e)) + '</option>'; }).join('') + '<option value="_none">— Not assigned —</option>';
     return '<div class="ml-bulk on">' + head +
-      '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkAssign(this.value)">' + opts + '</select>' +
+      (isAgentMe() ? '' : '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkAssign(this.value)">' + opts + '</select>') +
       '<select class="ml-f" ' + (S.writing ? 'disabled' : '') + ' onchange="if(this.value)MetaLeads.bulkRate(this.value)"><option value="">Set rating…</option><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option></select>' +
       (canTake() ? '<button class="ml-btn sm" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.bulkAssign(' + js(me()) + ')">Assign to me</button>' : '') +
       '<button class="ml-link" onclick="MetaLeads.selNone()">Clear selection</button>' +
@@ -882,10 +898,13 @@
   }
   function firstCol(e, role) { return teamCols(e).find(function (c) { return c.role === role; }) || null; }
   function today() { var d = new Date(Date.now() + 5.5 * 3600000); return d.getUTCDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]; }
-  function agentOptions(current) {
+  // chosen: a pick not saved yet ('' = Not assigned), which wins over what the sheet says.
+  function agentOptions(current, chosen) {
     var cur = current ? MM().matchAgent(current, roster()) : null;
-    return '<option value="">— Not assigned —</option>' + roster().map(function (e) { return '<option value="' + esc(e) + '"' + (cur === e ? ' selected' : '') + '>' + esc(agentLabel(e)) + '</option>'; }).join('') +
-      (current && !cur ? '<option value="_keep" selected>' + esc(current) + ' (as written)</option>' : '');
+    var list = assignRoster(); if (cur && list.indexOf(cur) < 0) list = list.concat([cur]);
+    var sel = chosen != null ? chosen : (cur || (current ? '_keep' : ''));
+    return '<option value=""' + (sel === '' ? ' selected' : '') + '>— Not assigned —</option>' + list.map(function (e) { return '<option value="' + esc(e) + '"' + (sel === e ? ' selected' : '') + '>' + esc(agentLabel(e)) + '</option>'; }).join('') +
+      (current && !cur ? '<option value="_keep"' + (sel === '_keep' ? ' selected' : '') + '>' + esc(current) + ' (as written)</option>' : '');
   }
   // The quick form: the latest row for the property in view — assign, rate, a remark, a follow-up.
   function workRow(p) {
@@ -902,7 +921,10 @@
     }).join('') + '</select>' : '';
     var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating');
     var aNow = aCol ? cellOf(e, aCol.index) : '', rNow = rCol ? cellOf(e, rCol.index) : '';
-    var k = js(p.key), rated = MM().parseRating(rNow), rk = rowKey(e);
+    var k = js(p.key), rk = rowKey(e);
+    // A rating or person picked but not saved yet survives a redraw (the CRM's live updates redraw this).
+    var rated = S.drafts[rk + ':R'] != null ? (Number(S.drafts[rk + ':R']) || null) : MM().parseRating(rNow);
+    var aDraft = S.drafts[rk + ':A'];
     var notes = notesOf(e).filter(function (x) { return x.value; });
     var lastNote = notes.length ? notes[notes.length - 1].index : -1;
     // Every note already in the row, column by column, each editable in place.
@@ -913,7 +935,10 @@
     }).join('');
     return '<div class="ml-work"><div class="ml-h"><b>Work this lead</b> <span class="ml-dim">Written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
       '<div class="ml-wgrid">' + pickRow +
-        '<label>Assigned to</label><select class="ml-f" id="mlwA">' + agentOptions(aNow) + '</select>' +
+        '<label>Assigned to</label>' + (canReassign(aNow)
+          ? '<select class="ml-f" id="mlwA" onchange="MetaLeads.draft(' + js(rk) + ',\'A\',this.value)">' + agentOptions(aNow, aDraft) + '</select>'
+          : '<div class="ml-f ml-ro"><input type="hidden" id="mlwA" value="_keep">' + (aNow ? esc((MM().matchAgent(aNow, roster()) ? agentLabel(MM().matchAgent(aNow, roster())) : aNow)) : 'Not assigned') +
+            ' <span class="ml-dim">— ' + (isAgentMe() ? 'an admin assigns leads' : 'only an admin changes an agent’s lead') + '</span></div>') +
         '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
         (notes.length ? '<div class="ml-wsub">Notes <span class="ml-dim">— tap one to edit it</span></div>' + notesHtml : '') +
         '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
@@ -933,8 +958,9 @@
     var k = js(rowKey(e));
     return '<div class="ml-rowedit">' + (cols.length ? cols.map(function (c) {
       var v = cellOf(e, c.index);
-      return '<label>' + esc(c.header || ('Column ' + MM().colLetter(c.index))) + ' <span class="ml-dim">' + MM().colLetter(c.index) + ' · ' + esc(MM().ROLES[c.role]) + '</span></label>' +
-        '<textarea class="ml-in" rows="1" data-col="' + c.index + '" data-header="' + esc(c.header || '') + '" data-from="' + esc(v) + '">' + esc(v) + '</textarea>';
+      var lock = c.role === 'assigned' && !canReassign(v);
+      return '<label>' + esc(c.header || ('Column ' + MM().colLetter(c.index))) + ' <span class="ml-dim">' + MM().colLetter(c.index) + ' · ' + esc(MM().ROLES[c.role]) + (lock ? ' · an admin assigns' : '') + '</span></label>' +
+        (lock ? '<div class="ml-in ml-ro">' + esc(v || '—') + '</div>' : '<textarea class="ml-in" rows="1" data-col="' + c.index + '" data-header="' + esc(c.header || '') + '" data-from="' + esc(v) + '">' + esc(v) + '</textarea>');
     }).join('') : '<div class="ml-dim">This row has no team columns yet — use Work this lead, which adds them.</div>') +
       '<div class="ml-wbtns"><button class="ml-btn primary sm" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.saveRow(' + k + ')">Save row to the sheet</button> <button class="ml-btn sm" onclick="MetaLeads.editRow(null)">Cancel</button></div></div>';
   }
@@ -1400,7 +1426,7 @@
       var first = lastSheet !== x.s.id; lastSheet = x.s.id;
       return tabRowHtml(x, first, mgr);
     }).join('');
-    return '<div class="ml-pgroup open">' + head +
+    return '<div class="ml-pgroup open">' + head + (code ? autoHtml('property', code) : '') +
       '<div class="ml-tmap"><div class="ml-tmap-th"><span>Sheet</span><span>Tab</span><span>Property</span><span>Leads</span><span></span></div>' + rows + '</div></div>';
   }
   function tabRowHtml(x, first, mgr) {
@@ -1419,7 +1445,7 @@
           (lr && lr.ok ? '<span class="ml-dim"> ' + esc(timeAgoSafe(S.cfg.lastRead.at)) + '</span>' : '') +
           (mgr ? ' <label class="ml-sw" title="Read this sheet or not"><input type="checkbox" ' + (s.on !== false ? 'checked' : '') + ' onchange="MetaLeads.srcOn(' + x.i + ',this.checked)"> On</label>' +
             '<button class="ml-icon" title="Disconnect this sheet" onclick="MetaLeads.remove(' + x.i + ')"><i class="fa-regular fa-trash-can"></i></button>' : '') +
-        '</div>'
+        '</div>' + autoHtml('sheet', s.id)
       : '<span class="ml-dim ml-same">same sheet</span>';
     var note = (t.tag || t.remark) && !editing ? '<div class="ml-tabnote">' + (t.tag ? '<span class="ml-tag">' + esc(t.tag) + '</span> ' : '') + esc(t.remark || '') + '</div>' : '';
     var noteEdit = editing ? '<div class="ml-noteedit"><input class="ml-in ml-tag-in" maxlength="40" placeholder="Tag (e.g. Above 2 Cr form)" value="' + esc(t.tag || '') + '">' +
@@ -1436,6 +1462,26 @@
         '<div class="ml-c-act"><button class="ml-link" onclick="MetaLeads.cols(' + js(key) + ')">' + (S.colsFor === key ? 'Hide columns' : 'Columns') + '</button></div>' +
         (S.colsFor === key ? '<div class="ml-trow-x">' + colsFor(s, t, x.i, x.j, mgr) + '</div>' : '') +
       '</div>';
+  }
+  // The default person for new leads of a property or a sheet (optional; admins set it). A lead that
+  // arrives after it is set and has nobody in "Assigned to" is given to them when the sheet is read;
+  // the sheet's own default wins over its property's. Removing it changes only the next leads.
+  function autoRule(scope, key) {
+    var a = (S.cfg && S.cfg.autoAssign) || {};
+    return ((scope === 'sheet' ? a.sheets : a.props) || {})[key] || null;
+  }
+  function autoHtml(scope, key) {
+    var r = autoRule(scope, key), what = scope === 'sheet' ? 'from this sheet' : 'for ' + key;
+    var since = r ? ' <span class="ml-dim">since ' + esc(MM().fmtWhen(r.since)) + '</span>' : '';
+    if (!isAdminMe()) return r ? '<div class="ml-auto"><i class="fa-solid fa-user-check"></i> New leads ' + esc(what) + ' go to <b>' + esc(agentLabel(r.email)) + '</b>' + since + '</div>' : '';
+    var people = roster().concat(((S.cfg && S.cfg.agents) || []).filter(function (e) { return roster().indexOf(e) < 0; }));
+    var busy = S.autoBusy === scope + ':' + key;
+    var sheet = scope === 'sheet';
+    return '<div class="ml-auto' + (r ? ' on' : '') + (sheet ? ' sm' : '') + '"><label title="New leads ' + esc(what) + ' go to this person automatically (optional)"><i class="fa-solid fa-user-check"></i> ' + (sheet ? 'New leads: ' : 'New leads ' + esc(what) + ' go to ') +
+      '<select class="ml-f" ' + (busy ? 'disabled' : '') + ' onchange="MetaLeads.setAuto(' + js(scope) + ',' + js(key) + ',this.value)">' +
+        '<option value="">' + (sheet ? 'As the property' : 'Nobody by default') + '</option>' + people.map(function (e) { return '<option value="' + esc(e) + '"' + (r && r.email === e ? ' selected' : '') + '>' + esc(agentLabel(e)) + (isAgentEmail(e) ? ' (agent)' : '') + '</option>'; }).join('') +
+      '</select></label>' + (sheet ? '' : since +
+      '<span class="ml-dim ml-auto-n">' + (r ? 'Only leads that arrive from now on; the ones already in stay as they are.' : 'Optional — new leads are then given to this person automatically. A sheet’s own choice (below) wins.') + '</span>') + '</div>';
   }
   function colsFor(s, t, i, j, mgr) {
     var pt = S.plan && S.plan.tabs.find(function (x) { return x.spreadsheetId === s.spreadsheetId && x.gid === t.gid; });
@@ -1629,6 +1675,8 @@
     pickRate: function (btn, n) {
       var box = btn.parentNode, hid = box.querySelector('input'); var on = hid.value === String(n);
       hid.value = on ? '' : String(n);
+      var o = S.open && S.plan && S.plan.people.find(function (x) { return x.key === S.open; }), w = o && workRow(o);
+      if (w) S.drafts[rowKey(w) + ':R'] = hid.value;
       box.querySelectorAll('.ml-rb').forEach(function (b) { b.classList.toggle('on', !on && b === btn); });
     },
     quickText: function (q) {
@@ -1638,6 +1686,14 @@
     // The preset phrases stay hidden until asked for (no re-render, so typing is never lost).
     quickOpen: function (btn) { var box = btn.parentNode.querySelector('.ml-qchips'); if (box) box.hidden = !box.hidden; },
     draft: function (key, f, v) { S.drafts[key + ':' + f] = v; },
+    setAuto: function (scope, key, email) {
+      var label = email ? agentLabel(email) : '';
+      S.autoBusy = scope + ':' + key; render();
+      api('set-auto-assign', { scope: scope, key: key, email: email || null }).then(function (d) {
+        S.cfg.autoAssign = d.autoAssign;
+        toast(email ? 'New leads ' + (scope === 'sheet' ? 'from this sheet' : 'for ' + key) + ' go to ' + label + ' from now on' : 'Removed — new leads are no longer given out automatically');
+      }).catch(function (e) { toast(e.message); }).then(function () { S.autoBusy = null; render(); });
+    },
     stamp: function (on) { S.stamp = on; },
     saveWork: function (key) {
       var p = S.plan.people.find(function (x) { return x.key === key; });
@@ -1660,7 +1716,7 @@
       writeEdits(groups).then(function (r) {
         // Saved: the drafts go. Refused: the remark shows the sheet's new text (to be merged by the
         // person), the typed follow-up stays to be saved again.
-        if (!r.errors.length) { noteKeys.forEach(function (d) { delete S.drafts[d]; }); if (!r.conflicts.length) delete S.drafts[key + ':F']; }
+        if (!r.errors.length) { noteKeys.forEach(function (d) { delete S.drafts[d]; }); delete S.drafts[rk + ':R']; delete S.drafts[rk + ':A']; if (!r.conflicts.length) delete S.drafts[key + ':F']; }
         render();
       });
     },
@@ -1841,9 +1897,18 @@
     }
   })();
 
-  var STALE_MS = 10 * 60000;
-  // Reading is just reading (no lead, no cell changes): the leads are read when the screen opens, and
-  // again when the last read is over 10 minutes old — nobody has to remember to press Read.
+  var STALE_MS = 3 * 60000;
+  // Reading is just reading: the leads are read when the screen opens, and again every 3 minutes while
+  // it is on screen and the tab is in front — a sheet Google says has not changed is not read again
+  // (one small Drive call each, no database cost), so new leads show up without anyone pressing Read.
+  setInterval(function () {
+    if (document.visibilityState !== 'visible' || !el() || el().style.display === 'none') return;
+    var a = document.activeElement;
+    if (a && el().contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;   // not while typing
+    if (S.writing || S.open) return;   // not under an open lead
+    autoRead();
+  }, 60000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && el() && el().style.display !== 'none') autoRead(); });
   function autoRead() {
     if (S.reading || S.readError || !S.cfg || !(S.cfg.sources || []).some(function (x) { return x.on !== false; })) return;
     if (!S.read || Date.now() - (S.read.at || 0) > STALE_MS) readSheets(true);

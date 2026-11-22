@@ -39,6 +39,7 @@ import { getDb, verifyCrmUser } from './_bot-shared.js';
 import { effectiveConfig } from '../shared-assets/agent-config.js';
 import { teamKey } from '../crm-assets/mentions.js';
 import { workPost, isWorkAction, isAdminWork } from './_agent-work.js';
+import { hasAssignedAdLeads } from './_meta-leads.js';
 
 const ROLES = ['admin', 'agent', 'none'];
 // Accounts that signed themselves up belong to no tenant, so they are the whole Firebase project's,
@@ -112,9 +113,13 @@ async function me(user) {
   const role = user.role || 'none';
   const out = { role, email: user.email || '' };
   if (role === 'agent') {
-    const snap = await getDb().collection('agentConfigs').doc(user.tenantId).get();
+    const db = getDb();
+    const [snap, adLeads] = await Promise.all([db.collection('agentConfigs').doc(user.tenantId).get(), hasAssignedAdLeads(db, user.tenantId, user.email)]);
     const stored = snap.exists ? snap.data() : null;
     out.config = effectiveConfig(stored, user.email);
+    // An admin gave them an ad lead: Meta Ads Leads is in their menu, showing only their leads
+    // (api/_meta-leads.js reads only the rows assigned to them unless they also have the Ads tab).
+    if (adLeads && !out.config.tabs.includes('ads')) out.config = { ...out.config, tabs: [...out.config.tabs, 'ads'], adsScope: 'assigned' };
     out.cfgAt = (stored && stored.updatedAt) || 0;
   }
   return json(out);

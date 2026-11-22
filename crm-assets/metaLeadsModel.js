@@ -82,7 +82,7 @@ export function teamRoleOf(header) {
   const h = normHeader(header);
   if (!h) return null;
   if (/^(assigned( to)?|agent|owner|handled by|assignee)$/.test(h)) return 'assigned';
-  if (/\brating\b|^(lead )?(temperature|quality|score)$/.test(h)) return 'rating';
+  if (/\bratings?\b|^(lead )?(temperature|quality|score)$/.test(h)) return 'rating';
   if (/^follow ?ups?\b|^followups?\b|^f ?u ?\d+$/.test(h)) return 'followup';
   if (/\bvisit\b|\bsite\b.*\bdate\b|\bsheduled\b|\bscheduled\b/.test(h)) return 'visit';
   if (/^(remarks?|notes?|comments?|feedback|status notes?|call notes?)$/.test(h)) return 'remarks';
@@ -192,11 +192,20 @@ export function parseTime(v) {
   const s = String(v == null ? '' : v).trim();
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}T/.test(s)) { const t = Date.parse(s); return Number.isFinite(t) ? t : null; }
-  // A person's "27-8-2026" / "01/09/2026" — day first, as typed in India.
-  const m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  // A person's "27-8-2026" / "01/09/2026" — day first, as typed in India — optionally with a time
+  // ("15/10/2026 13:05:00", "15/10/2026 1:05 pm"), as a sheet formats Meta's time. A day or month that
+  // cannot be one ("10/15/2026") is not a date at all, rather than rolling over into the next year.
+  const m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?m\.?)?)?$/i);
   if (m) {
     const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
-    const t = Date.UTC(y, Number(m[2]) - 1, Number(m[1]), 4, 30); // 10:00 IST
+    const mo = Number(m[2]), d = Number(m[1]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    let hh = m[4] != null ? Number(m[4]) : 10, mm = m[5] != null ? Number(m[5]) : 0;
+    if (m[7]) { const pm = /^p/i.test(m[7]); if (hh === 12) hh = pm ? 12 : 0; else if (pm) hh += 12; }
+    if (hh > 23 || mm > 59) return null;
+    const t = Date.UTC(y, mo - 1, d, hh, mm) - 5.5 * 3600000;   // India time
+    const back = new Date(t + 5.5 * 3600000);
+    if (back.getUTCDate() !== d) return null;                 // 31 Feb and the like
     return Number.isFinite(t) ? t : null;
   }
   return null;
@@ -289,6 +298,8 @@ export function readTab(tab) {
     const phoneRaw = cell(r, metaCol('phone'));
     const email = cell(r, metaCol('email'));
     if (!metaId && !name && !phoneRaw && !email) return;   // a stray note below the data
+    // The header row pasted again mid-sheet (it happens when someone copies a block): not a lead.
+    if (metaId && metaId.toLowerCase() === String((metaCol('id') || {}).header || 'id').trim().toLowerCase()) return;
     const team = { assigned: '', rating: null, ratingRaw: '', remarks: [], followups: [], visit: '', notes: [] };
     const answers = [];
     for (const c of cols) {

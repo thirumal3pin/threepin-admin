@@ -6,6 +6,7 @@ import { stageKindOf } from '../crm-assets/pipeline.js';
 import { rebuildLeadViews } from './_lead-views.js';
 import * as TM from '../shared-assets/task-model.js';
 import { campaignDigest, campaignDigestText, campaignDigestHtml } from './_campaign-loop.js';
+import { metaMorning } from './_meta-digest.js';
 
 // The digest, then the day's lead-views rebuild (one transaction per view document): room for both.
 export const maxDuration = 60;
@@ -485,6 +486,15 @@ export async function GET(request) {
       // switched off, requests nobody decided in a week expired. Its own try: it never stops a digest.
       try { const n = await sweepExpired(db, tenantId); if (n) summary.push({ tenantId, agentAccessTidied: n }); }
       catch (e) { console.error('followup-digest: agent access tidy-up for', tenantId, 'failed:', e); }
+      // Meta ad leads at 9 am (api/_meta-digest.js): the night's leads to their default person, and each
+      // person's list of new / untouched / warm leads by e-mail. Once a day; its own try.
+      if (s.lastMetaDigestDate !== today) {
+        try {
+          const mr = await metaMorning(db, tenantId);
+          if (!mr.error) await settingsRef.set({ lastMetaDigestDate: today, lastMetaDigestRun: { at: Date.now(), ...mr } }, { merge: true });
+          summary.push({ tenantId, metaLeads: mr });
+        } catch (e) { console.error('followup-digest: meta leads morning for', tenantId, 'failed:', e); }
+      }
       // Tasks first, on their own day mark, so a follow-up digest already sent (or failing) never
       // stops anyone's "your tasks today".
       if (s.lastTaskDigestDate !== today) {

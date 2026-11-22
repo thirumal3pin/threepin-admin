@@ -182,7 +182,7 @@ async function server(locked) {
   const db = createFakeDb();
   await db.collection('taskConfigs').doc('t_3pin').set(managers);
   const sheets = fakeSheetsFetch(locked);
-  const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: 'firebase-adminsdk-fbsvc@pin-realty.iam.gserviceaccount.com' }, token: async () => 'tok', now: () => NOW };
+  const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: 'firebase-adminsdk-fbsvc@pin-realty.iam.gserviceaccount.com' }, token: async () => 'tok', now: () => NOW, team: async () => [] };
   const act = (email, body) => metaLeadsAction({ tenantId: 't_3pin', email }, body, deps);
   return { db, sheets, act };
 }
@@ -359,7 +359,7 @@ async function server(locked) {
   const realAdd = db.collection('metaLeadEdits').add;
   const brokenDb = { ...db, collection: n => n === 'metaLeadEdits' ? { add: async () => { throw new Error('RESOURCE_EXHAUSTED'); } } : db.collection(n) };
   const [r2, s2] = await metaLeadsAction({ tenantId: 't_3pin', email: 'admin@threepin.in' }, { action: 'write', spreadsheetId: SHEETS.KDB.id, gid: 222, edits: [{ metaId: 'l:3004', field: 'remarks', value: 'Called' }] },
-    { db: brokenDb, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW });
+    { db: brokenDb, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW, team: async () => [] });
   eq('The edit log failing: the sheet was written and the answer says so', [s2, r2.applied.length, sheets.data.KDB.tabs[1].values[4][21]], [200, 1, 'Called']);
 }
 // ── Refresh: a sheet not modified since the last read is not read again ──
@@ -367,7 +367,7 @@ async function server(locked) {
   const db = createFakeDb();
   await db.collection('taskConfigs').doc('t_3pin').set({ managers: ['admin@threepin.in'] });
   const sheets = fakeSheetsFetch();
-  const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW };
+  const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: 'sa@x' }, token: async () => 'tok', now: () => NOW, team: async () => [] };
   const act = body => metaLeadsAction({ tenantId: 't_3pin', email: 'admin@threepin.in' }, body, deps);
   await act({ action: 'save', sources: SOURCES });
   const id = SOURCES[0].spreadsheetId;
@@ -389,7 +389,7 @@ async function server(locked) {
   const calls = [];
   let reply = { ok: true, model: 'gemini-test', verdict: { intent: 'rent', stage: 'visit_pending', confidence: 'high', evidence: 'Remarks: probably visit on Monday', next: { owner: 'team', action: 'Call to confirm the Monday visit to KDBMC001', kind: 'confirm_visit', dueAt: NOW + 86400000 }, visit: { status: 'requested', at: null, property: 'KDBMC001' }, holdReason: null, holdUntil: null, lostReason: null, urgency: 'normal', line: 'Visit likely Monday; confirm', want: null } };
   const classify = async o => { calls.push(o.caseFile); return reply; };
-  const deps = { db, fetch: async () => { throw new Error('no sheets here'); }, serviceAccount: null, token: async () => 'x', now: () => NOW, classify };
+  const deps = { db, fetch: async () => { throw new Error('no sheets here'); }, serviceAccount: null, token: async () => 'x', now: () => NOW, classify, team: async () => [] };
   const act = body => metaLeadsAction({ tenantId: 't_3pin', email: 'agent@threepin.in' }, body, deps);
   const person = {
     k: 'p:919884184215', sig: 's1', name: 'Murenu Murugan', crmId: '',

@@ -691,3 +691,14 @@ a.ml-plink:hover i{opacity:1;}
 .ml-qnote { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; padding: 8px 12px; border-radius: 10px; background: var(--ml-soft, #F4F1EC); font-size: 13px; }
 .ml-qnote i { opacity: .6; }
 .ml-hbar { margin: 10px 0 4px; }
+
+/* Who gets a lead: read-only "Assigned to" for those who may not change it; the default person per property / sheet. */
+.ml-ro{display:flex;align-items:center;flex-wrap:wrap;gap:4px;background:var(--bg2);color:var(--ink2);min-height:38px;padding:6px 10px;}
+.ml-auto{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0 10px;padding:8px 12px;border-radius:var(--r2,10px);background:var(--bg2);font-size:13px;}
+.ml-auto.on{background:light-dark(#E7F6EC,rgba(40,200,110,.12));}
+.ml-auto label{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.ml-auto select.ml-f{min-height:36px;}
+.ml-auto-n{flex-basis:100%;}
+.ml-auto.sm{margin:8px 0 0;padding:4px 8px;font-size:12.5px;gap:4px;}
+.ml-auto.sm select.ml-f{min-height:32px;max-width:100%;}
+@media (pointer:coarse){.ml-auto select.ml-f{min-height:44px;}}

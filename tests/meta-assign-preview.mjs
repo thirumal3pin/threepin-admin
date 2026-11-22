@@ -1,0 +1,225 @@
+// ═══════ META ADS LEADS — who gets a lead, in the browser (tests/meta-assign-preview.mjs) ═══════
+// Built on the harness of tests/meta-leads-preview.mjs: an admin sets a default person in Setup and
+// gives a lead to an agent; office staff are offered only staff; the agent sees only their lead.
+//   node tests/meta-assign-preview.mjs
+//
+//   node tests/meta-leads-preview.mjs
+//
+// The real CRM page with the Meta Ads Leads screens, wired to the REAL server code
+// (api/_meta-leads.js) over the in-memory Firestore. Google Sheets is a stand-in that answers for
+// the three REAL sheet ids (so Setup's "Add these three" is tested as it will run) with rows laid
+// out like the real sheets but made-up people (tests/_meta-leads-fixtures.mjs). Start to end:
+// an empty setup → the three sheets added and mapped to KDBMC001 / SHR0001 → a sheet that is not
+// shared → Save → Read → people, duplicates, CRM summaries → analysis → a non-manager's view →
+// and nothing written anywhere but the setup. Screenshots land in tests/out/meta-leads-*.png.
+
+import { chromium } from 'playwright';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { metaLeadsAction } from '../api/_meta-leads.js';
+import { createFakeDb } from './_fake-firestore.mjs';
+import { SHEETS, CRM_LEADS, STAGES, NOW, fakeClassify, ROSTER, SOURCES, fakeSheetsFetch } from './_meta-leads-fixtures.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const OUT = join(ROOT, 'tests/out');
+mkdirSync(OUT, { recursive: true });
+const T = 't_3pinrealty';
+const SA = 'firebase-adminsdk-fbsvc@pin-realty.iam.gserviceaccount.com';
+// The real ids, as Setup suggests them.
+const REAL = { KDB: '17kaZCqDhOszTBwBkj8qEGHHsy7E1TBRjAYAWOO2aMk0', KDO: '19SD6zrkLD84KHCMQ6ZAVA3D2OHJqFExkEThXIfA1BcY', KOY: '19N-RVhJUQ-HNeEvZK0nG_5aSWW78gpA8mHfbObXpbfk' };
+const LOCKED = '1LOCKEDnotSharedWithTheAppDDDDDDDDDDDDDDDDD';
+
+function sheetsFetch() {
+  const data = JSON.parse(JSON.stringify(SHEETS));
+  const byId = { [REAL.KDB]: data.KDB, [REAL.KDO]: data.KDO, [REAL.KOY]: data.KOY };
+  const calls = [];
+  const res = (status, body) => ({ ok: status < 300, status, json: async () => body });
+  const fetch = async (url, opts = {}) => {
+    const u = new URL(url); calls.push((opts.method === 'POST' ? 'POST ' : '') + u.pathname + u.search);
+    const wm = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values:batchUpdate$/);
+    if (wm) {
+      const sh = byId[wm[1]];
+      for (const d of JSON.parse(opts.body).data) {
+        const mm = d.range.match(/^'((?:[^']|'')+)'!([A-Z]+)(\d+)$/);
+        const tab = sh.tabs.find(t => t.title === mm[1]);
+        const col = mm[2].split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1, row = Number(mm[3]) - 1;
+        while (tab.values.length <= row) tab.values.push([]);
+        while (tab.values[row].length <= col) tab.values[row].push('');
+        tab.values[row][col] = d.values[0][0];
+      }
+      return res(200, {});
+    }
+    const fm = u.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (fm) {
+      const sh = byId[decodeURIComponent(fm[1])];
+      if (!sh) return res(404, { error: { message: 'File not found' } });
+      // Any change to the sheet (a write here, or a test editing the data) changes its modifiedTime.
+      let h = 0; const str = JSON.stringify(sh.tabs); for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+      return res(200, { modifiedTime: '2026-11-07T05:00:00.' + String(h >>> 0).padStart(10, '0') + 'Z' });
+    }
+    if (u.pathname === '/drive/v3/files') return res(200, { files: [
+      { id: REAL.KOY, name: 'Koyambedu - Leads', modifiedTime: '2026-11-07T06:57:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: REAL.KDO, name: 'Kodabakkam office', modifiedTime: '2026-11-07T05:11:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: REAL.KDB, name: 'office space - Kodambakkam ', modifiedTime: '2026-11-06T05:41:00Z', owners: [{ emailAddress: 'suriyaraja1707@gmail.com' }] },
+      { id: 'INVENTORYsheetXXXXXXXXXXXXXXXXXXXXXXXXXXXX', name: '3PIN_Inventory_Master', modifiedTime: '2026-11-07T04:00:00Z', owners: [{ emailAddress: '3pinrentals@gmail.com' }] }] });
+    const one = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)\/values\/A1:AZ1$/);
+    if (one) { const sh = byId[one[1]]; return res(200, { values: [sh ? sh.tabs[0].values[0] : ['Property_ID', 'Property_Name_Project']] }); }
+    const m = u.pathname.match(/\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
+    if (m[1] === LOCKED) return res(403, { error: { message: 'The caller does not have permission' } });
+    const sh = byId[m[1]];
+    if (!sh) return res(404, { error: { message: 'Requested entity was not found.' } });
+    if (!m[2]) return res(200, { properties: { title: sh.title }, sheets: sh.tabs.map(t => ({ properties: { sheetId: t.gid, title: t.title } })) });
+    return res(200, { valueRanges: u.searchParams.getAll('ranges').map(r => {
+      const mm = r.match(/^'((?:[^']|'')+)'!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+      const tab = sh.tabs.find(t => t.title === mm[1]);
+      const rows = tab ? tab.values.slice(Number(mm[3]) - 1, Number(mm[5])) : [];
+      return { values: rows.map(x => x.slice(0, mm[2] === 'A' && mm[4] === 'B' ? 2 : 52)) };
+    }) });
+  };
+  return { fetch, calls, data };
+}
+
+const INV = [
+  { id: 'KDBMC001', propertyCode: 'KDBMC001', name: 'Commercial Building for Rent', location: 'Kodambakkam' },
+  { id: 'SHR0001', propertyCode: 'SHR0001', name: 'Shriram Codename King Life', location: 'Koyambedu' },
+  { id: 'ANR005', propertyCode: 'ANR005', name: 'Brand-New Commercial Building for Rent in Anna Nagar', location: 'Anna Nagar' }
+];
+const LEADS = CRM_LEADS.map(l => ({ tenantId: T, ...l })).concat([
+  { id: 'C3', tenantId: T, name: 'Someone Else', phone: '9000000001', stageId: 'new', createdAt: NOW - 86400000, updatedAt: NOW - 86400000 }
+]);
+const stubFor = (email) => `
+window.__saves = 0;
+window.crmFirebase = {
+  saveLead: async () => { window.__saves++; }, deleteLead: async () => { window.__saves++; }, getLeadNotes: async () => [], getLeadHistory: async () => [],
+  saveNote: async () => { window.__saves++; }, deleteNoteDoc: async () => {}, saveHistory: async () => {}, savePipeline: async () => {},
+  getBotConfig: async () => null, saveBotConfig: async () => {}, saveEnquiryTypes: async () => {},
+  saveProperties: async () => {}, saveFollowupDigestSettings: async () => {}, saveDashboardEmailSettings: async () => {},
+  releaseLeadField: async () => {}, getLeadTailorTalk: async () => null, updateLeadAi: async () => {},
+  saveAutomationSettings: async () => {}, saveView: async () => {}, deleteView: async () => {},
+  setLeadFields: async () => { window.__saves++; }, setLeadAgents: async () => { window.__saves++; },
+  getInventory: async () => (${JSON.stringify(INV)})
+};
+window.crmTodayOpens = { load: async () => ({}), save: async () => {} };
+window.crmAuth = { login: async () => {}, logout: async () => {}, getIdToken: async () => 'x', getTenantId: () => '${T}' };
+window.onCrmAuthChange({ email: '${email}' });
+window.applyPipelineSnapshot(${JSON.stringify(STAGES)});
+window.applyEnquiryTypesSnapshot(['Property Enquiry']);
+window.applyAutomationSettingsSnapshot({ enabled: false });
+if (window.applyViewsSnapshot) window.applyViewsSnapshot({});
+window.applyTeamSnapshot({ admin: { email: 'admin@threepin.in' }, swami: { email: 'swami@threepin.in' }, thirumal: { email: 'thirumal@threepin.in' }, ramesh: { email: 'ramesh@threepin.in' } });
+window.applyLeadsSnapshot(${JSON.stringify(LEADS)});
+window.__ready = true;
+`;
+
+const db = createFakeDb();
+await db.collection('taskConfigs').doc(T).set({ managers: ['admin@threepin.in'] });
+const sheets = fakeSheetsFetch();
+const ai = fakeClassify();
+const deps = { db, fetch: sheets.fetch, serviceAccount: { client_email: SA }, token: async () => 'tok', now: () => Date.now(), classify: ai.classify,
+  team: async () => TEAMP, mail: async () => ({ ok: true }), rebuildAgents: async () => {} };
+const apiLog = [];
+
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.jpg': 'image/jpeg', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/json', '.woff2': 'font/woff2' };
+const errors = [];
+const ok = (label, cond, detail) => {
+  if (cond) console.log('  ok   ' + label);
+  else { console.log('  FAIL ' + label + (detail !== undefined ? ' — ' + (typeof detail === 'string' ? detail : JSON.stringify(detail)) : '')); errors.push(label); }
+};
+
+async function openPage(browser, { email = 'admin@threepin.in', viewport = { width: 1366, height: 900 }, scheme = 'light', path = '?nav=ml-setup', at = '/crm.html' } = {}) {
+  const ctx = await browser.newContext({ viewport, colorScheme: scheme, hasTouch: viewport.width < 500 });
+  try { await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://crm.local' }); } catch (e) { /* */ }
+  const page = await ctx.newPage();
+  page.on('dialog', d => d.accept());
+  page.on('pageerror', e => errors.push(`${viewport.width}px pageerror: ${e.message}`));
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push(`${viewport.width}px console: ${m.text()}`); });
+  await page.route('**/*', async route => {
+    const u = new URL(route.request().url());
+    if (u.hostname !== 'crm.local') return route.abort();
+    if (u.pathname === '/crm-assets/firebase-sync.js') return route.fulfill({ contentType: 'text/javascript', body: stubFor(email) });
+    if (u.pathname === '/api/meta-leads') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      apiLog.push({ email, action: body.action });
+      const role = (TEAMP.find(p => p.email === email) || {}).role; const [r, status] = await metaLeadsAction({ tenantId: T, email, role: role === 'none' ? undefined : role, email_verified: true }, body, role === 'agent' ? { ...deps, agentCodes: new Set() } : deps);
+      return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(r) });
+    }
+    if (u.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
+    const f = /^\/ads(\.html|-duplicates|-analysis|-setup)?$/.test(u.pathname) ? join(ROOT, 'crm.html') : join(ROOT, decodeURIComponent(u.pathname));
+    if (!existsSync(f)) return route.fulfill({ status: 404, body: '' });
+    return route.fulfill({ contentType: TYPES[extname(f)] || 'application/octet-stream', body: readFileSync(f) });
+  });
+  await page.goto('http://crm.local' + at + (at === '/crm.html' ? path : ''));
+  await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
+  await page.waitForTimeout(600);
+  return { page, ctx };
+}
+const TEAMP = [
+  { email: 'admin@threepin.in', uid: 'u_a', role: 'admin' },
+  { email: 'swami@threepin.in', uid: 'u_s', role: 'none' },
+  { email: 'thirumal@threepin.in', uid: 'u_t', role: 'none' },
+  { email: 'ramesh@threepin.in', uid: 'u_m', role: 'agent' },
+];
+const text = (page, sel) => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }, sel);
+const waitText = (page, sel, re, timeout = 8000) => page.waitForFunction(([s, r]) => { const e = document.querySelector(s); return e && new RegExp(r).test(e.textContent); }, [sel, re.source], { timeout });
+const shot2 = (page, name) => page.screenshot({ path: join(OUT, 'meta-assign-' + name + '.png'), fullPage: true });
+const openLead = async (page, name) => { await page.locator('.ml-person', { hasText: name }).first().click(); await page.waitForTimeout(600); };
+const optionTexts = page => page.evaluate(() => [...document.querySelectorAll('#mlwA option')].map(o => o.textContent));
+
+const browser = await chromium.launch({ channel: 'chrome' });
+console.log('Meta Ads Leads — who gets a lead');
+try {
+  await metaLeadsAction({ tenantId: T, email: 'admin@threepin.in', role: 'admin', email_verified: true }, { action: 'save', sources: SOURCES }, deps);
+  // ── The admin: Setup shows "New leads … go to" for each property and each sheet ──
+  let { page, ctx } = await openPage(browser, { email: 'admin@threepin.in' });
+  await waitText(page, '#metaLeadsView', /Lead sheets by property/);
+  await page.waitForSelector('.ml-auto select', { timeout: 8000 });
+  const pickers = (await page.$$('.ml-auto select')).length;
+  ok('Setup: a default-person picker per property and per sheet', pickers >= 5, pickers);
+  ok('…agents are offered, marked as agents', await page.evaluate(() => [...document.querySelectorAll('.ml-auto select option')].some(o => /Ramesh \(agent\)/.test(o.textContent))));
+  await page.locator('.ml-pgroup', { hasText: 'KDBMC001' }).first().locator('.ml-auto select').first().selectOption('swami@threepin.in');
+  await waitText(page, '#metaLeadsView', /Only leads that arrive from now on/);
+  ok('Set: says it is for new leads only, and since when', /since/.test(await text(page, '.ml-auto.on')));
+  await shot2(page, '1-setup-default');
+  // The admin opens the leads: an agent can be picked.
+  await page.goto('http://crm.local/crm.html?nav=meta-leads');
+  await page.waitForFunction(() => window.__ready === true);
+  await page.waitForTimeout(2500);
+  await openLead(page, 'Saravana');
+  ok('The admin may give a lead to an agent', (await optionTexts(page)).some(t => /Ramesh/.test(t)));
+  await page.selectOption('#mlwA', 'ramesh@threepin.in');
+  await page.click('.ml-work .ml-btn.primary');
+  await page.waitForTimeout(1200);
+  await shot2(page, '2-admin-assigned');
+  await ctx.close();
+  // ── Office staff: no agents to pick; an agent's lead is read-only ──
+  ({ page, ctx } = await openPage(browser, { email: 'swami@threepin.in', path: '?nav=meta-leads' }));
+  await page.waitForTimeout(1500);
+  await openLead(page, 'Parinita');
+  const staffOpts = await optionTexts(page);
+  ok('Staff are not offered agents', staffOpts.length > 1 && !staffOpts.some(t => /Ramesh/.test(t)), staffOpts);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  if (await page.$('.ml-drawer')) await page.click('.ml-drawer-bg');
+  await page.locator('.ml-sw button', { hasText: /^\s*All/ }).first().click();
+  await page.waitForTimeout(400);
+  await openLead(page, 'Mari Vel');
+  ok('An agent\'s lead: who has it is read-only for staff', /only an admin changes/.test(await text(page, '.ml-work')));
+  await shot2(page, '3-staff-agent-lead');
+  await ctx.close();
+  // ── The agent: only their leads, no assigning, no Take ──
+  ({ page, ctx } = await openPage(browser, { email: 'ramesh@threepin.in', path: '?nav=meta-leads', viewport: { width: 390, height: 844 } }));
+  await page.waitForTimeout(2000);
+  const names = await page.$$eval('.ml-person', els => els.map(e => e.textContent.replace(/\s+/g, ' ')));
+  ok('The agent sees only the leads assigned to them (Mari Vel, Saravana)', names.length === 2 && names.some(x => /Mari Vel/.test(x)) && names.some(x => /Saravana/.test(x)), names.map(x => x.slice(0, 40)));
+  ok('…no Take button, no assign picker', !(await page.$('.ml-take')) && !(await page.$('.ml-dact.take')) && !(await page.$('.ml-bulk select')));
+  await shot2(page, '4-agent-phone');
+  await openLead(page, 'Saravana');
+  ok('…their lead opens with "an admin assigns leads"', /an admin assigns leads/.test(await text(page, '.ml-work')));
+  await shot2(page, '5-agent-lead');
+  await ctx.close();
+} catch (e) { console.log('  FAIL', e.message); errors.push(e.message); }
+finally { await browser.close(); }
+const real = errors.filter(e => !/favicon/.test(e));
+console.log(real.length ? real.length + ' problem(s):\n' + real.join('\n') : 'All good.');
+process.exit(real.length ? 1 : 0);
