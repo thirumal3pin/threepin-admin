@@ -89,10 +89,12 @@ test('sign in, sign out, sign in again: sessions add up and every change alerts 
   assert.equal(d.open, true);
 });
 
-test('an admin is not e-mailed about their own sign-in; the other admin is', async () => {
+test('both admins are e-mailed about every sign-in, an admin’s own included', async () => {
   await call('swami', 'sign-in');
   assert.equal(mails.length, 1);
-  assert.equal(mails[0].to, 'thirumal@threepin.in');
+  assert.equal(mails[0].to, 'thirumal@threepin.in, swami@threepin.in');
+  const b = await call('swami', 'board');
+  assert.ok(b.alerts.some(a => a.email === 'swami@threepin.in'), 'and it is in their own alerts list');
 });
 
 test('agents are not kept unless an admin switches them on; only attendance admins see the board', async () => {

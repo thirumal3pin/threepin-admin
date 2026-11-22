@@ -73,8 +73,9 @@ async function nameFor(db, user) {
 }
 
 // ── the alert e-mail ──
-// One message to every attendance admin but the person themselves: a coloured band (green in, red
-// out), the sentence, the day's figures, and a button to the Attendance page.
+// One message to every attendance admin — Thirumal and Swami get every sign-in and sign-out, their
+// own included (the owner asked for exactly that on 22 Nov): a coloured band (green in, red out), the
+// sentence, the day's figures, and a button to the Attendance page.
 export function alertEmail({ ev, rec, test = false }) {
   const isIn = ev.type === 'in';
   const colour = isIn ? '#1E8E3E' : '#C5221F';
@@ -120,10 +121,12 @@ ${test ? `<tr><td style="background:#FFF4E5;color:#8A4B00;font-size:13px;font-we
 }
 
 async function alertAdmins(cfg, actorEmail, ev, rec, test = false) {
-  const to = adminsOf(cfg).filter(e => test || e !== lc(actorEmail));
+  const to = adminsOf(cfg);
   if (!to.length) return { ok: true, to: [] };
   const m = alertEmail({ ev, rec, test });
   const r = await mailer(to.join(', '), m.subject, m.text, m.html);
+  // Said in the log either way, so "was it sent?" can be answered from Vercel's runtime logs.
+  console.log('attendance alert', ev.type, lc(actorEmail || ev.email), '→', to.join(', '), r.ok ? 'sent' : 'FAILED ' + r.error);
   return { ...r, to };
 }
 
@@ -254,11 +257,11 @@ async function board(db, user, cfg, body) {
     const rec = recs[i] && recs[i].exists ? recs[i].data() : null;
     return { uid: r.uid, email: r.email, role: r.role, name: nameOf[r.uid] || (rec && rec.name) || r.authName || fallbackName(r.email), day, ...present(rec) };
   }).sort((a, b) => (b.open - a.open) || ((a.firstIn || 9e15) - (b.firstIn || 9e15)) || a.name.localeCompare(b.name));
-  // The alerts: every sign-in and sign-out of that day by someone else, newest first, minus what this
-  // admin cleared.
+  // The alerts: every sign-in and sign-out of that day (the admin's own too), newest first, minus what
+  // this admin cleared.
   const alerts = [];
   people.forEach(p => p.events.forEach(e => {
-    if (!['in', 'out'].includes(e.type) || p.email === lc(user.email)) return;
+    if (!['in', 'out'].includes(e.type)) return;
     if (e.at <= clearedBefore || clearedIds.has(e.id)) return;
     alerts.push({ id: e.id, type: e.type, at: e.at, uid: p.uid, name: p.name, email: p.email, missedOut: e.missedOut, source: e.source,
       text: e.missedOut ? `${p.name} didn’t sign out — closed when they next signed in` : alertLine({ ...e, name: p.name }, e.type === 'out' ? { workedMs: workedUpTo(p.events, e.at) } : {}) });
