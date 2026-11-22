@@ -12,6 +12,7 @@
 // with 44px targets on touch screens, a list that adapts to its container rather than the window.
 import { $, esc, whenSignedIn, toast, openSheet, busy, auth } from '../shared-assets/agent-client.js';
 import { dayOf, clock, dayLabel, hm, addDays, liveMs } from '../shared-assets/attendance-core.js';
+import { rememberSignedIn } from '../shared-assets/attendance-prompt.js';
 
 const me = await whenSignedIn();
 window.AppNav.boot({ console: 'attendance', select: () => {}, signOut: () => import('../shared-assets/agent-client.js').then(m => m.signOutHere()) });
@@ -75,7 +76,7 @@ async function toggle() {
   try {
     const r = await att(out ? 'sign-out' : 'sign-in', { source: 'page' });
     S.today = r.today; S.now = Date.now(); S.fetchedAt = Date.now();
-    try { localStorage.setItem('pin.att.asked.' + me.uid, dayOf(now())); } catch (e) { /* fine */ }
+    if (!out) rememberSignedIn(me.uid);
     drawMe();
     toast(r.already ? 'You were already signed in' : r.notIn ? 'You weren’t signed in' : out ? `Signed out at ${clock(r.today.lastOut || Date.now())}` : `Signed in at ${clock(r.today.openSince || Date.now())}`);
     if ($('hist').open) loadHistory();
@@ -89,6 +90,7 @@ async function loadStatus() {
   try {
     const r = await att('status');
     S = { ...r, fetchedAt: Date.now() };
+    if (r.today && r.today.sessions && r.today.sessions.length) rememberSignedIn(me.uid);
     statusAt = Date.now();
     drawMe();
     if (S.isAdmin) { $('admin').hidden = false; if (!$('day').value) $('day').value = S.day; loadBoard(!!B); }
