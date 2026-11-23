@@ -205,14 +205,23 @@
   // Which concepts a piece of text expresses, with how many distinct hits —
   // a brief that mentions school, park AND creche is more of a family brief
   // than one that mentions school once.
+  // Memoised: the scorer asks about the same requirement text once per property it is weighed
+  // against (loan, age, lifestyle), and a "who wants this?" pass over a big CRM asked tens of
+  // thousands of times about a few hundred texts. Bounded, so a long session cannot grow it forever.
+  const conceptMemo = new Map();
   function conceptsOf(text) {
-    const s = fold(text).replace(/[^a-z0-9 ]+/g, ' ');
+    const key = String(text == null ? '' : text);
+    const hit = conceptMemo.get(key);
+    if (hit) return hit;
+    const s = fold(key).replace(/[^a-z0-9 ]+/g, ' ');
     const out = {};
     for (const [name, re] of Object.entries(CONCEPTS)) {
       re.lastIndex = 0;
       const hits = s.match(re);
       if (hits && hits.length) out[name] = hits.length;
     }
+    if (conceptMemo.size > 4000) conceptMemo.clear();
+    conceptMemo.set(key, out);
     return out;
   }
 
@@ -497,10 +506,22 @@
   const RENTISH = /\b(?:rent|rental|per\s*month|monthly|p\.?\s*m\.?|a\s*month|month)\b|\/\s*(?:month|mon|m)\b/;
   const LEASEISH = /\b(?:lease|lumpsum|lump\s*sum|otti|bhogya|bogiyam)\b/;
 
+  const PSF_SAID = /\b(?:per\s*sq\.?\s*(?:ft|feet|foot)|per\s*sft|per\s*square\s*(?:feet|foot)|psf|\/\s*sq\.?\s*ft|\/\s*sft|a\s*sq\.?\s*ft)\b/;
+  const ANNUAL_SAID = /\b(?:per\s*annum|p\.?\s*a\.?|annual(?:ly)?|yearly|per\s*year|a\s*year)\b/;
+  // "not more than 80 lakhs" is a ceiling — the negation is checked separately.
+  const MIN_SAID = /\b(?<!not\s)(?<!no\s)(?:above|over|more\s*than|minimum|min|at\s*least|atleast|starting\s*(?:from|at)?)\s*(?:rs\.?|₹|inr)?\s*\d/;
   function readBudget(texts, dealHint) {
     for (const t of texts) {
       const m = S().parseMoney(t.text, 'price');
       const s = fold(t.text);
+      // A rate per square foot is a budget too, and it is not a price: "up to 9000 per sqft".
+      if (PSF_SAID.test(s) && !(m.price || []).some(r => r[1] >= 5 * LAKH)) {
+        const rates = (m.psf || []).concat(m.price || []).filter(r => r[0] >= 1500 && r[1] <= 100000);
+        if (rates.length) {
+          const hi = Math.max.apply(null, rates.map(r => r[1]));
+          return { min: Math.round(hi * 0.7), max: hi, firm: true, flexible: /\b(?:around|approx|about|flexible|negotiable)\b/.test(s), mode: 'psf', stated: `₹${hi.toLocaleString('en-IN')} per sq ft`, src: t.src };
+        }
+      }
       const rentish = RENTISH.test(s), leaseish = LEASEISH.test(s);
       // A tenant's word for it: rent, lease, tenant. "/month" alone is also how an EMI is quoted.
       const rentWord = /\b(?:rent|rental|renting|lease|leasing|tenant)\b/.test(s.replace(NOT_RENT_WANT, ' ').replace(/\brent\s*(?:currently|now|at\s*present)\b/g, ' '));
@@ -519,11 +540,21 @@
       else if (big.length && dealHint !== 'rent') { spans = big; mode = 'sale'; }
       else if (monthly.length && rentish) { spans = monthly; mode = 'monthly'; }
       if (!spans) continue;
-      const lo = Math.min.apply(null, spans.map(r => r[0]));
-      const hi = Math.max.apply(null, spans.map(r => r[1]));
+      let lo = Math.min.apply(null, spans.map(r => r[0]));
+      let hi = Math.max.apply(null, spans.map(r => r[1]));
+      // "Rent 30 lakhs per annum" is ₹2.5 L a month — a commercial tenant's usual way of saying it.
+      if (ANNUAL_SAID.test(s) && (mode === 'monthly' || (mode === 'lumpsum' && !leaseish) || (rentWord && mode !== 'sale'))) {
+        lo = Math.round(lo / 12); hi = Math.round(hi / 12); mode = 'monthly';
+      }
       const ranged = hi > lo * 1.02;
-      const flexible = /\b(?:around|approx|about|roughly|upto|up\s*to|can\s*(?:go|stretch|extend)|flexible|negotiable|or\s*so|ish)\b/.test(s);
+      const flexible = /\b(?:around|approx|about|roughly|upto|up\s*to|can\s*(?:go|stretch|extend)|flexible|negotiable|or\s*so|ish|kulla|kitta)\b/.test(s);
       const per = mode === 'monthly' ? ' a month' : '';
+      // "Above 3 Cr", "minimum 2 Cr": a floor, not a ceiling. The ceiling is left generous — a buyer
+      // who says "above 3" is telling us the segment, not their limit.
+      if (!ranged && MIN_SAID.test(s)) {
+        return { min: lo, max: Math.round(lo * 1.6), firm: false, flexible: true, mode, minOnly: true,
+          stated: t.text.length <= 60 ? t.text : 'above ' + fmtMoney(lo) + per, src: t.src };
+      }
       return {
         min: ranged ? lo : Math.round(lo * (mode === 'monthly' ? 0.75 : 0.7)),
         max: hi,
@@ -547,7 +578,10 @@
   const BOTH_DEAL = /\b(?:rent\s*(?:or|\/|and)\s*(?:buy|purchase|sale|own)|(?:buy|purchase|sale)\s*(?:or|\/|and)\s*rent|open\s*to\s*(?:both|rent(?:ing)?\s*(?:or|and)\s*buy(?:ing)?|buy(?:ing)?\s*(?:or|and)\s*rent(?:ing)?)|either\s*(?:rent|buy|to\s*rent|to\s*buy))\b/;
   const NOT_RENT_WANT = /\b(?:currently|presently|now)\s*(?:staying|living)?\s*(?:on|in|at)\s*(?:a\s*)?rent(?:ed)?(?:\s*house)?|paying\s*rent|rental\s*(?:yield|income|return|value)|rent\s*out|let\s*out|for\s*rental\s*income|rent\s*receivable|(?:current|present)\s*rent|rent\s*(?:currently|now|at\s*present)/g;
   const RENT_WANT = /\b(?:rent|rental|renting|tenant|tenancy|lease|leasing|to-?let)\b/;
-  const BUY_WANT = /\b(?:buy|buying|purchase|purchasing|to\s*own|investment|invest(?:ing|or)?|resale|new\s*booking|book\s*(?:a|the)\s*(?:flat|villa|plot|unit)|home\s*loan)\b/;
+  // "2 grounds land for sale in Choolaimedu", "villa for sale in ECR", "outright purchase": a buyer
+  // describing what they want by how it is offered. Read here only from a requirement — a seller's
+  // record never reaches readDeal (isBuyerLead keeps it out).
+  const BUY_WANT = /\b(?:buy|buying|purchase|purchasing|to\s*own|investment|invest(?:ing|or)?|resale|new\s*booking|book\s*(?:a|the)\s*(?:flat|villa|plot|unit)|home\s*loan|for\s*sale|on\s*sale|outright|ownership)\b/;
 
   // The question every bot asks — "buy, rent or sell?" — is not an answer to it.
   const DEAL_QUESTION = /\b(?:buy|purchase)\s*[,\/]?\s*(?:or\s*)?rent\s*[,\/]?\s*(?:or\s*)?(?:sell|sale)\b|\b(?:buy|rent|sell)\s*\/\s*(?:buy|rent|sell)\s*\/\s*(?:buy|rent|sell)\b/g;
@@ -558,6 +592,11 @@
     // ask) — an AI summary saying "not stated whether rent or buy" is not that.
     const own = fold(texts.filter(t => REQ_SRC.test(t.src) || /latest ask|Note|Budget/.test(t.src)).map(t => t.text).join(' \n ')).replace(DEAL_QUESTION, ' ');
     if (BOTH_DEAL.test(own)) return { values: ['sale', 'rent'], why: 'they have said so', src: 'their own words' };
+    // A joint venture, in their own words. "JV or outright" keeps both doors open.
+    if (JV_RE.test(own)) {
+      const alsoBuy = /\b(?:outright|or\s*(?:buy|purchase|sale)|(?:buy|purchase)\s*or)\b/.test(own);
+      return { values: alsoBuy ? ['jv', 'sale'] : ['jv'], why: alsoBuy ? 'they want a joint venture or an outright purchase' : 'they want a joint venture', src: 'their own words' };
+    }
     if (want && want.deal && want.deal !== 'unknown') {
       if (want.deal === 'either') return { values: ['sale', 'rent'], why: 'the AI’s read of their chat', src: 'AI read of the chat' };
       if (want.deal === 'buy') return { values: ['sale'], why: 'the AI’s read of their chat', src: 'AI read of the chat' };
@@ -599,7 +638,7 @@
     return 'sale';
   }
 
-  const DEAL_LABEL = { sale: 'for sale', rent: 'for rent' };
+  const DEAL_LABEL = { sale: 'for sale', rent: 'for rent', jv: 'for a joint venture' };
 
     // BHK. Read only from the texts a requirement is actually stated in — a
   // note saying "showed him the 2BHK, he wants 3" would otherwise make both
@@ -626,10 +665,14 @@
     // development — and "liked the layout" is also how every buyer describes
     // a floor plan. Read loosely it turned a 3BHK buyer's site-visit note
     // into a request for land. Only the unambiguous phrasings count.
-    { type: 'Plot', re: /\b(?:plot|plots|vacant\s*land|open\s*land|dtcp\s*(?:plot|layout)|approved\s*layout|(?:plot|land)\s*layout|land\s*(?:for\s*sale|parcel))\b/ },
+    // "land" on its own is a want for land ("4 grounds land for JV", "industrial land in Oragadam")
+    // — but never "land area", "landlord", "landmark" or "land owner", which are about something else.
+    { type: 'Plot', re: /\b(?:plot|plots|vacant\s*land|open\s*land|dtcp\s*(?:plot|layout)|approved\s*layout|(?:plot|land)\s*layout|land\s*(?:for\s*sale|parcel)|lands|land(?!\s*(?:area|lord|owner|mark|line|scape|ed\b)))\b/ },
     { type: 'Villa', re: /\b(?:villa|villas|town\s*house|townhouse|row\s*house|duplex\s*villa)\b/ },
     { type: 'House', re: /\b(?:independent\s*house|individual\s*house|separate\s*house|own\s*house)\b/ },
-    { type: 'Commercial', re: /\b(?:commercial|office\s*space|shop|showroom|retail|warehouse|godown|it\s*office)\b/ },
+    // "office" alone is not here: "a 2BHK near my office" is a home buyer. Only the phrasings that
+    // mean office SPACE count.
+    { type: 'Commercial', re: /\b(?:commercial|office\s*(?:space|premises|unit|floor|for\s*(?:rent|lease|sale))|offices|shop|shops|showroom|show\s*room|retail|warehouse|godown|it\s*office|it\s*space|factory|industrial\s*(?:shed|building|unit|space)|restaurant|hotel|co\s*-?\s*working|bare\s*shell|business\s*space)\b/ },
     { type: 'Apartment', re: /\b(?:apartment|apartments|flat|flats|condo)\b/ }
   ];
 
@@ -638,7 +681,59 @@
   // of those say anything. A note is a record of what happened ("showed him
   // the plot in Mambakkam, he wants a flat") and mining a want out of it
   // reliably gets the want backwards.
-  const REQ_SRC = /Property \/ Locality|Requirement|Preferred location|TailorTalk locality|Ad form|Intent|Enquiry type|AI read of the chat/;
+  const REQ_SRC = /Property \/ Locality|Requirement|Preferred location|TailorTalk locality|Ad form|Intent|Enquiry type|AI read of the chat|Reviewed requirement/;
+
+  // ═══════ WHAT KIND, WITHIN THE KIND ═══════
+  //
+  // Five types are not enough to keep a matcher honest. An office and a showroom are both
+  // "Commercial", and a retail tenant shown an office floor is not being listened to; an industrial
+  // land buyer and a family wanting a house plot are both "Plot", and they never want the same
+  // land. The sub-kind is read the same way on both sides — first match wins, so "restaurant space"
+  // is hospitality and not retail — and an unknown sub-kind on either side costs nothing: only two
+  // KNOWN, different sub-kinds are a mismatch.
+  const SUBTYPES = [
+    { type: 'Plot', sub: 'industrial_land', label: 'industrial land', re: /\bindustrial\s*(?:land|plot|site|park\s*land)s?\b|\bsipcot\s*(?:land|plot)s?\b/ },
+    { type: 'Plot', sub: 'agri_land', label: 'agricultural land', re: /\b(?:agri(?:cultural|culture)?|farm|farming|paddy|wet|dry)\s*(?:land|lands|plot)s?\b|\bfarm\s*land\b/ },
+    { type: 'Plot', sub: 'commercial_land', label: 'commercial land', re: /\bcommercial\s*(?:land|plot|site|property\s*land)s?\b/ },
+    { type: 'Plot', sub: 'res_plot', label: 'residential plot', re: /\bresidential\s*(?:land|plot|site|layout)s?\b|\b(?:house|villa|individual)\s*(?:plot|site)s?\b|\b(?:dtcp|cmda)\s*(?:approved\s*)?(?:plot|layout)s?\b|\bgated\s*(?:community\s*)?(?:plot|layout)s?\b|\bplots?\s*in\s*(?:a\s*)?gated\b/ },
+    { type: 'Commercial', sub: 'warehouse', label: 'warehouse', re: /\b(?:warehouse|warehousing|godown|go\s*down|logistics\s*park|storage\s*space)s?\b/ },
+    { type: 'Commercial', sub: 'industrial', label: 'industrial shed / factory', re: /\b(?:industrial\s*(?:shed|building|unit|space|property)|factory|manufacturing\s*unit|sheds?)\b/ },
+    { type: 'Commercial', sub: 'hospitality', label: 'hotel / restaurant', re: /\b(?:hotel|restaurant|cafe|hospitality|resort|service\s*apartment|guest\s*house|lodge|banquet|food\s*court|cloud\s*kitchen)s?\b/ },
+    { type: 'Commercial', sub: 'coworking', label: 'co-working', re: /\bco\s*-?\s*working\b|\bshared\s*office\b|\bplug\s*(?:and|&|n)\s*play\b|\bmanaged\s*office\b/ },
+    { type: 'Commercial', sub: 'retail', label: 'retail / showroom', re: /\b(?:retail|showroom|show\s*room|shop|shops|store|outlet|high\s*street|frontage)\b/ },
+    { type: 'Commercial', sub: 'office', label: 'office space', re: /\b(?:office|offices|it\s*space|workspace|work\s*space|corporate\s*space)\b/ },
+    { type: 'Commercial', sub: 'building', label: 'whole commercial building', re: /\b(?:commercial|entire|whole|independent|full|individual)\s*building\b|\bbuilding\s*for\s*(?:lease|rent|sale)\b/ }
+  ];
+  const SUB_LABEL = Object.fromEntries(SUBTYPES.map(x => [x.sub, x.label]));
+  function subtypeOf(text, type) {
+    const s = fold(text);
+    if (!s || !type) return null;
+    for (const x of SUBTYPES) if (x.type === type && x.re.test(s)) return x.sub;
+    return null;
+  }
+  // How near two KNOWN sub-kinds are: 1 same, a fraction for a real alternative, 0 for a
+  // different market altogether (a veto). Symmetric; anything not listed is 0.3 — unlike, but not
+  // impossible.
+  const SUB_NEAR = {
+    'office|coworking': 0.8, 'office|building': 0.6, 'retail|building': 0.6, 'retail|hospitality': 0.55,
+    'office|retail': 0.25, 'hospitality|building': 0.5, 'coworking|building': 0.4,
+    'warehouse|industrial': 0.8, 'warehouse|building': 0.3, 'industrial|building': 0.3,
+    'warehouse|office': 0, 'warehouse|retail': 0, 'warehouse|hospitality': 0, 'warehouse|coworking': 0,
+    'industrial|office': 0, 'industrial|retail': 0, 'industrial|hospitality': 0, 'industrial|coworking': 0,
+    'res_plot|commercial_land': 0.45, 'res_plot|agri_land': 0.3, 'res_plot|industrial_land': 0,
+    'industrial_land|commercial_land': 0.5, 'industrial_land|agri_land': 0.35, 'commercial_land|agri_land': 0.3
+  };
+  function subNear(a, b) {
+    if (!a || !b) return null;
+    if (a === b) return 1;
+    const v = SUB_NEAR[a + '|' + b] != null ? SUB_NEAR[a + '|' + b] : SUB_NEAR[b + '|' + a];
+    return v == null ? 0.3 : v;
+  }
+
+  // A joint venture / joint development: the landowner contributes the land, a builder the
+  // construction, and they share the built-up area. It is its own deal — a JV developer is not a
+  // buyer at a lower price, and a landowner selling outright has not offered a JV.
+  const JV_RE = /\b(?:joint\s*venture|jv|j\s*v|joint\s*development|jd|jda|development\s*agreement|land\s*owner\s*share|landowner\s*share|built\s*-?\s*up\s*share|revenue\s*shar(?:e|ing)|area\s*shar(?:e|ing))\b/;
 
   function readTypes(texts, bhk) {
     const scan = list => {
@@ -654,7 +749,19 @@
       return found.length ? { values: found, residentialOnly: false, src } : null;
     };
     const found = scan(texts.filter(t => REQ_SRC.test(t.src))) || scan(texts);
-    if (found) return found;
+    if (found) {
+      const srcText = (texts.find(t => t.src === found.src) || {}).text || '';
+      // "commercial land" / "industrial land" is land: the word commercial says what kind.
+      const landSub = subtypeOf(srcText, 'Plot');
+      if (found.values.includes('Plot') && landSub && landSub !== 'res_plot') found.values = found.values.filter(v => v !== 'Commercial');
+      // A bedroom count is a home. "Commercial" beside it ("2BHK near the commercial area") is not
+      // a request for a shop, unless nothing residential is named at all.
+      if (bhk && bhk.values.length && found.values.length > 1) found.values = found.values.filter(v => v !== 'Commercial');
+      const subs = {};
+      found.values.forEach(v => { const sb = subtypeOf(srcText, v); if (sb) subs[v] = sb; });
+      found.subs = subs;
+      return found;
+    }
     // No type word anywhere, but a BHK was asked for: residential, unspecified.
     if (bhk && bhk.values.length) return { values: ['Apartment', 'Villa', 'House'], residentialOnly: true, src: bhk.src };
     return null;
@@ -663,17 +770,96 @@
   // Localities, via the gazetteer in chennai-geo.js. Read from the stated
   // requirement first; `firm` records whether the buyer named the area
   // themselves, because that is what licenses a distance veto.
+  // ═══════ PLACES THEY RULED OUT ═══════
+  //
+  // "Not interested in Mogappair. Looking at MRC Nagar, RA Puram and Poes Garden." Read naively,
+  // that is four places they want — and Mogappair, the one they refused, came out top. Every
+  // place named after a refusal (up to the end of that clause) is an exclusion, and so is a place
+  // followed by the Tamil "vendam". Exclusions are taken from every text a person wrote or said —
+  // the requirement, the notes, the chat summary — but never from a description of a property.
+  const EXCL_CUE = /\b(?:not\s*(?:interested|keen|ok|okay|happy)\s*(?:in|on|with|about)|no\s*interest\s*in|uninterested\s*in|excluding|exclude|excluded|except(?:\s*for)?|other\s*than|apart\s*from|anything\s*but|but\s*not|avoid(?:ing)?|(?:do\s*not|don'?t|doesn'?t|does\s*not|did\s*not|didn'?t|won'?t|will\s*not)\s*(?:want|like|prefer|consider)|not\s*(?:in|near|at|around|looking\s*(?:at|in))|rul(?:e|ed|ing)\s*out|rejected|dislikes?|no\s*to)\b/g;
+  const EXCL_END = /[.;!?\n]|\b(?:but|looking|look|want|wants|prefer|prefers|preferred|need|needs|only|interested|show|considering|ok\s*with|fine\s*with|budget|however)\b/;
+  const VENDAM = /([a-z][a-z .]{2,40}?)\s*(?:-|,)?\s*(?:vendam|venda|vaendam|vendaam|beda|venam\s*illa)\b/g;
+  const NOT_WANT_SRC = /Properties discussed|Ad they replied to/;
+  const BARE_NOT = /\b(?:not|no|except|avoid)\s+([a-z][a-z .]{2,40})/g;
+  function readExclusions(texts) {
+    const geo = G();
+    const keys = [], quotes = [];
+    const add = (frag, quote) => {
+      const found = geo.resolveLoose ? geo.resolveLoose(frag).map(x => x.key) : geo.resolveAll(frag);
+      let hit = false;
+      for (const k of found) if (!keys.includes(k)) { keys.push(k); hit = true; }
+      if (hit && quotes.length < 3) quotes.push(quote.length > 120 ? quote.slice(0, 117) + '…' : quote);
+    };
+    for (const t of texts) {
+      if (NOT_WANT_SRC.test(t.src)) continue;
+      const s = fold(t.text);
+      EXCL_CUE.lastIndex = 0;
+      let m;
+      while ((m = EXCL_CUE.exec(s))) {
+        let frag = s.slice(m.index + m[0].length, m.index + m[0].length + 90);
+        const stop = frag.search(EXCL_END);
+        if (stop > 0) frag = frag.slice(0, stop);
+        else if (stop === 0) continue;
+        add(frag, t.text.trim());
+      }
+      VENDAM.lastIndex = 0;
+      while ((m = VENDAM.exec(s))) add(m[1].split(/[,.;]/).pop(), t.text.trim());
+      // A bare "not Mogappair" / "no OMR": only when what follows is a place and nothing else (a
+      // few words, no number) — "not more than 3 Cr in Velachery" is not a refusal of Velachery.
+      BARE_NOT.lastIndex = 0;
+      while ((m = BARE_NOT.exec(s))) {
+        const frag = m[1].split(/[,.;!?\n]|\b(?:and|or|but|budget)\b/)[0].trim();
+        if (!frag || /\d/.test(frag) || frag.split(/\s+/).length > 4) continue;
+        const found = geo.resolveLoose ? geo.resolveLoose(frag) : [];
+        if (found.length && found.every(f => !f.fuzzy || frag.length >= 6)) add(frag, t.text.trim());
+      }
+    }
+    return keys.length ? { keys, quotes } : null;
+  }
+
+  // Does a property sit in a place they ruled out? In it, or inside it (a block of Anna Nagar), or
+  // within a kilometre of its centre — a place they refused does not become acceptable across the
+  // road.
+  function excludedHit(r, p, ctx) {
+    const ex = r.localities && r.localities.exclude;
+    if (!ex || !ex.length || !p.localities || !p.localities.length) return null;
+    const geo = G(), area = ctx && ctx.area;
+    for (const bad of ex) {
+      for (const h of p.localities) {
+        if (h === bad) return { bad, km: 0 };
+        const pr = area ? area.proximity(h, bad) : null;
+        if (pr && (pr.basis === 'same' || pr.basis === 'contains')) return { bad, km: 0 };
+        const km = geo.distanceKm(h, bad);
+        if (km != null && km <= 1) return { bad, km };
+      }
+    }
+    return null;
+  }
+
+  // "Anywhere in Chennai", "any area in Chennai", or a requirement whose only place is the city:
+  // a stated answer (the whole city is fine), not a missing one.
+  const ANYWHERE = /\b(?:any\s*where|anywhere|any\s*(?:area|location|locality|place|part)|all\s*over|across)\b[^.\n]{0,20}\bchennai\b|\b(?:in|within|around)\s*chennai\b|^\s*chennai\s*$|\bany\s*(?:area|location|locality)\b/;
+
   function readLocalities(texts) {
     const geo = G();
-    const REQ = /Property \/ Locality|Preferred location|Requirement|TailorTalk locality|Ad form|AI read of the chat/;
-    const scan = list => {
+    const REQ = /Property \/ Locality|Preferred location|Requirement|TailorTalk locality|Ad form|AI read of the chat|Reviewed requirement/;
+    const excluded = readExclusions(texts);
+    const ex = excluded ? excluded.keys : [];
+    // Requirement text is read with spelling slips allowed ("anna nagr"); a note only exactly.
+    const scan = (list, loose) => {
       const keys = [];
-      let src = null;
+      let src = null, fuzzy = [];
       for (const t of list) {
-        for (const k of geo.resolveAll(t.text)) if (!keys.includes(k)) { keys.push(k); src = src || t.src; }
+        const found = loose && geo.resolveLoose ? geo.resolveLoose(t.text) : geo.resolveAll(t.text).map(key => ({ key, fuzzy: false }));
+        for (const f of found) {
+          if (ex.includes(f.key) || keys.includes(f.key)) continue;
+          keys.push(f.key); src = src || t.src;
+          if (f.fuzzy) fuzzy.push({ key: f.key, said: f.said });
+        }
         if (keys.length) break;
       }
-      return keys.length ? { keys, src } : null;
+      return keys.length ? { keys, src, fuzzy } : null;
     };
     // A named corridor ("anywhere on OMR", "ECR side") is a different kind of
     // answer from a locality and has to survive as one — the alias table
@@ -690,15 +876,24 @@
     const allText = fold(joinTexts(texts));
     const corridors = CORRIDOR_SAID.filter(([, re]) => re.test(allText)).map(([k]) => k);
 
-    const firm = scan(texts.filter(t => REQ.test(t.src)));
-    if (firm) return { keys: firm.keys, firm: true, src: firm.src, corridors };
-    const loose = scan(texts);
-    if (loose) return { keys: loose.keys, firm: false, src: loose.src, corridors };
+    const reqTexts = texts.filter(t => REQ.test(t.src));
+    // "Anything within 5 km of Adyar": a radius the location score honours.
+    const rad = fold(reqTexts.map(t => t.text).join(' ')).match(/\bwithin\s*(\d{1,2}(?:\.\d)?)\s*(?:km|kms|kilomet)/);
+    const radiusKm = rad ? Number(rad[1]) : null;
+    const firm0 = scan(reqTexts, true);
+    const firm = firm0 && radiusKm ? Object.assign(firm0, { radiusKm }) : firm0;
+    if (firm) return { keys: firm.keys, firm: true, src: firm.src, corridors, exclude: ex, excludeQuotes: excluded ? excluded.quotes : [], fuzzy: firm.fuzzy, radiusKm: firm.radiusKm || null };
+    const loose = scan(texts, false);
+    if (loose) return { keys: loose.keys, firm: false, src: loose.src, corridors, exclude: ex, excludeQuotes: excluded ? excluded.quotes : [], fuzzy: [] };
     // A brief that names ONLY a corridor still states a location.
     if (corridors.length) {
       const geo = G();
       const keys = corridors.flatMap(c => (geo.CORRIDOR_MEMBERS[c] || []).slice(0, 1));
-      return { keys, firm: false, src: 'corridor', corridors };
+      return { keys, firm: false, src: 'corridor', corridors, exclude: ex, excludeQuotes: excluded ? excluded.quotes : [], fuzzy: [] };
+    }
+    const anyText = reqTexts.find(t => ANYWHERE.test(fold(t.text)));
+    if (anyText || ex.length) {
+      return { keys: [], anywhere: !!anyText, firm: !!anyText, src: anyText ? anyText.src : 'their exclusions', corridors: [], exclude: ex, excludeQuotes: excluded ? excluded.quotes : [], fuzzy: [] };
     }
     return null;
   }
@@ -825,7 +1020,10 @@
     if (/\bgated\b/.test(all)) out.gated = true;
     if (/\b(?:covered\s*parking|stilt\s*parking|basement\s*parking|two\s*car|2\s*car)\b/.test(all)) out.coveredParking = true;
     if (/\b(?:corner\s*(?:unit|plot|house))\b/.test(all)) out.corner = true;
-    if (/\b(?:resale|re-sale|second\s*(?:hand|owner))\b/.test(all)) out.saleType = 'Resale';
+    // "New or resale", "open to resale": both, which is no preference at all.
+    const eitherSale = /\b(?:new\s*(?:or|\/|and)\s*(?:resale|re-sale)|(?:resale|re-sale)\s*(?:or|\/|and)\s*new|open\s*to\s*(?:resale|re-sale)|resale\s*(?:also|too)\s*(?:ok|fine))\b/.test(all);
+    if (eitherSale) { /* no preference */ }
+    else if (/\b(?:resale|re-sale|second\s*(?:hand|owner))\b/.test(all)) out.saleType = 'Resale';
     else if (/\b(?:brand\s*new|new\s*property|first\s*owner|fresh\s*booking)\b/.test(all)) out.saleType = 'New';
     if (/\b(?:semi\s*furnished)\b/.test(all)) out.furnishing = 'Semi-Furnished';
     else if (/\b(?:fully\s*furnished|furnished)\b/.test(all)) out.furnishing = 'Fully Furnished';
@@ -870,8 +1068,26 @@
     { key: 'pets', label: 'Pets allowed', want: /\b(?:pets?|dog|pet\s*friendly)\b/, have: /\bpets?\b/ },
     { key: 'furnished', label: 'Furnished', want: /\b(?:semi\s*-?\s*furnished|fully\s*-?\s*furnished|furnished)\b/, have: null },
     { key: 'independent', label: 'Independent / standalone', want: /\b(?:independent\s*(?:house|villa|building)|standalone|individual\s*house|no\s*common\s*wall)\b/, have: null },
-    { key: 'corner', label: 'Corner unit', want: /\bcorner\s*(?:unit|plot|house|flat)\b/, have: null }
+    { key: 'corner', label: 'Corner unit', want: /\bcorner\s*(?:unit|plot|house|flat)\b/, have: null },
+    // Commercial asks (Nov 2026). A retail tenant's first three questions are frontage, parking and
+    // ceiling height, and none of them had a name here.
+    { key: 'anyParking', label: 'Parking', want: /(?<!car\s)(?<!covered\s)(?<!stilt\s)(?<!basement\s)\bparking\b(?!\s*(?:is\s*)?(?:not|no)\b)/, have: /\b(?:parking|car\s*park)\b/ },
+    { key: 'frontage', label: 'Road frontage', want: /\b(?:frontage|road\s*facing|main\s*road\s*facing|facing\s*the\s*main\s*road|visibility)\b/, have: /\b(?:frontage|main\s*road\s*facing|road\s*facing|on\s*(?:the\s*)?main\s*road)\b/ },
+    { key: 'ceiling', label: 'Ceiling height', want: /\b(?:ceiling\s*height|high\s*ceiling|double\s*height)\b/, have: /\b(?:ceiling\s*height|high\s*ceiling|double\s*height|\d{2}\s*(?:ft|feet)\s*(?:clear\s*)?height)\b/ },
+    { key: 'washroom', label: 'Washrooms', want: /\b(?:washrooms?|restrooms?|toilets?)\b/, have: /\b(?:washrooms?|restrooms?|toilets?)\b/ },
+    { key: 'threePhase', label: 'Three-phase power', want: /\b(?:3|three)\s*-?\s*phase\b/, have: /\b(?:3|three)\s*-?\s*phase\b/ }
   ];
+  // A must-have none of the names above covers ("near my daughter's school in Kilpauk", "terrace
+  // garden", "EV charging"): still an ask. Checked word for word against the property — every
+  // telling word present is a "has", otherwise it is "not on record", never a "no".
+  const ASK_STOP = new Set(['with', 'near', 'nearby', 'have', 'must', 'should', 'need', 'needs', 'good', 'some', 'want', 'from', 'into', 'that', 'this', 'than', 'only', 'very', 'more', 'less', 'also', 'like', 'prefer', 'preferably', 'required']);
+  function otherAskHas(ask, p) {
+    const toks = plain(ask).split(' ').filter(w => w.length >= 4 && !ASK_STOP.has(w));
+    if (!toks.length) return null;
+    const txt = p.specText || '';
+    const hits = toks.filter(w => new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w{0,3}\\b').test(txt)).length;
+    return hits === toks.length ? 1 : null;
+  }
   const SPEC_BY_KEY = Object.fromEntries(SPECS.map(x => [x.key, x]));
   // "no need of a pooja room", "lift not required" — the ask turned down, not made.
   const SPEC_NEG_BEFORE = /\b(?:no|not|don'?t|doesn'?t|without|no\s*need\s*(?:of|for)?)\s+(?:\w+\s+){0,2}$/;
@@ -903,9 +1119,14 @@
     }
     // A must-have the AI heard that none of the table's names covers is still an ask — shown
     // as something to check, never scored.
-    const other = want && Array.isArray(want.must_have)
-      ? want.must_have.filter(x => !SPECS.some(sp => sp.want.test(fold(x)))).slice(0, 4)
-      : [];
+    if (out.includes('parking') || out.includes('twoParking')) { const i = out.indexOf('anyParking'); if (i !== -1) out.splice(i, 1); }
+    const asks = (want && Array.isArray(want.must_have) ? want.must_have.slice() : []);
+    // "Must have X, Y" in a reviewed requirement or a typed brief.
+    texts.filter(t => WANT_SRC.test(t.src) || /Reviewed requirement|Typed/.test(t.src)).forEach(t => {
+      const m = fold(t.text).match(/\bmust\s*(?:have|haves?|need)\s*:?\s*([^.\n]{3,160})/);
+      if (m) m[1].split(/,|\band\b|;/).map(x => x.trim()).filter(x => x.length >= 3).forEach(x => asks.push(x));
+    });
+    const other = [...new Set(asks.filter(x => !SPECS.some(sp => new RegExp(sp.want.source).test(fold(x)))).map(x => x.trim()))].slice(0, 5);
     return { keys: out, other };
   }
 
@@ -1077,7 +1298,12 @@
     const now = o.now || Date.now();
     const l = o.notes ? Object.assign({}, lead, { notes: o.notes }) : lead;
     const texts = leadTexts(l);
-    const want = cleanWant(lead.ai && lead.ai.want);
+    // A structured requirement (reviewed by a person, or read by the AI) arrives as a sentence the
+    // same readers parse — so a reviewed requirement and a typed one can never be scored by
+    // different code. A reviewed one outranks every field on the lead.
+    (o.extraTexts || []).forEach(t => { if (t && t.text) texts.push({ text: String(t.text), at: t.at || now, src: t.src || 'Reviewed requirement', authority: t.authority == null ? 4 : t.authority }); });
+    if (o.extraTexts && o.extraTexts.length) texts.sort((a, b) => (b.authority - a.authority) || (b.at - a.at));
+    const want = o.skipWant ? null : cleanWant(lead.ai && lead.ai.want);
     // The AI's read of the whole chat, as requirement text: where the CRM's own fields are blank,
     // this is where the area, the bedrooms and the type are read from.
     if (want) {
@@ -1087,6 +1313,7 @@
       if (want.bhk.length) bits.push(want.bhk.join(' or ') + ' BHK');
       if (want.types.length) bits.push(want.types.map(t => WANT_TYPE_WORD[t] || t).join(' or '));
       if (bits.length) texts.push({ text: bits.join(' '), at, src: 'AI read of the chat', authority: 2.5 });
+      if (want.areasExcluded.length) texts.push({ text: 'Not interested in ' + want.areasExcluded.join(', '), at, src: 'AI read of the chat', authority: 2.5 });
       texts.sort((a, b) => (b.authority - a.authority) || (b.at - a.at));
     }
     const seen = seenProperties(l, o.inventory);
@@ -1180,8 +1407,126 @@
       readyBy,
       sizeMin: num(w.size_sqft_min) && w.size_sqft_min >= 200 && w.size_sqft_min <= 100000 ? w.size_sqft_min : null,
       must_have: arr(w.must_have, 10),
-      dealBreakers: arr(w.deal_breakers, 6)
+      dealBreakers: arr(w.deal_breakers, 6),
+      areasExcluded: arr(w.areas_excluded, 6),
+      otherRequirements: arr(w.other_requirements, 3)
     };
+  }
+
+  // ═══════ STRUCTURED REQUIREMENTS ═══════
+  //
+  // lead.reqs = { items: [ITEM], src: 'reviewed' | 'ai', at, by, rev } — written by api/_match.js
+  // (the AI structurer and the review form), never over the lead's own fields. An ITEM:
+  //   { id, status: 'active'|'previous'|'closed', deal: buy|rent|lease|jv|either,
+  //     types: [apartment|villa|independent_house|plot|commercial], sub, bhk: [n],
+  //     locations: [{ name, pref: primary|secondary }], exclude: [name], anywhere, radiusKm,
+  //     budget: { min, max, unit: total|per_month|per_sqft|lease_amount, flex: fixed|approximate|negotiable|maximum|minimum },
+  //     area: { min, max, unit: sqft|sqm|grounds|cents|acres, kind: built|carpet|land, flex },
+  //     condition: [new|resale|ready|under_construction], possession: 'immediate'|'YYYY-MM',
+  //     mustHave: [..], facing, furnishing, floor, notes, uncertain: [field], missing: [field] }
+  // reqSentence() writes an ITEM as the sentence an agent would type, and the ordinary readers
+  // parse it. One reading path: a reviewed requirement, a typed brief and a CRM lead cannot drift.
+  const TYPE_WORD = { apartment: 'apartment', villa: 'villa', independent_house: 'independent house', plot: 'plot', commercial: 'commercial space' };
+  function moneyWord(n) {
+    if (!(n > 0)) return '';
+    if (n >= CR) return '₹' + (Math.round(n / CR * 100) / 100) + ' Cr';
+    if (n >= LAKH) return '₹' + (Math.round(n / LAKH * 100) / 100) + ' lakhs';
+    return '₹' + Math.round(n).toLocaleString('en-IN');
+  }
+  function reqSentence(it) {
+    if (!it || typeof it !== 'object') return '';
+    const bits = [];
+    const deal = { buy: 'to buy', rent: 'for rent', lease: 'for lease', jv: 'for a joint venture', either: 'rent or buy' }[it.deal] || '';
+    const bhk = Array.isArray(it.bhk) && it.bhk.length ? it.bhk.filter(n => n > 0).join(' or ') + ' BHK' : '';
+    const sub = it.sub && SUB_LABEL[it.sub] ? SUB_LABEL[it.sub] : '';
+    const types = (Array.isArray(it.types) ? it.types : []).map(t => TYPE_WORD[t]).filter(Boolean);
+    const kind = sub || types.join(' or ');
+    bits.push(['Wants', deal === 'to buy' ? 'to buy' : '', bhk, kind, deal && deal !== 'to buy' ? deal : ''].filter(Boolean).join(' '));
+    const locs = (Array.isArray(it.locations) ? it.locations : []).map(x => (typeof x === 'string' ? x : x && x.name)).filter(Boolean);
+    if (locs.length) bits.push('in ' + locs.join(', '));
+    else if (it.anywhere) bits.push('anywhere in Chennai');
+    if (it.radiusKm > 0 && locs.length) bits.push(`within ${it.radiusKm} km`);
+    let out = bits.join(' ') + '.';
+    const ex = (Array.isArray(it.exclude) ? it.exclude : []).filter(Boolean);
+    if (ex.length) out += ' Not interested in ' + ex.join(', ') + '.';
+    const b = it.budget || {};
+    if (b.max > 0 || b.min > 0) {
+      const flex = { approximate: 'around ', negotiable: '', maximum: 'up to ', minimum: 'above ', fixed: '' }[b.flex] || '';
+      const per = b.unit === 'per_month' ? ' per month' : b.unit === 'per_sqft' ? ' per sqft' : b.unit === 'lease_amount' ? ' lease amount' : '';
+      const amt = b.min > 0 && b.max > 0 && b.max > b.min * 1.02 ? `${moneyWord(b.min)} to ${moneyWord(b.max)}` : moneyWord(b.flex === 'minimum' ? (b.min || b.max) : (b.max || b.min));
+      out += ` Budget ${b.min > 0 && b.max > b.min * 1.02 ? '' : flex}${amt}${per}${b.flex === 'negotiable' ? ', negotiable' : ''}.`;
+    }
+    const a = it.area || {};
+    if (a.min > 0 || a.max > 0) {
+      const unit = { grounds: 'grounds', cents: 'cents', acres: 'acres', sqm: 'sq m', sqft: 'sqft' }[a.unit] || 'sqft';
+      const n = x => (Math.round(x * 100) / 100);
+      const amt = a.min > 0 && a.max > a.min ? `${n(a.min)} to ${n(a.max)} ${unit}` : `${n(a.min || a.max)} ${unit}`;
+      out += ` ${a.flex === 'approximate' ? 'Around ' : ''}${amt}${a.kind === 'land' && !/grounds|cents|acres/.test(unit) ? ' land area' : ''}.`;
+    }
+    const cond = Array.isArray(it.condition) ? it.condition : [];
+    if (cond.includes('new') && cond.includes('resale')) out += ' New or resale.';
+    else if (cond.includes('resale')) out += ' Resale.';
+    else if (cond.includes('new')) out += ' Brand new.';
+    if (it.possession === 'immediate' || cond.includes('ready')) out += ' Ready to move.';
+    else if (typeof it.possession === 'string' && /^20\d\d-\d\d$/.test(it.possession)) out += ` Possession by ${MONTHS[Number(it.possession.slice(5)) - 1]} ${it.possession.slice(0, 4)}.`;
+    else if (cond.includes('under_construction')) out += ' Under construction is fine.';
+    const must = (Array.isArray(it.mustHave) ? it.mustHave : []).filter(Boolean);
+    if (it.facing) must.push(it.facing + ' facing');
+    if (it.furnishing) must.push(it.furnishing);
+    if (must.length) out += ' Must have ' + must.join(', ') + '.';
+    return out.replace(/\s+/g, ' ').trim();
+  }
+  // What a reviewed requirement was reviewed AGAINST: the lead's own requirement words. When they
+  // change afterwards (someone edits the CRM field, TailorTalk hears a new budget), the review is
+  // out of date — the newer words win, and the screens say "changed since it was reviewed".
+  function reqFingerprint(lead) {
+    const l = lead || {}, tt = l.tt || {}, prof = tt.profile || {};
+    const s = [l.propertyInterest, l.budget, l.enquiryType, prof.requirement_details, prof.budget_and_finance, prof.preferred_location]
+      .map(v => fold(v).replace(/\s+/g, ' ').trim()).join('|');
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(36);
+  }
+  function activeItems(lead) {
+    const r = lead && lead.reqs;
+    const items = r && Array.isArray(r.items) ? r.items.filter(x => x && typeof x === 'object' && (x.status || 'active') === 'active') : [];
+    const stale = !!(r && r.fp && r.fp !== reqFingerprint(lead));
+    return { items, reviewed: !!(r && r.src === 'reviewed'), at: (r && r.at) || 0, stale };
+  }
+  // Every live requirement of one lead, each as its own profile. The first is the main one (the
+  // lead's own fields fill what it leaves out); any other is scored ONLY on what it says, so a
+  // second requirement ("and 2 grounds in Choolaimedu for JV") never borrows the first one's budget.
+  function requirementProfiles(lead, opts) {
+    const o = opts || {};
+    const { items, reviewed, at, stale } = activeItems(lead);
+    const out = [];
+    if (items.length) {
+      items.forEach((it, i) => {
+        const text = reqSentence(it);
+        if (!text) return;
+        const src = 'Reviewed requirement';
+        // Out of date: still read, but below the lead's own (newer) words.
+        const authority = stale ? 2.4 : reviewed ? 4 : 2.8;
+        const prof = i === 0
+          ? requirementProfile(lead, Object.assign({}, o, { extraTexts: [{ text, at, src, authority }], skipWant: reviewed && !stale }))
+          : Object.assign(briefProfile(text, { now: o.now, inventory: o.inventory, name: lead.name }), { id: lead.id, lead, kind: 'buyer' });
+        prof.reqIndex = i; prof.reqItem = it; prof.reqText = text; prof.reqSrc = reviewed ? 'reviewed' : 'ai'; prof.reqStale = stale;
+        out.push(prof);
+      });
+    }
+    if (!out.length) {
+      const main = requirementProfile(lead, o);
+      main.reqIndex = 0;
+      out.push(main);
+      // More than one requirement heard by the automation (ai.want.other_requirements).
+      const more = lead.ai && lead.ai.want && Array.isArray(lead.ai.want.other_requirements) ? lead.ai.want.other_requirements : [];
+      more.filter(x => typeof x === 'string' && x.trim().length > 6).slice(0, 3).forEach((line, j) => {
+        const p2 = Object.assign(briefProfile(line, { now: o.now, inventory: o.inventory, name: lead.name }), { id: lead.id, lead, kind: 'buyer' });
+        p2.reqIndex = j + 1; p2.reqText = line; p2.reqSrc = 'ai';
+        out.push(p2);
+      });
+    }
+    return out;
   }
 
     // The same shape, from a sentence somebody typed into a box — the "match a
@@ -1257,9 +1602,22 @@
       fromName.forEach(k => { if (!localities.includes(k)) localities.push(k); });
     }
 
+    // The kind within the kind, from what the property IS (type, configuration, name) — never from
+    // its highlights, where "near IT offices" would make a flat an office.
+    const kindText = [p.type, p.propertyType, p.config, p.name, p.subType].filter(Boolean).join(' | ');
+    const type0 = rec.facet.type;
+    const jvText = fold([p.dealType, p.name, p.highlights, p.availability, p.detailsText, p.sheetNotes, p.notes].filter(Boolean).join(' | '));
+    const landSpans = (rec.num.land || []).filter(r => r[0] >= 300);
     prof = {
       kind: 'property',
       p, id: p.id,
+      sub: subtypeOf(kindText, type0) || (type0 === 'Plot' && /\b(?:residential|house\s*site|dtcp|cmda|layout|gated)\b/.test(fold(kindText + ' ' + (p.approval || ''))) ? 'res_plot' : null),
+      // Open to a joint venture: said so in its deal or its description. Only land (or a house on
+      // land) can be.
+      jv: (type0 === 'Plot' || type0 === 'House' || type0 === 'Other') && (String(p.dealType || '').toLowerCase() === 'jv' || JV_RE.test(jvText)),
+      jvOnly: String(p.dealType || '').toLowerCase() === 'jv',
+      landLo: landSpans.length ? Math.min.apply(null, landSpans.map(r => r[0])) : null,
+      landHi: landSpans.length ? Math.max.apply(null, landSpans.map(r => r[1])) : null,
       code: p.propertyCode || null,
       name: p.name || p.id,
       locationText: p.location || '',
@@ -1323,17 +1681,30 @@
     const ttText = lead ? leadTexts(lead).filter(t => t.text.length >= 18).map(t => t.text).join(' \n ') : '';
     // Shaped as an inventory property so ONE profiler serves both, rather
     // than a second scorer that would drift from this one.
+    // The board stores propType / deal / sqft / uds (track-assets/app.js); the older names are still
+    // read for cards written before. Reading only the old names dropped the type, the deal and the
+    // size of every card, so a card was scored as an unknown thing of unknown size.
+    const facts = (lead && lead.tt && lead.tt.facts) || {};
+    const factSize = kind => (Array.isArray(facts.sizes) ? facts.sizes : []).filter(z => z && z.kind === kind && z.sqft > 0).map(z => z.sqft);
+    const built = listing.sqft || (factSize('built').length ? Math.max.apply(null, factSize('built')) + ' sqft' : '');
+    const land = listing.landArea || (factSize('land').length ? Math.max.apply(null, factSize('land')) + ' sqft' : '');
+    const typeWord = listing.propType || listing.propertyType || facts.type || '';
     const asProperty = {
       id: listing.id,
       propertyCode: listing.propertyCode || null,
-      name: listing.title || listing.propertyCode || 'Untitled listing',
-      location: listing.location || listing.address || '',
-      config: listing.config || '',
-      startingPrice: listing.askingPrice || '',
-      type: listing.propertyType || guessType(listing, ttText),
-      dealType: listing.dealType || ownerDeal(lead),
+      // A card the seller sync made is titled with the seller's NAME — useless as a property name.
+      name: (listing.title && listing.title !== listing.sellerName ? listing.title : '') || listing.propertyCode || (lead && lead.propertyInterest)
+        || [facts.config, typeWord, listing.location].filter(Boolean).join(' · ') || `Seller enquiry${listing.sellerName ? ' — ' + String(listing.sellerName).split(/\s+/)[0] : ''} (details pending)`,
+      location: listing.location || listing.address || (lead && lead.propertyInterest) || '',
+      config: listing.config || facts.config || '',
+      startingPrice: listing.askingPrice || facts.price || (lead && lead.budget) || '',
+      type: (typeWord && typeWord !== 'land' ? typeWord : typeWord === 'land' ? 'Land' : '') || guessType(listing, ttText),
+      dealType: listing.deal || listing.dealType || facts.deal || ownerDeal(lead),
       status: listing.readyToMove ? 'Ready to Move' : '',
-      highlights: listing.remarks || '',
+      sqftRange: built,
+      uds: listing.uds || (factSize('uds')[0] ? factSize('uds')[0] + ' sqft' : ''),
+      totalLandArea: land,
+      highlights: [listing.remarks, listing.description].filter(Boolean).join(' \n '),
       detailsText: ttText,
       sheetNotes: [listing.accessNotes, listing.shootNotes].filter(Boolean).join(' \n ')
     };
@@ -1392,14 +1763,26 @@
       if (fromText.length) asking = fmtMoney(Math.min.apply(null, fromText.map(r => r[0])));
     }
 
+    // TailorTalk's extracted facts (type, config, sizes, price) are the cleanest description we
+    // hold of an owner's property; the sentence is the fallback.
+    const facts = tt.facts || {};
+    const sizes = Array.isArray(facts.sizes) ? facts.sizes.filter(z => z && z.sqft > 0) : [];
+    const sz = kind => sizes.filter(z => z.kind === kind).map(z => z.sqft);
+    if (!moneySpans(asking).length && facts.priceValue > 0 && dealType !== 'rent') asking = fmtMoney(facts.priceValue);
+    const factType = { apartment: 'Apartment', villa: 'Villa', house: 'Independent House', land: 'Land', commercial: 'Commercial' }[facts.type] || '';
     const asProperty = {
       id: 'owner:' + (lead.id || ''),
       propertyCode: (lead.propertyCodes || [])[0] || null,
       name: described ? described.slice(0, 80) : (lead.name ? lead.name + '’s property' : 'Owner listing'),
       location: described,
-      config: described,
+      config: [facts.config, described].filter(Boolean).join(' , '),
+      // No extracted size: the owner's own sentence ("…2000 sqft", "2 grounds") is the next best.
+      sqftRange: sz('built').length ? Math.max.apply(null, sz('built')) + ' sqft'
+        : ((fold(described).match(/\b(\d{3,5}(?:\.\d+)?)\s*(?:sq\.?\s*ft|sqft|sft|square\s*feet)\b/) || [])[1] ? fold(described).match(/\b(\d{3,5}(?:\.\d+)?)\s*(?:sq\.?\s*ft|sqft|sft|square\s*feet)\b/)[1] + ' sqft' : ''),
+      uds: sz('uds').length ? sz('uds')[0] + ' sqft' : '',
+      totalLandArea: sz('land').length ? Math.max.apply(null, sz('land')) + ' sqft' : ((fold(described).match(/\b\d+(?:\.\d+)?\s*(?:grounds?|cents?|acres?)\b/) || [])[0] || ''),
       startingPrice: asking,
-      type: guessType({ title: described, config: described, remarks: prof.remarks }, described),
+      type: factType || guessType({ title: described, config: described, remarks: prof.remarks }, described),
       dealType,
       highlights: [prof.remarks, prof.activity_so_far].filter(Boolean).join(' | '),
       detailsText: [described, prof.chat_summary, lead.aiSummary, lead.lastNote && lead.lastNote.text]
@@ -1458,6 +1841,21 @@
       key: 'deal', label: 'Rent or buy', weight: 12, core: true, prior: 0.5,
       score(r, p) {
         const has = p.deal || 'sale';
+        const TL = t => { const w = (S().TYPE_LABEL[t] || t || 'property').toLowerCase(); return (/^[aeiou]/.test(w) ? 'an ' : 'a ') + w; };
+        if (r.deal && r.deal.values.includes('jv')) {
+          if (p.jv) return { s: 1, why: 'open to a joint venture — which is what they want' };
+          if (p.type && !['Plot', 'House', 'Other'].includes(p.type)) return { s: 0, veto: `${TL(p.type)} — a joint venture needs land, and they want a JV` };
+          if (has === 'rent') return { s: 0, veto: 'offered for rent, and they want a joint venture' };
+          if (r.deal.values.includes('sale')) return { s: 0.8, why: 'for outright sale — they would also buy outright' };
+          return { s: 0.1, veto: 'listed for outright sale — the owner has not said they are open to a joint venture (worth asking)' };
+        }
+        if (p.jvOnly && r.deal && r.deal.values.includes('sale') && has !== 'rent') {
+          return { s: 0.35, why: 'offered as a joint venture — ask whether the owner would sell outright' };
+        }
+        // An owner who would PREFER a JV may still sell: a real option to put to a buyer, not a sure one.
+        if (p.jv && r.deal && r.deal.values.length === 1 && r.deal.values[0] === 'sale' && has !== 'rent') {
+          return { s: 0.7, why: 'the owner prefers a joint venture — ask whether they would sell outright' };
+        }
         if (!r.deal) {
           return unknown(`whether they want to rent or to buy is not known — this is ${DEAL_LABEL[has]}`, 'Ask whether they are renting or buying');
         }
@@ -1472,7 +1870,17 @@
     {
       key: 'budget', label: 'Budget', weight: 26, core: true, prior: 0.5,
       score(r, p) {
+        // A joint venture is paid in built-up area, not rupees: there is no price to compare.
+        if (r.deal && r.deal.values.length === 1 && r.deal.values[0] === 'jv') return null;
         if (!r.budget) return unknown('their budget is not known', 'Ask their budget');
+        // A budget per square foot ("up to ₹9,000 a sq ft"), against the property's rate.
+        if (r.budget.mode === 'psf') {
+          if (p.psfLo == null) return unknown('no rate per sq ft on record for this property', 'Get the rate per sq ft');
+          const over = p.psfLo / r.budget.max;
+          if (over <= 1) return { s: 1, why: `₹${Math.round(p.psfLo).toLocaleString('en-IN')}/sq ft — inside their ₹${Math.round(r.budget.max).toLocaleString('en-IN')}/sq ft` };
+          const sc = over <= 1.05 ? 0.85 : over <= 1.12 ? 0.6 : over <= 1.25 ? 0.3 : 0.08;
+          return { s: sc, why: `₹${Math.round(p.psfLo).toLocaleString('en-IN')}/sq ft — ${Math.round((over - 1) * 100)}% over their ₹${Math.round(r.budget.max).toLocaleString('en-IN')}/sq ft` };
+        }
         if (p.priceLo == null) return unknown(`no ${p.deal === 'rent' ? 'rent' : 'price'} on record for this property`, 'Get the price from the owner or builder');
         if (r.budget.mode !== p.priceMode) {
           // A monthly rent and a sale price (or a lease amount) are not the same money. When the
@@ -1568,8 +1976,17 @@
       // has never heard of Periya Palayatamman Nagar.
       prior: 0.5,
       score(r, p, ctx) {
-        if (!r.localities || !r.localities.keys.length) return unknown('where they want to live is not known', 'Ask which areas they are considering');
         const geo = G();
+        // A place they refused is a veto before anything else is weighed.
+        const hit = excludedHit(r, p, ctx);
+        if (hit) {
+          const said = (r.localities.excludeQuotes || [])[0];
+          return { s: 0, veto: `in ${geo.label(hit.bad)}${hit.km ? ` (about ${Math.max(1, Math.round(hit.km))} km)` : ''}, which they ruled out${said ? ` — “${said}”` : ''}` };
+        }
+        if (r.localities && r.localities.anywhere && !r.localities.keys.length) {
+          return { s: 1, why: `${p.localities[0] ? geo.label(p.localities[0]) : (p.locationText || 'in Chennai')} — they are open to anywhere in Chennai` };
+        }
+        if (!r.localities || !r.localities.keys.length) return unknown('where they want to live is not known', 'Ask which areas they are considering');
         const area = ctx && ctx.area;
         const want = r.localities.keys;
         const heres = p.localities.length ? p.localities : (p.locationText ? [p.locationText] : []);
@@ -1630,11 +2047,24 @@
 
         const { pr } = best;
         const label = k => (area ? area.label(k) : geo.label(k));
+        // A stated radius decides it outright, either way.
+        if (r.localities.radiusKm && pr.basis !== 'same' && pr.basis !== 'contains') {
+          const km = geo.distanceKm(best.h, best.w);
+          if (km != null) {
+            if (km <= r.localities.radiusKm) return { s: 0.95, why: `${label(best.h)}, about ${Math.max(1, Math.round(km))} km from ${label(best.w)} — inside the ${r.localities.radiusKm} km they allowed` };
+            return { s: Math.min(pr.similarity, 0.25), why: `${label(best.h)}, about ${Math.round(km)} km from ${label(best.w)} — outside the ${r.localities.radiusKm} km they allowed` };
+          }
+        }
 
         if (pr.basis === 'same') return { s: 1, why: `${label(best.w)} — exactly where they are looking` };
         if (pr.basis === 'contains') return { s: 1, why: pr.note };
 
-        const s = pr.similarity;
+        // The area model's similarity is a geographic closeness; a buyer's willingness falls off
+        // faster than that. Calibrated (Nov 2026) to how a Chennai agent hears "Anna Nagar":
+        // the next block (≤ 3 km) is a real option, 3–4 km a compromise to put to them, 5–8 km a
+        // different market — not half a match.
+        const sim = pr.similarity;
+        const s = sim >= 0.8 ? sim : sim >= 0.6 ? 0.55 + (sim - 0.6) * 1.25 : sim >= 0.4 ? 0.25 + (sim - 0.4) * 1.5 : sim * 0.6;
         const near = pr.kmBand ? `about ${pr.kmBand} from ${pr.to}` : `near ${pr.to}`;
 
         // A veto needs evidence strong enough to justify hiding a property.
@@ -1698,6 +2128,19 @@
         if (p.type === 'Other' || !p.type) return unknown('this property\'s type is not on record', 'Record the property type');
         const want = r.types.values;
         if (want.includes(p.type)) {
+          // Same type: now the kind within it. Only two KNOWN sub-kinds can disagree.
+          const wantSub = r.types.subs && r.types.subs[p.type];
+          const near = subNear(wantSub, p.sub);
+          // For land and commercial space the kind within the kind does the work bedrooms do for a
+          // home (bedrooms are not scored there), so it carries their weight as well.
+          const subWeight = (p.type === 'Commercial' || p.type === 'Plot') ? 24 : 10;
+          if (near != null && near < 1) {
+            const theirs = SUB_LABEL[wantSub], ours = SUB_LABEL[p.sub];
+            if (near === 0) return { s: 0, weight: subWeight, veto: `${ours}, and they want ${theirs}` };
+            return { s: near, weight: subWeight, why: `${ours} rather than the ${theirs} they asked for` };
+          }
+          if (near === 1) return { s: 1, weight: subWeight, why: `${SUB_LABEL[p.sub]}, as asked` };
+          if (wantSub && !p.sub) return { unknown: true, why: `they want ${SUB_LABEL[wantSub]} — what kind of ${(S().TYPE_LABEL[p.type] || p.type).toLowerCase()} this is, is not on record`, ask: `Confirm with the owner whether it suits ${SUB_LABEL[wantSub]}` };
           // A BHK with no type named tells us "a home" and nothing more, so
           // the reason has to say that rather than claim they asked for a flat.
           return r.types.residentialOnly
@@ -1716,7 +2159,16 @@
           return { s: 0, veto: `${S().TYPE_LABEL[p.type] || p.type}, and they asked for ${want.join(' / ')}` };
         }
         if (wantsResi && isResi) {
-          return { s: 0.5, why: `${S().TYPE_LABEL[p.type] || p.type} rather than the ${want.join(' / ')} they named` };
+          // A villa and an independent house are close cousins; a flat for someone who asked for a
+          // house of their own (or the reverse) is a different way of living.
+          const pair = [want.includes('House') || want.includes('Villa') ? 'own' : 'flat', p.type === 'Apartment' ? 'flat' : 'own'];
+          const sc = pair[0] === pair[1] ? 0.7 : pair[0] === 'own' ? 0.25 : 0.4;
+          return { s: sc, why: `${S().TYPE_LABEL[p.type] || p.type} rather than the ${want.map(t => S().TYPE_LABEL[t] || t).join(' / ')} they named` };
+        }
+        // Land against a built commercial space is a different purchase, not a near miss: a land
+        // buyer is not shown a showroom to let, and a showroom tenant is not shown a plot.
+        if ((want.includes('Plot') && p.type === 'Commercial') || (want.includes('Commercial') && p.type === 'Plot')) {
+          return { s: 0, veto: p.type === 'Plot' ? `land, and they want built commercial space` : `built commercial space, and they want land` };
         }
         return { s: 0.2, why: `${S().TYPE_LABEL[p.type] || p.type} against ${want.join(' / ')}` };
       }
@@ -1726,7 +2178,30 @@
       key: 'size', label: 'Size', weight: 6, core: true, prior: 0.8,
       score(r, p) {
         if (!r.size) return unknown('the size they need is not stated', 'Ask the size they need');
-        if (p.areaLo == null) return unknown('the size is not on record for this property', 'Get the area from the owner');
+        // Land is measured as land: grounds against grounds. A 2-ground plot buyer's want is set
+        // against the LAND area of a plot or a house on land, never its built-up area, and never a
+        // flat's carpet (the type check has already ruled that pairing out).
+        const landWant = r.size.unit === 'land';
+        const landProp = p.type === 'Plot' || (p.type === 'House' && p.landLo != null && landWant);
+        let lo = p.areaLo, hi = p.areaHi;
+        if (landWant || p.type === 'Plot') {
+          if (landProp) { lo = p.landLo != null ? p.landLo : p.areaLo; hi = p.landHi != null ? p.landHi : p.areaHi; }
+          else if (landWant) return null;
+        }
+        if (lo == null) return unknown(`the ${landWant ? 'land ' : ''}size is not on record for this property`, landWant ? 'Get the land extent (grounds / cents) from the owner' : 'Get the area from the owner');
+        if (landWant || landProp) {
+          // For land the size IS the purchase — 2 grounds and 4 grounds are different budgets and
+          // different projects — so it weighs as much as bedrooms do for a flat.
+          const W = 14;
+          const g = n => (n / 2400 >= 0.95 ? `${Math.round(n / 2400 * 10) / 10} grounds` : fmtArea(n, n));
+          const ok = hi >= r.size.min * 0.95 && lo <= r.size.max * 1.05;
+          if (ok) return { s: 1, weight: W, why: `${g(lo)}${hi > lo ? '–' + g(hi) : ''} of land — the ${g(r.size.min)} they want` };
+          const short = hi < r.size.min;
+          const gap = short ? r.size.min / hi : lo / r.size.max;
+          const sc = gap <= 1.15 ? 0.7 : gap <= 1.35 ? 0.45 : gap <= 1.7 ? 0.2 : 0.05;
+          return { s: sc, weight: W, why: `${g(lo)} of land against the ${g(r.size.min)} they want — ${short ? 'smaller' : 'larger'}` };
+        }
+        p = Object.assign({}, p, { areaLo: lo, areaHi: hi });
         const overlap = p.areaHi >= r.size.min && p.areaLo <= r.size.max;
         if (overlap) return { s: 1, why: `${fmtArea(p.areaLo, p.areaHi)} covers the ${fmtArea(r.size.min, r.size.max)} they want` };
         const short = p.areaHi < r.size.min;
@@ -1777,9 +2252,13 @@
       // four asks matter more than one.
       score(r, p) {
         const keys = (r.specs && r.specs.keys) || [];
-        if (!keys.length) return null;
+        const others = (r.specs && r.specs.other) || [];
+        if (!keys.length && !others.length) return null;
         const have = [], lack = [], ask = [];
         let sum = 0;
+        for (const o of others) {
+          if (otherAskHas(o, p) === 1) { have.push(o); sum += 1; } else { ask.push(o); sum += 0.5; }
+        }
         for (const k of keys) {
           const sp = SPEC_BY_KEY[k];
           const v = specHas(sp, p);
@@ -1788,14 +2267,15 @@
           else if (v > 0) { have.push(sp.label + ' (not confirmed covered)'); sum += v; }
           else { lack.push(sp.label); }
         }
-        const s = sum / keys.length;
+        const n = keys.length + others.length;
+        const s = sum / n;
         const parts = [];
         if (have.length) parts.push(`has ${list(have)}`);
         if (lack.length) parts.push(`no ${list(lack)}`);
         if (ask.length) parts.push(`${list(ask)} not on record`);
         return {
-          s, weight: Math.min(16, 4 + 3 * keys.length),
-          why: parts.join('; ') + ` — of the ${keys.length === 1 ? 'one thing' : keys.length + ' things'} they asked for`,
+          s, weight: Math.min(16, 4 + 3 * n),
+          why: parts.join('; ') + ` — of the ${n === 1 ? 'one thing' : n + ' things'} they asked for`,
           unknowns: ask.map(a => ({ label: a, why: `${a} — they asked for it; not on record for this property`, ask: `Check with the owner: ${a.toLowerCase()}` }))
         };
       }
@@ -2018,6 +2498,7 @@
   }
 
   const CORE_WEIGHT = ATTRIBUTES.filter(a => a.core).reduce((n, a) => n + a.weight, 0);
+  const GATED = { locality: true, type: true };
 
   // ═══════════════════════════════════════════════════════════════════════
   // SCORING
@@ -2178,7 +2659,18 @@
     // Their deal-breakers, as the AI heard them — shown to be checked, not guessed at.
     (req.dealBreakers || []).slice(0, 3).forEach(d => unknowns.push({ key: 'breaker:' + d, label: 'Deal-breaker', why: `they ruled out: ${d}`, ask: `Check this one is not ${d}`, lost: 0 }));
 
-    const fit = available > 0 ? Math.max(0, (earned - penalty) / available) : 0;
+    let fit = available > 0 ? Math.max(0, (earned - penalty) / available) : 0;
+    // ── Gates ── Location and kind are not just two weights among many: a flat 6 km from where
+    // they asked, or an apartment for someone who wants an independent house, cannot be a strong
+    // match however well the rest fits ("do not award high scores merely because the budget
+    // matches"). A known, weak score on either caps the whole fit.
+    const gates = [];
+    for (const b of breakdown) {
+      if (!GATED[b.key] || b.unknown || b.veto) continue;
+      // 1.0 → no cap; the next block (0.82) → 88; 3–4 km (0.65) → 77; 5–8 km → ~58; 10 km → below 50.
+      const cap = 0.35 + 0.65 * b.s;
+      if (fit > cap) { gates.push({ key: b.key, label: b.label, cap: Math.round(cap * 100) }); fit = cap; }
+    }
     const confidence = CORE_WEIGHT > 0 ? coreKnown / CORE_WEIGHT : 0;
 
     // Why it matches, why it does not, and what we do not know yet — all of it, biggest first.
@@ -2200,7 +2692,7 @@
       fit, confidence,
       rank: fit * (0.6 + 0.4 * confidence),
       for: forList, against: againstList, unknown: unknowns,
-      vetoed: vetoes.length > 0, vetoes,
+      vetoed: vetoes.length > 0, vetoes, gates,
       earned: round1(earned), available: round1(available), penalty: round1(penalty),
       objections, breakdown
     };
@@ -2265,21 +2757,60 @@
     const now = o.now || Date.now();
     const bucket = Math.floor(now / 3600000);
     const hit = reqCache.get(lead);
-    if (hit && hit.inv === (o.inventory || null) && hit.bucket === bucket) return hit.req;
-    const req = requirementProfile(lead, { now, inventory: o.inventory });
-    reqCache.set(lead, { inv: o.inventory || null, bucket, req });
-    return req;
+    if (hit && hit.inv === (o.inventory || null) && hit.bucket === bucket) return hit.reqs;
+    const reqs = requirementProfiles(lead, { now, inventory: o.inventory });
+    reqCache.set(lead, { inv: o.inventory || null, bucket, reqs });
+    return reqs;
   }
+  // The cheap half of the vetoes, with no reasons attached — only ever used to skip a pair that
+  // score() would rule out anyway.
+  function quickVeto(r, p) {
+    const has = p.deal || 'sale';
+    if (r.deal && r.deal.values.length && !r.deal.values.includes(has) && !(r.deal.values.includes('jv') && (p.jv || has === 'sale'))) return true;
+    if (r.types && r.types.values.length && p.type && p.type !== 'Other' && !r.types.values.includes(p.type)) {
+      const RESI = ['Apartment', 'Villa', 'House'];
+      const wantsResi = r.types.values.some(t => RESI.includes(t));
+      if (wantsResi && (p.type === 'Plot' || p.type === 'Commercial')) return true;
+      if (!wantsResi && RESI.includes(p.type)) return true;
+    }
+    return false;
+  }
+  function farApart(r, p) {
+    const L = r.localities;
+    if (!L || !L.firm || !L.keys.length || L.radiusKm || !p.localities || !p.localities.length) return false;
+    if (L.corridors && L.corridors.length && p.corridors && p.corridors.some(c => L.corridors.includes(c))) return false;
+    const geo = G();
+    let best = Infinity;
+    for (const w of L.keys) for (const h of p.localities) {
+      const km = geo.distanceKm(h, w);
+      if (km == null) return false;      // somewhere we cannot place: never skipped on a guess
+      if (km < best) best = km;
+    }
+    return best > 10;
+  }
+  const hasSomething = req => !!(req && (req.budget || req.localities || req.bhk || req.types || (req.deal && req.deal.values.includes('jv'))));
 
+  // Closed, whatever the page passed: the live pipeline names its closed stages closed_lost and
+  // closed_won, and a caller that forgot stageKeyOf (the agents' "buyers with other agents" list did)
+  // was offering lost clients as buyers.
+  const CLOSED_ID = /(?:^|[_\s-])(?:lost|won|closed|dead|junk|spam|not[_\s-]?interested)(?:$|[_\s-])/i;
+  function isClosedLead(lead) {
+    if (!lead) return true;
+    if (CLOSED_ID.test(String(lead.stageId || '')) || CLOSED_ID.test(String(lead.status || ''))) return true;
+    if (lead.lostReason || lead.closedAt) return true;
+    return false;
+  }
   function isBuyerLead(lead, stageKeyOf) {
     if (!lead) return false;
+    if (lead.deleted || lead.mergedInto) return false;
     const intent = lead.ai && lead.ai.intent;
     if (intent === 'sell' || intent === 'rent_out' || intent === 'vendor') return false;
     if (/seller|vendor|collaborat/i.test(String(lead.enquiryType || ''))) return false;
     if (stageKeyOf) {
       const k = stageKeyOf(lead);
       if (k && DEAD_STAGES.has(k)) return false;
-    }
+      if (k && !DEAD_STAGES.has(k) && k !== 'open' && CLOSED_ID.test(String(k))) return false;
+    } else if (isClosedLead(lead)) return false;
     return true;
   }
 
@@ -2304,17 +2835,31 @@
 
     for (const lead of (leads || [])) {
       if (!isBuyerLead(lead, o.stageKeyOf)) continue;
-      const req = o.notesFor ? requirementProfile(lead, { now: o.now, inventory: o.inventory, notes: o.notesFor(lead) })
+      const reqs = o.notesFor ? requirementProfiles(lead, { now: o.now, inventory: o.inventory, notes: o.notesFor(lead) })
         : cachedRequirement(lead, o);
-      // Nothing at all to go on — no budget, no area, no configuration. A
-      // score here would be a guess dressed as a number.
-      if (!req.budget && !req.localities && !req.bhk && !req.types) continue;
-      const s = score(req, prop, ctx);
+      // Each live requirement is scored; the lead is listed once, under the one that fits best.
+      let best = null;
+      for (const req of reqs) {
+        // Nothing at all to go on — no budget, no area, no configuration. A
+        // score here would be a guess dressed as a number.
+        if (!hasSomething(req)) continue;
+        // A pair the full score would only veto (rent against sale, land against a flat) is not
+        // scored at all when vetoed pairs are not wanted — most of a big CRM, for most properties.
+        if (!o.includeVetoed && quickVeto(req, prop)) continue;
+        // …and one more than 10 km from everywhere they named: the location gate would cap it below
+        // any useful threshold, so it is not worth the full score either.
+        if (!o.includeVetoed && min >= 55 && farApart(req, prop)) continue;
+        const s = score(req, prop, ctx);
+        const key = (s.vetoed ? 0 : 1) * 1000 + s.rank;
+        if (!best || key > best.key) best = { key, req, s };
+      }
+      if (!best) continue;
+      const { req, s } = best;
       if (s.vetoed && !o.includeVetoed) continue;
       if (!s.vetoed && s.pct < min) continue;
       const interest = interestOf(lead, ctx.now);
       s.rank = s.rank * (0.7 + 0.3 * (interest ? interest.s : 0.45));
-      out.push(Object.assign({ lead, req, property: prop, interest }, s));
+      out.push(Object.assign({ lead, req, property: prop, interest, reqIndex: req.reqIndex || 0, reqCount: reqs.length }, s));
     }
     out.sort((a, b) => b.rank - a.rank || b.pct - a.pct);
     return o.limit ? out.slice(0, o.limit) : out;
@@ -2330,20 +2875,38 @@
   function propertiesFor(lead, properties, opts) {
     const o = opts || {};
     const list = properties || [];
-    const req = lead && lead.kind ? lead : requirementProfile(lead, { now: o.now, inventory: list, notes: o.notes });
-    const ctx = { idf: idfFor(list), area: o.area || areaModelFor(list), now: o.now || Date.now() };
+    // A lead may hold more than one live requirement; a profile (or a typed brief) is just one.
+    const reqs = lead && lead.kind ? [lead]
+      : (o.reqIndex != null ? requirementProfiles(lead, { now: o.now, inventory: list, notes: o.notes }).filter(r => r.reqIndex === o.reqIndex)
+        : requirementProfiles(lead, { now: o.now, inventory: list, notes: o.notes }));
+    const req0 = reqs[0];
+    // The idf table and the area model are cached on the list itself, so the caller's own array is
+    // passed whenever it holds plain properties; a mixed list (PinSources) passes its own cached
+    // raw list (list.raw) for the same reason.
+    const mixed = list.some(x => x && x.kind && x.p);
+    const rawList = !mixed ? list : (list.raw || list.map(x => (x && x.kind && x.p ? x.p : x)).filter(x => x && !String(x.id || '').startsWith('owner:')));
+    const ctx = { idf: idfFor(rawList), area: o.area || areaModelFor(rawList, o.extraListings || null), now: o.now || Date.now() };
     const min = o.minPct == null ? 45 : o.minPct;
-    const already = new Set((req.seen || []).map(x => String(x.p.id)));
+    const already = new Set(((req0 && req0.seen) || []).map(x => String(x.p.id)));
     const out = [];
 
     for (const p of list) {
-      const prop = propertyProfile(p);
-      const seen = already.has(String(p.id));
+      // An entry may already be a profile (an un-onboarded card or seller lead from PinSources).
+      const prop = p && (p.kind === 'property' || p.kind === 'listing' || p.kind === 'owner') && p.p ? p : propertyProfile(p);
+      const raw = prop.p || p;
+      const seen = already.has(String(raw.id));
       if (seen && !o.includeSeen) continue;
-      const s = score(req, prop, ctx);
+      let best = null;
+      for (const req of reqs) {
+        const sc = score(req, prop, ctx);
+        const key = (sc.vetoed ? 0 : 1) * 1000 + sc.rank;
+        if (!best || key > best.key) best = { key, req, s: sc };
+      }
+      if (!best) continue;
+      const { req, s } = best;
       if (s.vetoed && !o.includeVetoed) continue;
       if (!s.vetoed && s.pct < min) continue;
-      out.push(Object.assign({ p, property: prop, req, alreadyShared: seen }, s));
+      out.push(Object.assign({ p: raw, property: prop, req, reqIndex: req.reqIndex || 0, alreadyShared: seen }, s));
     }
     out.sort((a, b) => b.rank - a.rank || b.pct - a.pct);
     return o.limit ? out.slice(0, o.limit) : out;
@@ -2712,7 +3275,8 @@
     // the three directions
     buyersFor, propertiesFor, score,
     // profiles
-    requirementProfile, briefProfile, propertyProfile, listingProfile, ownerPropertyProfile,
+    requirementProfile, requirementProfiles, reqSentence, activeItems, reqFingerprint, briefProfile, propertyProfile, listingProfile, ownerPropertyProfile,
+    readExclusions, excludedHit, subtypeOf, subNear, SUBTYPES, SUB_LABEL, JV_RE, isClosedLead,
     // the hybrid search layer
     fuse, semanticRank, nearMisses, nearbyAreas, similarTo,
     // geography

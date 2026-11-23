@@ -122,6 +122,13 @@
       ],
     },
     {
+      // Both directions of matching on one page (match.html, api/_match.js): properties for a
+      // requirement — onboarded or still on its way in — and clients for a property. Agents too
+      // (with Properties): the server shows them other people's clients only as a card to request.
+      id: 'match', label: 'Match', icon: 'fa-solid fa-arrows-left-right', page: 'match', nav: 'match', tab: 'properties',
+      note: 'Properties for a requirement, and clients for a property',
+    },
+    {
       id: 'crm', label: 'CRM', icon: 'fa-regular fa-comments', page: 'crm', tab: 'crm',
       note: 'Leads, the board and what is owed a reply',
       items: [
@@ -201,6 +208,7 @@
     track: { href: 'propertytrack.html', home: 'board' },
     team: { href: 'team.html', home: 'team' },
     attendance: { href: 'attendance.html', home: 'attendance' },
+    match: { href: 'match.html', home: 'match' },
   };
 
   var K_SECTION = 'appnav.section';

@@ -44,6 +44,8 @@ const PAGE_TABS = {
   messages: ['messages'],
   // Attendance is everyone's (anyone whose attendance is kept signs in there), so it has no tab.
   track: ['shoots'],
+  // Matching (match.html): with Properties or the CRM; the server decides what each agent sees.
+  match: ['properties', 'crm'],
   finance: ['finance'],
   team: [],
 };

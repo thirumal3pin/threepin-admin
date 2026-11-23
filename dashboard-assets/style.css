@@ -1546,3 +1546,9 @@ a.nm-row{ text-decoration:none; }
 .conn-mapform input:focus{outline:none;border-color:var(--ink);background:var(--white);}
 .conn-mapform .conn-maperr{flex-basis:100%;font-size:12px;color:var(--red,#b91c1c);}
 #dpMapRow .conn-v{flex:1;min-width:0;}
+
+/* The search box handing a client search or a full requirement to the Match page (renderMatchHint). */
+.match-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 8px 0 4px; padding: 9px 12px;
+  border-radius: 10px; background: var(--bg2, #f3f1ec); color: var(--ink2, #44403c); font-size: 13px; }
+.match-hint a { font-weight: 650; color: var(--gold, #b45309); text-decoration: underline; text-underline-offset: 2px; }
+@media (pointer: coarse) { .match-hint a { min-height: 44px; display: inline-flex; align-items: center; } }

@@ -90,9 +90,9 @@ export async function teamOf(db, tenantId, fresh = false) {
 export const adminsOf = team => team.filter(u => u.role === 'admin' && u.active && u.verified).map(u => u.email);
 // The logins that are agents (switched off ones too — their clients stay theirs), for canWorkLead.
 export const agentEmailsOf = async (db, tenantId) => new Set((await teamOf(db, tenantId)).filter(u => u.role === 'agent').map(u => u.email));
-const nameIn = (team, email) => { const u = team.find(x => x.email === lc(email)); return u ? u.name : (lc(email).split('@')[0] || ''); };
+export const nameIn = (team, email) => { const u = team.find(x => x.email === lc(email)); return u ? u.name : (lc(email).split('@')[0] || ''); };
 
-async function loadConfig(db, tenantId) {
+export async function loadConfig(db, tenantId) {
   const s = await db.collection('agentConfigs').doc(tenantId).get();
   return s.exists ? s.data() : null;
 }
@@ -100,7 +100,7 @@ async function loadProperties(db, tenantId) {
   const q = await db.collection('properties').where('tenantId', '==', tenantId).get();
   return q.docs.map(d => ({ ...d.data(), id: d.id }));
 }
-async function loadGrants(db, tenantId) {
+export async function loadGrants(db, tenantId) {
   const q = await db.collection('grants').where('tenantId', '==', tenantId).where('active', '==', true).get();
   return q.docs.map(d => ({ ...d.data(), id: d.id }));
 }

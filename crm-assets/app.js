@@ -5645,6 +5645,8 @@ let cameFromTrack = null;   // { leadId, listingId } when we arrived from the bo
 try{
   const q = new URLSearchParams(location.search);
   pendingLeadOpen = q.get('lead') || null;
+  // From the Match page's "Follow-up": open the lead at its follow-up.
+  if(q.get('followup') === '1') window.__openAtFollowup = true;
   if(q.get('from') === 'track') cameFromTrack = { leadId: q.get('lead') || null, listingId: q.get('listing') || null };
 }catch(e){}
 function openPendingLead(){
@@ -5655,8 +5657,12 @@ function openPendingLead(){
     // user's own navigation — same rule AppNav.takeNav() follows. Taken out BEFORE the lead opens:
     // the lead's own history entry is pushed on top of this one, and Back (then a refresh) must land
     // on the plain CRM, not reopen the lead.
-    try{ const u = new URL(location.href); ['lead', 'from', 'listing'].forEach(k => u.searchParams.delete(k)); history.replaceState(history.state, '', u.pathname + u.search + u.hash); }catch(e){}
+    try{ const u = new URL(location.href); ['lead', 'from', 'listing', 'followup'].forEach(k => u.searchParams.delete(k)); history.replaceState(history.state, '', u.pathname + u.search + u.hash); }catch(e){}
     openDetail(id);
+    if(window.__openAtFollowup){
+      window.__openAtFollowup = false;
+      setTimeout(() => { const f = document.getElementById('dpFuSpotlight'); if(f){ f.scrollIntoView({ block:'center' }); const b = f.querySelector('button, input, select'); if(b) b.focus(); } }, 300);
+    }
   } else if(leadsFromServer || ++pendingLeadTries > 40){
     // The server's own list has it or not: say so now, not after forty redraws (forty minutes).
     pendingLeadOpen = null;
@@ -5865,6 +5871,7 @@ function renderMatchingProperties(l){
         if(act === 'link' && typeof linkProperty === 'function') linkProperty(l.id, key);
       }
     });
+    renderMatchMore(l, 'buyer');
   });
 }
 
@@ -5924,7 +5931,76 @@ function renderWaitingBuyersForOwner(l){
       }),
       onAction: (act, key) => { if(act === 'open') openDetail(key); }
     });
+    renderMatchMore(l, 'seller');
   });
+}
+
+// ═══════ BEYOND THE INVENTORY — and the requirement as it was reviewed ═══════
+//
+// The list above ranks the onboarded inventory, in the browser. Under it: what is NOT onboarded
+// yet — Shoot board cards, seller leads nobody has processed, agent submissions — from
+// /api/match (api/_match.js), the same engine and the same answers as the Match page and Eåsy,
+// with an agent's view redacted on the server. And one line on the requirement itself: read from
+// the CRM fields and the chat, or reviewed (by whom, when, and whether it changed since).
+const matchMoreCache = new Map();   // leadId → { at, rows, error }
+async function matchApi(body){
+  const token = await window.crmAuth.getIdToken();
+  const r = await fetch('/api/match', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + token }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok || j.ok === false) throw new Error(j.error || 'Matching is not available just now');
+  return j;
+}
+function renderMatchMore(l, kind){
+  const box = document.getElementById('dpMatchMore');
+  if(!box) return;
+  const id = encodeURIComponent(l.id);
+  if(kind === 'seller'){
+    box.innerHTML = `<div class="pm pm-more-box"><div class="pm-hdr"><span class="pm-hdr-sub">Every buyer, with filters and the full reasons:</span><span class="pm-hdr-sp"></span>`
+      + `<a class="pm-btn" href="match.html?seller=${id}" target="_blank" rel="noopener">Open in Match →</a></div></div>`;
+    return;
+  }
+  const r = l.reqs || null;
+  const fp = window.PinMatch && PinMatch.reqFingerprint ? PinMatch.reqFingerprint(l) : null;
+  const stale = !!(r && r.fp && fp && r.fp !== fp);
+  const n = r && Array.isArray(r.items) ? r.items.filter(x => x && (x.status || 'active') === 'active').length : 0;
+  const when = r && r.at ? new Date(r.at).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '';
+  const reqLine = !r ? 'Requirement read from the CRM fields, notes and chat.'
+    : stale ? `⚠ Requirement reviewed ${when}${r.by ? ' by ' + r.by.split('@')[0] : ''}, but the CRM details changed since — the newer details are used. Review it again.`
+    : `Requirement reviewed ${when}${r.by ? ' by ' + r.by.split('@')[0] : ''}${n > 1 ? ' · ' + n + ' requirements' : ''}.`;
+  const head = `<div class="pm-hdr pm-req${stale ? ' stale' : ''}"><span class="pm-hdr-sub">${escapeHtml(reqLine)}</span><span class="pm-hdr-sp"></span>`
+    + `<a class="pm-btn" href="match.html?lead=${id}#requirements" target="_blank" rel="noopener">${r ? 'Review' : 'Structure'} requirement →</a>`
+    + `<a class="pm-btn" href="match.html?lead=${id}" target="_blank" rel="noopener">Open in Match →</a></div>`;
+  const draw = state => {
+    if(currentDetailId !== l.id) return;
+    let body = '';
+    if(state === 'busy') body = '<div class="pm-empty">Checking the Shoot board and seller enquiries…</div>';
+    else if(state.error) body = `<div class="pm-empty">${escapeHtml(state.error)}</div>`;
+    else if(!state.rows.length) body = '<div class="pm-empty">Nothing on the Shoot board or in the seller enquiries fits yet.</div>';
+    else body = `<div class="pm-hdr"><span class="pm-hdr-n">Not yet onboarded</span><span class="pm-hdr-sub">${state.rows.length} that fit — seller-provided details, not yet verified</span></div>`
+      + state.rows.map(x => {
+        const band = (x.band && x.band.key) || 'weak';
+        const open = x.link && x.link.type === 'listing' ? 'propertytrack.html?listing=' + encodeURIComponent(x.link.id)
+          : x.link && x.link.type === 'lead' ? null : x.link && x.link.type === 'submission' ? 'myday.html' : null;
+        const why = (x.for || []).slice(0, 2).map(f => f.why).join(' · ');
+        const gap = (x.unknown || [])[0];
+        return `<div class="pm-row ${escapeHtml(band)}"><div class="pm-r1"><div class="pm-sc"><div class="pm-sc-n">${x.pct}%</div><div class="pm-sc-b">${escapeHtml(x.band ? x.band.label : '')}</div></div>`
+          + `<div class="pm-main"><div class="pm-name">${escapeHtml(x.name || '')}</div>`
+          + `<div class="pm-sub"><span class="pm-src ${escapeHtml(x.source)}">${escapeHtml(x.sourceLabel)} · ${escapeHtml(x.status || '')}</span> ${escapeHtml([x.location, x.price, x.area].filter(Boolean).join(' · '))}</div>`
+          + (why ? `<div class="pm-sub">${escapeHtml(why)}</div>` : '')
+          + (gap ? `<div class="pm-sub">Not known yet: ${escapeHtml(gap.why)}</div>` : '')
+          + `<div class="pm-sub pm-next">Next: ${escapeHtml(x.next || '')}</div>`
+          + `<div class="pm-acts">${x.link && x.link.type === 'lead' ? `<button type="button" class="pm-btn primary" data-open-lead="${escapeHtml(x.link.id)}">Open the seller →</button>` : open ? `<a class="pm-btn primary" href="${open}" target="_blank" rel="noopener">Open →</a>` : ''}</div>`
+          + `</div></div></div>`;
+      }).join('');
+    box.innerHTML = `<div class="pm pm-more-box">${head}${body}</div>`;
+    box.querySelectorAll('[data-open-lead]').forEach(b => b.addEventListener('click', () => openDetail(b.getAttribute('data-open-lead'))));
+  };
+  const hit = matchMoreCache.get(l.id);
+  if(hit && Date.now() - hit.at < 120000){ draw(hit); return; }
+  draw('busy');
+  matchApi({ action:'search', mode:'properties', leadId:l.id, limit:8, filters:{ sources:['listing','seller','submission'], minPct:55 } })
+    .then(j => { const st = { at: Date.now(), rows: j.rows || [] }; matchMoreCache.set(l.id, st); draw(st); })
+    .catch(e => draw({ rows: [], error: e.message }));
 }
 
 // The pipeline's own stage key for a lead, so a Won or Lost buyer is not

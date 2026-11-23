@@ -196,9 +196,15 @@ export async function runLeadAutomation(db, tenantId, leadId, { client, model = 
       const id = historyId(now + i);
       t.set(ref.collection('history').doc(id), { id, type: h.type, text: h.text, at: now + i, by: 'AI' });
     });
+    // The requirement as the AI read it is history too: when it changes, the change is kept (the
+    // lead's own fields are never touched) — leads/{id}/reqRevisions, beside the reviewed ones.
+    const wasWant = (current.ai && current.ai.want) || null;
+    if (JSON.stringify(wasWant) !== JSON.stringify(verdict.want || null) && (verdict.want || wasWant)) {
+      t.set(ref.collection('reqRevisions').doc('ai_' + rid), { at: now, by: 'AI', src: 'ai-auto', model: runRecord.model, want: verdict.want || null, was: wasWant });
+    }
     t.set(ref.collection('aiRuns').doc(rid), {
       ...runRecord, ok: true,
-      verdict: { stage: verdict.stage, confidence: verdict.confidence, intent: verdict.intent, evidence: verdict.evidence, next: verdict.next, visit: verdict.visit, line: verdict.line },
+      verdict: { stage: verdict.stage, confidence: verdict.confidence, intent: verdict.intent, evidence: verdict.evidence, next: verdict.next, visit: verdict.visit, line: verdict.line, want: verdict.want || null },
       moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped
     });
     return { leadId, ok: true, verdict, moved: d.moved, suggested: d.suggested, followUp: d.followUp, siteVisit: d.siteVisit, skipped: d.skipped, links, usage: runRecord.usage };

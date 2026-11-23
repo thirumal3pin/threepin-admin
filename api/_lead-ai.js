@@ -59,7 +59,7 @@ export const LEAD_AI_SCHEMA = {
     want: nullable({
       type: 'object',
       additionalProperties: false,
-      required: ['deal', 'budget_min', 'budget_max', 'budget_unit', 'areas', 'bhk', 'types', 'ready_by', 'size_sqft_min', 'must_have', 'deal_breakers'],
+      required: ['deal', 'budget_min', 'budget_max', 'budget_unit', 'areas', 'bhk', 'types', 'ready_by', 'size_sqft_min', 'must_have', 'deal_breakers', 'areas_excluded', 'other_requirements'],
       properties: {
         deal: { type: 'string', enum: ['buy', 'rent', 'lease', 'either', 'unknown'] },
         budget_min: nullable({ type: 'number' }),
@@ -71,7 +71,12 @@ export const LEAD_AI_SCHEMA = {
         ready_by: nullable({ type: 'string' }),
         size_sqft_min: nullable({ type: 'number' }),
         must_have: { type: 'array', items: { type: 'string' } },
-        deal_breakers: { type: 'array', items: { type: 'string' } }
+        deal_breakers: { type: 'array', items: { type: 'string' } },
+        // Places they ruled out ("not Mogappair"), as they wrote them — the matcher vetoes them.
+        areas_excluded: { type: 'array', items: { type: 'string' } },
+        // A second (third) live requirement, each as one short sentence an agent would type —
+        // "2 grounds land in Choolaimedu for a joint venture". Empty when there is only one.
+        other_requirements: { type: 'array', items: { type: 'string' } }
       }
     })
   }
@@ -129,6 +134,8 @@ export const LEAD_AI_SYSTEM = [
   '- budget_min / budget_max in rupees (1.5 Cr = 15000000, 45k = 45000); budget_unit total (purchase), per_month (rent) or lease_amount; null and "unknown" when not stated. One figure → budget_max only.',
   '- areas: the localities, roads or corridors they want, as they wrote them (e.g. ["Velachery", "OMR"]). bhk: bedroom counts wanted. types: only those they named or clearly meant.',
   '- ready_by: "immediate" if they need it now, else "YYYY-MM" for a stated deadline, else null. size_sqft_min: only a stated minimum.',
+  '- areas_excluded: localities they said they do NOT want ("not interested in Mogappair", "anything except OMR"), as they wrote them; [] if none. Never put an excluded place in areas.',
+  '- other_requirements: if the lead is looking for MORE THAN ONE property (e.g. a flat to live in and a plot to invest in, or a home and a shop), the fields above describe the main one and each other one goes here as one short sentence with its own type, place, size and budget, e.g. "2 grounds land in Choolaimedu for a joint venture". A requirement they have replaced or dropped is not listed. [] if there is only one.',
   '- must_have: short phrases for each specific thing they asked for — rooms, parking, floor, facing, amenities, what should be nearby (e.g. "pooja room", "covered car parking", "near a school", "lift", "east facing"). deal_breakers: short phrases for what they ruled out (e.g. "ground floor", "main road", "under construction").',
   '',
   'Answer only with the JSON object.'
@@ -327,11 +334,13 @@ export function normaliseWant(w, intent) {
     ready_by: w.ready_by === 'immediate' || /^20\d\d-(0[1-9]|1[0-2])$/.test(String(w.ready_by || '')) ? w.ready_by : null,
     size_sqft_min: num(w.size_sqft_min) && w.size_sqft_min >= 200 && w.size_sqft_min <= 100000 ? Math.round(w.size_sqft_min) : null,
     must_have: list(w.must_have, 10, 50),
-    deal_breakers: list(w.deal_breakers, 6, 50)
+    deal_breakers: list(w.deal_breakers, 6, 50),
+    areas_excluded: list(w.areas_excluded, 6, 40),
+    other_requirements: list(w.other_requirements, 3, 200)
   };
   if (out.budget_min && out.budget_max && out.budget_min > out.budget_max) [out.budget_min, out.budget_max] = [out.budget_max, out.budget_min];
   const empty = out.deal === 'unknown' && !out.budget_max && !out.budget_min && !out.areas.length && !out.bhk.length && !out.types.length
-    && !out.ready_by && !out.size_sqft_min && !out.must_have.length && !out.deal_breakers.length;
+    && !out.ready_by && !out.size_sqft_min && !out.must_have.length && !out.deal_breakers.length && !out.other_requirements.length;
   return empty ? null : out;
 }
 

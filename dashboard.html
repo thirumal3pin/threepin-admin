@@ -193,6 +193,9 @@
   <!-- Properties that satisfy MOST of the query. Kept out of the grid above
        and clearly labelled: widening a filter an agent set, silently, is how
        a search stops being trusted. -->
+  <!-- When the box holds a requirement or asks for clients: the Match page answers it across the
+       Shoot board, seller enquiries and the CRM's clients as well (dashboard-assets/app.js renderMatchHint). -->
+  <div id="matchHint" class="match-hint" hidden></div>
   <div id="nearMisses" hidden></div>
 </div>
 
@@ -533,6 +536,7 @@
 <script src="shared-assets/chennai-geo.js"></script>
 <script src="shared-assets/area-model.js"></script>
 <script src="shared-assets/match-engine.js"></script>
+<script src="shared-assets/match-sources.js"></script>
 <script src="shared-assets/match-panel.js"></script>
 <script src="map-assets/geo-resolve.js"></script>
 <script src="map-assets/map-core.js"></script>

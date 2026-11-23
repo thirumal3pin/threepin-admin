@@ -3,6 +3,7 @@ import { getDb, verifyCrmUser, buildSystemPrompt, UPDATE_LEAD_INFO_TOOL, getKnow
 import { easyPost, EASY_MODEL } from './_easy.js';
 import { agentPost } from './_agent.js';
 import { attendancePost } from './_attendance.js';
+import { matchPost } from './_match.js';
 
 // Two jobs in one function (Hobby plan: 12 functions):
 //   POST /api/bot-test-message  — the CRM's AI Bot "Live Test Chat": the draft bot workflow and the
@@ -80,5 +81,6 @@ export async function POST(request) {
   if (op === 'easy') return easyPost(request);
   if (op === 'agent') return agentPost(request);
   if (op === 'attendance') return attendancePost(request);
+  if (op === 'match') return matchPost(request);
   return testChatPost(request);
 }

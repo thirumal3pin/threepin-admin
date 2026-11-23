@@ -5,6 +5,10 @@ import { computeAttention, SEVERITY_RANK, isBusinessLead } from '../crm-assets/l
 import { stageKindOf, visitOf, VISIT_STATUS } from '../crm-assets/pipeline.js';
 import * as TM from '../shared-assets/task-model.js';
 import * as ED from './_easy-data.js';
+import * as AA from '../shared-assets/agent-access.js';
+// The matching API's own search (api/_match.js): Eåsy's matching answers are the Match page's.
+import { runSearch, loadAll as loadMatchData, viewerOf, structureText } from './_match.js';
+import { workPost } from './_agent-work.js';
 // The CRM's match engine, the same file the match panels run (plain scripts that attach to globalThis).
 import '../dashboard-assets/search-engine.js';
 import '../shared-assets/chennai-geo.js';
@@ -160,7 +164,12 @@ const TOOLS = [
   { name: 'propose_note', description: 'MVP-15 / MVP-09: prepare a note from what the agent said or typed after a call — about a lead, a property, or both ("Priya liked ANN001 but wants a covered car park"). It goes on the lead (and as feedback on the property), and can set the lead\'s next follow-up. Applied only after Yes. Resolve the lead and property first; if unsure which, ask instead of calling this.', input_schema: obj({ lead_id: S('Lead id, if the note is about a lead'), code: S('Property code, if it is about a property'), text: S('The note, cleaned up, in the agent\'s words'), property_feedback: S('What to log on the property, if different from text'), follow_up_at: S('Next follow-up as an ISO date-time with +05:30, only if the agent gave one'), call: { type: 'boolean', description: 'true when these are notes after a phone call' } }, ['text']) },
   { name: 'brochure', description: "MVP-04: the property's brochure link if it has one. If it has none, says so (new brochures are made by the existing brochure pipeline). To send it to a lead, follow with draft_message including the link.", input_schema: obj({ code: S('Property code or id') }, ['code']) },
   { name: 'seller_summaries', description: "MVP-14: this week's site-visit summary for each property that had visits, drafted as a message to its owner with a Send button. Use for \"seller summaries\", \"weekly owner update\".", input_schema: obj({ code: S('Only this property (optional)') }) },
-  { name: 'team_overview', description: "MVP-16, for the admin: each agent's day — visits today, follow-ups due, messages drafted / opened / confirmed sent this week, pending changes, open seller-detail asks. Refused for non-admins.", input_schema: obj({}) }
+  { name: 'team_overview', description: "MVP-16, for the admin: each agent's day — visits today, follow-ups due, messages drafted / opened / confirmed sent this week, pending changes, open seller-detail asks. Refused for non-admins.", input_schema: obj({}) },
+  { name: 'find_properties', description: 'Properties for a requirement — scored by the match engine across EVERYTHING we hold: onboarded inventory AND stock not yet onboarded (Shoot board cards at any stage, CRM seller leads not yet processed, agent submissions). Give either the requirement in words ("2 grounds land for JV in Chennai", "3 BHK Anna Nagar or Kilpauk ~3 Cr, not Mogappair") or a lead_id (uses that client\'s saved requirements; req_index picks one when they have several). Each result says its source and status (e.g. "Shoot board · More details pending") — never call an un-onboarded one a listing.', input_schema: obj({ requirement: S('The requirement in the words used'), lead_id: S('A client lead id instead of words'), req_index: { type: 'integer', description: 'Which of the client\'s requirements (0 = main)' } }) },
+  { name: 'find_clients', description: 'Clients (buyers / tenants) who fit a property — use for "who wants this?", "any buyers for a 3 BHK in Anna Nagar at 3 Cr?", and BEFORE taking a property from a seller ("is there demand?"). Give a property code, or describe the property in words (type, BHK, place, size, price, sale/rent/JV). Results carry score, reasons, budget difference and the next step. A result with access "restricted" belongs to another agent or the office: say so and offer request_access with its ref — never guess their details.', input_schema: obj({ code: S('Property code or id, if it is in the inventory'), description: S('The property in words, if it is not') }) },
+  { name: 'unonboarded_demand', description: 'Seller enquiries and Shoot board properties NOT yet onboarded that already have matching buyers — best first, with how many buyers and strong matches each. scope "shoot" limits it to properties at the shoot stages. Use for "which seller leads should we onboard first", "shoot-stage properties with buyers".', input_schema: obj({ scope: { type: 'string', enum: ['unprocessed', 'shoot'] } }) },
+  { name: 'structure_requirement', description: 'Read a requirement (typed text, or a client\'s whole record by lead_id) into structured fields with the AI — several requirements if they have more than one — and prepare it as a card the agent reviews; it is saved on the lead (beside, never over, the CRM fields, with history) only after Yes. Use when asked to "update / structure / save the requirement" for a client.', input_schema: obj({ lead_id: S('The client lead id'), text: S('The requirement in words, if given now') }, ['lead_id']) },
+  { name: 'request_access', description: 'For an agent: ask for the details of a matching client held by another agent or the office (a find_clients result with access "restricted" carries a ref). Prepared as a card; sent to the approvers after Yes.', input_schema: obj({ ref: S('The ref from a restricted result'), reason: S('One line: which property or client it is for'), property_code: S('The agent\'s own property it is for, if any') }, ['ref']) }
 ];
 
 const SYSTEM = `You are Eåsy by 3 PIN (spoken "easy"), the assistant inside 3 PIN Realty's CRM in Chennai. The people asking are 3 PIN's own team: agents and the admin. Agents often ask while on a call with a client, so be quick and to the point.
@@ -174,7 +183,9 @@ Write drafts the way a polite Chennai agent writes on WhatsApp, in Tamil if the 
 
 Be precise and brief. For "who to follow up", "what should I do" and similar, give only the few that matter most right now — at most 5 to 8, most important first, one short line each with the reason — and say how many lower-priority ones you left out rather than listing them. Old, inactive leads are not worth mentioning unless a follow-up on them is actually due. Never paste a long list; offer "say 'show more' for the rest".
 
-Keep answers short and scannable: a line or two, then a short list if needed. Use ₹ and Indian number style (L, Cr). When you name a lead, add its id in this exact form so the page can link it: [lead:THE_ID].`;
+Keep answers short and scannable: a line or two, then a short list if needed. Use ₹ and Indian number style (L, Cr). When you name a lead, add its id in this exact form so the page can link it: [lead:THE_ID].
+
+Matching (find_properties, find_clients, unonboarded_demand): the score, reasons and gaps come from the match engine — repeat them, never add reasons of your own or change a percentage. Say each property's source and status as given ("on the Shoot board, more details pending", "a seller lead not yet processed") and that seller-provided details are not yet verified. Lead with the 3–5 best; mention what is "not known yet" when it matters. A restricted result belongs to another agent or the office — say so and offer request_access; never reveal or guess their name or number. For the full list with filters, point them to the Match page.`;
 
 // ── Reading, cheaply ──────────────────────────────────────────────────────
 // Firestore bills a read per document, and the free plan stops every page at 50K a day (it did,
@@ -204,12 +215,53 @@ const loadProps = (db, T) => cached('props', T, () => db.collection('properties'
 
 // ── The tools ─────────────────────────────────────────────────────────────
 
-function makeTools(db, user, now, out) {
-  let leadsP, stagesP, propsP, cfgP;
+function makeTools(db, user, now, out, scope) {
+  let leadsP, stagesP, propsP, cfgP, viewerP;
   const T = user.tenantId;
+  const isAgent = user.role === 'agent';
+  const me = lc(user.email);
   const stages = () => stagesP || (stagesP = loadStages(db, T));
-  const leads = () => leadsP || (leadsP = loadLeads(db, T));
+  // An agent's Eåsy sees what the agent layer lets them see: their own leads (and any granted to
+  // them), every property through its access level. Staff see everything, as before.
+  const viewer = () => viewerP || (viewerP = scope ? Promise.resolve(scope) : viewerOf(db, user));
+  const leads = () => leadsP || (leadsP = isAgent
+    ? Promise.all([loadLeads(db, T), viewer()]).then(([ls, v]) => ls.filter(l => AA.leadVisibleTo(l, me) || (v.grants || []).some(g => g.kind === 'lead' && String(g.targetId) === String(l.id) && lc(g.agentEmail) === me && AA.grantLive(g, now))))
+    : loadLeads(db, T));
   const props = () => propsP || (propsP = loadProps(db, T));
+  // How much of a property this person may see: 'full' for staff and the agent's own / co / granted
+  // ones, 'summary' (the admin's chosen fields, no owner) for the rest.
+  async function accessTo(p) {
+    if (!isAgent || !p) return 'full';
+    if (AA.roleOn(p, me)) return 'full';
+    const v = await viewer();
+    if ((v.grants || []).some(g => g.kind === 'property' && String(g.targetId) === String(p.id) && lc(g.agentEmail) === me && AA.grantLive(g, now))) return 'full';
+    return AA.isActiveProperty(p) ? 'summary' : 'none';
+  }
+  async function shaped(p) {
+    const a = await accessTo(p);
+    if (a === 'full') return propertyRow(p);
+    if (a === 'none') return null;
+    const v = await viewer();
+    const allowed = new Set((v.cfg && v.cfg.otherPropertyFields) || ['name', 'location', 'config', 'type']);
+    const row = propertyRow(p);
+    const outRow = { id: row.id, code: row.code, access: 'summary', note: 'Another agent\'s property — request access for its full details' };
+    for (const [k, val] of Object.entries(row)) if (allowed.has(k) || (k === 'price' && (allowed.has('price') || allowed.has('startingPrice')))) outRow[k] = val;
+    delete outRow.contactName;
+    return outRow;
+  }
+  const matchData = () => loadMatchData(db, T);
+  const MATCH_ROW = r => ({
+    name: r.name, code: r.code || null, source: r.sourceLabel, status: r.status, verified: r.verified, trust: r.trustLabel,
+    match: r.pct + '%', band: r.band && r.band.label, confidence: r.confidence, price: r.price || null, location: r.location || null, size: r.area || null,
+    why: (r.for || []).slice(0, 3).map(f => f.why), against: (r.against || []).slice(0, 2).map(f => f.why), notKnownYet: (r.unknown || []).slice(0, 2).map(u => u.why),
+    budget: r.budget ? r.budget.text : null, next: r.next, open: r.link && r.link.type !== 'restricted' ? `${r.link.type}:${r.link.id}` : null, access: r.access
+  });
+  const CLIENT_ROW = r => r.access === 'restricted'
+    ? { access: 'restricted', ref: r.ref, who: r.ownerName || 'another agent / the office', requirement: r.requirement || null, match: r.pct + '%', band: r.band && r.band.label, why: (r.for || []).slice(0, 2).map(f => f.why) }
+    : { id: r.leadId, name: r.name, match: r.pct + '%', band: r.band && r.band.label, confidence: r.confidence, stage: r.stage, budget: r.budget || null,
+      wants: [r.config, (r.types || []).join('/'), r.locations.length ? 'in ' + r.locations.join(', ') : '', r.dealLabel].filter(Boolean).join(' '),
+      why: (r.for || []).slice(0, 2).map(f => f.why), against: (r.against || []).slice(0, 1).map(f => f.why), budgetDiff: r.budgetDiff ? r.budgetDiff.text : null,
+      lastContact: istDate(r.lastTouch), owner: r.ownerName || r.owner || null, next: r.next, ...(r.reqCount > 1 ? { requirement: '#' + (r.reqIndex + 1) + ' of ' + r.reqCount } : {}) };
   const config = () => cfgP || (cfgP = db.collection('taskConfigs').doc(T).get().then(s => (s.exists ? s.data() : null)));
   const own = (coll) => db.collection(coll).where('tenantId', '==', T).get().then(s => s.docs.map(d => ({ ...d.data(), id: d.id })));
   const kindOf = (l, st) => stageKindOf(st.find(x => x.id === l.stageId) || null);
@@ -307,6 +359,7 @@ function makeTools(db, user, now, out) {
       const snap = await ref.get();
       if (!snap.exists || snap.data().tenantId !== T) return { error: 'No such lead' };
       const lead = { ...snap.data(), id: snap.id };
+      if (isAgent && !(await leads()).some(l => l.id === lead.id)) return { error: 'That lead is not yours — it belongs to another agent or the office' };
       const [st, list, notes, chat] = await Promise.all([
         stages(), props(), notesOf(ref),
         ref.collection('tailortalk').doc('state').get()
@@ -314,19 +367,28 @@ function makeTools(db, user, now, out) {
             .map(m => ({ from: m.role === 'user' ? 'lead' : m.role === 'human_agent' ? 'team' : 'bot', text: String(m.meta && m.meta.type === 'reply' && m.meta.user_message ? m.meta.user_message : m.content).slice(0, 400) })))
           .catch(() => [])
       ]);
-      const best = PinMatch.propertiesFor(lead, list, { now, minPct: 55, limit: 3 })
-        .map(m => ({ code: codeOf(m.p), name: m.p.name || null, price: PinMatch.priceLabel(m.property) || null, match: m.pct + '%', why: (m.for || []).slice(0, 2).map(f => f.why) }));
+      void list;
+      // Across everything we hold — onboarded or not — as the Match page shows it.
+      const found = await runSearch({ db, user, body: { mode: 'properties', leadId: lead.id, limit: 3, filters: { minPct: 55 } }, viewer: await viewer(), data: await matchData() }).catch(() => ({ rows: [] }));
+      const best = (found.rows || []).map(MATCH_ROW);
       return { ...leadRow(lead, st), latestChat: chat, notes: notes.map(n => ({ at: istDate(n.createdAt), by: n.by || n.author || null, text: String(n.text || '').slice(0, 500) })), matchedProperties: best };
     },
 
     async search_properties({ query } = {}) {
-      const rows = (await props()).map(propertyRow).filter(r => matches(r, wordsOf(query)));
-      return { total: rows.length, properties: rows.slice(0, MAX_ROWS) };
+      const list = await props();
+      const rows = (await Promise.all(list.filter(p => matches(propertyRow(p), wordsOf(query))).map(shaped))).filter(Boolean);
+      if (rows.length || !String(query || '').trim()) return { total: rows.length, properties: rows.slice(0, MAX_ROWS) };
+      // No property contains those words — read them as a requirement instead ("3bhk anna nagr 2 cr").
+      const found = await runSearch({ db, user, body: { mode: 'properties', text: query, limit: 8, filters: { minPct: 55 } }, viewer: await viewer(), data: await matchData() });
+      return { total: found.total || 0, readAsRequirement: true, properties: (found.rows || []).map(MATCH_ROW) };
     },
 
     async property_summary({ code }) {
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
+      const acc = await accessTo(p);
+      if (acc === 'none') return { error: `No property ${code}` };
+      if (acc === 'summary') return { ...(await shaped(p)), howToGetMore: 'request access to this property in the Properties page' };
       const [ls, st, gaps] = await Promise.all([leads(), stages(), own(C.gaps)]);
       const visits = ls.map(l => ({ l, v: visitOf(l) }))
         .filter(x => x.v.at && ED.findPropertyFor(x.v.property, [p]))
@@ -340,28 +402,23 @@ function makeTools(db, user, now, out) {
     async match_buyers({ code }) {
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
-      const [ls, list, st] = await Promise.all([leads(), props(), stages()]);
-      const all = PinMatch.buyersFor(p, ls, {
-        inventory: list, now, minPct: 55, limit: 40,
-        stageKeyOf: l => { const k = kindOf(l, st); return k === 'won' || k === 'lost' ? k : null; }
-      });
-      const row = m => ({
-        id: m.lead.id, name: m.lead.name || null, match: m.pct + '%',
-        wants: [m.lead.propertyInterest, m.lead.budget && 'budget ' + m.lead.budget].filter(Boolean).join(' · ') || null,
-        heat: m.lead.tt && m.lead.tt.status ? m.lead.tt.status : null,
-        lastContact: istDate((m.lead.tt && m.lead.tt.lastMessageAt) || m.lead.updatedAt),
-        why: (m.for || []).slice(0, 2).map(f => f.why), against: (m.against || []).slice(0, 1).map(f => f.why)
-      });
-      return { property: propertyRow(p), matches: all.filter(m => m.pct >= 70).slice(0, 15).map(row), nearMatches: all.filter(m => m.pct < 70).slice(0, 10).map(row) };
+      if ((await accessTo(p)) === 'none') return { error: `No property ${code}` };
+      const found = await runSearch({ db, user, body: { mode: 'clients', propertyId: p.id, limit: 25, filters: { minPct: 55 } }, viewer: await viewer(), data: await matchData() });
+      const all = found.rows || [];
+      return { property: await shaped(p), total: found.total || 0, matches: all.filter(r => r.pct >= 70).slice(0, 15).map(CLIENT_ROW), nearMatches: all.filter(r => r.pct < 70).slice(0, 10).map(CLIENT_ROW) };
     },
 
     async draft_message({ to, lead_id, code, text }) {
-      return saveDraft({ to, leadId: lead_id, property: to === 'owner' ? await findProperty(code) : null, text });
+      if (isAgent && to === 'lead' && !(await leads()).some(l => l.id === String(lead_id || ''))) return { error: 'That lead is not yours' };
+      const prop = to === 'owner' ? await findProperty(code) : null;
+      if (isAgent && to === 'owner' && !(prop && AA.roleOn(prop, me))) return { error: 'Only the property\'s own agents can message its owner' };
+      return saveDraft({ to, leadId: lead_id, property: prop, text });
     },
 
     async ask_owner_for_missing({ code, fields, text }) {
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
+      if (isAgent && !AA.roleOn(p, me)) return { error: 'Only the property\'s own agents can ask its owner' };
       const labels = (fields || []).map(String).filter(Boolean);
       if (!labels.length) return { error: 'Say which details to ask for' };
       const r = await saveDraft({ to: 'owner', property: p, text, extra: { gaps: labels } });
@@ -376,6 +433,7 @@ function makeTools(db, user, now, out) {
     },
 
     async propose_property_add({ fields }) {
+      if (isAgent) return { error: 'Agents add properties from My listings (they go to the office for approval) — not from Eåsy' };
       const f = {};
       for (const [k, v] of Object.entries(fields || {})) if (ED.PROPERTY_EDITABLE[k] && String(v).trim()) f[k] = String(v).trim();
       if (!f.location) return { error: 'Need at least the locality to add a property' };
@@ -387,6 +445,7 @@ function makeTools(db, user, now, out) {
     },
 
     async propose_property_update({ code, changes }) {
+      if (isAgent) return { error: 'Property changes go through the office — tell them, or use My listings for your own submissions' };
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
       const ch = {};
@@ -401,11 +460,12 @@ function makeTools(db, user, now, out) {
       if (!text) return { error: 'Empty note' };
       let lead = null, p = null;
       if (lead_id) {
+        if (isAgent && !(await leads()).some(l => l.id === String(lead_id))) return { error: 'That lead is not yours' };
         const snap = await db.collection('leads').doc(String(lead_id)).get();
         if (!snap.exists || snap.data().tenantId !== T) return { error: 'No such lead' };
         lead = { id: snap.id, name: snap.data().name || 'lead' };
       }
-      if (code) { p = await findProperty(code); if (!p) return { error: `No property ${code}` }; }
+      if (code) { p = await findProperty(code); if (!p) return { error: `No property ${code}` }; if (isAgent && !AA.roleOn(p, me)) return { error: 'Feedback goes on your own properties only' }; }
       if (!lead && !p) return { error: 'Say which lead or property the note is about' };
       let fu = null;
       if (follow_up_at) {
@@ -425,6 +485,7 @@ function makeTools(db, user, now, out) {
     async brochure({ code }) {
       const p = await findProperty(code);
       if (!p) return { error: `No property ${code}` };
+      if ((await accessTo(p)) !== 'full') return { error: `${code} is another agent's property — request access to share its brochure` };
       // Brochure_Link may list several files, comma-separated: a link for each, the brochure first.
       const urls = String(p.brochureLink || '').split(/[\s,]+/).filter(u => /^https?:\/\//i.test(u));
       if (urls.length) {
@@ -435,6 +496,7 @@ function makeTools(db, user, now, out) {
     },
 
     async seller_summaries({ code } = {}) {
+      if (isAgent) return { error: 'Weekly owner summaries are sent by the office' };
       const [ls, list] = await Promise.all([leads(), props()]);
       const want = code ? await findProperty(code) : null;
       if (code && !want) return { error: `No property ${code}` };
@@ -448,6 +510,61 @@ function makeTools(db, user, now, out) {
         made.push({ code: r.code, owner: r.owner, visits: r.visits, drafted: !d.error, problem: d.error || null });
       }
       return { week: 'this week (Mon–today)', properties: made, none: made.length ? null : 'No property had a site visit this week, so there is nothing to send.' };
+    },
+
+    async find_properties({ requirement, lead_id, req_index } = {}) {
+      const body = lead_id ? { mode: 'properties', leadId: lead_id, reqIndex: req_index } : { mode: 'smart', text: requirement };
+      if (!lead_id && !String(requirement || '').trim()) return { error: 'Say the requirement, or which client' };
+      const found = await runSearch({ db, user, body: { ...body, limit: 10, filters: { minPct: 50 } }, viewer: await viewer(), data: await matchData() });
+      if (found.error) return { error: found.error };
+      if (found.mode === 'clients') return { note: 'That reads as a search for clients — use find_clients' };
+      const reading = found.reading ? (found.reading.chips || (found.reading.requirements && found.reading.requirements[found.reading.requirements.length > 1 && req_index != null ? req_index : 0] || {}).chips || []).map(c => `${c.label}: ${c.value}${c.note ? ' (' + c.note + ')' : ''}`) : [];
+      const missing = found.reading && (found.reading.missing || (found.reading.requirements && found.reading.requirements[0] && found.reading.requirements[0].missing)) || [];
+      return { understood: reading, notStated: missing, total: found.total, bySource: found.counts || {}, results: (found.rows || []).slice(0, 8).map(MATCH_ROW),
+        ...(found.reading && found.reading.requirements && found.reading.requirements.length > 1 ? { theyHaveRequirements: found.reading.requirements.map(r => '#' + (r.index + 1) + ': ' + (r.text || r.chips.map(c => c.value).join(', '))) } : {}) };
+    },
+
+    async find_clients({ code, description } = {}) {
+      let body;
+      if (code) {
+        const p = await findProperty(code);
+        if (p) body = { mode: 'clients', propertyId: p.id };
+        else return { error: `No property ${code} in the inventory — describe it instead` };
+      } else if (String(description || '').trim()) body = { mode: 'clients', text: description };
+      else return { error: 'Give the property code, or describe the property' };
+      const found = await runSearch({ db, user, body: { ...body, limit: 25, filters: { minPct: 50 } }, viewer: await viewer(), data: await matchData() });
+      if (found.error) return { error: found.error };
+      const rows = found.rows || [];
+      return { property: found.about || null, total: found.total, strong: rows.filter(r => r.pct >= 80).length, clients: rows.slice(0, 12).map(CLIENT_ROW),
+        restrictedNote: rows.some(r => r.access === 'restricted') ? 'Some matching clients belong to other agents or the office — offer request_access with their ref.' : undefined };
+    },
+
+    async unonboarded_demand({ scope: sc } = {}) {
+      const sc2 = sc === 'shoot' ? 'shoot' : 'unprocessed';
+      const found = await runSearch({ db, user, body: { mode: 'demand', scope: sc2, limit: 12 }, viewer: await viewer(), data: await matchData() });
+      const rows = found.rows || [];
+      return { scope: sc2, total: (rows || []).length, properties: (rows || []).map(x => ({ property: x.property.name, source: x.property.sourceLabel, status: x.property.status, price: x.property.price || null, location: x.property.location || null,
+        buyers: x.buyers, strong: x.strong, top: x.top.map(t => `${t.name} ${t.pct}%`), open: x.property.link && x.property.link.type !== 'restricted' ? `${x.property.link.type}:${x.property.link.id}` : null })) };
+    },
+
+    async structure_requirement({ lead_id, text } = {}) {
+      const ls = await leads();
+      const lead = ls.find(l => l.id === String(lead_id || ''));
+      if (!lead) return { error: isAgent ? 'That lead is not yours' : 'No such lead' };
+      const r = text ? await structureText(text) : await structureText([lead.propertyInterest, lead.budget, lead.tt && lead.tt.profile && lead.tt.profile.requirement_details, lead.tt && lead.tt.latestAsk, lead.lastNote && lead.lastNote.text].filter(Boolean).join('\n'));
+      const items = r.ok && r.items.length ? r.items : PinMatch.requirementProfiles(lead, {}).map(globalThis.PinSources.itemFromProfile).map(globalThis.PinSources.cleanItem).filter(Boolean);
+      if (!items.length) return { error: 'Nothing to read a requirement from yet' };
+      const lines = items.map((it, i) => `#${i + 1}${it.status !== 'active' ? ' (' + it.status + ')' : ''}: ${PinMatch.reqSentence(it)}${it.uncertain && it.uncertain.length ? ' — check: ' + it.uncertain.join(', ') : ''}`);
+      if (!r.ok) lines.push('(The AI was not available — this is the built-in reading.)');
+      return propose('requirement', { leadId: lead.id, items, model: r.model || null }, `Save ${lead.name || 'this client'}'s requirement${items.length > 1 ? 's' : ''}?`, lines);
+    },
+
+    async request_access({ ref, reason, property_code } = {}) {
+      if (!isAgent) return { error: 'Staff already see every client' };
+      if (!ref) return { error: 'Which client? Use the ref from find_clients' };
+      let propertyId = null;
+      if (property_code) { const p = await findProperty(property_code); if (p && AA.roleOn(p, me)) propertyId = p.id; }
+      return propose('access_request', { ref: String(ref).slice(0, 200), reason: String(reason || '').slice(0, 300), propertyId }, 'Ask for this client\'s details?', [`Request: a matching client's details${property_code ? ' for ' + property_code : ''}`, reason ? `Reason: ${reason}` : 'The approvers will see your request in Messages']);
     },
 
     async team_overview() {
@@ -499,6 +616,26 @@ async function applyChange(db, user, change) {
     await ref.set({ ...p.changes, updatedAt: now, updatedBy: who }, { merge: true });
     await audit(db, user, 'property_update', { type: 'property', id: p.propertyId }, before, p.changes);
     return { done: `Updated ${p.code}` };
+  }
+  if (change.kind === 'requirement') {
+    const ref = db.collection('leads').doc(String(p.leadId || ''));
+    const snap = await ref.get();
+    if (!snap.exists || snap.data().tenantId !== T) return { error: 'That lead is gone' };
+    const items = (p.items || []).map(globalThis.PinSources.cleanItem).filter(Boolean);
+    const lead = snap.data();
+    if (user.role === 'agent' && !AA.leadVisibleTo(lead, who)) return { error: 'That lead is not yours' };
+    const rev = ((lead.reqs && lead.reqs.rev) || 0) + 1;
+    const reqs = items.length ? { items, src: 'reviewed', at: now, by: who, rev, fp: PinMatch.reqFingerprint(lead), aiModel: p.model || null } : null;
+    await writeLead(db, T, ref, { reqs }, 'update');
+    await ref.collection('reqRevisions').doc('r' + String(rev).padStart(4, '0') + '_' + now).set({ at: now, by: who, src: 'reviewed', via: 'easy', rev, items, was: (lead.reqs && lead.reqs.items) || null });
+    await audit(db, user, 'requirement', { type: 'lead', id: snap.id }, lead.reqs || null, reqs);
+    return { done: `Saved ${items.length} requirement${items.length === 1 ? '' : 's'} for ${lead.name || 'the client'}` };
+  }
+  if (change.kind === 'access_request') {
+    const res = await workPost(user, 'request', { kind: 'lead', ref: p.ref, reason: p.reason || '', propertyId: p.propertyId || undefined }, false);
+    const j = await res.json().catch(() => ({}));
+    if (!j.ok) return { error: j.error || 'The request could not be sent' };
+    return { done: 'Request sent — you will see the answer in Messages' };
   }
   if (change.kind === 'note') {
     const done = [];
@@ -589,7 +726,8 @@ async function handle({ db, user, body, now }) {
 
   // The Log call picker on pages other than the CRM (which has every lead on the page already).
   if (body.action === 'leads') {
-    const ls = await loadLeads(db, user.tenantId);
+    let ls = await loadLeads(db, user.tenantId);
+    if (user.role === 'agent') ls = ls.filter(l => AA.leadVisibleTo(l, user.email));
     return [{ leads: ls.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 200).map(l => ({ id: l.id, name: l.name || null, phone: l.phone || null, updatedAt: l.updatedAt || 0 })) }, 200];
   }
 
@@ -645,7 +783,8 @@ async function handle({ db, user, body, now }) {
         return found.filter(Boolean);
       })
     ]);
-    const all = ED.scheduleFor({ leads: ls, stages: st, properties: ps, email: user.email, now, horizonMs: horizon });
+    const mine = user.role === 'agent' ? ls.filter(l => AA.leadVisibleTo(l, user.email)) : ls;
+    const all = ED.scheduleFor({ leads: mine, stages: st, properties: ps, email: user.email, now, horizonMs: horizon });
     const list = body.action === 'schedule' ? all : ED.dueNow(all, now);
     // The gist carries the lead's last notes (two reads per visit — a handful a day).
     await Promise.all(list.filter(r => r.kind === 'gist').map(async r => {
@@ -668,7 +807,7 @@ async function handle({ db, user, body, now }) {
         model: EASY_MODEL,
         max_tokens: 8000,
         output_config: { effort: 'low' },
-        system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }, { type: 'text', text: `Now: ${istNow(now)} (IST). Asked by ${user.email}.` + (body.voice
+        system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }, { type: 'text', text: `Now: ${istNow(now)} (IST). Asked by ${user.email}.` + (user.role === 'agent' ? ' This person is an AGENT: the tools already show only their own leads and properties in full; everything else comes back as a summary or a restricted match. Never try to work around that — offer request_access instead.' : '') + (body.voice
           ? ' This question was spoken and your answer will be read aloud: start with one or two short sentences that make sense heard, in the language of the question (Tamil if it was Tamil). Speech recognition may have misheard a name or number — if one does not match a record, ask instead of guessing.'
           : '') }],
         tools: TOOLS,
@@ -704,7 +843,9 @@ async function handle({ db, user, body, now }) {
 
 export async function easyPost(request) {
   if (!easyEnabled()) return json({ disabled: true, error: 'Eåsy is switched off' }, 503);
-  const user = await verifyCrmUser(request);
+  // Agents too (Nov 2026): every tool scopes itself to what the agent layer lets them see — their own
+  // leads, other properties as summaries, other agents' clients only as requestable matches.
+  const user = await verifyCrmUser(request, { allowAgent: true });
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }

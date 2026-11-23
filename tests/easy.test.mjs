@@ -403,5 +403,32 @@ section('Safety');
   check('Owner phone numbers are not in any tool description sent to a lead (prompt rule present)', /Never put an owner's phone number/.test(requests[0].system[0].text));
 }
 
+section('Matching (Nov 2026) — one engine with the Match page; agents see only what is theirs');
+{
+  const AG = { email: 'agent9@threepin.in', email_verified: true, tenantId: T, role: 'agent' };
+  await putLead('L_agentbuyer', { tenantId: T, name: 'Agent Buyer', phone: '9840099999', propertyInterest: '3BHK in Medavakkam', budget: '1.2 Cr', stageId: stages[0].id, assignedAgent: AG.email, createdAt: NOW - 5 * DAY, updatedAt: NOW - DAY });
+  const sl = await tool('search_leads', { query: '' }, AG);
+  check('An agent\'s lead search shows only their own leads', sl.r && sl.r.leads.length === 1 && sl.r.leads[0].id === 'L_agentbuyer', sl.r && sl.r.leads.map(l => l.id));
+  const other = await tool('lead_summary', { id: 'L_shiva' }, AG);
+  check('…and another lead\'s summary is refused', other.r && /not yours/.test(other.r.error || ''), other.r);
+  const add = await tool('propose_property_add', { fields: { location: 'Velachery', config: '2BHK' } }, AG);
+  check('Agents cannot add inventory from Eåsy', add.r && /My listings/.test(add.r.error || ''));
+  const mb = await tool('match_buyers', { code: props.med.propertyCode }, AG);
+  const restricted = (mb.r && [...mb.r.matches, ...mb.r.nearMatches].filter(x => x.access === 'restricted')) || [];
+  check('Matching buyers held by others come back restricted, with no id or phone', restricted.every(x => !x.id && !x.phone && x.ref), restricted);
+  const fc = await tool('find_clients', { description: '3 BHK apartment in Medavakkam, 1.1 Cr' });
+  check('Staff: find_clients from a description, with reasons and next steps', fc.r && fc.r.clients && fc.r.clients.every(c => c.match && c.next), fc.r);
+  const fp = await tool('find_properties', { requirement: '2 BHK in Medavakkam under 80 lakhs' });
+  check('Staff: find_properties says what it understood and each result\'s source', fp.r && Array.isArray(fp.r.understood) && fp.r.understood.some(u => /Medavakkam/.test(u)) && (fp.r.results || []).every(x => x.source && x.status), fp.r);
+  const sr = await tool('structure_requirement', { lead_id: 'L_agentbuyer', text: '3BHK in Medavakkam or Pallikaranai, max 1.3 Cr, not Tambaram' }, AG);
+  check('A requirement is prepared as a card, not saved', sr.r && sr.r.prepared && !store.get('leads/L_agentbuyer').reqs, sr.r);
+  forget();
+  const [conf] = await easyHandle({ db, user: AG, body: { action: 'confirm', changeId: sr.r.changeId, yes: true }, now: NOW });
+  const saved = store.get('leads/L_agentbuyer');
+  check('On Yes it is saved beside the CRM fields, which stay as they were', conf.ok && saved.reqs && saved.reqs.src === 'reviewed' && saved.propertyInterest === '3BHK in Medavakkam', conf);
+  check('…with a revision kept', [...store.docs.keys()].some(k => k.startsWith('leads/L_agentbuyer/reqRevisions/')));
+  await putLead('L_agentbuyer', null);
+}
+
 console.log(failed ? `\n${failed} failed, ${passed} passed` : `\nAll good (${passed} checks).`);
 process.exit(failed ? 1 : 0);

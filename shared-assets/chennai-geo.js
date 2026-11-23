@@ -149,7 +149,18 @@
     'vettuvankeni': [12.933, 80.253], 'injambakkam': [12.925, 80.251],
     'kanathur': [12.858, 80.242], 'muttukadu': [12.826, 80.243],
     'kovalam': [12.788, 80.254], 'mahabalipuram': [12.626, 80.192],
-    'uthandi': [12.875, 80.248], 'panaiyur': [12.892, 80.244]
+    'uthandi': [12.875, 80.248], 'panaiyur': [12.892, 80.244],
+    // ── Added Nov 2026 with the matching rework: places buyers and owners name that the
+    // gazetteer did not know, so a brief naming them lost its location entirely. ──
+    'mrc nagar': [13.017, 80.274], 'santhome': [13.033, 80.278], 'foreshore estate': [13.022, 80.276],
+    'kandanchavadi': [12.966, 80.243], 'okkiyampet': [12.940, 80.235],
+    'padappai': [12.879, 80.025], 'manimangalam': [12.913, 80.050],
+    'nandambakkam': [13.021, 80.183], 'puzhuthivakkam': [12.975, 80.203],
+    'ennore': [13.215, 80.320], 'ponneri': [13.338, 80.194], 'minjur': [13.279, 80.262],
+    'thiruvallur': [13.144, 79.909], 'sembakkam': [12.927, 80.164], 'gowrivakkam': [12.917, 80.158],
+    'pammal': [12.975, 80.135], 'jafferkhanpet': [13.024, 80.207], 'pattabiram': [13.123, 80.059],
+    'otteri': [13.093, 80.250], 'park town': [13.081, 80.276], 'kalpakkam': [12.523, 80.158],
+    'jaladampet': [12.917, 80.196], 'chinmaya nagar': [13.059, 80.198]
   };
 
   // ═══════ ALIASES ═══════
@@ -210,7 +221,14 @@
     'orr': 'vandalur', 'outer ring road': 'vandalur',
     'lb road': 'thiruvanmiyur', 'lattice bridge road': 'thiruvanmiyur',
     'beach road': 'besant nagar',
-    'guindy industrial estate': 'guindy', 'nazarethpet': 'nazarathpet'
+    'guindy industrial estate': 'guindy', 'nazarethpet': 'nazarathpet',
+    // Nov 2026: official names, roads and colonies that stand in for their locality.
+    'raja annamalaipuram': 'r a puram', 'raja annamalai puram': 'r a puram', 'm r c nagar': 'mrc nagar',
+    'san thome': 'santhome', 'santhom': 'santhome', 'kasturba nagar': 'adyar', 'kalakshetra colony': 'besant nagar',
+    'valmiki nagar': 'thiruvanmiyur', 'greams road': 'nungambakkam', 'haddows road': 'nungambakkam',
+    'khader nawaz khan road': 'nungambakkam', 'cenotaph road': 'teynampet', 'harrington road': 'chetpet',
+    'spur tank road': 'chetpet', 'ashok pillar': 'ashok nagar', 'okkiyam thoraipakkam': 'okkiyampet',
+    'ullagaram': 'puzhuthivakkam', 'thiruvallur town': 'thiruvallur', 'tiruvallur': 'thiruvallur'
     // Deliberately NOT aliased: "SIPCOT". There is a SIPCOT at Siruseri and
     // another at Sriperumbudur, 45 km apart. Aliasing it to either one put a
     // Valarpuram property (whose landmark reads "Sriperumbudur SIPCOT") next
@@ -452,9 +470,92 @@
       .join(' ');
   }
 
+  // ═══════ SPELLING SLIPS ═══════
+  //
+  // "anna nagr", "velacheri", "thiruvanmyur", "sholinganalur": a person typing a brief on a phone.
+  // The alias table holds the variants met in the data; this catches the rest — but ONLY for
+  // requirement text and searches (resolveLoose), never for placing a property, where a wrong
+  // guess would move real inventory across the city. A slip must be close (one edit up to 10
+  // letters, two beyond), begin with the same letter, and point at ONE place — a tie between two
+  // different places is a guess, and a guess is dropped.
+  const FUZZY_STOP = new Set(('the and for with from near need want looking flat flats house plot plots land villa ' +
+    'apartment apartments budget crore crores lakh lakhs rent rental lease sale sell buy buying office space shop ' +
+    'commercial building ground grounds acre acres cents sqft feet area areas road street nagar colony main cross ' +
+    'chennai tamil nadu india north south east west new resale ready move immediate parking client clients ' +
+    'only also other than not interested excluding except prefer preferably around about approx within under ' +
+    'above below minimum maximum good best nice big small family independent gated community luxury premium').split(' '));
+  function editDistance(a, b, cap) {
+    // Damerau (adjacent swap) Levenshtein, stopping early once every cell passes `cap`.
+    const n = a.length, m = b.length;
+    if (Math.abs(n - m) > cap) return cap + 1;
+    let prev2 = null, prev = Array.from({ length: m + 1 }, (_, j) => j);
+    for (let i = 1; i <= n; i++) {
+      const cur = [i];
+      let best = cur[0];
+      for (let j = 1; j <= m; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+        cur[j] = v;
+        if (v < best) best = v;
+      }
+      if (best > cap) return cap + 1;
+      prev2 = prev; prev = cur;
+    }
+    return prev[m];
+  }
+  const PLACE_PART = new Set(['nagar', 'road', 'colony', 'street', 'main', 'west', 'east', 'north', 'south']);
+  const FUZZY_NAMES = NAMES_BY_LENGTH.filter(([name]) => name.replace(/ /g, '').length >= 5 && !CORRIDOR_NAME.test(name));
+  function fuzzyKey(phrase) {
+    const len = phrase.replace(/ /g, '').length;
+    if (len < 5) return null;
+    const cap = len >= 11 ? 2 : 1;
+    let best = null, tie = false;
+    for (const [name, key] of FUZZY_NAMES) {
+      if (name[0] !== phrase[0]) continue;
+      const d = Math.min(editDistance(phrase, name, cap), editDistance(phrase.replace(/ /g, ''), name.replace(/ /g, ''), cap));
+      if (d > cap || d === 0) continue;
+      if (!best || d < best.d) { best = { d, key, name }; tie = false; }
+      else if (d === best.d && key !== best.key) tie = true;
+    }
+    return best && !tie ? best : null;
+  }
+  // Every place in a requirement: the exact ones first (scan), then any slip in what is left.
+  // → [{ key, fuzzy: bool, said }]
+  function resolveLoose(text) {
+    const out = resolveAll(text).map(key => ({ key, fuzzy: false, said: key }));
+    const s = norm(text);
+    if (!s) return out;
+    // Blank out the words an exact name already took, so a slip is looked for only in the rest.
+    let rest = ' ' + s + ' ';
+    for (const [name] of NAMES_BY_LENGTH) {
+      let i;
+      while ((i = rest.indexOf(' ' + name + ' ')) !== -1) rest = rest.slice(0, i + 1) + '#'.repeat(name.length) + rest.slice(i + 1 + name.length);
+    }
+    const toks = rest.trim().split(' ');
+    const used = new Array(toks.length).fill(false);
+    for (let w = 3; w >= 1; w--) {
+      for (let i = 0; i + w <= toks.length; i++) {
+        const win = toks.slice(i, i + w);
+        if (used.slice(i, i + w).some(Boolean)) continue;
+        if (win.some(t => !t || t.includes('#') || /\d/.test(t))) continue;
+        // "nagar", "road", "west" belong inside a place name ("besent nagar") but never begin one,
+        // and no other stop word may appear at all.
+        if (FUZZY_STOP.has(win[0]) || win.some(t => FUZZY_STOP.has(t) && !PLACE_PART.has(t))) continue;
+        if (!win.some(t => t.length >= 4)) continue;
+        const hit = fuzzyKey(win.join(' '));
+        if (!hit) continue;
+        if (out.some(o => o.key === hit.key)) { for (let j = i; j < i + w; j++) used[j] = true; continue; }
+        out.push({ key: hit.key, fuzzy: true, said: win.join(' ') });
+        for (let j = i; j < i + w; j++) used[j] = true;
+      }
+    }
+    return out;
+  }
+
   const api = {
     LOCALITIES, ALIASES, CORRIDOR_MEMBERS, CORRIDOR_OF, ZONE_MEMBERS, ZONE_OF,
-    resolve, resolveAll, placeOf, distanceKm, haversine, near, zoneOf, corridorsOf, label, norm
+    resolve, resolveAll, resolveLoose, editDistance, placeOf, distanceKm, haversine, near, zoneOf, corridorsOf, label, norm
   };
   root.PinGeo = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;

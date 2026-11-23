@@ -256,3 +256,20 @@
   background: transparent; color: var(--pm-ink-2, #44403C); cursor: pointer;
 }
 .pm .pm-more:hover { border-style: solid; color: var(--pm-ink, #1C1917); }
+
+/* ═══════ BEYOND THE INVENTORY (Nov 2026) ═══════
+   Where a match comes from, said on the row: a Shoot board card or a seller enquiry is an
+   opportunity, not a listing, and must never look like one. */
+.pm-more-box { margin-top: 12px; }
+.pm-req { padding: 8px 10px; border-radius: var(--pm-r); background: var(--pm-sunk); }
+.pm-req.stale { background: color-mix(in srgb, var(--pm-warn) 10%, transparent); }
+.pm-req .pm-btn { margin-left: 4px; }
+.pm-src {
+  display: inline-block; font-size: 10.5px; font-weight: 650; letter-spacing: .02em;
+  padding: 1px 7px; border-radius: 999px; margin-right: 4px;
+  border: 1px dashed color-mix(in srgb, var(--pm-warn) 55%, transparent);
+  color: var(--pm-warn); background: color-mix(in srgb, var(--pm-warn) 7%, transparent);
+}
+.pm-src.onboarded { border-style: solid; border-color: color-mix(in srgb, var(--pm-good) 45%, transparent); color: var(--pm-good); background: color-mix(in srgb, var(--pm-good) 7%, transparent); }
+.pm-next { color: var(--pm-ink-2); }
+@media (pointer: coarse) { .pm-btn { min-height: 44px; } }

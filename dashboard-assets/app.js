@@ -494,6 +494,7 @@ function applyFilters(){
   if(window.PinAdvanced){ PinAdvanced.renderChipsOnly(); PinAdvanced.updateCount(); }
   renderGrid();
   renderNearMisses(base, text, res);
+  renderMatchHint(text);
   // The map shows exactly what the grid shows — one filter state, two
   // renderings of it. A map with its own idea of which properties count
   // would be a second source of truth on the same screen.
@@ -598,6 +599,29 @@ function queuedFor(text){
       text, advanced: window.PinAdvanced ? PinAdvanced.query() : null, gazetteer: searchGaz, type: currentType
     }).filter(h => agentFilterPasses(h.p));
   } catch(e) { return []; }
+}
+
+// The search box searches this inventory. A sentence that asks for CLIENTS, or reads as a whole
+// requirement, is better answered by the Match page — which also looks at the Shoot board, seller
+// enquiries and agent submissions, and at every client in the CRM — so it says so, with the query
+// carried over. Read by the same parser the Match page uses (PinSources.parseSmartQuery).
+function renderMatchHint(text){
+  const el = document.getElementById('matchHint');
+  if(!el) return;
+  if(!text || briefOn || !window.PinSources || !window.PinMatch){ el.hidden = true; el.innerHTML = ''; return; }
+  let q, facts = 0;
+  try {
+    q = PinSources.parseSmartQuery(text);
+    const r = PinMatch.briefProfile(q.text, {});
+    facts = [r.deal, r.budget, r.localities, r.bhk, r.types, r.size].filter(Boolean).length;
+  } catch(e) { el.hidden = true; return; }
+  const href = 'match.html?q=' + encodeURIComponent(text);
+  const msg = q.direction === 'clients' ? 'Looking for <b>clients</b>? This box searches properties.'
+    : q.direction === 'demand' ? 'That is a question about <b>seller enquiries with matching buyers</b>.'
+    : facts >= 2 ? 'Also check the <b>Shoot board, seller enquiries and agent submissions</b> for this requirement.' : '';
+  if(!msg){ el.hidden = true; el.innerHTML = ''; return; }
+  el.innerHTML = `<span>${msg}</span><a href="${href}" target="_blank" rel="noopener">Search it in Match →</a>`;
+  el.hidden = false;
 }
 
 function renderNearMisses(base, text, shown){
@@ -1422,6 +1446,8 @@ function renderMatchingBuyers(id){
         if(act === 'crm') window.open('crm.html?lead=' + encodeURIComponent(key), '_blank', 'noopener');
       }
     });
+    // Every buyer — agents included, redacted on the server — with filters and full reasons.
+    el.insertAdjacentHTML('beforeend', `<div class="pm-acts"><a class="pm-btn" href="match.html?property=${encodeURIComponent(id)}" target="_blank" rel="noopener">Open in Match →</a></div>`);
     if(window.PinAgent) window.PinAgent.otherMatches(document.getElementById('dpAgMatches'), p, document.getElementById('dpAgJump'));
   });
 }

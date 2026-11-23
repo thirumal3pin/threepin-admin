@@ -2448,6 +2448,8 @@ function renderWaitingBuyers(x, lead) {
         ].filter(Boolean)
       })
     });
+    // Every buyer with filters, the full reasons, and the agent-safe view: the Match page.
+    el.insertAdjacentHTML('beforeend', `<div class="pm-acts"><a class="pm-btn" href="match.html?listing=${encodeURIComponent(x.id)}" target="_blank" rel="noopener">Open in Match →</a></div>`);
   }).catch(e => {
     // Without this the panel stayed on "Scoring every buyer…" for ever.
     console.error('Buyer matching failed:', e);
