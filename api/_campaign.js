@@ -59,7 +59,7 @@
 import { createHash } from 'node:crypto';
 import {
   varsIn, validVarName, validTemplateName, waNumber, missingVars, paramsFor, mediaUrl,
-  laterStatus, tally, lintTemplate, sampleFor, slugName, MAX_RECIPIENTS, LIMITS
+  laterStatus, tally, lintTemplate, sampleFor, slugName, MAX_RECIPIENTS, LIMITS, purposeOf
 } from '../crm-assets/campaignModel.js';
 import { stageKeyOf } from '../crm-assets/pipeline.js';
 import { KNOWN_TEMPLATES } from './_campaign-known.js';
@@ -668,12 +668,13 @@ async function stageKeys(db, tenantId) {
  */
 export function holdBackWhy(lead, contact, x) {
   if (x.optOut.has(contact) || (lead && lead.waOptOut === true)) return 'opted out';
+  // Dead in TailorTalk: held back for every kind of message, as the page holds it back.
+  if (lead && lead.tt && lead.tt.status === 'dead') return 'dead';
   if (!x.marketing) return '';
   if (x.marketingOptOut.has(contact) || (lead && lead.waMarketingOptOut === true)) return 'no offers';
   if (!lead) return '';
-  const last = lead.lastMarketingAt || 0;
-  if (x.gapDays > 0 && last && x.now - last < x.gapDays * DAY) return 'messaged recently';
-  if ((lead.marketingUnanswered || 0) >= 2 && last && x.now - last < 60 * DAY) return 'two offers unanswered';
+  // No frequency limit (the owner, 23 Nov 2026: every send is pressed by a person, who sees each
+  // lead's last successful campaign on its row and decides). x.gapDays is no longer applied.
   if (x.purpose !== 'referral' && x.journey !== 'referral' && ['negotiation', 'won'].includes(x.stageOf(lead))) return 'in negotiation/won';
   // Their last message (TailorTalk's time, which can be our own last template — that is not them).
   const inbound = (lead.tt && lead.tt.lastMessageAt) || 0;
@@ -807,7 +808,11 @@ async function createCampaign(db, tenantId, user, token, b, deps) {
   }
   const settings = await readSettings(db, tenantId);
   const marketing = live.category === 'MARKETING';
-  const purpose = str(b.purpose, 40) || null;
+  // The purpose that decides a rule (only the referral ask may reach a Won lead) is the TEMPLATE's,
+  // never the page's word for it — a page that kept an earlier purpose cannot open a Won lead to an
+  // offer. The page's purpose and journey are kept for the reports only.
+  const purpose = purposeOf({ name: template }) || str(b.purpose, 40) || null;
+  const rulePurpose = purposeOf({ name: template }) || null;
   const journey = str(b.journey, 60) || null;
   // Every lead read together, one round trip. A lead id that is missing or another tenant's is
   // not a lead of this CRM: the contact is kept as a hand-typed number.
@@ -819,7 +824,7 @@ async function createCampaign(db, tenantId, user, token, b, deps) {
   }
   const rules = {
     optOut: new Set(settings.optOut), marketingOptOut: new Set(settings.marketingOptOut), marketing,
-    gapDays: settings.marketingGapDays, now: deps.now(), stageOf: await stageKeys(db, tenantId), purpose, journey
+    gapDays: settings.marketingGapDays, now: deps.now(), stageOf: await stageKeys(db, tenantId), purpose: rulePurpose, journey: rulePurpose === 'referral' ? journey : null
   };
 
   const recipients = {};
@@ -977,7 +982,7 @@ async function sendBatch(db, tenantId, token, b, deps) {
   if (leadKeys.length) (await db.getAll(...leadKeys.map(k => db.collection('leads').doc(k)))).forEach(s => { if (s.exists && s.data().tenantId === tenantId) leads.set(s.id, s.data()); });
   const rules = {
     optOut: new Set(settings.optOut), marketingOptOut: new Set(settings.marketingOptOut), marketing,
-    gapDays: settings.marketingGapDays, now: deps.now(), stageOf: await stageKeys(db, tenantId), purpose: doc.purpose || null, journey: doc.journey || null
+    gapDays: settings.marketingGapDays, now: deps.now(), stageOf: await stageKeys(db, tenantId), purpose: purposeOf({ name: doc.template }) || null, journey: null
   };
   const held = [];
   const heldUp = {};

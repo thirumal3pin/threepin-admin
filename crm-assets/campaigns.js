@@ -166,7 +166,11 @@
   function leadById(id) { return allLeads().find(function (l) { return l && l.id === id; }) || null; }
   function leadsMap() { var m = {}; allLeads().forEach(function (l) { if (l && l.id) m[l.id] = l; }); return m; }
   function inv() { return (typeof inventory !== 'undefined' && Array.isArray(inventory)) ? inventory : []; }
-  function propById(id) { if (!id) return null; var k = String(id).toUpperCase(); return inv().find(function (p) { return p.id === id || String(p.propertyCode || '').toUpperCase() === k; }) || null; }
+  // Property codes as written anywhere ("anr-003", "ANR 003") read as one (the CRM's propKey does the same).
+  function normCode(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function propById(id) { if (!id) return null; var k = normCode(id); return inv().find(function (p) { return p.id === id || normCode(p.propertyCode) === k || normCode(p.id) === k; }) || null; }
+  // Was this lead's visit to that property (picked in step 2)?
+  function visitIsFor(l, pid) { var p = propById(pid), v = visitOfLead(l); return !!(p && v.property && (normCode(v.property) === normCode(p.propertyCode) || normCode(v.property) === normCode(p.id))); }
   function visitOfLead(l) { return window.crmPipeline && window.crmPipeline.visitOf ? window.crmPipeline.visitOf(l) : { at: null, status: 'none', property: null }; }
   function stageOf(l) { return typeof stageById === 'function' ? stageById(l.stageId) : null; }
   function stageKind(l) { var s = stageOf(l); return s && window.crmPipeline && window.crmPipeline.stageKindOf ? window.crmPipeline.stageKindOf(s) : null; }
@@ -186,8 +190,7 @@
   }
   function hasProp(l, pid) {
     if (typeof leadHasProperty === 'function' && leadHasProperty(l, pid)) return true;
-    var p = propById(pid), v = visitOfLead(l);
-    return !!(p && v.property && String(v.property).toUpperCase() === String(p.propertyCode || p.id).toUpperCase());
+    return visitIsFor(l, pid);
   }
   // The property a lead hears about when the campaign says "each lead's own": the one they
   // visited (for visit lists), else the sold-out one (for sold-out lists), else the first linked.
@@ -217,7 +220,9 @@
     return [l.propertyInterest, l.tt && l.tt.values && l.tt.values.propertyInterest, l.ai && l.ai.line]
       .concat(linkedProps(l).map(function (p) { return p.location + ' ' + p.name; })).filter(Boolean).join(' ').toLowerCase();
   }
-  function startOfDay(t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  // The start of the India day (the suggested messages count days the same way), whatever the
+  // browser's own time zone.
+  function startOfDay(t) { var IST = 5.5 * 3600000; return Math.floor((t + IST) / DAY) * DAY - IST; }
   function stageKeyOfLead(l) { var s = stageOf(l); return s && window.crmPipeline ? window.crmPipeline.stageKeyOf(s) : null; }
   function crmStages() { return typeof stages !== 'undefined' && Array.isArray(stages) ? stages : []; }
   function agentLabel(e) { return typeof agentName === 'function' ? agentName(e) : String(e || '').split('@')[0]; }
@@ -1060,6 +1065,9 @@
   function journeyLabel(j) { return j.type === 'retry' ? j.label : 'Suggested: ' + j.label; }
   function quickMatch(l, q, w) {
     var v = visitOfLead(l), now = Date.now();
+    // A property picked in step 2 narrows every visit list to visits TO that property — "visited in
+    // the last 7 days" for ANR003 means visited ANR003, whichever way the message names the property.
+    if (w && w.propertyId && /^(visit_week|visited|planned|tomorrow)$/.test(q) && !visitIsFor(l, w.propertyId)) return false;
     if (q === 'visit_week') return v.status === 'done' && v.at && v.at >= now - 7 * DAY && v.at <= now + DAY;
     if (q === 'visited') return v.status === 'done';
     if (q === 'planned') return !!(v.at && v.status !== 'done' && v.status !== 'cancelled' && v.at >= startOfDay(now));
@@ -1129,9 +1137,7 @@
     // A Marketing message never goes to a lead whose deal a person is closing.
     var sk = stageKeyOfLead(lead);
     if ((sk === 'negotiation' || sk === 'won') && ctx.purpose !== 'referral') return (sk === 'won' ? 'Won' : 'Negotiating') + ' — no Marketing messages';
-    var lastM = lead.lastMarketingAt || 0;
-    if (ctx.gapDays > 0 && lastM && ctx.now - lastM < ctx.gapDays * DAY) return 'Sent an offer in the last ' + ctx.gapDays + ' days';
-    if ((lead.marketingUnanswered || 0) >= 2 && lastM && ctx.now - lastM < 60 * DAY) return 'Two offers unanswered — give them a rest';
+    // No frequency limit: the row shows the last campaign instead (lastCampaignNote).
     var lastIn = lead.tt && lead.tt.lastMessageAt;
     if (lastIn && ctx.now - lastIn < DAY && ctx.now - lastIn >= 0) return 'Wrote in the last 24 h — reply in the chat, free';
     return '';
@@ -1166,7 +1172,9 @@
       // The brochure: the campaign's one file, or each lead's own property's — a lead whose
       // property has none is held back rather than sent a blank header.
       var mUrl = '', mName = '';
-      if (media) {
+      var again = w.retryMedia && w.retryMedia[key];
+      if (media && again && again.url) { mUrl = again.url; mName = again.name; }
+      else if (media) {
         if (one) { mUrl = oneMedia; mName = (C.propertyCode(one) || C.slugName(C.propertyLabel(one)) || 'Brochure') + '.pdf'; }
         else {
           mUrl = prop && prop.brochureLink ? C.mediaUrl(prop.brochureLink) : '';
@@ -1179,7 +1187,9 @@
       // words are not mistaken for something the CRM knows about them. A per-lead edit is theirs.
       var fb = C.fellBack ? C.fellBack(vars, mapping, values).filter(function (v) { return !(v in ed); }) : [];
       var can = !hold && !missing.length;
-      if (can) ctx.sentNumbers.add(contact);
+      // Only a row that is ticked claims its number: unticking one of two leads with the same number
+      // lets the other one go.
+      if (can && !w.unchecked[key]) ctx.sentNumbers.add(contact);
       rows.push({ key: key, lead: lead, name: name, contact: contact, prop: prop, visit: visit, values: values, hold: hold, missing: missing, fb: fb, can: can, manual: !lead, hand: !!byHand,
         mediaUrl: mUrl, mediaName: mName, on: can && !w.unchecked[key],
         why: lead ? (w.ai ? w.ai.picks[lead.id] : (w.journey && w.journey.reasons && w.journey.reasons[lead.id]) || '') : '' });
@@ -1187,9 +1197,12 @@
     // The CRM's leads claim their numbers first — they carry more (visit, property) than a number
     // typed in — and the ones added by hand are listed first, as the most recent thing done.
     var hint = w.quick === 'journey' && w.journey ? w.journey.type : w.quick;
-    handPool.forEach(function (l) { var h = hand[l.id] || {}; add(l.id, l, l.name, contactOf(l), one || propById(h.code) || ownProp(l, hint), visitOfLead(l), true); });
-    pool.forEach(function (l) { add(l.id, l, l.name, contactOf(l), one || ownProp(l, hint), visitOfLead(l), false); });
-    w.manual.forEach(function (m) { add(m.key, null, m.name, m.contact, one || propById(m.code), null, true); });
+    // "Each lead's own property" with a property picked: that property, for every lead linked to it.
+    var picked = w.propertyMode === 'own' && w.propertyId ? propById(w.propertyId) : null;
+    var propFor = function (l) { return picked && hasProp(l, w.propertyId) ? picked : ownProp(l, hint); };
+    handPool.forEach(function (l) { var h = hand[l.id] || {}; add(l.id, l, l.name, contactOf(l), one || propById(h.code) || propFor(l), visitOfLead(l), true); });
+    pool.forEach(function (l) { add(l.id, l, l.name, contactOf(l), one || propFor(l), visitOfLead(l), false); });
+    w.manual.forEach(function (m) { add(m.key, null, m.name, m.contact, one || propById(m.code) || picked, null, true); });
     return rows.filter(function (r) { return r.hand; }).concat(rows.filter(function (r) { return !r.hand; }));
   }
   function stepAllowed(n, rows) {
@@ -1390,7 +1403,7 @@
   function rowHtml(r, vars) {
     var C = CM();
     var v = r.visit && r.visit.at ? (r.visit.status === 'done' ? 'visited ' : 'visit ') + C.visitDate(r.visit.at) : '';
-    var meta = [r.contact ? C.prettyNumber(r.contact) : '', r.lead && r.lead.tt && r.lead.tt.status ? r.lead.tt.status : '', r.prop ? (C.propertyCode(r.prop) || C.propertyLabel(r.prop)) : '', v, r.hand ? 'added by hand' : '', r.lead && r.lead.lastCampaignAt ? 'last messaged ' + ago(r.lead.lastCampaignAt) : ''].filter(Boolean);
+    var meta = [r.contact ? C.prettyNumber(r.contact) : '', r.lead && r.lead.tt && r.lead.tt.status ? r.lead.tt.status : '', r.prop ? (C.propertyCode(r.prop) || C.propertyLabel(r.prop)) : '', v, r.hand ? 'added by hand' : '', r.lead && r.lead.lastCampaignAt ? (C.lastCampaignNote ? C.lastCampaignNote(r.lead) : 'last messaged ' + ago(r.lead.lastCampaignAt)) : ''].filter(Boolean);
     return '<div class="cmp-r' + (r.on ? ' on' : '') + (r.can ? '' : ' held') + '" role="listitem" data-key="' + esc(r.key) + '">'
       + '<input type="checkbox" id="' + esc(rowId('C', r.key)) + '" ' + (r.on ? 'checked' : '') + (r.can ? '' : ' disabled') + ' aria-label="Send to ' + esc(r.name || r.contact) + '" onchange="PinCampaigns.tick(' + js(r.key) + ',this.checked)">'
       + '<div class="cmp-rmain"><div class="cmp-rname">' + (r.lead ? '<button type="button" class="cmp-link" onclick="openDetail(' + js(r.lead.id) + ')">' + esc(r.name || '(no name)') + '</button>' : esc(r.name || '(no name)'))
@@ -2045,7 +2058,9 @@
       var w = S.wiz, t = tplByName(name);
       if (!t) return;
       w.template = name; w.mapping = autoMap(t, {}); w.edits = {}; w.req = null;
-      if (!w.purpose) w.purpose = purposeOf(t);
+      // A template picked by hand brings its own purpose (an earlier suggestion's purpose never sticks
+      // to another template); a suggestion or a retry sets theirs right after.
+      if (!quiet || !w.purpose) w.purpose = purposeOf(t);
       if (!w.name) w.name = name.replace(/_v\d+$/, '').replace(/_/g, ' ').replace(/^\w/, function (c) { return c.toUpperCase(); }) + ' — ' + new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
       if (!quiet) render();
     },
@@ -2090,7 +2105,8 @@
       var x = settings().lists.find(function (l) { return l.id === id; }); if (!x) return;
       var w = S.wiz, def = x.def || x;
       w.quick = def.quick || ''; w.f = Object.assign(blankFilters(), def.f || {}); w.journey = null; w.ai = null; w.limit = 150; w.unchecked = {};
-      if (def.propertyId || def.propertyMode) { w.propertyMode = def.propertyMode === 'one' ? 'one' : 'own'; w.propertyId = def.propertyId || ''; w.edits = {}; }
+      // Only a list saved WITH a property changes the property picked in step 2.
+      if (def.propertyId) { w.propertyMode = def.propertyMode === 'one' ? 'one' : 'own'; w.propertyId = def.propertyId; w.edits = {}; }
       toast('Using “' + x.name + '”'); render();
     },
     deleteList: async function (id) {
@@ -2102,7 +2118,13 @@
         toast('List deleted'); render();
       } catch (e) { toast(e.message); }
     },
-    tick: function (key, on) { if (on) delete S.wiz.unchecked[key]; else S.wiz.unchecked[key] = 1; refreshRows([key]); },
+    // A row ticked or unticked: it, and every other row with the same number (whether one of them
+    // goes decides whether the others are "same number as another lead here").
+    tick: function (key, on) {
+      if (on) delete S.wiz.unchecked[key]; else S.wiz.unchecked[key] = 1;
+      var rows = wizRows(), me = rows.find(function (r) { return r.key === key; });
+      refreshRows(me && me.contact ? rows.filter(function (r) { return r.contact === me.contact; }).map(function (r) { return r.key; }) : [key]);
+    },
     checkAll: function (on) { wizRows().forEach(function (r) { if (on) delete S.wiz.unchecked[r.key]; else S.wiz.unchecked[r.key] = 1; }); render(); },
     // More than a campaign holds: the first 1,000 (as listed) stay ticked, the rest are unticked.
     firstN: function () {
@@ -2294,12 +2316,15 @@
       var d = S.detail; if (!d) return;
       var C = CM(), byNum = leadsByNumber();
       var NO_RETRY = { '131050': 'stopped Marketing messages', '131049': 'WhatsApp asks to wait a week' };
-      var leadIds = [], manual = [], edits = {}, skipped = {};
+      var leadIds = [], manual = [], edits = {}, skipped = {}, media = {};
       Object.keys(d.recipients || {}).forEach(function (k) {
         var r = d.recipients[k]; if (r.status !== 'failed') return;
         var code = String(r.errorCode || ((/\(#?(13\d{4})\)|#(13\d{4})|\b(13\d{4})\b/.exec(String(r.error || '')) || []).slice(1).find(Boolean)) || '');
         if (NO_RETRY[code]) { skipped[NO_RETRY[code]] = (skipped[NO_RETRY[code]] || 0) + 1; return; }
         var lead = (!r.manual && leadById(k)) || byNum[C.waNumber(r.contact)] || null;
+        // The brochure each one was sent goes again with its text (never another property's file).
+        var keyR = lead ? lead.id : 'm_' + r.contact;
+        if (r.mediaUrl || r.headerMediaName) media[keyR] = { url: r.mediaUrl || '', name: r.headerMediaName || '' };
         if (lead) { if (leadIds.indexOf(lead.id) < 0) { leadIds.push(lead.id); edits[lead.id] = r.values; } }
         else { manual.push({ key: 'm_' + r.contact, contact: r.contact, name: r.name, code: '' }); edits['m_' + r.contact] = r.values; }
       });
@@ -2308,7 +2333,7 @@
       var w = S.wiz;
       w.name = d.name + ' — retry'; w.mapping = d.mapping && Object.keys(d.mapping).length ? d.mapping : w.mapping; w.propertyMode = d.propertyMode || 'own'; w.propertyId = d.propertyId || ''; w.headerMediaUrl = d.headerMediaUrl || ''; w.lockLead = !!d.lockLead;
       w.purpose = d.purpose || w.purpose;
-      w.manual = manual; w.edits = edits;
+      w.manual = manual; w.edits = edits; w.retryMedia = media;
       if (leadIds.length) { w.quick = 'journey'; w.journey = { key: 'retry:' + d.id, type: 'retry', label: 'Failed in “' + d.name + '”', leadIds: leadIds }; w.onlyManual = false; }
       else { w.quick = ''; w.onlyManual = true; }
       w.step = 3; S.focusStep = true; S.detail = null;

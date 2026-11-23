@@ -213,11 +213,11 @@ section('7. options follow-up — Marketing, 48 h to 30 days in "Options sent"')
   const twoOld = lead({ ...base, marketingUnanswered: 2, lastMarketingAt: NOW - 70 * DAY });
   const free = lead({ ...base, tt: { lastMessageAt: NOW - 30 * 60000 } });
   const r = one(run([noOffers, listed, recent, twoNo, twoOld, free], { marketingOptOut: ['+91 98400 77777'] }), 'options_followup');
-  check('Marketing rules: no offers (lead or list), messaged in the gap, two unanswered in 60 days (and one who wrote is out by the rule itself)',
-    JSON.stringify(ids(r)) === JSON.stringify([twoOld.id]), ids(r));
+  // No frequency limit since 23 Nov 2026: only "no offers" (and writing in, by the rule itself) keeps them out.
+  check('Marketing rules: no offers (lead or list) hold back; a recent offer or two unanswered no longer do',
+    JSON.stringify(ids(r).sort()) === JSON.stringify([recent.id, twoNo.id, twoOld.id].sort()), ids(r));
   const why = Object.fromEntries((r ? r.held : []).map(x => [x.id, x.why]));
-  check('…each held with the server’s why', why[noOffers.id] === 'no offers' && why[listed.id] === 'no offers' && why[recent.id] === 'messaged recently'
-    && why[twoNo.id] === 'two offers unanswered' && !why[free.id], why);
+  check('…each held with the server’s why', why[noOffers.id] === 'no offers' && why[listed.id] === 'no offers' && !why[recent.id] && !why[twoNo.id] && !why[free.id], why);
   check('the gap comes from the settings', ids(one(run([recent], { settings: { marketingGapDays: 3 } }), 'options_followup')).includes(recent.id)
     && ids(one(run([recent], { gapDays: 0 }), 'options_followup')).includes(recent.id));
   check('a Marketing card with everyone held is no card', !one(run([noOffers]), 'options_followup'));

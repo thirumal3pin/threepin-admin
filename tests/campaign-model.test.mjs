@@ -206,12 +206,13 @@ section('holdWhy / holdReason — the server’s rules, the server’s words');
   check('duplicate, dead', W({}, '919000000002') === 'duplicate number' && W({ tt: { status: 'dead' } }, n) === 'dead');
   check('no offers — on the lead or the list (Marketing only)', W({ waMarketingOptOut: true }, n) === 'no offers' && W({}, '919000000004') === 'no offers'
     && W({ waMarketingOptOut: true }, n, { marketing: false }) === '' && C.holdReason({ waMarketingOptOut: true }, n, ctx()) === 'Asked for no more offers');
-  check('messaged recently — by lastMarketingAt', W({ lastMarketingAt: NOW - 3 * DAY }, n) === 'messaged recently' && W({ lastMarketingAt: NOW - 8 * DAY }, n) === ''
-    && C.holdReason({ lastMarketingAt: NOW - 3 * DAY }, n, ctx()) === 'Messaged in the last 7 days');
+  // No frequency limit since 23 Nov 2026 (the owner presses every send and sees the last campaign on the row).
+  check('no frequency limit: an offer yesterday holds nobody back', W({ lastMarketingAt: NOW - DAY }, n) === '' && C.holdReason({ lastMarketingAt: NOW - DAY }, n, ctx()) === '');
   check('a Utility send since the last offer does not count once lastMarketingAt is kept', W({ lastMarketingAt: NOW - 20 * DAY, lastCampaignAt: NOW - DAY }, n) === '');
-  check('a lead from before lastMarketingAt falls back to lastCampaignAt', W({ lastCampaignAt: NOW - DAY }, n) === 'messaged recently');
-  check('two offers unanswered within 60 days', W({ marketingUnanswered: 2, lastMarketingAt: NOW - 30 * DAY }, n) === 'two offers unanswered'
-    && W({ marketingUnanswered: 2, lastMarketingAt: NOW - 61 * DAY }, n) === '' && W({ marketingUnanswered: 1, lastMarketingAt: NOW - 30 * DAY }, n) === '');
+  check('…nor a campaign yesterday, nor two offers unanswered', W({ lastCampaignAt: NOW - DAY }, n) === '' && W({ marketingUnanswered: 3, lastMarketingAt: NOW - DAY }, n) === '');
+  check('the row says when the last campaign went, and what it was', C.lastCampaignNote({ lastCampaignAt: NOW - 3 * DAY, lastCampaignName: 'New listing ANR003' }, NOW).startsWith('Last campaign ')
+    && /· New listing ANR003$/.test(C.lastCampaignNote({ lastCampaignAt: NOW - 3 * DAY, lastCampaignName: 'New listing ANR003' }, NOW))
+    && C.lastCampaignNote({ lastCampaignAt: NOW - 3600000 }, NOW) === 'Last campaign today' && C.lastCampaignNote({}, NOW) === '');
   check('Negotiating / Won — stage as a string or a function', W({}, n, { stageKey: 'negotiation' }) === 'in negotiation/won' && W({ s: 'won' }, n, { stageKey: l => l.s }) === 'in negotiation/won'
     && C.holdReason({}, n, ctx({ stageKey: 'won' })) === 'Won — no Marketing messages' && W({}, n, { stageKey: 'visit_done' }) === '');
   check('…the referral ask is exempt', W({}, n, { stageKey: 'won', purpose: 'referral' }) === '');
@@ -219,8 +220,7 @@ section('holdWhy / holdReason — the server’s rules, the server’s words');
     && C.holdReason({ tt: { lastMessageAt: NOW - H } }, n, ctx()) === 'Inside free 24-h window — reply in chat');
   check('Utility skips every Marketing rule', W({ waMarketingOptOut: true, lastMarketingAt: NOW - DAY, marketingUnanswered: 5, tt: { lastMessageAt: NOW - H } }, n, { marketing: false, stageKey: 'won' }) === '');
   check('the server’s order when several apply', W({ waMarketingOptOut: true, lastMarketingAt: NOW - DAY }, n) === 'no offers'
-    && W({ lastMarketingAt: NOW - DAY, marketingUnanswered: 3 }, n) === 'messaged recently'
-    && W({ marketingUnanswered: 3, lastMarketingAt: NOW - 10 * DAY }, n, { stageKey: 'won' }) === 'two offers unanswered'
+    && W({ marketingUnanswered: 3, lastMarketingAt: NOW - 10 * DAY }, n, { stageKey: 'won' }) === 'in negotiation/won'
     && W({ tt: { lastMessageAt: NOW - H } }, n, { stageKey: 'negotiation' }) === 'in negotiation/won');
   check('a typed-in contact (no lead) is judged by its number alone', W(null, n) === '' && W(null, '919000000004') === 'no offers');
   check('inFreeWindow', C.inFreeWindow({ tt: { lastMessageAt: NOW - H } }, NOW) && !C.inFreeWindow({}, NOW) && !C.inFreeWindow(null, NOW));

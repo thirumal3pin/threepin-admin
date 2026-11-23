@@ -83,7 +83,7 @@ check('no number', C.holdReason({}, '', ctx) === 'No WhatsApp number');
 check('opted out', /not to be messaged/.test(C.holdReason({}, '919000000001', ctx)));
 check('duplicate', /Same number/.test(C.holdReason({}, '919000000002', ctx)));
 check('dead', /Dead/.test(C.holdReason({ tt: { status: 'dead' } }, '919000000003', ctx)));
-check('marketing gap', /last 7 days/.test(C.holdReason({ lastCampaignAt: now - 86400000 }, '919000000003', ctx)));
+check('no marketing gap any more (the row shows the last campaign)', C.holdReason({ lastCampaignAt: now - 86400000 }, '919000000003', ctx) === '');
 check('utility ignores the gap', C.holdReason({ lastCampaignAt: now - 86400000 }, '919000000003', { ...ctx, marketing: false }) === '');
 
 section('CSV');
@@ -628,22 +628,26 @@ section('fix: who is held back — at create and again at every send');
   await lead2(w, 'WON', '9000000007', { stageId: 's_won' });
   await lead2(w, 'CHAT', '9000000008', { tt: { lastMessageAt: now - 3 * 3600000 } });
   await lead2(w, 'OLDCHAT', '9000000009', { tt: { lastMessageAt: now - 2 * DAY_MS } });
+  await lead2(w, 'DEAD', '9000000013', { tt: { status: 'dead' } });
   await w.db.collection('leads').doc('THEIRS').set({ tenantId: 'other', name: 'x', phone: '9000000010' });
   await w.run({ op: 'settings', save: true, marketingOptOut: ['9000000011'] });
-  const all = [['OK', 1], ['OPT', 2], ['NOOFF', 3], ['RECENT', 4], ['TWO', 5], ['NEG', 6], ['WON', 7], ['CHAT', 8], ['OLDCHAT', 9], ['THEIRS', 10], ['GONE', 12]]
+  const all = [['OK', 1], ['OPT', 2], ['NOOFF', 3], ['RECENT', 4], ['TWO', 5], ['NEG', 6], ['WON', 7], ['CHAT', 8], ['OLDCHAT', 9], ['THEIRS', 10], ['GONE', 12], ['DEAD', 13]]
     .map(([k, i]) => R(k, '90000000' + String(i).padStart(2, '0'))).concat([{ contact: '9000000011', values: { name: 'typed' } }]);
   let r = await w.run({ op: 'create', template: 'promo_v1', vars: ['name'], recipients: all });
   const why = Object.fromEntries(r.skipped.map(s => [s.key, s.why]));
   check('opted out', why.OPT === 'opted out');
   check('offers: no offers (lead flag, and the number list)', why.NOOFF === 'no offers' && why.m_919000000011 === 'no offers', why);
-  check('offers: the Marketing gap, by lastMarketingAt', why.RECENT === 'messaged recently');
-  check('offers: two unanswered in 60 days', why.TWO === 'two offers unanswered');
+  check('offers: no frequency limit — messaged recently and two unanswered both go', !why.RECENT && !why.TWO, why);
+  check('dead in TailorTalk is held back on the server too (as on the page)', why.DEAD === 'dead', why);
   check('offers: Negotiating and Won (by the pipeline’s stage keys)', why.NEG === 'in negotiation/won' && why.WON === 'in negotiation/won', why);
   check('offers: inside the free 24-hour window', why.CHAT === 'inside free 24-h window — reply in chat');
   const d = w.db._get('campaigns/' + r.id);
   check('the rest are in; another tenant’s or a missing lead is a typed number', d && d.recipients.OK && d.recipients.OLDCHAT && d.recipients.m_919000000010 && d.recipients.m_919000000010.manual === true && d.recipients.m_919000000012 && !d.recipients.THEIRS, d && Object.keys(d.recipients));
   r = await w.run({ op: 'create', template: 'promo_v1', vars: ['name'], purpose: 'referral', recipients: [R('NEG', '9000000006'), R('WON', '9000000007')] });
-  check('the referral journey may ask a Won lead', r.ok && r.counts.total === 2, r);
+  check('the page saying "referral" does not open a Won lead to an offer template (the template decides)', !r.ok && r.skipped.every(x => x.why === 'in negotiation/won'), r);
+  w.templates.referral_ask_v1 = { ...PROMO, template_name: 'referral_ask_v1' };
+  r = await w.run({ op: 'create', template: 'referral_ask_v1', vars: ['name'], recipients: [R('NEG', '9000000006'), R('WON', '9000000007')] });
+  check('the referral template may ask a Won lead', r.ok && r.counts.total === 2, r);
   r = await w.run({ op: 'create', template: 'site_visit_unavailable_update', vars: ['name'], recipients: [R('NOOFF', '9000000003'), R('NEG', '9000000006'), R('RECENT', '9000000004'), R('CHAT', '9000000008')] });
   check('a Utility message still goes to all of them', r.ok && r.counts.total === 4, r);
 }

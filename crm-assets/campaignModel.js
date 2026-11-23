@@ -564,12 +564,9 @@ export function holdWhy(lead, contact, ctx) {
   if (l.tt && l.tt.status === 'dead') return why('dead', 'Dead in TailorTalk');
   if (!c.marketing) return null;
   if (l.waMarketingOptOut === true || (c.marketingOptOut && c.marketingOptOut.has(contact))) return why('no offers', 'Asked for no more offers');
-  const gap = Number(c.gapDays) || 0;
-  const last = lastOfferAt(l);
-  if (gap > 0 && last && now - last < gap * DAY_MS) return why('messaged recently', `Messaged in the last ${gap} days`);
-  if ((Number(l.marketingUnanswered) || 0) >= UNANSWERED_LIMIT && l.lastMarketingAt && now - l.lastMarketingAt < UNANSWERED_WITHIN_DAYS * DAY_MS) {
-    return why('two offers unanswered', 'Two offers unanswered');
-  }
+  // No frequency limit (the owner, 23 Nov 2026): a person presses every send and sees each lead's
+  // last successful campaign on its row (lastCampaignNote) — gapDays / two unanswered offers no longer
+  // hold anyone back.
   // A Marketing message never goes to a lead whose deal a person is closing — except the
   // referral ask, which is for exactly the people who bought.
   const key = typeof c.stageKey === 'function' ? c.stageKey(lead) : c.stageKey;
@@ -811,4 +808,16 @@ export function templateJourneyTable(campaigns, leadsById, now, settings) {
     positivePct: pct1(g.positive, g.sends), optOutPct: pct1(g.optOuts, g.sends),
     visitsPer100: pct1(g.visits, g.sends), costPerVisit: g.visits ? round2(g.cost / g.visits) : null, cost: round2(g.cost)
   })).sort((a, b) => b.sends - a.sends || a.template.localeCompare(b.template));
+}
+
+// "Last campaign 18 Nov · New listing ANR003" — a lead's last campaign that WENT (lastCampaignAt is
+// written only for a send WhatsApp accepted), for the row in the wizard. '' when there is none.
+export function lastCampaignNote(lead, now = Date.now()) {
+  const at = lead && Number(lead.lastCampaignAt);
+  if (!at) return '';
+  const days = Math.floor((now - at) / DAY_MS);
+  const d = new Date(at + 5.5 * 3600000);
+  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const when = days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+  return `Last campaign ${when}${lead.lastCampaignName ? ' · ' + String(lead.lastCampaignName).slice(0, 60) : ''}`;
 }
