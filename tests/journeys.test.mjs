@@ -412,5 +412,45 @@ section('cost and quiet hours (campaignModel.js)');
     J.JOURNEYS.filter(j => j.purpose).every(j => { const s = C.STARTERS.find(x => x.purpose === j.purpose); const r = C.lintTemplate(s); return s && r.ok && !r.warnings.length; }));
 }
 
+section('follow-up routine (Nov 2026): visit confirmation, new lead unanswered, after a campaign, hold default');
+{
+  // Visit booked in the last 2 hours, for tomorrow: the confirmation — once.
+  const vb = (o = {}) => lead({ stageId: sid('visit_pending'), siteVisitAt: tomorrowAt(11), siteVisitStatus: 'scheduled', siteVisitSetAt: NOW - 30 * 60000, ...o });
+  const a = vb(), b = vb({ siteVisitSetAt: NOW - 3 * H }), c = vb(), d = vb({ siteVisitAt: NOW + 2 * H, siteVisitSetAt: NOW - 20 * 60000 });
+  const camp = [{ id: 'cc', journey: 'visit_confirmed', purpose: 'visit_confirmed', createdAt: NOW - 10 * 60000, leadIds: [c.id] }];
+  const r = one(run([a, b, c, d], { campaigns: camp }), 'visit_confirmed');
+  check('visit just booked → confirmation; not booked 3 h ago, not already confirmed, not a visit in 2 h (the "today" reminder covers it)', JSON.stringify(ids(r)) === JSON.stringify([a.id]), ids(r));
+  check('…a Utility message about their own booking', r && r.category === 'UTILITY' && r.purpose === 'visit_confirmed');
+
+  // A New lead 24–72 h old, nothing from them, nothing sent, nobody touched it.
+  const nl = (o = {}) => lead({ stageId: sid('new'), createdAt: NOW - 30 * H, updatedAt: NOW - 30 * H, ...o });
+  const n1 = nl(), n2 = nl({ createdAt: NOW - 10 * H, updatedAt: NOW - 10 * H }), n3 = nl({ createdAt: NOW - 80 * H, updatedAt: NOW - 80 * H }),
+    n4 = nl({ tt: { lastMessageAt: NOW - 5 * H } }), n5 = nl({ updatedAt: NOW - 2 * H }), n6 = nl({ lastCampaignAt: NOW - 3 * H });
+  const rn = one(run([n1, n2, n3, n4, n5, n6]), 'new_unanswered');
+  check('new lead with no answer in a day → one follow-up; not under 24 h, not past 72 h, not if they wrote, someone touched it, or we sent something', JSON.stringify(ids(rn)) === JSON.stringify([n1.id]), ids(rn));
+  check('…its template is the follow-up starter', rn && rn.purpose === 'followup' && !!C.STARTERS.find(x => x.purpose === 'followup'));
+
+  // After a campaign: no reply in 2 days → reminder (once); still quiet after 5 days → a call card.
+  const q = (o = {}) => lead({ stageId: sid('options'), updatedAt: NOW - 20 * DAY, ...o });
+  const r1 = q(), r2 = q(), r3 = q({ tt: { lastMessageAt: NOW - DAY } }), r4 = q(), r5 = q(), r6 = q({ stageId: sid('negotiation') });
+  const cs = [
+    { id: 'k1', purpose: 'new_listing', journey: 'new_listing', createdAt: NOW - 3 * DAY, leadIds: [r1.id, r3.id, r6.id] },
+    { id: 'k2', purpose: 'new_listing', createdAt: NOW - 3 * DAY, leadIds: [r2.id] },
+    { id: 'k2r', purpose: 'followup', journey: 'campaign_reminder', createdAt: NOW - DAY, leadIds: [r2.id] },
+    { id: 'k4', purpose: 'price_drop', createdAt: NOW - 6 * DAY, leadIds: [r4.id] },
+    { id: 'k5', purpose: 'followup', journey: 'new_unanswered', createdAt: NOW - 3 * DAY, leadIds: [r5.id] }
+  ];
+  const all = run([r1, r2, r3, r4, r5, r6], { campaigns: cs, gapDays: 0 });
+  const rem = one(all, 'campaign_reminder'), call = one(all, 'campaign_call');
+  check('no reply in 2 days → one reminder; not if reminded already, if they wrote, or once Negotiating; not after a new-lead follow-up', JSON.stringify(ids(rem)) === JSON.stringify([r1.id]), ids(rem));
+  check('still quiet 6 days after a campaign → a call card (no template)', JSON.stringify(ids(call)) === JSON.stringify([r4.id]) && call.action === 'call' && call.purpose === null, call);
+  check('…the Dashboard draws it as a call card (action "call")', call && call.action === 'call');
+
+  // On hold with no date: 45 days after the pause.
+  const h1 = lead({ stageId: sid('on_hold'), stageChangedAt: NOW - 46 * DAY }), h2 = lead({ stageId: sid('on_hold'), stageChangedAt: NOW - 20 * DAY });
+  const rh = one(run([h1, h2], { gapDays: 0 }), 'hold_revisit');
+  check('on hold with no date to come back: checked back 45 days after the pause, not before', JSON.stringify(ids(rh)) === JSON.stringify([h1.id]) && /no date given/.test(rh.reasons[h1.id]), rh);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

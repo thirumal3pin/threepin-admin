@@ -52,11 +52,15 @@ export function istDayStart(t) { return Math.floor((t + IST_OFFSET) / DAY) * DAY
 export const JOURNEYS = [
   { type: 'no_show', journey: 'no_show', purpose: 'no_show', title: 'Missed visit — offer another time' },
   { type: 'visit_today', journey: 'visit_today', purpose: 'visit_reminder', title: 'Visit today — not confirmed' },
+  { type: 'visit_confirmed', journey: 'visit_confirmed', purpose: 'visit_confirmed', title: 'Visit booked — send the confirmation' },
   { type: 'visit_reminder', journey: 'visit_reminder', purpose: 'visit_reminder', title: 'Visit reminder' },
   { type: 'visit_feedback', journey: 'visit_feedback', purpose: 'visit_feedback', title: 'Visit feedback' },
   { type: 'call', journey: 'sold_out_call', purpose: null, title: 'Call these first' },
   { type: 'sold_out', journey: 'sold_out', purpose: 'sold_out', title: 'Sold out — tell interested leads' },
   { type: 'feedback_nudge', journey: 'feedback_nudge', purpose: 'feedback_nudge', title: 'Feedback nudge' },
+  { type: 'new_unanswered', journey: 'new_unanswered', purpose: 'followup', title: 'New lead — no answer in a day' },
+  { type: 'campaign_reminder', journey: 'campaign_reminder', purpose: 'followup', title: 'No reply in 2 days — a short reminder' },
+  { type: 'campaign_call', journey: 'campaign_call', purpose: null, title: 'Call them — no reply in 5 days' },
   { type: 'options_followup', journey: 'options_followup', purpose: 'options_followup', title: 'Options follow-up' },
   { type: 'hold_revisit', journey: 'hold_revisit', purpose: 'search_checkin', title: 'On hold — check back' },
   { type: 'new_listing', journey: 'new_listing', purpose: 'new_listing', title: 'New listing for matched buyers' },
@@ -88,7 +92,16 @@ export const RULES = {
   referralFromDays: 7,       // won between these two ages: still news, settled enough to ask
   referralToDays: 21,
   gapDays: 7,                // the settings' marketingGapDays when none is given
-  maxPropertyCards: 3        // new-listing cards (sold-out shows up to 6)
+  maxPropertyCards: 3,       // new-listing cards (sold-out shows up to 6)
+  // The follow-up routine (Nov 2026, "recommended process"): suggestions only, a person sends.
+  confirmWithinHours: 2,     // a visit booked this recently gets its confirmation
+  newUnansweredFromHours: 24,// a New lead this old with nothing from them and nothing sent…
+  newUnansweredToHours: 72,  // …up to this old gets one follow-up, then it is a call
+  campaignReminderFromDays: 2, // a campaign unanswered this long: one short reminder…
+  campaignReminderToDays: 6,   // …if it went out no longer ago than this
+  campaignCallFromDays: 5,     // unanswered this long (reminder or not): call them…
+  campaignCallToDays: 10,      // …until this old, then it is a re-engage
+  holdDefaultDays: 45        // on hold with no date to come back: check back this long after the pause
 };
 
 const LOST_FOR_REENGAGE = ['budget', 'no_match'];
@@ -381,14 +394,71 @@ export function dueJourneys(input = {}) {
 
   // 8. On hold, and the date they asked us to come back has come. The card says why they paused.
   {
-    const list = reachable.filter(l => kindOf(l) === 'hold' && l.holdUntil && l.holdUntil <= now && !messagedSince(l, l.holdUntil));
-    const reasonOf = l => HOLD_REASONS[l.holdReason] || (l.holdReason ? String(l.holdReason) : 'No reason noted');
+    // No date given when they paused: 45 days after the pause (so a hold never silently lasts for ever).
+    const backAt = l => l.holdUntil || ((l.stageChangedAt || (l.reached && l.reached.on_hold) || 0) ? (l.stageChangedAt || l.reached.on_hold) + RULES.holdDefaultDays * DAY : 0);
+    const list = reachable.filter(l => { const t = kindOf(l) === 'hold' ? backAt(l) : 0; return t && t <= now && !messagedSince(l, t); });
+    const reasonOf = l => (HOLD_REASONS[l.holdReason] || (l.holdReason ? String(l.holdReason) : 'No reason noted')) + (l.holdUntil ? '' : ` · no date given — ${RULES.holdDefaultDays} days since the pause`);
     const reasons = Object.fromEntries(list.map(l => [l.id, reasonOf(l)]));
     push('hold_revisit', list, n => `${n} on hold — time to check back`, (n, kept) => {
       const counts = new Map();
       kept.forEach(l => counts.set(reasonOf(l), (counts.get(reasonOf(l)) || 0) + 1));
       return 'The date they asked us to wait until has come · ' + [...counts].map(([r, c]) => (kept.length > 1 ? `${r} (${c})` : r)).join(', ');
     }, { reasons });
+  }
+
+  // 2b. A visit booked in the last 2 hours with no confirmation sent for it yet: the confirmation
+  //     (the time, the place, who meets them). Not once the visit is today in under 3 hours — the
+  //     "visit today" reminder covers that.
+  {
+    const list = reachable.filter(l => {
+      const v = visitOf(l);
+      if (!visitIsOpen(v) || !v.setAt || kindOf(l) === 'lost') return false;
+      if (v.setAt > now || v.setAt < now - RULES.confirmWithinHours * HOUR) return false;
+      if (v.at < now + RULES.todayToHours * HOUR) return false;
+      return !sentSince(l, v.setAt - 60000, 'visit_confirmed', 'visit_reminder', 'visit_today');
+    });
+    push('visit_confirmed', list, n => `${n} visit${s(n)} just booked — send the confirmation`, 'The time, the address and who will meet them, while it is fresh');
+  }
+
+  // 7b. A New lead 24–72 hours old: nothing from them since they came in, nothing sent, nobody on the
+  //     team has touched it — one short follow-up. After it (or after 72 hours) it is a call.
+  {
+    const list = reachable.filter(l => {
+      if (keyOf(l) !== 'new') return false;
+      const born = l.createdAt || 0;
+      if (!born || born > now - RULES.newUnansweredFromHours * HOUR || born < now - RULES.newUnansweredToHours * HOUR) return false;
+      if (wroteSince(l, born + 60000) || messagedSince(l, born - 1)) return false;
+      return !personActedAfter(l, born + 5 * 60000);
+    });
+    push('new_unanswered', list, n => `${n} new lead${s(n)} with no answer in a day`, 'Nothing from them and nothing sent since they enquired — one short follow-up, then call');
+  }
+
+  // 7c / 7d. After a campaign: who never answered. A campaign that went 2–6 days ago with no reply
+  //     and nothing sent to them since → one short reminder (once per campaign). Still nothing 5–10
+  //     days after it (reminded or not) → a call card for the agent: a person, not another template.
+  {
+    const lastCampaign = l => (campaignsOf(l)[0]) || null;          // newest first
+    const answeredSince = (l, t) => wroteSince(l, t) || ((l.campaignReply && l.campaignReply.at) || 0) > t
+      || (l.campaignLog || []).some(e => e && e.status === 'replied' && (e.replyAt || e.at || 0) > t);
+    const followups = new Set(['campaign_reminder', 'followup', 'new_unanswered']);
+    const remind = [], call = [];
+    for (const l of reachable) {
+      const c = lastCampaign(l);
+      if (!c || !c.createdAt) continue;
+      if (['negotiation', 'won', 'lost'].includes(keyOf(l)) || kindOf(l) === 'won' || kindOf(l) === 'lost') continue;
+      // The campaign the routine follows is the first one of the run (a reminder follows it, not itself).
+      const first = followups.has(c.journey) || followups.has(c.purpose) ? (campaignsOf(l).find(x => !(followups.has(x.journey) || followups.has(x.purpose))) || c) : c;
+      const t = first.createdAt || 0, age = now - t;
+      if (answeredSince(l, t) || personActedAfter(l, t + 60000)) continue;
+      const remindedAlready = campaignsOf(l).some(x => (x.createdAt || 0) > t && (followups.has(x.journey) || followups.has(x.purpose)));
+      const otherSince = campaignsOf(l).some(x => (x.createdAt || 0) > t && x !== first && !(followups.has(x.journey) || followups.has(x.purpose)));
+      if (otherSince) continue;                                       // a newer campaign started its own run
+      if (age >= RULES.campaignCallFromDays * DAY && age < RULES.campaignCallToDays * DAY) call.push(l);
+      // A run that began with a follow-up (the new-lead one) gets no reminder of its own — only the call.
+      else if (!remindedAlready && !(followups.has(first.journey) || followups.has(first.purpose)) && age >= RULES.campaignReminderFromDays * DAY && age < RULES.campaignReminderToDays * DAY) remind.push(l);
+    }
+    push('campaign_reminder', remind, n => `${n} didn’t reply to a campaign in 2 days`, 'One short reminder — once per campaign; after that, a call');
+    push('campaign_call', call, n => `Call them — ${n} still quiet 5 days after a campaign`, n => `No reply to the message${n === 1 ? '' : 's'} (or the reminder) — a call works better than another template`);
   }
 
   // New listings: added in the last 14 days and still for sale.
