@@ -31,3 +31,6 @@ tailortalk-preview/
 # Production conversation state pulled locally to study real scenarios.
 # Real customers and real phone numbers - never in the repo.
 .chats-cache.json
+
+# Local links to the test tools (a worktree points at the main checkout) — never committed.
+tests/rules/node_modules
