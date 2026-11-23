@@ -305,6 +305,14 @@
   // → { state: 'lost'|'hold'|'overdue'|'today'|'later'|'todo'|'waiting'|'none', at, text, action }
   function nextOf(p) {
     var b = S.briefs[p.key], v = b && b.v;
+    // The date the team set in the sheet's "Next follow-up" column wins over the AI's reading of the
+    // notes. "No follow-up" takes the lead off the due lists (a lost brief still says why).
+    var nf = p.team.nextFu;
+    if (nf && !nf.unread && !(nf.none && v && v.stage === 'lost')) {
+      if (nf.none) return { state: 'off', text: 'No follow-up', action: '', set: true };
+      var dd = istDay(nf.at) - istDay(Date.now());
+      return { state: dd < 0 ? 'overdue' : dd === 0 ? 'today' : 'later', at: nf.at, text: (dd < 0 ? 'Overdue · ' : '') + whenText(nf.at), action: (v && v.next && v.next.action) || '', set: true };
+    }
     if (!v) return null;
     if (v.stage === 'lost') return { state: 'lost', text: 'Lost · ' + (LOST_NAME[v.lostReason] || 'not interested'), action: '' };
     if (v.stage === 'on_hold') return { state: 'hold', at: v.holdUntil, text: 'On hold' + (v.holdUntil ? ' till ' + whenText(v.holdUntil) : ''), action: v.next.action || '' };
@@ -321,9 +329,9 @@
   function dueChip(p) {
     var n = nextOf(p);
     if (!n || !n.text || n.state === 'none') return '';
-    var cls = { lost: 'bad', overdue: 'bad', today: 'warn', hold: '', later: 'info', todo: 'info', waiting: '' }[n.state] || '';
-    var icon = { lost: 'fa-circle-xmark', hold: 'fa-pause', waiting: 'fa-hourglass-half' }[n.state] || 'fa-phone';
-    return '<span class="ml-badge ml-due ' + cls + '" title="' + esc(n.action || n.text) + '"><i class="fa-solid ' + icon + '"></i> ' + esc(n.text) + '</span>';
+    var cls = { lost: 'bad', overdue: 'bad', today: 'warn', hold: '', later: 'info', todo: 'info', waiting: '', off: '' }[n.state] || '';
+    var icon = { lost: 'fa-circle-xmark', hold: 'fa-pause', waiting: 'fa-hourglass-half', off: 'fa-bell-slash' }[n.state] || 'fa-phone';
+    return '<span class="ml-badge ml-due ' + cls + '" title="' + esc((n.set ? 'Next follow-up (set by the team)' : 'From the AI brief') + (n.action ? ' — ' + n.action : '')) + '"><i class="fa-solid ' + icon + '"></i> ' + esc(n.text) + '</span>';
   }
   function money(n) { return n >= 1e7 ? '₹' + (Math.round(n / 1e5) / 100) + ' Cr' : n >= 1e5 ? '₹' + (Math.round(n / 1e3) / 100) + ' L' : n >= 1e3 ? '₹' + Math.round(n / 1e3) + 'k' : '₹' + n; }
   function wantChips(w) {
@@ -541,7 +549,7 @@
         if (n && (n.state === 'overdue' || n.state === 'today')) return [0, n.at];
         if (!p.team.contacted) return [1, waitAtFor(p) || 0];
         if (!n) return [3, -lastAtFor(p)];
-        return [{ later: 2, todo: 3, waiting: 4, none: 4, hold: 5, lost: 6 }[n.state], n.at || -lastAtFor(p)];
+        return [{ later: 2, todo: 3, waiting: 4, none: 4, hold: 5, off: 5, lost: 6 }[n.state], n.at || -lastAtFor(p)];
       };
       out.sort(function (a, b) { var x = rank(a), y = rank(b); return x[0] - y[0] || x[1] - y[1]; });
       return out;
@@ -916,6 +924,52 @@
   }
   function firstCol(e, role) { return teamCols(e).find(function (c) { return c.role === role; }) || null; }
   function today() { var d = new Date(Date.now() + 5.5 * 3600000); return d.getUTCDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]; }
+
+  // ─── Next follow-up: the date of the next call, in the row's "Next follow-up" column ───
+  // A draft is '' (not chosen) | 'none' | 'YYYY-MM-DD' | 'YYYY-MM-DDTHH:MM' (India time); where it came
+  // from ('note' = read from what was typed, 'pick' = chosen) decides whether more typing may change it.
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function fuToDraft(r) {
+    if (!r || r.unread) return '';
+    if (r.none) return 'none';
+    var x = MM().istParts2(r.at);
+    return x.y + '-' + pad2(x.m) + '-' + pad2(x.d) + (r.timed ? 'T' + pad2(Math.floor(x.min / 60)) + ':' + pad2(x.min % 60) : '');
+  }
+  function fuFromDraft(v) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(v || '');
+    return m ? { at: MM().istMoment(+m[1], +m[2], +m[3], m[4] != null ? +m[4] * 60 + +m[5] : null), timed: m[4] != null } : null;
+  }
+  function fuValue(v) { if (v === 'none') return MM().NO_FOLLOWUP; var x = fuFromDraft(v); return x ? MM().formatFollowUp(x.at, x.timed) : ''; }
+  function ymdIn(n) { return istYmd(dayStart(istYmd(Date.now())) + n * DAY_MS + 12 * 3600000); }
+  function fuShown(p, e) { var d = S.drafts[rowKey(e) + ':N']; return d != null ? d : fuToDraft(p.team.nextFu); }
+  function nextFuInner(p, e) {
+    var rk = rowKey(e), k = js(p.key), d = S.drafts[rk + ':N'], src = S.drafts[rk + ':Nsrc'];
+    var cur = p.team.nextFu, val = fuShown(p, e);
+    var day = val && val !== 'none' ? val.slice(0, 10) : '', time = val && val.length > 10 ? val.slice(11) : '';
+    var chip = function (label, on, call) { return '<button type="button" class="ml-fuc" aria-pressed="' + (on ? 'true' : 'false') + '" onclick="' + call + '">' + label + '</button>'; };
+    var chips = [['Today', 0], ['Tomorrow', 1], ['In 3 days', 3], ['Next week', 7]].map(function (c) { var y = ymdIn(c[1]); return chip(c[0], day === y, 'MetaLeads.fuPick(' + k + ',' + js(y) + ')'); }).join('') +
+      chip('No follow-up', val === 'none', 'MetaLeads.fuNone(' + k + ')');
+    var nf = firstCol(e, 'nextfu');
+    var at = fuFromDraft(val), say;
+    var curDue = cur && cur.at && !cur.none && istDay(cur.at) <= istDay(Date.now());
+    if (val === 'none') say = '<b>No follow-up</b> — off the due lists';
+    else if (at) say = '<b>' + esc(whenText(at.at)) + '</b>' + (istDay(at.at) - istDay(Date.now()) === 1 ? ' (' + esc(MM().formatFollowUp(at.at, false).replace(/ \d{4}$/, '')) + ')' : '') +
+      (d != null && src === 'note' ? ' — picked from your note' : '') + (d == null && curDue ? ' — <span class="ml-bad">' + (istDay(cur.at) < istDay(Date.now()) ? 'overdue' : 'due today') + '</span>, set the next one after the call' : '');
+    else if (cur && cur.unread) say = 'The sheet says “' + esc(cur.raw) + '” — pick a date';
+    else say = 'Not set — pick when to call next';
+    if (d != null && fuValue(d) !== (nf ? cellOf(e, nf.index) : '')) say += ' · saved into <b>Next follow-up</b>' + (nf ? '' : ' (a new column)');
+    return '<div class="ml-fu" role="group" aria-labelledby="mlwNl">' + chips + '</div>' +
+      '<div class="ml-fupick"><label>On <input type="date" class="ml-f ml-date" value="' + esc(day) + '" min="' + esc(ymdIn(0)) + '" onchange="MetaLeads.fuDate(' + k + ',this.value)"></label>' +
+      '<label>at <input type="time" class="ml-f ml-date" value="' + esc(time) + '" step="900" onchange="MetaLeads.fuTime(' + k + ',this.value)"></label>' +
+      (time ? '<button type="button" class="ml-link" onclick="MetaLeads.fuTime(' + k + ',\'\')">any time</button>' : '') + '</div>' +
+      '<div class="ml-goes" role="status">' + say + '</div>';
+  }
+  function fuOpen(key) { var f = function (x) { return x.key === key; }; var p = S.plan && (peopleFor(S.prop).find(f) || S.plan.people.find(f)); var e = p && workRow(p); return e ? { p: p, e: e, rk: rowKey(e) } : null; }
+  function fuSet(o, v, src) {
+    if (v == null) { delete S.drafts[o.rk + ':N']; delete S.drafts[o.rk + ':Nsrc']; }
+    else { S.drafts[o.rk + ':N'] = v; S.drafts[o.rk + ':Nsrc'] = src; }
+    var box = document.getElementById('mlwN'); if (box) box.innerHTML = nextFuInner(o.p, o.e);
+  }
   // A repeat enquiry nobody has yet: who had them last time, and one tap to give it back to them.
   function prevHint(p, aNow, rk) {
     var prev = p.team.prevAgent;
@@ -967,11 +1021,12 @@
             ' <span class="ml-dim">— ' + (isAgentMe() ? 'an admin assigns leads' : 'only an admin changes an agent’s lead') + '</span></div>') +
         '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +
         (notes.length ? '<div class="ml-wsub">Notes <span class="ml-dim">— tap one to edit it</span></div>' + notesHtml : '') +
-        '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.draft(' + k + ',\'F\',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
+        '<label>Add a note</label><div><input class="ml-in" id="mlwF" value="' + esc(S.drafts[p.key + ':F'] || '') + '" oninput="MetaLeads.noteIn(' + k + ',this.value)" placeholder="' + (notes.length ? 'e.g. Busy, call back at 6 pm' : 'What did they say?') + ' — Enter saves" onkeydown="if(event.key===\'Enter\'){event.preventDefault();MetaLeads.saveWork(' + k + ')}">' +
           '<div class="ml-goes">Goes into <b>' + esc(nextNoteLabel(e).replace(' (a new column)', '')) + '</b>' + (/a new column/.test(nextNoteLabel(e)) ? ' — a new column, added to the sheet' : '') + '</div>' +
           '<button type="button" class="ml-link ml-qtoggle" onclick="MetaLeads.quickOpen(this)">Quick phrases <i class="fa-solid fa-chevron-down"></i></button>' +
           '<div class="ml-qchips" hidden>' + QUICK.map(function (q) { return '<button type="button" class="ml-qc" onclick="MetaLeads.quickText(' + js(q) + ')">' + esc(q) + '</button>'; }).join('') + '</div>' +
           '<label class="ml-dim"><input type="checkbox" id="mlwD" ' + (S.stamp ? 'checked' : '') + ' onchange="MetaLeads.stamp(this.checked)"> add today’s date (' + esc(today()) + ')</label></div>' +
+        '<label id="mlwNl">Next follow-up</label><div id="mlwN">' + nextFuInner(p, e) + '</div>' +
       '</div>' +
       '<div class="ml-wbtns"><button class="ml-btn primary" ' + (S.writing ? 'disabled' : '') + ' onclick="MetaLeads.saveWork(' + k + ')">' + (S.writing ? '<i class="fa-solid fa-rotate fa-spin"></i> Writing…' : 'Save to the sheet') + '</button>' +
         (p.phoneOk ? ' <a class="ml-btn" href="tel:+' + esc(p.phoneKey) + '"><i class="fa-solid fa-phone"></i> Call</a> <a class="ml-btn" href="' + esc(waLink(p)) + '" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>' : '') + '</div>' +
@@ -1033,7 +1088,7 @@
   // What one row says in the sheet (assigned, rating, notes) — the row in the form says so instead.
   function rowTeamHtml(e, ctx) {
     if (ctx.isWork) return '<div class="ml-enq-team"><span class="ml-inform"><i class="fa-solid fa-pen"></i> In the form — notes and rating are edited there</span></div>';
-    var t = e.team, notes = t.remarks.concat(t.followups, t.notes);
+    var t = e.team, notes = t.remarks.concat(t.followups, t.notes, t.nextFu ? [{ label: 'Next follow-up', text: t.nextFu }] : []);
     var hit = t.assigned ? MM().matchAgent(t.assigned, roster()) : null;
     var who = t.assigned ? (hit ? agentLabel(hit) : t.assigned + ' ?') : '';
     if (!who && !t.rating && !notes.length) return '<div class="ml-enq-team ml-dim">Nothing written in this row yet</div>';
@@ -1728,6 +1783,35 @@
     // The preset phrases stay hidden until asked for (no re-render, so typing is never lost).
     quickOpen: function (btn) { var box = btn.parentNode.querySelector('.ml-qchips'); if (box) box.hidden = !box.hidden; },
     draft: function (key, f, v) { S.drafts[key + ':' + f] = v; },
+    // Typing a note: what it says about the next call is chosen for you ("tomorrow", "after 3 days",
+    // "RNR", "not interested") — until a date is picked by hand, which then stays.
+    noteIn: function (key, v) {
+      S.drafts[key + ':F'] = v;
+      var o = fuOpen(key); if (!o || S.drafts[o.rk + ':Nsrc'] === 'pick') return;
+      var sug = MM().suggestFollowUp(v);
+      if (sug) fuSet(o, fuToDraft(sug), 'note');
+      else if (S.drafts[o.rk + ':Nsrc'] === 'note') fuSet(o, null);
+    },
+    fuPick: function (key, ymd) {
+      var o = fuOpen(key); if (!o) return;
+      var cur = fuShown(o.p, o.e);
+      if (cur.slice(0, 10) === ymd && S.drafts[o.rk + ':N'] != null) return fuSet(o, null);   // tapped again: back to as it was
+      fuSet(o, ymd + (cur.length > 10 ? cur.slice(10) : ''), 'pick');
+    },
+    fuNone: function (key) { var o = fuOpen(key); if (!o) return; fuSet(o, fuShown(o.p, o.e) === 'none' && S.drafts[o.rk + ':N'] != null ? null : 'none', 'pick'); },
+    fuDate: function (key, v) {
+      var o = fuOpen(key); if (!o) return;
+      var cur = fuShown(o.p, o.e);
+      fuSet(o, v ? v + (cur.length > 10 ? cur.slice(10) : '') : null, 'pick');
+    },
+    fuTime: function (key, v) {
+      var o = fuOpen(key); if (!o) return;
+      var cur = fuShown(o.p, o.e), day = cur && cur !== 'none' ? cur.slice(0, 10) : '';
+      if (!v) return fuSet(o, day || null, 'pick');
+      // A time with no day: today if it is still ahead, else tomorrow.
+      if (!day) { var hm = v.split(':'); day = MM().istMoment(+ymdIn(0).slice(0, 4), +ymdIn(0).slice(5, 7), +ymdIn(0).slice(8, 10), +hm[0] * 60 + +hm[1]) > Date.now() ? ymdIn(0) : ymdIn(1); }
+      fuSet(o, day + 'T' + v, 'pick');
+    },
     setAuto: function (scope, key, email) {
       var label = email ? agentLabel(email) : '';
       S.autoBusy = scope + ':' + key; render();
@@ -1738,7 +1822,7 @@
     },
     stamp: function (on) { S.stamp = on; },
     saveWork: function (key) {
-      var p = S.plan.people.find(function (x) { return x.key === key; });
+      var p = peopleFor(S.prop).find(function (x) { return x.key === key; }) || S.plan.people.find(function (x) { return x.key === key; });
       var e = workRow(p);
       var A = document.getElementById('mlwA').value, R = document.getElementById('mlwR').value, F = document.getElementById('mlwF').value.trim();
       var aCol = firstCol(e, 'assigned'), rCol = firstCol(e, 'rating');
@@ -1754,12 +1838,18 @@
       });
       // A new note: Remarks if empty, else the next follow-up column after the last note.
       if (F) addEdit(groups, e, { field: 'log', value: S.stamp ? F + ' (' + today() + ')' : F });
+      // The next call's date: its own "Next follow-up" column (added the first time).
+      var N = S.drafts[rk + ':N'], nfCol = firstCol(e, 'nextfu'), nfNow = nfCol ? cellOf(e, nfCol.index) : '';
+      if (N != null && fuValue(N) && fuValue(N) !== nfNow) addEdit(groups, e, { field: 'nextfu', value: fuValue(N), from: nfNow });
+      var wasDue = isDue(p) && N == null && !!F;
       if (!Object.keys(groups).length) { toast('Nothing changed'); return; }
       writeEdits(groups).then(function (r) {
         // Saved: the drafts go. Refused: the remark shows the sheet's new text (to be merged by the
         // person), the typed follow-up stays to be saved again.
-        if (!r.errors.length) { noteKeys.forEach(function (d) { delete S.drafts[d]; }); delete S.drafts[rk + ':R']; delete S.drafts[rk + ':A']; if (!r.conflicts.length) delete S.drafts[key + ':F']; }
+        if (!r.errors.length) { noteKeys.forEach(function (d) { delete S.drafts[d]; }); delete S.drafts[rk + ':R']; delete S.drafts[rk + ':A']; if (!r.conflicts.length) { delete S.drafts[key + ':F']; delete S.drafts[rk + ':N']; delete S.drafts[rk + ':Nsrc']; } }
         render();
+        // A due lead worked with no new date stays due — said once, so it is a choice, not a slip.
+        if (wasDue && !r.errors.length && !r.conflicts.length) toast('Saved. This lead was due — pick its next follow-up date, or it stays on the due list.');
       });
     },
     workRow: function (pk, rk) { S.workRow[pk] = rk; render(); },
@@ -1779,7 +1869,7 @@
     csv: function () {
       var list = currentList();
       var q = function (v) { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-      var head = ['Name', 'Phone', 'Email', 'Properties', 'First enquiry', 'Last enquiry', 'Enquiries', 'Ads', 'Assigned to', 'Rating', 'Latest note', 'Contacted', 'In the CRM (stage)', 'AI: stage', 'AI: next step', 'AI: due'];
+      var head = ['Name', 'Phone', 'Email', 'Properties', 'First enquiry', 'Last enquiry', 'Enquiries', 'Ads', 'Assigned to', 'Rating', 'Latest note', 'Contacted', 'In the CRM (stage)', 'AI: stage', 'AI: next step', 'Next follow-up'];
       var lines = [head.join(',')].concat(list.map(function (p) {
         var rows = rowsFor(p, S.prop);
         return [p.name, p.phoneOk ? p.phoneKey.slice(2) : (p.phone || ''), p.email, p.properties.join(' '), MM().fmtWhen(firstAtFor(p)), MM().fmtWhen(lastAtFor(p)), rows.length,

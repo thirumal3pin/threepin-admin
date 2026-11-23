@@ -156,6 +156,24 @@ eq('…else the property\'s', MA.ruleFor({ sheets: {}, props: { KDBMC001: { emai
   ok('…and the 9 am e-mail lists it as unassigned (the newest row decides)', b.unassigned.length === 1 && b.unassigned[0].at === Date.parse('2026-11-23T12:08:00+05:30'));
 }
 
+// ── Follow-ups due in the 9 am e-mail (owner, 23 Nov 2026) ──
+{
+  const H = ['id', 'created_time', 'full_name', 'phone_number', 'Assigned to', 'Remarks', 'Next follow-up'];
+  const now = Date.parse('2026-11-24T09:00:00+05:30');
+  const tab = { sourceId: 'S1', spreadsheetId: 'S1', sheetTitle: 'office space', title: 'Sheet1', gid: 0, propertyCode: 'KDBMC001', values: [H,
+    ['l:1', '2026-11-10T10:00:00+05:30', 'Due Today', 'p:+919000000001', 'Rameez', 'call tomorrow', '24 Nov 2026, 6 pm'],
+    ['l:2', '2026-11-10T10:00:00+05:30', 'Was Due', 'p:+919000000002', 'Rameez', 'RNR', '21 Nov 2026'],
+    ['l:3', '2026-11-10T10:00:00+05:30', 'Later On', 'p:+919000000003', 'Rameez', 'after 3 days', '27 Nov 2026'],
+    ['l:4', '2026-11-10T10:00:00+05:30', 'Closed One', 'p:+919000000004', 'Rameez', 'Not interested', 'No follow-up']] };
+  const b = buckets([tab], TEAM, now).byPerson.get('rameez@threepin.in');
+  eq('Due today and overdue are listed, the overdue first; a later date and "No follow-up" are not', b.due.map(x => x.name), ['Was Due', 'Due Today']);
+  eq('…each says when', b.due.map(x => x.when), ['overdue · was due 21 Nov', 'due today 6 pm']);
+  eq('…and none of them is also "untouched" or "warm"', [b.stale.length, b.warm.length], [0, 0]);
+  const { personEmail } = await import('../api/_meta-digest.js');
+  const m = personEmail(b, now, 'https://app');
+  ok('The e-mail leads with the follow-ups', /2 follow-ups due today/.test(m.subject) && m.html.indexOf('Follow-ups due today') < m.html.indexOf('Open Meta Ads Leads'), m.subject);
+}
+
 // ── The every-few-minutes tick (outside timer) ──
 {
   const { metaLeadsTick } = await import('../api/_meta-leads.js');

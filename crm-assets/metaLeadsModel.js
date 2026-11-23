@@ -73,9 +73,9 @@ export const META_FIELDS = {
 // What a column can be. 'answer' = a question on the ad's form; the team's are the rest.
 export const ROLES = {
   meta: 'Meta', answer: 'Form answer', assigned: 'Assigned to', rating: 'Rating', remarks: 'Remarks',
-  followup: 'Follow-up', visit: 'Visit date', note: 'Note', ignore: 'Not used'
+  followup: 'Follow-up', nextfu: 'Next follow-up date', visit: 'Visit date', note: 'Note', ignore: 'Not used'
 };
-export const TEAM_ROLES = ['assigned', 'rating', 'remarks', 'followup', 'visit', 'note'];
+export const TEAM_ROLES = ['assigned', 'rating', 'remarks', 'followup', 'nextfu', 'visit', 'note'];
 
 /** What a typed (team) header means, or null when it is not one we know. */
 export function teamRoleOf(header) {
@@ -83,6 +83,8 @@ export function teamRoleOf(header) {
   if (!h) return null;
   if (/^(assigned( to)?|agent|owner|handled by|assignee)$/.test(h)) return 'assigned';
   if (/\bratings?\b|^(lead )?(temperature|quality|score)$/.test(h)) return 'rating';
+  // "Next follow-up" (the date of the next call) before "Follow up 1, 2…" (the notes of each call).
+  if (/^next (follow ?ups?|followups?|call ?backs?|calls?|contact)( date| on| at| time)?$/.test(h)) return 'nextfu';
   if (/^follow ?ups?\b|^followups?\b|^f ?u ?\d+$/.test(h)) return 'followup';
   if (/\bvisit\b|\bsite\b.*\bdate\b|\bsheduled\b|\bscheduled\b/.test(h)) return 'visit';
   if (/^(remarks?|notes?|comments?|feedback|status notes?|call notes?)$/.test(h)) return 'remarks';
@@ -300,7 +302,7 @@ export function readTab(tab) {
     if (!metaId && !name && !phoneRaw && !email) return;   // a stray note below the data
     // The header row pasted again mid-sheet (it happens when someone copies a block): not a lead.
     if (metaId && metaId.toLowerCase() === String((metaCol('id') || {}).header || 'id').trim().toLowerCase()) return;
-    const team = { assigned: '', rating: null, ratingRaw: '', remarks: [], followups: [], visit: '', notes: [] };
+    const team = { assigned: '', rating: null, ratingRaw: '', remarks: [], followups: [], nextFu: '', visit: '', notes: [] };
     const answers = [];
     for (const c of cols) {
       const v = cell(r, c);
@@ -311,6 +313,7 @@ export function readTab(tab) {
       else if (c.role === 'remarks') team.remarks.push({ label: c.label, text: v });
       else if (c.role === 'followup') team.followups.push({ label: c.label, text: v });
       else if (c.role === 'visit') team.visit = team.visit || v;
+      else if (c.role === 'nextfu') team.nextFu = team.nextFu || v;
       else if (c.role === 'note') team.notes.push({ label: c.label, text: v });
     }
     const pk = phoneKey(phoneRaw);
@@ -334,6 +337,132 @@ export function readTab(tab) {
 const wroteOn = t => !!(t && (t.ratingRaw || t.remarks.length || t.followups.length || t.visit || t.notes.length));
 export const teamWrote = e => wroteOn(e.team) || (e.alsoIn || []).some(a => wroteOn(a.team));
 
+// ── Next follow-up ───────────────────────────────────────────────────────
+// The team's own date for the next call, kept in a "Next follow-up" column of the row (added the
+// first time one is set from the app). Written as "24 Nov 2026" or "24 Nov 2026, 6 pm" (India time),
+// or "No follow-up". It decides when a lead is due — before anything the AI read from the notes.
+// Asked for by the owner, 23 Nov 2026: "few want a call tomorrow, few in 3 days — don't miss any".
+
+const FU_IST = 5.5 * 3600000;
+export const NO_FOLLOWUP = 'No follow-up';
+const FU_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const monthOf = w => { const s = String(w || '').toLowerCase().replace(/\.$/, ''); const i = FU_MONTHS.indexOf(s.slice(0, 3)); return i >= 0 && (s.length === 3 || 'january february march april may june july august september sept october november december'.split(' ').includes(s)) ? i + 1 : 0; };
+/** India-time calendar parts of a moment. */
+export function istParts2(t) { const x = new Date(t + FU_IST); return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, d: x.getUTCDate(), min: x.getUTCHours() * 60 + x.getUTCMinutes(), wd: x.getUTCDay() }; }
+/** A day (and minutes past midnight, or 10 am when none) in India time → ms. Overflowing days roll on. */
+export function istMoment(y, m, d, min) { return Date.UTC(y, m - 1, d, 0, min == null ? 600 : min) - FU_IST; }
+const clockOf = min => { const h = Math.floor(min / 60), mm = min % 60; return (h % 12 || 12) + (mm ? ':' + String(mm).padStart(2, '0') : '') + (h < 12 ? ' am' : ' pm'); };
+
+/** ms → "24 Nov 2026" (timed: "24 Nov 2026, 6 pm") — the way it is written into the sheet. */
+export function formatFollowUp(at, timed) {
+  const p = istParts2(at);
+  return `${p.d} ${MONTHS[p.m - 1]} ${p.y}` + (timed ? ', ' + clockOf(p.min) : '');
+}
+
+// A time in some text: "6 pm", "6:30pm", "at 6", "after 5", "evening". → minutes past midnight, or null.
+function timeIn(s) {
+  let m = /\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.m\.?|p\.m\.?)(?![a-z])/i.exec(s);
+  if (m) { let h = +m[1] % 12; if (/^p/i.test(m[3])) h += 12; const mm = +(m[2] || 0); return h < 24 && mm < 60 ? h * 60 + mm : null; }
+  m = /\b(?:at|after|aftr|by|around|before|abt|about)\s+(\d{1,2})(?:[:.](\d{2}))?(?!\s*(?:days?|weeks?|wks?|months?|hours?|hrs?|mins?|minutes?|th|st|nd|rd|[\/\-]|\d|[a-z]))/i.exec(s);
+  if (m) { let h = +m[1]; if (h < 1 || h > 12) return null; if (h <= 8) h += 12; else if (h === 12) h = 12; return h * 60 + +(m[2] || 0); }
+  if (/\bnoon\b/i.test(s)) return 12 * 60;
+  if (/\bmorning\b/i.test(s)) return 10 * 60;
+  if (/\bafternoon\b/i.test(s)) return 14 * 60;
+  if (/\bevening\b|\beve\b/i.test(s)) return 18 * 60;
+  if (/\bnight\b|\btonight\b/i.test(s)) return 20 * 60;
+  return null;
+}
+// The first calendar date written in some text — "24 Nov", "Nov 24th", "24/11", "24-11-2026",
+// "2026-11-24" (day first, as written in India). → { y|null, m, d, text } or null.
+function dateIn(s) {
+  const found = [];
+  let m;
+  const iso = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
+  while ((m = iso.exec(s))) found.push({ i: m.index, y: +m[1], m: +m[2], d: +m[3], text: m[0] });
+  const dm = /\b(\d{1,2})(?:st|nd|rd|th)?[\s\-\/.]*([a-z]{3,9}\.?)(?:,?[\s\-\/]*(\d{4}|'?\d{2}(?!\s*(?:am|pm|:|\.\d))))?/gi;
+  while ((m = dm.exec(s))) if (monthOf(m[2])) found.push({ i: m.index, y: m[3] ? +String(m[3]).replace("'", '') : null, m: monthOf(m[2]), d: +m[1], text: m[0] });
+  const md = /\b([a-z]{3,9}\.?)\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s*(\d{4}))?/gi;
+  while ((m = md.exec(s))) if (monthOf(m[1])) found.push({ i: m.index, y: m[3] ? +m[3] : null, m: monthOf(m[1]), d: +m[2], text: m[0] });
+  const num = /\b(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{4}|\d{2}))?\b/g;
+  while ((m = num.exec(s))) found.push({ i: m.index, y: m[3] ? +m[3] : null, m: +m[2], d: +m[1], text: m[0] });
+  const ok = found.filter(f => f.m >= 1 && f.m <= 12 && f.d >= 1 && f.d <= 31).sort((a, b) => a.i - b.i)[0];
+  if (!ok) return null;
+  if (ok.y != null && ok.y < 100) ok.y += 2000;
+  return ok;
+}
+// A date with no year: the one nearest to now (a written "3 Jan" in late December is next year's).
+function withYear(f, now) {
+  if (f.y) return f.y;
+  const y = istParts2(now).y;
+  const t = istMoment(y, f.m, f.d);
+  if (t < now - 180 * DAY) return y + 1;
+  if (t > now + 185 * DAY) return y - 1;
+  return y;
+}
+const realDay = (y, m, d) => { const x = new Date(Date.UTC(y, m - 1, d)); return x.getUTCFullYear() === y && x.getUTCMonth() === m - 1 && x.getUTCDate() === d; };
+
+/**
+ * A cell of the Next follow-up column → { at, timed, none } — or null when it is blank or holds no
+ * date we can read (shown as written, never guessed).
+ */
+export function parseFollowUp(raw, now = Date.now()) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  if (/^(no|none|nil|n\/?a|-+|—|done|closed|stop|not needed|nothing)\b|no follow/i.test(s)) return { at: null, timed: false, none: true };
+  const f = dateIn(s);
+  if (!f) return null;
+  const y = withYear(f, now);
+  if (!realDay(y, f.m, f.d)) return null;
+  const min = timeIn(s.replace(f.text, ' '));
+  return { at: istMoment(y, f.m, f.d, min), timed: min != null, none: false };
+}
+
+const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, couple: 2, 'couple of': 2, few: 3, 'a few': 3 };
+const WD = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+/**
+ * When a note says to call next — "might visit tomorrow", "call after 3 days", "Monday 6 pm",
+ * "RNR" (tomorrow), "not interested" (none). → { at, timed } | { none: true } | null (it doesn't say).
+ * A suggestion only: the person sees it chosen and can change it before saving.
+ */
+export function suggestFollowUp(text, now = Date.now()) {
+  const s = ' ' + String(text == null ? '' : text).toLowerCase().replace(/\s+/g, ' ') + ' ';
+  if (!s.trim()) return null;
+  if (/not interested|not intrested|no (more )?(need|requirement)|not required|wrong (number|no\b)|already (bought|taken|rented|leased|purchased|finali[sz]ed|got|booked)|bought (elsewhere|another)|do ?n[o']?t call|not looking|dropped the plan|invalid number/.test(s)) return { none: true };
+  const t = istParts2(now);
+  let days = null, m;
+  if (/day after (tomorrow|tmrw|tmr|tom)\b/.test(s)) days = 2;
+  else if (/\b(tomorrow|tomorow|tommorow|tommorrow|tmrw|tmr|tmw|tomo|next day)\b/.test(s)) days = 1;
+  else if (/\b(today|tonight|this (evening|afternoon|morning)|later today|in (an?|1|one|2|two|few|a few) (hours?|hrs?))\b/.test(s)) days = 0;
+  else if ((m = /\b(?:in|after|aftr|within|another|next)?\s*(\d{1,2}|a few|a couple of|couple of|couple|few|one|two|three|four|five|six|seven|eight|nine|ten|an?)\s+(days?|weeks?|wks?|months?)\b/.exec(s))) {
+    const n = /^\d+$/.test(m[1]) ? +m[1] : NUM_WORDS[m[1]] || 0;
+    if (n) days = /^d/.test(m[2]) ? n : /^w/.test(m[2]) ? n * 7 : null;
+    if (n && /^m/.test(m[2])) { const x = new Date(Date.UTC(t.y, t.m - 1 + n, t.d)); days = Math.round((x - Date.UTC(t.y, t.m - 1, t.d)) / DAY); }
+  }
+  else if (/\bnext week\b|\bafter a week\b/.test(s)) days = 7;
+  else if (/\bnext month\b/.test(s)) { const x = new Date(Date.UTC(t.y, t.m, t.d)); days = Math.round((x - Date.UTC(t.y, t.m - 1, t.d)) / DAY); }
+  else if (/\b(this |on the |on )?week ?end\b/.test(s)) days = ((6 - t.wd + 7) % 7) || 7;
+  else if ((m = /\b(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/.exec(s))) {
+    days = ((WD[m[1].slice(0, 3)] - t.wd + 7) % 7) || 7;   // "Monday" said on a Monday: next Monday
+  }
+  let min = timeIn(s);
+  if (days == null) {
+    const f = dateIn(s);
+    if (f) {
+      const y = withYear(f, now);
+      if (realDay(y, f.m, f.d) && istMoment(y, f.m, f.d, 23 * 60 + 59) >= now) {
+        const rest = s.replace(f.text, ' ');
+        min = timeIn(rest);
+        return { at: istMoment(y, f.m, f.d, min), timed: min != null };
+      }
+    }
+  }
+  if (days == null && min != null) days = istMoment(t.y, t.m, t.d, min) > now ? 0 : 1;
+  if (days == null && /\b(rnr|r\.n\.r|no answer|not answering|not answered|unanswered|not reachable|unreachable|switch(ed)? ?off|not picking|not picked|didn'?t pick|did not pick|no response|not responding|ringing|busy|call ?back|cb)\b/.test(s)) days = 1;
+  if (days == null) return null;
+  return { at: istMoment(t.y, t.m, t.d + days, min), timed: min != null };
+}
+
 // ── The plan ─────────────────────────────────────────────────────────────
 
 /** A tab's key: "<spreadsheetId>:<gid>" (an enquiry's: from its where). */
@@ -348,12 +477,21 @@ const rowAssigned = e => String(e.team.assigned || ((e.alsoIn || []).map(a => a.
 // (e.agent is set by buildPlan.)
 function whoHas(list) {
   const last = list[list.length - 1];
-  if (!last) return { assignedRaw: '', agent: null, prevAssignedRaw: '', prevAgent: null, contacted: false };
+  if (!last) return { assignedRaw: '', agent: null, prevAssignedRaw: '', prevAgent: null, contacted: false, nextFu: null };
   const assignedRaw = rowAssigned(last);
   let prev = null;
   if (!assignedRaw) for (let i = list.length - 2; i >= 0; i--) { const r = rowAssigned(list[i]); if (r) { prev = list[i]; break; } }
   return { assignedRaw, agent: assignedRaw ? last.agent || null : null, prevAssignedRaw: prev ? rowAssigned(prev) : '', prevAgent: prev ? prev.agent || null : null,
-    contacted: teamWrote(last), everContacted: list.some(teamWrote) };
+    contacted: teamWrote(last), everContacted: list.some(teamWrote), nextFu: nextFuOf(list) };
+}
+// The date of the next call: the newest of the rows (or their copies in other tabs) that has one.
+const rowNextFu = e => String(e.team.nextFu || ((e.alsoIn || []).map(a => a.team.nextFu).find(Boolean)) || '').trim();
+function nextFuOf(list) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const raw = rowNextFu(list[i]);
+    if (raw) return { raw, row: list[i].key, ...(parseFollowUp(raw) || { at: null, none: false, timed: false, unread: true }) };
+  }
+  return null;
 }
 /** A person's lead state for one property (code) — or overall ('' / 'all'). */
 export function teamFor(p, code) {
@@ -399,7 +537,7 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
       if (e.metaId && seen.has(e.metaId)) {
         const kept = seen.get(e.metaId);
         kept.alsoIn = (kept.alsoIn || []).concat([{ ...e.where, row: e.row, team: e.team, sameTab: kept.where.spreadsheetId === e.where.spreadsheetId && kept.where.gid === e.where.gid }]);
-        for (const f of ['assigned', 'ratingRaw', 'visit']) if (!kept.team[f] && e.team[f]) kept.team[f] = e.team[f];
+        for (const f of ['assigned', 'ratingRaw', 'visit', 'nextFu']) if (!kept.team[f] && e.team[f]) kept.team[f] = e.team[f];
         if (!kept.team.rating && e.team.rating) kept.team.rating = e.team.rating;
         copies++;
         continue;
@@ -429,7 +567,7 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
     // the old row's agent and remarks must not make it look handled. Who had them last time is kept
     // (prevAssignedRaw) so the new one can go back to the same person.
     for (const e of list) { const r = rowAssigned(e); e.agent = r ? matchAgent(r, roster) : null; }
-    const { assignedRaw, agent, prevAssignedRaw, prevAgent, contacted } = whoHas(list);
+    const { assignedRaw, agent, prevAssignedRaw, prevAgent, contacted, nextFu } = whoHas(list);
     const notes = [];
     for (const e of list) {
       const src = `${e.where.sheetTitle} › ${e.where.tab}`;
@@ -476,7 +614,7 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
       dupCodes, duplicate: dupCodes.length > 0, multiProperty: codes.length > 1,
       revisited, revisitCodes, priority, newRows: newRows.length,
       team: { assignedRaw, agent, prevAssignedRaw, prevAgent, rating: latestTeam('rating'), ratingRaw: latestTeam('ratingRaw') || '', notes,
-        contacted, everContacted: list.some(teamWrote) },
+        contacted, everContacted: list.some(teamWrote), nextFu },
       crm: crm ? {
         id: crm.id, name: crm.name || '', stage: stageName(crm.stageId), stageId: crm.stageId || '', agent: crm.assignedAgent || '',
         propertyCodes: crmCodes, propertyInterest: crm.propertyInterest || '', budget: crm.budget || '', source: crm.source || '',
@@ -733,7 +871,7 @@ export function heatmap(plan) {
 
 // ── Writing back to the sheet ────────────────────────────────────────────
 
-const DEFAULT_HEADER = { assigned: 'Assigned to', rating: 'Rating', remarks: 'Remarks', visit: 'Visit date', note: 'Notes' };
+const DEFAULT_HEADER = { assigned: 'Assigned to', rating: 'Rating', remarks: 'Remarks', nextfu: 'Next follow-up', visit: 'Visit date', note: 'Notes' };
 export const MAX_COLS = 52;   // A…AZ, as far as a tab is read
 
 /**

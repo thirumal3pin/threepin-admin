@@ -170,6 +170,16 @@ button.ml-tile[onclick]:hover{border-color:var(--ink3);}
 .ml-qc{border:1px solid var(--border);background:var(--ml-soft);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;color:var(--ink2);cursor:pointer;}
 .ml-qc:hover{border-color:var(--ink3);color:var(--ink);}
 .ml-work label.ml-dim{display:inline-flex;align-items:center;gap:6px;margin-top:12px;}
+/* Next follow-up: one tap for the usual gaps, or a date and time. The pressed state is the ARIA state. */
+.ml-fu{display:flex;flex-wrap:wrap;gap:8px;}
+.ml-fuc{min-height:36px;border:1px solid var(--border2,var(--border));background:var(--card);border-radius:999px;padding:4px 13px;font:inherit;font-size:13.5px;font-weight:600;color:var(--ink2);cursor:pointer;}
+@media (hover:hover){.ml-fuc:hover{border-color:var(--ink3);color:var(--ink);}}
+.ml-fuc:focus-visible{outline:2px solid var(--brand);outline-offset:2px;}
+.ml-fuc[aria-pressed="true"]{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink,var(--brand));}
+@media (forced-colors:active){.ml-fuc[aria-pressed="true"]{border-color:Highlight;outline:2px solid Highlight;}}
+.ml-fupick{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:10px;font-size:13px;color:var(--ink3);}
+.ml-fupick label{display:inline-flex;align-items:center;gap:6px;}
+.ml-fupick .ml-f{width:auto;min-height:36px;}
 .ml-wbtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;padding-top:18px;border-top:1px solid var(--border);}
 
 .ml-would{font-size:13px;line-height:1.55;color:var(--ink2);padding:14px 16px;border-radius:var(--r2);background:var(--card);border:1px solid var(--border);margin-bottom:12px;}
