@@ -1592,6 +1592,22 @@
   }
 
   // ─── actions ───────────────────────────────────────────────────────────
+  // For WhatsApp Campaigns (crm-assets/campaigns.js): the Meta ad leads as people — read now when
+  // they have not been, or were read over 10 minutes ago (one read; unchanged sheets are skipped).
+  // → Promise<[{ key, name, phone, phoneKey, phoneOk, email, properties, enquiries, team, crm }]>
+  window.metaLeadsPeople = function () {
+    return new Promise(function (resolve) {
+      var fresh = S.plan && S.read && Date.now() - (S.read.at || 0) < 10 * 60000;
+      if (fresh) return resolve(S.plan.people);
+      if (!S.cfg) loadConfig(); else autoRead();
+      var tries = 0;
+      (function wait() {
+        if (S.plan && !S.reading && !S.cfgLoading) return resolve(S.plan.people);
+        if (S.cfgError || S.readError || ++tries > 120) return resolve(S.plan ? S.plan.people : []);
+        setTimeout(wait, 500);
+      })();
+    });
+  };
   window.MetaLeads = {
     go: function (v) { if (typeof toggleView === 'function') toggleView(v); },
     read: function () { readSheets(false); },

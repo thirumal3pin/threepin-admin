@@ -37,7 +37,23 @@
   var DAY = 86400000;
   // [view, label, icon, the shorter label a phone shows]
   var TABS = [['campaigns', 'Dashboard', 'fa-solid fa-gauge-high', 'Dashboard'], ['cmp-templates', 'Templates', 'fa-regular fa-file-lines', 'Templates'], ['cmp-new', 'New campaign', 'fa-regular fa-paper-plane', 'New'], ['cmp-history', 'Campaigns', 'fa-solid fa-clock-rotate-left', 'Sent']];
-  var STEPS = ['Template', 'Property & values', 'Who gets it', 'Review & send'];
+  var STEPS = ['Goal & message', 'Property & values', 'Who gets it', 'Review & send'];
+  // ── What the campaign is for (step 1 starts here; the owner, 23 Nov 2026) ──
+  // Each goal sets who gets it (the quick list), whether one property is named for everyone, and
+  // which templates are offered. prop: 'required' | 'optional' | 'none'.
+  var GOALS = [
+    { id: 'new_listing', icon: 'fa-solid fa-house-circle-check', title: 'New listing → matched buyers', who: 'Open buyers whose budget, area and BHK fit the property', prop: 'required', mode: 'one', quick: 'matched', purposes: ['new_listing', 'brochure', 'price_update'] },
+    { id: 'price_drop', icon: 'fa-solid fa-arrow-trend-down', title: 'Price drop', who: 'Leads linked to the property, or who visited it', prop: 'required', mode: 'one', quick: 'interested', purposes: ['price_drop', 'price_update'] },
+    { id: 'sold_out', icon: 'fa-solid fa-ban', title: 'Sold out → alternatives', who: 'Leads interested in the property that is gone', prop: 'required', mode: 'one', quick: 'soldout', purposes: ['sold_out'] },
+    { id: 'visit_reminder', icon: 'fa-regular fa-calendar-check', title: 'Visit reminder', who: 'Visits tomorrow — one property, or all', prop: 'optional', mode: 'own', quick: 'tomorrow', purposes: ['visit_reminder', 'visit_confirmed'] },
+    { id: 'visit_feedback', icon: 'fa-regular fa-comment-dots', title: 'Visit feedback', who: 'Visited in the last 7 days — one property, or all', prop: 'optional', mode: 'own', quick: 'visit_week', purposes: ['visit_feedback', 'feedback_nudge'] },
+    { id: 'reengage', icon: 'fa-solid fa-rotate-right', title: 'Re-engage quiet leads', who: 'Hot / warm leads quiet for 14 days', prop: 'optional', mode: 'own', quick: 'quiet', purposes: ['reengage', 'search_checkin', 'followup', 'options_followup'] },
+    { id: 'ad_leads', icon: 'fa-brands fa-meta', title: 'Meta ad leads — bulk message', who: 'People who answered your ads (the lead sheets)', prop: 'optional', mode: 'own', quick: 'ads', purposes: ['brochure', 'followup', 'new_listing', 'reengage'] },
+    { id: 'ad_match', icon: 'fa-solid fa-wand-magic-sparkles', title: 'Matching property for ad leads', who: 'Each ad lead hears about the property that fits them best', prop: 'none', mode: 'own', quick: 'ads_match', purposes: ['new_listing', 'brochure', 'followup'] },
+    { id: 'custom', icon: 'fa-regular fa-pen-to-square', title: 'Something else', who: 'Any approved template, any list', prop: 'optional', mode: null, quick: '', purposes: null }
+  ];
+  var goalById = function (id) { return GOALS.filter(function (g) { return g.id === id; })[0] || null; };
+  var isAdsQuick = function (q) { return q === 'ads' || q === 'ads_match'; };
 
   var S = {
     view: 'campaigns',
@@ -170,7 +186,21 @@
   function normCode(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
   function propById(id) { if (!id) return null; var k = normCode(id); return inv().find(function (p) { return p.id === id || normCode(p.propertyCode) === k || normCode(p.id) === k; }) || null; }
   // Was this lead's visit to that property (picked in step 2)?
-  function visitIsFor(l, pid) { var p = propById(pid), v = visitOfLead(l); return !!(p && v.property && (normCode(v.property) === normCode(p.propertyCode) || normCode(v.property) === normCode(p.id))); }
+  function sameProp(code, p) { return !!(p && code && (normCode(code) === normCode(p.propertyCode) || normCode(code) === normCode(p.id))); }
+  function visitIsFor(l, pid) { var p = propById(pid), v = visitOfLead(l); return sameProp(v.property, p); }
+  // Every visit that happened (lead.visitsDone, kept since 23 Nov 2026) and the current one if done.
+  function doneVisits(l) {
+    var out = (Array.isArray(l.visitsDone) ? l.visitsDone : []).map(function (x) { return { at: x.at, property: x.property }; });
+    var v = visitOfLead(l);
+    if (v.status === 'done' && v.at && !out.some(function (x) { return x.at === v.at; })) out.push({ at: v.at, property: v.property });
+    return out.sort(function (a, b) { return b.at - a.at; });
+  }
+  // The newest visit that happened — to the property picked, when one is — since a moment.
+  function doneVisitTo(l, pid, since) {
+    var p = pid ? propById(pid) : null;
+    return doneVisits(l).filter(function (x) { return (!p || sameProp(x.property, p)) && (!since || x.at >= since); })[0] || null;
+  }
+  function shortDay(t) { return t ? new Date(t + 5.5 * 3600000).toUTCString().slice(5, 11).replace(/^0/, '') : ''; }
   function visitOfLead(l) { return window.crmPipeline && window.crmPipeline.visitOf ? window.crmPipeline.visitOf(l) : { at: null, status: 'none', property: null }; }
   function stageOf(l) { return typeof stageById === 'function' ? stageById(l.stageId) : null; }
   function stageKind(l) { var s = stageOf(l); return s && window.crmPipeline && window.crmPipeline.stageKindOf ? window.crmPipeline.stageKindOf(s) : null; }
@@ -1048,7 +1078,7 @@
 
   // ─── the campaign wizard ──────────────────────────────────────────────
   function newWizard() {
-    return { step: 1, name: '', template: '', mapping: {}, propertyMode: 'own', propertyId: '', headerMediaUrl: '', lockLead: false, purpose: '',
+    return { step: 1, goal: '', allTemplates: false, minMatch: 70, adWindow: '30', adState: 'all', name: '', template: '', mapping: {}, propertyMode: 'own', propertyId: '', headerMediaUrl: '', lockLead: false, purpose: '',
       quick: '', f: blankFilters(), journey: null, handLeads: {},
       ai: null, aiBusy: false, aiQ: '', unchecked: {}, edits: {}, manual: [], manualText: '', addNote: '', limit: 150, previewAt: 0, filtersOpen: false, req: null };
   }
@@ -1059,17 +1089,22 @@
   function wizVars() { var t = wizTemplate(); return (t && t.vars) || []; }
   var QUICK = [
     ['', 'Everyone'], ['visit_week', 'Visited in the last 7 days'], ['visited', 'Visited a property'], ['planned', 'Visit planned'], ['tomorrow', 'Visit tomorrow'],
-    ['interested', 'Interested in the property'], ['soldout', 'Interested in a sold-out property'], ['quiet', 'Hot / Warm, quiet 14 days'], ['holddue', 'On hold, revisit due']
+    ['interested', 'Interested in the property'], ['soldout', 'Interested in a sold-out property'], ['quiet', 'Hot / Warm, quiet 14 days'], ['holddue', 'On hold, revisit due'],
+    ['matched', 'Matched buyers'], ['ads', 'Meta ad leads'], ['ads_match', 'Ad leads → matching property']
   ];
   // The chip for a suggested message (or a retry): its leads, exactly as they were found.
   function journeyLabel(j) { return j.type === 'retry' ? j.label : 'Suggested: ' + j.label; }
   function quickMatch(l, q, w) {
     var v = visitOfLead(l), now = Date.now();
-    // A property picked in step 2 narrows every visit list to visits TO that property — "visited in
-    // the last 7 days" for ANR003 means visited ANR003, whichever way the message names the property.
-    if (w && w.propertyId && /^(visit_week|visited|planned|tomorrow)$/.test(q) && !visitIsFor(l, w.propertyId)) return false;
-    if (q === 'visit_week') return v.status === 'done' && v.at && v.at >= now - 7 * DAY && v.at <= now + DAY;
-    if (q === 'visited') return v.status === 'done';
+    var pid = w && w.propertyId;
+    // A property picked narrows every visit list to visits TO that property — "visited in the last 7
+    // days" for ANR003 means visited ANR003 — and every visit that happened counts, not only the latest.
+    if (q === 'visit_week') return !!doneVisitTo(l, pid, now - 7 * DAY);
+    if (q === 'visited') return !!doneVisitTo(l, pid, 0);
+    if ((q === 'planned' || q === 'tomorrow') && pid && !visitIsFor(l, pid)) return false;
+    // Buyers the matching engine says fit the property (open leads, not already linked to it).
+    if (q === 'matched') { if (!pid) return false; var k = stageKind(l); if (k === 'won' || k === 'lost') return false; if (hasProp(l, pid)) return false; var m = matchPct(l, pid); return m != null && m >= (w.minMatch || 70); }
+    if (q === 'interested' && pid) return hasProp(l, pid) || !!doneVisitTo(l, pid, 0);
     if (q === 'planned') return !!(v.at && v.status !== 'done' && v.status !== 'cancelled' && v.at >= startOfDay(now));
     if (q === 'tomorrow') { var t0 = startOfDay(now) + DAY; return !!(v.at && v.at >= t0 && v.at < t0 + DAY && v.status !== 'cancelled'); }
     if (q === 'interested') return w.propertyId ? hasProp(l, w.propertyId) : linkedProps(l).length > 0;
@@ -1081,6 +1116,88 @@
     return true;
   }
   function holdDue(l) { return stageKind(l) === 'hold' && !!l.holdUntil && l.holdUntil <= Date.now(); }
+  // The matching engine's % for a lead and a property (shared-assets/match-engine.js), kept per render.
+  var matchMemo = { at: 0, fn: null, m: {} };
+  function matchPct(l, pid) {
+    if (Date.now() - matchMemo.at > 5000) matchMemo = { at: Date.now(), fn: matchFn(), m: {} };
+    var p = propById(pid); if (!p || !matchMemo.fn) return null;
+    var k = l.id + '|' + p.id;
+    if (!(k in matchMemo.m)) { try { matchMemo.m[k] = matchMemo.fn(l, p); } catch (e) { matchMemo.m[k] = null; } }
+    return matchMemo.m[k];
+  }
+  // ── Meta ad leads (crm-assets/metaLeads.js reads the sheets; window.metaLeadsPeople) ──
+  function loadAdPeople(force) {
+    if (S.adLoading || (S.adPeople && !force) || typeof window.metaLeadsPeople !== 'function') return;
+    S.adLoading = true; render();
+    window.metaLeadsPeople().then(function (list) { S.adPeople = list || []; S.adMatch = {}; })
+      .catch(function () { S.adPeople = []; }).then(function () { S.adLoading = false; render(); });
+  }
+  function adLastAt(p, code) { var e = (p.enquiries || []).filter(function (x) { return !code || normCode(x.propertyCode) === normCode(code); }); return e.length ? e[e.length - 1].at || 0 : 0; }
+  // An ad lead as a requirement the matching engine reads: their form answers and the property they asked about.
+  function adAsLead(p) {
+    var ans = [], budget = '';
+    (p.enquiries || []).forEach(function (e) { (e.answers || []).forEach(function (a) { ans.push(a.label + ': ' + a.value); if (/budget|price/i.test(a.label) && !budget) budget = a.value; }); });
+    var asked = (p.properties || []).map(propById).filter(Boolean).map(function (x) { return [x.config, x.type, x.location].filter(Boolean).join(' '); });
+    return { id: 'ad:' + p.key, name: p.name, propertyInterest: ans.concat(asked).join('. '), budget: budget, updatedAt: p.lastAt || Date.now(), createdAt: p.firstAt || Date.now() };
+  }
+  // The inventory's best fit for an ad lead (not one they already asked about, not sold), or null.
+  function adBestMatch(p, min) {
+    S.adMatch = S.adMatch || {};
+    if (p.key in S.adMatch) return S.adMatch[p.key];
+    var fn = matchFn(), best = null;
+    if (fn) {
+      var pseudo = adAsLead(p);
+      inv().forEach(function (x) {
+        if (x.soldOut || (p.properties || []).some(function (c) { return sameProp(c, x); })) return;
+        var pct = null; try { pct = fn(pseudo, x); } catch (e) { pct = null; }
+        if (pct != null && (!best || pct > best.pct)) best = { prop: x, pct: pct };
+      });
+    }
+    S.adMatch[p.key] = best;
+    return best;
+  }
+  // The ad leads a campaign goes to, each with its property and the reason on its row.
+  function adPool(w) {
+    if (!S.adPeople) { loadAdPeople(); return []; }
+    var pid = w.propertyId, p0 = pid ? propById(pid) : null, C = CM();
+    var since = w.adWindow && w.adWindow !== 'all' ? Date.now() - Number(w.adWindow) * DAY : 0;
+    var q = String(w.f.q || '').toLowerCase().trim();
+    var out = [];
+    S.adPeople.forEach(function (p) {
+      if (!(p.phoneKey || p.phone)) return;
+      if (p0 && !(p.properties || []).some(function (c) { return sameProp(c, p0); })) return;
+      var at = adLastAt(p, p0 ? (C.propertyCode(p0) || p0.id) : '');
+      if (since && at < since) return;
+      if (w.adState === 'new' && p.team && p.team.contacted) return;
+      if (w.adState === 'unassigned' && p.team && p.team.assignedRaw) return;
+      if (q && (p.name + ' ' + (p.phone || '') + ' ' + (p.properties || []).join(' ')).toLowerCase().indexOf(q) < 0) return;
+      var code = p0 ? (C.propertyCode(p0) || p0.id) : ((p.enquiries || []).slice(-1)[0] || {}).propertyCode || (p.properties || [])[0] || '';
+      var prop = p0 || propById(code);
+      var state = p.team && p.team.contacted ? '' : ' · not contacted';
+      var why = 'Ad lead ' + shortDay(at) + (code ? ' · ' + code : '') + state;
+      if (w.quick === 'ads_match') {
+        var b = adBestMatch(p, w.minMatch || 60);
+        if (!b || b.pct < (w.minMatch || 60)) return;
+        prop = b.prop;
+        why = 'Best fit ' + (C.propertyCode(b.prop) || C.propertyLabel(b.prop)) + ' · ' + Math.round(b.pct) + '% match · asked about ' + (code || 'an ad');
+      }
+      out.push({ p: p, prop: prop, why: why, at: at });
+    });
+    return out.sort(function (a, b) { return b.at - a.at; });
+  }
+  // Why this person is on the list, in a few words, for the row ("Visited ANR003 on 18 Nov").
+  function reasonFor(l, w) {
+    var q = w.quick, pid = w.propertyId, p = pid ? propById(pid) : null, C = CM(), v = visitOfLead(l);
+    var code = p ? (C.propertyCode(p) || C.propertyLabel(p)) : '';
+    var dv;
+    if (q === 'visit_week' || q === 'visited') { dv = doneVisitTo(l, pid, q === 'visit_week' ? Date.now() - 7 * DAY : 0); return dv ? 'Visited ' + (dv.property || 'a property') + ' on ' + shortDay(dv.at) : ''; }
+    if (q === 'tomorrow' || q === 'planned') return v.at ? 'Visit ' + shortDay(v.at) + (v.property ? ' at ' + v.property : '') : '';
+    if (q === 'matched') { var m = matchPct(l, pid), b = l.budget || (l.tt && l.tt.values && l.tt.values.budget) || ''; return (m != null ? Math.round(m) + '% match' : 'Matches') + (b ? ' · budget ' + b : '') + (l.propertyInterest ? ' · ' + String(l.propertyInterest).slice(0, 40) : ''); }
+    if (q === 'interested' || q === 'soldout') { if (p) { dv = doneVisitTo(l, pid, 0); return dv ? 'Visited ' + code + ' on ' + shortDay(dv.at) : 'Enquired about ' + code; } return ''; }
+    if (q === 'quiet') return ((l.tt && l.tt.status) ? l.tt.status[0].toUpperCase() + l.tt.status.slice(1) + ' · ' : '') + 'quiet ' + Math.floor((Date.now() - lastActive(l)) / DAY) + ' days';
+    if (q === 'holddue') return l.holdUntil ? 'On hold till ' + shortDay(l.holdUntil) : '';
+    return '';
+  }
   var BUDGETS = [['', 'Any budget'], ['0-5000000', 'Under ₹50 L'], ['5000000-10000000', '₹50 L – 1 Cr'], ['10000000-20000000', '₹1 – 2 Cr'], ['20000000-40000000', '₹2 – 4 Cr'], ['40000000-', '₹4 Cr +']];
   function filterMatch(l, w) {
     var f = w.f;
@@ -1157,12 +1274,13 @@
     var oneMedia = media && one ? C.mediaUrl(w.headerMediaUrl) : '';
     var hand = w.handLeads || {};
     var handPool = Object.keys(hand).map(leadById).filter(Boolean);
-    var pool = w.onlyManual ? [] : allLeads().filter(function (l) { return !hand[l.id] && filterMatch(l, w); });
+    var ads = isAdsQuick(w.quick);
+    var pool = w.onlyManual || ads ? [] : allLeads().filter(function (l) { return !hand[l.id] && filterMatch(l, w); });
     if (w.ai) pool = pool.filter(function (l) { return w.ai.picks[l.id]; });
     pool.sort(function (a, b) { return lastActive(b) - lastActive(a); });
     var rows = [];
     var mapping = w.mapping || {};
-    function add(key, lead, name, contact, prop, visit, byHand) {
+    function add(key, lead, name, contact, prop, visit, byHand, reason) {
       var values = C.valuesFor(vars, mapping, { lead: lead || { name: name }, prop: prop, visit: visit, agent: lead ? agentOf(lead) : agentOf(null), now: ctx.now });
       // {{first_name}} filled from "Lead's name" (a mapping saved before first names existed).
       vars.forEach(function (v) { var m = mapping[v]; if (/first/i.test(v) && m && m.source === 'lead_name' && values[v]) values[v] = String(values[v]).split(' ')[0]; });
@@ -1192,7 +1310,7 @@
       if (can && !w.unchecked[key]) ctx.sentNumbers.add(contact);
       rows.push({ key: key, lead: lead, name: name, contact: contact, prop: prop, visit: visit, values: values, hold: hold, missing: missing, fb: fb, can: can, manual: !lead, hand: !!byHand,
         mediaUrl: mUrl, mediaName: mName, on: can && !w.unchecked[key],
-        why: lead ? (w.ai ? w.ai.picks[lead.id] : (w.journey && w.journey.reasons && w.journey.reasons[lead.id]) || '') : '' });
+        why: (lead ? (w.ai ? w.ai.picks[lead.id] : (w.journey && w.journey.reasons && w.journey.reasons[lead.id]) || '') : '') || reason || (lead && !byHand ? reasonFor(lead, w) : '') });
     }
     // The CRM's leads claim their numbers first — they carry more (visit, property) than a number
     // typed in — and the ones added by hand are listed first, as the most recent thing done.
@@ -1203,12 +1321,23 @@
     handPool.forEach(function (l) { var h = hand[l.id] || {}; add(l.id, l, l.name, contactOf(l), one || propById(h.code) || propFor(l), visitOfLead(l), true); });
     pool.forEach(function (l) { add(l.id, l, l.name, contactOf(l), one || propFor(l), visitOfLead(l), false); });
     w.manual.forEach(function (m) { add(m.key, null, m.name, m.contact, one || propById(m.code) || picked, null, true); });
+    // Meta ad leads (the lead sheets): a person already in the CRM goes as their CRM lead; anyone else
+    // by their number. Their property: the one picked (when they enquired about it), else the one
+    // they enquired about last — or, for "matching property", the inventory's best fit for them.
+    if (ads) adPool(w).forEach(function (x) {
+      var lead = x.p.crm && x.p.crm.id ? leadById(x.p.crm.id) : null;
+      var prop = one || x.prop;
+      if (lead && !hand[lead.id]) add(lead.id, lead, lead.name, contactOf(lead), prop, visitOfLead(lead), false, x.why);
+      else if (!lead) add('a_' + (x.p.phoneKey || x.p.key), null, x.p.name, CM().waNumber(x.p.phoneKey || x.p.phone || ''), prop, null, false, x.why);
+    });
     return rows.filter(function (r) { return r.hand; }).concat(rows.filter(function (r) { return !r.hand; }));
   }
   function stepAllowed(n, rows) {
     var w = S.wiz, t = wizTemplate(), C = CM();
     if (n === 1) return true;
     if (!(w.template && t && t.vars !== null)) return false;
+    var g = goalById(w.goal);
+    if (g && g.prop === 'required' && !w.propertyId) return false;
     if (n < 4) return true;
     var on = (rows || wizRows()).filter(function (r) { return r.on; }).length;
     return on > 0 && on <= C.MAX_RECIPIENTS;
@@ -1231,7 +1360,7 @@
     }
     var rows = w.step >= 2 ? wizRows() : null;
     var body = w.step === 1 ? wizStep1() : w.step === 2 ? wizStep2(rows) : w.step === 3 ? wizStep3(rows) : wizStep4(rows);
-    return head('New campaign', 'Pick an approved template, the leads, and send it — or download the list for TailorTalk Broadcast.',
+    return head('New campaign', 'Pick what it is for, the message and the people — then send it, or download the list for TailorTalk Broadcast.',
       '<button type="button" class="tsk-btn" onclick="PinCampaigns.resetWizard()">Start over</button>') + stepper(rows)
       + '<h2 class="cmp-steph" id="cmpStepH" tabindex="-1">Step ' + w.step + ' of 4 · ' + STEPS[w.step - 1] + '</h2>' + body;
   }
@@ -1239,12 +1368,38 @@
     return '<div class="cmp-wnav' + (cls ? ' ' + cls : '') + '" id="cmpWnav">' + (back ? '<button type="button" class="tsk-btn" onclick="PinCampaigns.step(' + (S.wiz.step - 1) + ')">← Back</button>' : '<span></span>')
       + (extra || '') + (nextLabel ? '<button type="button" class="tsk-btn primary" ' + (nextOk ? '' : 'disabled') + ' onclick="PinCampaigns.step(' + (S.wiz.step + 1) + ')">' + nextLabel + ' →</button>' : '') + '</div>';
   }
+  // Step 1: what the campaign is for (a goal), its property when the goal is about one, then the
+  // template — only the goal's kind of templates, unless "show all" is pressed.
+  function goalsHtml() {
+    var w = S.wiz;
+    return '<section class="cmp-card"><h2 class="cmp-h2">What is this campaign for?</h2><div class="cmp-goals" role="group" aria-label="Goal">' + GOALS.map(function (g) {
+      var on = w.goal === g.id;
+      return '<button type="button" class="cmp-goal' + (on ? ' on' : '') + '" aria-pressed="' + on + '" onclick="PinCampaigns.pickGoal(' + js(g.id) + ')"><i class="' + g.icon + '" aria-hidden="true"></i><b>' + esc(g.title) + '</b><span>' + esc(g.who) + '</span></button>';
+    }).join('') + '</div></section>';
+  }
+  function goalPropertyHtml(g) {
+    var w = S.wiz, C = CM();
+    if (!g || g.prop === 'none') return '';
+    var opts = '<option value="">' + (g.prop === 'required' ? '— pick the property —' : 'All properties') + '</option>' + inv().filter(function (p) { return !(p.soldOut && (g.id === 'new_listing' || g.id === 'price_drop')) || p.id === w.propertyId; }).map(function (p) { return '<option value="' + esc(p.id) + '"' + (w.propertyId === p.id ? ' selected' : '') + '>' + esc((C.propertyCode(p) ? C.propertyCode(p) + ' · ' : '') + C.propertyLabel(p) + (p.soldOut ? ' (sold)' : '')) + '</option>'; }).join('');
+    var one = propById(w.propertyId);
+    return '<section class="cmp-card"><label class="tsk-f"><span>' + (g.prop === 'required' ? 'Which property?' : 'Only one property? (optional)') + '</span><select id="cmpGoalProp" onchange="PinCampaigns.wiz(\'propertyId\',this.value)">' + opts + '</select></label>'
+      + (one ? '<p class="cmp-note">' + esc([C.propertyCode(one), C.propertyLabel(one), one.location, one.startingPrice].filter(Boolean).join(' · ')) + '</p>' : '')
+      + (g.prop === 'optional' ? '<p class="cmp-note">Picked: only people for that property get it, and the message names it.</p>' : '') + '</section>';
+  }
   function wizStep1() {
     var w = S.wiz;
     if (!S.templates) return '<p class="cmp-empty">' + (S.tplLoading ? 'Loading templates from TailorTalk…' : esc(S.tplError || 'Templates could not be loaded.')) + '</p>';
-    var list = approved();
+    // No goal picked yet (or a suggestion opened the wizard on its template): every template is
+    // offered, as "Something else" — the goal is the quicker way, never a gate.
+    var g = goalById(w.goal) || goalById('custom');
+    var all = approved();
+    var fits = g && g.purposes ? all.filter(function (t) { return g.purposes.indexOf(purposeOf(t)) >= 0; }) : all;
+    var list = w.allTemplates || !fits.length ? all : fits;
     var others = (S.templates || []).filter(function (t) { return t.status !== 'APPROVED'; });
-    return '<section class="cmp-card"><label class="tsk-f"><span>Campaign name</span><input id="cmpName1" value="' + esc(w.name) + '" placeholder="e.g. Feedback — visits this week" oninput="PinCampaigns.setName(this.value)"></label></section>'
+    return goalsHtml() + (w.goal ? goalPropertyHtml(g) : '<p class="cmp-note">Pick what the campaign is for and the people and templates follow — or pick any template below.</p>')
+      + '<section class="cmp-card"><label class="tsk-f"><span>Campaign name</span><input id="cmpName1" value="' + esc(w.name) + '" placeholder="e.g. Feedback — visits this week" oninput="PinCampaigns.setName(this.value)"></label></section>'
+      + '<div class="cmp-h2row"><h2 class="cmp-h2">The message</h2>' + (g.purposes && fits.length && fits.length < all.length ? '<button type="button" class="cmp-link" onclick="PinCampaigns.setFlag(\'allTemplates\',' + (!w.allTemplates) + ')">' + (w.allTemplates ? 'Only templates for “' + esc(g.title) + '”' : 'Show all ' + all.length + ' templates') + '</button>' : '') + '</div>'
+      + (g.purposes && !fits.length ? '<p class="cmp-note">No approved template is made for “' + esc(g.title) + '” yet — any approved one is shown. Create one on the Templates screen.</p>' : '')
       + '<div class="cmp-tgrid">' + list.map(function (t) {
         return '<button type="button" class="cmp-tcard pick' + (w.template === t.name ? ' on' : '') + '" onclick="PinCampaigns.pickTemplate(' + js(t.name) + ')" aria-pressed="' + (w.template === t.name) + '">'
           + '<div class="cmp-tchead"><span class="cmp-tn">' + esc(t.name) + '</span><span class="cmp-tpills">' + catPill(t.category) + '</span></div>' + bubble(t, null, { small: true })
@@ -1252,7 +1407,7 @@
       }).join('') + '</div>'
       + (list.length ? '' : '<p class="cmp-empty">No approved template yet. Create one on the Templates screen and get it approved first.</p>')
       + (others.length ? '<p class="cmp-note">Not shown because they are not approved yet: ' + others.map(function (t) { return esc(t.name) + ' (' + esc(((STATUS_META[t.status] || [t.status])[0]).toLowerCase()) + ')'; }).join(', ') + '.</p>' : '')
-      + wizNav(false, 'Property & values', !!(w.template && wizTemplate() && wizTemplate().vars !== null));
+      + wizNav(false, 'Property & values', !!(w.template && wizTemplate() && wizTemplate().vars !== null) && !(g.prop === 'required' && !w.propertyId));
   }
   var PROP_SOURCES = /^(property|code|area|price|config)$/;
   // Whether the message is about a property at all: a variable filled from one, a brochure, or
@@ -1275,12 +1430,18 @@
     var media = !!(t && t.mediaHeader);
     var sample = (rows || []).find(function (r) { return r.can; }) || (rows || [])[0] || null;
     var noBrochure = media && w.propertyMode === 'own' ? (rows || []).filter(function (r) { return /brochure/i.test(r.hold || ''); }).length : 0;
-    return '<section class="cmp-card"><h2 class="cmp-h2">Which property does the message talk about?</h2>'
+    var g = goalById(w.goal);
+    var propCard = g && g.mode
+      ? '<section class="cmp-card"><h2 class="cmp-h2">The property</h2><p class="cmp-note">' + (w.goal === 'ad_match' ? 'Each ad lead hears about the property that fits them best (worked out in the next step).'
+          : one ? (w.propertyMode === 'one' ? 'Everyone hears about ' : 'Only people for, and told about, ') + '<b>' + esc([C.propertyCode(one), C.propertyLabel(one)].filter(Boolean).join(' · ')) + '</b>' + (one.startingPrice ? ' · ' + esc(one.startingPrice) : '') + '. <button type="button" class="cmp-link sm" onclick="PinCampaigns.step(1)">Change</button>'
+          : 'Each person hears about their own property — the one they visited or enquired about.') + '</p></section>'
+      : null;
+    return (propCard || '<section class="cmp-card"><h2 class="cmp-h2">Which property does the message talk about?</h2>'
       + '<div class="cmp-radios"><label class="cmp-radio' + (w.propertyMode === 'own' ? ' on' : '') + '"><input type="radio" name="pm" ' + (w.propertyMode === 'own' ? 'checked' : '') + ' onchange="PinCampaigns.wiz(\'propertyMode\',\'own\')"><b>Each lead’s own property</b><span>The one they visited, or the one they enquired about</span></label>'
       + '<label class="cmp-radio' + (w.propertyMode === 'one' ? ' on' : '') + '"><input type="radio" name="pm" ' + (w.propertyMode === 'one' ? 'checked' : '') + ' onchange="PinCampaigns.wiz(\'propertyMode\',\'one\')"><b>One property for everyone</b><span>A new listing, a sold-out notice, a price change</span></label></div>'
       + '<label class="tsk-f"><span>' + (w.propertyMode === 'one' ? 'The property' : 'Property (optional — narrows the lead list to those linked to it)') + '</span><select id="cmpPropSel" onchange="PinCampaigns.wiz(\'propertyId\',this.value)">' + opts + '</select></label>'
       + (one ? '<p class="cmp-note">' + esc([C.propertyCode(one), C.propertyLabel(one), one.location, one.startingPrice, one.soldOut ? 'sold out' : ''].filter(Boolean).join(' · ')) + '</p>' : '')
-      + (!talksAboutProperty(t, w.mapping) ? '<p class="cmp-note">This template does not mention a property, so this only narrows who gets it.</p>' : '') + '</section>'
+      + (!talksAboutProperty(t, w.mapping) ? '<p class="cmp-note">This template does not mention a property, so this only narrows who gets it.</p>' : '') + '</section>')
       + '<section class="cmp-card"><h2 class="cmp-h2">Fill each variable from</h2>'
       + (vars.length ? '<div class="cmp-maps">' + vars.map(function (v) {
         // The words around a variable only where its name says nothing: {{2}}, or one with no source.
@@ -1343,7 +1504,19 @@
     var w = S.wiz, C = CM(), vars = wizVars(), P = window.crmPipeline;
     var on = rows.filter(function (r) { return r.on; }).length;
     var shown = rows.slice(0, w.limit);
-    var quick = (w.journey ? [['journey', journeyLabel(w.journey)]] : []).concat(QUICK);
+    // "Matched buyers" needs a property; with a goal picked, its own list comes first.
+    var g = goalById(w.goal);
+    var quick = (w.journey ? [['journey', journeyLabel(w.journey)]] : []).concat(QUICK.filter(function (q) { return q[0] !== 'matched' || w.propertyId; }));
+    if (g && g.quick) quick.sort(function (a, b) { return (b[0] === g.quick) - (a[0] === g.quick); });
+    var adsOn = isAdsQuick(w.quick);
+    var adPanel = adsOn
+      ? '<div class="cmp-adbox">' + (S.adLoading ? '<p class="cmp-note" role="status"><i class="fa-solid fa-rotate fa-spin" aria-hidden="true"></i> Reading the Meta ad lead sheets…</p>' : '')
+        + '<div class="cmp-filters">'
+        + '<label class="tsk-f"><span>Enquired</span><select onchange="PinCampaigns.setAd(\'adWindow\',this.value)">' + [['7', 'In the last 7 days'], ['30', 'In the last 30 days'], ['90', 'In the last 90 days'], ['all', 'Any time']].map(function (o) { return '<option value="' + o[0] + '"' + (w.adWindow === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
+        + '<label class="tsk-f"><span>Which ones</span><select onchange="PinCampaigns.setAd(\'adState\',this.value)">' + [['all', 'All ad leads'], ['new', 'Not contacted yet'], ['unassigned', 'Nobody assigned']].map(function (o) { return '<option value="' + o[0] + '"' + (w.adState === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
+        + (w.quick === 'ads_match' ? '<label class="tsk-f"><span>Minimum match</span><select onchange="PinCampaigns.setAd(\'minMatch\',this.value)">' + [50, 60, 70, 80].map(function (n) { return '<option value="' + n + '"' + (Number(w.minMatch) === n ? ' selected' : '') + '>' + n + '%</option>'; }).join('') + '</select></label>' : '')
+        + '</div><p class="cmp-note">From the lead sheets (Meta Ads Leads). Someone already in the CRM goes as their CRM lead.' + (w.propertyId ? ' Only those who asked about the property picked.' : '') + '</p></div>'
+      : (w.quick === 'matched' ? '<div class="cmp-filters"><label class="tsk-f"><span>Minimum match</span><select onchange="PinCampaigns.setAd(\'minMatch\',this.value)">' + [50, 60, 70, 80, 90].map(function (n) { return '<option value="' + n + '"' + (Number(w.minMatch || 70) === n ? ' selected' : '') + '>' + n + '%</option>'; }).join('') + '</select></label></div>' : '');
     var agents = distinct(function (l) { return l.assignedAgent; });
     var ads = distinct(function (l) { return l.tt && l.tt.adTitle; });
     var lostOpts = [['', 'Any'], ['any', 'Any lost lead']].concat(Object.keys((P && P.LOST_REASONS) || {}).map(function (k) { return [k, P.LOST_REASONS[k]]; }));
@@ -1359,9 +1532,10 @@
         return '<button type="button" class="cmp-chip' + (w.quick === q[0] ? ' on' : '') + (q[0] === 'journey' ? ' j' : '') + '" aria-pressed="' + (w.quick === q[0]) + '" onclick="PinCampaigns.quick(' + js(q[0]) + ')">' + esc(q[1]) + '</button>';
       }).join('') + '</div>'
       + ((w.quick === 'interested' || w.quick === 'soldout') && !w.propertyId ? '<p class="cmp-note">Pick the property in step 2 to narrow this to one property.</p>' : '')
-      + savedListsHtml()
+      + adPanel
+      + (adsOn ? '' : savedListsHtml())
       + '<label class="tsk-f grow cmp-qsearch"><span>Search</span><input type="search" id="cmpF_q" value="' + esc(w.f.q) + '" placeholder="Name, number or property code" oninput="PinCampaigns.filter(\'q\',this.value,1)"></label>'
-      + '<details class="cmp-fdet"' + (filtersOpen ? ' open' : '') + ' ontoggle="PinCampaigns.setFlag(\'filtersOpen\',this.open)"><summary>Filters' + (nf ? ' <b>(' + nf + ')</b>' : '') + '</summary>'
+      + '<details class="cmp-fdet"' + (adsOn ? ' hidden' : '') + (filtersOpen ? ' open' : '') + ' ontoggle="PinCampaigns.setFlag(\'filtersOpen\',this.open)"><summary>Filters' + (nf ? ' <b>(' + nf + ')</b>' : '') + '</summary>'
       + '<div class="tsk-f cmp-stagef"><span id="cmpStagesL">Stage — tick several</span><div class="cmp-chips wrap" role="group" aria-labelledby="cmpStagesL">' + stageChips + '</div></div>'
       + '<div class="cmp-filters">'
       + sel('agent', w.f.agent, [['', 'Anyone']].concat(agents.map(function (a) { return [a, agentLabel(a)]; })).concat([['none', 'No agent yet']]), 'Lead agent')
@@ -1376,7 +1550,7 @@
       + (ads.length ? sel('ad', w.f.ad, [['', 'Any ad or post']].concat(ads.map(function (a) { return [a, a.length > 48 ? a.slice(0, 46) + '…' : a]; })), 'Ad or post') : '')
       + '<label class="tsk-f"><span>Area</span><input id="cmpF_area" value="' + esc(w.f.area) + '" placeholder="e.g. Anna Nagar" oninput="PinCampaigns.filter(\'area\',this.value,1)"></label>'
       + '</div></details></section>'
-      + '<section class="cmp-card"><h2 class="cmp-h2"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Ask AI who should get it</h2>'
+      + '<section class="cmp-card"' + (adsOn ? ' hidden' : '') + '><h2 class="cmp-h2"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Ask AI who should get it</h2>'
       + '<div class="cmp-aiq"><input id="cmpAiQ" value="' + esc(w.aiQ) + '" aria-label="Who should get it, in your words" placeholder="e.g. buyers who visited Anna Nagar 3 BHKs and found the price too high" oninput="PinCampaigns.setWiz(\'aiQ\',this.value)" onkeydown="if(event.key===\'Enter\')PinCampaigns.askAi()">'
       + '<button type="button" class="tsk-btn primary" ' + (w.aiBusy ? 'disabled' : '') + ' onclick="PinCampaigns.askAi()">' + (w.aiBusy ? 'Choosing…' : 'Choose') + '</button>'
       + (w.ai ? '<button type="button" class="tsk-btn" onclick="PinCampaigns.clearAi()">Clear AI picks</button>' : '') + '</div>'
@@ -2079,9 +2253,25 @@
     },
     setWiz: function (k, v) { if (S.wiz) { S.wiz[k] = v; saveWiz(); } },
     setName: function (v) { if (S.wiz) { S.wiz.name = v; saveWiz(); } },
-    setFlag: function (k, v) { if (S.wiz) { S.wiz[k] = !!v; saveWiz(); } },
+    setFlag: function (k, v) { if (S.wiz) { S.wiz[k] = !!v; saveWiz(); if (k === 'allTemplates') render(); } },
+    // The goal: who gets it (its quick list), one property for everyone or each lead's own, and the
+    // templates offered. A template that does not fit the new goal is unpicked.
+    pickGoal: function (id) {
+      var w = S.wiz, g = goalById(id); if (!g) return;
+      w.goal = id; w.allTemplates = false; w.journey = null; w.ai = null; w.unchecked = {}; w.edits = {}; w.limit = 150;
+      if (g.mode) w.propertyMode = g.mode;
+      if (g.prop === 'none') w.propertyId = '';
+      w.quick = g.quick;
+      if (g.quick === 'matched') w.minMatch = w.minMatch || 70;
+      if (g.quick === 'ads_match') w.minMatch = 60;
+      var t = wizTemplate();
+      if (t && g.purposes && g.purposes.indexOf(purposeOf(t)) < 0) { w.template = ''; w.mapping = {}; }
+      if (isAdsQuick(g.quick)) loadAdPeople();
+      saveWiz(); render();
+    },
+    setAd: function (k, v) { S.wiz[k] = v; S.wiz.limit = 150; if (k === 'minMatch') S.wiz.minMatch = Number(v) || 60; render(); },
     mapVar: function (v, k, val, typing) { var m = S.wiz.mapping[v] = S.wiz.mapping[v] || { source: k === 'fallback' ? CM().autoSource(v) : 'fixed', text: '' }; m[k] = val; rerenderSoon(typing); },
-    quick: function (q) { S.wiz.quick = q; S.wiz.limit = 150; render(); },
+    quick: function (q) { S.wiz.quick = q; S.wiz.limit = 150; if (isAdsQuick(q)) loadAdPeople(); render(); },
     filter: function (k, v, typing) { S.wiz.f[k] = v; S.wiz.limit = 150; rerenderSoon(typing); },
     toggleStage: function (id) { var f = S.wiz.f, list = f.stages || (f.stages = []), i = list.indexOf(id); if (i >= 0) list.splice(i, 1); else list.push(id); S.wiz.limit = 150; render(); },
     clearFilters: function (andQuick) { var q = S.wiz.f.q; S.wiz.f = blankFilters(); if (andQuick) { S.wiz.quick = ''; } else S.wiz.f.q = q; S.wiz.limit = 150; render(); },

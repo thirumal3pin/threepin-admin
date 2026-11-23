@@ -870,7 +870,8 @@ const browser = await chromium.launch();
     await page.waitForTimeout(200);
     const rows = await rowsText(page);
     ok('a typed number of a Negotiating lead is that lead, held for it', rows.some(r => /Nikhil Negotiating.*added by hand.*Negotiating — no Marketing messages/.test(r.t) && !r.on), rows.map(r => r.t.slice(0, 100)));
-    ok('…of a lead messaged recently, held for it', rows.some(r => /Recently Messaged.*added by hand.*Messaged in the last 7 days/.test(r.t) && !r.on));
+    // No frequency limit since 23 Nov 2026: a lead messaged recently goes, and its row says when.
+    ok('…of a lead messaged recently: not held — its row says when the last campaign went', rows.some(r => /Recently Messaged.*Last campaign/.test(r.t) && r.on), rows.map(r => r.t.slice(0, 120)));
     ok('…of a lead who said STOP, held for it', rows.some(r => /Omar Optout.*Asked not to be messaged/.test(r.t) && !r.on));
     ok('…a new number stays a contact typed in', rows.some(r => /Brand New.*added by hand/.test(r.t) && r.on));
     await page.evaluate(() => PinCampaigns.step(4));

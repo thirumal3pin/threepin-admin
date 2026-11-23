@@ -4144,6 +4144,18 @@ function writeVisit(l, at, status, property, agents, notes, minutes, mode){
   const before = P.visitOf(l);
   const beforeAgents = visitAgentsOf(l).join(',');
   const now = Date.now();
+  // Every visit that HAPPENED is kept (visitsDone), not only the latest booking: a lead who saw
+  // ANR003 on Monday and books MADA0001 for Friday has still visited ANR003 — the campaign lists
+  // ("visited ANR003 in the last 7 days") read this. At most the last 20.
+  const doneRec = v => v && v.status === 'done' && v.at ? { at: v.at, property: v.property || null } : null;
+  const keepDone = x => {
+    if (!x) return;
+    const list = Array.isArray(l.visitsDone) ? l.visitsDone.slice() : [];
+    if (!list.some(y => y.at === x.at && String(y.property || '') === String(x.property || ''))) list.push(x);
+    l.visitsDone = list.sort((a, b) => a.at - b.at).slice(-20);
+  };
+  keepDone(doneRec(before));
+  keepDone(doneRec({ at, status, property }));
   l.siteVisitAt = at;
   l.siteVisitStatus = status;
   l.siteVisitProperty = property || null;

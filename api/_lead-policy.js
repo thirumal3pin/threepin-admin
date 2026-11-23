@@ -262,6 +262,13 @@ export function decideLeadChanges({ lead, verdict, stages, now, run = {}, enquir
     const wasStatus = lead.siteVisitStatus || 'none';
     if (at !== wasAt || status !== wasStatus || property !== (lead.siteVisitProperty || null)) {
       Object.assign(patch, { siteVisitAt: at, siteVisitStatus: status, siteVisitProperty: property, siteVisitBy: 'ai', siteVisitSetAt: now });
+      // A visit that happened is kept in visitsDone (the page keeps it the same way, app.js writeVisit).
+      const done = [wasStatus === 'done' && wasAt ? { at: wasAt, property: lead.siteVisitProperty || null } : null, status === 'done' && at ? { at, property } : null].filter(Boolean);
+      if (done.length) {
+        const list = Array.isArray(lead.visitsDone) ? lead.visitsDone.slice() : [];
+        for (const x of done) if (!list.some(y => y.at === x.at && String(y.property || '') === String(x.property || ''))) list.push(x);
+        patch.visitsDone = list.sort((a, b) => a.at - b.at).slice(-20);
+      }
       result.siteVisit = at;
       // Only the date and the standing are worth a line on the timeline — a
       // property code arriving late is bookkeeping, not news.
