@@ -352,7 +352,8 @@ function whoHas(list) {
   const assignedRaw = rowAssigned(last);
   let prev = null;
   if (!assignedRaw) for (let i = list.length - 2; i >= 0; i--) { const r = rowAssigned(list[i]); if (r) { prev = list[i]; break; } }
-  return { assignedRaw, agent: assignedRaw ? last.agent || null : null, prevAssignedRaw: prev ? rowAssigned(prev) : '', prevAgent: prev ? prev.agent || null : null, contacted: teamWrote(last) };
+  return { assignedRaw, agent: assignedRaw ? last.agent || null : null, prevAssignedRaw: prev ? rowAssigned(prev) : '', prevAgent: prev ? prev.agent || null : null,
+    contacted: teamWrote(last), everContacted: list.some(teamWrote) };
 }
 /** A person's lead state for one property (code) — or overall ('' / 'all'). */
 export function teamFor(p, code) {

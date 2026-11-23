@@ -493,6 +493,9 @@
   function rowsFor(p, code) { return code === 'all' ? p.enquiries : p.enquiries.filter(function (e) { return e.propertyCode === code; }); }
   function lastAtFor(p) { var r = rowsFor(p, S.prop); return r.length ? (r[r.length - 1].at || 0) : (p.lastAt || 0); }
   function firstAtFor(p) { var r = rowsFor(p, S.prop); return r.length ? (r[0].at || 0) : (p.firstAt || 0); }
+  // How long a lead has been waiting for a call: from its NEWEST enquiry — the one nobody answered yet.
+  // (A person answered in October who enquires again today has waited minutes, not 39 days.)
+  function waitAtFor(p) { return lastAtFor(p); }
   function passes(p) {
     var f = S.filter, F = S.f;
     if (f === 'create' && p.action !== 'create') return false;
@@ -534,7 +537,7 @@
       var rank = function (p) {
         var n = nextOf(p);
         if (n && (n.state === 'overdue' || n.state === 'today')) return [0, n.at];
-        if (!p.team.contacted) return [1, firstAtFor(p) || 0];
+        if (!p.team.contacted) return [1, waitAtFor(p) || 0];
         if (!n) return [3, -lastAtFor(p)];
         return [{ later: 2, todo: 3, waiting: 4, none: 4, hold: 5, lost: 6 }[n.state], n.at || -lastAtFor(p)];
       };
@@ -542,7 +545,7 @@
       return out;
     }
     if (by === 'old') out.sort(function (a, b) { return lastAtFor(a) - lastAtFor(b); });
-    else if (by === 'untouched') out.sort(function (a, b) { return (a.team.contacted ? 1 : 0) - (b.team.contacted ? 1 : 0) || firstAtFor(a) - firstAtFor(b); });
+    else if (by === 'untouched') out.sort(function (a, b) { return (a.team.contacted ? 1 : 0) - (b.team.contacted ? 1 : 0) || waitAtFor(a) - waitAtFor(b); });
     else if (by === 'hot') out.sort(function (a, b) { return (b.team.rating || 0) - (a.team.rating || 0) || lastAtFor(b) - lastAtFor(a); });
     else if (by === 'name') out.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
     else if (by === 'name_desc') out.sort(function (a, b) { return String(b.name).localeCompare(String(a.name)); });
@@ -563,7 +566,7 @@
     var p = code === 'all' ? null : S.plan.properties.find(function (x) { return x.code === code; });
     var create = p ? p.create : S.plan.people.filter(function (x) { return x.action === 'create'; }).length;
     var mine = peopleFor(S.prop).filter(function (x) { return x.team.agent === me(); }).length;
-    var late = peopleFor(S.prop).filter(function (x) { return !x.team.contacted && firstAtFor(x) && Date.now() - firstAtFor(x) > SLA_MS; }).length;
+    var late = peopleFor(S.prop).filter(function (x) { return !x.team.contacted && waitAtFor(x) && Date.now() - waitAtFor(x) > SLA_MS; }).length;
     var t = function (n, label, cls, onclick) { return '<button class="ml-tile ' + (cls || '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '><div class="ml-tile-n">' + n + '</div><div class="ml-tile-l">' + label + '</div></button>'; };
     // My leads / Unassigned: the counts are of those leads only (an unassigned lead is never in "mine").
     if (S.f.agent === '_mine' || S.f.agent === '_none') {
@@ -571,7 +574,7 @@
       var ppl = peopleFor(S.prop).filter(function (x) { return S.f.agent === '_mine' ? x.team.agent === me() : !x.team.assignedRaw; });
       var enq = ppl.reduce(function (n, x) { return n + rowsFor(x, S.prop).length; }, 0);
       var notYet = ppl.filter(function (x) { return !x.team.contacted; }).length;
-      var lateN = ppl.filter(function (x) { return !x.team.contacted && firstAtFor(x) && Date.now() - firstAtFor(x) > SLA_MS; }).length;
+      var lateN = ppl.filter(function (x) { return !x.team.contacted && waitAtFor(x) && Date.now() - waitAtFor(x) > SLA_MS; }).length;
       var pri = ppl.filter(function (x) { return MM().isPriorityFor(x, c); }).length;
       return '<div class="ml-tiles">' +
         t(ppl.length, (S.f.agent === '_mine' ? 'Assigned to me' : 'Not assigned') + ' (' + enq + ' enquiries)', '', "MetaLeads.filter('all')") +
@@ -820,8 +823,10 @@
   }
   function waitingFlag(p) {
     if (p.team.contacted) return '';
-    var t = firstAtFor(p); if (!t) return '';
+    var t = waitAtFor(p); if (!t) return '';
     var ms = Date.now() - t;
+    // Answered before, back with a new enquiry: say exactly that — only this enquiry is waiting.
+    if (p.team.everContacted) return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="Answered last time — this new enquiry (' + esc(shortWhen(t)) + ') is not answered yet">New enquiry · not contacted · ' + esc(gapText(ms)) + '</span>';
     return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="Nothing written on this lead yet">Not contacted · ' + esc(gapText(ms)) + '</span>';
   }
   // The latest note written for this person (the newest row that has one): its column and text.
@@ -858,7 +863,7 @@
         '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div><div class="ml-when-r">' + esc(relShort(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
         '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
         '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>' + (p.team.prevAssignedRaw ? ' <span class="ml-prev" title="Enquired again — who had them before">· last time ' + esc(p.team.prevAgent ? agentLabel(p.team.prevAgent) : p.team.prevAssignedRaw) + '</span>' : '')) + ' ' + ratingChip(p.team.rating) + '</div>' +
-          (note ? '<div class="ml-note" title="' + esc(note.label + ': ' + note.text) + '"><span class="ml-tn-l">' + esc(note.label) + '</span> ' + esc(note.text) + '</div>' : '<div class="ml-note ml-dim">No notes yet</div>') + '</div>' +
+          (note ? '<div class="ml-note" title="' + esc(note.label + ': ' + note.text) + '"><span class="ml-tn-l">' + (!p.team.contacted && p.team.everContacted ? 'Last time · ' : '') + esc(note.label) + '</span> ' + esc(note.text) + '</div>' : '<div class="ml-note ml-dim">No notes yet</div>') + '</div>' +
         // On a phone: one line — the AI's next step when there is one, else the latest note.
         '<div class="ml-mline">' + (function () { var n = nextOf(p); return n && n.action ? '<i class="fa-solid fa-arrow-right"></i> ' + esc(n.action) : note ? esc(note.text) : '<span class="ml-dim">No notes yet</span>'; })() + '</div>' +
         '<div class="ml-act">' + '<div class="ml-badges">' + '<span class="ml-badge ml-magent">' + (who ? esc(who) : 'Not assigned') + (p.team.rating ? ' ★ ' + p.team.rating : '') + '</span> ' + status + '</div>' +

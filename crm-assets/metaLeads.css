@@ -719,3 +719,6 @@ a.ml-plink:hover i{opacity:1;}
 /* A repeat enquiry nobody has yet: who had them last time. */
 .ml-prev{color:var(--ink3);font-size:12.5px;font-weight:400;}
 .ml-prevhint{margin-top:6px;font-size:12.5px;color:var(--ink3);}
+
+/* Status chips in a lead row wrap inside their column rather than run under the buttons. */
+.ml-act .ml-badge{white-space:normal;max-width:100%;}
