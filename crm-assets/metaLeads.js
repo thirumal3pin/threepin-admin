@@ -735,7 +735,7 @@
     }).join('') + '</tr>';
     var body = rows.slice(0, S.shown).map(function (p) {
       var open = S.open === p.key;
-      return '<tr class="ml-tr' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + (p.team.contacted ? '' : ' fresh') + '">' +
+      return '<tr class="ml-tr' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + (p.team.contacted ? '' : ' fresh') + (p.team.assignedRaw ? '' : ' unas') + '">' +
         '<td class="ml-tsel"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></td>' +
         COLS.map(function (c) {
           var v = c.get(p);
@@ -840,7 +840,7 @@
     var ad = rows.length ? rows[rows.length - 1].ad : '';
     var ch = S.changed[p.key];
     var status = (ch ? '<span class="ml-badge ' + (ch === 'new' ? 'info' : 'chg') + '" title="Since the last refresh">' + (ch === 'new' ? 'New' : 'Updated') + '</span> ' : '') + dueChip(p) + ' ' + waitingFlag(p) + ' ' + actionBadge(p);
-    return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + '">' +
+    return '<div class="ml-person' + (open ? ' open' : '') + (S.sel[p.key] ? ' sel' : '') + (p.team.assignedRaw ? '' : ' unas') + '">' +
       '<div class="ml-prow-w">' +
       '<label class="ml-pick1" title="Select"><input type="checkbox" ' + (S.sel[p.key] ? 'checked' : '') + ' onchange="MetaLeads.sel(' + js(p.key) + ',this.checked)"></label>' +
       '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' + avatar(p) +

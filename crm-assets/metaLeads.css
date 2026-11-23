@@ -113,7 +113,7 @@ button.ml-tile[onclick]:hover{border-color:var(--ink3);}
 .ml-pick1{display:flex;align-items:flex-start;padding:19px 0 0 16px;}
 .ml-pick1 input,.ml-selall input{width:16px;height:16px;accent-color:var(--brand);}
 .ml-prow{flex:1;min-width:0;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.95fr) minmax(0,1.5fr) minmax(0,1.05fr);grid-template-areas:"who when team act";gap:8px 24px;text-align:left;padding:16px 16px;border:0;background:none;font:inherit;color:var(--ink);cursor:pointer;align-items:start;}
-.ml-prow:hover{background:var(--ml-soft);}
+.ml-prow-w:hover{background:var(--ml-soft);}
 .ml-person.open>.ml-prow-w{background:var(--ml-soft);}
 .ml-who{grid-area:who;min-width:0;}
 .ml-when{grid-area:when;min-width:0;}
@@ -702,3 +702,11 @@ a.ml-plink:hover i{opacity:1;}
 .ml-auto.sm{margin:8px 0 0;padding:4px 8px;font-size:12.5px;gap:4px;}
 .ml-auto.sm select.ml-f{min-height:32px;max-width:100%;}
 @media (pointer:coarse){.ml-auto select.ml-f{min-height:44px;}}
+
+/* Nobody has this lead yet: a soft warm wash and a thin warm edge — noticed in a scan, never loud. */
+.ml-person.unas>.ml-prow-w{background:light-dark(#FFFBF5,rgba(255,170,80,.045));box-shadow:inset 3px 0 0 light-dark(#F4CF9E,rgba(255,180,100,.40));}
+.ml-person.unas>.ml-prow-w:hover{background:light-dark(#FFF6EA,rgba(255,170,80,.08));}
+.ml-person.unas.sel>.ml-prow-w{background:var(--brand-soft);}
+.ml-tr.unas>td{background:light-dark(#FFFBF5,rgba(255,170,80,.045));}
+.ml-tr.unas>td:first-child{box-shadow:inset 3px 0 0 light-dark(#F4CF9E,rgba(255,180,100,.40));}
+.ml-person.unas.open>.ml-prow-w{background:var(--ml-soft);}
