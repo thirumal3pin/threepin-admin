@@ -28,11 +28,15 @@ const ago = (t, now) => { const h = Math.round((now - t) / H); return h < 48 ? `
 export function buckets(tabs, people, now) {
   const byPerson = new Map(), unassigned = [], seen = new Set();
   const slot = e => { if (!byPerson.has(e)) byPerson.set(e, { fresh: [], stale: [], warm: [] }); return byPerson.get(e); };
-  for (const tab of tabs) {
-    for (const e of readTab(tab).enquiries) {
-      if (!e.metaId || !e.at) continue;
+  // Newest first, so a person who enquired again is judged by the new row (not called yet), not by
+  // the old one someone already worked.
+  const all = [];
+  for (const tab of tabs) for (const e of readTab(tab).enquiries) if (e.metaId && e.at) all.push({ e, tab });
+  all.sort((a, b) => b.e.at - a.e.at);
+  for (const { e, tab } of all) {
+    {
       const key = (e.phoneKey || e.metaId) + '|' + (tab.propertyCode || '');
-      if (seen.has(key)) continue;   // the same person twice for one property: once
+      if (seen.has(key)) continue;   // the same person twice for one property: the newest row only
       seen.add(key);
       const item = { name: e.name, phone: e.phone, code: tab.propertyCode || '', at: e.at, rating: e.team.rating, sheet: `${String(tab.sheetTitle || '').trim()} › ${tab.title}` };
       const raw = String(e.team.assigned || '').trim();

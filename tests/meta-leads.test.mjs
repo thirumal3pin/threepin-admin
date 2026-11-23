@@ -84,9 +84,13 @@ const plan = M.buildPlan({ tabs: tabsFor(SOURCES), crmLeads: CRM_LEADS, roster: 
   eq('Arjun: one person, three enquiries over two properties, each with its date and time',
     [arjun.enquiries.length, arjun.properties, arjun.enquiries.map(e => [M.fmtWhen(e.at), e.where.sheetTitle.trim() + ' › ' + e.where.tab, e.ad])],
     [3, ['KDBMC001', 'SHR0001'], [['15 Oct 2026, 2:00 pm', 'office space - Kodambakkam › Sheet1', 'Video 2'], ['20 Oct 2026, 2:56 pm', 'office space - Kodambakkam › Sheet3', 'Video 2'], ['7 Nov 2026, 3:59 am', 'Koyambedu - Leads › Sheet1', 'Creative 1']]]);
-  eq('Arjun: latest assignee and rating, every note with where it was written',
-    [arjun.team.agent, arjun.team.rating, arjun.team.notes.map(n => n.text)],
-    ['swami@threepin.in', 3, ['Sent exact location — gym, 2.5 km from branch', 'Visiting today 12PM (16/10)', 'callback wednesday ( 24/10)', 'Purpose: gym 50/sqft']]);
+  eq('Arjun: rating, every note with where it was written',
+    [arjun.team.rating, arjun.team.notes.map(n => n.text)],
+    [3, ['Sent exact location — gym, 2.5 km from branch', 'Visiting today 12PM (16/10)', 'callback wednesday ( 24/10)', 'Purpose: gym 50/sqft']]);
+  // His newest enquiry (7 Nov, the Koyambedu flats) has nobody yet: a fresh lead, not "Swami's, contacted".
+  eq('Arjun overall: the newest enquiry decides — not assigned, not contacted, last time with Swami',
+    [arjun.team.assignedRaw, arjun.team.contacted, arjun.team.prevAgent, arjun.team.everContacted], ['', false, 'swami@threepin.in', true]);
+  eq('…for KDBMC001 he is still Swami\'s, contacted', [M.teamFor(arjun, 'KDBMC001').agent, M.teamFor(arjun, 'KDBMC001').contacted], ['swami@threepin.in', true]);
   const queen = plan.people.find(p => p.phoneKey === '917010300002');
   eq('Queen Salon: the same person through two KDBMC001 sheets three weeks apart', [queen.enquiries.length, queen.properties, queen.name, queen.team.agent], [2, ['KDBMC001'], 'Queen', 'thirumal@threepin.in']);
   const sara = plan.people.find(p => p.phoneKey === '919042700008');

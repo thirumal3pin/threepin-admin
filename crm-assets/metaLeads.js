@@ -482,8 +482,13 @@
     if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; S.f.sort = 'next'; }
   }
   function me() { return (typeof currentUserEmail !== 'undefined' && currentUserEmail) ? String(currentUserEmail).toLowerCase() : ''; }
+  // Viewing one property: each person's state is that property's (its newest enquiry decides who has it
+  // and whether it was answered). Worked out once per plan and property.
   function peopleFor(code) {
-    return S.plan.people.filter(function (p) { return code === 'all' || p.properties.indexOf(code) >= 0; });
+    if (code === 'all') return S.plan.people;
+    var memo = S.plan.__byCode || (S.plan.__byCode = {});
+    if (!memo[code]) memo[code] = S.plan.people.filter(function (p) { return p.properties.indexOf(code) >= 0; }).map(function (p) { return Object.assign({}, p, { team: MM().teamFor(p, code) }); });
+    return memo[code];
   }
   function rowsFor(p, code) { return code === 'all' ? p.enquiries : p.enquiries.filter(function (e) { return e.propertyCode === code; }); }
   function lastAtFor(p) { var r = rowsFor(p, S.prop); return r.length ? (r[r.length - 1].at || 0) : (p.lastAt || 0); }
@@ -852,7 +857,7 @@
         (function () { var fa = formAnswers(p); return fa.length ? '<div class="ml-fans" title="' + esc(fa.map(function (a) { return a.label + ': ' + a.value; }).join('\n')) + '">' + fa.map(function (a) { return '<span>' + esc(a.label) + ': <b>' + esc(a.value) + '</b></span>'; }).join(' · ') + '</div>' : ''; })() + '</div>' +
         '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div><div class="ml-when-r">' + esc(relShort(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
         '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
-        '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>') + ' ' + ratingChip(p.team.rating) + '</div>' +
+        '<div class="ml-team"><div class="ml-agent">' + (who ? '<i class="fa-regular fa-user"></i> ' + esc(who) : '<span class="ml-unas">Not assigned</span>' + (p.team.prevAssignedRaw ? ' <span class="ml-prev" title="Enquired again — who had them before">· last time ' + esc(p.team.prevAgent ? agentLabel(p.team.prevAgent) : p.team.prevAssignedRaw) + '</span>' : '')) + ' ' + ratingChip(p.team.rating) + '</div>' +
           (note ? '<div class="ml-note" title="' + esc(note.label + ': ' + note.text) + '"><span class="ml-tn-l">' + esc(note.label) + '</span> ' + esc(note.text) + '</div>' : '<div class="ml-note ml-dim">No notes yet</div>') + '</div>' +
         // On a phone: one line — the AI's next step when there is one, else the latest note.
         '<div class="ml-mline">' + (function () { var n = nextOf(p); return n && n.action ? '<i class="fa-solid fa-arrow-right"></i> ' + esc(n.action) : note ? esc(note.text) : '<span class="ml-dim">No notes yet</span>'; })() + '</div>' +
@@ -901,6 +906,14 @@
   }
   function firstCol(e, role) { return teamCols(e).find(function (c) { return c.role === role; }) || null; }
   function today() { var d = new Date(Date.now() + 5.5 * 3600000); return d.getUTCDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]; }
+  // A repeat enquiry nobody has yet: who had them last time, and one tap to give it back to them.
+  function prevHint(p, aNow, rk) {
+    var prev = p.team.prevAgent;
+    if (aNow || !p.team.prevAssignedRaw) return '';
+    var can = prev && assignRoster().indexOf(prev) >= 0;
+    return '<div class="ml-prevhint">Enquired again — last time with <b>' + esc(prev ? agentLabel(prev) : p.team.prevAssignedRaw) + '</b>' +
+      (can ? ' <button type="button" class="ml-link" onclick="var s=document.getElementById(\'mlwA\');s.value=' + esc(js(prev)) + ';MetaLeads.draft(' + esc(js(rk)) + ',\'A\',s.value)">Give back to ' + esc(agentLabel(prev)) + '</button>' : '') + '</div>';
+  }
   // chosen: a pick not saved yet ('' = Not assigned), which wins over what the sheet says.
   function agentOptions(current, chosen) {
     var cur = current ? MM().matchAgent(current, roster()) : null;
@@ -939,7 +952,7 @@
     return '<div class="ml-work"><div class="ml-h"><b>Work this lead</b> <span class="ml-dim">Written to ' + esc(String(e.where.sheetTitle).trim() + ' › ' + e.where.tab) + ', row ' + e.row + '</span></div>' +
       '<div class="ml-wgrid">' + pickRow +
         '<label>Assigned to</label>' + (canReassign(aNow)
-          ? '<select class="ml-f" id="mlwA" onchange="MetaLeads.draft(' + js(rk) + ',\'A\',this.value)">' + agentOptions(aNow, aDraft) + '</select>'
+          ? '<div><select class="ml-f" id="mlwA" onchange="MetaLeads.draft(' + js(rk) + ',\'A\',this.value)">' + agentOptions(aNow, aDraft) + '</select>' + prevHint(p, aNow, rk) + '</div>'
           : '<div class="ml-f ml-ro"><input type="hidden" id="mlwA" value="_keep">' + (aNow ? esc((MM().matchAgent(aNow, roster()) ? agentLabel(MM().matchAgent(aNow, roster())) : aNow)) : 'Not assigned') +
             ' <span class="ml-dim">— ' + (isAgentMe() ? 'an admin assigns leads' : 'only an admin changes an agent’s lead') + '</span></div>') +
         '<label>Rating <span class="ml-dim">1–5</span></label><div class="ml-rates">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="ml-rb r' + n + (rated === n ? ' on' : '') + '" title="' + n + ' of 5" onclick="MetaLeads.pickRate(this,' + n + ')">' + n + '</button>'; }).join('') + '<input type="hidden" id="mlwR" value="' + (rated || '') + '"></div>' +

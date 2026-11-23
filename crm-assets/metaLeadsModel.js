@@ -340,6 +340,27 @@ export const teamWrote = e => wroteOn(e.team) || (e.alsoIn || []).some(a => wrot
 export const tabKey = t => `${t.spreadsheetId}:${t.gid}`;
 const inTab = (e, key) => `${e.where.spreadsheetId}:${e.where.gid}` === key;
 
+// "Assigned to" of a row (or of the same lead's copy in another tab).
+const rowAssigned = e => String(e.team.assigned || ((e.alsoIn || []).map(a => a.team.assigned).find(Boolean)) || '').trim();
+// Who has a lead and whether it was answered: the NEWEST of the given enquiries decides. A person who
+// enquires again is a fresh lead until someone takes and calls them — the old row's agent and remarks
+// must not make it look handled. Who had them before is kept so it can go back to the same person.
+// (e.agent is set by buildPlan.)
+function whoHas(list) {
+  const last = list[list.length - 1];
+  if (!last) return { assignedRaw: '', agent: null, prevAssignedRaw: '', prevAgent: null, contacted: false };
+  const assignedRaw = rowAssigned(last);
+  let prev = null;
+  if (!assignedRaw) for (let i = list.length - 2; i >= 0; i--) { const r = rowAssigned(list[i]); if (r) { prev = list[i]; break; } }
+  return { assignedRaw, agent: assignedRaw ? last.agent || null : null, prevAssignedRaw: prev ? rowAssigned(prev) : '', prevAgent: prev ? prev.agent || null : null, contacted: teamWrote(last) };
+}
+/** A person's lead state for one property (code) — or overall ('' / 'all'). */
+export function teamFor(p, code) {
+  if (!code || code === 'all') return p.team;
+  const rows = p.enquiries.filter(e => e.propertyCode === code);
+  return rows.length ? { ...p.team, ...whoHas(rows) } : p.team;
+}
+
 /** The key a person is known by: their phone, else their email, else the Meta lead id. */
 export function personKey(e) {
   if (e.phoneKey && e.phoneKey.length >= 10) return 'p:' + e.phoneKey;
@@ -402,8 +423,12 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
     const last = list[list.length - 1];
     const pick = f => { for (let i = list.length - 1; i >= 0; i--) if (list[i][f]) return list[i][f]; return ''; };
     const latestTeam = f => { for (let i = list.length - 1; i >= 0; i--) { const v = list[i].team[f]; if (v != null && v !== '') return v; } return null; };
-    const assignedRaw = latestTeam('assigned') || '';
-    const agent = assignedRaw ? matchAgent(assignedRaw, roster) : null;
+    // Who has the lead, and whether it was answered, is the NEWEST enquiry's: a person who enquires
+    // again (a new row, maybe in another sheet) is a fresh lead until someone takes and calls them —
+    // the old row's agent and remarks must not make it look handled. Who had them last time is kept
+    // (prevAssignedRaw) so the new one can go back to the same person.
+    for (const e of list) { const r = rowAssigned(e); e.agent = r ? matchAgent(r, roster) : null; }
+    const { assignedRaw, agent, prevAssignedRaw, prevAgent, contacted } = whoHas(list);
     const notes = [];
     for (const e of list) {
       const src = `${e.where.sheetTitle} › ${e.where.tab}`;
@@ -449,7 +474,8 @@ export function buildPlan({ tabs, crmLeads, roster, properties, stages } = {}) {
       enquiries: list, firstAt: list[0].at, lastAt: last.at, properties: codes,
       dupCodes, duplicate: dupCodes.length > 0, multiProperty: codes.length > 1,
       revisited, revisitCodes, priority, newRows: newRows.length,
-      team: { assignedRaw, agent, rating: latestTeam('rating'), ratingRaw: latestTeam('ratingRaw') || '', notes, contacted: list.some(teamWrote) },
+      team: { assignedRaw, agent, prevAssignedRaw, prevAgent, rating: latestTeam('rating'), ratingRaw: latestTeam('ratingRaw') || '', notes,
+        contacted, everContacted: list.some(teamWrote) },
       crm: crm ? {
         id: crm.id, name: crm.name || '', stage: stageName(crm.stageId), stageId: crm.stageId || '', agent: crm.assignedAgent || '',
         propertyCodes: crmCodes, propertyInterest: crm.propertyInterest || '', budget: crm.budget || '', source: crm.source || '',
@@ -524,7 +550,7 @@ const tally = (list, f) => {
  * now: for the "last N days" series.
  */
 export function analyse(plan, code, now = Date.now(), days = 30, tab = '') {
-  let ppl = code ? plan.people.filter(p => p.properties.includes(code)) : plan.people;
+  let ppl = code ? plan.people.filter(p => p.properties.includes(code)).map(p => ({ ...p, team: teamFor(p, code) })) : plan.people;
   let enq = ppl.flatMap(p => (code ? p.enquiries.filter(e => e.propertyCode === code) : p.enquiries));
   if (tab) { ppl = ppl.filter(p => p.enquiries.some(e => inTab(e, tab))); enq = enq.filter(e => inTab(e, tab)); }
   const series = [];
@@ -652,12 +678,17 @@ export function slicePlan(plan, { agent = '', lo = null, hi = null, code = '' } 
   const people = [];
   let undated = 0;
   for (const p of plan.people) {
-    if (agent === '_none' ? p.team.assignedRaw : (agent && p.team.agent !== agent && p.team.assignedRaw !== agent)) continue;
+    const t = code ? teamFor(p, code) : p.team;   // whose it is: for the property in view
+    if (agent === '_none' ? t.assignedRaw : (agent && t.agent !== agent && t.assignedRaw !== agent)) continue;
     const mine = code ? p.enquiries.filter(e => e.propertyCode === code) : p.enquiries;
-    if (lo == null) { if (mine.length) people.push(p); continue; }
+    if (lo == null) { if (mine.length) people.push(code ? { ...p, team: teamFor(p, code) } : p); continue; }
     undated += mine.filter(e => !e.at).length;
     const enquiries = mine.filter(e => e.at && e.at >= lo && e.at < hi);
-    if (enquiries.length) people.push({ ...p, enquiries });
+    // A period counts its own enquiries: assigned and contacted as they were for those rows (a person
+    // answered in October and back today still counts as contacted in October).
+    if (enquiries.length) {
+      people.push({ ...p, enquiries, team: { ...p.team, ...whoHas(enquiries), contacted: enquiries.some(teamWrote) } });
+    }
   }
   return { ...plan, people, undated };
 }

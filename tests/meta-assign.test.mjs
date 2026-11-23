@@ -138,5 +138,23 @@ eq('…else the property\'s', MA.ruleFor({ sheets: {}, props: { KDBMC001: { emai
   eq('A lead from last night, not called yet: "new" for its person', b.byPerson.get('rameez@threepin.in').fresh.length, 1);
 }
 
+// ── A person who enquires again (the owner's case, 23 Nov: assigned to Thirumal in October, back today) ──
+{
+  const MM = await import('../crm-assets/metaLeadsModel.js');
+  const H = ['id', 'created_time', 'full_name', 'phone_number', 'Assigned to', 'Remarks'];
+  const old = { sourceId: 'S1', spreadsheetId: 'S1', sheetTitle: 'office space', title: 'Sheet1', gid: 0, propertyCode: 'KDBMC001',
+    values: [H, ['l:1', '2026-10-15T17:30:00+05:30', 'Govardhana', 'p:+917904522919', 'Thirumal', 'He is a property consultant']] };
+  const today = { sourceId: 'S2', spreadsheetId: 'S2', sheetTitle: 'Tnagar new lead', title: 'Sheet1', gid: 0, propertyCode: 'KDBMC001',
+    values: [H, ['l:2', '2026-11-23T12:08:00+05:30', 'Govardhana', 'p:+917904522919', '', '']] };
+  const plan = MM.buildPlan({ tabs: [old, today], crmLeads: [], roster: TEAM.map(p => p.email), properties: [], stages: [] });
+  const g = plan.people[0];
+  eq('Back today: not assigned and not contacted — the old row does not make it look handled', [g.team.assignedRaw, g.team.contacted], ['', false]);
+  eq('…who had them last time is kept, to give it back to them', g.team.prevAgent, 'thirumal@threepin.in');
+  eq('…the same for the property in view', [MM.teamFor(g, 'KDBMC001').assignedRaw, MM.teamFor(g, 'KDBMC001').contacted], ['', false]);
+  ok('…October still counts as contacted in October\'s analysis', MM.slicePlan(plan, { lo: Date.parse('2026-10-01T00:00:00+05:30'), hi: Date.parse('2026-11-01T00:00:00+05:30') }).people[0].team.contacted === true);
+  const b = buckets([old, today], TEAM, Date.parse('2026-11-23T13:00:00+05:30'));
+  ok('…and the 9 am e-mail lists it as unassigned (the newest row decides)', b.unassigned.length === 1 && b.unassigned[0].at === Date.parse('2026-11-23T12:08:00+05:30'));
+}
+
 console.log(bad ? `${bad} of ${n} checks FAILED` : `All good (${n} checks).`);
 if (bad) process.exit(1);
