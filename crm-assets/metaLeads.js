@@ -175,7 +175,8 @@
     return '<div class="ml-drawer-bg" onclick="MetaLeads.closeLead()"></div><aside class="ml-drawer' + (phone ? ' full' : '') + '" role="dialog" aria-label="' + esc(p.name || 'Lead') + '">' +
       '<div class="ml-drawer-h">' + (phone ? '<button class="ml-back" onclick="MetaLeads.closeLead()" aria-label="Back to the leads"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
         '<div class="ml-dh-who">' + (phone ? avatar(p) : '') + '<div class="ml-dh-t"><div class="ml-name">' + esc(p.name || '(no name)') + '</div>' +
-        '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + p.properties.map(propLink).join(' ') + (phone && who ? ' · ' + esc(who) : '') + '</div></div></div>' +
+        '<div class="ml-dim">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + ' · ' + p.properties.map(propLink).join(' ') + (phone && who ? ' · ' + esc(who) : '') + '</div>' +
+        (p.email ? '<div class="ml-dim ml-dh-mail"><i class="fa-regular fa-envelope" aria-hidden="true"></i> <a href="mailto:' + esc(p.email) + '">' + esc(p.email) + '</a></div>' : '') + '</div></div>' +
         (phone ? '' : '<div class="ml-dh-r">' + (p.crm ? crmLink(p, 'ml-btn sm ml-crmopen', '<i class="fa-solid fa-arrow-up-right-from-square"></i> Open in CRM' + (p.crm.stage ? ' · ' + esc(p.crm.stage) : '')) : '') +
           '<button class="ml-icon" title="Close (Esc)" onclick="MetaLeads.closeLead()">✕</button></div>') + '</div>' +
       (phone ? acts + tabs : '') +
@@ -669,6 +670,7 @@
   var TCOLS = [
     { key: 'name', label: 'Name', get: function (p) { return p.name || ''; } },
     { key: 'phone', label: 'Phone', get: function (p) { return p.phone ? MM().displayPhone(p.phone) : ''; } },
+    { key: 'email', label: 'Email', get: function (p) { return p.email || ''; } },
     { key: 'prop', label: 'Property', get: function (p) { return p.properties.join(' '); } },
     { key: 'at', label: 'Enquired', get: function (p) { return MM().fmtWhen(lastAtFor(p)); }, sort: function (p) { return lastAtFor(p); }, nofilter: true },
     { key: 'ad', label: 'Ad', get: function (p) { return Array.from(new Set(rowsFor(p, S.prop).map(function (e) { return e.ad; }).filter(Boolean))).join(', '); } },
@@ -846,6 +848,7 @@
       '<button class="ml-prow" onclick="MetaLeads.toggle(' + js(p.key) + ')" aria-expanded="' + open + '">' + avatar(p) +
         '<div class="ml-who"><div class="ml-name">' + esc(p.name || '(no name)') + (p.crm && p.crm.name && p.crm.name !== p.name ? ' <span class="ml-aka">CRM: ' + esc(p.crm.name) + '</span>' : '') + '</div>' +
         '<div class="ml-phone' + (p.phoneOk ? '' : ' bad') + '">' + esc(p.phone ? MM().displayPhone(p.phone) : 'no phone') + '</div>' +
+        (p.email ? '<div class="ml-email" title="' + esc(p.email) + '">' + esc(p.email) + '</div>' : '') +
         (function () { var fa = formAnswers(p); return fa.length ? '<div class="ml-fans" title="' + esc(fa.map(function (a) { return a.label + ': ' + a.value; }).join('\n')) + '">' + fa.map(function (a) { return '<span>' + esc(a.label) + ': <b>' + esc(a.value) + '</b></span>'; }).join(' · ') + '</div>' : ''; })() + '</div>' +
         '<div class="ml-when"><div class="ml-when-t">' + esc(shortWhen(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div><div class="ml-when-r">' + esc(relShort(rows.length ? rows[rows.length - 1].at : p.lastAt)) + '</div>' +
         '<div class="ml-meta">' + (dups || (ad ? '<span class="ml-dim">' + esc(ad) + '</span>' : '')) + (codes ? ' ' + codes : '') + '</div></div>' +
