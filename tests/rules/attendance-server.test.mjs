@@ -178,3 +178,38 @@ test('the test e-mail goes to both admins, marked TEST, in the requested words',
   assert.match(mails[0].text, /Pradeep \(pradeep@threepin\.in\) signed in now — /);
   assert.match(mails[0].html, /test message for attendance alerts/i);
 });
+
+test('an admin puts a missed sign-out right: the hours count, and only an admin can', async () => {
+  const y = C.addDays(today, -1);
+  const [Y, M, D] = y.split('-').map(Number);
+  const istAt = (h, m = 0) => Date.UTC(Y, M - 1, D, h, m) - 5.5 * 3600000;
+  const inAt = istAt(9, 30);
+  // Signed in at 9:30 yesterday, never signed out; this morning's sign-in closed it as "no sign-out".
+  const events = [{ id: 'a', type: 'in', at: inAt, source: 'page' }];
+  await db.collection('attendance').doc(C.docId(T, 'u_rajesh', y)).set({ tenantId: T, uid: 'u_rajesh', email: 'rajesh@threepin.in', name: 'Rajesh', day: y, events, ...C.summarise(events) });
+  await call('rajesh', 'sign-in');
+  let yd = await rec('u_rajesh', y);
+  assert.equal(yd.workedMs, 0, 'closed as no sign-out: nothing counted');
+  assert.equal((await call('rajesh', 'fix-out', { uid: 'u_rajesh', day: y, inAt, time: '18:30' })).status, 403, 'not the person themselves');
+  let r = await call('thiru', 'fix-out', { uid: 'u_rajesh', day: y, inAt, time: '18:30' });
+  assert.equal(r.ok, true);
+  yd = await rec('u_rajesh', y);
+  assert.equal(yd.workedMs, 9 * 3600e3, '9:30 to 6:30 counts: 9 hours');
+  assert.equal(yd.sessions[0].missedOut, undefined, 'no longer marked missed');
+  const ev = yd.events.find(e => e.type === 'out');
+  assert.equal(ev.fixedBy, 'thirumal@threepin.in');
+  assert.ok(ev.was, 'what it said before is kept');
+  // A session still open on a past day (they never signed in again): closed at the time given.
+  const y2 = C.addDays(today, -2);
+  const [Y2, M2, D2] = y2.split('-').map(Number);
+  const in2 = Date.UTC(Y2, M2 - 1, D2, 10, 0) - 5.5 * 3600000;
+  const ev2 = [{ id: 'b', type: 'in', at: in2, source: 'page' }, { id: 'c', type: 'out', at: in2 + 2 * 3600e3, source: 'page' }, { id: 'd', type: 'in', at: in2 + 3 * 3600e3, source: 'page' }];
+  await db.collection('attendance').doc(C.docId(T, 'u_swami', y2)).set({ tenantId: T, uid: 'u_swami', email: 'swami@threepin.in', name: 'Swami', day: y2, events: ev2, ...C.summarise(ev2) });
+  assert.equal((await call('thiru', 'fix-out', { uid: 'u_swami', day: y2, inAt: in2, time: '11:30' })).status, 409, 'a session with a real sign-out is not "fixed"');
+  assert.equal((await call('thiru', 'fix-out', { uid: 'u_swami', day: y2, inAt: in2 + 3 * 3600e3, time: '12:00' })).status, 400, 'a sign-out before the sign-in is refused');
+  r = await call('thiru', 'fix-out', { uid: 'u_swami', day: y2, inAt: in2 + 3 * 3600e3, time: '17:00' });
+  assert.equal(r.ok, true);
+  const s2 = await rec('u_swami', y2);
+  assert.equal(s2.open, false);
+  assert.equal(s2.workedMs, 2 * 3600e3 + 4 * 3600e3, '2 h + 1 pm to 5 pm');
+});

@@ -72,7 +72,8 @@ export function createFakeDb() {
   function query(collPath, filters = [], lim = null) {
     return {
       where: (field, op, value) => {
-        if (op !== '==' && op !== 'array-contains') throw new Error(`fake db supports == and array-contains (got ${op})`);
+        if (op !== '==' && op !== 'array-contains' && op !== 'in') throw new Error(`fake db supports ==, in and array-contains (got ${op})`);
+        if (op === 'in' && (!Array.isArray(value) || value.length > 30)) throw new Error('fake db: "in" takes a list of at most 30, as Firestore does');
         return query(collPath, [...filters, [field, value, op]], lim);
       },
       limit: n => query(collPath, filters, n),
@@ -82,7 +83,7 @@ export function createFakeDb() {
         let docs = [];
         for (const [path, data] of store) {
           if (!path.startsWith(collPath + '/') || path.split('/').length !== depth) continue;
-          if (filters.every(([f, v, op]) => op === 'array-contains' ? (Array.isArray(getPath(data, f)) && getPath(data, f).includes(v)) : getPath(data, f) === v)) docs.push(snap(docRef(path)));
+          if (filters.every(([f, v, op]) => op === 'array-contains' ? (Array.isArray(getPath(data, f)) && getPath(data, f).includes(v)) : op === 'in' ? v.includes(getPath(data, f)) : getPath(data, f) === v)) docs.push(snap(docRef(path)));
         }
         docs.sort((a, b) => a.id.localeCompare(b.id));
         if (lim !== null) docs = docs.slice(0, lim);

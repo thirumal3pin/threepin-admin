@@ -186,10 +186,16 @@ export async function startStack({ emuPort = Number(process.env.E2E_EMU_PORT) ||
   `;
   const browser = await chromium.launch({ channel: 'chrome', headless });
   // touch: a phone's touch screen (no hover; real touch gestures through page.touchscreen / CDP).
-  async function as(key, { viewport = { width: 390, height: 844 }, dark = false, touch = false } = {}) {
+  // attendance: true lets the morning sign-in pop-up show (shared-assets/attendance-prompt.js); by
+  // default each person counts as signed in today, so the pop-up does not cover the page under test.
+  async function as(key, { viewport = { width: 390, height: 844 }, dark = false, touch = false, attendance = false } = {}) {
     const ctx = await browser.newContext({ viewport, colorScheme: dark ? 'dark' : 'light', deviceScaleFactor: 2, ...(touch ? { hasTouch: true, isMobile: true } : {}) });
     const p = PEOPLE[key];
     await ctx.addInitScript(u => { window.__fakeUser = u; }, p);
+    if (!attendance) await ctx.addInitScript(uid => {
+      const day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      try { localStorage.setItem('pin.att.state.' + uid, JSON.stringify({ day, s: 'in', at: Date.now() })); } catch (e) { /* no storage */ }
+    }, p.uid);
     await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js', r => r.fulfill({ contentType: 'text/javascript', body: FAKE_AUTH }));
     await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js', r => r.fulfill({ contentType: 'text/javascript', body: FS_WRAP }));
     await ctx.route('https://www.gstatic.com/firebasejs/12.16.0/__real-firestore.js', r => r.fulfill({ contentType: 'text/javascript', body: REAL_FS }));

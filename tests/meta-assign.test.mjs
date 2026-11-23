@@ -156,5 +156,27 @@ eq('…else the property\'s', MA.ruleFor({ sheets: {}, props: { KDBMC001: { emai
   ok('…and the 9 am e-mail lists it as unassigned (the newest row decides)', b.unassigned.length === 1 && b.unassigned[0].at === Date.parse('2026-11-23T12:08:00+05:30'));
 }
 
+// ── The every-few-minutes tick (outside timer) ──
+{
+  const { metaLeadsTick } = await import('../api/_meta-leads.js');
+  const { db, sheets, mails, deps, act, setNow } = await setup();
+  setNow(Date.parse('2026-10-21T00:00:00-05:00'));
+  await act('admin', { action: 'set-auto-assign', scope: 'property', key: 'KDBMC001', email: 'swami@threepin.in' });
+  setNow(NOW);
+  process.env.META_TICK_KEY = 'tick-secret';
+  const req = key => new Request('https://x/api/sync-inventory?op=meta-leads&tick=1', { headers: key ? { authorization: 'Bearer ' + key } : {} });
+  let r = await metaLeadsTick(req('wrong'), { ...deps, db, tenantId: T });
+  eq('The tick refuses a wrong key', r.status, 401);
+  r = await metaLeadsTick(req('tick-secret'), { ...deps, db, tenantId: T });
+  let j = await r.json();
+  ok('The tick reads the sheets and gives the new lead to its default person (and e-mails them)', j.ok && j.read > 0 && kdb3(sheets)[4][19] === 'Swami' && mails.some(m => m.to === 'swami@threepin.in'), j);
+  // The tick's own write changed that sheet, so the next one reads it once more; after that, nothing.
+  await metaLeadsTick(req('tick-secret'), { ...deps, db, tenantId: T });
+  r = await metaLeadsTick(req('tick-secret'), { ...deps, db, tenantId: T });
+  j = await r.json();
+  eq('Then a tick skips the sheets that did not change', [j.ok, j.read], [true, 0]);
+  delete process.env.META_TICK_KEY;
+}
+
 console.log(bad ? `${bad} of ${n} checks FAILED` : `All good (${n} checks).`);
 if (bad) process.exit(1);

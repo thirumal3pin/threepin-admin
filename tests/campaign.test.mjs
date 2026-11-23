@@ -650,6 +650,14 @@ section('fix: who is held back — at create and again at every send');
   check('the referral template may ask a Won lead', r.ok && r.counts.total === 2, r);
   r = await w.run({ op: 'create', template: 'site_visit_unavailable_update', vars: ['name'], recipients: [R('NOOFF', '9000000003'), R('NEG', '9000000006'), R('RECENT', '9000000004'), R('CHAT', '9000000008')] });
   check('a Utility message still goes to all of them', r.ok && r.counts.total === 4, r);
+  // A number typed in by hand that is a CRM lead's: that lead's rules hold it back too.
+  await w.db.collection('leads').doc('OPTED').set({ tenantId: TENANT, name: 'Opted', phone: '9000000020', phoneKey: '919000000020', waOptOut: true });
+  r = await w.run({ op: 'create', template: 'promo_v1', vars: ['name'], recipients: [{ contact: '9000000020', values: { name: 'typed' } }, R('OK', '9000000001')] });
+  check('a typed number of a lead who opted out is held back (the lead behind the number)', r.ok && r.skipped.some(x => x.why === 'opted out') && r.counts.total === 1, r);
+  // A lead is sent to its own number only.
+  await w.db.collection('leads').doc('OWNNUM').set({ tenantId: TENANT, name: 'Own', phone: '9000000021', phoneKey: '919000000021' });
+  r = await w.run({ op: 'create', template: 'promo_v1', vars: ['name'], recipients: [R('OWNNUM', '9000000099'), R('OK', '9000000001')] });
+  check('a lead with another number next to it is refused', r.ok && r.skipped.some(x => x.key === 'OWNNUM' && /not this lead/.test(x.why)), r);
 }
 {
   // F1: things change between create and send — the batch checks again.

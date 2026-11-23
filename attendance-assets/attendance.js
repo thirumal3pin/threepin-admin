@@ -111,8 +111,19 @@ function dayRows(days, { person = false } = {}) {
       <span class="at-io">${none ? '—' : `${clock(d.firstIn)} → ${d.open ? (d.day === dayOf(now()) ? 'now' : '<em>no sign-out</em>') : clock(d.lastOut) || '—'}`}${missed ? ' <span class="tag wait">forgot to sign out</span>' : ''}</span>
       <b class="at-h2">${none ? '' : hm(d.liveMs)}</b>
       ${!none && d.sessions.length > 1 ? `<span class="at-sc">${d.sessions.length} sessions</span>` : ''}
+      ${person ? fixRows(d) : ''}
     </li>`;
-  }).join('')}</ul>${person ? '' : ''}`;
+  }).join('')}</ul>`;
+}
+// For the attendance admins, in one person's days: each session that lost its sign-out (closed as
+// "forgot to sign out", or still open on a past day) gets a time to put it right — its hours then count.
+function fixRows(d) {
+  const today = dayOf(now());
+  const broken = (d.sessions || []).filter(x => x.missedOut || (!x.out && d.day !== today));
+  if (!broken.length) return '';
+  return `<div class="at-fixes">${broken.map(x => `<form class="at-fix" data-day="${esc(d.day)}" data-in="${x.in}">
+      <label>Signed in ${clock(x.in)} — signed out at <input type="time" required aria-label="Sign-out time for the session from ${clock(x.in)}"></label>
+      <button type="submit" class="btn sm">Save</button><span class="err" role="alert"></span></form>`).join('')}</div>`;
 }
 async function loadHistory() {
   $('histBody').innerHTML = '<div class="sk"></div><div class="sk"></div>';
@@ -219,6 +230,20 @@ async function personSheet(uid, span = 7) {
     const worked = r.days.filter(d => d.sessions.length).length;
     const el = document.getElementById('psBody');
     if (el) el.innerHTML = `<div class="at-psum"><span><b>${hm(r.totalMs)}</b> worked</span><span><b>${worked}</b> of ${r.days.length} days</span><span><b>${worked ? hm(r.totalMs / worked) : '—'}</b> a day on average</span></div>` + dayRows(r.days, { person: true });
+    // Putting a missed sign-out right: saved, the sheet shows the day again with its hours.
+    if (el) el.querySelectorAll('form.at-fix').forEach(f => f.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const btn = f.querySelector('button'), err = f.querySelector('.err'), t = f.querySelector('input').value;
+      err.textContent = '';
+      await busy(btn, async () => {
+        try {
+          await att('fix-out', { uid, day: f.dataset.day, inAt: Number(f.dataset.in), time: t });
+          toast('Sign-out set to ' + t);
+          close(); setTimeout(() => personSheet(uid, span), 50);
+          if (B && f.dataset.day === B.day) loadBoard(true);
+        } catch (e2) { err.textContent = e2.message; }
+      });
+    }));
   } catch (e) { const el = document.getElementById('psBody'); if (el) el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 

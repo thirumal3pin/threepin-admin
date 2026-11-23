@@ -121,8 +121,10 @@
   .savebar .msg { flex: 1; font-size: 13px; color: var(--ink3); }
 
   /* Bottom sheet */
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 50; }
-  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--card);
+  /* Above the app menu (appnav.css: rail 240, its phone overlay 470–480): an open sheet is modal and
+     covers the menu too — on a laptop the rail no longer hides the left edge of a wide sheet. */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 500; }
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 501; background: var(--card);
     border-radius: 16px 16px 0 0; padding: 8px 16px 16px; padding-bottom: max(16px, env(safe-area-inset-bottom));
     max-height: 90vh; overflow: auto; box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
   @media (min-width: 640px) { .sheet { left: 50%; right: auto; width: 520px; translate: -50% 0; bottom: 24px; border-radius: 16px; } }
@@ -143,7 +145,7 @@
   @keyframes sk { to { background-position: -200% 0; } }
   .center { text-align: center; padding: 18vh 16px 0; }
   /* width: max-content — with left: 50% an auto width shrinks to half the screen and wraps early. */
-  .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; z-index: 60; background: var(--ink); color: var(--bg);
+  .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; z-index: 510; background: var(--ink); color: var(--bg);
     padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.18);
     width: max-content; max-width: calc(100vw - 32px); pointer-events: none; }
 

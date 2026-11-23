@@ -2272,7 +2272,9 @@
     },
     setAd: function (k, v) { S.wiz[k] = v; S.wiz.limit = 150; if (k === 'minMatch') S.wiz.minMatch = Number(v) || 60; render(); },
     mapVar: function (v, k, val, typing) { var m = S.wiz.mapping[v] = S.wiz.mapping[v] || { source: k === 'fallback' ? CM().autoSource(v) : 'fixed', text: '' }; m[k] = val; rerenderSoon(typing); },
-    quick: function (q) { S.wiz.quick = q; S.wiz.limit = 150; if (isAdsQuick(q)) loadAdPeople(); render(); },
+    // Another list picked after a suggestion: the campaign is no longer that suggestion — it must not
+    // be recorded as one (the Dashboard's "already told" checks read it).
+    quick: function (q) { S.wiz.quick = q; S.wiz.limit = 150; if (q !== 'journey') S.wiz.journey = null; if (isAdsQuick(q)) loadAdPeople(); render(); },
     filter: function (k, v, typing) { S.wiz.f[k] = v; S.wiz.limit = 150; rerenderSoon(typing); },
     toggleStage: function (id) { var f = S.wiz.f, list = f.stages || (f.stages = []), i = list.indexOf(id); if (i >= 0) list.splice(i, 1); else list.push(id); S.wiz.limit = 150; render(); },
     clearFilters: function (andQuick) { var q = S.wiz.f.q; S.wiz.f = blankFilters(); if (andQuick) { S.wiz.quick = ''; } else S.wiz.f.q = q; S.wiz.limit = 150; render(); },

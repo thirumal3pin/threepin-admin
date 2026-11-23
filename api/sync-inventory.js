@@ -4,7 +4,7 @@ import {
   commitWrites, loadExistingProperties, loadPendingProtections, TENANT_ID,
   findLostDetail, writeRecoveredNotes, keepFromChoice
 } from './_inventory-shared.js';
-import { metaLeadsPost } from './_meta-leads.js';
+import { metaLeadsPost, metaLeadsTick } from './_meta-leads.js';
 import { claimReservedCreates } from './_agent-listings.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
@@ -24,6 +24,14 @@ function json(body, status = 200){
     status,
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
   });
+}
+
+// GET is only the Meta ads leads tick (GET /api/meta-leads?tick=1, an outside timer every few minutes —
+// api/_meta-leads.js metaLeadsTick); anything else here is POST.
+export async function GET(request){
+  const u = new URL(request.url);
+  if (u.searchParams.get('op') === 'meta-leads' && u.searchParams.get('tick')) return metaLeadsTick(request);
+  return new Response('Not found', { status: 404 });
 }
 
 export async function POST(request){

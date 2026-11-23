@@ -679,6 +679,9 @@
   }
   var TCOLS = [
     { key: 'name', label: 'Name', get: function (p) { return p.name || ''; } },
+    // Next to the name: waiting for a call, and for how long ("Not contacted · 2 h", "New enquiry ·
+    // not contacted · 31 min") — sorted longest wait first.
+    { key: 'done', label: 'Status', get: function (p) { return p.team.contacted ? 'Contacted' : 'Not contacted'; }, sort: function (p) { return p.team.contacted ? -1 : Date.now() - (waitAtFor(p) || Date.now()); }, pick: ['Not contacted', 'Contacted'] },
     { key: 'phone', label: 'Phone', get: function (p) { return p.phone ? MM().displayPhone(p.phone) : ''; } },
     { key: 'email', label: 'Email', get: function (p) { return p.email || ''; } },
     { key: 'prop', label: 'Property', get: function (p) { return p.properties.join(' '); } },
@@ -688,7 +691,6 @@
     { key: 'rating', label: 'Rating', get: function (p) { return p.team.rating ? String(p.team.rating) : ''; }, sort: function (p) { return p.team.rating || 0; }, pick: ['5', '4', '3', '2', '1', '—'] },
     { key: 'remarks', label: 'Remarks (in the sheet)', get: function (p) { return textsOf(p, 'remarks').join(' · '); }, wide: true },
     { key: 'fu', label: 'Follow-ups', get: function (p) { return textsOf(p, 'followups').join(' · '); }, wide: true },
-    { key: 'done', label: 'Contacted', get: function (p) { return p.team.contacted ? 'Yes' : 'Not yet'; }, pick: ['Yes', 'Not yet'] },
     { key: 'crm', label: 'CRM', get: function (p) { return p.crm ? (p.crm.stage || 'In CRM') : ''; } }
   ];
   var MAX_DETAILS = 6;
@@ -755,7 +757,7 @@
           var cell = c.det ? (v ? '<span class="ml-dq">' + esc(v.slice(0, cut)) + ':</span> <b>' + esc(v.slice(cut + 2)) + '</b>' : '<span class="ml-dim">—</span>')
             : c.key === 'rating' && p.team.rating ? ratingChip(p.team.rating)
             : c.key === 'name' ? '<b>' + esc(v || '(no name)') + '</b>' + (MM().isPriorityFor(p, S.prop === 'all' ? '' : S.prop) ? ' <span class="ml-badge pri" title="Revisited — priority">⚡</span>' : '')
-            : c.key === 'done' && !p.team.contacted ? waitingFlag(p) || '<span class="ml-dim">Not yet</span>'
+            : c.key === 'done' ? (p.team.contacted ? '<span class="ml-dim">Contacted</span>' : waitingFlag(p) || '<span class="ml-badge warn">Not contacted</span>')
             : c.key === 'prop' ? p.properties.map(propLink).join(' ') || '—'
             : esc(v || '—');
           return '<td class="' + (c.wide ? 'wide' : c.det ? 'det' : '') + '" onclick="MetaLeads.toggle(' + js(p.key) + ')" title="' + esc(c.wide || c.det ? v : '') + '">' + (c.wide ? '<div class="ml-clamp">' + cell + '</div>' : cell) + '</td>';

@@ -521,3 +521,33 @@ export async function metaLeadsPost(request) {
     return json({ ok: false, error: quota ? 'The database is out of its daily quota — try again after it resets' : 'Something went wrong reading the lead sheets' }, quota ? 429 : 500);
   }
 }
+
+// ── The every-few-minutes tick (an outside timer: Vercel's Hobby crons run once a day) ──
+//   GET /api/meta-leads?tick=1   Authorization: Bearer <META_TICK_KEY or CRON_SECRET>
+// Reads every connected sheet as the system (unchanged sheets are skipped — one small Drive call
+// each, no database cost), which gives new leads to their sheet's or property's default person and
+// e-mails them (api/_meta-assign.js) — so a 9 pm lead reaches its person within minutes, not at 9 am.
+// Database cost per tick: the setup (1 read), plus the last-read line only when a sheet changed.
+export async function metaLeadsTick(request, deps0 = {}) {
+  const auth = request.headers.get('authorization') || '';
+  const keys = [process.env.META_TICK_KEY, process.env.CRON_SECRET].filter(Boolean);
+  if (!keys.length || !keys.some(k => auth === `Bearer ${k}`)) return json({ ok: false, error: 'Unauthorized' }, 401);
+  let sa = null;
+  try { sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || 'null'); } catch { sa = null; }
+  const deps = { ...makeDeps({ serviceAccount: sa, db: deps0.db }), ...deps0 };
+  // The page keeps each sheet's last modifiedTime; the tick keeps its own, so an unchanged sheet is skipped.
+  const T = deps0.tenantId || TENANT_ID;
+  const stateRef = deps.db.collection(COLLECTION).doc(T + '__tick');
+  const prev = (await stateRef.get().catch(() => null));
+  const since = (prev && prev.exists && prev.data().mods) || {};
+  try {
+    const [out, status] = await metaLeadsAction({ tenantId: T, email: 'auto@tick', role: 'system' }, { action: 'read', since }, deps);
+    if (status === 200 && out.mods && JSON.stringify(out.mods) !== JSON.stringify(since)) await stateRef.set({ mods: out.mods, at: deps.now() });
+    const read = status === 200 ? out.tabs.length : 0;
+    console.log('meta tick:', JSON.stringify({ read, unchanged: (out.unchanged || []).length, errors: (out.errors || []).length }));
+    return json({ ok: status === 200, read, unchanged: (out.unchanged || []).length, errors: (out.errors || []).length }, status === 200 ? 200 : status);
+  } catch (e) {
+    console.error('meta tick error:', e);
+    return json({ ok: false, error: 'tick failed' }, 500);
+  }
+}

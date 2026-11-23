@@ -17,6 +17,7 @@
 //   clear-alerts   { ids: [...] } or { all: true } → hides alerts from MY list (each admin clears their own)
 //   set-tracked    { email, on } → keep (or stop keeping) a person's attendance
 //   test-email     {} → a sample alert to the admins, clearly marked TEST
+//   fix-out        { uid, day, inAt, time: 'HH:MM' } → a missed sign-out put right (that session's hours count)
 //
 // Every time is the server's clock (never the phone's), and the day is India's (attendance-core.js).
 // The records live in collections the database rules never open to a browser (default deny):
@@ -307,6 +308,53 @@ async function clearAlerts(db, user, body) {
   return json({ ok: true });
 }
 
+// An admin puts right a sign-out that was missed: { uid, day, inAt, time: 'HH:MM' } — the session that
+// began at inAt on that day ends at that time (India). A session closed as "no sign-out" gets the
+// real time (and its hours count); one still open on a past day is closed at it. The change is kept
+// on the event (fixedBy, fixedAt, was) so it shows as a correction.
+async function fixOut(db, user, body) {
+  const uid = String(body.uid || ''), day = String(body.day || ''), inAt = Number(body.inAt);
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(body.time || ''));
+  if (!uid || !isDay(day) || !inAt || !m) return json({ ok: false, error: 'Say whose day, which session and the time' }, 400);
+  const hh = Number(m[1]), mm = Number(m[2]);
+  if (hh > 23 || mm > 59) return json({ ok: false, error: 'That is not a time' }, 400);
+  const [y, mo, d] = day.split('-').map(Number);
+  let at = Date.UTC(y, mo - 1, d, hh, mm) - 5.5 * 3600000;
+  // Earlier than the sign-in: past midnight only when that makes a shift of 12 hours or less
+  // (signed in 8 pm, out "1:00" = 1 am); otherwise it is a time before they came in.
+  if (at <= inAt) {
+    if (at + 86400000 - inAt <= 12 * 3600000) at += 86400000;
+    else return json({ ok: false, error: 'That is before they signed in (' + clock(inAt) + ')' }, 400);
+  }
+  if (at > Date.now()) return json({ ok: false, error: 'That time has not come yet' }, 400);
+  const ref = db.collection(COL).doc(docId(user.tenantId, uid, day));
+  const res = await db.runTransaction(async tx => {
+    const s0 = await tx.get(ref);
+    if (!s0.exists) return { error: 'No attendance that day', status: 404 };
+    const rec = s0.data();
+    if (rec.tenantId !== user.tenantId) return { error: 'No attendance that day', status: 404 };
+    const events = [...(rec.events || [])].sort((a, b) => a.at - b.at);
+    const i = events.findIndex(e => e.type === 'in' && e.at === inAt);
+    if (i < 0) return { error: 'That session is not there any more — reload', status: 409 };
+    const next = events.slice(i + 1).find(e => e.type === 'in');
+    if (next && at >= next.at) return { error: 'They signed in again at ' + clock(next.at) + ' — pick a time before that', status: 400 };
+    const j = events.findIndex((e, k) => k > i && e.type === 'out' && (!next || e.at < next.at || e.missedOut));
+    const fix = { fixedBy: lc(user.email), fixedAt: Date.now() };
+    if (j >= 0) {
+      const old = events[j];
+      if (!old.missedOut && old.source !== 'auto') return { error: 'This session already has a sign-out — it is only for a missed one', status: 409 };
+      events[j] = { ...old, at, missedOut: false, source: 'admin', was: old.at, ...fix };
+    } else {
+      events.push({ id: `${uid.slice(0, 6)}-${at}-f`, type: 'out', at, source: 'admin', by: lc(user.email), ...fix });
+    }
+    const out = { ...rec, events, ...summarise(events), updatedAt: Date.now() };
+    tx.set(ref, out);
+    return { rec: out };
+  });
+  if (res.error) return json({ ok: false, error: res.error }, res.status);
+  return json({ ok: true, day: { day, ...present(res.rec) } });
+}
+
 async function setTracked(db, user, body) {
   const email = lc(body.email);
   if (!email || typeof body.on !== 'boolean') return json({ ok: false, error: 'Say who, and on or off' }, 400);
@@ -324,7 +372,7 @@ async function testEmail(cfg, body) {
   return json({ ok: !!r.ok, to: r.to, error: r.ok ? undefined : r.error }, r.ok ? 200 : 502);
 }
 
-const ADMIN = { board: 1, person: 1, 'clear-alerts': 1, 'set-tracked': 1, 'test-email': 1 };
+const ADMIN = { board: 1, person: 1, 'clear-alerts': 1, 'set-tracked': 1, 'test-email': 1, 'fix-out': 1 };
 
 export async function attendancePost(request) {
   if (request.method !== 'POST') return json({ ok: false, error: 'POST only' }, 405);
@@ -351,6 +399,7 @@ export async function attendanceAct(user, body = {}) {
       if (action === 'person') return await person(db, user, body);
       if (action === 'clear-alerts') return await clearAlerts(db, user, body);
       if (action === 'set-tracked') return await setTracked(db, user, body);
+      if (action === 'fix-out') return await fixOut(db, user, body);
       if (action === 'test-email') return await testEmail(cfg, body);
     }
     return json({ ok: false, error: 'Unknown action' }, 400);

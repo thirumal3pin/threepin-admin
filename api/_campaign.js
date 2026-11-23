@@ -666,6 +666,20 @@ async function stageKeys(db, tenantId) {
  * @param {string}  contact   waNumber
  * @param {object}  x         { optOut: Set, marketingOptOut: Set, marketing, gapDays, now, stageOf, purpose, journey }
  */
+// The CRM leads behind numbers typed in by hand (their phoneKey), so a typed number of a lead who
+// opted out, or whose deal is being closed, is held back like the lead itself. 30 numbers a query.
+export async function leadsByNumbers(db, tenantId, numbers) {
+  const out = new Map();
+  const list = [...new Set(numbers.filter(Boolean))];
+  for (let i = 0; i < list.length; i += 30) {
+    const snap = await db.collection('leads').where('tenantId', '==', tenantId).where('phoneKey', 'in', list.slice(i, i + 30)).get();
+    snap.docs.forEach(d => { const l = d.data(); const k = l.phoneKey; if (k && (!out.has(k) || (l.updatedAt || 0) > (out.get(k).updatedAt || 0))) out.set(k, { ...l, _id: d.id }); });
+  }
+  return out;
+}
+// A lead's own WhatsApp numbers (its phone, its TailorTalk contact).
+const ownNumbers = lead => [waNumber(lead && lead.phone), waNumber(lead && lead.tt && lead.tt.contact)].filter(Boolean);
+
 export function holdBackWhy(lead, contact, x) {
   if (x.optOut.has(contact) || (lead && lead.waOptOut === true)) return 'opted out';
   // Dead in TailorTalk: held back for every kind of message, as the page holds it back.
@@ -830,15 +844,23 @@ async function createCampaign(db, tenantId, user, token, b, deps) {
   const recipients = {};
   const seen = new Set();
   const skipped = [];
+  // Numbers typed in by hand that are a CRM lead's: that lead's rules apply to them too.
+  const typed = list.filter(r => !leads.get(str(r && r.leadId, 120))).map(r => waNumber(r && r.contact));
+  let byNumber = new Map();
+  try { if (typed.some(Boolean)) byNumber = await leadsByNumbers(db, tenantId, typed); } catch (e) { console.error('campaign: typed numbers not matched to leads', e && e.message); }
   for (const r of list) {
     const contact = waNumber(r && r.contact);
     const leadId = str(r && r.leadId, 120);
     const lead = leads.get(leadId) || null;
+    // A lead is sent to its own number only — never a number the page put next to it.
+    // (A lead with no number on file is sent the one given, as before.)
+    if (lead && contact && ownNumbers(lead).length && !ownNumbers(lead).includes(contact)) { skipped.push({ key: leadId, why: 'number is not this lead’s' }); continue; }
+    const asLead = lead || byNumber.get(contact) || null;
     // A lead is keyed by its id; a contact typed in by hand (or not one of ours) by its number.
     const key = lead ? leadId : (contact ? 'm_' + contact : '');
     const values = {};
     for (const v of vars) values[v] = str(r && r.values && r.values[v], 200);
-    const why = !contact ? 'no number' : holdBackWhy(lead, contact, rules) || (seen.has(contact) ? 'duplicate number'
+    const why = !contact ? 'no number' : holdBackWhy(asLead, contact, rules) || (seen.has(contact) ? 'duplicate number'
       : missingVars(vars, values).length ? 'missing ' + missingVars(vars, values).join(', ') : (!okKey(key) ? 'bad id' : ''));
     if (why) { skipped.push({ key: leadId || key || null, why }); continue; }
     seen.add(contact);
@@ -986,9 +1008,11 @@ async function sendBatch(db, tenantId, token, b, deps) {
   };
   const held = [];
   const heldUp = {};
+  let typedLeads = new Map();
+  try { const nums = ids.filter(k => doc.recipients[k].manual).map(k => doc.recipients[k].contact); if (nums.length) typedLeads = await leadsByNumbers(db, tenantId, nums); } catch (e) { /* the number alone is judged */ }
   for (const k of ids) {
     const r = doc.recipients[k];
-    const why = holdBackWhy(r.manual ? null : (leads.get(k) || null), r.contact, rules);
+    const why = holdBackWhy(r.manual ? (typedLeads.get(r.contact) || null) : (leads.get(k) || null), r.contact, rules);
     if (!why) continue;
     held.push({ key: k, why });
     Object.assign(heldUp, { [`recipients.${k}.status`]: 'cancelled', [`recipients.${k}.why`]: why, [`recipients.${k}.cancelledAt`]: deps.now(), [`recipients.${k}.claimId`]: null });

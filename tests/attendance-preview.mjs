@@ -28,7 +28,7 @@ try {
   await page.click('#hist summary'); await page.waitForSelector('.at-days', { timeout: 10000 });
   await page.screenshot({ path: OUT + '/1-employee-phone.png', fullPage: true });
 
-  ({ page } = await S.as('swami', { viewport: { width: 390, height: 844 } }));
+  ({ page } = await S.as('swami', { viewport: { width: 390, height: 844 }, attendance: true }));
   page.on('pageerror', e => errs.push('swami: ' + e.message));
   await page.goto(S.BASE + '/myday.html');
   await page.waitForSelector('dialog.att-pop[open]', { timeout: 15000 });
