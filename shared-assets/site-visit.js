@@ -174,6 +174,41 @@ export function siteVisitMessage(p, o = {}) {
   return lines.join('\n');
 }
 
+// ── The message for the team's site-visits WhatsApp group ──
+// Short, so the group sees at a glance who is coming, to which property, when, and who meets them:
+//   📍 *SITE VISIT* — tomorrow, 24th November, 11:30 AM
+//   👤 *Client:* Nitin — 98400 12345
+//   🏢 *Property:* KDBMC001 · Commercial Building – Kodambakkam
+//   Kodambakkam · 11,000 Sq.Ft | Stilt + 5 · Rent ₹110 per Sq.ft
+//   🙋 *Meeting them:* Thirumal (99418 80088)
+// o = { name, phone, at, now, host: { kind, name, phone } }
+export function teamVisitLine(p) {
+  if (!p) return '';
+  const f = siteVisitFacts(p), get = l => (f.find(x => x.label === l) || {}).value || '';
+  const what = get('Configuration') || get('Building') || get('Area') || get('Land Area');
+  const money = get('Monthly Rent') || get('Rent') || get('Price');
+  const label = get('Monthly Rent') || get('Rent') ? 'Rent ' : get('Price') ? 'Price ' : '';
+  return [get('Location'), what, money ? label + money : ''].filter(Boolean).join(' · ');
+}
+export function teamVisitMessage(p, o = {}) {
+  const now = o.now || Date.now();
+  const when = whenWords(o.at, now);
+  const name = str(o.name), phone = prettyPhone(o.phone || '');
+  const title = p ? str(p.name).replace(/\s+for\s+(rent|sale|lease)\s*[-–—:]\s*/i, ' – ').replace(/\s+for\s+(rent|sale|lease)$/i, '') : '';
+  const code = p ? str(p.propertyCode) : '';
+  const h = o.host || {}, hn = str(h.name), hp = str(h.phone);
+  const meet = h.kind === 'team' && hn ? `${hn}${hp ? ` (${hp})` : ''}` : h.kind === 'caretaker' ? `The caretaker${hp ? ` (${hp})` : ''}` : h.kind === 'owner' ? `The owner${hp ? ` (${hp})` : ''}` : '';
+  const lines = [
+    `📍 *SITE VISIT*${when ? ` — ${when}` : ''}`,
+    `👤 *Client:* ${name || 'Name not given'}${phone ? ` — ${phone}` : ''}`,
+    `${p && kindOf(p) === 'commercial' ? '🏢' : '🏡'} *Property:* ${[code && !/^\d+$/.test(code) ? code : '', title].filter(Boolean).join(' · ') || 'not picked yet'}`,
+  ];
+  const line = teamVisitLine(p);
+  if (line) lines.push(line);
+  if (meet) lines.push(`🙋 *Meeting them:* ${meet}`);
+  return lines.join('\n');
+}
+
 // A phone number for wa.me: digits only, India's 91 in front of a bare ten-digit mobile.
 export function waNumber(v) {
   let d = String(v || '').replace(/\D/g, '').replace(/^0+/, '');
@@ -227,6 +262,11 @@ const CSS = `
 #svmModal details{margin-top:12px}
 #svmModal summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink2,#44403c)}
 #svmModal .svm-msghdr{display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px;font-size:12.5px}
+#svmModal .svm-modes{display:inline-flex;gap:2px;padding:3px;margin-top:14px;border-radius:10px;background:var(--bg2,#f5f5f4);border:1px solid var(--border,#e7e5e4)}
+#svmModal .svm-modes button{border:0;background:transparent;color:var(--ink3,#57534e);font:inherit;font-size:13px;font-weight:600;padding:7px 12px;border-radius:8px;cursor:pointer;min-height:36px}
+#svmModal .svm-modes button[aria-pressed="true"]{background:var(--card,#fff);color:var(--ink,#1c1917);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+#svmModal .svm-modes button:focus-visible{outline:2px solid var(--ink,#1c1917);outline-offset:1px}
+@media (pointer:coarse){#svmModal .svm-modes button{min-height:44px}}
 #svmModal .svm-link{border:0;background:none;color:var(--ink3,#78716c);font-size:12px;cursor:pointer;text-decoration:underline;padding:0}
 #svmModal textarea{min-height:260px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12.5px;line-height:1.55;resize:vertical}
 #svmModal .svm-ftr{display:flex;gap:8px;justify-content:flex-end;padding:12px 20px;border-top:1px solid var(--border,#e7e5e4);flex-wrap:wrap}
@@ -264,13 +304,15 @@ function mount() {
           <div class="svm-f wide"><label for="svmPhone">Client's WhatsApp number <span class="svm-opt">opens their chat directly</span></label><input id="svmPhone" type="tel" placeholder="98400 12345"></div>
         </div>
       </details>
-      <div class="svm-msghdr"><b>Message</b><button type="button" class="svm-link" data-svm="rewrite" id="svmRewrite" hidden>Undo my edits — rewrite from the fields</button></div>
+      <div class="svm-modes" role="group" aria-label="Which message"><button type="button" data-mode="client" aria-pressed="true">For the client</button><button type="button" data-mode="team" aria-pressed="false">For the team group</button></div>
+      <div class="svm-msghdr"><b id="svmMsgLbl">Message</b><button type="button" class="svm-link" data-svm="rewrite" id="svmRewrite" hidden>Undo my edits — rewrite from the fields</button></div>
+      <p class="svm-hint" id="svmTeamHint" hidden>WhatsApp opens with this message — pick your site-visits group to send it.</p>
       <textarea id="svmMsg" spellcheck="false" aria-label="The message"></textarea>
     </div>
     <div class="svm-ftr">
       <button type="button" class="svm-btn" data-svm="close">Close</button>
       <button type="button" class="svm-btn" data-svm="copy">📋 Copy</button>
-      <button type="button" class="svm-btn primary" data-svm="wa">💬 WhatsApp</button>
+      <button type="button" class="svm-btn primary" data-svm="wa" id="svmWaBtn">💬 WhatsApp</button>
     </div>
   </div>`;
   document.body.appendChild(el);
@@ -281,13 +323,15 @@ function mount() {
   });
   el.addEventListener('click', e => {
     if (e.target === el) return close();
+    const m = e.target.closest('[data-mode]');
+    if (m) { setMode(m.dataset.mode); return; }
     const t = e.target.closest('[data-svm],[data-title]');
     if (!t) return;
     if (t.dataset.title != null) { S.title = t.dataset.title; paintTitles(); return refresh(); }
-    ({ close, copy, wa: whatsapp, rewrite: () => { S.edited = false; refresh(); } })[t.dataset.svm]();
+    ({ close, copy, wa: whatsapp, rewrite: () => { S.edited[S.mode] = false; refresh(); } })[t.dataset.svm]();
   });
   el.addEventListener('input', e => {
-    if (e.target.id === 'svmMsg') { S.edited = true; $('svmRewrite').hidden = false; return; }
+    if (e.target.id === 'svmMsg') { S.edited[S.mode] = true; S.text[S.mode] = $('svmMsg').value; $('svmRewrite').hidden = false; return; }
     if (e.target.id === 'svmMap') S.mapTyped = true;
     if (e.target.id === 'svmLoc') S.locTyped = true;
     refresh();
@@ -348,18 +392,32 @@ function saveMap() {
   const m = newMap();
   if (m && $('svmSaveMap').checked) { S.onSaveMap(S.property, m); S.mapTyped = false; }
 }
+// The two messages: for the client (the confirmation) and for the team's site-visits group. Each keeps
+// its own hand edits while the other is shown.
+function setMode(mode) {
+  if (!S) return;
+  S.mode = mode === 'team' ? 'team' : 'client';
+  [...document.querySelectorAll('#svmModal [data-mode]')].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode)));
+  $('svmTitle').textContent = S.mode === 'team' ? 'Site visit — for the team group' : 'Site visit confirmation';
+  $('svmMsgLbl').textContent = S.mode === 'team' ? 'Message for the team' : 'Message';
+  $('svmTeamHint').hidden = S.mode !== 'team';
+  $('svmWaBtn').textContent = S.mode === 'team' ? '💬 WhatsApp — pick the group' : '💬 WhatsApp';
+  refresh();
+}
 function refresh() {
   if (!S) return;
   $('svmSaveMapWrap').hidden = !newMap();
   if (newMap()) $('svmSaveMapText').textContent = /^https?:\/\//i.test(str(S.property.mapLink))
     ? 'Update the property’s map pin to this link (and note it)'
     : 'Save this link as the property’s map pin (and note it) — next time it is filled in';
-  if (S.edited) return;
+  if (S.edited[S.mode]) { $('svmMsg').value = S.text[S.mode]; $('svmRewrite').hidden = false; return; }
   $('svmRewrite').hidden = true;
-  $('svmMsg').value = siteVisitMessage(S.property, {
-    name: $('svmName').value, title: S.title, at: atNow(), map: $('svmMap').value,
-    location: S.locTyped ? $('svmLoc').value : null, host: hostNow()
-  });
+  $('svmMsg').value = S.mode === 'team'
+    ? teamVisitMessage(S.property, { name: $('svmName').value, phone: $('svmPhone').value, at: atNow(), host: hostNow() })
+    : siteVisitMessage(S.property, {
+      name: $('svmName').value, title: S.title, at: atNow(), map: $('svmMap').value,
+      location: S.locTyped ? $('svmLoc').value : null, host: hostNow()
+    });
 }
 function remember() {
   const h = hostNow();
@@ -374,20 +432,22 @@ function close() {
 }
 function copy() {
   remember(); saveMap();
-  const text = $('svmMsg').value, done = () => S && S.toast('Site visit message copied');
+  const text = $('svmMsg').value, done = () => S && S.toast(S.mode === 'team' ? 'Team message copied — paste it in the site-visits group' : 'Site visit message copied');
   const fallback = () => { const ta = $('svmMsg'); ta.select(); try { document.execCommand('copy'); } catch (e) {} done(); };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
 }
 function whatsapp() {
   remember(); saveMap();
-  window.open(`https://wa.me/${waNumber($('svmPhone').value)}?text=${encodeURIComponent($('svmMsg').value)}`, '_blank', 'noopener');
+  // The team message has no number: WhatsApp asks which chat — the site-visits group.
+  const to = S && S.mode === 'team' ? '' : waNumber($('svmPhone').value);
+  window.open(`https://wa.me/${to}?text=${encodeURIComponent($('svmMsg').value)}`, '_blank', 'noopener');
 }
 
 export function openSiteVisitDialog(opts = {}) {
   mount();
   const list = opts.properties || (opts.property ? [opts.property] : []);
   const pick = opts.property || list.find(p => opts.propertyKey && (keyOf(p) === opts.propertyKey || str(p.propertyCode).toUpperCase() === str(opts.propertyKey).toUpperCase() || str(p.name) === opts.propertyKey)) || null;
-  S = { property: pick, properties: list, title: opts.title != null ? opts.title : '', edited: false, mapTyped: false, locTyped: false, toast: opts.toast || (() => {}), onSaveMap: opts.onSaveMap || null };
+  S = { property: pick, properties: list, title: opts.title != null ? opts.title : '', edited: { client: false, team: false }, text: { client: '', team: '' }, mode: 'client', mapTyped: false, locTyped: false, toast: opts.toast || (() => {}), onSaveMap: opts.onSaveMap || null };
   // The property: fixed on its own page; picked from the inventory in the CRM (the booked one first).
   const wrap = $('svmPropWrap');
   wrap.hidden = !opts.properties;
@@ -419,7 +479,7 @@ export function openSiteVisitDialog(opts = {}) {
   $('svmPhone').value = opts.phone ? prettyPhone(opts.phone) : '';
   $('svmMore').open = false;
   fillProperty();
-  refresh();
+  setMode(opts.mode === 'team' ? 'team' : 'client');
   $('svmModal').classList.add('open');
   // Back closes the dialog, not the page (or the property) behind it.
   if (window.AppNav && window.AppNav.openLayer) window.AppNav.openLayer('site-visit', () => { $('svmModal').classList.remove('open'); S = null; });

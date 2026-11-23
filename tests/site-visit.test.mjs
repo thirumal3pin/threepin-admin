@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { siteVisitFacts, siteVisitMessage, whenWords, dealOf, kindOf, waNumber, prettyPhone } from '../shared-assets/site-visit.js';
+import { siteVisitFacts, siteVisitMessage, whenWords, dealOf, kindOf, waNumber, prettyPhone, teamVisitMessage, teamVisitLine } from '../shared-assets/site-visit.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const props = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'properties-snapshot.json'), 'utf8'));
@@ -145,6 +145,21 @@ eq('wa.me: a ten-digit mobile gets 91', waNumber('98400 12345'), '919840012345')
 eq('wa.me: +91 kept, 0 dropped', [waNumber('+91 98400-12345'), waNumber('098400 12345')], ['919840012345', '919840012345']);
 eq('wa.me: too short is nothing (WhatsApp asks whom)', waNumber('12345'), '');
 eq('Shown as 5 + 5', [prettyPhone('919941880088'), prettyPhone('9941880088')], ['99418 80088', '99418 80088']);
+
+// ── The team's site-visits group message ──
+{
+  const kdb = { propertyCode: 'KDBMC001', name: 'Commercial Building for Rent – Kodambakkam', type: 'Commercial Building', dealType: 'Rent', location: 'Kodambakkam, Chennai', builtupArea: '11000', totalFloors: 'Stilt + 5', startingPrice: '₹110 per Sq.ft' };
+  const NOWT = new Date(2026, 10, 23, 14, 0).getTime(), AT = new Date(2026, 10, 24, 11, 30).getTime();
+  const m = teamVisitMessage(kdb, { name: 'Nitin', phone: '919840023050', at: AT, now: NOWT, host: { kind: 'team', name: 'Thirumal', phone: '99418 80088' } });
+  const lines = m.split('\n');
+  eq('Team: when first', lines[0], '📍 *SITE VISIT* — tomorrow, 24th November, at 11:30 AM');
+  eq('Team: the client and their number', lines[1], '👤 *Client:* Nitin — 98400 23050');
+  eq('Team: code and title (without "for Rent")', lines[2], '🏢 *Property:* KDBMC001 · Commercial Building – Kodambakkam');
+  ok('Team: one line to recognise it — where, what, the rent', /^Kodambakkam, Chennai · .*11.?000.* · Rent ₹110 per Sq\.ft$/.test(lines[3]), lines[3]);
+  eq('Team: who meets them', lines[4], '🙋 *Meeting them:* Thirumal (99418 80088)');
+  ok('Team: nothing missing breaks it — no property, no number, nobody named', /not picked yet/.test(teamVisitMessage(null, { name: 'A', at: AT, now: NOWT })) && !/—\s*$/m.test(teamVisitMessage(null, { name: 'A' })) && !/Meeting/.test(teamVisitMessage(kdb, { name: 'A' })));
+  eq('Team line: a flat sale — locality, configuration, price', teamVisitLine({ name: '3 BHK Flat', type: 'Apartment', dealType: 'Sale', location: 'Anna Nagar', config: '3 BHK', startingPrice: '₹1.8 Cr' }).split(' · ')[0], 'Anna Nagar');
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
