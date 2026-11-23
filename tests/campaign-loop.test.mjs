@@ -165,8 +165,15 @@ section('a reply is recorded once, on the campaign and on the lead');
   const chat = [tplMsg(T0 + 1000), userMsg(T0 + 10 * MIN, 'Request a Call')];
   w.clock.t = T0 + 11 * MIN;
   const before = JSON.stringify(w.db._get('leads/L1'));
-  let r = await applyCampaignReplies(w.db, TENANT, 'L1', null, chat, { now: w.clock.t, contact: '919000000001' });
+  const alerts = [];
+  const mail = async (to, subject, text, html) => { alerts.push({ to, subject, text, html }); return { ok: true }; };
+  let r = await applyCampaignReplies(w.db, TENANT, 'L1', null, chat, { now: w.clock.t, contact: '919000000001', mail });
   check('applied', r.ok && r.applied.length === 1 && r.applied[0].action === 'call' && r.applied[0].campaignId === id, r);
+  const want = w.db._get('leads/L1').assignedAgent;
+  check('a call asked for: e-mailed at once to the lead\'s agent (else the Tasks managers)', alerts.length === 1
+    && alerts[0].to === (want ? String(want).toLowerCase() : 'thirumal@threepin.in, swami@threepin.in'), alerts.map(a => a.to));
+  check('…with who, the campaign, what they wrote and a link to the lead', /replied: asked for a call/i.test(alerts[0].subject) && /Feedback — this week/.test(alerts[0].text)
+    && /Request a Call/.test(alerts[0].text) && /crm\.html\?lead=L1/.test(alerts[0].html));
   const c = w.db._get('campaigns/' + id);
   check('recipient replied, with the reply', c.recipients.L1.status === 'replied' && c.recipients.L1.reply.text === 'Request a Call' && c.recipients.L1.reply.action === 'call' && c.recipients.L1.reply.at === T0 + 10 * MIN);
   check('counts re-tallied', c.counts.replied === 1 && c.counts.sent === 2, c.counts);
@@ -185,16 +192,17 @@ section('a reply is recorded once, on the campaign and on the lead');
   check('nothing else of the lead changed', Object.keys(JSON.parse(before)).every(k => ['campaignLog'].includes(k) || JSON.stringify(JSON.parse(before)[k]) === JSON.stringify(lead[k])));
 
   // The same chat again — a webhook retry, then the nightly replay.
-  r = await applyCampaignReplies(w.db, TENANT, 'L1', null, chat, { now: w.clock.t + MIN });
+  r = await applyCampaignReplies(w.db, TENANT, 'L1', null, chat, { now: w.clock.t + MIN, mail });
   check('the same webhook twice records nothing more', r.applied.length === 0 && historyOf(w.db, 'L1').length === 1, r);
+  check('…and e-mails nobody again', alerts.length === 1);
   // Even with the lead's shortcut gone (the replay checks the campaign itself).
   r = await applyCampaignReplies(w.db, TENANT, 'L1', { ...w.db._get('leads/L1'), campaignReply: null }, chat, { now: w.clock.t + 2 * MIN });
   check('the nightly replay records nothing more', r.applied.length === 0 && historyOf(w.db, 'L1').length === 1 && w.db._get('campaigns/' + id).counts.replied === 1, r);
   // Concurrent: two at once never both record.
   const chat2 = [...chat, userMsg(T0 + 12 * MIN, 'after 6 pm please')];
   const [a, b] = await Promise.all([
-    applyCampaignReplies(w.db, TENANT, 'L1', null, chat2, { now: w.clock.t }),
-    applyCampaignReplies(w.db, TENANT, 'L1', null, chat2, { now: w.clock.t })
+    applyCampaignReplies(w.db, TENANT, 'L1', null, chat2, { now: w.clock.t, mail }),
+    applyCampaignReplies(w.db, TENANT, 'L1', null, chat2, { now: w.clock.t, mail })
   ]);
   check('two at once record the new message once', a.applied.length + b.applied.length === 1 && historyOf(w.db, 'L1').length === 2, [a, b]);
   check('the newest answer is shown', w.db._get('leads/L1').campaignReply.text === 'after 6 pm please' && w.db._get('campaigns/' + id).recipients.L1.reply.text === 'after 6 pm please');

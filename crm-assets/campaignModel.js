@@ -473,6 +473,11 @@ export const STARTERS = [
     header: '',
     body: 'Hi {{name}}, did you get a chance to look at the homes we sent for {{req_area}}?\n\nIf one stands out, we can arrange a visit this weekend. If none fit, tell us what to change (area, budget or size) and we will send fresh options.',
     footer: FOOT, buttons: ['Book a visit', 'Send fresh options', 'Not now'] },
+  // A short nudge: a new enquiry nobody could reach in a day, or a campaign left unanswered for two.
+  { purpose: 'followup', title: 'Follow-up — no reply yet', category: 'MARKETING', name: 'enquiry_followup_v1', language: 'en',
+    header: '',
+    body: 'Hi {{name}}, 3 PIN Realty here — following up on your enquiry.\n\nShall we share the details and a few options that fit, or call you at a time that suits?',
+    footer: FOOT, buttons: ['Share details', 'Call me', 'Not now'] },
   { purpose: 'search_checkin', title: 'On hold — search check-in', category: 'MARKETING', name: 'search_checkin_v1', language: 'en',
     header: '',
     body: 'Hi {{name}}, 3 PIN Realty here. You had asked us to check back about your {{req_config}} home search around {{req_area}}.\n\nIs now a good time? Tap below and we will send this week\'s best matches in your budget, or call at a time that suits you.',
@@ -492,7 +497,8 @@ export const STARTERS = [
 export const PURPOSES = (() => {
   const out = [];
   for (const s of STARTERS) if (!out.some(p => p[0] === s.purpose)) out.push([s.purpose, s.title.replace(/ \(Tamil\)$/, '')]);
-  return out.concat([['followup', 'Requirement follow-up'], ['price_update', 'Price update'], ['other', 'Something else']]);
+  // Old purposes still known (a starter may now carry one of them — never listed twice).
+  return out.concat([['followup', 'Requirement follow-up'], ['price_update', 'Price update'], ['other', 'Something else']].filter(x => !out.some(p => p[0] === x[0])));
 })();
 
 // A template's purpose: its own tag, else read from its name — the more particular names first

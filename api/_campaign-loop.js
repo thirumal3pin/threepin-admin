@@ -33,6 +33,7 @@ import { writeLead } from './_lead-views.js';
 import { waNumber, laterStatus, tally, validTemplateName } from '../crm-assets/campaignModel.js';
 import { stageKeyOf } from '../crm-assets/pipeline.js';
 import { KNOWN_TEMPLATES } from './_campaign-known.js';
+import * as TM from '../shared-assets/task-model.js';
 
 const MIN = 60000, HOUR = 3600000, DAY = 86400000;
 const IST_OFFSET_MS = 5.5 * HOUR;
@@ -491,7 +492,56 @@ function prunedSeen(seen, now) {
  * @param {object} o              { now, contact } — contact: the number the chat is with
  * @returns {{ ok, applied: Array<{ campaignId, recipient, lead, action, text }>, skipped?: string }}
  */
-export async function applyCampaignReplies(db, tenantId, leadId, lead, chatHistory, { now = Date.now(), contact = null } = {}) {
+// ─── the person to tell, at once ─────────────────────────────────────────
+// A reply that asks for a person — a call, a visit, options, a new time — is e-mailed straight away
+// to the lead's agent (else the Tasks managers), with what they need to act: who, the number, which
+// campaign, what they wrote, and a link to the lead. Sent once per reply: only after the reply was
+// claimed on the campaign (a retry finds it claimed) and the lead was written.
+export const ALERT_ACTIONS = ['call', 'visit', 'options', 'reschedule'];
+const CRM_BASE = process.env.APP_URL || 'https://admin.threepin.in';
+let defaultMail = null;
+async function sendMail(to, subject, text, html) {
+  if (!defaultMail) defaultMail = (await import('./_bot-shared.js')).sendEmail;
+  return defaultMail(to, subject, text, html);
+}
+export function replyAlertEmail({ lead, leadId, campaign, reply }) {
+  const esc = v => escapeHtml(String(v == null ? '' : v));
+  const a = ACTIONS[reply.action] || ACTIONS.other;
+  const name = lead.name || 'A lead';
+  const phone = lead.phone || (lead.tt && lead.tt.contact) || '';
+  const url = `${CRM_BASE}/crm.html?lead=${encodeURIComponent(leadId)}`;
+  const when = reply.followUpAt ? ` — ${whenLabel(reply.followUpAt)}` : '';
+  const subject = `📣 ${name} replied: ${a.means.toLowerCase()}${when}`;
+  const text = `${name}${phone ? ' (' + phone + ')' : ''} replied to "${campaign}":\n“${reply.text}”\n${a.means}${when}\n\nOpen the lead: ${url}`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;color:#212121">
+  <div style="background:#1E8E3E;height:5px;border-radius:4px 4px 0 0"></div>
+  <div style="border:1px solid #E0E0E0;border-top:0;border-radius:0 0 10px 10px;padding:18px 20px">
+  <div style="font-size:12px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;color:#1E8E3E">Campaign reply · needs you</div>
+  <h2 style="font-size:18px;margin:8px 0 4px">${esc(name)} — ${esc(a.means.toLowerCase())}${esc(when)}</h2>
+  <div style="color:#666;font-size:13px;margin-bottom:10px">${phone ? `<a href="tel:${esc(String(phone).replace(/[^\d+]/g, ''))}" style="color:#1E8E3E;font-weight:bold">${esc(phone)}</a> · ` : ''}replied to <b>${esc(campaign)}</b></div>
+  <div style="background:#F5F5F5;border-radius:8px;padding:10px 12px;font-size:14px">“${esc(reply.text)}”</div>
+  <a href="${esc(url)}" style="display:inline-block;margin-top:14px;background:#212121;color:#fff;text-decoration:none;font-weight:bold;font-size:14px;padding:9px 16px;border-radius:8px">Open the lead</a>
+  </div></div>`;
+  return { subject, text, html };
+}
+async function alertReply(db, tenantId, lead, leadId, campaign, reply, mail) {
+  if (!ALERT_ACTIONS.includes(reply.action)) return null;
+  let to = String(lead.assignedAgent || '').trim().toLowerCase();
+  let list = to && /@/.test(to) ? [to] : [];
+  if (!list.length) {
+    const tc = await db.collection('taskConfigs').doc(tenantId).get().catch(() => null);
+    list = TM.managersOf(tc && tc.exists ? tc.data() : null);
+  }
+  if (!list.length) return null;
+  const m = replyAlertEmail({ lead, leadId, campaign, reply });
+  try {
+    const r = await (mail || sendMail)(list.join(', '), m.subject, m.text, m.html);
+    console.log('campaign reply alert', leadId, reply.action, '→', list.join(', '), r && r.ok ? 'sent' : 'FAILED ' + (r && r.error));
+    return { to: list, ok: !!(r && r.ok) };
+  } catch (e) { console.error('campaign reply alert failed', leadId, e && e.message); return { to: list, ok: false }; }
+}
+
+export async function applyCampaignReplies(db, tenantId, leadId, lead, chatHistory, { now = Date.now(), contact = null, mail = null } = {}) {
   if (!hasTemplateEntry(chatHistory)) return { ok: true, applied: [], skipped: 'no template' };
   // A reply to a template older than the reply window was settled long ago (or never will be):
   // dropped before anything is read.
@@ -599,6 +649,8 @@ export async function applyCampaignReplies(db, tenantId, leadId, lead, chatHisto
         if (target.id === leadId) { markSeen(entryKey(cand), cand.at); patch.campaignReplySeen = prunedSeen(seen, now); seenDirty = false; }
         await writeLead(db, tenantId, target.ref, patch, 'update', { mustSave: true });
         if (target.id === leadId) Object.assign(lead, patch);
+        // The reply is recorded: tell the person who must act (never throws — the record stands).
+        await alertReply(db, tenantId, { ...cur, ...patch }, target.id, name, reply, mail);
       }
     } catch (e) {
       // The lead was not written: let the message go again so the next webhook or the nightly
