@@ -493,9 +493,11 @@
   function rowsFor(p, code) { return code === 'all' ? p.enquiries : p.enquiries.filter(function (e) { return e.propertyCode === code; }); }
   function lastAtFor(p) { var r = rowsFor(p, S.prop); return r.length ? (r[r.length - 1].at || 0) : (p.lastAt || 0); }
   function firstAtFor(p) { var r = rowsFor(p, S.prop); return r.length ? (r[0].at || 0) : (p.firstAt || 0); }
-  // How long a lead has been waiting for a call: from its NEWEST enquiry — the one nobody answered yet.
-  // (A person answered in October who enquires again today has waited minutes, not 39 days.)
-  function waitAtFor(p) { return lastAtFor(p); }
+  // How long a lead has been waiting for a call. Answered last time and back with a new enquiry: from
+  // the new enquiry (minutes, not 39 days). Never answered, even last time: from the first enquiry —
+  // that wait is real.
+  function waitAtFor(p) { return p.team.everContacted ? lastAtFor(p) : firstAtFor(p); }
+  function repeatOf(p) { return rowsFor(p, S.prop).length > 1; }
   function passes(p) {
     var f = S.filter, F = S.f;
     if (f === 'create' && p.action !== 'create') return false;
@@ -827,7 +829,8 @@
     var ms = Date.now() - t;
     // Answered before, back with a new enquiry: say exactly that — only this enquiry is waiting.
     if (p.team.everContacted) return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="Answered last time — this new enquiry (' + esc(shortWhen(t)) + ') is not answered yet">New enquiry · not contacted · ' + esc(gapText(ms)) + '</span>';
-    return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="Nothing written on this lead yet">Not contacted · ' + esc(gapText(ms)) + '</span>';
+    var again = repeatOf(p);
+    return '<span class="ml-badge ' + (ms > SLA_MS ? 'bad' : 'warn') + '" title="' + (again ? 'Enquired more than once and never answered — counted from the first enquiry (' + esc(shortWhen(t)) + ')' : 'Nothing written on this lead yet') + '">Not contacted' + (again ? ' (last time too)' : '') + ' · ' + esc(gapText(ms)) + '</span>';
   }
   // The latest note written for this person (the newest row that has one): its column and text.
   function latestNote(p) {
