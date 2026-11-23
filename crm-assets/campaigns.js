@@ -788,7 +788,8 @@
     visit_reminder: 'fa-regular fa-bell', visit_feedback: 'fa-regular fa-comment-dots', sold_out: 'fa-solid fa-tag', feedback_nudge: 'fa-regular fa-hand-point-right',
     options_followup: 'fa-regular fa-images', hold_revisit: 'fa-regular fa-calendar-check', new_listing: 'fa-solid fa-house-circle-check',
     lost_reengage: 'fa-solid fa-rotate-left', referral: 'fa-regular fa-star', call: 'fa-solid fa-phone', visit_today: 'fa-regular fa-calendar', no_show: 'fa-regular fa-calendar-xmark',
-    search_checkin: 'fa-solid fa-magnifying-glass'
+    search_checkin: 'fa-solid fa-magnifying-glass', visit_confirmed: 'fa-regular fa-circle-check', new_unanswered: 'fa-regular fa-hourglass-half',
+    campaign_reminder: 'fa-solid fa-reply', campaign_call: 'fa-solid fa-phone'
   };
   function waLink(l) { var n = contactOf(l); return n ? 'https://wa.me/' + n : ''; }
   // Leads a journey can reach for free: they wrote in the last 24 hours, so a reply in the chat
