@@ -104,13 +104,31 @@ function shapeClient(row, lead, v, tenantId) {
   return {
     id: 'ref:' + leadRef(tenantId, lead.id), ref: leadRef(tenantId, lead.id), access: 'restricted',
     name: card.name || 'A matching client', phone: card.phone || '', stage: card.stage ? row.stage : '', leadSource: card.source || '',
-    requirement: card.requirement || '', budget: scrub(row.budget), locations: row.locations, exclude: row.exclude, config: row.config, types: row.types, sub: row.sub,
+    // A band, never the figure: the figure can quote another agent's property ("₹3.25 Cr quoted for ANR003").
+    // No "asked for" text: the client's own words can carry figures and names; the structured rows
+    // (wants, areas, a budget band) say the same safely.
+    budget: budgetBand(row.budgetMax, row.budgetMode), locations: row.locations, exclude: row.exclude, config: row.config, types: row.types, sub: row.sub,
     area: row.area, dealLabel: row.dealLabel, deal: row.deal, pct: row.pct, vetoed: row.vetoed, band: row.band, confidence: row.confidence, confidenceValue: row.confidenceValue,
     for: row.for.map(x => ({ ...x, why: scrub(x.why) })), against: row.against.map(x => ({ key: x.key, label: x.label, lost: x.lost, why: scrub(x.why) })),
     unknown: row.unknown.map(x => ({ key: x.key, label: x.label, why: scrub(x.why) })), vetoes: (row.vetoes || []).map(x => ({ key: x.key, label: x.label, why: scrub(x.why) })),
-    budgetDiff: row.budgetDiff, location2: row.location2, interest: row.interest, reqUpdated: row.reqUpdated, lastTouch: row.lastTouch,
-    owner: '', ownerName: row.owner ? 'Another agent / the office' : '', next: 'Request this client’s details to work them', rank: row.rank
+    budgetDiff: row.budgetDiff ? { within: row.budgetDiff.within, text: row.budgetDiff.within ? 'Within their budget' : 'Over their budget' } : null,
+    location2: row.location2, interest: row.interest,
+    owner: '', ownerName: row.ownerName === 'Office' ? 'Office' : row.ownerName && row.ownerName !== 'Unassigned' ? row.ownerName : 'Office',
+    requested: !!(v.requested && v.requested.has(leadRef(tenantId, lead.id))),
+    next: '', rank: row.rank
   };
+}
+// A client row with the property's price taken out of every line that would quote it.
+function hidePrice(r) {
+  const swap = x => (x && x.key === 'budget' ? { ...x, why: /over/i.test(x.why || '') ? 'Over their budget' : 'In their budget' } : x);
+  return { ...r, for: (r.for || []).map(swap), against: (r.against || []).map(swap), breakdown: (r.breakdown || []).map(swap),
+    budgetDiff: r.budgetDiff ? { within: r.budgetDiff.within, soft: r.budgetDiff.soft, text: r.budgetDiff.within ? 'In their budget' : 'Over their budget' } : null };
+}
+function budgetBand(max, mode) {
+  if (!max) return '';
+  if (mode === 'monthly') { const k = Math.round(max / 1000); return k < 30 ? 'Under ₹30k a month' : k < 60 ? '₹30k–60k a month' : k < 150 ? '₹60k–1.5 L a month' : 'Above ₹1.5 L a month'; }
+  const cr = max / 1e7;
+  return cr < 0.75 ? 'Under ₹75 L' : cr < 1.5 ? '₹75 L – 1.5 Cr' : cr < 3 ? '₹1.5–3 Cr' : cr < 5 ? '₹3–5 Cr' : 'Above ₹5 Cr';
 }
 function hasLeadGrant(v, lead) {
   return (v.grants || []).some(g => g.kind === 'lead' && String(g.targetId) === String(lead.id) && lc(g.agentEmail) === v.me && AA.grantLive(g));
@@ -128,6 +146,9 @@ function shapeProperty(row, v, unified) {
     return {
       ...row, access: 'summary', facts: row.facts.filter(f => allowed.has('price') || f.label !== 'Price'),
       price: allowed.has('price') || allowed.has('startingPrice') ? row.price : '', alsoIn: [],
+      requested: !!(v.requested && v.requested.has(String(row.link.id))),
+      // With the price hidden, "₹25 L over budget" would give it away.
+      budget: allowed.has('price') || allowed.has('startingPrice') || !row.budget ? row.budget : { within: row.budget.within, soft: !!row.budget.soft, pct: null, text: row.budget.within ? 'Within budget' : 'Over budget' },
       next: 'Request this property’s details to share it'
     };
   }
@@ -296,9 +317,62 @@ function canWork(v, lead) {
 // ── Searching ──────────────────────────────────────────────────────────────
 function leadOf(data, id) { return (data.leads || []).find(l => String(l.id) === String(id)) || null; }
 
-export async function runSearch({ db, user, body, viewer, data }) {
+// A client by name or number (the people this viewer may open), best first: whole-name and
+// start-of-word hits before anything containing the words; a number by its last digits.
+function pickLeads(d, text, v) {
+  const q = lc(text).replace(/\s+/g, ' ').trim();
+  const digits = q.replace(/\D/g, '');
+  if (!q) return [];
+  const words = q.split(' ').filter(Boolean);
+  const out = [];
+  for (const l of d.leads || []) {
+    if (v.agent && !AA.leadVisibleTo(l, v.me) && !hasLeadGrant(v, l)) continue;
+    if (PinMatch.isClosedLead(l)) continue;
+    const name = lc(l.name);
+    const phone = String(l.phone || '').replace(/\D/g, '');
+    let score = 0;
+    if (digits.length >= 4 && phone.endsWith(digits)) score = 3;
+    else if (digits.length >= 5 && phone.includes(digits)) score = 2;
+    else if (name && words.every(w => name.split(/\s+/).some(x => x.startsWith(w)))) score = name === q ? 4 : 2.5;
+    else if (name && words.every(w => name.includes(w))) score = 1;
+    if (!score) continue;
+    const seller = PS.isSellerLead(l);
+    out.push({ score, leadId: String(l.id), name: l.name || '(no name)', seller, stage: PS.stageOf(l, d.stages).name,
+      requirement: AA.requirementOf ? AA.requirementOf(l).slice(0, 140) : String(l.propertyInterest || ''), phoneEnd: phone ? '…' + phone.slice(-4) : '', updatedAt: PS.lastTouch(l) });
+  }
+  return out.sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt).slice(0, 12).map(({ score, ...x }) => x);
+}
+// A property by code or name, among those this viewer may open.
+function pickProperties(d, text, v) {
+  const q = lc(text).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const key = q.replace(/ /g, '');
+  if (!q) return [];
+  const out = [];
+  for (const p of d.properties || []) {
+    if (!PS.propertyStatus(p)) continue;
+    const code = lc(p.propertyCode || p.id).replace(/[^a-z0-9]/g, '');
+    const name = lc(p.name).replace(/[^a-z0-9 ]/g, ' ');
+    let score = 0;
+    if (code === key) score = 5;
+    else if (key.length >= 3 && code.startsWith(key)) score = 3;
+    else if (q.split(' ').every(w => name.includes(w))) score = 2;
+    if (!score) continue;
+    out.push({ score, propertyId: String(p.id), code: p.propertyCode || p.id, name: p.name || '', location: p.location || '', price: p.startingPrice || '' });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 12).map(({ score, ...x }) => x);
+}
+
+export async function runSearch({ db, user, body: body0, viewer, data }) {
+  let body = body0 || {};
   const v = viewer || await viewerOf(db, user);
   const d = data || await loadAll(db, user.tenantId);
+  // An agent's requests still waiting: the rows say "Requested · waiting" after a reload too.
+  if (v.agent && !v.requested && db) {
+    try {
+      const q = await db.collection('accessRequests').where('tenantId', '==', user.tenantId).where('requesterEmail', '==', v.me).where('status', '==', 'pending').get();
+      v.requested = new Set(q.docs.map(x => String(x.data().targetRef || x.data().targetId || '')));
+    } catch (e) { v.requested = new Set(); }
+  }
   const now = Date.now();
   const limit = Math.min(Math.max(Number(body.limit) || 60, 1), 200);
   let mode = body.mode || 'smart';
@@ -307,24 +381,56 @@ export async function runSearch({ db, user, body, viewer, data }) {
   if (mode === 'smart') {
     const q = PS.parseSmartQuery(text);
     mode = q.direction; text = q.text; scope = q.scope; clientBudget = q.budgetFilter;
+    // The tab the person is on settles a sentence that names no direction of its own: on "Find
+    // clients", "3 BHK Anna Nagar 3 Cr" describes the property to find clients for.
+    // Only words that ask for a direction outright keep the sentence from following the toggle.
+    const said = q.direction !== 'properties' || q.scope || /\b(?:properties\s+(?:for|in|at|near)|find\s+(?:me\s+)?(?:a\s+)?(?:flat|property|properties|house|home)\s+for\s+(?:my|a|our)\s+(?:client|buyer|tenant))\b/i.test(String(body.text || ''));
+    if (body.prefer === 'clients' && mode === 'properties' && !scope && !said) mode = 'clients';
+    // Words with no requirement in them at all — a name, a phone number, a code: look the person
+    // (or the property) up instead of matching nonsense.
+    const r0 = PinMatch.briefProfile(text, {});
+    const facts = [r0.deal, r0.budget, r0.localities, r0.bhk, r0.types, r0.size].filter(Boolean).length;
+    if (!facts && mode !== 'demand') {
+      // Which kind of name: the tab says (a property's on "Find clients", a client's otherwise).
+      const forProperty = body.prefer === 'clients';
+      const raw = String(body.text || '').replace(/^\s*(?:find|show|search)?\s*(?:the\s+)?(?:client|customer|lead|buyer|tenant|property|code)s?\s*[:\-]?\s*/i, '').trim() || text;
+      const found = forProperty ? pickProperties(d, raw, v) : pickLeads(d, raw, v);
+      if (found.length === 1 && forProperty) { body = { ...body, propertyId: found[0].propertyId }; mode = 'clients'; }
+      else return { mode: 'pick', pick: forProperty ? 'property' : 'lead', text: raw, rows: found, total: found.length };
+    }
   } else if (body.scope) scope = String(body.scope);
-  const nameOf = e => nameIn(v.team || [], e);
+  // The person who works the client: their name; an admin's login means the office has it.
+  const nameOf = e => {
+    const em = lc(e);
+    if (!em) return 'Unassigned';
+    const u = (v.team || []).find(x => x.email === em);
+    if (u && u.role === 'admin') return 'Office';
+    // A shared office login ("admin@…", "info@…", "office@…") is the office, not a person.
+    if (/^(?:admin|office|info|sales|team|3pin|threepin)\b/.test(em.split('@')[0])) return 'Office';
+    return u ? u.name : (em.includes('@') ? em.split('@')[0] : em);
+  };
   const filters = Object.assign({}, body.filters || {}, clientBudget ? { clientBudget } : {});
   const sort = body.sort || 'score';
-  const includeVetoed = !!(filters && filters.showRuledOut);
+  // Ruled-out rows are always scored so the page can say "No match yet — 58 were ruled out"; they
+  // are only SENT when asked for (Show ruled out).
+  const showOut = !!(filters && filters.showRuledOut);
+  const includeVetoed = true;
+  const cut = list => { const out = list.filter(r => r.vetoed).length; return { rows: showOut ? list : list.filter(r => !r.vetoed), out }; };
 
   if (mode === 'demand') {
     const statusKeys = scope === 'shoot' ? ['shoot_scheduled', 'shoot_done', 'media_ready', 'for_approval', 'approved'] : null;
-    const rows = PS.demandFor(d.unified, d.leads, { stages: d.stages, statusKeys, minPct: 65, now })
+    const all = PS.demandFor(d.unified, d.leads, { stages: d.stages, statusKeys, now })
+    const kept = all
       .filter(x => !filters.sources || !filters.sources.length || filters.sources.includes(x.entry.src.kind))
       .filter(x => !filters.types || !filters.types.length || filters.types.includes(x.entry.type))
       .filter(x => !filters.location || [x.entry.locationText].concat((x.entry.localities || []).map(k => globalThis.PinGeo.label(k))).join(' ').toLowerCase().includes(String(filters.location).toLowerCase()))
-      .slice(0, limit).map(x => ({
+    const rows = kept.slice(0, limit).map(x => ({
         property: shapeProperty(PS.propertyRow({ property: x.entry, p: x.entry.p, pct: 0, confidence: x.entry.src ? 0 : 0, vetoed: false, vetoes: [], for: [], against: [], unknown: [], breakdown: [], rank: 0 }), v, d.unified),
         buyers: x.buyers, strong: x.strong,
-        top: x.top.map(t => { const l = leadOf(d, t.leadId); return v.agent && l && !AA.leadVisibleTo(l, v.me) ? { pct: t.pct, name: 'A matching client', ref: leadRef(user.tenantId, t.leadId) } : t; })
+        top: x.top.map(t => { const l = leadOf(d, t.leadId); return v.agent && l && !AA.leadVisibleTo(l, v.me) ? { pct: t.pct, name: 'A matching client', ref: leadRef(user.tenantId, t.leadId), held: true } : t; }),
+        ...(v.agent ? (() => { const ids = x.ids || []; const yours = ids.filter(id => { const l = leadOf(d, id); return l && AA.leadVisibleTo(l, v.me); }).length; return { yours, held: x.buyers - yours }; })() : {})
       }));
-    return { mode, scope, rows, total: rows.length };
+    return { mode, scope, rows, total: kept.length };
   }
 
   if (mode === 'clients') {
@@ -350,13 +456,32 @@ export async function runSearch({ db, user, body, viewer, data }) {
       const shaped = shapeProperty({ source: 'onboarded', link: { id: String(body.propertyId) }, facts: [] }, v, d.unified);
       if (shaped.access === 'summary' && !d.properties.some(p => String(p.id) === String(body.propertyId))) return { mode, error: 'No such property' };
     }
-    about = { name: prop.name, type: prop.type, sub: prop.sub, deal: prop.deal, price: PinMatch.priceLabel(prop), location: (prop.localities || []).map(k => globalThis.PinGeo.label(k)).join(', ') || prop.locationText };
+    // An agent searching another agent's property (or the office's seller enquiry) whose price they
+    // may not see: no figure anywhere — not in the reading, not in a client's budget line.
+    let priceHidden = false;
+    if (v.agent && !body.details && !(body.text && !body.propertyId && !body.listingId && !body.sellerLeadId)) {
+      const raw = prop.p || null;
+      const own = raw && (AA.roleOn(raw, v.me) || (v.grants || []).some(g => g.kind === 'property' && String(g.targetId) === String(raw.id) && lc(g.agentEmail) === v.me && AA.grantLive(g)));
+      const mineCard = prop.src && prop.src.agent && prop.src.agent === v.me;
+      const allowed = new Set((v.cfg && v.cfg.otherPropertyFields) || []);
+      priceHidden = !own && !mineCard && !(allowed.has('price') || allowed.has('startingPrice'));
+    }
+    about = { name: prop.name, type: prop.type, sub: prop.sub, deal: prop.deal, price: priceHidden ? '' : PinMatch.priceLabel(prop), priceHidden, location: (prop.localities || []).map(k => globalThis.PinGeo.label(k)).join(', ') || prop.locationText };
     let rows = PS.findClients(prop, d.leads, { inventory: d.unified.raw, unified: d.unified, stages: d.stages, nameOf, now, minPct: filters.minPct || 50, includeVetoed });
-    rows = PS.sortRows(PS.filterRows(rows, filters), sort);
-    const total = rows.length;
+    rows = PS.sortRows(PS.filterRows(rows, { ...filters, showRuledOut: true }), sort);
+    const c1 = cut(rows); rows = c1.rows;
+    const total = rows.filter(r => !r.vetoed).length, ruledOut = c1.out;
     const byId = new Map(d.leads.map(l => [String(l.id), l]));
-    rows = rows.slice(0, limit).map(r => shapeClient(r, byId.get(r.leadId), v, user.tenantId));
-    return { mode, about, rows, total };
+    let shaped = rows.map(r => shapeClient(r, byId.get(r.leadId), v, user.tenantId));
+    if (about.priceHidden) shaped = shaped.map(r => hidePrice(r));
+    // "Mine": only the clients this agent works.
+    if (filters.mine) shaped = shaped.filter(r => r.access === 'full');
+    // Counted before "Mine" narrows the list, so the header always says how many are theirs and held.
+    const allShaped = filters.mine ? rows.map(r => shapeClient(r, byId.get(r.leadId), v, user.tenantId)) : shaped;
+    const held = v.agent ? allShaped.filter(r => r.access === 'restricted' && !r.vetoed).length : 0;
+    const yours = v.agent ? allShaped.filter(r => r.access !== 'restricted' && !r.vetoed).length : 0;
+    const shownTotal = filters.mine ? shaped.filter(r => !r.vetoed).length : total;
+    return { mode, about, rows: shaped.slice(0, limit), total: shownTotal, ruledOut, ...(v.agent ? { yours, held } : {}) };
   }
 
   // properties
@@ -371,6 +496,7 @@ export async function runSearch({ db, user, body, viewer, data }) {
     // drops one; `requirements` is what is matched now (the live ones).
     const allItems = lead.reqs && Array.isArray(lead.reqs.items) ? lead.reqs.items.map(PS.cleanItem).filter(Boolean) : null;
     reading = { from: 'lead', leadName: lead.name || '', allItems, reviewedAt: (lead.reqs && lead.reqs.at) || null, reviewedBy: (lead.reqs && lead.reqs.by) || null,
+      reviewedByName: lead.reqs && lead.reqs.by ? nameIn(v.team || [], lead.reqs.by) : null,
       requirements: profs.map(p => ({ index: p.reqIndex, text: p.reqText || '', src: p.reqSrc || 'lead', stale: !!p.reqStale, item: p.reqItem || PS.itemFromProfile(p), ...PS.explainReq(p) })) };
   } else if (body.item) {
     const it = PS.cleanItem(body.item);
@@ -384,11 +510,12 @@ export async function runSearch({ db, user, body, viewer, data }) {
 
   let rows = PS.findProperties(req, d.unified, { now, minPct: filters.minPct || 50, includeVetoed });
   if (scope === 'unonboarded') rows = rows.filter(r => r.source !== 'onboarded');
-  rows = PS.sortRows(PS.filterRows(rows, filters), sort);
-  const total = rows.length;
+  rows = PS.sortRows(PS.filterRows(rows, { ...filters, showRuledOut: true }), sort);
+  const c2 = cut(rows); rows = c2.rows;
+  const total = rows.filter(r => !r.vetoed).length, ruledOut = c2.out;
   const counts = rows.reduce((o, r) => { o[r.source] = (o[r.source] || 0) + 1; return o; }, {});
   rows = rows.slice(0, limit).map(r => shapeProperty(r, v, d.unified));
-  return { mode, scope, reading, rows, total, counts };
+  return { mode, scope, reading, rows, total, ruledOut, counts };
 }
 
 // ── The endpoint ───────────────────────────────────────────────────────────
@@ -450,7 +577,11 @@ export async function matchPost(request) {
       // The lead's own fields (propertyInterest, budget…) are never touched: the reviewed version
       // lives beside them, and every version is kept.
       await writeLead(db, user.tenantId, ref, { reqs }, 'update');
-      await ref.collection('reqRevisions').doc('r' + String(rev).padStart(4, '0') + '_' + now).set({ at: now, by: v.me, src: 'reviewed', rev, items, was: (lead.reqs && lead.reqs.items) || null });
+      // What it was before: the last saved version, or — on a first save — how the CRM and the chat
+      // read until now, so "Before" in History is never empty.
+      let was = (lead.reqs && lead.reqs.items) || null;
+      if (!was) { try { was = PinMatch.requirementProfiles(lead, {}).map(PS.itemFromProfile).map(PS.cleanItem).filter(Boolean); } catch (e) { was = null; } }
+      await ref.collection('reqRevisions').doc('r' + String(rev).padStart(4, '0') + '_' + now).set({ at: now, by: v.me, byName: nameIn(v.team || [], v.me), src: 'reviewed', rev, items, was, wasSrc: lead.reqs ? 'reviewed' : 'crm' });
       const c = cache.get(user.tenantId); if (c) c.leadsAt = 0;
       return json({ ok: true, reqs });
     }
@@ -461,7 +592,7 @@ export async function matchPost(request) {
       if (!snap || !snap.exists || snap.data().tenantId !== user.tenantId) return json({ error: 'That lead is not here' }, 404);
       if (!canWork(v, { ...snap.data(), id: snap.id }) && !(v.agent && AA.leadVisibleTo(snap.data(), v.me))) return json({ error: 'That lead is not yours' }, 403);
       const q = await snap.ref.collection('reqRevisions').orderBy('at', 'desc').limit(20).get();
-      return json({ ok: true, revisions: q.docs.map(x => ({ id: x.id, ...x.data() })) });
+      return json({ ok: true, revisions: q.docs.map(x => { const r = x.data(); return { id: x.id, ...r, byName: r.byName || (r.by === 'AI' ? 'AI (from the chat)' : nameIn(v.team || [], r.by || '')) }; }) });
     }
 
     return json({ error: 'Unknown action' }, 400);

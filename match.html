@@ -29,90 +29,36 @@
   </header>
   <main class="mt-wrap" id="main">
 
-    <!-- One box for everything: the sentence decides the direction (properties, clients, or stock with buyers). -->
-    <form class="card mt-smart" id="smartForm" role="search" aria-label="Smart search">
-      <label for="q" class="mt-smart-l">Ask in plain words</label>
-      <div class="mt-q">
-        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-        <input type="search" id="q" name="q" autocomplete="off" enterkeyhint="search" spellcheck="false"
-          placeholder="2 BHK in Anna Nagar under 2 Cr" aria-describedby="qHint">
-        <button type="submit" class="btn primary" id="qGo">Search</button>
-      </div>
-      <p class="mt-hint" id="qHint">A requirement finds properties. “Buyers looking for…” finds clients.</p>
-      <div class="chips mt-eg" aria-label="Examples">
-        <button type="button" class="chip" data-eg="2 BHK in Anna Nagar under 2 Cr">2 BHK in Anna Nagar under 2 Cr</button>
-        <button type="button" class="chip" data-eg="buyers looking for 3 BHK in Adyar">Buyers for 3 BHK in Adyar</button>
-        <button type="button" class="chip" data-eg="unprocessed seller leads that match active buyer requirements">Seller leads with buyers</button>
-        <button type="button" class="chip" data-eg="properties in Shoot stage with matching clients">Shoot stage with buyers</button>
-      </div>
-    </form>
-
-    <!-- The two directions -->
-    <div class="mt-dir" role="tablist" aria-label="What are you looking for?">
-      <button type="button" role="tab" id="tabProps" aria-controls="pProps" aria-selected="true">
-        <i class="fa-regular fa-building" aria-hidden="true"></i>
-        <span><b>Find properties</b><small>for a requirement</small></span>
-      </button>
-      <button type="button" role="tab" id="tabClients" aria-controls="pClients" aria-selected="false" tabindex="-1">
-        <i class="fa-solid fa-users" aria-hidden="true"></i>
-        <span><b>Find clients</b><small>for a property</small></span>
-      </button>
-    </div>
-
-    <!-- Properties for a requirement -->
-    <section id="pProps" role="tabpanel" aria-labelledby="tabProps" class="mt-panel">
-      <div class="card mt-lead" id="leadBox" hidden>
-        <div class="pad">
-          <div class="mt-leadh">
-            <h2 class="mt-h" id="leadTitle">This client’s requirements</h2>
-            <p class="mt-reviewed" id="leadReviewed"></p>
-          </div>
-          <div class="mt-reqs" id="leadReqs" role="group" aria-label="Requirement to match"></div>
-          <p class="mt-stale" id="leadStale" hidden><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> The CRM requirement changed after this was reviewed — check it.</p>
-          <p class="mt-reqline" id="leadText" hidden></p>
-          <ul class="mt-chips" id="leadChips"></ul>
-          <p class="mt-missing" id="leadMissing" hidden></p>
-          <div class="mt-formbar">
-            <button type="button" class="btn sm" id="reqEdit" aria-expanded="false" aria-controls="reqEditor"><i class="fa-regular fa-pen-to-square" aria-hidden="true"></i> Edit requirements</button>
-            <button type="button" class="btn sm quiet" id="reqHist" aria-expanded="false" aria-controls="histBox"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> History</button>
-          </div>
-          <div class="mt-hist" id="histBox" hidden></div>
+    <!-- ONE search: the toggle says which way, the box takes the words, More options holds the form. -->
+    <section class="card mt-search" aria-label="Search">
+      <fieldset class="mt-seg" id="forSeg">
+        <legend class="sr">What are you looking for?</legend>
+        <label><input type="radio" name="for" value="properties" checked><span>Find properties</span></label>
+        <label><input type="radio" name="for" value="clients"><span>Find clients</span></label>
+      </fieldset>
+      <form id="smartForm" role="search" aria-label="Match">
+        <label for="q" class="sr" id="qL">What the buyer wants</label>
+        <div class="mt-q">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input type="search" id="q" name="q" autocomplete="off" enterkeyhint="search" spellcheck="false"
+            placeholder="3 BHK Anna Nagar under 3 Cr" aria-describedby="qHint">
+          <button type="submit" class="btn primary" id="qGo">Search</button>
         </div>
-
-        <!-- Editing a client's requirements: a list of ITEMs, one shown in the form at a time. -->
-        <div class="mt-editor" id="reqEditor" hidden>
-          <div class="mt-ai">
-            <button type="button" class="btn sm" id="reqAi"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Read with AI</button>
-            <p class="mt-ai-note" id="reqAiNote" role="status"></p>
-          </div>
-          <ul class="mt-qs" id="reqQs" hidden></ul>
-          <div class="mt-edtabs">
-            <div class="mt-reqs" id="edTabs" role="group" aria-label="Requirement being edited"></div>
-            <button type="button" class="btn sm quiet" id="edAdd"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add a requirement</button>
-          </div>
-          <div class="mt-edrow">
-            <label class="mt-edstatus"><span class="mt-lbl">This requirement is</span>
-              <select id="edStatus"><option value="active">Active — match on it</option><option value="previous">Previous — keep, don’t match</option></select></label>
-            <button type="button" class="btn sm quiet danger" id="edRemove"><i class="fa-regular fa-trash-can" aria-hidden="true"></i> Remove</button>
-          </div>
-          <div id="edFormSlot"></div>
-          <p class="mt-savenote">Saving keeps the CRM’s own fields as they are — this reviewed version sits beside them, and the previous version stays in History.</p>
-          <p class="err" id="reqErr" role="alert"></p>
-          <div class="mt-formbar">
-            <button type="button" class="btn primary" id="reqSave"><i class="fa-solid fa-check" aria-hidden="true"></i> Save as this client’s requirement</button>
-            <button type="button" class="btn quiet" id="reqCancel">Cancel</button>
-          </div>
-        </div>
+      </form>
+      <p class="mt-hint" id="qHint">What the buyer wants — or a client’s name or phone number.</p>
+      <button type="button" class="mt-readas" id="readAs" aria-controls="refine" hidden></button>
+      <div class="mt-eg" id="egs" role="group" aria-label="Examples">
+        <button type="button" class="chip" data-for="properties" data-eg="3 BHK Anna Nagar under 3 Cr">3 BHK Anna Nagar under 3 Cr</button>
+        <button type="button" class="chip" data-for="properties" data-eg="2 BHK rent OMR 30k">2 BHK rent OMR 30k</button>
+        <button type="button" class="chip" data-for="clients" data-eg="unprocessed seller leads that match active buyer requirements" hidden>Seller leads with buyers</button>
+        <button type="button" class="chip" data-for="clients" data-eg="properties in Shoot stage with matching clients" hidden>Shoot board with buyers</button>
       </div>
-
-      <details class="card mt-refine" id="refine">
-        <summary>
-          <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
-          <span class="mt-sum-t" id="refineTitle">Fill in a requirement yourself</span>
-        </summary>
-        <div class="mt-refine-b">
-          <div id="readBox" hidden>
-            <ul class="mt-chips" id="readChips"></ul>
+      <details class="mt-moreopt" id="refine">
+        <summary><i class="fa-solid fa-chevron-down" aria-hidden="true"></i> More options: fill in field by field</summary>
+        <!-- Find properties: a requirement, field by field -->
+        <div class="mt-refine-b" id="refineProps">
+          <div id="readBox" class="mt-airead" hidden>
+            <p class="mt-airead-l" id="readLine"></p>
             <p class="mt-missing" id="readMissing" hidden></p>
           </div>
           <div class="mt-ai">
@@ -121,7 +67,6 @@
           </div>
           <div id="aiPick" class="mt-reqs" hidden></div>
           <ul class="mt-qs" id="aiQs" hidden></ul>
-
           <form id="itemForm" class="mt-form" novalidate>
             <fieldset>
               <legend>What</legend>
@@ -157,7 +102,7 @@
               <legend>Where</legend>
               <div class="mt-grid">
                 <div class="field"><label for="iLoc">Locations</label>
-                  <input type="text" id="iLoc" name="locations" placeholder="Anna Nagar, Kilpauk" aria-describedby="iLocH">
+                  <input type="text" id="iLoc" name="locations" aria-describedby="iLocH">
                   <small class="mt-fh" id="iLocH">First one is the main one</small></div>
                 <div class="field"><label for="iEx">Not in</label>
                   <input type="text" id="iEx" name="exclude" placeholder="Places they ruled out"></div>
@@ -167,8 +112,8 @@
             <fieldset>
               <legend>Budget and size</legend>
               <div class="mt-grid four">
-                <div class="field"><label for="iBMin">Budget from</label><input type="text" id="iBMin" inputmode="decimal" placeholder="80 L" aria-describedby="moneyH"></div>
-                <div class="field"><label for="iBMax">Budget up to</label><input type="text" id="iBMax" inputmode="decimal" placeholder="2 Cr" aria-describedby="moneyH"></div>
+                <div class="field"><label for="iBMin">Budget from</label><input type="text" id="iBMin" inputmode="decimal" aria-describedby="moneyH"></div>
+                <div class="field"><label for="iBMax">Budget up to</label><input type="text" id="iBMax" inputmode="decimal" aria-describedby="moneyH"></div>
                 <div class="field"><label for="iBUnit">Budget is</label>
                   <select id="iBUnit"><option value="total">Total price</option><option value="per_month">Per month</option><option value="per_sqft">Per sq ft</option><option value="lease_amount">Lease amount</option></select></div>
                 <div class="field"><label for="iBFlex">How firm</label>
@@ -208,23 +153,9 @@
             </div>
           </form>
         </div>
-      </details>
-    </section>
-
-    <!-- Clients for a property -->
-    <section id="pClients" role="tabpanel" aria-labelledby="tabClients" class="mt-panel" hidden>
-      <form class="card mt-pform" id="codeForm">
-        <div class="pad">
-          <label for="pCode" class="mt-h">By property code</label>
-          <div class="mt-q mt-code">
-            <input type="text" id="pCode" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ANR001">
-            <button type="submit" class="btn primary">Find clients</button>
-          </div>
-        </div>
-      </form>
-      <form class="card mt-pform" id="detailsForm" novalidate>
-        <div class="pad">
-          <h2 class="mt-h">Or describe the property</h2>
+        <!-- Find clients: the seller's property, field by field -->
+        <div class="mt-refine-b" id="refineClients" hidden>
+          <form class="mt-form" id="detailsForm" novalidate>
           <div class="mt-grid">
             <div class="field"><label for="dType">Type</label>
               <select id="dType"><option value="">Choose…</option><option>Apartment</option><option>Villa</option><option value="Independent House">House</option><option>Plot</option><option>Commercial</option></select></div>
@@ -235,26 +166,72 @@
               </select></div>
             <div class="field"><label for="dBhk">BHK</label>
               <select id="dBhk"><option value="">—</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div>
-            <div class="field"><label for="dLoc">Location</label><input type="text" id="dLoc" placeholder="Anna Nagar"></div>
+            <div class="field"><label for="dLoc">Location</label><input type="text" id="dLoc"></div>
           </div>
           <div class="mt-grid four">
             <div class="field"><label for="dArea">Area</label><input type="number" id="dArea" min="0" step="any" inputmode="decimal"></div>
             <div class="field"><label for="dAUnit">Unit</label>
               <select id="dAUnit"><option value="sqft">sq ft</option><option value="grounds">grounds</option><option value="cents">cents</option><option value="acres">acres</option></select></div>
-            <div class="field"><label for="dPrice">Price</label><input type="text" id="dPrice" inputmode="decimal" placeholder="1.8 Cr" aria-describedby="dPriceH"></div>
+            <div class="field"><label for="dPrice">Price</label><input type="text" id="dPrice" inputmode="decimal" aria-describedby="dPriceH"></div>
             <div class="field"><label for="dDeal">Deal</label>
               <select id="dDeal"><option value="sale">Sale</option><option value="rent">Rent</option><option value="lease">Lease</option><option value="jv">Joint venture</option></select></div>
           </div>
-          <small class="mt-fh" id="dPriceH">Rent and lease: the amount a month.</small>
+          <small class="mt-fh" id="dPriceH">As you would say it: 1.8 Cr, 22k. Rent and lease: the amount a month.</small>
           <div class="mt-grid">
             <div class="field"><label for="dStatus">Status</label>
               <select id="dStatus"><option value="">Not stated</option><option value="ready">Ready to move</option><option value="under construction">Under construction</option></select></div>
             <div class="field"><label for="dCond">Condition</label>
               <select id="dCond"><option value="">Not stated</option><option value="new">New</option><option value="resale">Resale</option></select></div>
           </div>
-          <div class="mt-formbar"><button type="submit" class="btn primary"><i class="fa-solid fa-users" aria-hidden="true"></i> Find clients</button></div>
+            <div class="mt-formbar"><button type="submit" class="btn primary"><i class="fa-solid fa-users" aria-hidden="true"></i> Find clients</button></div>
+          </form>
         </div>
-      </form>
+      </details>
+    </section>
+
+    <!-- A client's own requirement (?lead=): one line, Edit, History -->
+    <section class="card mt-lead" id="leadBox" aria-labelledby="leadTitle" hidden>
+      <div class="pad">
+        <div class="mt-leadh">
+          <h2 class="mt-h" id="leadTitle">This client’s requirement</h2>
+          <p class="mt-reviewed" id="leadReviewed"></p>
+        </div>
+        <div class="mt-reqs" id="leadReqs" role="group" aria-label="Requirement to match"></div>
+        <p class="mt-stale" id="leadStale" hidden><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> The CRM requirement changed after this was reviewed — check it.</p>
+        <div class="mt-reqrow">
+          <p class="mt-reqone" id="leadLine"></p>
+          <div class="mt-reqbtns">
+            <button type="button" class="btn sm" id="reqEdit" aria-expanded="false" aria-controls="reqEditor"><i class="fa-regular fa-pen-to-square" aria-hidden="true"></i> Edit</button>
+            <button type="button" class="btn sm quiet" id="reqHist" aria-expanded="false" aria-controls="histBox"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> History</button>
+          </div>
+        </div>
+        <div class="mt-hist" id="histBox" hidden></div>
+      </div>
+
+      <!-- Editing a client's requirements: a list of ITEMs, one shown in the form at a time. -->
+      <div class="mt-editor" id="reqEditor" hidden>
+        <div class="mt-ai">
+          <button type="button" class="btn sm" id="reqAi"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Read with AI</button>
+          <p class="mt-ai-note" id="reqAiNote" role="status"></p>
+        </div>
+        <ul class="mt-qs" id="reqQs" hidden></ul>
+        <div class="mt-edtabs">
+          <div class="mt-reqs" id="edTabs" role="group" aria-label="Requirement being edited"></div>
+          <button type="button" class="btn sm quiet" id="edAdd"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add a requirement</button>
+        </div>
+        <div class="mt-edrow">
+          <label class="mt-edstatus"><span class="mt-lbl">This requirement is</span>
+            <select id="edStatus"><option value="active">Active — match on it</option><option value="previous">Previous — keep, don’t match</option></select></label>
+          <button type="button" class="btn sm quiet danger" id="edRemove"><i class="fa-regular fa-trash-can" aria-hidden="true"></i> Remove</button>
+        </div>
+        <div id="edFormSlot"></div>
+        <p class="mt-savenote">Saving keeps the CRM’s own fields as they are — this reviewed version sits beside them, and the old version stays in History.</p>
+        <p class="err" id="reqErr" role="alert"></p>
+        <div class="mt-formbar">
+          <button type="button" class="btn primary" id="reqSave"><i class="fa-solid fa-check" aria-hidden="true"></i> Save as this client’s requirement</button>
+          <button type="button" class="btn quiet" id="reqCancel">Cancel</button>
+        </div>
+      </div>
     </section>
 
     <!-- Results, both directions -->
@@ -267,16 +244,24 @@
         </div>
         <div class="mt-tools" id="tools">
           <label class="mt-sort"><span class="sr">Sort</span>
-            <select id="sort" aria-label="Sort">
+            <select id="sort">
               <option value="score">Highest match</option><option value="location">Exact location</option><option value="budget">Best budget match</option>
               <option value="recent">Recently updated</option><option value="newest">Newly added</option><option value="confidence">Highest confidence</option>
             </select></label>
+          <button type="button" class="btn mt-fbtn" id="filterBtn" aria-expanded="false" aria-controls="filters">
+            <i class="fa-solid fa-sliders" aria-hidden="true"></i> Filters <span class="mt-fn" id="filterN" hidden></span>
+            <i class="fa-solid fa-chevron-down mt-chev" aria-hidden="true"></i></button>
         </div>
       </div>
 
-      <details class="card mt-filters" id="filters">
-        <summary><i class="fa-solid fa-sliders" aria-hidden="true"></i> Filters <span class="mt-fn" id="filterN" hidden></span>
-          <i class="fa-solid fa-chevron-down mt-chev" aria-hidden="true"></i></summary>
+      <div class="mt-minerow" id="mineRow" hidden></div>
+
+      <!-- Filters: a panel under the header on a wide screen (show()), a drawer from the bottom on a phone (showModal()). -->
+      <dialog class="mt-filters" id="filters" aria-labelledby="filtersH">
+        <div class="mt-fhead">
+          <h2 id="filtersH">Filters</h2>
+          <button type="button" class="btn sm quiet mt-fx" id="filterClose" aria-label="Close filters"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </div>
         <form id="filterForm" class="mt-fform">
           <div class="field" data-for="properties"><span class="mt-lbl" id="fTypeL">Category</span>
             <div class="pick" role="group" aria-labelledby="fTypeL">
@@ -284,10 +269,10 @@
               <label><input type="checkbox" name="fType" value="House"> House</label><label><input type="checkbox" name="fType" value="Plot"> Plot</label>
               <label><input type="checkbox" name="fType" value="Commercial"> Commercial</label>
             </div></div>
-          <div class="field" data-for="properties"><span class="mt-lbl" id="fSrcL">Onboarding status</span>
+          <div class="field" data-for="properties"><span class="mt-lbl" id="fSrcL">Stage</span>
             <div class="pick" role="group" aria-labelledby="fSrcL">
               <label><input type="checkbox" name="fSrc" value="onboarded"> Onboarded</label><label><input type="checkbox" name="fSrc" value="listing"> Shoot board</label>
-              <label><input type="checkbox" name="fSrc" value="seller"> CRM seller lead</label><label><input type="checkbox" name="fSrc" value="submission"> Agent submission</label>
+              <label><input type="checkbox" name="fSrc" value="seller"> Seller lead</label><label><input type="checkbox" name="fSrc" value="submission"> Agent’s listing</label>
             </div></div>
           <div class="field" data-for="properties"><span class="mt-lbl" id="fDealL">Deal</span>
             <div class="pick" role="group" aria-labelledby="fDealL">
@@ -300,29 +285,25 @@
               <label><input type="checkbox" name="fBhk" value="4"> 4</label><label><input type="checkbox" name="fBhk" value="5"> 5+</label>
             </div></div>
           <div class="mt-grid four">
-            <div class="field"><label for="fLoc">Location</label><input type="text" id="fLoc" placeholder="Any"></div>
-            <div class="field" data-for="properties"><label for="fBMin">Price from</label><input type="text" id="fBMin" inputmode="decimal" placeholder="50 L"></div>
-            <div class="field" data-for="properties"><label for="fBMax">Price up to</label><input type="text" id="fBMax" inputmode="decimal" placeholder="3 Cr"></div>
-            <div class="field"><label for="fMin">Match at least</label>
-              <select id="fMin"><option value="">Any (40%+)</option><option value="55">55% — partial</option><option value="70">70% — worth a call</option><option value="85">85% — strong</option></select></div>
+            <div class="field"><label for="fMin">Show</label>
+              <select id="fMin"><option value="">All</option><option value="70">Worth a call (70%+)</option><option value="85">Strong only (85%+)</option></select></div>
+            <div class="field"><label for="fLoc">Location</label><input type="text" id="fLoc"></div>
+            <div class="field" data-for="properties"><label for="fBMin">Price from</label><input type="text" id="fBMin" inputmode="decimal" aria-describedby="fMoneyH"></div>
+            <div class="field" data-for="properties"><label for="fBMax">Price up to</label><input type="text" id="fBMax" inputmode="decimal" aria-describedby="fMoneyH"></div>
             <div class="field" data-for="properties"><label for="fAMin">Size from (sq ft)</label><input type="number" id="fAMin" min="0" inputmode="numeric"></div>
             <div class="field" data-for="properties"><label for="fAMax">Size up to (sq ft)</label><input type="number" id="fAMax" min="0" inputmode="numeric"></div>
           </div>
+          <small class="mt-fh" id="fMoneyH" data-for="properties">Prices as you would say them: 50 L, 1.5 Cr</small>
           <div class="mt-fbar">
             <label class="chk mt-chk"><input type="checkbox" id="fOut"><span class="lb">Show ruled out</span></label>
             <button type="reset" class="btn sm quiet" id="fClear">Clear filters</button>
+            <button type="button" class="btn primary mt-fshow" id="filterShow">Show results</button>
           </div>
         </form>
-      </details>
+      </dialog>
 
       <ol class="mt-list" id="list" aria-labelledby="resTitle"></ol>
     </section>
-
-    <div class="card mt-start" id="start">
-      <div class="pad">
-        <p><b>Two ways to match.</b> Describe what a client wants to see every property that fits — onboarded, on the Shoot board, a seller lead or an agent’s submission, each marked for what has been checked. Or pick a property to see the clients it suits.</p>
-      </div>
-    </div>
   </main>
 </div>
 <script src="shared-assets/appnav.js"></script>

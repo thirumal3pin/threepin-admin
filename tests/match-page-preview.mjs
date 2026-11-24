@@ -9,10 +9,11 @@
 // onboarded properties, Shoot board cards, seller leads and an agent submission; buyers with
 // several requirements; ruled-out rows. The AI reader is a canned answer.
 //
-// Walks: the smart box (properties) → Check what I understood → Read with AI → Search with these →
-// filters → Show ruled out → a score breakdown → clients for a property (code and details) → the
-// demand question → See buyers → a lead deep link, and an agent's restricted client card with
-// Request details. Screenshots at 1280 and 390 wide; fails on any console error, page error, or
+// Walks: the toggle + box (properties) → "I read this as" → More options → Read with AI → Search
+// with these → Filters (panel / phone drawer) → Show ruled out → Why this score → Find clients with
+// More options (the property's details) → a code in the box flips the toggle → the demand question →
+// See buyers → a lead deep link (one-line requirement, Edit, History Now/Before), and an agent's
+// restricted client card with Request details → "Requested · waiting". Screenshots at 1280 and 390 wide; fails on any console error, page error, or
 // sideways scroll at 390.
 
 import { chromium } from 'playwright';
@@ -153,7 +154,9 @@ const shot = (page, name, full = true) => page.screenshot({ path: join(OUT, `mat
 // The first rows as a phone shows them (a full-page shot of a long list is too tall to look at).
 const rowsShot = async (page, name) => { await page.locator('#results').scrollIntoViewIfNeeded(); await page.evaluate(() => document.querySelector('#results').scrollIntoView()); await page.screenshot({ path: join(OUT, `match-${name}.png`) }); };
 const sideways = page => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-const results = page => page.waitForFunction(() => !document.querySelector('#list[aria-busy]') && document.querySelector('#list > li:not(.mt-sk)'), null, { timeout: 15000 });
+const results = page => page.waitForFunction(() => !document.querySelector('#results[data-loading]') && document.querySelector('#list > li:not(.mt-sk)'), null, { timeout: 15000 });
+const clientsShown = page => page.waitForFunction(() => /^Clients for|Matching clients/.test(document.querySelector('#resTitle').textContent) && !document.querySelector('#results[data-loading]'), null, { timeout: 15000 });
+const forIs = (page, v) => page.locator(`#forSeg input[value="${v}"]:checked`).count().then(n => n === 1);
 const expect = (cond, msg) => { if (!cond) problems.push('expect: ' + msg); };
 
 try {
@@ -169,15 +172,19 @@ try {
     const n = await page.locator('#list > li.mt-row').count();
     expect(await page.locator('#list > li.mt-row:not([data-src="onboarded"])').count() > 0, `${tag}: stock not yet onboarded is listed too`);
     expect(n > 0, `${tag}: the smart box found properties`);
-    expect(/matching propert/.test(await page.textContent('#resCount')), `${tag}: the count is announced`);
-    expect(await page.locator('#tabProps[aria-selected="true"]').count() === 1, `${tag}: properties tab selected`);
+    expect(/\d+ match/.test(await page.textContent('#resCount')), `${tag}: the count is announced`);
+    expect(await forIs(page, 'properties'), `${tag}: the toggle is on Find properties`);
+    expect(!(await page.locator('#readAs').isHidden()) && /I read this as/.test(await page.textContent('#readAs')), `${tag}: "I read this as" under the box`);
+    expect(await page.locator('#egs').isHidden(), `${tag}: the examples give way to the results`);
+    expect(await page.locator('[data-act="request"], [data-act="req-prop"]').count() === 0, `${tag}: no Request buttons for an admin`);
     await shot(page, `${w}-1-properties`);
     if (w === 390) await rowsShot(page, '390-1b-properties-rows');
     if (w === 390) expect(await sideways(page) <= 0, `${tag}: no sideways scroll on the results (${await sideways(page)}px)`);
 
-    // 2. Check what I understood → Read with AI → Search with these.
-    await page.click('#refine > summary');
-    expect(await page.locator('#readChips li').count() > 0, `${tag}: the reading is shown as chips`);
+    // 2. "I read this as" → More options (filled in) → Read with AI → Search with these.
+    await page.click('#readAs');
+    expect(await page.evaluate(() => document.getElementById('refine').open), `${tag}: "I read this as" opens More options`);
+    expect(await page.inputValue('#iLoc') !== '', `${tag}: More options comes filled in`);
     await page.click('#aiRead');
     await page.waitForFunction(() => /AI/.test(document.querySelector('#aiNote').textContent), null, { timeout: 10000 });
     expect(await page.inputValue('#iEx') === 'Mogappair', `${tag}: the AI read filled "Not in"`);
@@ -186,31 +193,70 @@ try {
     await page.click('#itemForm button[type="submit"]');
     await results(page);
 
-    // 3. Filters and ruled-out rows; a score breakdown.
-    await page.click('#filters > summary');
+    // 3. Filters (a panel when wide, a bottom drawer on a phone) and ruled-out rows; Why this score.
+    await page.click('#filterBtn');
+    expect(await page.evaluate(() => document.getElementById('filters').open), `${tag}: Filters opens`);
+    expect(await page.evaluate(w => document.getElementById('filters').matches(':modal') === (w < 640), w), `${tag}: filters are a drawer only on a phone`);
     await page.check('#fOut');
     await page.waitForTimeout(500);
     await results(page);
+    expect(/^Show \d+/.test(await page.textContent('#filterShow')), `${tag}: the drawer offers "Show N"`);
+    await shot(page, `${w}-3-filters`, false);
+    await page.click('#filterShow');
     await page.locator('.mt-row .mt-more > summary').first().click();
     await shot(page, `${w}-3-filters-breakdown`, w !== 390);
     if (w === 390) { await page.locator('.mt-row .mt-more[open]').first().scrollIntoViewIfNeeded(); await shot(page, '390-3b-breakdown', false); }
-    if (w === 390) expect(await sideways(page) <= 0, `${tag}: no sideways scroll with filters open (${await sideways(page)}px)`);
+    if (w === 390) expect(await sideways(page) <= 0, `${tag}: no sideways scroll with filters on (${await sideways(page)}px)`);
+    expect(await page.locator('.mt-row.out .mt-next').count() === 0, `${tag}: ruled-out rows have no Next line`);
+    await page.click('#filterBtn');
     await page.uncheck('#fOut');
-    await page.click('#filters > summary');
+    await page.waitForTimeout(500);
+    await results(page);
+    await page.evaluate(() => document.getElementById('filters').close());
 
-    // 4. Clients for a property, by its typed details.
-    await page.click('#tabClients');
+    // 4. Clients for a property, by its typed details (More options on Find clients).
+    await page.check('#forSeg input[value="clients"]');
+    expect(new URL(page.url()).searchParams.get('for') === 'clients', `${tag}: the toggle is kept in the address`);
+    await page.evaluate(() => { document.getElementById('refine').open = true; });
     await page.selectOption('#dType', 'Apartment');
     await page.selectOption('#dBhk', '3');
     await page.fill('#dLoc', 'Anna Nagar');
     await page.fill('#dPrice', '3 Cr');
     await page.click('#detailsForm button[type="submit"]');
-    await page.waitForFunction(() => /client/.test(document.querySelector('#resCount').textContent) && !document.querySelector('#list[aria-busy]'), null, { timeout: 15000 });
+    await clientsShown(page);
     expect(await page.locator('#list .mt-row a[href^="crm.html?lead="]').count() > 0, `${tag}: client rows link to the CRM`);
+    expect(!(await page.locator('#list').textContent()).match(/TailorTalk/), `${tag}: the TailorTalk source tag is not shown`);
     expect(await page.locator('#list .mt-row a[href^="https://wa.me/91"]').count() > 0, `${tag}: WhatsApp links carry 91`);
     await shot(page, `${w}-4-clients`);
-    if (w === 390) await rowsShot(page, '390-4b-clients-rows');
+    if (w === 390) {
+      await rowsShot(page, '390-4b-clients-rows');
+      // Narrow cards: View client and Share sit behind ⋯ (a popover).
+      const more = page.locator('#list .mt-moreb').first();
+      expect(await more.isVisible(), `${tag}: the ⋯ button shows on a narrow card`);
+      await more.click();
+      expect(await page.locator('.mt-pop:popover-open a[href^="crm.html"]').count() === 1, `${tag}: ⋯ holds View client`);
+      await shot(page, '390-4c-more-menu', false);
+      await page.keyboard.press('Escape');
+      expect(await page.locator('.mt-pop:popover-open').count() === 0, `${tag}: Esc closes ⋯`);
+    } else expect(!(await page.locator('#list .mt-moreb').first().isVisible()), `${tag}: no ⋯ on a wide card`);
     if (w === 390) expect(await sideways(page) <= 0, `${tag}: no sideways scroll on clients (${await sideways(page)}px)`);
+
+    // 4b. A property code in the box on Find properties: the toggle flips to Find clients.
+    await page.check('#forSeg input[value="properties"]');
+    await page.fill('#q', 'ANR003');
+    await page.press('#q', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('#results[data-loading]') && document.querySelector('#resTitle').textContent, null, { timeout: 15000 });
+    expect(await forIs(page, 'clients'), `${tag}: a code flips the toggle to Find clients`);
+    // On Find clients, a code the data has (the fixtures' codes are short, "P01") opens its buyers.
+    await page.fill('#q', 'P01');
+    await page.press('#q', 'Enter');
+    await clientsShown(page);
+
+    // 4c. More options always holds the CURRENT search (not the previous form's values).
+    await page.fill('#q', '2 grounds land in Medavakkam 2.5 Cr');
+    await page.press('#q', 'Enter');
+    await clientsShown(page);
+    expect(await page.inputValue('#dLoc') === 'Medavakkam' && await page.inputValue('#dType') === 'Plot', `${tag}: More options follows the latest search (${await page.inputValue('#dType')} · ${await page.inputValue('#dLoc')})`);
 
     // 5. The demand question → See buyers.
     await page.fill('#q', 'unprocessed seller leads that match active buyer requirements');
@@ -218,13 +264,17 @@ try {
     await page.waitForFunction(() => document.querySelector('#list .mt-row.demand'), null, { timeout: 15000 });
     await shot(page, `${w}-5-demand`);
     if (w === 390) await rowsShot(page, '390-5b-demand-rows');
+    const demandName = await page.locator('#list .mt-row.demand h3').first().evaluate(h => h.firstChild.textContent.trim());
     await page.locator('[data-act="demand-buyers"]').first().click();
-    await page.waitForFunction(() => /client/.test(document.querySelector('#resCount').textContent) && !document.querySelector('#list[aria-busy]'), null, { timeout: 15000 });
+    await clientsShown(page);
+    expect(await page.inputValue('#q') === demandName, `${tag}: See buyers puts the property's name in the box`);
+    expect(await page.locator('#resNote [data-back]').count() === 1, `${tag}: a way back to the demand list`);
 
     // 6. A lead deep link with more than one requirement.
     await page.goto(BASE + '/match.html?lead=B19');
     await results(page);
     expect(!(await page.locator('#leadBox').isHidden()), `${tag}: the lead's requirements are shown`);
+    expect((await page.textContent('#leadLine')).includes(' · '), `${tag}: the requirement is one line`);
     await shot(page, `${w}-6-lead`, false);
     if (w === 1280) {
       // Edit the client's requirements: read with AI, add a second one, save — then the search re-runs.
@@ -239,35 +289,55 @@ try {
       await page.locator('#edTabs [data-ed]').first().click();
       await shot(page, `${w}-6b-lead-edit`);
       await page.click('#reqSave');
-      await page.waitForFunction(() => document.querySelector('#reqEditor').hidden && !document.querySelector('#list[aria-busy]'), null, { timeout: 15000 });
+      await page.waitForFunction(() => document.querySelector('#reqEditor').hidden && !document.querySelector('#results[data-loading]'), null, { timeout: 15000 });
       expect(saved.length === 1 && saved[0].items.length === 2, `${tag}: two requirements saved (${JSON.stringify(saved.map(x => x.items.length))})`);
       expect(await page.locator('#leadReqs [data-req]').count() === 2, `${tag}: both requirements are offered after saving`);
       await page.click('#reqHist');
       await page.waitForSelector('.mt-histl li', { timeout: 10000 });
+      expect(/^Now/.test(await page.locator('.mt-histl > li').first().innerText()), `${tag}: History calls the version in use "Now"`);
+      expect(/Before/.test(await page.textContent('#histBox')), `${tag}: History calls the earlier one "Before"`);
       await shot(page, `${w}-6c-lead-saved`, false);
     }
 
     // 7. A property code deep link.
     await page.goto(BASE + '/match.html?property=P01');
-    await page.waitForFunction(() => !document.querySelector('#list[aria-busy]') && /client|No results/.test(document.querySelector('#resCount').textContent), null, { timeout: 15000 });
-    expect(await page.locator('#tabClients[aria-selected="true"]').count() === 1, `${tag}: ?property= opens the clients side`);
+    await page.waitForFunction(() => !document.querySelector('#results[data-loading]') && /match|No results|property/.test(document.querySelector('#resCount').textContent), null, { timeout: 15000 });
+    expect(await forIs(page, 'clients'), `${tag}: ?property= opens the clients side`);
     await ctx.close();
   }
 
   // 8. An agent: other agents' clients are restricted cards with Request details.
   const { ctx, page, tag } = await open('rameez', { width: 390, height: 844 }, '/match.html');
-  await page.click('#tabClients');
+  await page.check('#forSeg input[value="clients"]');
+  await page.evaluate(() => { document.getElementById('refine').open = true; });
   await page.selectOption('#dType', 'Apartment');
   await page.selectOption('#dBhk', '3');
   await page.fill('#dLoc', 'Anna Nagar');
   await page.fill('#dPrice', '3 Cr');
   await page.click('#detailsForm button[type="submit"]');
-  await page.waitForFunction(() => !document.querySelector('#list[aria-busy]') && document.querySelector('#list > li:not(.mt-sk)'), null, { timeout: 15000 });
+  await results(page);
+  const mineShown = !(await page.locator('#mineRow').isHidden());
+  expect(mineShown ? /Mine · \d+/.test(await page.textContent('#mineRow')) && /held by others/.test(await page.textContent('#mineRow'))
+    : /yours · \d+ held by others/.test(await page.textContent('#resCount')), `${tag}: the agent sees their own clients and how many others hold`);
+  if (mineShown) {
+    // "Mine" re-asks the server for only this agent's clients.
+    const req = page.waitForRequest(r => r.url().includes('/api/match') && /"mine":true/.test(r.postData() || ''), { timeout: 10000 });
+    await page.click('#mineRow [data-mine]');
+    expect(!!(await req.catch(() => null)), `${tag}: Mine sends filters.mine`);
+    await results(page);
+    expect(await page.locator('#mineRow [aria-pressed="true"]').count() === 1, `${tag}: Mine shows as on`);
+    await page.click('#mineRow [data-mine]');
+    await page.waitForTimeout(500);
+    await results(page);
+  }
+  expect(await page.locator('.mt-row.held .mt-next').count() === 0, `${tag}: held clients have no Next line`);
+  expect(!/Asked for/.test(await page.textContent('#list')), `${tag}: held clients have no "Asked for" row`);
   const held = page.locator('.mt-row.held [data-act="request"]');
   expect(await held.count() > 0, `${tag}: restricted client cards offer Request details`);
   if (await held.count()) {
     await held.first().click();
     await page.waitForFunction(() => /Asked/.test((document.querySelector('.mt-reqres.ok') || {}).textContent || ''), null, { timeout: 10000 });
+    expect(await page.locator('.mt-wait').count() > 0, `${tag}: Request details becomes "Requested · waiting"`);
   }
   await shot(page, '390-7-agent-clients', false);
   await page.locator('.mt-row.held').first().scrollIntoViewIfNeeded();

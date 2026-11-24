@@ -89,6 +89,8 @@ export async function startStack({ emuPort = Number(process.env.E2E_EMU_PORT) ||
         if (url.pathname === '/api/agent') r = await agentPost(request);
         else if (url.pathname === '/api/tailortalk') r = await TT.POST(request);
         else if (url.pathname === '/api/attendance') r = await (await import('../api/_attendance.js')).attendancePost(request);
+        else if (url.pathname === '/api/match') r = await (await import('../api/_match.js')).matchPost(request);
+        else if (url.pathname === '/api/easy') r = await (await import('../api/_easy.js')).easyPost(request);
         else r = new Response(JSON.stringify({ ok: false, error: 'not in this test' }), { status: 404 });
         calls.push({ path: url.pathname + url.search, body: body.toString().slice(0, 300), status: r.status });
         res.writeHead(r.status, { 'Content-Type': 'application/json' });

@@ -202,7 +202,8 @@
     'omr': 'sholinganallur', 'rajiv gandhi salai': 'sholinganallur',
     'old mahabalipuram road': 'sholinganallur',
     'ecr': 'neelankarai', 'east coast road': 'neelankarai',
-    'gst': 'tambaram', 'gst road': 'tambaram', 'grand southern trunk road': 'tambaram',
+    // Not bare "gst": "3 Cr + GST" is the tax, and it was placing buyers on GST Road (Nov 2026).
+    'gst road': 'tambaram', 'grand southern trunk road': 'tambaram',
     'radial road': 'thoraipakkam', 'pallavaram radial road': 'thoraipakkam',
     'pallavaram thoraipakkam road': 'thoraipakkam',
     '200 ft radial road': 'thoraipakkam', '200ft radial road': 'thoraipakkam',

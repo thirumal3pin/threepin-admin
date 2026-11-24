@@ -194,6 +194,79 @@ section('A reviewed requirement that has gone out of date');
   check('the CRM budget changed after review: the newer words win, and it is flagged', p0.reqStale === true && p0.budget.max === 4.5e7, p0.budget && p0.budget.max);
 }
 
+section('Parts of the city, unknown kinds, far under budget (found on the live data, 24 Nov 2026)');
+{
+  const z = M.briefProfile('2BHK for rent in Central Chennai 40k', {});
+  check('"Central Chennai" is a part of the city, not "location unknown"', z.localities && z.localities.zones && z.localities.zones[0] === 'Chennai Central');
+  const zp = M.score(z, M.propertyProfile({ id: 'zp', type: 'Apartment', location: 'Porur', config: '2 BHK', startingPrice: 'Rent 30000 per month' }), { now: D.NOW });
+  check('…so a Porur flat is not a match for them', zp.pct < 60, zp.pct);
+  const zc = M.score(z, M.propertyProfile({ id: 'zc', type: 'Apartment', location: 'Kilpauk', config: '2 BHK', startingPrice: 'Rent 38000 per month' }), { now: D.NOW });
+  check('…and a Kilpauk flat is', zc.pct >= 80, zc.pct);
+  const u = M.score(M.briefProfile('anywhere in Chennai, budget 2 crore', {}), M.propertyProfile({ id: 'pl', type: 'Plot', location: 'Medavakkam', startingPrice: '1.9 Cr', totalLandArea: '2 grounds' }), { now: D.NOW });
+  check('a client who never said what kind cannot be a strong match for land', u.pct <= 72, u.pct);
+  const fu = M.score(M.briefProfile('3bhk Anna Nagar budget 5 to 9 crore', {}), M.propertyProfile({ id: 'fu', type: 'Apartment', location: 'Anna Nagar', config: '3 BHK', startingPrice: '2.5 Cr' }), { now: D.NOW });
+  check('half their minimum budget is a partial match at most', fu.pct <= 62, fu.pct);
+  const ps = M.briefProfile('flat in Adyar, budget 11000 per sqft', {});
+  check('a per-sq-ft budget is a purchase', ps.deal && ps.deal.values[0] === 'sale');
+  const rows = PS.sortRows([{ pct: 88, rank: 0.9 }, { pct: 95, rank: 0.5 }, { pct: 99, rank: 0.8 }], 'score');
+  check('"Highest match" sorts by the percentage', rows.map(r => r.pct).join() === '99,95,88');
+  check('"seller leads with buyers" is the demand list', PS.parseSmartQuery('seller leads with buyers').direction === 'demand');
+  const tp = PS.propertyFromBrief('3 BHK apartment in Anna Nagar, 2000 sqft, 3.2 Cr, resale, east facing, covered parking, 5th floor, semi furnished');
+  check('a property described in words keeps facing, parking, floor, furnishing and resale', tp.facing.includes('East') && tp.parkingKind.includes('Covered') && tp.floorNo === 5 && /semi/i.test(tp.furnishing) && tp.saleType === 'Resale' && tp.priceLo === 32000000);
+}
+
+section('Found by the page test on the live data (24 Nov 2026)');
+{
+  const b = t => M.briefProfile(t, {});
+  // S1 / S6: a reviewed requirement is exactly what was saved
+  const old = { id: 'S1', name: 'S1', propertyInterest: 'Adyar, Guindy, Anna Nagar, OMR', budget: '1 Cr', stageId: 'new', tt: { profile: { requirement_details: '3 BHK on OMR' } } };
+  const saved = { ...old, reqs: { src: 'reviewed', at: D.NOW, fp: M.reqFingerprint(old), items: [{ status: 'active', deal: 'buy', types: ['apartment'], bhk: [2, 3], locations: [{ name: 'Anna Nagar' }, { name: 'Kilpauk' }], exclude: ['Mogappair'], budget: { max: 35000000, unit: 'total', flex: 'maximum' } }] } };
+  const p1 = M.requirementProfiles(saved, {})[0];
+  check('S1 a saved requirement brings nothing of the old reading (no OMR)', !(p1.localities.corridors || []).length && !p1.localities.keys.includes('sholinganallur') && p1.localities.keys.join() === 'anna nagar,kilpauk', JSON.stringify(p1.localities.keys));
+  check('S6 "2 or 3 BHK" stays both', p1.bhk.values.join() === '2,3');
+  check('S6 "maximum" stays a ceiling, not "flexible"', p1.budget.max === 35000000 && p1.budget.ceiling === true && !p1.budget.flexible);
+  check('S6 the deal is the saved one', p1.deal.why === 'their reviewed requirement');
+  check('"2 or 3 BHK" typed is both', b('2 or 3 BHK in Adyar').bhk.values.join() === '2,3');
+  // S2
+  check('S2 "for my client" is a requirement, not a search for clients', PS.parseSmartQuery('need a 3 BHK for my client in Anna Nagar 3 Cr').direction === 'properties');
+  check('S2 a pasted remark about a client is a requirement', PS.parseSmartQuery('Client called yesterday, wants 3BHK in Adyar under 2 Cr').direction === 'properties');
+  check('S2 "buyers looking for…" still searches clients', PS.parseSmartQuery('buyers looking for 3 BHK in Adyar').direction === 'clients');
+  check('S2 "a buyer for my 3BHK in Porur" searches clients', PS.parseSmartQuery('find a buyer for my 3BHK in Porur').direction === 'clients');
+  // S3
+  const r74 = M.propertyProfile({ id: 'r74', type: 'Apartment', location: 'Adyar', config: '3 BHK', startingPrice: 'Monthly rent ₹74,000 plus ₹6,000 maintenance' });
+  check('S3 the rent is the figure before "plus maintenance"', r74.priceLo === 74000 && r74.priceMode === 'monthly', r74.priceLo);
+  const ph = M.propertyProfile({ id: 'ph', type: 'Apartment', location: 'Alwarpet', config: '3 BHK', startingPrice: 'On Request: Contact Mr. Swaminathan 9884012345' });
+  check('S3 a phone number in the price cell is never a price', ph.priceLo == null, ph.priceLo);
+  // S14
+  check('S14 a property\'s quoted price is not the client\'s budget', !b('ANR003 is priced at ₹3.25 Cr. Interested in Anna Nagar 3BHK').budget);
+  check('S14 …but their own budget beside it is', b('ANR003 is priced at ₹3.25 Cr. Budget 3 Cr for a 3BHK in Anna Nagar').budget.max === 3e7);
+  check('S7 the budget is said as an amount, never the whole sentence', b('Looking for 3BHK in Anna Nagar, budget around 3 crores, ready to move').budget.stated === '₹3 Cr');
+  // S10
+  check('S10 "3 Cr + GST" is the tax, not GST Road', (x => !(x.localities.corridors || []).includes('GST') && !x.localities.keys.includes('tambaram'))(b('3bhk T Nagar, 3 Cr + GST')));
+  // S12
+  check('S12 "4 grounds JV chennai" is land, a JV, anywhere in Chennai', (x => x.types.values.join() === 'Plot' && x.deal.values.join() === 'jv' && x.localities.anywhere)(b('4 grounds JV chennai')));
+  // S8
+  const home = M.propertyProfile({ id: 'h', name: 'PREMIUM 3 BHK FOR RENT – Sterling Road', location: 'Nungambakkam', startingPrice: 'Rent 90000 per month' });
+  check('S8 a record with bedrooms and no type is ruled out for a land buyer', M.score(b('2 grounds land for sale in Choolaimedu'), home, { now: D.NOW }).vetoed);
+  check('S8 …but is not a mismatch for a home buyer', !M.score(b('3 BHK flat for rent Nungambakkam 1 L'), home, { now: D.NOW }).vetoed);
+  // S9
+  const nowhere = M.propertyProfile({ id: 'nw', type: 'Apartment', config: '2 BHK', startingPrice: '1.5 Cr' });
+  check('S9 a property we cannot place is at most worth a call to a client who named their area', M.score(b('2 BHK in Anna Nagar or Kilpauk, 1.6 Cr'), nowhere, { now: D.NOW }).pct <= 70);
+  // ceiling ranking
+  const under = b('3 BHK Anna Nagar under 3 Cr');
+  const inside = M.score(under, M.propertyProfile({ id: 'in', type: 'Apartment', location: 'Anna Nagar', config: '3 BHK', startingPrice: '2.85 Cr' }), { now: D.NOW });
+  const over = M.score(under, M.propertyProfile({ id: 'ov', type: 'Apartment', location: 'Anna Nagar', config: '3 BHK', startingPrice: '3.25 Cr' }), { now: D.NOW });
+  check('with a ceiling they stated, over budget ranks below inside it', over.pct < inside.pct, `${over.pct} vs ${inside.pct}`);
+  // partial
+  const up = M.score(b('2 BHK Anna Nagar 2 Cr'), M.propertyProfile({ id: 'up', type: 'Apartment', location: 'Anna Nagar', config: '3 BHK', startingPrice: '1.9 Cr' }), { now: D.NOW });
+  check('one room more is a partial match (~), not a tick', !up.for.some(f => f.key === 'bhk') && up.against.some(a => a.key === 'bhk' && a.partial));
+  // label cap
+  const thin = PS.findClients(PS.propertyFromBrief('2 BHK flat for rent in Perungudi 30k'), [{ id: 'T1', name: 'T', propertyInterest: 'Perungudi', budget: 'rent 30000 per month', stageId: 'new' }], { now: D.NOW, minPct: 0 });
+  check('two key facts unknown: never labelled strong', thin[0] && thin[0].band.key !== 'strong', thin[0] && thin[0].band.label);
+  // wording
+  check('a single-figure budget is "within budget", never "under their range"', PS.budgetDiff({ budget: { max: 3e7, min: 2.1e7, firm: true, mode: 'sale' } }, { priceLo: 1.9e7, priceMode: 'sale' }).text.startsWith('Within budget'));
+}
+
 section('The search box');
 {
   const q = t => PS.parseSmartQuery(t);
@@ -228,8 +301,27 @@ section('The API — who sees what');
   check('a restricted card carries no id, phone or name — only a reference to request it with', others.every(r => !r.leadId && !r.phone && r.ref && !JSON.stringify(r).includes('98400')));
   const p = await api.runSearch({ db: null, user, body: { mode: 'properties', text: '3 BHK in Anna Nagar 3 Cr' }, viewer: agent, data });
   check('another agent\'s seller card shows as an opportunity, never the seller', p.rows.filter(r => r.source === 'listing').every(r => r.access === 'restricted' && !/Ravi/.test(JSON.stringify(r))));
+  const hid = await api.runSearch({ db: null, user, body: { mode: 'clients', propertyId: 'P02' }, viewer: agent, data });
+  const hidJ = JSON.stringify(hid);
+  check('an agent searching another agent\'s property never sees its price — not in the reading, not on a client card', !hid.about.price && !/3\.1 Cr|31,00,000|₹3\.1/.test(hidJ), hid.about.price);
+  check('restricted cards carry no "asked for" text and no next line', hid.rows.filter(r => r.access === 'restricted').every(r => !r.requirement && !r.next));
+  const onlyMine = await api.runSearch({ db: null, user, body: { mode: 'clients', details: { type: 'Apartment', bhk: 3, location: 'Anna Nagar', price: 30000000, deal: 'sale' }, filters: { mine: true } }, viewer: agent, data });
+  check('"Mine" shows only the agent\'s own clients', onlyMine.rows.length >= 1 && onlyMine.rows.every(r => r.access === 'full'));
+  check('the header counts: yours and held', typeof a.yours === 'number' && typeof a.held === 'number' && a.held >= 3);
   const sm = await api.runSearch({ db: null, user, body: { mode: 'smart', text: 'unprocessed seller leads that match active buyer requirements' }, viewer: staff, data });
   check('the smart box answers the demand question', sm.mode === 'demand' && sm.rows.length >= 1);
+  const pc = await api.runSearch({ db: null, user, body: { mode: 'smart', text: '3 BHK apartment in Anna Nagar 3 Cr resale', prefer: 'clients' }, viewer: staff, data });
+  check('on the "Find clients" tab, plain words describe the property', pc.mode === 'clients' && pc.rows.some(r => r.leadId === 'B01'), pc.mode);
+  const pp = await api.runSearch({ db: null, user, body: { mode: 'smart', text: '3 BHK apartment in Anna Nagar 3 Cr', prefer: 'properties' }, viewer: staff, data });
+  check('…and on "Find properties" the same words find properties', pp.mode === 'properties');
+  const nm = await api.runSearch({ db: null, user, body: { mode: 'smart', text: 'Client B01' }, viewer: staff, data });
+  check('a client\'s name finds the client to pick', nm.mode === 'pick' && nm.pick === 'lead' && nm.rows[0].leadId === 'B01', JSON.stringify(nm).slice(0, 200));
+  const ph = await api.runSearch({ db: null, user, body: { mode: 'smart', text: '00001' }, viewer: staff, data });
+  check('…and so do the last digits of their number', ph.mode === 'pick' && ph.rows.some(r => r.leadId === 'B01'));
+  const ag = await api.runSearch({ db: null, user, body: { mode: 'smart', text: 'Client' }, viewer: agent, data });
+  check('an agent\'s name search finds only their own clients', ag.mode === 'pick' && ag.rows.every(r => r.leadId === 'B01'), ag.rows.map(r => r.leadId).join());
+  const code = await api.runSearch({ db: null, user, body: { mode: 'smart', text: 'p17', prefer: 'clients' }, viewer: staff, data });
+  check('a property code on the "Find clients" tab finds who wants it', code.mode === 'clients' && code.about && /T Nagar/.test(code.about.name), code.mode);
   api.__setAi(async () => ({ direction: 'properties', questions: [], items: [{ status: 'active', deal: 'buy', types: ['apartment'], sub: null, bhk: [3], locations: [{ name: 'Anna Nagar', pref: 'primary' }], exclude: ['Mogappair'], anywhere: false, radiusKm: null, budget: { min: null, max: 30000000, unit: 'total', flex: 'approximate' }, area: null, condition: [], possession: null, mustHave: ['covered parking'], facing: null, furnishing: null, uncertain: [], missing: [], label: '3 BHK Anna Nagar' }] }));
   const st = await api.structureText('3bhk anna nagar 3cr not mogappair covered parking');
   check('the AI reader returns cleaned items', st.ok && st.items[0].exclude[0] === 'Mogappair' && st.items[0].budget.max === 3e7);
