@@ -290,6 +290,15 @@
     el.dataset.change = c.id;
   }
   function linkCard(l){
+    // A brochure (a Drive file) opens like every other brochure button (shared-assets/brochure-open.js):
+    // the straight download, or the in-app viewer on an iPhone — never a Drive page, and its address
+    // is not shown.
+    const fileId = window.PinBrochure && /drive\.google\.com|drive\.usercontent/.test(String(l.url || '')) ? window.PinBrochure.fileId(l.url) : null;
+    if(fileId){
+      const code = String(l.label || '').split('—').pop().trim();
+      add('easy-card', `<div class="easy-card-head">${esc(l.label)}</div><button type="button" class="easy-link" data-brochure="${esc(l.url)}" data-brochure-name="${esc(code)}">📄 Open the brochure</button>`);
+      return;
+    }
     add('easy-card', `<div class="easy-card-head">${esc(l.label)}</div><a class="easy-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>`);
   }
   function planCard(plan){

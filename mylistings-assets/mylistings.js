@@ -317,7 +317,7 @@ function openDetail(id, { edit = false } = {}) {
       <div class="bar"><button type="button" class="btn primary" id="fSave">Save details</button></div>
     </details>
     <details class="ml-sec"${x.brochure && x.brochure.state === 'none' && ['shoot_done', 'media_ready'].includes(x.stageKey) ? ' open' : ''}><summary>Brochure <span class="ml-sum">${x.brochure.state === 'created' ? 'ready' : x.brochure.state === 'requested' ? 'asked for' : 'not asked yet'}</span></summary>
-      ${x.brochure.state === 'created' ? `<p><a class="btn sm" href="${esc(x.brochure.link)}" target="_blank" rel="noopener"><i class="fa-regular fa-file-lines" aria-hidden="true"></i> Open the brochure</a></p>`
+      ${x.brochure.state === 'created' ? `<p><button type="button" class="btn sm" data-brochure="${esc(x.brochure.link)}" data-brochure-name="${esc(x.propertyCode || x.title || '')}"><i class="fa-regular fa-file-lines" aria-hidden="true"></i> Open the brochure</button></p>`
         : x.brochure.state === 'requested' ? `<p class="note">Asked for ${esc(ago(x.brochure.at))}${x.brochure.code ? ' under the code <b>' + esc(x.brochure.code) + '</b>' : ''}. The office builds it and the link shows here.</p>`
         : `<p class="note">The office builds it from the photos link and this write-up (what you would send a buyer on WhatsApp).</p>
            <div class="field"><label for="bDesc">Write-up for the brochure</label><textarea id="bDesc" maxlength="4000" rows="6" placeholder="🏡 3 BHK FOR SALE | …&#10;▪️ 1,450 Sq.Ft. …&#10;💰 Price …">${esc(x.description || '')}</textarea></div>

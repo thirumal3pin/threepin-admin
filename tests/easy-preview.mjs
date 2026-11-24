@@ -180,7 +180,9 @@ try {
   // MVP-04
   const withB = Object.values(s).find(v => v && v.propertyCode && v.brochureLink);
   t = await ask(page, `Brochure for ${withB.propertyCode}`);
-  ok('Brochure → the link card', await page.locator('.easy-card a.easy-link', { hasText: withB.brochureLink }).count() === 1, t);
+  // A brochure card opens like every brochure button (shared-assets/brochure-open.js) — never shows the Drive address.
+  ok('Brochure → the card opens the brochure (no Drive address shown)', await page.locator(`.easy-card [data-brochure="${withB.brochureLink}"]`).count() === 1
+    && await page.locator('.easy-card a.easy-link', { hasText: withB.brochureLink }).count() === 0, t);
 
   // MVP-01
   t = await ask(page, 'Add a 2BHK in Velachery, 72 lakhs, owner Rajan 98400 12345');

@@ -19,6 +19,8 @@ const firebaseConfig = {
 };
 export const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+// For plain scripts on these pages that need a sign-in token (shared-assets/brochure-open.js).
+window.agentAuth = { getIdToken: () => (auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)) };
 let _db;
 try { _db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
 catch (e) { _db = getFirestore(app); }

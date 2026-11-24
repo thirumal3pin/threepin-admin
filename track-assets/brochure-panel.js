@@ -327,7 +327,7 @@ window.bpPreview = code => {
     ${p.startingPrice ? `<div class="bp-pv-price">${esc(p.startingPrice)}</div>` : ''}
     <div class="bp-pv-links">
       ${B.isUrl(p.photosLink) ? `<a class="tk-btn sm" href="${esc(p.photosLink)}" target="_blank" rel="noopener">📷 Photos ↗</a>` : '<span class="bp-muted">No photos link</span>'}
-      ${B.isUrl(p.brochureLink) ? `<a class="tk-btn sm" href="${esc(p.brochureLink)}" target="_blank" rel="noopener">📄 Brochure ↗</a>` : `<span class="bp-muted">${p.brochureLink ? 'Brochure built, not delivered yet' : 'No brochure yet'}</span>`}
+      ${B.isUrl(p.brochureLink) ? `<button type="button" class="tk-btn sm" data-brochure="${esc(p.brochureLink)}" data-brochure-name="${esc(p.propertyCode || p.name || '')}">📄 Brochure</button>` : `<span class="bp-muted">${p.brochureLink ? 'Brochure built, not delivered yet' : 'No brochure yet'}</span>`}
     </div>
     ${p.detailsText ? `<div class="bp-pv-desc">${esc(p.detailsText)}</div>` : '<div class="bp-muted">No description in the dashboard yet.</div>'}
     <div class="bp-pv-acts">
