@@ -414,7 +414,7 @@ async function handleTaskEvent(request, user) {
   }
   const results = await Promise.all(to.map(async email => {
     const r = await sendEmail(email, subject, text, html);
-    return { to: email, ok: !!(r && r.ok), error: r && r.error };
+    return { to: email, ok: !!(r && r.ok), error: (r && r.error) || null };
   }));
   const sent = results.filter(r => r.ok).length;
   // Counts only: the page does not need — and an agent must not be handed — who was emailed.
@@ -440,7 +440,9 @@ async function taskDigestForTenant(db, tenantId, alreadySent) {
     const text = list.map(t => `- ${t.title} (${TM.dueBucket(t) === 'overdue' ? 'overdue, was due ' + fmtDueIst(t.due) : 'due today'}, ${TM.STATUS_LABEL[t.status] || ''})`).join('\n') + `\n\nOpen: ${CRM_BASE}/crm.html?nav=tasks`;
     const subject = `Your tasks today: ${list.length}${late ? ` (${late} overdue)` : ''}`;
     const r = await sendEmail(email, subject, text, html);
-    return { to: email, ok: !!(r && r.ok), error: r && r.error, tasks: list.length };
+    // null, never undefined: Firestore refuses undefined, and it threw away the whole day's record
+    // (who already had their digest) on every run where a send worked (16 Oct – 24 Nov 2026).
+    return { to: email, ok: !!(r && r.ok), error: (r && r.error) || null, tasks: list.length };
   }));
 }
 
