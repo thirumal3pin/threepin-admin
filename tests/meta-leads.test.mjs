@@ -449,6 +449,47 @@ async function server(locked) {
   [r] = await act({ action: 'brief', person: capped });
   eq('The daily cap reached: no AI call, and the page is told', [calls.length - before, r.ok, r.capped], [0, false, true]);
 }
+// ── Next follow-up: the date of the next call (owner, 23 Nov 2026) ──
+{
+  const now = Date.parse('2026-11-23T19:48:00+05:30');   // Monday evening
+  const say = (txt) => { const r = M.suggestFollowUp(txt, now); return r == null ? null : r.none ? 'none' : M.formatFollowUp(r.at, r.timed); };
+  eq('Note: "might visit tomorrow (23 Nov)" → tomorrow (the written date is the note\'s own)', say('Interested , Might visit tomorrow (23 Nov)'), '24 Nov 2026');
+  eq('Note: "call after 3 days"', say('call after 3 days'), '26 Nov 2026');
+  eq('Note: "call in 2-3 days" → 3 days, never "2 March"', say('call in 2-3 days'), '26 Nov 2026');
+  eq('Note: "call back at 6 pm" said at 7:48 pm → tomorrow 6 pm', say('Busy, call back at 6 pm'), '24 Nov 2026, 6 pm');
+  eq('Note: "after 6" is the evening', say('call after 6'), '24 Nov 2026, 6 pm');
+  eq('Note: RNR → tomorrow', say('RNR — no answer'), '24 Nov 2026');
+  eq('Note: "Monday 6 pm" said on a Monday → next Monday', say('Monday 6 pm'), '30 Nov 2026, 6 pm');
+  eq('Note: next week', say('next week'), '30 Nov 2026');
+  eq('Note: a written date ahead', say('call on 28/11 at 11'), '28 Nov 2026, 11 am');
+  eq('Note: a January date in November is next year\'s', say('call on 5 Jan'), '5 Jan 2027');
+  eq('Note: not interested → no follow-up', say('Not interested'), 'none');
+  eq('Note: nothing about when → no suggestion', [say('Details sent on WhatsApp'), say('wants 2 bhk at 2 lakhs'), say('budget 70-100')], [null, null, null]);
+  const cell = (c) => { const r = M.parseFollowUp(c, now); return r == null ? null : r.none ? 'none' : M.formatFollowUp(r.at, r.timed); };
+  eq('Cell: as the app writes it, read back the same', [cell('24 Nov 2026'), cell('24 Nov 2026, 6:30 pm'), cell('No follow-up')], ['24 Nov 2026', '24 Nov 2026, 6:30 pm', 'none']);
+  eq('Cell: typed by hand in the sheet, day first', [cell('24/11/2026'), cell('2026-11-24'), cell('24-11-26')], ['24 Nov 2026', '24 Nov 2026', '24 Nov 2026']);
+  eq('Cell: not a date → not guessed', [cell('tomorrow'), cell('31 Feb 2026')], [null, null]);
+  eq('A day with no time is 10 am India time', M.parseFollowUp('24 Nov 2026', now).at, Date.parse('2026-11-24T10:00:00+05:30'));
+  eq('The column is known by its name, and is not one of the notes', [M.teamRoleOf('Next follow-up'), M.teamRoleOf('Next Follow Up Date'), M.teamRoleOf('Follow up 1')], ['nextfu', 'nextfu', 'followup']);
+  // Written: a missing column is added once, then reused; never in the notes' chain.
+  const H = ['id', 'created_time', 'full_name', 'phone_number', 'Remarks'];
+  const vals = [H, ['l:1', '2026-11-20T10:00:00+05:30', 'Mani', 'p:+919876543210', 'Busy']];
+  let w = M.planSheetWrite({ values: vals, edits: [{ metaId: 'l:1', field: 'nextfu', value: '24 Nov 2026', from: '' }, { metaId: 'l:1', field: 'log', value: 'RNR' }] });
+  eq('First date: a "Next follow-up" column is added; the note goes to Follow up 1, not into it', [w.added.map(a => a.header), w.applied.map(a => a.header + '=' + a.value)], [['Next follow-up', 'Follow up 1'], ['Next follow-up=24 Nov 2026', 'Follow up 1=RNR']]);
+  const vals2 = [[...H, 'Next follow-up'], ['l:1', '2026-11-20T10:00:00+05:30', 'Mani', 'p:+919876543210', 'Busy', '24 Nov 2026']];
+  w = M.planSheetWrite({ values: vals2, edits: [{ metaId: 'l:1', field: 'nextfu', value: '27 Nov 2026', from: '24 Nov 2026' }] });
+  eq('Next time: the same column is written', [w.added.length, w.applied[0].col, w.applied[0].value], [0, 5, '27 Nov 2026']);
+  w = M.planSheetWrite({ values: vals2, edits: [{ metaId: 'l:1', field: 'nextfu', value: '27 Nov 2026', from: '' }] });
+  eq('Changed in the sheet meanwhile: refused, not written over', [w.applied.length, w.conflicts.length], [0, 1]);
+  // Read: the person's date is the newest row's that has one; "contacted" is not set by a date alone.
+  const tab = (rows) => ({ sourceId: 'S', spreadsheetId: 'S', sheetTitle: 'X', title: 'T', gid: 0, propertyCode: 'P1', values: [[...H, 'Next follow-up'], ...rows] });
+  const plan = M.buildPlan({ tabs: [tab([['l:1', '2026-11-01T10:00:00+05:30', 'Mani', 'p:+919876543210', 'Busy', '24 Nov 2026'], ['l:2', '2026-11-20T10:00:00+05:30', 'Mani', 'p:+919876543210', '', '']])], crmLeads: [], roster: [], properties: [], stages: [] });
+  const g = plan.people[0];
+  eq('The person\'s next follow-up comes from the row that has one', [g.team.nextFu.raw, g.team.nextFu.at], ['24 Nov 2026', Date.parse('2026-11-24T10:00:00+05:30')]);
+  eq('…and for the property in view', M.teamFor(g, 'P1').nextFu.raw, '24 Nov 2026');
+  const p2 = M.buildPlan({ tabs: [tab([['l:3', '2026-11-20T10:00:00+05:30', 'Ravi', 'p:+919876543211', '', '25 Nov 2026']])], crmLeads: [], roster: [], properties: [], stages: [] });
+  eq('A date alone is not "contacted"', p2.people[0].team.contacted, false);
+}
 eq('cleanSources keeps only known roles', cleanSources([{ spreadsheetId: SHEETS.KOY.id, tabs: [{ gid: 0, overrides: { 18: 'rating', 19: 'meta', x: 'note', 20: 'bogus' } }] }], [], 'a', 1)[0].tabs[0].overrides, { 18: 'rating' });
 
 console.log(failed ? `\n${failed} of ${checks} failed` : `\nAll good (${checks} checks).`);
