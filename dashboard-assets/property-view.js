@@ -379,10 +379,25 @@
   function downloadBrochure(id){
     const p=resolveProperty(id);
     if(!p){showToast('Property not found');return;}
-    const m=p.brochureLink&&p.brochureLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    const m=p.brochureLink&&p.brochureLink.match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
+    // On an iPhone / iPad — and in the installed app on any touch phone — a forced download opens in
+    // the app's in-app browser, which has nowhere to save a file: Drive's redirect stalls and leaves
+    // a blank white page (owner, 24 Nov 2026). Open Drive's own viewer there instead: it loads, shows
+    // the whole PDF, and its Share button saves it to Files or sends it on WhatsApp. A computer still
+    // gets the straight download.
+    const fileId=m&&(m[1]||m[2]);
+    const ios=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+    let standalone=false;
+    try{standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;}catch(e){}
+    const touch=window.matchMedia&&window.matchMedia('(pointer: coarse)').matches;
+    if(fileId&&(ios||(standalone&&touch))){
+      window.open(`https://drive.google.com/file/d/${fileId}/view`,'_blank','noopener');
+      showToast('Opening the brochure — use Share there to save it or send it on WhatsApp');
+      return;
+    }
     if(m){
       const a=document.createElement('a');
-      a.href=`https://drive.google.com/uc?export=download&id=${m[1]}`;
+      a.href=`https://drive.google.com/uc?export=download&id=${fileId}`;
       a.target='_blank';a.rel='noopener';
       document.body.appendChild(a);a.click();a.remove();
       showToast('Brochure downloading…');
