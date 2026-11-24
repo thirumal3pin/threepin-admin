@@ -269,9 +269,48 @@ async function logList(request) {
   return json({ ok: true, entries, sheet: !!queue });
 }
 
+// ── A brochure PDF, in pieces, for the phones ──
+//
+// GET ?op=file&id=<Drive file id>&from=<byte> (signed-in team members only). On an iPhone the
+// installed app cannot follow Drive's download redirects: the in-app browser shows a white page
+// while a 3–7 MB file comes down, and often gives up (owner, 24 Nov 2026 — "works sometimes"). So the
+// app downloads the PDF itself, from here. Vercel caps a function's response at 4.5 MB, so each
+// call returns at most 3.5 MB of the file (Drive answers byte ranges) and says how big the whole file
+// is; the page asks for the next piece until it has it all, then opens or shares the PDF.
+const PIECE = 3.5 * 1024 * 1024;
+async function brochurePiece(request, url) {
+  const user = await verifyCrmUser(request, { allowAgent: true });
+  if (!user || !user.tenantId) return json({ ok: false, error: 'Unauthorized' }, 401);
+  return drivePiece(url);
+}
+// The piece itself, after the sign-in check (exported for the tests, which run it on real brochures).
+export async function drivePiece(url) {
+  const id = String(url.searchParams.get('id') || '');
+  if (!/^[A-Za-z0-9_-]{10,100}$/.test(id)) return json({ ok: false, error: 'Bad file id' }, 400);
+  const from = Math.max(0, Math.floor(Number(url.searchParams.get('from')) || 0));
+  let res;
+  try {
+    res = await fetch(`https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`, {
+      headers: { Range: `bytes=${from}-${from + PIECE - 1}` }, redirect: 'follow'
+    });
+  } catch (e) { return json({ ok: false, error: 'Drive could not be reached' }, 502); }
+  if (res.status !== 206 && res.status !== 200) return json({ ok: false, error: `Drive answered ${res.status}` }, 502);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // Only a real PDF goes out: a Drive warning page, or anything else, is refused.
+  if (from === 0 && String.fromCharCode(...buf.slice(0, 4)) !== '%PDF') return json({ ok: false, error: 'That file is not a PDF the app can open' }, 415);
+  const range = res.headers.get('content-range') || '';
+  const total = Number((range.match(/\/(\d+)$/) || [])[1]) || (res.status === 200 ? buf.length : 0);
+  const body = res.status === 200 && from > 0 ? buf.slice(from, from + PIECE) : buf.slice(0, PIECE);
+  return new Response(body, { status: 200, headers: {
+    'Content-Type': 'application/octet-stream', 'Cache-Control': 'private, max-age=600',
+    'X-File-Total': String(total), 'X-Piece-From': String(from), 'X-Piece-Length': String(body.length)
+  } });
+}
+
 export async function GET(request) {
   const url = new URL(request.url);
   if (url.searchParams.get('op') === 'log') return logList(request);
+  if (url.searchParams.get('op') === 'file') return brochurePiece(request, url);
   return json({ ok: false, error: 'Unknown op' }, 404);
 }
 
