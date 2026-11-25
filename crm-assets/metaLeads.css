@@ -268,7 +268,9 @@ button.ml-tt-r{cursor:pointer;}
 button.ml-tt-r:hover,.ml-tt-r.on{background:var(--ml-soft);}
 .ml-tt-r.on{box-shadow:inset 3px 0 0 var(--brand);}
 .ml-tt-h{font-size:12.5px;font-weight:600;color:var(--ink3);border-top:0;}
-.ml-team-r,.ml-ad-r{grid-template-columns:minmax(0,2fr) repeat(6,minmax(0,.8fr)) !important;}
+.ml-team-r{grid-template-columns:minmax(0,2fr) repeat(6,minmax(0,.8fr)) !important;}
+.ml-ad-r{grid-template-columns:minmax(0,2fr) repeat(7,minmax(0,.8fr)) !important;}
+.ml-tab-r{grid-template-columns:minmax(0,2.4fr) repeat(7,minmax(0,.7fr)) minmax(0,1fr);}
 .ml-tabsel{font-size:13px;margin:0 0 10px;padding:8px 12px;border-radius:var(--r2);background:var(--ml-soft);}
 
 /* ── Setup ── */
@@ -642,7 +644,8 @@ tr.ml-flash td{animation:ml-flash 2.6s ease-out;}
 .ml-pt-ad{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .ml-k{display:none;font-style:normal;}
 .ml-pt-none{display:none;color:var(--ink3);font-weight:400;}
-.ml-team-r.c8,.ml-ad-r.c8{grid-template-columns:minmax(0,2fr) repeat(7,minmax(0,.8fr)) !important;}
+.ml-team-r.c8{grid-template-columns:minmax(0,2fr) repeat(7,minmax(0,.8fr)) !important;}
+.ml-ad-r.c8{grid-template-columns:minmax(0,2fr) repeat(8,minmax(0,.8fr)) !important;}
 .ml-grid2{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));margin-bottom:16px;}
 .ml-an-say{font-size:13px;color:var(--ink2);margin:-2px 0 12px;}
 .ml-hm{display:flex;flex-direction:column;gap:2px;overflow-x:auto;}

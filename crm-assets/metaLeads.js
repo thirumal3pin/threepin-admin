@@ -1299,14 +1299,14 @@
     var rate = [5, 4, 3, 2, 1].map(function (n) { return { label: 'Rating ' + n, n: a.ratings[n] }; }).concat([{ label: 'Not rated', n: a.ratings.none }]);
     var card = function (h, inner) { return '<div class="ml-card"><div class="ml-h">' + h + '</div>' + inner + '</div>'; };
     var tabTable = whole.byTab.length ? '<div class="ml-card"><div class="ml-h">By sheet and tab <span class="ml-dim">— click a tab for its own analysis</span></div>' +
-      '<div class="ml-tt"><div class="ml-tt-r ml-tt-h"><span>Sheet › tab</span><span>Enquiries</span><span>People</span><span>Last 7 days</span><span>Written</span><span>Duplicates</span><span>In CRM</span><span>Top ad</span></div>' +
+      '<div class="ml-tt"><div class="ml-tt-r ml-tt-h ml-tab-r"><span>Sheet › tab</span><span>Enquiries</span><span>People</span><span>Last 7 days</span><span>Written</span><span>Not contacted</span><span>Duplicates</span><span>In CRM</span><span>Top ad</span></div>' +
       whole.byTab.map(function (t) {
-        return '<button class="ml-tt-r' + (S.tab === t.key ? ' on' : '') + '" onclick="MetaLeads.tab(' + js(t.key) + ')">' +
+        return '<button class="ml-tt-r ml-tab-r' + (S.tab === t.key ? ' on' : '') + '" onclick="MetaLeads.tab(' + js(t.key) + ')">' +
           '<span><b>' + esc(String(t.sheetTitle).trim()) + ' › ' + esc(t.title) + '</b>' + (t.tag ? ' <span class="ml-tag">' + esc(t.tag) + '</span>' : '') +
             (!code ? ' <span class="ml-code">' + esc(t.propertyCode) + '</span>' : '') +
             (t.remark ? '<div class="ml-dim">' + esc(t.remark) + '</div>' : '') +
             '<div class="ml-dim">' + esc(t.firstAt ? MM().fmtWhen(t.firstAt).split(',')[0] + ' – ' + MM().fmtWhen(t.lastAt).split(',')[0] : 'no rows in the period') + '</div></span>' +
-          '<span>' + t.enquiries + '</span><span>' + t.people + '</span><span>' + t.last7 + '</span><span>' + pctOf(t.contacted, t.people) + '</span><span>' + t.duplicates + '</span><span>' + t.inCrm + '</span><span>' + esc(t.topAd || '—') + '</span></button>';
+          '<span>' + t.enquiries + '</span><span>' + t.people + '</span><span>' + t.last7 + '</span><span>' + pctOf(t.contacted, t.people) + '</span><span' + (t.people - t.contacted ? ' class="ml-bad"' : '') + '>' + (t.people - t.contacted) + '</span><span>' + t.duplicates + '</span><span>' + t.inCrm + '</span><span>' + esc(t.topAd || '—') + '</span></button>';
       }).join('') + '</div></div>' : '';
     var gname = { day: 'day', week: 'week', month: 'month' }[grain];
     return propChips(true) +
@@ -1467,10 +1467,11 @@
     var before = {}; if (pa) pa.adQuality.forEach(function (x) { before[x.ad] = x.enquiries; });
     var k = function (t) { return '<i class="ml-k">' + t + '</i>'; };
     return '<div class="ml-card"><div class="ml-h">Lead quality by ad <span class="ml-dim">(ratings from the sheet)</span></div><div class="ml-tt">' +
-      '<div class="ml-tt-r ml-tt-h ml-ad-r' + (pa ? ' c8' : '') + '"><span>Ad</span><span>Enquiries</span>' + (pa ? '<span>vs before</span>' : '') + '<span>People</span><span>Contacted</span><span>Rated 4–5</span><span>Rated 3+</span><span>Average rating</span></div>' +
+      '<div class="ml-tt-r ml-tt-h ml-ad-r' + (pa ? ' c8' : '') + '"><span>Ad</span><span>Enquiries</span>' + (pa ? '<span>vs before</span>' : '') + '<span>People</span><span>Contacted</span><span>Not contacted</span><span>Rated 4–5</span><span>Rated 3+</span><span>Average rating</span></div>' +
       a.adQuality.map(function (x) {
         return '<button class="ml-tt-r ml-ad-r' + (pa ? ' c8' : '') + '" onclick="MetaLeads.adLeads(' + js(x.ad) + ')"><span><b>' + esc(x.ad) + '</b></span><span>' + k('Enquiries') + x.enquiries + '</span>' + (pa ? chgCell(x.enquiries, before[x.ad] || 0) : '') +
           '<span>' + k('People') + x.people + '</span><span>' + k('Contacted') + pct(x.contacted, x.people) + '</span>' +
+          '<span' + (x.people - x.contacted ? ' class="ml-bad"' : '') + '>' + k('Not contacted') + (x.people - x.contacted) + '</span>' +
           '<span>' + k('Rated 4–5') + x.top + '</span><span>' + k('Rated 3+') + pct(x.threePlus, x.people) + '</span><span>' + k('Average') + (x.avg != null ? '★ ' + x.avg + ' <span class="ml-dim">(' + x.rated + ' rated)</span>' : '—') + '</span></button>';
       }).join('') + '</div></div>';
   }

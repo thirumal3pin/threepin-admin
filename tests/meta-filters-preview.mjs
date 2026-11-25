@@ -213,6 +213,18 @@ try {
   ok('Clear all filters: the bar goes, "All" is back', !(await page.$('.ml-active')) && await page.$eval('.ml-chips .ml-chip.on', b => /^All$/.test(b.textContent.trim())));
   ok('…My leads is kept (it is a switch, not a filter)', await page.evaluate(() => JSON.parse(localStorage.getItem('ml.filters')).f.agent === '_mine'));
   ok('…the sort is kept', await page.$eval('.ml-sort', s => s.value) === 'hot');
+  // Analysis: a Not contacted count per ad and per sheet tab (owner, 25 Nov 2026).
+  await page.evaluate(() => MetaLeads.go('ml-analysis'));
+  await page.waitForTimeout(600);
+  const heads = await page.$$eval('.ml-card', cs => cs.map(c => ({ h: (c.querySelector('.ml-h') || {}).textContent || '', cols: [...c.querySelectorAll('.ml-tt-h span')].map(x => x.textContent) })));
+  const adCard = heads.find(x => /Lead quality by ad/.test(x.h)), tabCard = heads.find(x => /By sheet and tab/.test(x.h));
+  ok('Analysis: "Lead quality by ad" has a Not contacted column', !!adCard && adCard.cols.includes('Not contacted'), adCard);
+  ok('Analysis: "By sheet and tab" has a Not contacted column', !!tabCard && tabCard.cols.includes('Not contacted'), tabCard);
+  const adOk = await page.$$eval('.ml-ad-r:not(.ml-tt-h)', rows => rows.every(r => { const s = [...r.children].map(x => x.textContent.replace(/^(People|Contacted|Not contacted)/, '')); return s.length >= 8; }));
+  ok('…each ad row has the extra cell, header and rows line up', adOk && await page.$$eval('.ml-ad-r', rs => new Set(rs.map(r => r.children.length)).size === 1));
+  ok('…sheet rows line up too', await page.$$eval('.ml-tab-r', rs => rs.length > 1 && new Set(rs.map(r => r.children.length)).size === 1));
+  await page.locator('.ml-card', { hasText: 'Lead quality by ad' }).first().screenshot({ path: join(OUT, 'meta-filters-analysis-ad.png') });
+  await page.locator('.ml-card', { hasText: 'By sheet and tab' }).first().screenshot({ path: join(OUT, 'meta-filters-analysis-tab.png') });
   ok('No page errors so far', !errors.length, errors);
   await ctx.close();
 
