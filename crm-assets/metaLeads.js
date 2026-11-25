@@ -470,8 +470,8 @@
   function fuAt(p) { var n = nextOf(p); return n && n.at ? n.at : 0; }
   function firstProp(p) { return (S.prop !== 'all' ? S.prop : p.properties.slice().sort()[0]) || '\uffff'; }
   function dateControls(F) {
-    var inp = function (k, v, label) { return '<label class="ml-dlab"><span>' + label + '</span><input type="date" class="ml-f ml-date" value="' + esc(v || '') + '" onchange="MetaLeads.setF(' + js(k) + ',this.value)"></label>'; };
-    var ctl = selectHtml('dateOf', F.dateOf, [['', 'Enquiry date'], ['fu', 'Follow-up date']]) + selectHtml('days', F.days, DATE_OPTS);
+    var inp = function (k, v, label) { return '<label class="ml-dlab"><span>' + label + '</span><input type="date" class="ml-f ml-date' + (v ? ' set' : '') + '" value="' + esc(v || '') + '" onchange="MetaLeads.setF(' + js(k) + ',this.value)"></label>'; };
+    var ctl = selectHtml('dateOf', F.dateOf, [['', 'Enquiry date'], ['fu', 'Follow-up date']], !!(F.days && dateWindow(F))) + selectHtml('days', F.days, DATE_OPTS, !!(F.days && dateWindow(F)));
     if (F.days === 'on') ctl += inp('d1', F.d1, 'On');
     else if (F.days === 'from') ctl += inp('d1', F.d1, 'From');
     else if (F.days === 'until') ctl += inp('d1', F.d1, 'Until');
@@ -483,11 +483,12 @@
   var SLA_MS = 24 * 3600000;
   var FKEY = 'ml.filters';
   function saveF() { try { localStorage.setItem(FKEY, JSON.stringify({ f: S.f, by: me(), layout: S.layout, tsort: S.tsort })); } catch (e) { /* no storage */ } }
-  (function loadF() { try { var x = JSON.parse(localStorage.getItem(FKEY) || 'null'); if (x && x.f) { S.f = Object.assign(S.f, x.f); S.fRestored = true; } if (x && x.layout) S.layout = x.layout; if (x && x.tsort) S.tsort = x.tsort; } catch (e) { /* none */ } })();
+  (function loadF() { try { var x = JSON.parse(localStorage.getItem(FKEY) || 'null'); if (x && x.f) { S.f = Object.assign(S.f, x.f); S.fRestored = true; } if (x && x.layout) S.layout = x.layout; if (x && x.tsort) S.tsort = x.tsort; } catch (e) { /* none */ } S.f.sort = 'new'; })();
+  // ↑ Whatever sort was left last time, the page opens on "Enquiry date: newest first" (owner, 25 Nov 2026).
   function agentDefault() {
     if (S.agentDefaulted || S.fRestored || !S.plan || !S.cfg || S.cfg.manager) return;
     S.agentDefaulted = true;
-    if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; S.f.sort = 'next'; }
+    if (S.plan.people.some(function (p) { return p.team.agent === me(); })) { S.f.agent = '_mine'; }
   }
   function me() { return (typeof currentUserEmail !== 'undefined' && currentUserEmail) ? String(currentUserEmail).toLowerCase() : ''; }
   // Viewing one property: each person's state is that property's (its newest enquiry decides who has it
@@ -633,17 +634,55 @@
       b('_none', '<i class="fa-regular fa-hand"></i> Unassigned', none, 'Nobody has these yet — take one') +
       b('', 'All', scope.length, 'Everyone') + '</div>';
   }
-  function selectHtml(key, value, options) {
-    return '<select class="ml-f' + (key === 'sort' ? ' ml-sort' : ' fsel' + (value ? ' set' : '')) + '" aria-label="' + esc(key) + '" onchange="MetaLeads.setF(' + js(key) + ',this.value)">' + options.map(function (o) {
+  function selectHtml(key, value, options, on) {
+    var set = on != null ? on : key === 'sort' ? (value && value !== 'new') : !!value;
+    return '<select class="ml-f' + (key === 'sort' ? ' ml-sort' : ' fsel') + (set ? ' set' : '') + '" aria-label="' + esc(key) + '" onchange="MetaLeads.setF(' + js(key) + ',this.value)">' + options.map(function (o) {
       return '<option value="' + esc(o[0]) + '"' + (String(value) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
     }).join('') + '</select>';
+  }
+  // Every filter narrowing the list, in words, each with its own ✕ (owner, 25 Nov 2026: "all active
+  // filters need a highlight so I don't get confused" — a rating left on from earlier hid every lead).
+  // My leads / Unassigned and the property are not listed: they are highlighted on screen already.
+  function activeFilters() {
+    if (searching()) return [];
+    var F = S.f, out = [];
+    var add = function (label, undo) { out.push({ label: label, undo: undo }); };
+    if (S.filter !== 'all') add((FILTERS.find(function (x) { return x[0] === S.filter; }) || [, S.filter])[1], "MetaLeads.filter('all')");
+    if (F.agent && F.agent !== '_mine' && F.agent !== '_none') add('Agent: ' + agentLabel(F.agent), "MetaLeads.setF('agent','')");
+    var R = { '4+': 'Rated 4 and above', 5: 'Rating 5', 4: 'Rating 4', 3: 'Rating 3', 2: 'Rating 2', 1: 'Rating 1', none: 'Not rated' };
+    if (F.rating) add(R[F.rating] || 'Rating ' + F.rating, "MetaLeads.setF('rating','')");
+    if (F.ad) add('Ad: ' + F.ad, "MetaLeads.setF('ad','')");
+    if (F.tab) {
+      var tl = F.tab;
+      S.plan.people.some(function (p) { return p.enquiries.some(function (e) { if (e.where.spreadsheetId + ':' + e.where.gid !== F.tab) return false; tl = String(e.where.sheetTitle).trim() + ' › ' + e.where.tab; return true; }); });
+      add('Sheet tab: ' + tl, "MetaLeads.setF('tab','')");
+    }
+    if (F.days && dateWindow(F)) {
+      var dl = (DATE_OPTS.find(function (x) { return x[0] === F.days; }) || [, F.days])[1].replace('…', '');
+      if (F.days === 'range') dl = 'Between ' + (F.d1 || '…') + ' and ' + (F.d2 || '…'); else if (/^(on|from|until)$/.test(F.days)) dl += ' ' + F.d1;
+      add((F.dateOf === 'fu' ? 'Follow-up date: ' : 'Enquiry date: ') + dl, "MetaLeads.setF('days','')");
+    }
+    return out;
+  }
+  function activeBar(n) {
+    var a = activeFilters();
+    if (!a.length) return '';
+    return '<div class="ml-active" role="group" aria-label="Filters on">' +
+      '<span class="ml-active-h"><i class="fa-solid fa-filter" aria-hidden="true"></i> ' + n + ' shown · Filters on:</span>' +
+      a.map(function (f) { return '<button type="button" class="ml-af" onclick="' + f.undo + '" aria-label="Remove filter: ' + esc(f.label) + '" title="Remove this filter">' + esc(f.label) + ' <i class="fa-solid fa-xmark" aria-hidden="true"></i></button>'; }).join('') +
+      '<button type="button" class="ml-btn sm ml-clearall" onclick="MetaLeads.clearAll()"><i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i> Clear all filters</button></div>';
+  }
+  function emptyHtml() {
+    var a = activeFilters();
+    if (!a.length) return 'Nobody matches.';
+    return 'Nobody matches ' + a.map(function (f) { return '<b>' + esc(f.label) + '</b>'; }).join(' + ') + (a.length > 1 ? ' together' : '') + '.' +
+      ' <button type="button" class="ml-link" onclick="MetaLeads.clearAll()">Clear all filters</button>';
   }
   function toolbar() {
     var F = S.f, scope = peopleFor(S.prop);
     var ads = {}, tabs = {};
     scope.forEach(function (p) { rowsFor(p, S.prop).forEach(function (e) { if (e.ad) ads[e.ad] = 1; tabs[e.where.spreadsheetId + ':' + e.where.gid] = String(e.where.sheetTitle).trim() + ' › ' + e.where.tab; }); });
     var agentOpts = [['', 'Every agent'], ['_mine', 'Assigned to me'], ['_none', 'Not assigned']].concat(roster().map(function (e) { return [e, agentLabel(e)]; }));
-    var any = F.agent || F.rating || F.ad || F.tab || F.days || S.q || S.filter !== 'all';
     // The switch (My leads / Unassigned) is not counted as a filter here — it is on screen already.
     var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return F[k] && !(k === 'agent' && (F[k] === '_mine' || F[k] === '_none')); }).length;
     return '<div class="ml-tools' + (S.fOpen ? ' open' : '') + '">' +
@@ -655,7 +694,6 @@
       dateControls(F) +
       '<span class="ml-tools-sep"></span>' +
       selectHtml('sort', F.sort, SORTS) +
-      (any ? '<button class="ml-link" onclick="MetaLeads.clearF()">Clear filters</button>' : '') +
       '<button class="ml-btn sm" onclick="MetaLeads.csv()" title="Download the people shown as a spreadsheet"><i class="fa-solid fa-download"></i><span class="ml-hide-s"> CSV</span></button>' +
     '</div>';
   }
@@ -777,7 +815,7 @@
     return '<div class="ml-count">' + rows.length + ' of ' + list.length + ' ' + (list.length === 1 ? 'person' : 'people') +
         (Object.keys(S.tf).some(function (k) { return S.tf[k]; }) ? ' · <button class="ml-link" onclick="MetaLeads.tfClear()">Clear column filters</button>' : '') + '</div>' +
       bulkBar(rows) +
-      '<div class="ml-tablewrap"><table class="ml-table"><thead>' + head + filt + '</thead><tbody>' + (body || '<tr><td colspan="' + (COLS.length + 1) + '" class="ml-dim" style="padding:18px;text-align:center">Nobody matches.</td></tr>') + '</tbody></table></div>' +
+      '<div class="ml-tablewrap"><table class="ml-table"><thead>' + head + filt + '</thead><tbody>' + (body || '<tr><td colspan="' + (COLS.length + 1) + '" class="ml-dim" style="padding:18px;text-align:center">' + emptyHtml() + '</td></tr>') + '</tbody></table></div>' +
       (rows.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (rows.length - S.shown) + ' left)</button>' : '') + drawer;
   }
   // Esc closes the side panel.
@@ -788,7 +826,7 @@
     if (!S.plan) return needRead();
     var a = MM().analyse(S.plan, S.prop === 'all' ? '' : S.prop);
     var list = currentList();
-    var chips = FILTERS.map(function (f) { return '<button class="ml-chip sm' + (S.filter === f[0] ? ' on' : '') + '" onclick="MetaLeads.filter(' + js(f[0]) + ')">' + f[1] + '</button>'; }).join('');
+    var chips = FILTERS.map(function (f) { return '<button class="ml-chip sm' + (S.filter === f[0] ? ' on' + (f[0] !== 'all' ? ' set' : '') : '') + '" aria-pressed="' + (S.filter === f[0]) + '" onclick="MetaLeads.filter(' + js(f[0]) + ')">' + f[1] + '</button>'; }).join('');
     var phone = isPhone();
     var rows = list.slice(0, S.shown).map(personHtml).join('');
     var nSet = ['agent', 'rating', 'ad', 'tab', 'days'].filter(function (k) { return S.f[k] && !(k === 'agent' && (S.f[k] === '_mine' || S.f[k] === '_none')); }).length;
@@ -798,10 +836,10 @@
       '<div class="ml-bar"><input class="ml-search" type="search" placeholder="Search leads by name or phone number…" value="' + esc(S.q) + '" oninput="MetaLeads.search(this.value)">' +
         '<button class="ml-btn ml-fbtn2' + (S.fOpen ? ' on' : '') + '" onclick="MetaLeads.fOpen()" aria-expanded="' + !!S.fOpen + '"><i class="fa-solid fa-sliders"></i> Filters' + (nSet ? ' <span class="ml-fn">' + nSet + '</span>' : '') + '</button>' +
         '<div class="ml-chips ml-scroll">' + chips + '</div></div>' +
-      '<div class="ml-tools-w' + (S.fOpen ? ' open' : '') + '">' + sw + toolbar() + '</div>' +
+      '<div class="ml-tools-w' + (S.fOpen ? ' open' : '') + '">' + sw + toolbar() + '</div>' + activeBar(list.length) +
       (searching() ? '<div class="ml-qnote"><i class="fa-solid fa-magnifying-glass"></i> <span><b>' + list.length + '</b> of all ' + S.plan.people.length + ' leads match “' + esc(S.q.trim()) + '” — searched across every property, with the filters set aside.</span> <button class="ml-link" onclick="MetaLeads.search(\'\', true)">Clear search</button></div>' : '') +
       (S.layout === 'table' && !phone ? tableHtml(list) :
-        (list.length ? bulkBar(list) + '<div class="ml-list' + (S.selMode ? ' selmode' : '') + '">' + rows + '</div>' : '<div class="ml-empty">Nobody matches.</div>') + (phone ? drawerHtml(openP) : '') +
+        (list.length ? bulkBar(list) + '<div class="ml-list' + (S.selMode ? ' selmode' : '') + '">' + rows + '</div>' : '<div class="ml-empty">' + emptyHtml() + '</div>') + (phone ? drawerHtml(openP) : '') +
         (list.length > S.shown ? '<button class="ml-btn ml-more" onclick="MetaLeads.more()">Show more (' + (list.length - S.shown) + ' left)</button>' : ''));
   }
   function actionBadge(p) {
@@ -1737,6 +1775,7 @@
     },
     tfClear: function () { S.tf = {}; render(); },
     setF: function (k, v) { S.f[k] = v; S.shown = PAGE; saveF(); if (S.view !== 'meta-leads') { MetaLeads.go('meta-leads'); return; } render(); },
+    clearAll: function () { var a = S.f.agent; S.f = blankF(S.f.sort); if (a === '_mine' || a === '_none') S.f.agent = a; S.filter = 'all'; S.q = ''; S.tf = {}; S.shown = PAGE; saveF(); render(); },
     clearF: function () { S.f = blankF(S.f.sort); S.filter = 'all'; if (S.qProp) { S.prop = S.qProp; S.qProp = null; } S.q = ''; saveF(); render(); },
     lateFirst: function () { S.filter = 'uncontacted'; S.f.sort = 'untouched'; render(); },
     sel: function (k, on) { S.sel[k] = on; render(); },
