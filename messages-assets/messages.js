@@ -1,6 +1,7 @@
 // ═══════ MESSAGES (messages.html) — the team's own chat ═══════
 // Agent ↔ agent and agent ↔ admin, WhatsApp style. Not client messaging (that stays on TailorTalk).
-//   threads/{id}            { title, type: access_request | property | lead | general, linkedId, members,
+//   threads/{id}            { title, type: direct | property | lead | general (| access_request, before
+//                             26 Nov 2026 — folded into the people's chat, foldedInto), linkedId, members,
 //                             names, lastAt, lastText, lastBy, reads: { key: ms } }
 //   threads/{id}/messages   { kind: text | system, text, at, by, replyTo? }
 //                           replyTo: the id of the message it answers, in this thread (the quote is
@@ -10,6 +11,10 @@
 // the only things firestore.rules let them write. What is unread is worked out from each person's
 // own read mark; read ticks from the others' marks (a message is read once every other member's mark
 // has passed it).
+// Requests (owner, 26 Nov 2026): one chat per set of people ('direct'). Each request is a card in it
+// (kind 'request', requestId) with Approve / Reject on the card and its status live; everything about
+// one request — decisions, visits, the team's replies — answers the card (replyTo) and lives in the
+// card's own thread, a panel beside the chat. Decision lines also show small in the chat.
 import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
 import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
@@ -29,6 +34,14 @@ let threadUnsub = null, docUnsub = null, wantTried = false, chatPushed = false;
 // messages older than the 300 loaded — fetched once by id, so their quotes still show.
 let replyTo = null, lastSwipeEnd = 0, msgsLoaded = false;   // (msgsLoaded: "no messages yet" only once they have come)
 const quoted = new Map();   // id → message | null (being fetched) | false (not there)
+// Request cards: each card's request, live (id → request | null when it is not there / not ours).
+const reqs = new Map(), reqUnsubs = new Map();
+let sideCard = null, wantReq = new URLSearchParams(location.search).get('r'), foldTried = false;
+// Waiting on me, for the chat list ("3 waiting"): admins every pending request, others theirs to decide.
+let waitingByThread = new Map();
+// What one tap on Approve gives (the admin's defaults — team.html → What agents see → Approvals).
+let QD = null;
+approvalDefaults(me).then(d => { QD = d || {}; renderChat(); renderSide(); renderWaiting(); }).catch(() => { QD = {}; });
 // Is this property one I am the primary agent of (my own copy says so)?
 let myViewP = null;
 function isMyOwnProperty(id) {
@@ -53,8 +66,13 @@ function watchThreads() {
   threadUnsub = onSnapshot(qq, { includeMetadataChanges: true }, s => {
     // An empty answer from this device's copy is not "no conversations": wait for the server's.
     if (s.metadata.fromCache && !s.docs.length && !threads.length && navigator.onLine !== false) return;
-    threads = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+    threads = s.docs.map(d => ({ ...d.data(), id: d.id })).filter(t => !t.foldedInto).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     renderList();
+    // Chats from before 26 Nov (one per request): folded into the people's chat, once.
+    if (!foldTried && threads.some(t => t.type === 'access_request' && (t.members || []).includes(me.email))) {
+      foldTried = true;
+      api('threads-fold').catch(e => console.error('fold:', e.message));
+    }
     if (window.AppNav && window.AppNav.setBadge) window.AppNav.setBadge('messages', threads.filter(isUnread).length);
     const want = new URLSearchParams(location.search).get('t');
     if (want && !openId && !wantTried) {
@@ -70,6 +88,16 @@ function watchThreads() {
   });
 }
 watchThreads();
+{
+  const rq = collection(db, 'accessRequests');
+  const qq = isAdmin ? query(rq, where('tenantId', '==', me.tenantId), where('status', '==', 'pending'))
+    : query(rq, where('tenantId', '==', me.tenantId), where('approvers', 'array-contains', me.email));
+  onSnapshot(qq, s => {
+    const m = new Map();
+    s.docs.map(d => ({ ...d.data(), id: d.id })).filter(r => canDecide(r) && r.threadId).forEach(r => m.set(r.threadId, (m.get(r.threadId) || 0) + 1));
+    waitingByThread = m; renderList();
+  }, () => {});
+}
 
 if (isAdmin) {
   const c = document.createElement('button');
@@ -86,9 +114,14 @@ $('filters').addEventListener('click', e => {
 });
 $('q').addEventListener('input', e => { q = e.target.value.trim().toLowerCase(); renderList(); });
 
-// "Access: 3 BHK, Anna Nagar · for Arjun" — the lock icon already says it is a request.
-const shortTitle = t => t.type === 'access_request' ? String(t.title || '').replace(/^(Access|More time|Owner’s number):\s*/, m => m.startsWith('Access') ? '' : m) : String(t.title || '');
-const ICON = { access_request: 'fa-solid fa-lock-open', property: 'fa-regular fa-building', lead: 'fa-regular fa-user', general: 'fa-regular fa-comments' };
+// "Access: 3 BHK, Anna Nagar · for Arjun" — the lock icon already says it is a request. A people's
+// chat is named after the others in it.
+const othersOf = t => (t.members || []).filter(e => e !== me.email);
+const shortTitle = t => t.type === 'direct' ? (othersOf(t).map(e => nameOf(people, e)).join(', ') || String(t.title || ''))
+  : t.type === 'access_request' ? String(t.title || '').replace(/^(Access|More time|Owner’s number):\s*/, m => m.startsWith('Access') ? '' : m) : String(t.title || '');
+const ICON = { access_request: 'fa-solid fa-lock-open', property: 'fa-regular fa-building', lead: 'fa-regular fa-user', general: 'fa-regular fa-comments', direct: 'fa-solid fa-user-group' };
+const initials = t => { const o = othersOf(t); if (o.length !== 1) return ''; const n = nameOf(people, o[0]).trim().split(/\s+/); return ((n[0] || '')[0] || '') + ((n[1] || '')[0] || ''); };
+const canDecide = r => !!r && r.status === 'pending' && r.requesterEmail !== me.email && (isAdmin || (r.approvers || []).includes(me.email));
 const short = t => {
   if (!t) return '';
   const d = new Date(t), now = new Date();
@@ -98,16 +131,17 @@ const short = t => {
 };
 function renderList() {
   let list = threads;
-  if (filter !== 'all') list = list.filter(t => t.type === filter);
-  if (q) list = list.filter(t => [t.title, ...(t.members || []).map(e => nameOf(people, e))].join(' ').toLowerCase().includes(q));
+  if (filter !== 'all') list = list.filter(t => filter === 'requests' ? t.type === 'direct' || t.type === 'access_request' : t.type === filter);
+  if (q) list = list.filter(t => [t.title, shortTitle(t), ...(t.members || []).map(e => nameOf(people, e))].join(' ').toLowerCase().includes(q));
   $('threads').innerHTML = list.length ? list.map(t => {
     const n = isUnread(t);
     const by = t.lastBy ? (t.lastBy === me.email ? 'You: ' : nameOf(people, t.lastBy).split(' ')[0] + ': ') : '';
     const others = (t.members || []).filter(e => e !== me.email).map(e => nameOf(people, e).split(' ')[0]).join(', ');
+    const w = waitingByThread.get(t.id) || 0, ini = t.type === 'direct' ? initials(t) : '';
     return `<div class="thread${n ? ' unread' : ''}" role="button" tabindex="0" data-id="${esc(t.id)}">
-      <div class="av"><i class="${ICON[t.type] || ICON.general}"></i></div>
+      <div class="av${ini ? ' ini' : ''}">${ini ? esc(ini.toUpperCase()) : `<i class="${ICON[t.type] || ICON.general}"></i>`}</div>
       <div class="bd"><b>${esc(shortTitle(t))}</b><small>${t.lastText ? esc(by + t.lastText) : esc(others)}</small></div>
-      <div class="side"><span>${esc(short(t.lastAt))}</span>${n ? '<span class="ub" aria-label="Unread"></span>' : ''}</div></div>`;
+      <div class="side"><span>${esc(short(t.lastAt))}</span>${w ? `<span class="wt" title="Requests waiting for your decision">${w} waiting</span>` : ''}${n ? '<span class="ub" aria-label="Unread"></span>' : ''}</div></div>`;
   }).join('') : `<div class="empty"><i class="fa-regular fa-comments"></i>${q || filter !== 'all' ? 'No conversations here.' : 'No conversations yet. A request for details opens one; so does “Message” on a property or a lead, or New.'}</div>`;
   $('threads').querySelectorAll('.thread').forEach(el => {
     el.addEventListener('click', () => openChat(el.dataset.id, { push: true }));
@@ -132,13 +166,24 @@ function openChat(id, { push = false } = {}) {
     <div id="pinned"></div>
     <div class="msgs" id="msgs" aria-live="polite"><div class="day">Loading…</div></div>
     <div class="replybar" id="replyBar" hidden></div>
-    <form class="compose" id="compose"><textarea id="text" rows="1" maxlength="4000" placeholder="Message" aria-label="Message"></textarea><button type="submit" class="send" id="send" aria-label="Send"><i class="fa-solid fa-paper-plane"></i></button></form>`;
+    <form class="compose" id="compose"><textarea id="text" rows="1" maxlength="4000" placeholder="Message" aria-label="Message"></textarea><button type="submit" class="send" id="send" aria-label="Send"><i class="fa-solid fa-paper-plane"></i></button></form>
+    <aside class="rside" id="side" hidden aria-labelledby="sideT">
+      <div class="rside-h"><button type="button" class="btn sm" id="sideBack" aria-label="Back to the conversation"><i class="fa-solid fa-arrow-left"></i></button><div class="t"><b id="sideT">Request</b><small id="sideS"></small></div><button type="button" class="x" id="sideX" aria-label="Close the request" title="Close"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="rside-b" id="sideBody"></div>
+      <form class="compose" id="sideCompose"><textarea id="sideText" rows="1" maxlength="4000" placeholder="Reply about this request" aria-label="Reply about this request"></textarea><button type="submit" class="send" aria-label="Send the reply"><i class="fa-solid fa-paper-plane"></i></button></form>
+    </aside>`;
   $('back').addEventListener('click', () => closeChat());
   replyTo = null; msgsLoaded = false; quoted.clear(); untap();
   const ta = $('text');
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 900px)').matches) { e.preventDefault(); send(); } });
   $('compose').addEventListener('submit', e => { e.preventDefault(); send(); });
+  $('sideX').addEventListener('click', () => closeSide());
+  $('sideBack').addEventListener('click', () => closeSide());
+  const st = $('sideText');
+  st.addEventListener('input', () => { st.style.height = 'auto'; st.style.height = Math.min(140, st.scrollHeight) + 'px'; });
+  st.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 900px)').matches) { e.preventDefault(); sendSide(); } });
+  $('sideCompose').addEventListener('submit', e => { e.preventDefault(); sendSide(); });
   const url = new URL(location.href); url.searchParams.set('t', id);
   if (push && !wasOpen) { history.pushState({ chat: id }, '', url); chatPushed = true; }
   else { history.replaceState({ ...(history.state || {}), chat: id }, '', url); if (!wasOpen) chatPushed = false; }
@@ -150,13 +195,18 @@ function openChat(id, { push = false } = {}) {
   msgUnsub = onSnapshot(query(collection(db, 'threads', id, 'messages'), orderBy('at', 'desc'), limit(300)), { includeMetadataChanges: true }, s => {
     msgs = s.docs.map(d => ({ ...d.data(), id: d.id, pending: d.metadata.hasPendingWrites })).reverse();
     msgsLoaded = true;
-    renderChat();
+    watchCards();
+    renderChat(); renderSide(); renderWaiting();
     markRead();
+    // myday.html → "Message" on a request: its card's thread opens.
+    if (wantReq) { const c = msgs.find(m => m.kind === 'request' && m.requestId === wantReq); if (c) { wantReq = null; openSide(c.id); } }
   }, err => { if (!isShutdown(err)) $('msgs').innerHTML = `<div class="sys">${esc(err.message)}</div>`; });
   // The thread itself, live (it may be brand new and not in the list yet).
   docUnsub = onSnapshot(doc(db, 'threads', id), s => {
     if (!s.exists()) { $('msgs').innerHTML = '<div class="sys">This conversation is not there any more.</div>'; return; }
     openThread = { ...s.data(), id: s.id };
+    // A chat from before 26 Nov, folded: on to the people's chat, at that request's card.
+    if (openThread.foldedInto) { wantReq = wantReq || openThread.linkedId || null; const to = openThread.foldedInto; setTimeout(() => openChat(to), 0); return; }
     renderHeader(); renderChat(); markRead();
     if ($('compose')) $('compose').hidden = !(openThread.members || []).includes(me.email);
     if (!canReply() && replyTo) { replyTo = null; renderReplyBar(); }
@@ -172,7 +222,8 @@ window.addEventListener('popstate', () => {
 });
 function closeChat(silent, { fromHistory = false } = {}) {
   if (msgUnsub) msgUnsub(); if (reqUnsub) reqUnsub(); if (docUnsub) docUnsub();
-  msgUnsub = reqUnsub = docUnsub = null; openId = null; openThread = null; openReq = null; replyTo = null;
+  msgUnsub = reqUnsub = docUnsub = null; openId = null; openThread = null; openReq = null; replyTo = null; sideCard = null;
+  reqUnsubs.forEach(u => u()); reqUnsubs.clear(); reqs.clear();
   if (!silent) {
     $('chat').hidden = true; $('chat').innerHTML = ''; document.body.classList.remove('chat-open');
     if (!fromHistory) {
@@ -187,6 +238,7 @@ function closeChat(silent, { fromHistory = false } = {}) {
 // Escape: first drops a reply being written, then closes the conversation.
 window.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || e.defaultPrevented || !openId || document.querySelector('.sheet')) return;   // (a sheet's own Escape is not ours)
+  if (sideCard) { closeSide(); return; }
   if (replyTo) { replyTo = null; renderReplyBar(); return; }
   closeChat();
 });
@@ -198,7 +250,8 @@ function renderHeader() {
   const link = t.type === 'property' && t.linkedId ? (isAgent ? 'dashboard.html?property=' : 'property.html?id=') + encodeURIComponent(t.linkedId)
     : t.type === 'lead' && t.linkedId ? 'crm.html?lead=' + encodeURIComponent(t.linkedId)
     : t.type === 'access_request' && t.linkedId ? 'myday.html?req=' + encodeURIComponent(t.linkedId) : '';
-  $('chatTitle').outerHTML = `<${link ? `a href="${esc(link)}"` : 'div'} class="t" id="chatTitle"><b>${esc(t.title)}</b><small>${esc(others.join(', '))}${link ? ' · tap to open' : ''}</small></${link ? 'a' : 'div'}>`;
+  const sub = t.type === 'direct' ? 'Requests and messages' + (others.length > 1 ? ' · ' + others.length + ' people' : '') : others.join(', ');
+  $('chatTitle').outerHTML = `<${link ? `a href="${esc(link)}"` : 'div'} class="t" id="chatTitle"><b>${esc(shortTitle(t))}</b><small>${esc(sub)}${link ? ' · tap to open' : ''}</small></${link ? 'a' : 'div'}>`;
   const member = (t.members || []).includes(me.email);
   let note = document.getElementById('roNote');
   if (!member && !note) { note = document.createElement('div'); note.id = 'roNote'; note.className = 'readonly-note'; note.textContent = 'You are reading this as an admin — you are not in this conversation, so you cannot reply.'; $('pinned').before(note); }
@@ -247,19 +300,28 @@ function renderChat() {
   const rp = canReply() ? id => `<button type="button" class="rp" data-reply="${esc(id)}" aria-label="Reply" title="Reply"><i class="fa-solid fa-reply"></i></button>` : () => '';
   const tap = id => (id === tappedId ? ' tapped' : '');
   let lastDay = '', html = '';
-  msgs.forEach((m, i) => {
+  // A request's replies live in its card's thread; its updates (approved, a visit…) also show here, small.
+  const cards = cardMap();
+  const shown = msgs.filter(m => !(m.replyTo && cards.has(m.replyTo) && m.kind !== 'system'));
+  shown.forEach((m, i) => {
     const day = new Date(m.at || Date.now()).toDateString();
     if (day !== lastDay) { lastDay = day; html += `<div class="day">${esc(new Date(m.at || Date.now()).toDateString() === new Date().toDateString() ? 'Today' : new Date(m.at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }))}</div>`; }
+    if (m.kind === 'request') { html += cardHtml(m); return; }
+    if (m.kind === 'system' && m.replyTo && cards.has(m.replyTo)) { html += `<button type="button" class="sys sysreq" data-side="${esc(m.replyTo)}" title="Open this request">${esc(reqLabel(cards.get(m.replyTo)))}${esc(m.text)}</button>`; return; }
     if (m.kind === 'system') { html += `<div class="sys${tap(m.id)}" data-mid="${esc(m.id)}">${esc(m.text)}${rp(m.id)}</div>`; return; }
     const mine = m.by === me.email;
-    const prev = msgs[i - 1];
+    const prev = shown[i - 1];
     const showBy = !mine && others.length > 1 && !(prev && prev.by === m.by && prev.kind !== 'system');
     const time = new Date(m.at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, x => x.toUpperCase());
     const tick = mine ? (m.pending ? '<i class="fa-regular fa-clock"></i>' : `<span class="tick${readAt !== Infinity && readAt >= m.at ? ' read' : ''}"><i class="fa-solid fa-check-double"></i></span>`) : '';
     // (One line on purpose: the bubble keeps the message's own line breaks, so any space here would show.)
     html += `<div class="bub ${mine ? 'mine' : 'them'}${tap(m.id)}" data-mid="${esc(m.id)}">${showBy ? `<span class="by">${esc(nameOf(people, m.by))}</span>` : ''}${m.replyTo ? quoteHtml(m.replyTo) : ''}${esc(m.text)}<span class="meta">${time} ${tick}</span>${rp(m.id)}</div>`;
   });
+  // A redraw (a request's status arriving, a new message) keeps the keyboard where it was.
+  const fa = document.activeElement, fk = fa && box.contains(fa) ? ['reply', 'side', 'jump', 'capprove', 'creject', 'cmore', 'ccancel'].find(k => fa.dataset && fa.dataset[k]) : null;
+  const fsel = fk ? `[data-${fk}="${CSS.escape(fa.dataset[fk])}"]` : null;
   box.innerHTML = html || (msgsLoaded ? '<div class="sys">No messages yet — say hello.</div>' : '<div class="day">Loading…</div>');
+  if (fsel) { const n = box.querySelector(fsel); if (n) n.focus({ preventScroll: true }); }
   if (nearBottom || msgs.length && msgs[msgs.length - 1].by === me.email) box.scrollTop = box.scrollHeight;
 }
 
@@ -290,6 +352,9 @@ function quoteHtml(id) {
 function startReply(id) {
   const m = msgs.find(x => x.id === id) || quoted.get(id);
   if (!m || !canReply()) return;
+  // Answering a request (or one of its updates) is talking about that request: its thread opens.
+  if (m.kind === 'request') { openSide(m.id); return; }
+  if (m.replyTo && cardMap().has(m.replyTo)) { openSide(m.replyTo); return; }
   replyTo = { id, m };
   untap();
   renderReplyBar();
@@ -429,12 +494,194 @@ async function send() {
   }
 }
 
+// ── Request cards ──
+const cardMap = () => new Map(msgs.filter(m => m.kind === 'request').map(m => [m.id, m]));
+const repliesTo = id => msgs.filter(m => m.replyTo === id);
+const reqOfCard = c => (c && c.requestId ? reqs.get(c.requestId) : undefined);
+function reqLabel(c) {
+  const r = reqOfCard(c);
+  const l = r ? (r.targetCode || String(r.title || '').replace(/^Lead:\s*/, '').slice(0, 40)) : '';
+  return l ? l + ' — ' : '';
+}
+// Each card's request, live — the newest 40 cards (an old chat's history needs no live status).
+function watchCards() {
+  const ids = [...new Set(msgs.filter(m => m.kind === 'request' && m.requestId).map(m => m.requestId))].slice(-40);
+  ids.forEach(id => {
+    if (reqUnsubs.has(id)) return;
+    const tid = openId;
+    reqUnsubs.set(id, onSnapshot(doc(db, 'accessRequests', id), sn => {
+      if (openId !== tid) return;
+      reqs.set(id, sn.exists() ? { ...sn.data(), id: sn.id } : null);
+      renderChat(); renderSide(); renderWaiting();
+    }, () => { reqs.set(id, null); renderChat(); }));
+  });
+}
+const whatOf = r => r.kind === 'lead' ? 'a matching buyer' + (r.title ? ' — ' + String(r.title).replace(/^Lead:\s*/, '') : '') : r.need === 'time' ? 'more time on ' + r.title : r.need === 'number' ? 'the owner’s number for ' + r.title : r.title;
+const liveOf = r => r.status === 'approved' && (!r.grantState || r.grantState === 'contact-hidden') && !(r.terms && r.terms.until && r.terms.until < Date.now());
+function statusOf(r) {
+  const mine = r.requesterEmail === me.email;
+  const byWho = e => (e === me.email ? 'you' : (r.decidedByName || nameOf(people, e)));
+  if (r.grantState === 'revoked') return ['', 'Access taken back'];
+  if (r.status === 'approved' && !liveOf(r)) return ['', 'Approved · access ended'];
+  return ({ pending: ['wait', canDecide(r) ? 'Waiting for your decision' : mine ? 'Waiting for a decision' : 'Waiting'],
+    approved: ['green', `Approved by ${byWho(r.decidedBy)}${r.terms && r.terms.until ? ' · details ' + untilText(r.terms.until) : ''}${r.grantState === 'contact-hidden' ? ' · owner’s number hidden' : r.terms && r.terms.contact ? ' · with the owner’s number' : ''}`],
+    rejected: ['red', `Not approved by ${byWho(r.decidedBy)}`], cancelled: ['', (mine ? 'You' : r.requesterName) + ' cancelled it'],
+    expired: ['', 'Expired — nobody decided in time'] })[r.status] || ['', r.status];
+}
+const untilText = t => 'until ' + new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+// What one tap on Approve gives — the same as on My Day.
+function quickBody(r) {
+  const d = QD || {}, need = r.need || 'details';
+  const body = { id: r.id, decision: 'approve' };
+  if (need !== 'number') body.days = Number(d.days) > 0 ? Number(d.days) : 7;
+  if (r.kind === 'property' && (need === 'number' || (need === 'details' && d.shareContact))) { body.shareContact = true; body.hours = Number(d.hours || 24); }
+  return body;
+}
+function quickTerms(r) {
+  const b = quickBody(r), parts = [];
+  if ((r.need || 'details') !== 'number') parts.push(b.days ? `details for ${b.days} day${b.days === 1 ? '' : 's'}` : 'details with no time limit');
+  if (b.shareContact) parts.push(`owner’s number for ${b.hours >= 48 ? Math.round(b.hours / 24) + ' days' : b.hours + ' hours'}`);
+  else if (r.kind === 'property') parts.push('without the owner’s number');
+  return 'Approve gives ' + parts.join(', ');
+}
+function cardHtml(c, { inSide = false } = {}) {
+  const r = reqOfCard(c);
+  const reps = repliesTo(c.id), talk = reps.filter(m => m.kind !== 'system');
+  const last = reps.length ? reps[reps.length - 1] : null;
+  const time = new Date(c.at || Date.now()).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, x => x.toUpperCase());
+  const foot = inSide ? '' : `<button type="button" class="rc-thread" data-side="${esc(c.id)}"><i class="fa-regular fa-comments" aria-hidden="true"></i> ${talk.length ? `${talk.length} repl${talk.length === 1 ? 'y' : 'ies'}` : 'Reply'}${last ? ` · last ${esc(short(last.at))}` : ''}</button>`;
+  if (r === undefined) return `<div class="rcard loading" data-card="${esc(c.id)}"><div class="rc-h"><span class="rc-k">Request</span><span class="rc-t">${time}</span></div><b>${esc(c.text)}</b>${foot}</div>`;
+  if (r === null) return `<div class="rcard gone" data-card="${esc(c.id)}"><div class="rc-h"><span class="rc-k">Request</span><span class="rc-t">${time}</span></div><b>${esc(c.text)}</b><small>This request is no longer there.</small>${foot}</div>`;
+  const mineReq = r.requesterEmail === me.email, [tone, st] = statusOf(r), can = canDecide(r) && canReply();
+  const live = liveOf(r);
+  return `<div class="rcard${r.status === 'pending' ? ' open' : ''}" data-card="${esc(c.id)}">
+    <div class="rc-h"><span class="rc-k"><i class="fa-solid ${r.kind === 'lead' ? 'fa-user-lock' : 'fa-building-lock'}" aria-hidden="true"></i> Request</span><span class="rc-t">${time}</span></div>
+    <b>${mineReq ? 'You' : esc(r.requesterName)} asked for ${esc(whatOf(r))}</b>
+    ${r.clientName ? `<small>For ${mineReq ? 'your' : 'their'} client ${esc(r.clientName)}</small>` : ''}
+    ${codeLine(r, me.role, { link: !mineReq })}
+    ${r.reason ? `<div class="q">“${esc(r.reason)}”</div>` : ''}
+    <div><span class="tag ${tone}">${esc(st)}</span></div>
+    ${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
+    <div class="acts">
+      ${can ? `<button type="button" class="btn sm primary" data-capprove="${esc(r.id)}"${QD ? '' : ' disabled'}><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button><button type="button" class="btn sm" data-creject="${esc(r.id)}">Reject</button><button type="button" class="btn sm quiet" data-cmore="${esc(r.id)}">More options</button>` : ''}
+      ${r.status === 'pending' && mineReq ? `<button type="button" class="btn sm danger" data-ccancel="${esc(r.id)}">Cancel request</button>` : ''}
+      ${live && mineReq && r.kind === 'property' ? `<a class="btn sm primary" href="dashboard.html?property=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
+      ${live && mineReq && r.kind === 'lead' && r.grantId ? `<button type="button" class="btn sm primary" data-copenlead="${esc(r.grantId)}">Open in Leads</button>` : ''}
+    </div>
+    ${can ? `<p class="qa-terms">${esc(QD ? quickTerms(r) + '. More options to change it.' : 'Loading what Approve gives…')}</p>
+    <div class="rj" data-crj="${esc(r.id)}" hidden><label for="crj-${esc(r.id)}${inSide ? '-s' : ''}">Why (they see this)</label><textarea id="crj-${esc(r.id)}${inSide ? '-s' : ''}" maxlength="500" rows="2" placeholder="e.g. The owner has given this to us exclusively for now"></textarea><p class="rj-err" role="alert"></p>
+      <div class="acts"><button type="button" class="btn sm danger" data-crjsend="${esc(r.id)}">Send rejection</button><button type="button" class="btn sm quiet" data-crjback="${esc(r.id)}">Not now</button></div></div>` : ''}
+    ${foot}</div>`;
+}
+// The strip on top of a people's chat: what waits on me here, all approvable at once.
+function renderWaiting() {
+  const el = $('pinned');
+  if (!el || !openThread || openThread.type !== 'direct') return;
+  const cards = msgs.filter(m => m.kind === 'request');
+  const mineWait = cards.map(reqOfCard).filter(r => r && canDecide(r));
+  const asked = cards.map(reqOfCard).filter(r => r && r.status === 'pending' && r.requesterEmail === me.email);
+  if (!mineWait.length && !asked.length) { el.innerHTML = ''; return; }
+  const terms = mineWait.length && QD && new Set(mineWait.map(quickTerms)).size === 1 ? quickTerms(mineWait[0]) + ' — each.' : 'Each gets what its own Approve gives.';
+  el.innerHTML = `<div class="pinned waiting">${mineWait.length ? `<b>${mineWait.length} request${mineWait.length === 1 ? '' : 's'} waiting on you</b>
+      <div class="acts"><button type="button" class="btn sm" data-firstwait>Show the first</button>${mineWait.length > 1 && canReply() ? `<button type="button" class="btn sm primary" data-approveall${QD ? '' : ' disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Approve all ${mineWait.length}</button>` : ''}</div>
+      ${mineWait.length > 1 ? `<small>${esc(terms)}</small>` : ''}` : `<b>${asked.length} of your requests waiting for a decision</b>`}</div>`;
+}
+function openSide(cardId) {
+  sideCard = cardId;
+  const side = $('side');
+  if (!side) return;
+  side.hidden = false;
+  document.body.classList.add('side-open');
+  const url = new URL(location.href); const c = msgs.find(m => m.id === cardId);
+  if (c && c.requestId) { url.searchParams.set('r', c.requestId); history.replaceState(history.state, '', url); }
+  renderSide();
+  if (window.matchMedia('(min-width: 900px)').matches) setTimeout(() => { const t = $('sideText'); if (t) t.focus(); }, 50);
+}
+function closeSide() {
+  sideCard = null;
+  const side = $('side');
+  if (side) { side.hidden = true; $('sideBody').innerHTML = ''; }
+  document.body.classList.remove('side-open');
+  const url = new URL(location.href); url.searchParams.delete('r'); history.replaceState(history.state, '', url);
+  const el = document.querySelector(`#msgs [data-card]`); if (el) { const back = document.querySelector('#msgs .rc-thread'); if (back) back.focus({ preventScroll: true }); }
+}
+function renderSide() {
+  if (!sideCard || !$('sideBody')) return;
+  const c = msgs.find(m => m.id === sideCard);
+  if (!c) return;
+  const r = reqOfCard(c);
+  $('sideT').textContent = r ? (r.targetCode ? r.targetCode + ' · ' : '') + String(r.title || 'Request').replace(/^Lead:\s*/, '') : 'Request';
+  $('sideS').textContent = 'Everything about this request';
+  const box = $('sideBody');
+  const keep = { open: [...box.querySelectorAll('[data-crj]:not([hidden])')].map(x => [x.dataset.crj, x.querySelector('textarea').value]) };
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const others = othersOf(openThread || {});
+  const readAt = Math.min(...others.map(e => ((openThread || {}).reads || {})[emailKey(e)] || 0), Infinity);
+  const reps = repliesTo(c.id);
+  box.innerHTML = cardHtml(c, { inSide: true }) + (reps.length ? '' : '<div class="sys">No replies yet — ask a question or add a note about this request.</div>') + reps.map(m => {
+    if (m.kind === 'system') return `<div class="sys">${esc(m.text)}</div>`;
+    const mine = m.by === me.email;
+    const time = new Date(m.at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, x => x.toUpperCase());
+    const tick = mine ? (m.pending ? '<i class="fa-regular fa-clock"></i>' : `<span class="tick${readAt !== Infinity && readAt >= m.at ? ' read' : ''}"><i class="fa-solid fa-check-double"></i></span>`) : '';
+    return `<div class="bub ${mine ? 'mine' : 'them'}">${!mine ? `<span class="by">${esc(nameOf(people, m.by))}</span>` : ''}${esc(m.text)}<span class="meta">${time} ${tick}</span></div>`;
+  }).join('');
+  keep.open.forEach(([id, text]) => { const b = box.querySelector(`[data-crj="${CSS.escape(id)}"]`); if (b) { b.hidden = false; b.querySelector('textarea').value = text; } });
+  if (nearBottom || (reps.length && reps[reps.length - 1].by === me.email)) box.scrollTop = box.scrollHeight;
+  $('sideCompose').hidden = !canReply();
+}
+async function sendSide() {
+  const ta = $('sideText'), text = ta.value.trim(), t = openThread, cardId = sideCard;
+  if (!text || !t || !cardId) return;
+  ta.value = ''; ta.style.height = 'auto';
+  const now = Date.now();
+  const label = reqLabel(msgs.find(m => m.id === cardId));
+  const b = writeBatch(db);
+  b.set(doc(collection(db, 'threads', t.id, 'messages')), { kind: 'text', text: text.slice(0, 4000), at: now, by: me.email, replyTo: cardId });
+  b.update(doc(db, 'threads', t.id), { lastAt: now, lastText: (label + text).replace(/\s+/g, ' ').slice(0, 140), lastBy: me.email, ['reads.' + myKey]: now });
+  try { await b.commit(); }
+  catch (e) { toast('✗ Not sent — ' + (e.code === 'permission-denied' ? 'you are not in this conversation' : 'check your connection')); if (sideCard === cardId) ta.value = text; }
+}
+// Card buttons — in the chat and in the side panel alike.
+document.addEventListener('click', async e => {
+  const t = e.target.closest && e.target.closest('#chat [data-side], #chat [data-capprove], #chat [data-creject], #chat [data-crjback], #chat [data-crjsend], #chat [data-cmore], #chat [data-ccancel], #chat [data-copenlead], #chat [data-approveall], #chat [data-firstwait]');
+  if (!t) return;
+  const scope = t.closest('#sideBody') || t.closest('#msgs') || document;
+  const reqBy = id => [...reqs.values()].find(r => r && r.id === id);
+  if (t.dataset.side) { openSide(t.dataset.side); return; }
+  if (t.hasAttribute('data-firstwait')) {
+    const c = msgs.find(m => m.kind === 'request' && canDecide(reqOfCard(m)));
+    const el = c && document.querySelector(`#msgs [data-card="${CSS.escape(c.id)}"]`);
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+    return;
+  }
+  if (t.hasAttribute('data-approveall')) {
+    const list = msgs.filter(m => m.kind === 'request').map(reqOfCard).filter(r => r && canDecide(r));
+    if (!list.length) return;
+    busy(t, () => api('decide-many', { decision: 'approve', items: list.map(quickBody) })
+      .then(r => toast(`Approved ${r.done}` + (r.failed ? ` · ${r.failed} not: ${(r.results.find(x => !x.ok) || {}).error}` : ' — they’ve been told'))).catch(x => toast('✗ ' + x.message)));
+    return;
+  }
+  if (t.dataset.capprove) { const r = reqBy(t.dataset.capprove); if (r) busy(t, () => api('decide', quickBody(r)).then(() => toast('Approved — ' + quickTerms(r).replace(/^Approve gives /, ''))).catch(x => toast('✗ ' + x.message))); return; }
+  if (t.dataset.cmore) { const r = reqBy(t.dataset.cmore); if (r) decideSheet(r, { canCoAgent: r.kind === 'property' && (isAdmin || await isMyOwnProperty(r.targetId)), defaults: { ...(await approvalDefaults(me)), isAdmin }, role: me.role }); return; }
+  const box = id => scope.querySelector(`[data-crj="${CSS.escape(id)}"]`);
+  if (t.dataset.creject) { const b = box(t.dataset.creject); if (b) { b.hidden = false; b.querySelector('textarea').focus(); } return; }
+  if (t.dataset.crjback) { const b = box(t.dataset.crjback); if (b) b.hidden = true; return; }
+  if (t.dataset.crjsend) {
+    const b = box(t.dataset.crjsend), note = b.querySelector('textarea').value.trim(), err = b.querySelector('.rj-err');
+    if (!note) { err.textContent = 'Say why — they see it'; b.querySelector('textarea').focus(); return; }
+    busy(t, () => api('decide', { id: t.dataset.crjsend, decision: 'reject', note }).then(() => toast('Rejected — they’ve been told')).catch(x => { err.textContent = x.message; }));
+    return;
+  }
+  if (t.dataset.ccancel) { if (confirm('Cancel this request?')) busy(t, () => api('cancel', { id: t.dataset.ccancel }).then(() => toast('Request cancelled')).catch(x => toast('✗ ' + x.message))); return; }
+  if (t.dataset.copenlead) getDoc(doc(db, 'grants', t.dataset.copenlead)).then(g => { if (g.exists()) location.href = 'crm.html?lead=' + encodeURIComponent(g.data().targetId); }).catch(() => toast('Could not open it — try again'));
+});
+
 // ── A new conversation ──
 $('newBtn').addEventListener('click', async () => {
   const list = (people.length ? people : await directory()).filter(p => p.email !== me.email);
   openSheet(`
     <h3>New conversation</h3>
-    <div class="field"><label for="nTitle">Title (required)</label><input type="text" id="nTitle" maxlength="120" placeholder="e.g. Weekend visits in Adyar"></div>
+    <div class="field"><label for="nTitle">Topic (optional)</label><input type="text" id="nTitle" maxlength="120" placeholder="e.g. Weekend visits in Adyar" aria-describedby="nTitleHelp"><p class="note" id="nTitleHelp">Leave it empty to open your one chat with them — where their requests are too. A topic starts a separate group chat.</p></div>
     <div class="field"><label>With</label><div class="pick" id="nPeople">${list.map(p => `<label><input type="checkbox" value="${esc(p.email)}"> ${esc(p.name)}${p.role === 'admin' ? ' · admin' : p.role === 'agent' ? ' · agent' : ''}</label>`).join('') || '<span class="note">Nobody else on the team yet.</span>'}</div></div>
     <p class="note">For a property or a lead, use “Message” on it instead — the conversation is linked to it. Admins can read every team conversation.</p>
     <p class="err" id="nErr"></p>
@@ -443,9 +690,8 @@ $('newBtn').addEventListener('click', async () => {
     sh.querySelector('#nGo').addEventListener('click', () => busy(sh.querySelector('#nGo'), async () => {
       const title = sh.querySelector('#nTitle').value.trim();
       const members = [...sh.querySelectorAll('#nPeople input:checked')].map(i => i.value);
-      if (!title) { sh.querySelector('#nErr').textContent = 'Give it a title'; return; }
       if (!members.length) { sh.querySelector('#nErr').textContent = 'Pick at least one person'; return; }
-      try { const r = await api('thread-open', { type: 'general', title, members }); await close(true); openChat(r.id, { push: true }); }
+      try { const r = await api('thread-open', title ? { type: 'general', title, members } : { type: 'direct', members }); await close(true); openChat(r.id, { push: true }); }
       catch (e) { sh.querySelector('#nErr').textContent = e.message; }
     }));
   } });

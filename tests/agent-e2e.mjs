@@ -264,25 +264,32 @@ try {
   }
 
   // ═══ Messages ═══
-  section('Messages — the request’s thread, a reply, read ticks');
+  section('Messages — the people’s chat, the request’s card and thread, a reply, read ticks');
   {
     const page = rameez.page;
     await page.goto(BASE + '/messages.html');
     await page.waitForSelector('#threads .thread', { timeout: 25000 });
     const titles = await page.$$eval('#threads .thread b', bs => bs.map(b => b.textContent));
-    ok('a thread per request (titled by what it is about)', titles.some(t => /^3 BHK Apartment, Anna Nagar · for Arjun$/.test(t)), titles.join(' | '));
-    await page.click('#threads .thread:has-text("Anna Nagar")');
-    await page.waitForSelector('#msgs .sys');
-    const sys = await page.textContent('#msgs');
-    ok('the system lines: asked, approved with its timers', /asked for the details/.test(sys) && /Approved by Swami — details until/.test(sys) && /owner’s number until/.test(sys), sys.slice(0, 300));
-    ok('the pinned card says approved', !!(await until(() => page.evaluate(() => /Approved by Swami/.test(document.querySelector('#pinned').textContent)))));
-    ok('…with the property’s code — the asker gets no approver’s new-tab link (he has “Open property”)', await page.evaluate(() => (document.querySelector('#pinned .pcode .code') || {}).textContent === 'ANR001' && !document.querySelector('#pinned .pcode a')));
+    // (26 Nov 2026: one chat per set of people — each request a card in it — not one chat per request.)
+    ok('one chat with the people who decide, named after them', titles.some(t => /Swami/.test(t)) && !titles.some(t => /^3 BHK Apartment, Anna Nagar/.test(t)), titles.join(' | '));
+    const anr = (await db.collection('accessRequests').where('requesterEmail', '==', 'rameez@threepin.in').where('targetId', '==', 'ANR001').get()).docs.map(d => d.data()).find(r => r.need === 'details' || !r.need);
+    await page.click(`#threads [data-id="${anr.threadId}"]`);
+    await page.waitForSelector('#msgs .rcard');
+    const card = `#msgs [data-card="${anr.cardId}"]`;
+    ok('the request is a card that says approved', !!(await until(() => page.evaluate(c => { const e = document.querySelector(c); return e && /You asked for/.test(e.textContent) && /Approved by Swami/.test(e.textContent); }, card))));
+    ok('…with the property’s code — the asker gets no approver’s new-tab link (he has “Open property”)', await page.evaluate(c => !document.querySelector(c + ' .pcode a') && !!document.querySelector(c + ' a[href^="dashboard.html?property="]'), card));
+    await page.click(card + ' .rc-thread');
+    await page.waitForSelector('#side:not([hidden]) .rcard');
+    const sys = await page.textContent('#sideBody');
+    ok('its thread: approved with its timers', /Approved by Swami — details until/.test(sys) && /owner’s number until/.test(sys), sys.slice(0, 300));
+    ok('the chat shows the approval small, at the card', await page.evaluate(() => [...document.querySelectorAll('#msgs .sysreq')].some(b => /ANR001 — Approved by Swami/.test(b.textContent))));
+    await page.keyboard.press('Escape');
     await page.fill('#text', 'Thanks! Visiting Saturday 11 AM.');
     await page.click('#send');
     await page.waitForSelector('.bub.mine');
     ok('a sent message turns from a clock to ticks once saved', !!(await until(() => page.evaluate(() => !!document.querySelector('.bub.mine .tick')))));
     await shot(page, '12-rameez-chat');
-    const th = (await db.collection('threads').where('type', '==', 'access_request').get()).docs.find(d => /Anna Nagar/.test(d.data().title));
+    const th = await db.collection('threads').doc(await page.evaluate(() => new URLSearchParams(location.search).get('t'))).get();
     ok('his message is saved as the last line, by him', th && th.data().lastBy === 'rameez@threepin.in' && th.data().lastText === 'Thanks! Visiting Saturday 11 AM.', JSON.stringify(th && th.data()));
     const { ctx, page: sp } = await as('swami');
     await sp.goto(BASE + '/messages.html');
@@ -294,7 +301,7 @@ try {
     await sp.fill('#text', 'Great, the owner knows.');
     await sp.click('#send');
     ok('Rameez gets the reply live', !!(await until(() => page.evaluate(() => [...document.querySelectorAll('.bub.them')].some(b => /owner knows/.test(b.textContent))))));
-    ok('Swami’s pinned card: the code and the property in a new tab', await sp.evaluate(() => { const a = document.querySelector('#pinned .pcode a'); return (document.querySelector('#pinned .pcode .code') || {}).textContent === 'ANR001' && a && a.target === '_blank' && a.getAttribute('href') === 'property.html?id=ANR001'; }));
+    ok('Swami’s card: the code and the property in a new tab', await sp.evaluate(() => { const c = [...document.querySelectorAll('#msgs .rcard')].find(e => (e.querySelector('.pcode .code') || {}).textContent === 'ANR001'); const a = c && c.querySelector('.pcode a'); return a && a.target === '_blank' && a.getAttribute('href') === 'property.html?id=ANR001'; }));
     // Replies — Swami answers one message from the arrow beside it (a mouse)…
     await sp.hover('.bub.them:has-text("Visiting Saturday")');
     await sp.click('.bub.them:has-text("Visiting Saturday") .rp');
@@ -317,8 +324,9 @@ try {
     ok('reply: tapping the quote goes to the message it answers', !!(await until(() => sp.evaluate(() => [...document.querySelectorAll('.bub.flash')].some(b => /Visiting Saturday/.test(b.textContent))))));
     // …and from the keyboard: Shift+Tab from the box reaches the newest message's arrow, Enter replies.
     await sp.focus('#text');
-    await sp.keyboard.press('Shift+Tab');
-    await sp.waitForTimeout(250);
+    // (Backwards from the box: past any request update shown small at the end, to the newest message's arrow.)
+    for (let i = 0; i < 4; i++) { await sp.keyboard.press('Shift+Tab'); await sp.waitForTimeout(120); if (await sp.evaluate(() => document.activeElement && document.activeElement.classList.contains('rp'))) break; }
+    await sp.waitForTimeout(150);
     const kb = await sp.evaluate(() => { const a = document.activeElement; return { rp: !!(a && a.classList.contains('rp')), shown: a ? getComputedStyle(a).opacity : '' }; });
     ok('reply: the keyboard reaches the reply arrow, and it shows when it has the focus', kb.rp && kb.shown === '1', JSON.stringify(kb));
     await sp.keyboard.press('Enter');
@@ -402,13 +410,17 @@ try {
     await shot(sp, '13-swami-chat');
     noErrors(sp, 'Messages (admin)');
     await ctx.close();
-    // A new conversation needs a title.
+    // New with no topic: the one chat with them (26 Nov 2026); with a topic: a separate group chat.
     await page.click('#back');
     await page.click('#newBtn');
     await page.waitForSelector('#nTitle');
     await page.click('#nPeople label:has-text("Swami")');
     await page.click('#nGo');
-    ok('a conversation needs a title', /title/i.test(await page.textContent('#nErr')));
+    ok('New with no topic opens the one chat with them', !!(await until(() => page.evaluate(() => /Swami/.test((document.querySelector('#chatTitle') || {}).textContent || '') && /Requests and messages/.test(document.querySelector('#chatTitle').textContent)))));
+    await page.click('#back');
+    await page.click('#newBtn');
+    await page.waitForSelector('#nTitle');
+    await page.click('#nPeople label:has-text("Swami")');
     await page.fill('#nTitle', 'Weekend visits');
     await page.click('#nGo');
     ok('…and opens once it has one', !!(await until(() => page.evaluate(() => /Weekend visits/.test((document.querySelector('#chatTitle') || {}).textContent || '')))));
@@ -424,26 +436,26 @@ try {
     noErrors(page, 'Messages (agent)');
   }
 
-  section('The pinned card’s buttons work (an approver deciding from the conversation)');
+  section('The request card’s buttons work (an approver deciding from the conversation)');
   {
     const page = rameez.page;
     // A property of his that is on the market (ADY002 was put on hold earlier in this run).
     await db.collection('properties').doc('RMZ009').set({ tenantId: S.T, id: 'RMZ009', propertyCode: 'RMZ009', name: '3 BHK, Mogappair', config: '3 BHK', startingPrice: '₹1.1 Cr', zone: 'Mogappair', availability: 'Available', assignedAgent: 'rameez@threepin.in' });
     const k = await S.api('kavya', 'request', { kind: 'property', targetId: 'RMZ009', reason: 'My client wants Mogappair' });
     await page.goto(BASE + '/messages.html?t=' + encodeURIComponent(k.threadId));
-    await page.waitForSelector('#pDecide', { timeout: 25000 });
-    await page.click('#pDecide');
-    ok('“Approve or reject” on the pinned card opens the decision', !!(await until(() => page.evaluate(() => !!document.querySelector('#dGo')))));
+    await page.waitForSelector('#msgs [data-cmore]', { timeout: 25000 });
+    await page.click('#msgs [data-cmore]');
+    ok('“More options” on the card opens the decision', !!(await until(() => page.evaluate(() => !!document.querySelector('#dGo')))));
     await page.keyboard.press('Escape');
     await until(() => page.evaluate(() => !document.querySelector('.sheet')));
     // On a laptop, with the menu expanded: the conversation beside the list, the card's button there.
     const { ctx: lc, page: lp } = await as('swami', { viewport: { width: 1440, height: 900 } });
     await lp.goto(BASE + '/messages.html?t=' + encodeURIComponent(k.threadId));
-    await lp.waitForSelector('#pDecide', { timeout: 25000 });
+    await lp.waitForSelector('#msgs [data-cmore]', { timeout: 25000 });
     const geo = await lp.evaluate(() => ({ chat: document.getElementById('chat').getBoundingClientRect().left, list: document.getElementById('threads').getBoundingClientRect().right, rail: document.body.classList.contains('rail-on') }));
     ok('laptop: the open conversation sits beside the list (menu expanded)', geo.rail && geo.chat >= geo.list - 2, JSON.stringify(geo));
-    ok('laptop: the decision button shows while the reply box has the cursor', await lp.evaluate(() => { const b = document.getElementById('pDecide'); return !!b && b.getBoundingClientRect().height > 0; }));
-    await lp.click('#pDecide');
+    ok('laptop: the card’s decision buttons show', await lp.evaluate(() => { const b = document.querySelector('#msgs [data-cmore]'); return !!b && b.getBoundingClientRect().height > 0; }));
+    await lp.click('#msgs [data-cmore]');
     ok('laptop: and it opens the decision', !!(await until(() => lp.evaluate(() => !!document.querySelector('#dGo')))));
     await lc.close();
   }

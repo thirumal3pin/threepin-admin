@@ -772,9 +772,24 @@ async function threadFor(db, tenantId, { type, linkedId, title, members, by, tea
 export async function systemMessage(db, threadRef, members, text, extra, readBy) {
   const now = Date.now();
   const b = db.batch();
-  b.set(threadRef.collection('messages').doc(), { kind: 'system', text: String(text).slice(0, 1000), at: now, by: null, ...(extra || {}) });
-  b.update(threadRef, { lastAt: now, lastText: String(text).slice(0, 140), lastBy: null, ...(readBy ? { ['reads.' + AA.emailKey(readBy)]: now + 1 } : {}) });
+  const { lastText, ...rest } = extra || {};
+  b.set(threadRef.collection('messages').doc(), { kind: 'system', text: String(text).slice(0, 1000), at: now, by: null, ...rest });
+  b.update(threadRef, { lastAt: now, lastText: String(lastText || text).slice(0, 140), lastBy: null, ...(readBy ? { ['reads.' + AA.emailKey(readBy)]: now + 1 } : {}) });
   await b.commit();
+}
+// One conversation per set of people (owner, 26 Nov 2026: a new chat for every request between the
+// same people "seems unprofessional"). Each request is a card in that chat (a message of kind
+// 'request' naming it); everything about it — decisions, visits, the team's replies — is a reply to
+// the card (replyTo), shown in the card's own thread beside the chat, so the chat itself stays clean.
+async function peopleThread(db, tenantId, members, team, by) {
+  const mem = [...new Set(members.map(lc).filter(Boolean))].sort();
+  return threadFor(db, tenantId, { type: 'direct', key: 'people', title: mem.map(e => nameIn(team, e)).join(', '), members: mem, by, team });
+}
+// A line about one request: under its card (in its thread), and named in the chat list.
+async function requestLine(db, r, id, text, readBy) {
+  if (!r || !r.threadId) return;
+  const label = r.targetCode || String(r.title || '').replace(/^Lead:\s*/, '').slice(0, 40);
+  await systemLineFor(db, r.threadId, text, { requestId: id, ...(r.cardId ? { replyTo: r.cardId, lastText: (label ? label + ' — ' : '') + text } : {}) }, readBy);
 }
 async function systemLineFor(db, threadId, text, extra, readBy) {
   if (!threadId) return;
@@ -877,20 +892,22 @@ async function request(db, user, body) {
   const now = Date.now();
   const reqRef = db.collection('accessRequests').doc();
   const what = need === 'time' ? 'more time on ' + title : need === 'number' ? 'the owner’s number for ' + title : kind === 'lead' ? 'this lead’s details' : 'the details of ' + title;
-  const thread = await threadFor(db, user.tenantId, { type: 'access_request', linkedId: reqRef.id,
-    title: `${need === 'time' ? 'More time' : need === 'number' ? 'Owner’s number' : 'Access'}: ${title.slice(0, 60)}${clientName ? ' · for ' + clientName : ''}`, members: [me, ...approvers], by: me, team });
+  const thread = await peopleThread(db, user.tenantId, [me, ...approvers], team, me);
+  const cardRef = thread.ref.collection('messages').doc();
   const req = {
     tenantId: user.tenantId, kind, need, targetId, targetCode, targetRef, title,
     requesterUid: user.uid, requesterEmail: me, requesterName: nameIn(team, me),
     clientName, reason, visitAt, ...(aboutCode ? { aboutCode, aboutTitle } : {}),
-    approvers, status: 'pending', createdAt: now, threadId: thread.id,
+    approvers, status: 'pending', createdAt: now, threadId: thread.id, cardId: cardRef.id,
     history: [{ at: now, by: me, what: 'asked', note: reason || null }],
   };
+  const cardText = `${req.requesterName} asked for ${what}${clientName ? ' for their client ' + clientName : ''}${reason ? ': “' + reason + '”' : ''}`;
   const b = db.batch();
   b.set(reqRef, req);
   if (privateLead) b.set(db.collection('requestPrivate').doc(reqRef.id), { tenantId: user.tenantId, approvers, ...privateLead });
+  b.set(cardRef, { kind: 'request', requestId: reqRef.id, text: cardText.slice(0, 1000), at: now, by: me });
+  b.update(thread.ref, { lastAt: now, lastText: cardText.slice(0, 140), lastBy: me, ['reads.' + AA.emailKey(me)]: now + 1 });
   await b.commit();
-  await systemMessage(db, thread.ref, thread.data.members, `${req.requesterName} asked for ${what}${clientName ? ' for their client ' + clientName : ''}${reason ? ': “' + reason + '”' : ''}`, { requestId: reqRef.id }, me);
   if (user.role === 'agent') await patchView(db, user.tenantId, user.uid, markAsked(req, kind === 'lead' ? 'pending' : reqRef.id, { status: 'pending', id: reqRef.id, at: Date.now() }));
   return json({ ok: true, id: reqRef.id, threadId: thread.id });
 }
@@ -994,7 +1011,7 @@ async function decide(db, user, body, opts = {}) {
   else if (need === 'number') line = `Owner’s number shared by ${who} until ${fmtWhen(patch.terms.contactUntil)}` + (note ? `. “${note}”` : '');
   else line = `Approved by ${who} — details ${patch.terms.until ? 'until ' + fmtWhen(patch.terms.until) : 'with no time limit'}`
     + (patch.terms.contact ? `; owner’s number until ${fmtWhen(patch.terms.contactUntil)}` : '') + (note ? `. “${note}”` : '');
-  await systemLineFor(db, r.threadId, line, { requestId: ref.id }, me);
+  await requestLine(db, r, ref.id, line, me);
   // Approved: their copy is rebuilt now, so it opens at once. Rejected: only the "asked" mark changes.
   if (decision === 'approved') {
     if (opts.later) opts.later.add(r.requesterEmail);   // decide-many: one rebuild per agent at the end
@@ -1048,7 +1065,7 @@ async function cancel(db, user, body) {
       return x;
     });
   } catch (e) { if (e.http) return json({ ok: false, error: e.message }, e.http); throw e; }
-  await systemLineFor(db, r.threadId, `${r.requesterName} cancelled the request`, null, me);
+  await requestLine(db, r, ref.id, `${r.requesterName} cancelled the request`, me);
   await patchView(db, user.tenantId, user.uid, markAsked(r, r.kind === 'lead' ? 'cancelled' : null, { status: 'cancelled', id: ref.id, at: r.createdAt || 0, decidedAt: Date.now() }));
   return json({ ok: true });
 }
@@ -1108,7 +1125,7 @@ async function grantChange(db, user, body, what) {
     const r = await rr.get();
     if (r.exists) {
       await rr.update({ ...reqPatch, history: FieldValue.arrayUnion({ at: now, by: me, what: what === 'revoke' ? 'revoked' : what === 'hide' ? 'contact-hidden' : 'extended' }) }).catch(() => {});
-      await systemLineFor(db, r.data().threadId, line, null, me);
+      await requestLine(db, r.data(), g.requestId, line, me);
     }
   }
   await rebuildAgents(db, user.tenantId, [g.agentEmail]).catch(e => console.error('rebuild after grant change:', e.message));
@@ -1133,7 +1150,21 @@ export async function refreshApprovers(db, tenantId, { propertyId = null } = {})
     if (JSON.stringify(next) === JSON.stringify(prev)) continue;
     await d.ref.update({ approvers: next });
     if (r.kind === 'lead') await db.collection('requestPrivate').doc(d.id).update({ approvers: next }).catch(() => {});
-    if (r.threadId) {
+    if (r.threadId && r.cardId) {
+      // In a people's chat: the request moves to the chat of the people who decide it now (the old
+      // chat keeps its card, with a line saying where it went).
+      const th = await peopleThread(db, tenantId, [r.requesterEmail, ...next], team, r.requesterEmail);
+      if (th.id !== r.threadId) {
+        await requestLine(db, r, d.id, 'The people who decide this changed — it moved to their conversation');
+        const card = th.ref.collection('messages').doc(), now = Date.now();
+        const text = `${r.requesterName} asked for ${r.title} (moved here: the people who decide it changed)`;
+        const b = db.batch();
+        b.set(card, { kind: 'request', requestId: d.id, text, at: now, by: r.requesterEmail });
+        b.update(th.ref, { lastAt: now, lastText: text.slice(0, 140), lastBy: null });
+        b.update(d.ref, { threadId: th.id, cardId: card.id });
+        await b.commit().catch(e => console.error('move request card:', e.message));
+      }
+    } else if (r.threadId) {
       const names = {};
       next.forEach(e => { names['names.' + AA.emailKey(e)] = nameIn(team, e); });
       await db.collection('threads').doc(r.threadId).update({ members: [...new Set([r.requesterEmail, ...next])].sort(), ...names }).catch(() => {});
@@ -1166,7 +1197,7 @@ export async function sweepExpired(db, tenantId, { requestDays = 7 } = {}) {
     const r = d.data();
     if ((r.createdAt || 0) > now - requestDays * 86400000) continue;
     await d.ref.update({ status: 'expired', decidedAt: now, decidedBy: 'system', history: FieldValue.arrayUnion({ at: now, by: 'system', what: 'expired' }) });
-    await systemLineFor(db, r.threadId, `Nobody decided in ${requestDays} days, so this request expired. ${r.requesterName} can ask again.`);
+    await requestLine(db, r, d.id, `Nobody decided in ${requestDays} days, so this request expired. ${r.requesterName} can ask again.`);
     changed++;
   }
   // A lead handed to another agent in the CRM moves its waiting requests to them too.
@@ -1176,9 +1207,57 @@ export async function sweepExpired(db, tenantId, { requestDays = 7 } = {}) {
 }
 
 // ── Messages ──
+// The chats from before 26 Nov 2026 (one per request) folded into the people's one chat: the request
+// becomes a card there, its old messages the card's replies, and the old chat is marked folded (the
+// page hides it and sends a link to it on to the new one). Whoever opens Messages first folds the
+// chats they are in; fixed ids make a second run harmless. Nothing is deleted.
+async function threadsFold(db, user) {
+  const me = lc(user.email);
+  if (!(await throttle(db, user, 'fold', 6, 3600000))) return json({ ok: true, folded: 0, later: true });
+  const mine = await db.collection('threads').where('tenantId', '==', user.tenantId).where('members', 'array-contains', me).get();
+  const todo = mine.docs.filter(d => d.data().type === 'access_request' && !d.data().foldedInto).slice(0, 40);
+  if (!todo.length) return json({ ok: true, folded: 0 });
+  const team = await teamOf(db, user.tenantId);
+  let folded = 0;
+  for (const d of todo) {
+    const t = d.data(), mem = (t.members || []).map(lc);
+    if (mem.length < 2) continue;
+    const rs = t.linkedId ? await db.collection('accessRequests').doc(t.linkedId).get() : null;
+    const r = rs && rs.exists && rs.data().tenantId === user.tenantId ? rs.data() : null;
+    const th = await peopleThread(db, user.tenantId, mem, team, t.createdBy || me);
+    const old = await d.ref.collection('messages').orderBy('at').limit(480).get();
+    const cardId = 'fold_' + d.id.replace(/[^A-Za-z0-9_-]/g, '_').slice(-40);
+    const first = old.docs[0] && old.docs[0].data();
+    const asked = first && first.kind === 'system' && (!first.requestId || first.requestId === t.linkedId) ? old.docs[0].id : null;
+    const label = (r && (r.targetCode || String(r.title || '').replace(/^Lead:\s*/, '').slice(0, 40))) || '';
+    const ops = [[th.ref.collection('messages').doc(cardId), { kind: 'request', requestId: t.linkedId || null,
+      text: String((asked && first.text) || (r ? `${r.requesterName} asked for ${r.title}` : t.title || 'A request')).slice(0, 1000),
+      at: (r && r.createdAt) || t.createdAt || (first && first.at) || Date.now(), by: r ? r.requesterEmail : (t.createdBy || null) }]];
+    old.docs.forEach(m => {
+      if (m.id === asked) return;
+      const x = m.data();
+      ops.push([th.ref.collection('messages').doc('fold_' + m.id), { kind: x.kind === 'system' ? 'system' : 'text', text: String(x.text || '').slice(0, 4000), at: x.at || 0, by: x.by || null,
+        replyTo: cardId, ...(x.kind === 'system' ? { requestId: t.linkedId || null } : {}) }]);
+    });
+    for (let i = 0; i < ops.length; i += 450) { const b = db.batch(); ops.slice(i, i + 450).forEach(([ref, data]) => b.set(ref, data)); await b.commit(); }
+    // The chat's last line and everyone's read mark: the newer of the two (nothing turns unread).
+    const fresh = (await th.ref.get()).data() || {};
+    const patch = {}, reads = { ...(fresh.reads || {}) };
+    Object.entries(t.reads || {}).forEach(([k, v]) => { if (Number(v) > Number(reads[k] || 0)) patch['reads.' + k] = Number(v); });
+    if ((t.lastAt || 0) > (fresh.lastAt || 0)) Object.assign(patch, { lastAt: t.lastAt, lastText: String((label ? label + ' — ' : '') + (t.lastText || '')).slice(0, 140), lastBy: t.lastBy || null });
+    if (Object.keys(patch).length) await th.ref.update(patch);
+    if (r) await rs.ref.update({ threadId: th.id, cardId });
+    const done = { foldedInto: th.id };
+    mem.forEach(e => { done['reads.' + AA.emailKey(e)] = Date.now() + 1; });
+    await d.ref.update(done);
+    folded++;
+  }
+  return json({ ok: true, folded });
+}
+
 async function threadOpen(db, user, body) {
   const me = lc(user.email);
-  const type = ['property', 'lead', 'general'].includes(body && body.type) ? body.type : null;
+  const type = ['property', 'lead', 'general', 'direct'].includes(body && body.type) ? body.type : null;
   if (!type) return json({ ok: false, error: 'Bad thread' }, 400);
   if (user.role === 'agent') {
     const cfg = effectiveConfig(await loadConfig(db, user.tenantId), me);
@@ -1203,8 +1282,16 @@ async function threadOpen(db, user, body) {
     linkedId = c.lead.id;
     if (!members.length) members = orAdmins([c.lead.assignedAgent, c.lead.secondaryAgent].map(lc));
     if (!title) title = 'Lead: ' + plainText(String(c.lead.name || 'client')).slice(0, 80);
-  } else {
+  } else if (type === 'general') {
     key = 'general|' + title.toLowerCase();
+  }
+  if (type === 'direct') {
+    // Your one chat with these people (where their requests are too).
+    members = [...new Set([me, ...members])];
+    if (members.length < 2) return json({ ok: false, error: 'Pick at least one person' }, 400);
+    if (members.length > 20) return json({ ok: false, error: 'At most 20 people' }, 400);
+    const th = await peopleThread(db, user.tenantId, members, team, me);
+    return json({ ok: true, id: th.id, created: th.created });
   }
   if (!title) return json({ ok: false, error: 'Give the conversation a title' }, 400);
   members = [...new Set([me, ...members])];
@@ -1278,13 +1365,15 @@ export async function visitAlert(db, user, before, after) {
   // And a line in the request's thread, when this visit came through one.
   const r = await db.collection('accessRequests').where('tenantId', '==', user.tenantId).where('requesterEmail', '==', me)
     .where('targetId', '==', p.id).limit(5).get().catch(() => null);
-  const withThread = r && r.docs.map(d => d.data()).filter(x => x.threadId).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))[0];
+  const withThread = r && r.docs.map(d => ({ ...d.data(), _id: d.id })).filter(x => x.threadId).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))[0];
   if (withThread) {
     const th = db.collection('threads').doc(withThread.threadId);
-    const ts = await th.get();
+    const ts = withThread.cardId ? null : await th.get();
     const when = (a.at || b.at) ? new Date(a.at || b.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
     const words = { booked: 'booked a site visit', moved: 'moved the site visit', cancelled: 'called off the site visit', done: 'marked the site visit done' }[kind];
-    if (ts.exists) await systemMessage(db, th, ts.data().members || [], `${nameIn(team, me)} ${words}${when ? ' — ' + when : ''} (client: ${first})`, null, me).catch(() => {});
+    const vline = `${nameIn(team, me)} ${words}${when ? ' — ' + when : ''} (client: ${first})`;
+    if (withThread.cardId) await requestLine(db, withThread, withThread._id, vline, me).catch(() => {});
+    else if (ts.exists) await systemMessage(db, th, ts.data().members || [], vline, null, me).catch(() => {});
   }
   return id;
 }
@@ -1314,7 +1403,7 @@ const AGENT_ACTIONS = {
   view, directory, 'crm-boot': crmBoot,
   'property-notes': propertyNotes, 'property-note': propertyNote, 'property-availability': propertyAvailability, 'property-submit': propertySubmit,
   'lead-save': leadSave, 'lead-note': leadNote, 'lead-note-delete': leadNoteDelete, 'lead-history': leadHistory, 'lead-add': leadAdd,
-  request, decide, 'decide-many': decideMany, cancel, 'thread-open': threadOpen,
+  request, decide, 'decide-many': decideMany, cancel, 'thread-open': threadOpen, 'threads-fold': threadsFold,
   // Staff and admins (each refuses agents itself): the dashboard's agents panel.
   assign, 'property-access': propertyAccess,
   // Admins, the property's primary agent, or whoever approved it (grantChange checks).

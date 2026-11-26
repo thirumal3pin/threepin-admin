@@ -186,7 +186,7 @@ function requestItem(r, mode) {
     <div class="bd">${head}${codeLine(r, me.role, { link: r.requesterEmail !== me.email })}${r.reason && mode === 'approve' ? `<div class="q">“${esc(r.reason)}”</div>` : ''}${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
       <div class="acts">
         ${canDecide(r) ? `<button type="button" class="btn sm primary" data-quick="${esc(r.id)}" aria-describedby="qa-${esc(r.id)}"${QD ? '' : ' disabled'}><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button><button type="button" class="btn sm" data-reject="${esc(r.id)}">Reject</button><button type="button" class="btn sm quiet" data-decide="${esc(r.id)}">More options</button>` : ''}
-        ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
+        ${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}&r=${encodeURIComponent(r.id)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}
         ${r.status === 'pending' && r.requesterEmail === me.email ? `<button type="button" class="btn sm danger" data-cancel="${esc(r.id)}">Cancel</button>` : ''}
         ${liveAccess(r) && r.kind === 'property' && r.requesterEmail === me.email ? `<a class="btn sm" href="dashboard.html?property=${encodeURIComponent(r.targetId)}">Open property</a>` : ''}
         ${liveAccess(r) && r.grantId && r.decidedBy === me.email && r.requesterEmail !== me.email ? `${r.terms && r.terms.contact ? `<button type="button" class="btn sm" data-hide="${esc(r.grantId)}">Hide number</button>` : ''}<button type="button" class="btn sm danger" data-end="${esc(r.grantId)}">End access</button>` : ''}

@@ -22,6 +22,7 @@
     "preview:meta-followup": "node tests/meta-followup-preview.mjs",
     "preview:meta-filters": "node tests/meta-filters-preview.mjs",
     "preview:myday-bulk": "node tests/myday-bulk-preview.mjs",
+    "preview:messages-people": "node tests/messages-people-preview.mjs",
     "preview:posting": "node tests/posting-preview.mjs && node tests/posting-roles.mjs && node tests/series-editor-preview.mjs && node tests/posting-brochure-preview.mjs",
     "preview:brief": "node tests/brief-preview.mjs",
     "preview:home": "node tests/home-preview.mjs",

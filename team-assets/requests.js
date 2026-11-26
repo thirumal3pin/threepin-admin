@@ -41,7 +41,7 @@ async function start() {
         <small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${esc(ago(r.createdAt))} · decides: ${esc((r.approvers || []).map(e => nameOf(people, e).split(' ')[0]).join(', '))}</small>
         ${codeLine(r, me.role)}
         ${r.reason ? `<div class="q">“${esc(r.reason)}”</div>` : ''}
-        <div class="acts"><button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}</div></div></div>`).join('') : empty('Nothing waiting.'));
+        <div class="acts"><button type="button" class="btn sm primary" data-decide="${esc(r.id)}">Approve or reject</button>${r.threadId ? `<a class="btn sm" href="messages.html?t=${encodeURIComponent(r.threadId)}&r=${encodeURIComponent(r.id)}"><i class="fa-regular fa-comments"></i> Message</a>` : ''}</div></div></div>`).join('') : empty('Nothing waiting.'));
     html += block('Properties agents added', subs.length, subs.length ? subs.map(s => `<div class="item"><div class="ic"><i class="fa-regular fa-building"></i></div>
       <div class="bd"><b>${esc((s.fields || {}).name)}</b><small>${esc(s.byName || nameOf(people, s.byEmail))} · ${esc(ago(s.createdAt))}</small>
         <small>${esc([s.fields.config, s.fields.startingPrice, s.fields.type, s.fields.zone].filter(Boolean).join(' · '))}</small>
