@@ -355,7 +355,7 @@ export async function agentPost(request) {
   // Admin actions re-check the token against the live account: revoked or disabled = refused now.
   // So does every decision on a request and every change to a grant (an approver demoted or switched
   // off must not decide, extend or take back).
-  const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction || ['decide', 'revoke', 'hide-contact', 'grant-extend'].includes(action) });
+  const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction || ['decide', 'decide-many', 'revoke', 'hide-contact', 'grant-extend'].includes(action) });
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   try {
     if (action === 'me') return await me(user);

@@ -29,6 +29,22 @@
   .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
   .stat small { color: var(--ink3); font-size: 11.5px; line-height: 1.2; display: block; }
   .stat.hot b { color: var(--brand-ink); }
+  /* Approvals: select several, decide together (26 Nov 2026). */
+  .linkbtn { border: 0; background: none; padding: 6px 4px; font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+  .linkbtn:focus-visible, .pick input:focus-visible, .bulk-all input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .item .pick { flex: none; width: 36px; height: 36px; display: grid; place-items: center; cursor: pointer; }
+  .item .pick input, .bulk-all input { width: 20px; height: 20px; accent-color: var(--brand); cursor: pointer; margin: 0; }
+  .item.picked { background: var(--brand-soft); }
+  .bulk { position: sticky; top: var(--top-h, 60px); z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; background: var(--card); border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; }
+  .bulk .acts { margin: 0; margin-left: auto; }
+  .bulk .qa-terms { flex: 1 1 100%; margin: 0; }
+  .bulk .rj { flex: 1 1 100%; }
+  .bulk-all { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; min-height: 36px; }
+  .bulk + .item { border-top: 0; }
+  /* While selecting, the bar decides: each card keeps only Message (and its tick box). */
+  .selecting .item [data-quick], .selecting .item [data-reject], .selecting .item [data-decide], .selecting .item > .bd > .qa-terms { display: none; }
+  .selecting .item { cursor: default; }
+  @media (forced-colors: active) { .item.picked { outline: 2px solid Highlight; outline-offset: -2px; } }
 </style>
 <link rel="stylesheet" href="shared-assets/theme.css">
 </head>

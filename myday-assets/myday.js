@@ -26,6 +26,13 @@ let subject = me.email;              // whose day
 let unsubs = [];
 const S = { asked: new Map(), approve: new Map(), pendingAll: new Map(), leads: new Map(), alerts: [], props: [], subs: [], grants: [], matches: [], listings: null, queue: null };
 let reqFilter = 'all';
+// Several approvals at once (owner, 26 Nov 2026): "Select" on Approvals waiting on me, tick, then
+// Approve or Reject them together. The ticks survive the page redrawing as new requests come in.
+let selMode = false;
+const sel = new Set();
+// The bar sticks just under the page's own header (its height changes with the screen).
+{ const top = document.querySelector('header.top');
+  if (top && window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', top.offsetHeight + 'px')).observe(top); }
 let tab = 'today';
 let histRange = 7, histKind = 'all';
 const SEEN_KEY = () => 'pin.myday.seen.' + subject;
@@ -172,7 +179,10 @@ function requestItem(r, mode) {
   const head = mode === 'approve'
     ? `<b>${esc(r.requesterName)} asks for ${reqTitle(r).replace(/^(More|The|A) /, m => m.toLowerCase())}</b><small>${r.clientName ? 'For their client ' + esc(r.clientName) + ' · ' : ''}${r.kind === 'lead' && r.aboutCode ? 'for their property <span class="code">' + esc(r.aboutCode) + '</span>' + (r.aboutTitle ? ' ' + esc(r.aboutTitle) : '') + ' · ' : ''}${esc(ago(r.createdAt))}${r.visitAt ? ' · visit wanted ' + esc(when(r.visitAt)) : ''}</small>${r.kind === 'lead' ? `<small class="yourlead" data-yourlead="${esc(r.id)}">${esc(yourLead.get(r.id) || '')}</small>` : ''}`
     : `<b>${reqTitle(r)}</b><small>${decided}</small>`;
-  return `<div class="item"><div class="ic ${mode === 'approve' ? 'brand' : r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid ${ic}"></i></div>
+  const pick = mode === 'approve' && selMode && canDecide(r);
+  return `<div class="item${pick && sel.has(r.id) ? ' picked' : ''}">${pick
+    ? `<label class="pick"><input type="checkbox" data-pick="${esc(r.id)}"${sel.has(r.id) ? ' checked' : ''} aria-label="Select: ${esc(r.requesterName)} — ${esc(String(r.title || ''))}"></label>`
+    : `<div class="ic ${mode === 'approve' ? 'brand' : r.status === 'approved' ? 'green' : r.status === 'rejected' ? 'red' : ''}"><i class="fa-solid ${ic}"></i></div>`}
     <div class="bd">${head}${codeLine(r, me.role, { link: r.requesterEmail !== me.email })}${r.reason && mode === 'approve' ? `<div class="q">“${esc(r.reason)}”</div>` : ''}${r.note && r.status !== 'pending' ? `<div class="q">${esc(r.note)}</div>` : ''}
       <div class="acts">
         ${canDecide(r) ? `<button type="button" class="btn sm primary" data-quick="${esc(r.id)}" aria-describedby="qa-${esc(r.id)}"${QD ? '' : ' disabled'}><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button><button type="button" class="btn sm" data-reject="${esc(r.id)}">Reject</button><button type="button" class="btn sm quiet" data-decide="${esc(r.id)}">More options</button>` : ''}
@@ -209,6 +219,31 @@ function quickTerms(r) {
   if (b.shareContact) parts.push(`owner’s number for ${b.hours >= 48 ? Math.round(b.hours / 24) + ' days' : b.hours + ' hours'}`);
   else if (r.kind === 'property') parts.push('without the owner’s number');
   return 'Approve gives ' + parts.join(', ') + '. More options to change it.';
+}
+
+// The bar over the list while selecting: select all, how many, Approve / Reject them together.
+// Approve gives each one exactly what its own Approve button gives (its line under it says what).
+function bulkBar(list) {
+  const n = sel.size, all = list.length && list.every(r => sel.has(r.id));
+  const same = new Set(list.filter(r => sel.has(r.id)).map(quickTerms)).size <= 1;
+  const terms = n ? (same ? quickTerms(list.find(r => sel.has(r.id))).replace(/\. More options.*$/, '') + ' — each.' : 'Each gets what its own Approve gives (written under it).') : 'Tick the requests to decide together.';
+  return `<div class="bulk" role="region" aria-label="Decide several">
+    <label class="bulk-all"><input type="checkbox" data-pickall${all ? ' checked' : ''}> ${n ? `<b>${n} selected</b>` : 'Select all ' + list.length}</label>
+    <div class="acts">
+      <button type="button" class="btn sm primary" data-bulkok${n ? '' : ' disabled'}${QD ? '' : ' disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Approve${n ? ' ' + n : ''}</button>
+      <button type="button" class="btn sm" data-bulkrj${n ? '' : ' disabled'}>Reject${n ? ' ' + n : ''}</button>
+    </div>
+    <p class="qa-terms">${esc(terms)}</p>
+    <div class="rj" data-rj="__bulk" hidden><label for="rj-__bulk">Why (each of them sees this)</label><textarea id="rj-__bulk" maxlength="500" rows="2" placeholder="e.g. The owner has given these to us exclusively for now"></textarea><p class="rj-err" role="alert"></p>
+      <div class="acts"><button type="button" class="btn sm danger" data-bulkrjsend>Send rejection to ${n}</button><button type="button" class="btn sm quiet" data-rjback="__bulk">Not now</button></div></div>
+  </div>`;
+}
+function bulkDone(r, verb) {
+  const failed = (r.results || []).filter(x => !x.ok);
+  (r.results || []).filter(x => x.ok).forEach(x => sel.delete(x.id));
+  toast(`${verb} ${r.done}` + (failed.length ? ` · ${failed.length} not: ${failed[0].error}` : ' — they’ve been told'));
+  if (!sel.size) selMode = false;
+  render();
 }
 
 // The lead's own agent (and admins) may see WHICH of their clients a buyer request is about
@@ -301,8 +336,11 @@ function render() {
   if (leadsLoaded && !shownAt) shownAt = Date.now();
   let html = '';
   if (isAdmin && subject === me.email && S.subsAll.length) html += section('Properties agents added', S.subsAll.length, `<div class="item"><div class="ic brand"><i class="fa-regular fa-building"></i></div><div class="bd"><b>${S.subsAll.length === 1 ? 'One property is' : S.subsAll.length + ' properties are'} waiting for your approval</b><small>${esc(S.subsAll.map(x => (x.fields || {}).name).filter(Boolean).slice(0, 3).join(' · '))}</small><div class="acts"><a class="btn sm primary" href="team.html?tab=requests">Review in Team &amp; access</a></div></div></div>`, { hot: true });
-  if (asksAndApproves) html += `<div id="s-approve">${section('Approvals waiting on ' + (subject === me.email ? 'me' : esc(name)), toDecide.length,
-    !ld('approve') ? loading() : toDecide.length ? toDecide.map(r => requestItem(r, 'approve')).join('') : empty('fa-regular fa-circle-check', 'Nothing waiting for a decision.'), { hot: true })}</div>`;
+  [...sel].forEach(id => { if (!toDecide.some(r => r.id === id)) sel.delete(id); });
+  if (toDecide.length < 2 && !sel.size) selMode = false;
+  const selLink = toDecide.length >= 2 && ld('approve') ? `<button type="button" class="more linkbtn" data-selmode aria-pressed="${selMode}">${selMode ? 'Done' : '<i class="fa-regular fa-square-check" aria-hidden="true"></i> Select'}</button>` : '';
+  if (asksAndApproves) html += `<div id="s-approve"${selMode ? ' class="selecting"' : ''}>${section('Approvals waiting on ' + (subject === me.email ? 'me' : esc(name)), toDecide.length,
+    !ld('approve') ? loading() : toDecide.length ? (selMode ? bulkBar(toDecide) : '') + toDecide.map(r => requestItem(r, 'approve')).join('') : empty('fa-regular fa-circle-check', 'Nothing waiting for a decision.'), { hot: true, more: selLink })}</div>`;
   // Admins: listings an agent sent for approval — decided right here.
   if (isAdmin && subject === me.email && S.queue && S.queue.length) html += `<div id="s-lq">${section('Listings waiting for approval', S.queue.length, S.queue.map(listingQueueItem).join(''), { hot: true, more: '<a class="more" href="propertytrack.html">Shoot &amp; Media board</a>' })}</div>`;
   // Agents: their listings that need them (sent back, approved — mark Live, waiting).
@@ -403,6 +441,27 @@ const canCo = r => r.kind === 'property' && (isAdmin || S.props.some(p => String
 function bindActions(root) {
   const chips = root.querySelector('#reqChips');
   if (chips) chips.addEventListener('click', e => { const b = e.target.closest('[data-rf]'); if (!b) return; reqFilter = b.dataset.rf; render(); });
+  // Several at once.
+  const sm = root.querySelector('[data-selmode]');
+  if (sm) sm.addEventListener('click', () => { selMode = !selMode; if (!selMode) sel.clear(); render(); });
+  root.querySelectorAll('[data-pick]').forEach(c => c.addEventListener('change', () => { if (c.checked) sel.add(c.dataset.pick); else sel.delete(c.dataset.pick); render(); root.querySelector(`[data-pick="${CSS.escape(c.dataset.pick)}"]`)?.focus(); }));
+  const pa = root.querySelector('[data-pickall]');
+  if (pa) pa.addEventListener('change', () => { const ids = [...root.querySelectorAll('[data-pick]')].map(x => x.dataset.pick); if (pa.checked) ids.forEach(id => sel.add(id)); else sel.clear(); render(); root.querySelector('[data-pickall]')?.focus(); });
+  const bok = root.querySelector('[data-bulkok]');
+  if (bok) bok.addEventListener('click', () => {
+    const list = allRequests().filter(r => sel.has(r.id) && canDecide(r));
+    if (!list.length) return;
+    busy(bok, () => Promise.resolve().then(() => api('decide-many', { decision: 'approve', items: list.map(quickBody) })).then(r => bulkDone(r, 'Approved')).catch(e => toast('✗ ' + e.message)));
+  });
+  const brj = root.querySelector('[data-bulkrj]');
+  if (brj) brj.addEventListener('click', () => { const box = root.querySelector('[data-rj="__bulk"]'); if (!box) return; box.hidden = false; box.querySelector('textarea').focus(); });
+  const brs = root.querySelector('[data-bulkrjsend]');
+  if (brs) brs.addEventListener('click', () => {
+    const box = root.querySelector('[data-rj="__bulk"]'), note = box.querySelector('textarea').value.trim(), err = box.querySelector('.rj-err');
+    if (!note) { err.textContent = 'Say why — they see it'; box.querySelector('textarea').focus(); return; }
+    const ids = [...sel].filter(id => allRequests().some(r => r.id === id && canDecide(r)));
+    busy(brs, () => api('decide-many', { decision: 'reject', note, items: ids.map(id => ({ id })) }).then(r => bulkDone(r, 'Rejected')).catch(e => { err.textContent = e.message; }));
+  });
   // One tap: approved with the admin's defaults.
   root.querySelectorAll('[data-quick]').forEach(b => b.addEventListener('click', () => {
     const r = allRequests().find(x => x.id === b.dataset.quick);

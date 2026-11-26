@@ -897,7 +897,7 @@ async function request(db, user, body) {
 
 const fmtWhen = t => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).replace(/\b(am|pm)\b/g, m => m.toUpperCase());
 
-async function decide(db, user, body) {
+async function decide(db, user, body, opts = {}) {
   const me = lc(user.email);
   const ref = db.collection('accessRequests').doc(String((body && body.id) || '_'));
   const decision = body && body.decision === 'approve' ? 'approved' : body && body.decision === 'reject' ? 'rejected' : null;
@@ -996,13 +996,41 @@ async function decide(db, user, body) {
     + (patch.terms.contact ? `; owner’s number until ${fmtWhen(patch.terms.contactUntil)}` : '') + (note ? `. “${note}”` : '');
   await systemLineFor(db, r.threadId, line, { requestId: ref.id }, me);
   // Approved: their copy is rebuilt now, so it opens at once. Rejected: only the "asked" mark changes.
-  if (decision === 'approved') await rebuildAgents(db, user.tenantId, [r.requesterEmail]).catch(e => console.error('rebuild after decide:', e.message));
-  else await patchView(db, user.tenantId, r.requesterUid, d => {
+  if (decision === 'approved') {
+    if (opts.later) opts.later.add(r.requesterEmail);   // decide-many: one rebuild per agent at the end
+    else await rebuildAgents(db, user.tenantId, [r.requesterEmail]).catch(e => console.error('rebuild after decide:', e.message));
+  } else await patchView(db, user.tenantId, r.requesterUid, d => {
     markAsked(r, r.kind === 'lead' ? 'rejected' : null, { status: 'rejected', id: ref.id, at: r.createdAt || 0, decidedAt: Date.now(), by: who, note: String(note || '').slice(0, 300) })(d);
     // The locked card says so at once (not after the next rebuild).
     if (r.kind === 'property' && (r.need || 'details') === 'details') (d.props || []).forEach(p => { if (String(p.id) === String(r.targetId) && p._access === 'summary') p._refused = { note, by: who, at: Date.now() }; });
   });
   return json({ ok: true, status: decision, grantId: patch.grantId || null });
+}
+
+// Several requests at once (My Day → Select → Approve / Reject). Each is decided exactly as one tap
+// would (same checks, same thread line); approved agents' copies are rebuilt once at the end, not once
+// per request — a rebuild reads the whole stock, and the free plan's reads are the team's.
+// body: { items: [{ id, days?, shareContact?, hours? }], decision, note? } — at most 30.
+async function decideMany(db, user, body) {
+  const items = Array.isArray(body && body.items) ? body.items.slice(0, 31) : [];
+  if (!items.length) return json({ ok: false, error: 'Pick at least one request' }, 400);
+  if (items.length > 30) return json({ ok: false, error: 'At most 30 at a time' }, 400);
+  const decision = body.decision === 'reject' ? 'reject' : body.decision === 'approve' ? 'approve' : null;
+  if (!decision) return json({ ok: false, error: 'Approve or reject' }, 400);
+  if (decision === 'reject' && !plainText(String(body.note || '')).trim()) return json({ ok: false, error: 'Say why — the agents see it' }, 400);
+  const later = new Set(), results = [];
+  // A few at a time (each is its own transaction on its own request), so 30 fit in one call.
+  for (let i = 0; i < items.length; i += 6) {
+    await Promise.all(items.slice(i, i + 6).map(async it => {
+      const one = { ...(it && typeof it === 'object' ? it : {}), decision, note: body.note };
+      const res = await decide(db, user, one, { later }).catch(() => json({ ok: false, error: 'Something went wrong — try again' }, 500));
+      const out = await res.json().catch(() => ({}));
+      results.push({ id: String(it && it.id || ''), ok: !!out.ok, error: out.ok ? undefined : out.error });
+    }));
+  }
+  if (later.size) await rebuildAgents(db, user.tenantId, [...later]).catch(e => console.error('rebuild after decide-many:', e.message));
+  const done = results.filter(x => x.ok).length;
+  return json({ ok: done > 0, done, failed: results.length - done, results, ...(done ? {} : { error: (results[0] || {}).error || 'Nothing was decided' }) }, done ? 200 : 409);
 }
 
 async function cancel(db, user, body) {
@@ -1286,7 +1314,7 @@ const AGENT_ACTIONS = {
   view, directory, 'crm-boot': crmBoot,
   'property-notes': propertyNotes, 'property-note': propertyNote, 'property-availability': propertyAvailability, 'property-submit': propertySubmit,
   'lead-save': leadSave, 'lead-note': leadNote, 'lead-note-delete': leadNoteDelete, 'lead-history': leadHistory, 'lead-add': leadAdd,
-  request, decide, cancel, 'thread-open': threadOpen,
+  request, decide, 'decide-many': decideMany, cancel, 'thread-open': threadOpen,
   // Staff and admins (each refuses agents itself): the dashboard's agents panel.
   assign, 'property-access': propertyAccess,
   // Admins, the property's primary agent, or whoever approved it (grantChange checks).
