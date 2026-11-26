@@ -187,6 +187,37 @@ body.rail-on #appRail { display: flex; }
 .rl-grp .rl-item { padding-left: 30px; font-size: 13px; min-height: 30px; }
 .rl-grp .rl-item.on::before { left: 17px; }
 
+/* ── Main sections vs the pages inside them (owner, 26 Nov 2026: "no differentiation between main
+   sections and sub sections, and I don't know which sections are open") ──
+   · The open section sits on its own soft panel, its chevron pointing down (shut ones point right).
+   · Its pages hang from a thin guide line under the section's icon: smaller, lighter, indented.
+   · The page you are on is a soft brand pill with a brand mark on the guide line — the solid tile is
+     kept for main sections, so a page never looks like a section.
+   Still one section open at a time (openOnly in appnav.js). */
+#appRail { --rl-open-bg: light-dark(rgba(0,0,0,.035), rgba(255,255,255,.05)); --rl-guide: light-dark(rgba(0,0,0,.12), rgba(255,255,255,.14)); }
+.rl-sec + .rl-sec { margin-top: 2px; }
+.rl-sec.open { background: var(--rl-open-bg); border-radius: 12px; padding-bottom: 4px; }
+.rl-sec.open > .rl-h { font-weight: 700; }
+.rl-sec.open > .rl-h:hover { background: transparent; }
+.rl-h .rl-chev { transform: rotate(-90deg); transition: transform var(--dur-2, .2s) var(--ease-out, ease-out); }
+.rl-sec.open .rl-h .rl-chev { transform: none; color: var(--rl-ink); }
+.rl-grp-h .rl-chev { transform: rotate(-90deg); transition: transform var(--dur-2, .2s) var(--ease-out, ease-out); }
+.rl-grp.open .rl-grp-h .rl-chev { transform: none; }
+.rl-sec.open .rl-body { margin: 0 8px 0 23px; padding: 2px 0 2px 7px; border-left: 1.5px solid var(--rl-guide); }
+#appRail .rl-body .rl-item { padding: 6px 9px 6px 9px; font-size: 13.5px; color: var(--rl-ink-2); font-weight: 450; min-height: 32px; }
+#appRail .rl-body .rl-item:hover { color: var(--rl-ink); background: var(--rl-hover); }
+#appRail .rl-body .rl-item .rl-ico { width: 18px; font-size: 12px; color: var(--rl-ink-3); }
+#appRail .rl-body .rl-item.on { background: var(--brand-soft, rgba(255,138,0,.12)); color: var(--brand-ink, #A35A00); font-weight: 650; }
+#appRail .rl-body .rl-item.on .rl-ico { width: 18px; height: auto; margin: 0; border-radius: 0; display: inline-block; background: none; color: var(--brand-ink, #A35A00); }
+#appRail .rl-body .rl-item.on::before { display: block; content: ''; position: absolute; left: -8.5px; top: 6px; bottom: 6px; width: 2.5px; height: auto; margin: 0; border-radius: 2px; background: var(--brand, #FF8A00); }
+#appRail .rl-body .rl-grp-h { padding-left: 9px; }
+#appRail .rl-body .rl-grp .rl-item { padding-left: 15px; }
+@media (forced-colors: active) {
+  .rl-sec.open { outline: 1px solid CanvasText; }
+  #appRail .rl-body .rl-item.on { outline: 2px solid Highlight; }
+  #appRail .rl-body .rl-item.on::before { background: Highlight; }
+}
+
 /* ── Foot ── */
 
 .rail-foot { border-top: 1px solid var(--rl-line); padding: 9px 10px calc(9px + env(safe-area-inset-bottom)); }
@@ -268,6 +299,7 @@ body.rail-on #appRail { display: flex; }
      for one widens the rail again and opens it. */
   body.rail-min #appRail { width: var(--rail-w-min); }
   body.rail-min #appRail .rl-body { display: none; }
+  body.rail-min #appRail .rl-sec.open { background: none; padding-bottom: 0; }
   body.rail-min #appRail .rail-brand-tx,
   body.rail-min #appRail .rl-nm,
   body.rail-min #appRail .rl-chev,
@@ -302,7 +334,7 @@ body.rail-on #appRail { display: flex; }
   body.rail-open { overflow: hidden; }
   /* The drawer is the whole menu here, so its rows get thumb-sized targets. */
   #appRail .rl-h { min-height: 46px; font-size: 15px; }
-  #appRail .rl-item { min-height: 42px; font-size: 14.5px; }
+  #appRail .rl-item, #appRail .rl-body .rl-item { min-height: 42px; font-size: 14.5px; }
   #appRail .rl-grp-h { min-height: 34px; }
   #appRail .rail-out { min-height: 44px; }
 }
