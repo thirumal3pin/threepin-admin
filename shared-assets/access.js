@@ -80,7 +80,7 @@ async function forgetLocalCopy() {
     Object.keys(localStorage).filter(k => DATA_KEYS.test(k)).forEach(k => localStorage.removeItem(k));
   } catch (e) { /* private window */ }
   try {
-    const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+    const fs = await import("./fs-metered.js");
     const db = fs.getFirestore(app);
     await fs.terminate(db);
     await fs.clearIndexedDbPersistence(db);
@@ -100,7 +100,7 @@ async function startInbox(a) {
   try {
     if (!a.tenantId) { const r = await auth.currentUser.getIdTokenResult(false); a = { ...a, tenantId: r.claims.tenantId || null }; }
     if (!a.tenantId) return;
-    const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+    const fs = await import("./fs-metered.js");
     const db = fs.getFirestore(app);
     const me = String(a.email || '').toLowerCase();
     const key = me.replace(/[^a-z0-9]/g, '_');

@@ -326,7 +326,8 @@ try {
     await sp.focus('#text');
     // (Backwards from the box: past any request update shown small at the end, to the newest message's arrow.)
     for (let i = 0; i < 4; i++) { await sp.keyboard.press('Shift+Tab'); await sp.waitForTimeout(120); if (await sp.evaluate(() => document.activeElement && document.activeElement.classList.contains('rp'))) break; }
-    await sp.waitForTimeout(150);
+    // (the arrow fades in over 0.12 s — wait for it rather than reading it mid-fade)
+    await sp.waitForFunction(() => document.activeElement && getComputedStyle(document.activeElement).opacity === '1', null, { timeout: 2000 }).catch(() => {});
     const kb = await sp.evaluate(() => { const a = document.activeElement; return { rp: !!(a && a.classList.contains('rp')), shown: a ? getComputedStyle(a).opacity : '' }; });
     ok('reply: the keyboard reaches the reply arrow, and it shows when it has the focus', kb.rp && kb.shown === '1', JSON.stringify(kb));
     await sp.keyboard.press('Enter');

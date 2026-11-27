@@ -4,6 +4,7 @@ import { easyPost, EASY_MODEL } from './_easy.js';
 import { agentPost } from './_agent.js';
 import { attendancePost } from './_attendance.js';
 import { matchPost } from './_match.js';
+import { track, nameFor } from './_usage.js';
 
 // Two jobs in one function (Hobby plan: 12 functions):
 //   POST /api/bot-test-message  — the CRM's AI Bot "Live Test Chat": the draft bot workflow and the
@@ -76,7 +77,7 @@ async function testChatPost(request) {
   }
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const op = new URL(request.url).searchParams.get('op');
   if (op === 'easy') return easyPost(request);
   if (op === 'agent') return agentPost(request);
@@ -84,3 +85,6 @@ export async function POST(request) {
   if (op === 'match') return matchPost(request);
   return testChatPost(request);
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const POST = (request, ...a) => track(nameFor('bot-test-message', request, 'POST'), () => POST_raw(request, ...a));

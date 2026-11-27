@@ -1,4 +1,5 @@
 import { getDb } from './_bot-shared.js';
+import { track, nameFor } from './_usage.js';
 
 // The human-facing page Meta redirects users to after a data deletion
 // request — the URL returned by api/data-deletion-callback.js.
@@ -21,7 +22,7 @@ ${code ? `<p>Confirmation code: <code>${esc(code)}</code></p>` : ''}
   'X-Content-Type-Options': 'nosniff'
 } });
 
-export async function GET(request) {
+async function GET_raw(request) {
   const url = new URL(request.url);
   const id = (url.searchParams.get('id') || '').trim().toLowerCase();
   if (!id) return page('', 'Missing confirmation code', 400);
@@ -33,3 +34,6 @@ export async function GET(request) {
   const label = status === 'completed' ? 'Completed' : status === 'not_found' ? 'Not found' : String(status || 'Pending');
   return page(id, label);
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('data-deletion-status', request, 'GET'), () => GET_raw(request, ...a));

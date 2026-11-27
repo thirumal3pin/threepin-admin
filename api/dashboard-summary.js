@@ -3,6 +3,7 @@ import { computeDashboardMetrics, formatINR } from '../crm-assets/dashboardMetri
 import { summarizeDeadReasons } from './_dashboard-ai-shared.js';
 import { pullTailorTalkPage } from './_tailortalk-sync.js';
 import { readLeads } from './_lead-views.js';
+import { track, nameFor } from './_usage.js';
 
 export const maxDuration = 60;
 
@@ -558,7 +559,7 @@ async function dashboardSummaryForTenant(db, tenantId, opts) {
 // Triggered by Vercel Cron (see vercel.json) at 21:30 IST daily, or manually
 // from the CRM's "Send Now" button (POST). Mirrors api/followup-digest.js's
 // multi-tenant loop, idempotency, and per-tenant error isolation exactly.
-export async function GET(request) {
+async function GET_raw(request) {
   const auth = request.headers.get('authorization') || '';
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
@@ -613,7 +614,7 @@ export async function GET(request) {
   });
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -646,3 +647,7 @@ export async function POST(request) {
   }, { merge: true }).catch(() => {});
   return new Response(JSON.stringify(r), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('dashboard-summary', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('dashboard-summary', request, 'POST'), () => POST_raw(request, ...a));

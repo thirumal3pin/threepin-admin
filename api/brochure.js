@@ -1,6 +1,7 @@
 import { getDb, sendEmail, verifyCrmUser } from './_bot-shared.js';
 import { getSheetsToken, QUEUE_SHEET_ID } from './_inventory-shared.js';
 import { json, fail, checkAuth, checkRateLimit, getDriveAccessToken, makeDriveFilePublic, logBrochureCall } from './_brochure-shared.js';
+import { track, nameFor } from './_usage.js';
 
 // Brochure delivery, in one file/one function (Vercel's Hobby plan caps a
 // deployment at 12 Serverless Functions — keeping this to a single route
@@ -307,14 +308,14 @@ export async function drivePiece(url) {
   } });
 }
 
-export async function GET(request) {
+async function GET_raw(request) {
   const url = new URL(request.url);
   if (url.searchParams.get('op') === 'log') return logList(request);
   if (url.searchParams.get('op') === 'file') return brochurePiece(request, url);
   return json({ ok: false, error: 'Unknown op' }, 404);
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   if (new URL(request.url).searchParams.get('op') === 'log') return logPost(request);
   if (!checkAuth(request)) return fail('auth', 'Unauthorized', 401);
 
@@ -333,3 +334,7 @@ export async function POST(request) {
   if (body.alert) return handleAlert(db, body);
   return body.drive_file_id ? handleFinish(db, body) : handleInit(db, body);
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('brochure', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('brochure', request, 'POST'), () => POST_raw(request, ...a));

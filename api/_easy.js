@@ -14,6 +14,7 @@ import '../dashboard-assets/search-engine.js';
 import '../shared-assets/chennai-geo.js';
 import '../shared-assets/area-model.js';
 import '../shared-assets/match-engine.js';
+import { relabel } from './_usage.js';
 
 const PinMatch = globalThis.PinMatch;
 
@@ -849,6 +850,7 @@ export async function easyPost(request) {
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }
+  relabel('easy:' + (body && body.action || 'ask'));
   const [o, status] = await easyHandle({ db: getDb(), user, body });
   return json(o, status);
 }

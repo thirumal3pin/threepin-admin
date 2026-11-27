@@ -1,3 +1,4 @@
+import { track, nameFor } from './_usage.js';
 // Non-secret, client-safe config values that static pages need at runtime but
 // can't read from Vercel env vars directly (there's no build/templating step
 // for crm.html/dashboard.html — they're served as plain static files).
@@ -11,7 +12,7 @@
 // protected by an HTTP-referrer restriction in the Google Cloud console, not
 // by hiding it, so restrict it to admin.threepin.in/* before deploying. An
 // unrestricted key in a public page is somebody else's map bill.
-export async function GET() {
+async function GET_raw() {
   return new Response(JSON.stringify({
     metaAppId: process.env.META_APP_ID || '',
     metaEmbeddedSignupConfigId: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || '',
@@ -21,3 +22,6 @@ export async function GET() {
     headers: { 'Content-Type': 'application/json' }
   });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('public-config', request, 'GET'), () => GET_raw(request, ...a));

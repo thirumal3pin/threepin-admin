@@ -44,6 +44,7 @@ import { parseSheetLink, classifyColumns, columnIssues, ROLES, planSheetWrite } 
 import { briefAction, briefsAction, defaultClassify } from './_meta-leads-brief.js';
 import { sendEmail } from './_bot-shared.js';
 import * as MA from './_meta-assign.js';
+import { relabel } from './_usage.js';
 
 const COLLECTION = 'metaLeadConfigs';
 const EDITS = 'metaLeadEdits';
@@ -174,6 +175,7 @@ export async function metaLeadsAction(user, body, deps) {
   const sa = deps.serviceAccount;
   const shareWith = (sa && sa.client_email) || 'the app’s service account';
   const action = String((body && body.action) || '');
+  relabel('meta-leads:' + action);
   const tokenOnce = () => { let p; return () => (p = p || deps.token(sa)); };
 
   // The AI brief of one person, and every stored brief (api/_meta-leads-brief.js).

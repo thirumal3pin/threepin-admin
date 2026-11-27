@@ -7,7 +7,8 @@
 // (api/_agent-work.js); these pages only draw it.
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, onSnapshot } from "./fs-metered.js";
+import { quietWhenAway } from './quiet-when-away.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -24,6 +25,8 @@ window.agentAuth = { getIdToken: () => (auth.currentUser ? auth.currentUser.getI
 let _db;
 try { _db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
 catch (e) { _db = getFirestore(app); }
+// A page nobody is looking at stops reading (shared-assets/quiet-when-away.js — the quota).
+quietWhenAway(_db);
 export const db = _db;
 
 export const $ = id => document.getElementById(id);
@@ -102,7 +105,7 @@ export function approvalDefaults(me) {
       let a;
       if (me.role === 'agent') a = ((await api('me')).config || {}).approvals;
       else {
-        const { getDoc } = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+        const { getDoc } = await import("./fs-metered.js");
         const { effectiveConfig } = await import('./agent-config.js');
         const snap = await getDoc(doc(db, 'agentConfigs', me.tenantId));
         a = effectiveConfig(snap.exists() ? snap.data() : null).approvals;
@@ -301,7 +304,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {}, role = def
       let mode = 'approve';
       const q = s => sh.querySelector(s);
       // Another approver deciding first: said here at once, not only when Approve is pressed.
-      import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => {
+      import("./fs-metered.js").then(fs => {
         const un = fs.onSnapshot(doc(db, 'accessRequests', req.id), snap => {
           if (!sh.isConnected) { un(); return; }
           const d = snap.exists() ? snap.data() : null;
@@ -312,7 +315,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {}, role = def
         }, () => {});
       }).catch(() => {});
       // The lead's own agent (and admins) may see which lead it is (requestPrivate; never the asker).
-      if (isLead) import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => fs.getDoc(doc(db, 'requestPrivate', req.id)))
+      if (isLead) import("./fs-metered.js").then(fs => fs.getDoc(doc(db, 'requestPrivate', req.id)))
         .then(snap => { if (snap.exists() && snap.data().leadName && q('#dLeadName')) q('#dLeadName').textContent = ' — your lead ' + snap.data().leadName; }).catch(() => {});
       sh.querySelectorAll('[data-d]').forEach(b => b.addEventListener('click', () => {
         mode = b.dataset.d;
@@ -368,7 +371,7 @@ export function decideSheet(req, { canCoAgent = false, defaults = {}, role = def
 }
 
 // ── An agent's own leads (the three queries the rules allow), read once — for pickers ──
-import { collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { collection, query, where, getDocs } from "./fs-metered.js";
 let myLeadsP = null;
 export function myLeads(me) {
   if (!myLeadsP) myLeadsP = readMyLeads(me).catch(e => { myLeadsP = null; throw e; });

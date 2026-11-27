@@ -25,13 +25,14 @@ import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16
 import {
   getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, deleteField, writeBatch, onSnapshot, getDoc, getDocs, query, where,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
-} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+} from "../shared-assets/fs-metered.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 import { defaultStages } from './track-pipeline.js';
 import * as TaskModel from '../shared-assets/task-model.js';
+import { quietWhenAway } from '../shared-assets/quiet-when-away.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -49,6 +50,8 @@ const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 let db, persistent = true;
 try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
 catch (e) { db = getFirestore(app); persistent = false; }
+// A page nobody is looking at stops reading (shared-assets/quiet-when-away.js — the quota).
+quietWhenAway(db);
 // Every lead from a few view documents instead of one read per lead (shared-assets/lead-views.js).
 const views = leadViews(db);
 // Signing out removes the local copy — nothing stays on a shared computer.

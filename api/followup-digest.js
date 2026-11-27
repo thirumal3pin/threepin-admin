@@ -7,6 +7,7 @@ import { rebuildLeadViews } from './_lead-views.js';
 import * as TM from '../shared-assets/task-model.js';
 import { campaignDigest, campaignDigestText, campaignDigestHtml } from './_campaign-loop.js';
 import { metaMorning } from './_meta-digest.js';
+import { track, nameFor } from './_usage.js';
 
 // The digest, then the day's lead-views rebuild (one transaction per view document): room for both.
 export const maxDuration = 60;
@@ -452,7 +453,7 @@ async function taskDigestForTenant(db, tenantId, alreadySent) {
 // Caveat worth knowing: WhatsApp's Cloud API only allows a freeform text
 // send to a number that has messaged the business within the last 24
 // hours — otherwise Meta requires a pre-approved message template.
-export async function GET(request) {
+async function GET_raw(request) {
   const auth = request.headers.get('authorization') || '';
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
@@ -548,7 +549,7 @@ export async function GET(request) {
   });
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   // An agent may report a change to a task of theirs (handleTaskEvent lets only the task's own people
   // or a manager set off its emails); the digest itself stays with the full-access team.
   const isTask = new URL(request.url).searchParams.get('action') === 'task';
@@ -573,3 +574,7 @@ export async function POST(request) {
   const { rebuild, commitCampaign, ...out } = r;
   return new Response(JSON.stringify(out), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('followup-digest', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('followup-digest', request, 'POST'), () => POST_raw(request, ...a));

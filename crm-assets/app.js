@@ -5995,12 +5995,20 @@ function renderMatchMore(l, kind){
     box.innerHTML = `<div class="pm pm-more-box">${head}${body}</div>`;
     box.querySelectorAll('[data-open-lead]').forEach(b => b.addEventListener('click', () => openDetail(b.getAttribute('data-open-lead'))));
   };
+  // On a tap, not on every lead opened (owner, 27 Nov 2026 — the database quota): a check reads the
+  // whole Shoot board and every seller enquiry on the server, and opening leads one after another
+  // ran it each time. The answer is kept for 10 minutes.
   const hit = matchMoreCache.get(l.id);
-  if(hit && Date.now() - hit.at < 120000){ draw(hit); return; }
-  draw('busy');
-  matchApi({ action:'search', mode:'properties', leadId:l.id, limit:8, filters:{ sources:['listing','seller','submission'], minPct:55 } })
-    .then(j => { const st = { at: Date.now(), rows: j.rows || [] }; matchMoreCache.set(l.id, st); draw(st); })
-    .catch(e => draw({ rows: [], error: e.message }));
+  if(hit && Date.now() - hit.at < 600000){ draw(hit); return; }
+  const run = () => {
+    draw('busy');
+    matchApi({ action:'search', mode:'properties', leadId:l.id, limit:8, filters:{ sources:['listing','seller','submission'], minPct:55 } })
+      .then(j => { const st = { at: Date.now(), rows: j.rows || [] }; matchMoreCache.set(l.id, st); draw(st); })
+      .catch(e => draw({ rows: [], error: e.message }));
+  };
+  box.innerHTML = `<div class="pm pm-more-box">${head}<div class="pm-empty"><button type="button" class="pm-btn primary" id="dpMatchRun">Check the Shoot board and seller enquiries</button></div></div>`;
+  const b = document.getElementById('dpMatchRun');
+  if(b) b.addEventListener('click', run);
 }
 
 // The pipeline's own stage key for a lead, so a Won or Lost buyer is not

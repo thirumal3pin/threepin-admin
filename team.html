@@ -48,6 +48,31 @@
     box-shadow: 0 1px 2px rgba(0,0,0,.10); }
 
   .note { color: var(--ink3); font-size: 13.5px; margin: 0 0 14px; }
+  /* Database usage (team-assets/usage.js) */
+  .seg.four { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 560px) { .seg.four { grid-template-columns: 1fr 1fr; } }
+  .u-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; justify-content: space-between; margin-bottom: 12px; }
+  .u-pick { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink3); flex: 1 1 260px; }
+  .u-pick select { max-width: 100%; }
+  .u-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .u-tile { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .u-tile b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .u-tile small { color: var(--ink3); font-size: 12.5px; }
+  .u-bar { display: block; height: 6px; border-radius: 3px; background: var(--bg2); position: relative; overflow: hidden; margin: 4px 0 2px; }
+  .u-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--p); background: var(--brand); border-radius: 3px; }
+  .u-bar.over::after { background: light-dark(#B42318, #FF8A8A); }
+  .u-hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; align-items: end; height: 120px; padding: 10px 10px 4px; margin-bottom: 12px; }
+  .u-h { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 3px; min-width: 0; }
+  .u-h span { width: 100%; height: var(--p); min-height: 1px; background: var(--brand); border-radius: 3px 3px 0 0; opacity: .85; }
+  .u-h small { font-size: 10px; color: var(--ink3); height: 12px; font-variant-numeric: tabular-nums; }
+  .u-who { margin-bottom: 10px; }
+  .u-table .u-r { display: grid; grid-template-columns: minmax(0, 1fr) 56px 76px 60px; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: start; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .u-table .u-r:first-child { border-top: 0; }
+  .u-table .u-th { font-size: 12px; font-weight: 700; color: var(--ink3); text-transform: uppercase; letter-spacing: .04em; }
+  .u-table .u-r > span:not(:first-child) { text-align: right; }
+  .u-table .u-r small { display: block; color: var(--ink3); font-size: 12px; overflow-wrap: anywhere; }
+  .u-table .u-r .u-tip { color: var(--ink2); }
+  .u-table .u-r .tag { font-size: 10.5px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
   .group-h { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink3);
     margin: 18px 4px 8px; display: flex; gap: 8px; align-items: baseline; }
@@ -180,10 +205,11 @@
     </div>
 
     <div id="app" hidden>
-      <div class="seg three" role="tablist">
+      <div class="seg four" role="tablist">
         <button type="button" role="tab" data-tab="people" aria-selected="true">People</button>
         <button type="button" role="tab" data-tab="agents" aria-selected="false">What agents see</button>
         <button type="button" role="tab" data-tab="requests" aria-selected="false">Requests <span class="n" id="reqN" hidden></span></button>
+        <button type="button" role="tab" data-tab="usage" aria-selected="false">Database usage</button>
       </div>
 
       <section id="tab-people">
@@ -196,6 +222,10 @@
       <section id="tab-requests" hidden>
         <p class="note">Agents ask for a property’s details (or a matching buyer’s number) from their Properties page. The property’s primary agent or any admin decides — the first decision wins. Everything shared is listed here, and you can take it back at any time.</p>
         <div id="requests"><div class="card"><div class="sk"></div><div class="sk"></div></div></div>
+      </section>
+      <section id="tab-usage" hidden>
+        <p class="note">Every read and write the site makes, by what it is for — per Firebase day (1:30 PM to 1:30 PM India time). The free plan allows 50,000 reads and 20,000 writes a day; over that, the site stops until the reset.</p>
+        <div id="usage"><div class="card"><div class="sk"></div><div class="sk"></div></div></div>
       </section>
       <section id="tab-agents" hidden>
         <p class="note">Saved changes reach agents straight away: the menu, what they see of each property and lead, and what they may do.</p>
@@ -224,6 +254,7 @@
 <script src="shared-assets/install-app.js"></script>
 <script type="module" src="shared-assets/access.js"></script>
 <script type="module" src="team-assets/team.js"></script>
+<script type="module" src="team-assets/usage.js"></script>
 <script type="module" src="team-assets/requests.js"></script>
 </body>
 </html>

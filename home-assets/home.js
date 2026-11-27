@@ -92,7 +92,7 @@ function nameOf(user) {
 // Signing out here also drops the local copy the consoles keep, as the CRM's own sign-out does.
 async function forgetLocalCopy() {
   try {
-    const fs = await import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js");
+    const fs = await import("../shared-assets/fs-metered.js");
     await fs.clearIndexedDbPersistence(fs.getFirestore(app));
   } catch (e) { /* another tab still has it open, or none was kept */ }
 }

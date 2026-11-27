@@ -30,7 +30,7 @@
 
 import {
   doc, collection, query, where, onSnapshot, getDoc, getDocs, writeBatch, runTransaction, deleteField, serverTimestamp, FieldPath
-} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+} from "./fs-metered.js";
 import * as LV from './lead-views.js';
 
 const REFUSED_FOR = 10 * 60000;   // rows refused (rules not live): try them again after this

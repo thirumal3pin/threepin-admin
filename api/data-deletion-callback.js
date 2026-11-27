@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getDb } from './_bot-shared.js';
+import { track, nameFor } from './_usage.js';
 
 // Meta's required "Data Deletion Request Callback" — every app using
 // Facebook Login-based flows (which WhatsApp Embedded Signup is built on)
@@ -33,7 +34,7 @@ function parseSignedRequest(signedRequest, secret) {
   }
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const contentType = request.headers.get('content-type') || '';
   let signedRequest;
   if (contentType.includes('application/json')) {
@@ -66,3 +67,6 @@ export async function POST(request) {
     headers: { 'Content-Type': 'application/json' }
   });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const POST = (request, ...a) => track(nameFor('data-deletion-callback', request, 'POST'), () => POST_raw(request, ...a));

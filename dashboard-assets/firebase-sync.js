@@ -2,13 +2,14 @@ import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16
 import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, getDocs, writeBatch, query, where,
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, waitForPendingWrites
-} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+} from "../shared-assets/fs-metered.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { stageKeyOf, stageKindOf, defaultStages } from '../track-assets/track-pipeline.js';
 import { wantsListing } from '../track-assets/seller-sync.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+import { quietWhenAway } from '../shared-assets/quiet-when-away.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -30,6 +31,8 @@ let db, persistent = true;
 // opening one would only slow its first paint.
 try { db = window.__pinPageMode === 'single' ? getFirestore(app) : initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); if (window.__pinPageMode === 'single') persistent = false; }
 catch (e) { db = getFirestore(app); persistent = false; }
+// A page nobody is looking at stops reading (shared-assets/quiet-when-away.js — the quota).
+quietWhenAway(db);
 const views = leadViews(db);
 async function signOutAndForget(auth) {
   // A save still on its way goes first (up to 5 s): clearing the local copy would drop it. Not

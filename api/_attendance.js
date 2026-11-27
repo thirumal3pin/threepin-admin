@@ -34,6 +34,7 @@ import {
   dayOf, addDays, isDay, daysBetween, docId, clock, dayLabel, hm, summarise, liveMs,
   adminsOf, isTracked, alertLine, MIN_GAP_MS, MAX_RANGE_DAYS,
 } from '../shared-assets/attendance-core.js';
+import { relabel } from './_usage.js';
 
 const APP_URL = process.env.APP_URL || 'https://admin.threepin.in';
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
@@ -388,6 +389,7 @@ export async function attendanceAct(user, body = {}) {
   const db = getDb();
   const cfg = await loadConfig(db, user.tenantId);
   const action = String(body.action || '');
+  relabel('attendance:' + action);
   try {
     if (action === 'status') return await status(db, user, cfg);
     if (action === 'sign-in') return await signIn(db, user, cfg, body);

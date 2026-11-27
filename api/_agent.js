@@ -40,6 +40,7 @@ import { effectiveConfig } from '../shared-assets/agent-config.js';
 import { teamKey } from '../crm-assets/mentions.js';
 import { workPost, isWorkAction, isAdminWork } from './_agent-work.js';
 import { hasAssignedAdLeads } from './_meta-leads.js';
+import { relabel, usageFromPage, usageRead } from './_usage.js';
 
 const ROLES = ['admin', 'agent', 'none'];
 // Accounts that signed themselves up belong to no tenant, so they are the whole Firebase project's,
@@ -358,7 +359,11 @@ export async function agentPost(request) {
   const user = await verifyCrmUser(request, { allowAgent: true, checkRevoked: isAdminAction || ['decide', 'decide-many', 'revoke', 'hide-contact', 'grant-extend'].includes(action) });
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   try {
+    relabel('agent:' + action);
     if (action === 'me') return await me(user);
+    // The database usage log (api/_usage.js): a page's own counts, and the admins' view of them.
+    if (action === 'usage-log') return json(await usageFromPage(getDb(), user, body));
+    if (action === 'usage-read') { if (!isAdminToken(user)) return json({ error: 'Admins only' }, 403); return json(await usageRead(getDb(), user, body)); }
     // Phases 2–6: properties, leads, requests, messages (api/_agent-work.js).
     if (isWorkAction(action)) return await workPost(user, action, body, isAdminToken(user));
     if (!isAdminAction) return json({ error: 'Unknown action' }, 400);

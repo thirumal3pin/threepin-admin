@@ -13,13 +13,18 @@
 
 import { digestGet, digestPost } from './_finance-digest.js';
 import { uploadPost } from './_finance-upload.js';
+import { track, nameFor } from './_usage.js';
 
-export async function GET(request) {
+async function GET_raw(request) {
   return digestGet(request);
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const task = new URL(request.url).searchParams.get('task');
   if (task === 'upload') return uploadPost(request);
   return digestPost(request);
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('finance', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('finance', request, 'POST'), () => POST_raw(request, ...a));

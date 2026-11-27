@@ -67,6 +67,7 @@ import { visitOf } from '../crm-assets/pipeline.js';
 import { writeLead } from './_lead-views.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { campaignAction, makeDeps } from './_campaign.js';
+import { track, nameFor, relabel } from './_usage.js';
 
 export const maxDuration = 60;
 const SYNC_BUDGET_MS = 40000;
@@ -736,9 +737,10 @@ async function campaignPost(request) {
   }
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action') || 'webhook';
+  relabel('tailortalk:' + action);
   if (action === 'webhook') return webhookPost(request, url);
   if (action === 'sync') return syncPost(request);
   if (action === 'refresh') return refreshPost(request);
@@ -751,8 +753,12 @@ export async function POST(request) {
 
 // ?action=sync is the daily cron. Without it, lets someone confirm the route is deployed from a
 // browser — it says nothing about configuration.
-export async function GET(request) {
+async function GET_raw(request) {
   const action = request ? new URL(request.url).searchParams.get('action') : null;
-  if (action === 'sync') return syncCron(request);
+  if (action === 'sync') { relabel('tailortalk:sync (daily job)'); return syncCron(request); }
   return json({ ok: true, service: 'tailortalk' });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('tailortalk', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('tailortalk', request, 'POST'), () => POST_raw(request, ...a));

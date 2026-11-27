@@ -6,6 +6,7 @@ import {
 } from './_inventory-shared.js';
 import { metaLeadsPost, metaLeadsTick } from './_meta-leads.js';
 import { claimReservedCreates } from './_agent-listings.js';
+import { track, nameFor, relabel } from './_usage.js';
 
 // Powers the dashboard's "Sync from Sheet" button. Same mapping logic as
 // scripts/sync-inventory.js — both import api/_inventory-shared.js, so the
@@ -28,13 +29,13 @@ function json(body, status = 200){
 
 // GET is only the Meta ads leads tick (GET /api/meta-leads?tick=1, an outside timer every few minutes —
 // api/_meta-leads.js metaLeadsTick); anything else here is POST.
-export async function GET(request){
+async function GET_raw(request){
   const u = new URL(request.url);
-  if (u.searchParams.get('op') === 'meta-leads' && u.searchParams.get('tick')) return metaLeadsTick(request);
+  if (u.searchParams.get('op') === 'meta-leads' && u.searchParams.get('tick')) { relabel('meta-leads:tick (timer)'); return metaLeadsTick(request); }
   return new Response('Not found', { status: 404 });
 }
 
-export async function POST(request){
+async function POST_raw(request){
   // Meta ads leads ride on this function (POST /api/meta-leads → ?op=meta-leads, vercel.json):
   // the plan's 12 functions are all taken. Everything else about it is in api/_meta-leads.js.
   if(new URL(request.url).searchParams.get('op') === 'meta-leads') return metaLeadsPost(request);
@@ -165,3 +166,7 @@ export async function POST(request){
     return json({ error: 'Sync failed. ' + String(e.message || e).slice(0, 300) }, 500);
   }
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('sync-inventory', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('sync-inventory', request, 'POST'), () => POST_raw(request, ...a));

@@ -9,12 +9,16 @@
 
 import { generatePost } from './_lead-summary-generate.js';
 import { backfillPost } from './_lead-summary-backfill.js';
+import { track, nameFor } from './_usage.js';
 
 export const maxDuration = 60;
 
-export async function POST(request) {
+async function POST_raw(request) {
   const op = new URL(request.url).searchParams.get('op');
   if (op === 'generate') return generatePost(request);
   if (op === 'backfill') return backfillPost(request);
   return new Response(JSON.stringify({ error: 'Unknown op' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const POST = (request, ...a) => track(nameFor('lead-summary', request, 'POST'), () => POST_raw(request, ...a));

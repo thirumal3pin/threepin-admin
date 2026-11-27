@@ -1,4 +1,5 @@
 import { getDb, verifyCrmUser } from './_bot-shared.js';
+import { track, nameFor } from './_usage.js';
 
 // Knowledge base connectors for the AI bot.
 //
@@ -73,7 +74,7 @@ function clamp(text) {
 
 // --- Handlers ----------------------------------------------------------------
 
-export async function GET(request) {
+async function GET_raw(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   const db = getDb();
@@ -83,7 +84,7 @@ export async function GET(request) {
   return json({ sources: meta });
 }
 
-export async function POST(request) {
+async function POST_raw(request) {
   const user = await verifyCrmUser(request);
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
 
@@ -166,3 +167,7 @@ export async function POST(request) {
     return json({ error: String(e.message || e) }, 200);
   }
 }
+
+// Every request counted in the database usage log (api/_usage.js), under its name.
+export const GET = (request, ...a) => track(nameFor('knowledge-sync', request, 'GET'), () => GET_raw(request, ...a));
+export const POST = (request, ...a) => track(nameFor('knowledge-sync', request, 'POST'), () => POST_raw(request, ...a));

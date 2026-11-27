@@ -33,7 +33,7 @@ import {
   getFirestore, collection, doc, setDoc, onSnapshot,
   getDoc, getDocs, getDocFromServer, getDocsFromServer, writeBatch, runTransaction, query, where, limit,
   orderBy, serverTimestamp, Timestamp, getCountFromServer,
-} from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
+} from '../shared-assets/fs-metered.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
 } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
@@ -51,6 +51,7 @@ import { validateEvent } from './finance-events.js';
 import { EV, PARTY_FIELDS } from './finance-events.js';
 import * as CACHE from './finance-cache.js';
 import { leadViews } from '../shared-assets/lead-views-client.js';
+import { quietWhenAway } from '../shared-assets/quiet-when-away.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0',
@@ -63,6 +64,8 @@ const firebaseConfig = {
 
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const db = getFirestore(app);
+// A page nobody is looking at stops reading (shared-assets/quiet-when-away.js — the quota).
+quietWhenAway(db);
 const auth = getAuth(app);
 const storage = getStorage(app);
 

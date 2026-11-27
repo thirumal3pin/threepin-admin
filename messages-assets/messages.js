@@ -16,7 +16,7 @@
 // one request — decisions, visits, the team's replies — answers the card (replyTo) and lives in the
 // card's own thread, a panel beside the chat. Decision lines also show small in the chat.
 import { $, esc, lc, emailKey, api, db, isShutdown, whenSignedIn, directory, nameOf, when, toast, openSheet, decideSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
-import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { collection, query, where, onSnapshot, orderBy, limit, doc, writeBatch, updateDoc, getDoc } from "../shared-assets/fs-metered.js";
 
 const me = await whenSignedIn();
 const isAdmin = me.role === 'admin', isAgent = me.role === 'agent';

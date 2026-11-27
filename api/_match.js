@@ -36,6 +36,7 @@ import '../shared-assets/chennai-geo.js';
 import '../shared-assets/area-model.js';
 import '../shared-assets/match-engine.js';
 import '../shared-assets/match-sources.js';
+import { relabel } from './_usage.js';
 
 const PinMatch = globalThis.PinMatch;
 const PS = globalThis.PinSources;
@@ -526,6 +527,7 @@ export async function matchPost(request) {
   if (!user || !user.tenantId) return json({ error: 'Unauthorized' }, 401);
   const db = getDb();
   const action = body && body.action;
+  relabel('match:' + action);
   try {
     const v = await viewerOf(db, user);
     // An agent needs Properties or the CRM (leads) in their access to match at all.

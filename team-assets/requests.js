@@ -7,7 +7,7 @@
 //   Shared right now         every running grant: who, what, until when — Hide number, Take back
 //   Decided lately           the last 30 days, both ways
 import { $, esc, api, db, isShutdown, whenSignedIn, directory, nameOf, when, ago, untilWords, toast, decideSheet, openSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
-import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { collection, query, where, onSnapshot } from "../shared-assets/fs-metered.js";
 
 if ($('tab-requests')) start();
 

@@ -8,8 +8,9 @@
 //         write it, and only known settings). The model and defaults are shared-assets/agent-config.js.
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, runTransaction } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, runTransaction } from "../shared-assets/fs-metered.js";
 import * as AC from '../shared-assets/agent-config.js';
+import { quietWhenAway } from '../shared-assets/quiet-when-away.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCO5782HKI_ka5zx0tSBzohlvNB5rY_ZF0",
@@ -31,6 +32,8 @@ function start() {
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+// A page nobody is looking at stops reading (shared-assets/quiet-when-away.js — the quota).
+quietWhenAway(db);
 
 const ROLE_LABEL = { admin: 'Admin', agent: 'Agent', none: 'Full access' };
 const ROLE_NOTE = {
@@ -106,11 +109,13 @@ function showTab(name) {
   $('tab-people').hidden = name !== 'people';
   $('tab-agents').hidden = name !== 'agents';
   $('tab-requests').hidden = name !== 'requests';
+  $('tab-usage').hidden = name !== 'usage';
+  if (name === 'usage') document.dispatchEvent(new CustomEvent('team-usage-open'));
   if (name === 'requests') document.dispatchEvent(new CustomEvent('team-requests-open'));
   setDirty(dirty);
 }
 document.querySelectorAll('#app > .seg button[data-tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-{ const t = new URLSearchParams(location.search).get('tab'); if (['requests', 'agents', 'people'].includes(t)) showTab(t); }
+{ const t = new URLSearchParams(location.search).get('tab'); if (['requests', 'agents', 'people', 'usage'].includes(t)) showTab(t); }
 
 // ═══════ PEOPLE ═══════
 

@@ -1,0 +1,71 @@
+// What each line of the database usage log is, in plain words (team.html → Database usage).
+// Lines are named by api/_usage.js (server: "<api>:<action>") and shared-assets/fs-metered.js
+// (pages: "<page> › <collection> [filters] (live | once | write | transaction)"). The first rule that
+// matches wins; a line nobody described yet shows its name only — add a rule here when that happens.
+// tip: what to look at if this line is large.
+export const USAGE_RULES = [
+  // ── Server ──
+  [/^agent:view$/, 'An agent’s own copy of properties and matches, opened by every agent page', 'Rebuilt (whole stock) when it is out of date'],
+  [/^agent:(decide|decide-many)$/, 'Approving or rejecting access requests — also rebuilds the agent’s copy (reads the whole stock)', 'Bulk approve rebuilds once'],
+  [/^agent:request$/, 'An agent asking for a property’s or a lead’s details'],
+  [/^agent:(directory|me|crm-boot)$/, 'Start-up of agent pages: who is signed in, the team list'],
+  [/^agent:(thread-open|threads-fold)$/, 'Messages: opening a chat, folding old request chats'],
+  [/^agent:lead-/, 'Agents working a lead (notes, history, saves)'],
+  [/^agent:property-/, 'Agents working a property (notes, availability, new listings)'],
+  [/^agent:(revoke|hide-contact|grant-extend)$/, 'Changing shared access — rebuilds the agent’s copy'],
+  [/^agent:usage-log$/, 'Saving the pages’ usage counts (this log)'],
+  [/^agent:usage-read$/, 'Opening this Database usage screen'],
+  [/^agent:/, 'Team & agent actions (Team page, agent pages)'],
+  [/^match:/, 'Matching — properties for a client or clients for a property; reads the Shoot board, seller enquiries and stock', 'In the CRM it now runs only on a tap'],
+  [/^easy:/, 'Eåsy, the assistant (questions, day plan, reminders) — capped at 8,000 reads a day'],
+  [/^tailortalk:webhook$/, 'WhatsApp chats from TailorTalk — every message a client sends updates their lead', 'Grows with how much clients chat (half the ad leads chat at night)'],
+  [/^tailortalk:sync/, 'The nightly TailorTalk sync (4:30 AM)'],
+  [/^tailortalk:calendar$/, 'Site-visit calendar invitations'],
+  [/^tailortalk:campaign$/, 'WhatsApp campaigns'],
+  [/^tailortalk:(ai-lead|admin-ai|refresh)$/, 'AI reading of a lead’s chat'],
+  [/^tailortalk/, 'TailorTalk (WhatsApp bot) work'],
+  [/^meta-leads:tick/, 'Meta ad sheets checked every few minutes by an outside timer'],
+  [/^meta-leads:/, 'Meta Ads Leads page (reading and writing the Google Sheets)'],
+  [/^followup-digest/, 'The 9 AM job: follow-up e-mails, the Meta digest, expiring access'],
+  [/^dashboard-summary/, 'The nightly dashboard summary e-mail (9:30 PM)'],
+  [/^finance/, 'Finance (the 8 AM job and the Finance page)'],
+  [/^attendance:/, 'Attendance sign-in and sign-out'],
+  [/^(generate|backfill)|^lead-summary/, 'AI lead summaries'],
+  [/^brochure/, 'Brochure links'],
+  [/^(knowledge-sync|sync-inventory)/, 'Inventory sheet sync / bot knowledge'],
+  // ── Pages ──
+  [/› leadViews\/\* \(live\)/, 'The lead list: every lead, in bundles of about 20, kept live (CRM)', 'About 120 bundles each time the CRM opens after 30 minutes away'],
+  [/› leadViews/, 'The lead list’s bundles'],
+  [/› leads \[[^\]]*(assignedAgent|secondaryAgent|agentAccess)/, 'The signed-in person’s own leads (My Day, agents’ CRM)'],
+  [/› leads \[tenantId ==\] \(live\)$/, 'EVERY lead one by one — only when the bundles cannot be read (expensive: 1,700+)', 'Should be rare; if large, the lead bundles are failing'],
+  [/› leads\/\*\/notes/, 'A lead’s notes (opening a lead)'],
+  [/› leads\/\*\/history/, 'A lead’s history (opening a lead)'],
+  [/› leads\/\*\/tailortalk/, 'A lead’s WhatsApp chat state (opening a lead)'],
+  [/› leads/, 'Leads'],
+  [/› properties \[tenantId ==\] \(live\)/, 'Every property, kept live (Property dashboard)', '160+ each time the dashboard opens after 30 minutes away'],
+  [/› properties \[tenantId ==\] \(once\)/, 'Every property, read once (CRM inventory / campaigns)'],
+  [/› properties\/\*\/(notes|internalNotes)/, 'A property’s notes'],
+  [/› properties/, 'Properties'],
+  [/› listings/, 'Shoot & Media board cards'],
+  [/› (trackPipelines|postTracker)/, 'Shoot & Media stages and posting'],
+  [/› accessRequests/, 'Access requests (badges on every page, My Day)'],
+  [/› threads\/\*\/messages/, 'Messages: one conversation'],
+  [/› threads/, 'Messages: the conversation list and unread badges (every page)'],
+  [/› agentViews/, 'An agent’s own copy of properties'],
+  [/› grants/, 'Shared access (who may see what)'],
+  [/› visitAlerts/, 'Colleagues’ visits on your property'],
+  [/› (settings|pipelines|taskConfigs|easyConfig)/, 'Settings: team, pipeline stages, managers'],
+  [/› tasks/, 'Daily tasks'],
+  [/› attendance/, 'Attendance'],
+  [/› (finance|fin)/i, 'Finance'],
+  [/› propertySubmissions/, 'Properties agents added, waiting for approval'],
+  [/› campaigns/, 'WhatsApp campaigns'],
+  [/› agentConfigs/, 'What agents may see and do (the admin’s settings), read when a page opens'],
+  [/› requestPrivate/, 'Which client a buyer request is about (for the approver)'],
+  [/› (users|teamList)/, 'Team members'],
+  [/› (easyDrafts|easyChanges|easyGaps)/, 'Eåsy drafts and changes'],
+];
+export function describe(name) {
+  for (const [re, what, tip] of USAGE_RULES) if (re.test(name)) return { what, tip: tip || '' };
+  return { what: '', tip: '' };
+}

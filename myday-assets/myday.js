@@ -9,7 +9,7 @@
 // the asker, visit alerts addressed to them, their leads (three queries, as the CRM's agent mode),
 // and, for an agent, their own copy of the properties.
 import { $, esc, lc, api, db, isShutdown, whenSignedIn, watchMyView, directory, nameOf, when, ago, untilWords, toast, decideSheet, busy, approvalDefaults, codeLine } from '../shared-assets/agent-client.js';
-import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+import { collection, query, where, onSnapshot } from "../shared-assets/fs-metered.js";
 import { leadViews } from '../shared-assets/lead-views-client.js';
 import { canWorkLead, codeKey } from '../shared-assets/agent-access.js';
 import { renderMatches, matchCounts } from '../shared-assets/agent-matches.js';
@@ -252,7 +252,7 @@ const yourLead = new Map();
 function fillYourLeads(reqs) {
   reqs.filter(r => r.kind === 'lead' && canDecide(r) && !yourLead.has(r.id)).forEach(r => {
     yourLead.set(r.id, '');
-    import("https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js").then(fs => fs.getDoc(fs.doc(db, 'requestPrivate', r.id))).then(snap => {
+    import("../shared-assets/fs-metered.js").then(fs => fs.getDoc(fs.doc(db, 'requestPrivate', r.id))).then(snap => {
       const n = snap.exists() ? snap.data().leadName : '';
       if (!n) return;
       const words = (isAdmin ? 'The client: ' : 'Your client: ') + n;
